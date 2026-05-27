@@ -42,12 +42,17 @@ The following zones are part of the game.
 
 ## Cards (C)
 
-- **C.1** The top-left section of a card contains a symbol.
+- **C.1** A card's symbol is displayed on the back of the card.
 - **C.2** A card is either single-sided or double-sided.
 - **C.3** A card has two display states: face-up and face-down.
 - **C.4** Sleeves are not part of this game. Sleeves are permanently banned.
 - **C.5** A card is either colorless or of one or more colors.
 - **C.6** An instant is a card that can be played at any time.
+- **C.9** Every card is a spell. The card's specific type (e.g., creature, instant, spell, artifact) is a kind of spell.
+- **C.10** A card whose specific type is `SPELL` (with no further specialization) can only be played during its controller's turn.
+- **C.11** A card's symbol is a structured property that may be referenced by game effects (e.g., "count cards with symbol ⨳ in your GRAVEYARD").
+- **C.7** A wall is a card type, distinct from creature and instant.
+- **C.8** A card's X/Y stats may be modified by abilities while the card is on the BOARD.
 
 ## Exclusions (X)
 
@@ -58,7 +63,7 @@ The following are not part of this game.
 
 ## Play (P)
 
-- **P.1** When a non-creature card is played, it is placed in the GRAVEYARD.
+- **P.1** When a card is played, it is placed in the GRAVEYARD unless a more specific rule below specifies otherwise.
 - **P.2** When a creature card is played, it is placed on the BOARD.
 - **P.3** A creature can only be played during your turn.
 - **P.4** When a creature dies, it is placed in the GRAVEYARD.
@@ -68,6 +73,16 @@ The following are not part of this game.
 - **P.11** A cost component written as `N deck` means: exile the top N cards from your DECK.
 - **P.12** A cost component written as `N graveyard` means: exile N cards from your GRAVEYARD.
 - **P.13** A cost component of `N hand` is valid only on cards that are placed on the BOARD when played.
+- **P.14** When a wall is played, it is placed on the BOARD.
+- **P.15** A wall does not die. Triggers and effects that reference creature death do not apply to walls.
+- **P.16** A cost component of `sacrifice <criterion>` means: choose a card you control on the BOARD matching the criterion and move it from BOARD to GRAVEYARD as part of paying the cost.
+- **P.17** A card placed in the ATTACHED zone is placed face-down.
+- **P.18** The controller of an attached card may look at it at any time.
+- **P.19** When an artifact is played, it is placed on the BOARD.
+- **P.20** A cost component cannot be reduced below 0 by any modifier; the effective minimum is 0.
+- **P.21** When an environment is played, it is placed on the BOARD.
+- **P.22** At most one environment may be on the BOARD at any time, across both players.
+- **P.23** A new environment cannot be played while another environment is on the BOARD.
 - **P.8** When a card is placed in the GRAVEYARD or EXILE and it has attached cards, those attached cards are placed in EXILE.
 - **P.9** When a card moves from the BOARD to a different position on the BOARD, its attached cards remain attached.
 - **P.10** When a card moves from the BOARD to the HAND or to the DECK, its attached cards are placed in EXILE.
@@ -77,6 +92,7 @@ The following are not part of this game.
 - **A.1** A card may have triggered abilities. A triggered ability fires when a specified event occurs.
 - **A.2** A card may have static abilities. A static ability is a continuous effect that applies while the source card is on the BOARD.
 - **A.3** When an effect specifies a target, the player playing the effect chooses the specific card or player to which the effect applies.
+- **A.4** An effect of `draw N` means: move the top N cards of the controller's DECK to their HAND.
 
 ## Control (T)
 
@@ -93,9 +109,28 @@ The following are not part of this game.
 - **R.6** When both players consecutively pass and the response chain is empty, the response window closes.
 - **R.7** Within a response window, the active player has the first opportunity to respond or pass.
 
+## Visibility (V)
+
+- **V.1** In a DECK, the top card's symbol is visible to both players.
+- **V.2** In a DECK, all cards except the top are concealed (including the bottom and any cards between).
+- **V.3** Cards in a player's HAND are fully visible to that player and concealed from their opponent.
+- **V.4** Cards in the GRAVEYARD are fully visible to both players.
+- **V.5** Cards in EXILE are fully visible to both players.
+- **V.6** Cards on the BOARD are fully visible to both players.
+- **V.7** Visibility of cards in ATTACHED is defined by P.17 (face-down, symbol visible to both players) and P.18 (controller may look at the face at any time).
+
 ## Combat (B)
 
 - **B.1** A creature can attack a player.
 - **B.2** When a creature attacks a player successfully, that player exiles X cards from their DECK, where X is the first value in the creature's X/Y stats.
 - **B.3** A creature cannot attack during the turn it enters the BOARD, regardless of how it entered.
 - **B.4** When a creature attacks, its card is tapped (turned sideways).
+- **B.5** During combat, the defending player may declare one or more of their creatures or walls as blockers, each assigned to a specific attacking creature.
+- **B.6** An attack on a player is "successful" (per B.2) if and only if it is not blocked.
+- **B.7** When an attacker is blocked, the attacker deals damage equal to its X to each of its blockers, and each blocker deals damage equal to its X to the attacker.
+- **B.8** A creature with accumulated damage equal to or greater than its Y dies (placed in GRAVEYARD per P.4).
+- **B.9** Walls do not die from damage (per P.15). Accumulated damage on a wall is cleared at the end of combat.
+- **B.10** At the end of the turn, all accumulated damage on creatures is cleared.
+- **B.11** A flying creature can only be blocked by a card with flying, or by a card whose text explicitly grants it the ability to block flying.
+- **B.12** A tapped creature cannot block.
+- **B.13** A tapped creature cannot attack.
