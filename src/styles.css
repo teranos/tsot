@@ -1,0 +1,142 @@
+:root {
+  color-scheme: dark;
+  --bg: #0a0a0c;
+  --fg: #e8e8ec;
+  --dim: #6a6a72;
+  --glyph-bg: rgba(35, 35, 38, 0.92);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+}
+
+body {
+  cursor: none;
+}
+
+#world {
+  position: fixed;
+  inset: 0;
+}
+
+.glyph-cursor {
+  font-size: 24px;
+  line-height: 1;
+  color: var(--fg);
+  transform: translate(-50%, -50%);
+  user-select: none;
+  text-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
+}
+
+.glyph-cursor-symbol {
+  display: block;
+}
+
+.glyph-run {
+  position: fixed;
+  right: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  z-index: 9999;
+}
+
+.glyph-run-indicators {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.glyph-run-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--glyph-bg);
+  transition: width 180ms ease, height 180ms ease, border-radius 180ms ease;
+}
+
+.seg-window {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.seg-head {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.seg-symbol {
+  font-size: 72px;
+  line-height: 1;
+  color: var(--fg);
+}
+
+.seg-ident {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.seg-command {
+  font-size: 13px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+}
+
+.seg-title {
+  font-size: 22px;
+  color: var(--fg);
+}
+
+.seg-meaning {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--fg);
+}
+
+.triplet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.triplet-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.triplet-label {
+  flex: 0 0 56px;
+  color: var(--dim);
+  letter-spacing: 0.08em;
+}
+
+.triplet-body {
+  color: var(--fg);
+  word-break: break-word;
+  overflow-wrap: break-word;
+}

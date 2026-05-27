@@ -1,0 +1,13 @@
+{
+  "name": "tsot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run dev-server.ts",
+    "build": "bun run build.ts"
+  },
+  "dependencies": {
+    "@qntx/glyphs": "file:../QNTX/packages/glyphs"
+  }
+}
