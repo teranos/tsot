@@ -11,7 +11,4 @@ name = "tsot"
 path = "src/main.rs"
 
 [dependencies]
-prost = "0.13"
-
-[build-dependencies]
-prost-build = "0.13"
+mlua = { version = "0.10", features = ["lua54", "vendored"] }

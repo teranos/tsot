@@ -1,3 +1,2 @@
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/tsot.rs"));
-}
+pub mod card;
+pub use card::{Card, CardType, Color, CostComponent, CostSource, Stats};
