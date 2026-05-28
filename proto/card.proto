@@ -22,7 +22,7 @@ enum CardType {
 
 enum CostSource {
   HAND = 0;
-  DECK = 1;
+  MILL = 1;
   GRAVEYARD = 2;
   SACRIFICE = 3;
   SELF = 4;
@@ -31,6 +31,7 @@ enum CostSource {
 message CostComponent {
   int32 amount = 1;
   CostSource source = 2;
+  bool is_x = 3;  // when true, amount is chosen by the player at cast time
 }
 
 message Stats {

@@ -70,7 +70,7 @@ The following are not part of this game.
 - **P.5** If a card's cost is to exile itself, the card is placed in EXILE on play instead of its default destination from P.1 or P.2.
 - **P.6** When cards from the HAND are used to pay the cost of a BOARD-placed card, those cards are attached to the played card.
 - **P.7** A cost component written as `N hand` means: choose N cards from your HAND. By P.6, those cards become attached to the played card.
-- **P.11** A cost component written as `N deck` means: exile the top N cards from your DECK.
+- **P.11** A cost component written as `N mill` means: place the top N cards of your DECK into your GRAVEYARD.
 - **P.12** A cost component written as `N graveyard` means: exile N cards from your GRAVEYARD.
 - **P.13** A cost component of `N hand` is valid only on cards that are placed on the BOARD when played.
 - **P.14** When a wall is played, it is placed on the BOARD.

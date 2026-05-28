@@ -4,7 +4,7 @@ symbol: "≡"
 colors: BLACK
 type: ENVIRONMENT
 subtypes: "Urban"
-cost { amount: 4 source: DECK }
+cost { amount: 4 source: MILL }
 cost { amount: 4 source: GRAVEYARD }
 abilities: "4+ cost for deck and graveyard cast cost."
 abilities: "you can see which cards are red and black."
