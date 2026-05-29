@@ -135,43 +135,41 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
         self.rng.gen_range(lo..=hi)
     }
 
-    /// Phase 1 response policy: respond when an opponent's cast is on top
-    /// of the chain, with a zero-cost instant we own. Probability is
-    /// threat-aware — high when the cast accelerates fast death, lower
-    /// otherwise (so the AI doesn't completely freeze counters when it's
-    /// ahead, but doesn't waste them on irrelevant casts either). Narrow
-    /// on purpose — anything with HAND cost requires payment selection
-    /// which would need the full `resolve_hand_payment` flow inside the
-    /// policy. Today only counterspell qualifies.
+    /// Phase 2 response policy: respond when an opposing threat is present —
+    /// either an opposing cast on top of the chain (R.1.a) or an opposing
+    /// declared attacker (R.1.b empty-chain window). Picks any
+    /// `playable_responses` candidate; pays HAND cost by taking the first
+    /// non-self cards in hand (deterministic — smart payment ordering is a
+    /// future refinement). Probability is threat-aware: high if fast death
+    /// looms, lower otherwise.
     fn respond_or_pass(&mut self, state: &GameState, player: PlayerId) -> ResponseAction {
         let Some(p) = &state.priority else {
             return ResponseAction::Pass;
         };
-        let Some(top) = p.chain.last() else {
-            return ResponseAction::Pass;
-        };
-        let StackItem::PlayedCard { controller, .. } = top;
-        if *controller == player {
+
+        // Threat present? Either chain-top is an opposing cast, or there
+        // are opposing declared attackers (R.1.b context with empty chain).
+        let chain_threat = p.chain.last().is_some_and(|top| {
+            let StackItem::PlayedCard { controller, .. } = top;
+            *controller != player
+        });
+        let combat_threat = matches!(
+            &state.combat,
+            Some(crate::game::CombatState::AwaitingBlockers { attacks })
+                if attacks.iter().any(|a| {
+                    state.card_pool.get(&a.attacker)
+                        .map(|i| i.controller != player)
+                        .unwrap_or(false)
+                })
+        );
+        if !chain_threat && !combat_threat {
             return ResponseAction::Pass;
         }
-        let candidates: Vec<InstanceId> = state
-            .player(player)
-            .hand
-            .iter()
-            .filter(|iid| {
-                let Some(inst) = state.card_pool.get(*iid) else {
-                    return false;
-                };
-                inst.card.kind == crate::card::CardType::Spell
-                    && inst.card.timing == Some(crate::card::Timing::Instant)
-                    && inst.card.cost.iter().all(|c| c.amount == 0 && !c.is_x)
-            })
-            .cloned()
-            .collect();
+
+        let candidates = state.playable_responses(player);
         if candidates.is_empty() {
             return ResponseAction::Pass;
         }
-        // Threat-aware probability. would_die_soon = high; otherwise = low.
         let prob = if would_die_soon(state, player) {
             0.95
         } else {
@@ -181,26 +179,55 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
             return ResponseAction::Pass;
         }
         let pick = candidates[self.rng.gen_range(0..candidates.len())].clone();
+
+        // Hand-cost payment: deterministic first-N non-self hand cards.
+        // Smart payment selection is a follow-up; here we just need a
+        // legal payment so play_card validates.
+        let Some(inst) = state.card_pool.get(&pick) else {
+            return ResponseAction::Pass;
+        };
+        let mut hand_need: usize = 0;
+        for c in &inst.card.cost {
+            if let crate::card::CostSource::Hand = c.source {
+                hand_need += c.amount.max(0) as usize;
+            }
+        }
+        let hand_payment_ids: Vec<InstanceId> = if hand_need > 0 {
+            state
+                .player(player)
+                .hand
+                .iter()
+                .filter(|iid| **iid != pick)
+                .take(hand_need)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         ResponseAction::Respond {
             card: pick,
-            choices: PlayChoices::default(),
+            choices: PlayChoices {
+                hand_payment_ids,
+                x_value: None,
+            },
         }
     }
 }
 
 /// "Will this player be decked within ~2 turns at the opponent's current
-/// pace?" Sums opponent's untapped board power + any opposing creature on
-/// the chain, divides into my deck size. Cheap heuristic used by
-/// `RandomOracle` to decide whether a counter is worth burning.
+/// pace?" Sums opponent's on-board creature power (tapped or not — tapped
+/// creatures will untap and attack again, or are CURRENTLY attacking in
+/// the case of declared attackers in R.1.b) + any opposing creature on
+/// the chain. Cheap heuristic used by `RandomOracle` to decide whether a
+/// response is worth burning.
 fn would_die_soon(state: &GameState, victim: PlayerId) -> bool {
     let opponent = victim.opponent();
     let board_power: i32 = state
         .player(opponent)
         .board
         .iter()
-        .filter_map(|iid| state.card_pool.get(iid).map(|inst| (iid, inst)))
-        .filter(|(_, inst)| !inst.tapped)
-        .map(|(iid, _)| state.effective_stats(iid).0)
+        .map(|iid| state.effective_stats(iid).0)
         .sum();
     let chain_power: i32 = state
         .priority

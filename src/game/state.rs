@@ -478,6 +478,81 @@ impl GameState {
         Some(removed)
     }
 
+    /// Remove the chain item whose card matches `target`. Same semantics as
+    /// `counter_top` but selects by InstanceId instead of always popping the
+    /// top — lets cards like DTST-creature's "counter target card on the
+    /// stack" pick any chain item, not just the one directly underneath.
+    /// Returns the removed item or None if no chain item matches.
+    pub fn counter_target(&mut self, target: &InstanceId) -> Option<StackItem> {
+        let mut p = self.priority.as_ref()?.clone();
+        let pos = p.chain.iter().position(|item| {
+            let StackItem::PlayedCard { card, .. } = item;
+            card == target
+        })?;
+        let removed = p.chain.remove(pos);
+        p.consecutive_passes = 0;
+        p.next_to_act = self.active_player;
+        self.set_priority(Some(p));
+        Some(removed)
+    }
+
+    /// Phase 2 introspection (X-E.1): instances in `player`'s hand that
+    /// could be cast as a response right now. Filter: instant timing,
+    /// HAND-only cost (no MILL / GRAVEYARD / X — those need the full
+    /// payment flow), with enough other cards in hand to pay. Same surface
+    /// the UI will use to populate the "respond?" prompt.
+    pub fn playable_responses(&self, player: PlayerId) -> Vec<InstanceId> {
+        let hand = &self.player(player).hand;
+        hand.iter()
+            .filter(|iid| {
+                let Some(inst) = self.card_pool.get(*iid) else {
+                    return false;
+                };
+                if inst.card.kind != crate::card::CardType::Spell {
+                    return false;
+                }
+                if inst.card.timing != Some(crate::card::Timing::Instant) {
+                    return false;
+                }
+                let mut hand_need: usize = 0;
+                for c in &inst.card.cost {
+                    if c.is_x {
+                        return false;
+                    }
+                    match c.source {
+                        crate::card::CostSource::Hand => {
+                            hand_need += c.amount.max(0) as usize;
+                        }
+                        _ => return false,
+                    }
+                }
+                // Need hand_need OTHER cards in hand (excluding the cast).
+                hand.len() > hand_need
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Phase 2 introspection (X-E.2): targets for a counter effect — the
+    /// InstanceIds of cards currently on the response chain. Empty if no
+    /// window is open. The UI consumes this to populate the target picker
+    /// for "counter target spell"; the response policy can use it for
+    /// X.2-style "skip if no legal target" auto-pass.
+    pub fn legal_counter_targets(&self) -> Vec<InstanceId> {
+        self.priority
+            .as_ref()
+            .map(|p| {
+                p.chain
+                    .iter()
+                    .map(|item| {
+                        let StackItem::PlayedCard { card, .. } = item;
+                        card.clone()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
 
     pub fn set_status_effects(&mut self, iid: &InstanceId, effects: Vec<StatusEffect>) {
         let Some(inst) = self.card_pool.get_mut(iid) else {
@@ -895,5 +970,71 @@ mod tests {
         s.respond_with(response).unwrap();
         s.journal.take().unwrap().rollback(&mut s);
         assert_eq!(s.priority, snapshot.priority);
+    }
+
+    #[test]
+    fn counter_target_removes_specific_chain_item() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let item_a = dummy_played(&s);
+        let b_card = s.b.hand[0].clone();
+        let item_b = dummy_played_for(b_card.clone(), PlayerId::B);
+        s.open_response_window(item_a.clone()).unwrap();
+        s.pass_priority().unwrap();
+        s.respond_with(item_b.clone()).unwrap();
+        // Chain: [item_a, item_b]. Target item_a (the bottom) by its card id.
+        let a_card = match &item_a {
+            StackItem::PlayedCard { card, .. } => card.clone(),
+        };
+        let removed = s.counter_target(&a_card).unwrap();
+        assert_eq!(removed, item_a);
+        // item_b should still be on the chain.
+        let p = s.priority.as_ref().unwrap();
+        assert_eq!(p.chain.len(), 1);
+        assert_eq!(p.chain[0], item_b);
+        assert_eq!(p.next_to_act, s.active_player);
+        assert_eq!(p.consecutive_passes, 0);
+    }
+
+    #[test]
+    fn counter_target_returns_none_for_missing_target() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let item = dummy_played(&s);
+        s.open_response_window(item).unwrap();
+        assert_eq!(s.counter_target(&"nonexistent".to_string()), None);
+    }
+
+    #[test]
+    fn legal_counter_targets_returns_chain_cards_in_order() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let a_card = s.a.hand[0].clone();
+        let b_card = s.b.hand[0].clone();
+        let item_a = dummy_played_for(a_card.clone(), PlayerId::A);
+        let item_b = dummy_played_for(b_card.clone(), PlayerId::B);
+        assert_eq!(s.legal_counter_targets(), Vec::<InstanceId>::new());
+        s.open_response_window(item_a).unwrap();
+        s.pass_priority().unwrap();
+        s.respond_with(item_b).unwrap();
+        assert_eq!(s.legal_counter_targets(), vec![a_card, b_card]);
+    }
+
+    #[test]
+    fn playable_responses_filters_to_zero_cost_instants() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        // a_hand[0] is a creature by default — not a response candidate.
+        // Mutate a_hand[1] into a zero-cost instant.
+        let inst = s.a.hand[1].clone();
+        let card = s.card_pool.get_mut(&inst).unwrap();
+        card.card.kind = crate::card::CardType::Spell;
+        card.card.timing = Some(crate::card::Timing::Instant);
+        card.card.cost = vec![];
+        // Mutate a_hand[2] into a sorcery — should NOT be returned.
+        let sorc = s.a.hand[2].clone();
+        let card2 = s.card_pool.get_mut(&sorc).unwrap();
+        card2.card.kind = crate::card::CardType::Spell;
+        card2.card.timing = Some(crate::card::Timing::Sorcery);
+        card2.card.cost = vec![];
+        let candidates = s.playable_responses(PlayerId::A);
+        assert!(candidates.contains(&inst));
+        assert!(!candidates.contains(&sorc));
     }
 }

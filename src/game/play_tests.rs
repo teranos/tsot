@@ -766,3 +766,72 @@ fn play_card_during_open_window_pushes_to_chain_instead_of_opening_new() {
     assert!(s.b.hand.contains(&b_instant));
     assert!(!s.b.graveyard.contains(&b_instant));
 }
+
+#[test]
+fn lua_chain_and_counter_target_apis_remove_specific_item() {
+    // Verifies the Phase 2 introspection + explicit-target counter from Lua:
+    // a fixture instant's on_play inspects game.chain(), picks the bottom
+    // item by InstanceId, and calls game.counter(target). The bottom item
+    // is removed; this card itself (which is the top of the chain at
+    // resolution time, then popped before the handler runs) leaves the
+    // chain via the normal pop path. Counterspell's "counter top" semantics
+    // are NOT used here — we want the explicit-target path.
+    let registry = registry_with_fixture(
+        "explicit_counter",
+        r#"
+        return {
+          id = "explicit_counter",
+          type = "instant",
+          on_play = function(game, self)
+            local chain = game.chain()
+            if #chain == 0 then return end
+            -- Pick the bottom of the chain (the older cast).
+            game.counter(chain[1].card)
+          end,
+        }
+        "#,
+    );
+    let card = registry.cards().iter().find(|c| c.id == "explicit_counter").unwrap().clone();
+
+    let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+    let a_creature = s.a.hand[0].clone();
+    let cs_iid = s.b.hand[0].clone();
+    s.card_pool.get_mut(&cs_iid).unwrap().card = card;
+
+    // A's cast on the chain.
+    let a_cast = crate::game::StackItem::PlayedCard {
+        card: a_creature.clone(),
+        controller: PlayerId::A,
+        choices: PlayChoices::default(),
+    };
+    s.open_response_window(a_cast).unwrap();
+    s.pass_priority().unwrap(); // A → B
+
+    // B casts the fixture instant in response.
+    let mut oracle = crate::choice::NoopOracle;
+    s.play_card(
+        PlayerId::B,
+        &cs_iid,
+        PlayChoices::default(),
+        Some(&mut crate::game::EventContext::new(registry.lua(), &mut oracle)),
+    )
+    .unwrap();
+
+    // Drive — the fixture's on_play fires, sees chain = [a_creature],
+    // calls game.counter(a_creature), removes A's cast.
+    s.drive_window_to_close(Some(&mut crate::game::EventContext::new(
+        registry.lua(),
+        &mut oracle,
+    )))
+    .unwrap();
+
+    // A's creature stays in hand (countered, never resolved).
+    assert!(s.a.hand.contains(&a_creature));
+    assert!(!s.a.board.contains(&a_creature));
+    // Fixture instant resolved to B's graveyard.
+    assert!(s.b.graveyard.contains(&cs_iid));
+    // Window closed.
+    assert!(s.priority.is_none());
+    // counter (target) bumped for B.
+    assert_eq!(s.action_counts.get("counter").map(|v| v[1]).unwrap_or(0), 1);
+}

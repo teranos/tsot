@@ -4,7 +4,9 @@
 //! macro inside `Lua::scope`, so closures can borrow `&mut GameState` for the
 //! duration of the handler call only.
 
-use super::state::{CombatState, GameState, InstanceId, Modifier, PlayerId, StatusEffect, Zone};
+use super::state::{
+    CombatState, GameState, InstanceId, Modifier, PlayerId, StackItem, StatusEffect, Zone,
+};
 use crate::card::{Card, CardType, EventName, Timing};
 use crate::choice::{ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest};
 use mlua::{Lua, Result, Value};
@@ -417,23 +419,77 @@ macro_rules! build_game_table {
             })?,
         )?;
 
-        // Counter-the-top: removes the stack item directly underneath the
-        // resolving handler (the spell this counterspell-like card targets).
-        // Returns true if something was countered, false if the chain is
-        // empty (target already gone). Phase 1 has no explicit targeting —
-        // every "counter target spell" effect resolves as "counter the
-        // spell directly under me."
-        let cell_counter = &$cell;
-        let counter_owner = $owner;
+        // Counter-the-top: convenience for "counter the spell directly
+        // underneath me." Used by counterspell.
+        let cell_counter_top = &$cell;
+        let counter_top_owner = $owner;
         game.set(
             "counter_top",
             $scope.create_function_mut(move |_, ()| -> Result<bool> {
-                let mut s = cell_counter.borrow_mut();
+                let mut s = cell_counter_top.borrow_mut();
                 let removed = s.counter_top();
                 if removed.is_some() {
-                    s.bump_action("counter_top", counter_owner);
+                    s.bump_action("counter_top", counter_top_owner);
                 }
                 Ok(removed.is_some())
+            })?,
+        )?;
+
+        // Counter-target: removes a specific chain item by InstanceId.
+        // Returns true if the target was on the chain and got countered,
+        // false otherwise. For cards like DTST-creature's "counter target
+        // card on the stack" where the controller picks which item.
+        let cell_counter_t = &$cell;
+        let counter_t_owner = $owner;
+        game.set(
+            "counter",
+            $scope.create_function_mut(move |_, target: String| -> Result<bool> {
+                let mut s = cell_counter_t.borrow_mut();
+                let removed = s.counter_target(&target);
+                if removed.is_some() {
+                    s.bump_action("counter", counter_t_owner);
+                }
+                Ok(removed.is_some())
+            })?,
+        )?;
+
+        // Chain inspector: returns the response chain as a Lua array of
+        // tables [{card, controller, kind}, ...]. Bottom of chain at
+        // index 1, top at #chain. Empty array if no window is open.
+        let cell_chain = &$cell;
+        game.set(
+            "chain",
+            $scope.create_function_mut(move |lua, ()| -> Result<mlua::Table> {
+                let s = cell_chain.borrow();
+                let arr = lua.create_table()?;
+                if let Some(p) = s.priority.as_ref() {
+                    for (i, item) in p.chain.iter().enumerate() {
+                        let t = lua.create_table()?;
+                        let StackItem::PlayedCard { card, controller, .. } = item;
+                        t.set("card", card.clone())?;
+                        t.set("controller", pid_to_str(*controller).to_string())?;
+                        t.set("kind", "played_card")?;
+                        arr.set(i + 1, t)?;
+                    }
+                }
+                Ok(arr)
+            })?,
+        )?;
+
+        // Legal targets for a counter effect: the InstanceIds of chain
+        // items right now. Used by handlers to populate `choose_card`
+        // pools for "counter target spell" choices.
+        let cell_ct = &$cell;
+        game.set(
+            "legal_counter_targets",
+            $scope.create_function_mut(move |lua, ()| -> Result<mlua::Table> {
+                let s = cell_ct.borrow();
+                let targets = s.legal_counter_targets();
+                let arr = lua.create_table()?;
+                for (i, t) in targets.iter().enumerate() {
+                    arr.set(i + 1, t.clone())?;
+                }
+                Ok(arr)
             })?,
         )?;
 

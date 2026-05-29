@@ -5,38 +5,38 @@
 
 ## Status (2026-05-30)
 
-Phase 1 **done end-to-end**. The chain, R.1.a window, counter mechanic, and a working counterspell card all landed in one bundle. Phase 2 has been re-scoped (see below) because several of its original headline items either got pulled forward into Phase 1 (counter mechanic, "instant responses non-zero" deliverable) or got killed by the inline-triggers design decision (triggered abilities never go on the stack — see line 43).
+Phases 1 and 2 **done end-to-end**.
+
+**Phase 1** delivered the chain, R.1.a window, priority loop, counter mechanic, and counterspell card.
+
+**Phase 2** delivered R.1.b (attack-declaration window), engine introspection (`playable_responses`, `legal_counter_targets`), and explicit-target counter (`game.chain()`, `game.counter(target)`). The UX X.1/X.2/X.3 skip-logic and resolution event metadata moved to Phase 3 — they pair naturally with the Option B refactor (UI as outer driver) and have no live consumer until then.
 
 What's actually running today:
 - `StackItem`, `PriorityState`, `GameState.priority`, `SetPriorityState` journal variant.
-- `open_response_window`, `pass_priority`, `respond_with`, `counter_top`, `drive_window_to_close` — full priority/pass/resolve loop.
-- R.1.a wired in `play_card`: every cast goes through window → drive → resolve. Casts in response (priority already open) route to `respond_with` instead of opening a nested window.
-- `game.counter_top()` Lua API; counterspell card uses it.
-- `ChoiceOracle::respond_or_pass` policy hook (Option A — flagged for Option B refactor at the trait definition). RandomOracle's policy is threat-aware: 95% counter when fast death looms, 25% otherwise.
-- Sim telemetry: `game.counter_top`, `game.instant_response_played` counters; "instant responses (R.1)" row reads from action counts.
-
-What's still pending (Phase 2 re-scoped):
-- R.1.b window in `declare_attacker` (TODO marker still in `combat.rs:135`).
-- Engine introspection (`playable_responses`, `legal_targets`).
-- Explicit targeting for counter (`game.counter(target)`, `game.chain()`).
-- UX X.2 (no-legal-target skip) and X.3 (opponent-considering-response marker).
-- Resolution event metadata (unopposed vs declined).
+- Priority primitives: `open_response_window`, `open_response_window_empty`, `pass_priority`, `respond_with`, `counter_top`, `counter_target`.
+- `drive_window_to_close` — full priority/pass/resolve loop with response policy hook.
+- R.1.a wired in `play_card`; R.1.b wired in `declare_attacker`. Casts during open window route to `respond_with`.
+- Engine introspection: `pub playable_responses(player)`, `pub legal_counter_targets()`.
+- Lua API: `game.counter_top()`, `game.counter(target)`, `game.chain()`, `game.legal_counter_targets()`.
+- counterspell uses `counter_top`; explicit-target counter ready for DTST-creature once activated abilities land.
+- `ChoiceOracle::respond_or_pass` policy hook (Option A — flagged for Option B refactor at the trait definition). RandomOracle uses `playable_responses` + threat-aware `would_die_soon` heuristic.
+- Sim telemetry: `game.counter_top`, `game.counter`, `game.instant_response_played` counters; "instant responses (R.1)" row reads from action counts.
 
 ## Integration points (where stack touches existing code)
 
 Stack and priority cut across more of the engine than `events` did.
 Mapping the contact surfaces so future PRs know where to look:
 
-### Engine methods that must open a window (Phase 1)
+### Engine methods that open a window (✅ done)
 
 Per RULES.md R.1, only two events open a window: card-played and attack-declared. Block declarations resolve atomically (no window) — `on_block` / `on_blocked_by` fire inline. Per R.7, the active player gets priority first in every window.
 
-| Site | Per rule | What changes |
+| Site | Per rule | Status |
 |---|---|---|
-| `play_card` post-validation, pre-resolution | R.1.a | After cost is paid but before the card resolves, open a window. Active player first per R.7. Card resolves only when both pass consecutively. |
-| `declare_attacker` after attack recorded | R.1.b | After the attack is in the buffer, open a window. Active player first per R.7; defender typically gets the first meaningful pick after active passes. |
+| `play_card` post-validation, pre-resolution | R.1.a | ✅ wired — opens a window, drives via `drive_window_to_close`, then resolves. |
+| `declare_attacker` after attack recorded | R.1.b | ✅ wired — opens an empty-chain window, drives, then `on_attack` fires inline. |
 
-Each fire site is marked `TODO(stack-phase-1)` in the code. The third site (block declaration) was previously planned as R.1.c but dropped: RULES doesn't open a window there, and the design intent (`on_block` resolves atomically) matches the no-stack-trigger principle.
+The third site (block declaration) was previously planned as R.1.c but dropped: RULES doesn't open a window there, and the design intent (`on_block` resolves atomically) matches the no-stack-trigger principle.
 
 ### Triggered abilities stay inline (design ratified 2026-05-30)
 
@@ -139,55 +139,52 @@ Scope ballooned past the original "data structures only" plan because counterspe
 
 ---
 
-## Phase 2 (re-scoped 2026-05-30) — Introspection + explicit targeting + smart UX
+## Phase 2 (re-scoped 2026-05-30) — Introspection + explicit targeting + resolution metadata
 
-The original Phase 2 was built around "triggered abilities on the stack." That assumption is dead per the inline-triggers ratification. The counter mechanic and "instant responses non-zero" deliverables landed in Phase 1. What remains is the introspection layer + the smart-skip UX hooks + the targeted-counter API.
+The original Phase 2 was built around "triggered abilities on the stack." That assumption is dead per the inline-triggers ratification. The counter mechanic landed in Phase 1. The UX X.1/X.2/X.3 skip-logic moved to Phase 3 (deferred 2026-05-30) — it needs the per-card target system and is more naturally bundled with the Option B refactor when the UI driver takes over.
 
-**Goal:** the engine exposes the queries a UI needs, the counter mechanic supports arbitrary chain targets (not just top), and the UX auto-skips response windows when nothing useful can happen.
+**Goal:** the engine exposes the queries a UI needs and the counter mechanic supports arbitrary chain targets.
 
-**Scope (in):**
-- **Engine introspection** (X-E.1, X-E.2):
-  - `playable_responses(player) → Vec<InstanceId>` — instants in player's hand whose cost can be paid in the current state. Today this logic is inlined in `RandomOracle::respond_or_pass`.
-  - `legal_targets(card, state) → Vec<Target>` — for a card being considered, the set of legal targets right now. Needed for X.2 + counter targeting.
-- **Explicit-target counter:**
-  - `game.chain() → array of {card, controller, kind}` — Lua-visible chain inspector.
-  - `game.counter(target_iid)` — removes a specific chain item by InstanceId. Today's `counter_top` stays as a convenience but new cards (DTST-creature) need explicit targeting.
-- **UX X.1, X.2, X.3:**
-  - **X.1:** auto-pass when `playable_responses(player)` is empty. Already de facto implemented inside the policy; lift it into engine-level so even non-Random oracles get the skip.
-  - **X.2:** auto-pass when player has playables but none have a legal target. Requires `legal_targets`.
-  - **X.3:** "opponent considering response to {cause}" marker — UI affordance only; engine surfaces it via a new field in the priority-handoff event.
-- **Resolution event metadata** (X.7 partial): resolved items carry `unopposed: bool` (was the responder forced to pass because nothing was playable?) vs `declined: bool` (could have responded but chose not to). Useful for UI tells and for the AI's "they let it through, must be safe" inference.
-- **R.1.b window** in `declare_attacker` — small patch, moved here from Phase 1's leftover. Defender's response opportunity before `on_attack` fires.
+**Scope:**
+- **R.1.b window** in `declare_attacker` — ✅ done 2026-05-30. Defender's response opportunity before `on_attack` fires. Same shape as R.1.a.
+- **Engine introspection** (X-E.1, X-E.2) — ✅ done 2026-05-30:
+  - `pub fn playable_responses(player) → Vec<InstanceId>` on `GameState`. Filter today: `kind == Spell && timing == Instant && cost.amount == 0`. RandomOracle's policy now calls this instead of inlining the filter.
+  - `pub fn legal_counter_targets() → Vec<InstanceId>` on `GameState`. Empty if no window. Card-agnostic for the counter case; a generalized `legal_targets(card, state)` is deferred until more target-shaped effects exist in the corpus.
+- **Explicit-target counter** — ✅ done 2026-05-30:
+  - `pub fn counter_target(target) → Option<StackItem>` on `GameState`. Same priority/pass semantics as `counter_top`.
+  - `game.chain()` Lua API — returns `[{card, controller, kind}, ...]`.
+  - `game.counter(target_iid)` Lua API — explicit-target counter.
+  - `game.legal_counter_targets()` Lua API — convenience for handler-side target pools.
+  - `counter_top` stays as the convenience for "spell directly under me" cards (counterspell).
 
 **Out (deferred to Phase 3):**
-- Hold-priority (X.5).
-- Pre-declared responses (X.6).
-- Tight timer (X.4).
-- Full visualization API.
+- **UX X.1 / X.2 / X.3 skip-logic.** X.1 is de facto in the response policy (returns Pass when no candidates); lifting to engine level pairs naturally with the Option B refactor (when the engine driver becomes the right place for it). X.2 needs a generalized `legal_targets` system. X.3 is UI affordance work — better when there's an actual UI consuming it.
+- **Resolution event metadata.** Same deferral logic — the consumer (UI / smarter AI) lands in Phase 3.
 
 **Cards unlocked by Phase 2:**
-- **DTST-creature** — "Tap: counter target card on the stack." Needs `game.counter(target)`.
-- Any future card whose timing genuinely depends on knowing legal targets / playable responses (e.g., conditional responses).
+- **DTST-creature** — "Tap: counter target card on the stack." The counter API is ready; needs the activated-ability (Tap-cost) system before the handler can be written.
 
 **Deliverable:**
-- Integration test: cast a non-counter target → opponent's DTST-creature taps and counters it explicitly (not just top).
-- The sim's pending-mechanics row "instant responses" stays non-zero; the new ratio is more efficient (fewer wasted casts because the engine itself skips no-target windows).
-- `playable_responses` + `legal_targets` exposed as `pub` methods on `GameState`, used by both the RandomOracle policy (replacing the inlined logic) and the future UI driver.
+- ✅ Integration test `lua_chain_and_counter_target_apis_remove_specific_item` — Lua fixture inspects `game.chain()`, picks a target, calls `game.counter(target)`, asserts target removed.
+- ✅ `playable_responses` + `legal_counter_targets` exposed as `pub` methods on `GameState`, used by `RandomOracle::respond_or_pass` and available to future UI drivers.
 
 ---
 
-## Phase 3 — UX baseline polish + the Option B refactor
+## Phase 3 — UX baseline + the Option B refactor + UI hooks
 
-Round out X.4, X.5, X.6, X.7 and migrate from Option A (oracle holds the response policy) to Option B (caller drives the priority loop). Visualization API for a UI to consume.
+Round out X.1–X.7 and migrate from Option A (oracle holds the response policy) to Option B (caller drives the priority loop). Visualization API for a UI to consume.
 
-**Goal:** UX baseline (X.1–X.7) fully met. The engine exposes everything a UI needs to render and drive priority decisions, and `play_card` becomes a pure-announce method with the sim/UI as the outer driver.
+**Goal:** UX baseline (X.1–X.7) fully met. The engine exposes everything a UI needs to render and drive priority decisions, and `play_card` becomes a pure-announce method with the sim/UI as the outer driver. Picks up the X.1/X.2/X.3 skip-logic and resolution metadata items deferred from Phase 2 — they make sense here because the UI is the natural consumer.
 
 **Scope (in):**
 - **Option B refactor.** `play_card` no longer drives `drive_window_to_close` internally; it just announces (open window or `respond_with`) and returns. The caller runs the loop, querying `pass_priority` / `resolve_stack_item` and consulting whatever policy module they own. `ChoiceOracle::respond_or_pass` retires; the policy moves into a separate `ResponsePolicy` (sim) or UI driver. Matches how human play actually flows.
+- **UX X.1 — auto-pass when nothing playable.** Engine-level skip using `playable_responses`. Today the policy does it; lifting to engine means non-Random oracles get it free.
+- **UX X.2 — auto-pass when no legal target.** Needs a generalized `legal_targets(card, state)` system — today only `legal_counter_targets` exists. Card-side: each effect declares its target rule; engine queries it before prompting.
+- **UX X.3 — opponent-considering-response marker.** Priority-handoff event carries `cause` field; UI shows "Opponent has N playables, considering response to {cause}."
+- **Resolution event metadata (X.7).** Each resolved item carries `unopposed: bool` (responder had nothing playable) and `declined: bool` (could have responded but chose to pass). Powers "they let it through" UI affordance and smarter-AI inference.
 - **Hold-priority (X.5):** active player can explicitly retain priority after their own play to chain their own response (e.g., draw-two into silent-murder using a drawn card).
 - **Pre-declared responses (X.6):** `register_response_intent(player, condition, action)` — engine consults intent registry before prompting.
 - **Timer (X.4):** per-window timeout. On expiry, auto-pass. Configurable.
-- **Resolution metadata (X.7) complete:** events carry `cause`, `responder_options`, `responder_action`.
 - **Visualization API:**
   - `peek_chain() → Vec<StackItemView>` — read-only view of current chain for rendering.
   - `priority_holder() → Option<PlayerId>`.
