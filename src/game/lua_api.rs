@@ -129,8 +129,13 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     let pid = parse_pid(pid_str)?;
     for _ in 0..n.max(0) {
         if s.player(pid).deck.is_empty() {
-            // L.1 (effect-draw, same as the draw step's empty-deck rule).
-            s.bump_action("self_deckout_by_choice", pid);
+            // L.1: effect-draw on an empty deck → drawing player loses.
+            // Counted separately from "voluntary suicide" plays caught by
+            // preview-rollback (those increment `preview_skip_suicide`).
+            // This counter is for handler-driven draws that committed —
+            // typically a forced trigger from an opponent's action
+            // (e.g., squirrel-overrun being blocked late game).
+            s.bump_action("decked_by_handler_draw", pid);
             s.set_winner(Some(pid.opponent()));
             break;
         }

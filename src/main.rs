@@ -669,7 +669,7 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
         "choose_player",
         "choose_int",
         "confirm",
-        "self_deckout_by_choice",
+        "decked_by_handler_draw",
         "preview_skip_suicide",
     ] {
         let a_total: u64 = all
