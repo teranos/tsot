@@ -52,8 +52,10 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 - `surge` — `on_play`: untap all your creatures (second instant; uses `game.zones`)
 - `mortal-bee` — `on_attack`: exile 1 from opponent's deck, self-skip next untap (white flying insect; demonstrates `game.add_status` with `"skip_untap"`)
 
-**Cards in corpus awaiting Phase 2** (data + abilities text only, no handler):
+**Cards in corpus awaiting Phase 2 / further infra** (data + abilities text only, no handler):
 - `goblin-berserker`, `goblin-warlord`, `goblin-conspirator` — all need choice API (`discard a card`, `reveal a goblin`); `goblin-warlord` also needs `static`.
+- `eager-goblin` — needs choice API + `game.discard` + a counter/modifier-add API (e.g. `game.add_modifier(iid, "+1/+1")`).
+- `slow-recall` — needs spell type in `play_card`, deck→exile cost source, `on_turn_end` event, delayed-trigger registry.
 
 **Other Phase 1 spec items:**
 - [x] mlua sandbox: VM constructed via `Lua::new_with(MATH | STRING | TABLE | COROUTINE)`; base-lib loader functions (`load`, `loadstring`, `loadfile`, `dofile`) nil'd in globals. Test in `card::tests::sandbox_denies_dangerous_stdlib`.
