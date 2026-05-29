@@ -24,6 +24,7 @@ struct GameStats {
     a_final_gy: u32,
     b_final_gy: u32,
     event_fires: HashMap<EventName, [u32; 2]>,
+    action_counts: HashMap<&'static str, [u32; 2]>,
 }
 
 fn main() -> mlua::Result<()> {
@@ -104,6 +105,7 @@ fn run_game(
         a_final_gy: 0,
         b_final_gy: 0,
         event_fires: HashMap::new(),
+        action_counts: HashMap::new(),
     };
 
     let mut safety = 1000;
@@ -124,7 +126,10 @@ fn run_game(
 
         if let Some(creature) = pick_random_creature_in_hand(&state, active, rng) {
             rig_creature_free_haste(&mut state, &creature);
-            if state.play_card(active, &creature, PlayChoices::default()).is_ok() {
+            if state
+                .play_card(active, &creature, PlayChoices::default(), Some(lua))
+                .is_ok()
+            {
                 bump_played(&mut stats, active);
                 let (x, y) = state.effective_stats(&creature);
                 events.push(format!("played {} ({x}/{y})", short(&creature)));
@@ -144,7 +149,7 @@ fn run_game(
         let attackers = eligible_attackers(&state, active);
         let mut declared_atk_count = 0u32;
         for atk in &attackers {
-            if state.declare_attacker(atk).is_ok() {
+            if state.declare_attacker(atk, Some(lua)).is_ok() {
                 declared_atk_count += 1;
             }
         }
@@ -196,6 +201,7 @@ fn run_game(
     stats.a_final_gy = state.a.graveyard.len() as u32;
     stats.b_final_gy = state.b.graveyard.len() as u32;
     stats.event_fires = state.event_fires.clone();
+    stats.action_counts = state.action_counts.clone();
     stats
 }
 
@@ -351,14 +357,20 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     }
 
     println!();
+    println!("Handler actions (per-game averages, what game.* methods did from inside handlers):");
+    println!("                          A         B");
+    for action in ["draw", "mill", "damage", "move"] {
+        let a_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[0]).unwrap_or(0) as f64);
+        let b_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[1]).unwrap_or(0) as f64);
+        println!("  game.{action:16} {a_avg:>6.2}    {b_avg:>6.2}");
+    }
+
+    println!();
     println!("Pending mechanics (zero today; nonzero once each engine piece lands):");
     println!("                                  A         B");
-    print_pending("draws from effects (A.4)");
     print_pending("discards (HAND → GRAVEYARD)");
     print_pending("sacrifices (cost P.16)");
-    print_pending("bounces (BOARD → HAND)");
     print_pending("activated abilities used");
-    print_pending("attached cards on board (P.6)");
     print_pending("instant responses (R.1)");
     print_pending("artifacts played (P.19)");
     print_pending("environments played (P.21)");

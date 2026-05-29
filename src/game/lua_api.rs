@@ -90,8 +90,12 @@ fn push_to_zone(s: &mut GameState, controller: PlayerId, zone: Zone, iid: String
 // --- Pure logic for each API method. -----------------------------------------
 
 fn do_damage(s: &mut GameState, iid: &str, n: i32) -> Result<()> {
+    let owner = s.card_pool.get(iid).map(|i| i.owner);
     if let Some(inst) = s.card_pool.get_mut(iid) {
         inst.damage += n;
+    }
+    if let Some(owner) = owner {
+        s.bump_action("damage", owner);
     }
     Ok(())
 }
@@ -101,10 +105,14 @@ fn do_mill(s: &mut GameState, pid_str: &str, n: i32, dest_str: &str) -> Result<(
     let dest = parse_mill_zone(dest_str)?;
     let take = (n.max(0) as usize).min(s.player(pid).deck.len());
     let drained: Vec<InstanceId> = s.player_mut(pid).deck.drain(0..take).collect();
+    let actually_milled = drained.len() as u32;
     match dest {
         Zone::Graveyard => s.player_mut(pid).graveyard.extend(drained),
         Zone::Exile => s.player_mut(pid).exile.extend(drained),
         _ => unreachable!("parse_mill_zone restricts this"),
+    }
+    for _ in 0..actually_milled {
+        s.bump_action("mill", pid);
     }
     Ok(())
 }
@@ -119,6 +127,7 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
         }
         let top = s.player_mut(pid).deck.remove(0);
         s.player_mut(pid).hand.push(top);
+        s.bump_action("draw", pid);
     }
     Ok(())
 }
@@ -141,6 +150,7 @@ fn do_move(s: &mut GameState, iid: &str, dest_str: &str) -> Result<()> {
         }
     }
     push_to_zone(s, controller, dest, iid.to_string());
+    s.bump_action("move", controller);
     Ok(())
 }
 
@@ -193,6 +203,16 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        let cell_top = &$cell;
+        game.set(
+            "deck_top",
+            $scope.create_function_mut(move |_, pid_str: String| -> Result<Option<String>> {
+                let pid = parse_pid(&pid_str)?;
+                let s = cell_top.borrow();
+                Ok(s.player(pid).deck.first().cloned())
+            })?,
+        )?;
+
         game
     }};
 }
@@ -203,95 +223,88 @@ fn credit_fire(state: &mut GameState, event: EventName, owner: PlayerId) {
 
 // --- Fire helpers per event. -------------------------------------------------
 
-/// Fire the attacker's `on_blocked_by` handler, if any. Called from
-/// `declare_blocker` once per blocker assigned. Errors log and continue.
-pub(crate) fn fire_on_blocked_by(
+fn build_self_table(
     lua: &Lua,
-    state: &mut GameState,
-    attacker: &InstanceId,
-    blocker: &InstanceId,
-) {
-    let Some(attacker_inst) = state.card_pool.get(attacker) else {
-        return;
-    };
-    let Some(handler) = attacker_inst
-        .card
-        .handlers
-        .get(&EventName::OnBlockedBy)
-        .cloned()
-    else {
-        return;
-    };
-    let attacker_owner = attacker_inst.owner;
-    let card_id = attacker_inst.card.id.clone();
-    let self_iid = attacker.clone();
-    let blocker_iid = blocker.clone();
-    let blocker_owner = state.card_pool.get(blocker).map(|i| i.owner);
-
-    let state_cell = RefCell::new(&mut *state);
-    let result: Result<()> = lua.scope(|scope| {
-        let game = build_game_table!(lua, scope, state_cell);
-
-        let self_table = lua.create_table()?;
-        self_table.set("instance_id", self_iid.clone())?;
-        self_table.set("owner", pid_to_str(attacker_owner))?;
-
-        let blocker_table = lua.create_table()?;
-        blocker_table.set("instance_id", blocker_iid)?;
-        if let Some(o) = blocker_owner {
-            blocker_table.set("owner", pid_to_str(o))?;
-        }
-
-        handler.call::<()>((game, self_table, blocker_table))?;
-        Ok(())
-    });
-
-    let _ = state_cell;
-    match result {
-        Ok(()) => credit_fire(state, EventName::OnBlockedBy, attacker_owner),
-        Err(e) => eprintln!("[lua] on_blocked_by handler for {card_id} failed: {e}"),
-    }
+    state: &GameState,
+    iid: &InstanceId,
+) -> Result<mlua::Table> {
+    let inst = state
+        .card_pool
+        .get(iid)
+        .ok_or_else(|| mlua::Error::runtime(format!("build_self_table: not in pool: {iid}")))?;
+    let t = lua.create_table()?;
+    t.set("instance_id", iid.clone())?;
+    t.set("owner", pid_to_str(inst.owner))?;
+    t.set("controller", pid_to_str(inst.controller))?;
+    let attached_list = lua.create_sequence_from(inst.attached.clone())?;
+    t.set("attached", attached_list)?;
+    Ok(t)
 }
 
-/// Fire the dying card's `on_die` handler, if any. Called from `resolve_combat`'s
-/// death loop after the Board → Graveyard move (so handlers observe the post-move
-/// zone state). Errors log and continue.
-pub(crate) fn fire_on_die(lua: &Lua, state: &mut GameState, dying: &InstanceId) {
-    let Some(inst) = state.card_pool.get(dying) else {
+/// Fire an event whose handler takes `(game, self)`. Used for `on_die`,
+/// `on_enter_board`, `on_attack`, `on_play`. Errors log and continue.
+pub(crate) fn fire_self_only(
+    lua: &Lua,
+    state: &mut GameState,
+    event: EventName,
+    source: &InstanceId,
+) {
+    let Some(inst) = state.card_pool.get(source) else {
         return;
     };
-    let Some(handler) = inst.card.handlers.get(&EventName::OnDie).cloned() else {
+    let Some(handler) = inst.card.handlers.get(&event).cloned() else {
         return;
     };
     let owner = inst.owner;
-    let controller = inst.controller;
     let card_id = inst.card.id.clone();
-    let self_iid = dying.clone();
-    let attached_snapshot: Vec<InstanceId> = inst.attached.clone();
 
     let state_cell = RefCell::new(&mut *state);
     let result: Result<()> = lua.scope(|scope| {
         let game = build_game_table!(lua, scope, state_cell);
-
-        let self_table = lua.create_table()?;
-        self_table.set("instance_id", self_iid.clone())?;
-        self_table.set("owner", pid_to_str(owner))?;
-        self_table.set("controller", pid_to_str(controller))?;
-        // Attached snapshot at the moment of death. If the handler returns
-        // them via game.move, the host's live `attached` field is updated
-        // by do_move; this snapshot lets handlers iterate without mutation
-        // hazard.
-        let attached_list = lua.create_sequence_from(attached_snapshot.clone())?;
-        self_table.set("attached", attached_list)?;
-
-        let _ = Value::Nil; // silence unused warning in case macro changes
+        let self_table = build_self_table(lua, &state_cell.borrow(), source)?;
         handler.call::<()>((game, self_table))?;
+        let _ = Value::Nil; // keep import warm
         Ok(())
     });
 
     let _ = state_cell;
     match result {
-        Ok(()) => credit_fire(state, EventName::OnDie, owner),
-        Err(e) => eprintln!("[lua] on_die handler for {card_id} failed: {e}"),
+        Ok(()) => credit_fire(state, event, owner),
+        Err(e) => eprintln!("[lua] {} handler for {card_id} failed: {e}", event.lua_key()),
+    }
+}
+
+/// Fire an event whose handler takes `(game, self, partner)`. Used for
+/// `on_blocked_by` (self=attacker, partner=blocker) and `on_block`
+/// (self=blocker, partner=attacker). Errors log and continue.
+pub(crate) fn fire_with_partner(
+    lua: &Lua,
+    state: &mut GameState,
+    event: EventName,
+    source: &InstanceId,
+    partner: &InstanceId,
+) {
+    let Some(inst) = state.card_pool.get(source) else {
+        return;
+    };
+    let Some(handler) = inst.card.handlers.get(&event).cloned() else {
+        return;
+    };
+    let owner = inst.owner;
+    let card_id = inst.card.id.clone();
+
+    let state_cell = RefCell::new(&mut *state);
+    let result: Result<()> = lua.scope(|scope| {
+        let game = build_game_table!(lua, scope, state_cell);
+        let self_table = build_self_table(lua, &state_cell.borrow(), source)?;
+        let partner_table = build_self_table(lua, &state_cell.borrow(), partner)?;
+        handler.call::<()>((game, self_table, partner_table))?;
+        Ok(())
+    });
+
+    let _ = state_cell;
+    match result {
+        Ok(()) => credit_fire(state, event, owner),
+        Err(e) => eprintln!("[lua] {} handler for {card_id} failed: {e}", event.lua_key()),
     }
 }

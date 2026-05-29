@@ -15,6 +15,7 @@
 
 use super::lua_api;
 use super::state::{AttackDecl, CombatState, GameState, InstanceId, Phase, Zone};
+use crate::card::EventName;
 use mlua::Lua;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,7 +53,14 @@ impl GameState {
     /// Declare one attacker. Taps the creature unless it has vigilance.
     /// Validates B.3 (summoning sick unless **haste**), B.13 (not tapped),
     /// B.17 (not **defender**), and that the creature is on the active player's BOARD.
-    pub fn declare_attacker(&mut self, attacker: &InstanceId) -> Result<(), CombatError> {
+    ///
+    /// When `lua` is `Some`, the attacker's `on_attack` handler fires after the
+    /// attack is recorded.
+    pub fn declare_attacker(
+        &mut self,
+        attacker: &InstanceId,
+        lua: Option<&Lua>,
+    ) -> Result<(), CombatError> {
         if self.winner.is_some() {
             return Err(CombatError::GameOver);
         }
@@ -139,8 +147,10 @@ impl GameState {
             }
         }
 
-        // TODO(events): fire "whenever this creature attacks" triggers per A.1.
-        // E.g., squirrel-overrun's "may attach 1"; midnight-raven's "may put top of deck on bottom".
+        // LUA Phase 1: fire on_attack on the declared attacker.
+        if let Some(lua) = lua {
+            lua_api::fire_self_only(lua, self, EventName::OnAttack, attacker);
+        }
         // TODO(stack): open a response window per R.1 (attack-declared trigger).
 
         Ok(())
@@ -227,14 +237,13 @@ impl GameState {
             _ => return Err(CombatError::NotAwaitingBlockers),
         }
 
-        // LUA Phase 1: fire `on_blocked_by` on the attacker, once per blocker.
-        // Per-blocker (not once-per-attacker) — matches handler signature `(game, self, blocker)`.
+        // LUA Phase 1: fire `on_blocked_by` on the attacker, then `on_block` on the blocker.
+        // Per-blocker semantics for both. Order: attacker-side first, then blocker-side.
         // Errors log and continue per LUA.md Q #3.
         if let Some(lua) = lua {
-            lua_api::fire_on_blocked_by(lua, self, attacker, blocker);
+            lua_api::fire_with_partner(lua, self, EventName::OnBlockedBy, attacker, blocker);
+            lua_api::fire_with_partner(lua, self, EventName::OnBlock, blocker, attacker);
         }
-        // TODO(events): also fire `on_block` on the blocker. Skipped for now — first
-        // wiring focuses on a single event end-to-end.
         // TODO(stack): when block-declaration is added as an R.1 window-opener (per design
         // discussion), open a response window here.
 
@@ -322,7 +331,7 @@ impl GameState {
             // attached cards via game.move; P.8 (auto-exile of leftover
             // attached) is still TODO and will run after handlers when wired.
             if let Some(lua) = lua {
-                lua_api::fire_on_die(lua, self, iid);
+                lua_api::fire_self_only(lua, self, EventName::OnDie, iid);
             }
             // TODO(types): P.8 — when a card with attached cards moves to GRAVEYARD,
             // any attached cards still present must move to EXILE.
@@ -369,7 +378,7 @@ mod tests {
 
         let defender_deck_before = s.b.deck.len();
         let defender_exile_before = s.b.exile.len();
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
         let outcome = s.confirm_blocks(None).unwrap();
         // deck_of(...) makes 1/1 cards, so attacker_x = 1.
@@ -389,7 +398,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         enter_combat(&mut s);
 
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
         s.declare_blocker(&blk, &atk, None).unwrap();
         let outcome = s.confirm_blocks(None).unwrap();
@@ -408,7 +417,7 @@ mod tests {
         put_on_board(&mut s, PlayerId::A, &atk);
         add_ability(&mut s, &atk, "haste");
         enter_combat(&mut s);
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         assert!(s.card_pool.get(&atk).unwrap().tapped);
     }
 
@@ -420,7 +429,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         add_ability(&mut s, &atk, "vigilance");
         enter_combat(&mut s);
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         assert!(!s.card_pool.get(&atk).unwrap().tapped);
     }
 
@@ -433,7 +442,7 @@ mod tests {
         add_ability(&mut s, &atk, "defender");
         enter_combat(&mut s);
         assert_eq!(
-            s.declare_attacker(&atk),
+            s.declare_attacker(&atk, None),
             Err(CombatError::AttackerIsDefender)
         );
     }
@@ -446,7 +455,7 @@ mod tests {
         s.card_pool.get_mut(&atk).unwrap().summoning_sick = true;
         enter_combat(&mut s);
         assert_eq!(
-            s.declare_attacker(&atk),
+            s.declare_attacker(&atk, None),
             Err(CombatError::AttackerSummoningSick)
         );
     }
@@ -459,7 +468,7 @@ mod tests {
         s.card_pool.get_mut(&atk).unwrap().summoning_sick = true;
         add_ability(&mut s, &atk, "haste");
         enter_combat(&mut s);
-        assert!(s.declare_attacker(&atk).is_ok());
+        assert!(s.declare_attacker(&atk, None).is_ok());
     }
 
     #[test]
@@ -470,7 +479,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         s.card_pool.get_mut(&atk).unwrap().tapped = true;
         enter_combat(&mut s);
-        assert_eq!(s.declare_attacker(&atk), Err(CombatError::AttackerTapped));
+        assert_eq!(s.declare_attacker(&atk, None), Err(CombatError::AttackerTapped));
     }
 
     #[test]
@@ -483,7 +492,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         add_ability(&mut s, &atk, "unblockable");
         enter_combat(&mut s);
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
         assert_eq!(
             s.declare_blocker(&blk, &atk, None),
@@ -502,7 +511,7 @@ mod tests {
         add_ability(&mut s, &atk, "flying");
         add_ability(&mut s, &blk, "flying");
         enter_combat(&mut s);
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
         assert!(s.declare_blocker(&blk, &atk, None).is_ok());
     }
@@ -517,7 +526,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         add_ability(&mut s, &atk, "flying");
         enter_combat(&mut s);
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
         assert_eq!(
             s.declare_blocker(&blk, &atk, None),
@@ -535,7 +544,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         s.card_pool.get_mut(&blk).unwrap().tapped = true;
         enter_combat(&mut s);
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
         assert_eq!(
             s.declare_blocker(&blk, &atk, None),
@@ -551,9 +560,156 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         // Still in Untap.
         assert_eq!(
-            s.declare_attacker(&atk),
+            s.declare_attacker(&atk, None),
             Err(CombatError::NotCombatPhase)
         );
+    }
+
+    fn registry_with_fixture(name: &str, source: &str) -> crate::card::CardRegistry {
+        let tmp = std::env::temp_dir().join(format!("tsot_fixture_{name}"));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Clean any stale fixture from a prior run.
+        if let Ok(rd) = std::fs::read_dir(&tmp) {
+            for entry in rd.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let path = tmp.join(format!("{name}.lua"));
+        std::fs::write(&path, source).unwrap();
+        crate::card::CardRegistry::load(&tmp).unwrap()
+    }
+
+    #[test]
+    fn on_attack_handler_fires_when_attacker_declared() {
+        let registry = registry_with_fixture(
+            "on_attack",
+            r#"return {
+                id = "fire-on-attack",
+                on_attack = function(game, self)
+                    _G.fire_on_attack_count = (_G.fire_on_attack_count or 0) + 1
+                end,
+            }"#,
+        );
+        let fixture = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "fire-on-attack")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&atk).unwrap();
+            inst.card.handlers = fixture.handlers.clone();
+            inst.card.id = fixture.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        registry
+            .lua()
+            .globals()
+            .set("fire_on_attack_count", 0_i32)
+            .unwrap();
+        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+
+        let count: i32 = registry
+            .lua()
+            .globals()
+            .get("fire_on_attack_count")
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(s.event_fires[&crate::card::EventName::OnAttack], [1, 0]);
+    }
+
+    #[test]
+    fn on_block_handler_fires_when_blocker_declared() {
+        let registry = registry_with_fixture(
+            "on_block",
+            r#"return {
+                id = "fire-on-block-side",
+                on_block = function(game, self, attacker)
+                    _G.fire_on_block_side_count = (_G.fire_on_block_side_count or 0) + 1
+                end,
+            }"#,
+        );
+        let fixture = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "fire-on-block-side")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        let blk = s.b.hand[0].clone();
+        // Handler goes on the BLOCKER, not the attacker.
+        {
+            let inst = s.card_pool.get_mut(&blk).unwrap();
+            inst.card.handlers = fixture.handlers.clone();
+            inst.card.id = fixture.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        put_on_board(&mut s, PlayerId::B, &blk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        registry
+            .lua()
+            .globals()
+            .set("fire_on_block_side_count", 0_i32)
+            .unwrap();
+        s.declare_attacker(&atk, None).unwrap();
+        s.confirm_attacks().unwrap();
+        s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
+
+        let count: i32 = registry
+            .lua()
+            .globals()
+            .get("fire_on_block_side_count")
+            .unwrap();
+        assert_eq!(count, 1);
+        // Owner of blocker is B → credited to B.
+        assert_eq!(s.event_fires[&crate::card::EventName::OnBlock], [0, 1]);
+    }
+
+    #[test]
+    fn midnight_raven_attack_moves_top_of_deck_to_bottom() {
+        use crate::card::CardRegistry;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let raven = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "midnight-raven")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&atk).unwrap();
+            inst.card.handlers = raven.handlers.clone();
+            inst.card.id = raven.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        let top_before = s.a.deck[0].clone();
+        let bottom_before = s.a.deck.last().unwrap().clone();
+        let deck_len = s.a.deck.len();
+
+        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+
+        // Top card moved to bottom; deck length unchanged.
+        assert_eq!(s.a.deck.len(), deck_len);
+        assert_eq!(s.a.deck.last().unwrap(), &top_before);
+        // The card that *was* on the bottom is now one above the bottom.
+        assert_eq!(s.a.deck[deck_len - 2], bottom_before);
+        assert_eq!(s.event_fires[&crate::card::EventName::OnAttack], [1, 0]);
     }
 
     #[test]
@@ -600,7 +756,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         enter_combat(&mut s);
 
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
         s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
 
@@ -641,7 +797,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         enter_combat(&mut s);
 
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
 
         let defender_deck_before = s.b.deck.len();
@@ -685,7 +841,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         enter_combat(&mut s);
 
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
 
         let a_hand_before = s.a.hand.len();
@@ -738,7 +894,7 @@ mod tests {
         add_ability(&mut s, &lender_iid, "haste");
         enter_combat(&mut s);
 
-        s.declare_attacker(&lender_iid).unwrap();
+        s.declare_attacker(&lender_iid, None).unwrap();
         s.confirm_attacks().unwrap();
         s.declare_blocker(&killer_iid, &lender_iid, None).unwrap();
         let outcome = s.confirm_blocks(Some(registry.lua())).unwrap();
@@ -767,7 +923,7 @@ mod tests {
         put_on_board(&mut s, PlayerId::A, &atk);
         add_ability(&mut s, &atk, "haste");
         enter_combat(&mut s);
-        s.declare_attacker(&atk).unwrap();
+        s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
         let outcome = s.confirm_blocks(None).unwrap();
         assert_eq!(outcome.defender_milled_to_exile, 1);

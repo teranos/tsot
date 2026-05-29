@@ -140,6 +140,10 @@ pub struct GameState {
     /// Engine metric: per-event handler-fire counts, credited to the owner of
     /// the source card. `[u32; 2]` indexed by player (0 = A, 1 = B). Diagnostic.
     pub event_fires: HashMap<EventName, [u32; 2]>,
+    /// Engine metric: counts of each `game.*` action invoked from inside a
+    /// handler. Keyed by short action name ("draw", "mill", "damage", "move").
+    /// Player attribution depends on the action — see `bump_action` callers.
+    pub action_counts: HashMap<&'static str, [u32; 2]>,
 }
 
 impl GameState {
@@ -162,6 +166,7 @@ impl GameState {
             winner: None,
             combat: None,
             event_fires: HashMap::new(),
+            action_counts: HashMap::new(),
         }
     }
 
@@ -169,6 +174,16 @@ impl GameState {
     pub fn bump_event_fire(&mut self, event: EventName, owner: PlayerId) {
         let entry = self.event_fires.entry(event).or_insert([0, 0]);
         let idx = match owner {
+            PlayerId::A => 0,
+            PlayerId::B => 1,
+        };
+        entry[idx] += 1;
+    }
+
+    /// Engine helper: credit a `game.*` action invocation to the affected player.
+    pub fn bump_action(&mut self, action: &'static str, who: PlayerId) {
+        let entry = self.action_counts.entry(action).or_insert([0, 0]);
+        let idx = match who {
             PlayerId::A => 0,
             PlayerId::B => 1,
         };

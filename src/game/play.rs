@@ -2,8 +2,10 @@
 //!
 //! Mirrors RULES.md P.1, P.2, P.6, P.7, P.11, P.17.
 
+use super::lua_api;
 use super::state::{GameState, InstanceId, PlayerId};
-use crate::card::{CardType, CostSource};
+use crate::card::{CardType, CostSource, EventName};
+use mlua::Lua;
 use std::collections::HashSet;
 
 /// Player-supplied choices when playing a card.
@@ -57,6 +59,7 @@ impl GameState {
         player: PlayerId,
         instance: &InstanceId,
         choices: PlayChoices,
+        lua: Option<&Lua>,
     ) -> Result<(), PlayError> {
         if self.winner.is_some() {
             return Err(PlayError::GameOver);
@@ -123,6 +126,12 @@ impl GameState {
             });
         }
 
+        // LUA Phase 1: on_play fires after validation, before mutations.
+        // The played card is still in HAND when the handler runs.
+        if let Some(lua) = lua {
+            lua_api::fire_self_only(lua, self, EventName::OnPlay, instance);
+        }
+
         // All checks pass — apply mutations.
         let pm = self.player_mut(player);
 
@@ -141,10 +150,6 @@ impl GameState {
 
         pm.board.push(instance.clone());
 
-        // TODO(events): fire "enter the BOARD" triggers per A.1 here.
-        // E.g., jellyfish's "when this creature enters the board, return target creature
-        // to its owner's hand"; mesopelagic-fish has none, but many cards will.
-
         let inst_mut = self.card_pool.get_mut(instance).unwrap();
         inst_mut.summoning_sick = true; // B.3
         for hid in &choices.hand_payment_ids {
@@ -155,6 +160,12 @@ impl GameState {
             if let Some(a) = self.card_pool.get_mut(hid) {
                 a.face_down = true;
             }
+        }
+
+        // LUA Phase 1: on_enter_board fires after the card is on BOARD and
+        // attachments are wired (so handlers see self.attached correctly).
+        if let Some(lua) = lua {
+            lua_api::fire_self_only(lua, self, EventName::OnEnterBoard, instance);
         }
 
         Ok(())
@@ -172,7 +183,7 @@ mod tests {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         let iid = s.a.hand[0].clone();
         assert!(s
-            .play_card(PlayerId::A, &iid, PlayChoices::default())
+            .play_card(PlayerId::A, &iid, PlayChoices::default(), None)
             .is_ok());
         assert!(!s.a.hand.contains(&iid));
         assert!(s.a.board.contains(&iid));
@@ -195,7 +206,9 @@ mod tests {
         let choices = PlayChoices {
             hand_payment_ids: vec![payment.clone()],
         };
-        assert!(s.play_card(PlayerId::A, &creature, choices).is_ok());
+        assert!(s
+            .play_card(PlayerId::A, &creature, choices, None)
+            .is_ok());
         assert!(s.a.board.contains(&creature));
         assert!(!s.a.hand.contains(&creature));
         assert!(!s.a.hand.contains(&payment));
@@ -221,7 +234,7 @@ mod tests {
             }],
         );
         assert!(s
-            .play_card(PlayerId::A, &creature, PlayChoices::default())
+            .play_card(PlayerId::A, &creature, PlayChoices::default(), None)
             .is_ok());
         assert_eq!(s.a.deck.len(), deck_before - 3);
         assert_eq!(s.a.graveyard.len(), graveyard_before + 3);
@@ -258,6 +271,7 @@ mod tests {
             PlayChoices {
                 hand_payment_ids: vec![pay.clone()],
             },
+            None,
         );
         assert!(result.is_ok());
         assert!(s.a.board.contains(&creature));
@@ -270,7 +284,7 @@ mod tests {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         let in_deck = s.a.deck[0].clone();
         assert_eq!(
-            s.play_card(PlayerId::A, &in_deck, PlayChoices::default()),
+            s.play_card(PlayerId::A, &in_deck, PlayChoices::default(), None),
             Err(PlayError::NotInHand)
         );
     }
@@ -295,6 +309,7 @@ mod tests {
             PlayChoices {
                 hand_payment_ids: vec![pay],
             },
+            None,
         );
         assert_eq!(
             result,
@@ -324,6 +339,7 @@ mod tests {
             PlayChoices {
                 hand_payment_ids: vec![creature.clone()],
             },
+            None,
         );
         assert_eq!(result, Err(PlayError::HandPaymentInvalid(creature)));
     }
@@ -348,6 +364,7 @@ mod tests {
             PlayChoices {
                 hand_payment_ids: vec![pay.clone(), pay.clone()],
             },
+            None,
         );
         assert_eq!(result, Err(PlayError::DuplicateHandPayment(pay)));
     }
@@ -365,7 +382,7 @@ mod tests {
                 is_x: false,
             }],
         );
-        let result = s.play_card(PlayerId::A, &creature, PlayChoices::default());
+        let result = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
         assert_eq!(
             result,
             Err(PlayError::InsufficientDeckForMill {
@@ -381,7 +398,7 @@ mod tests {
         let iid = s.a.hand[0].clone();
         s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Instant;
         assert_eq!(
-            s.play_card(PlayerId::A, &iid, PlayChoices::default()),
+            s.play_card(PlayerId::A, &iid, PlayChoices::default(), None),
             Err(PlayError::UnsupportedType(CardType::Instant))
         );
     }
@@ -399,7 +416,7 @@ mod tests {
                 is_x: true,
             }],
         );
-        let result = s.play_card(PlayerId::A, &creature, PlayChoices::default());
+        let result = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
         assert_eq!(result, Err(PlayError::VariableXNotSupported));
     }
 
@@ -416,7 +433,7 @@ mod tests {
                 is_x: false,
             }],
         );
-        let result = s.play_card(PlayerId::A, &creature, PlayChoices::default());
+        let result = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
         assert_eq!(
             result,
             Err(PlayError::UnsupportedCostSource(CostSource::Graveyard))
@@ -440,10 +457,159 @@ mod tests {
         let deck_before = s.a.deck.clone();
         let board_before = s.a.board.clone();
         let graveyard_before = s.a.graveyard.clone();
-        let _ = s.play_card(PlayerId::A, &creature, PlayChoices::default());
+        let _ = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
         assert_eq!(s.a.hand, hand_before);
         assert_eq!(s.a.deck, deck_before);
         assert_eq!(s.a.board, board_before);
         assert_eq!(s.a.graveyard, graveyard_before);
+    }
+
+    fn registry_with_fixture(name: &str, source: &str) -> crate::card::CardRegistry {
+        let tmp = std::env::temp_dir().join(format!("tsot_fixture_{name}"));
+        std::fs::create_dir_all(&tmp).unwrap();
+        if let Ok(rd) = std::fs::read_dir(&tmp) {
+            for entry in rd.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let path = tmp.join(format!("{name}.lua"));
+        std::fs::write(&path, source).unwrap();
+        crate::card::CardRegistry::load(&tmp).unwrap()
+    }
+
+    #[test]
+    fn on_play_handler_fires_before_card_leaves_hand() {
+        let registry = registry_with_fixture(
+            "on_play",
+            r#"return {
+                id = "fire-on-play",
+                on_play = function(game, self)
+                    -- Record whether the card is still in hand when we see it.
+                    _G.fire_on_play_count = (_G.fire_on_play_count or 0) + 1
+                end,
+            }"#,
+        );
+        let fixture = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "fire-on-play")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let creature = s.a.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&creature).unwrap();
+            inst.card.handlers = fixture.handlers.clone();
+            inst.card.id = fixture.id.clone();
+        }
+
+        registry
+            .lua()
+            .globals()
+            .set("fire_on_play_count", 0_i32)
+            .unwrap();
+        s.play_card(
+            PlayerId::A,
+            &creature,
+            PlayChoices::default(),
+            Some(registry.lua()),
+        )
+        .unwrap();
+
+        let count: i32 = registry.lua().globals().get("fire_on_play_count").unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(s.event_fires[&crate::card::EventName::OnPlay], [1, 0]);
+    }
+
+    #[test]
+    fn goblin_scribe_draws_a_card_on_enter_board() {
+        let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let scribe = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "goblin-scribe")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let creature = s.a.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&creature).unwrap();
+            inst.card.handlers = scribe.handlers.clone();
+            inst.card.id = scribe.id.clone();
+        }
+        let hand_before = s.a.hand.len();
+        let deck_before = s.a.deck.len();
+
+        s.play_card(
+            PlayerId::A,
+            &creature,
+            PlayChoices::default(),
+            Some(registry.lua()),
+        )
+        .unwrap();
+
+        // Hand lost the played card and gained one drawn card → net zero.
+        // (-1 for play, +1 for ETB draw.)
+        assert_eq!(s.a.hand.len(), hand_before);
+        assert_eq!(s.a.deck.len(), deck_before - 1);
+        assert!(s.a.board.contains(&creature));
+        assert_eq!(
+            s.event_fires[&crate::card::EventName::OnEnterBoard],
+            [1, 0]
+        );
+    }
+
+    #[test]
+    fn on_enter_board_handler_fires_after_card_on_board() {
+        let registry = registry_with_fixture(
+            "on_enter_board",
+            r#"return {
+                id = "fire-on-enter",
+                on_enter_board = function(game, self)
+                    _G.fire_on_enter_count = (_G.fire_on_enter_count or 0) + 1
+                end,
+            }"#,
+        );
+        let fixture = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "fire-on-enter")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let creature = s.a.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&creature).unwrap();
+            inst.card.handlers = fixture.handlers.clone();
+            inst.card.id = fixture.id.clone();
+        }
+
+        registry
+            .lua()
+            .globals()
+            .set("fire_on_enter_count", 0_i32)
+            .unwrap();
+        s.play_card(
+            PlayerId::A,
+            &creature,
+            PlayChoices::default(),
+            Some(registry.lua()),
+        )
+        .unwrap();
+
+        let count: i32 = registry
+            .lua()
+            .globals()
+            .get("fire_on_enter_count")
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(s.a.board.contains(&creature));
+        assert_eq!(
+            s.event_fires[&crate::card::EventName::OnEnterBoard],
+            [1, 0]
+        );
     }
 }
