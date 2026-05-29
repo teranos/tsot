@@ -557,6 +557,60 @@ mod tests {
     }
 
     #[test]
+    fn surge_instant_untaps_all_your_creatures_on_play() {
+        let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let surge = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "surge")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let surge_iid = s.a.hand[0].clone();
+        let cred1 = s.a.hand[1].clone();
+        let cred2 = s.a.hand[2].clone();
+        let b_creat = s.b.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&surge_iid).unwrap();
+            inst.card = surge.clone();
+        }
+        // Put two tapped A creatures on board, plus one tapped B creature.
+        s.a.hand.retain(|x| x != &cred1 && x != &cred2);
+        s.a.board.push(cred1.clone());
+        s.a.board.push(cred2.clone());
+        s.card_pool.get_mut(&cred1).unwrap().tapped = true;
+        s.card_pool.get_mut(&cred2).unwrap().tapped = true;
+        s.b.hand.retain(|x| x != &b_creat);
+        s.b.board.push(b_creat.clone());
+        s.card_pool.get_mut(&b_creat).unwrap().tapped = true;
+
+        let payment = s.a.hand.iter().find(|x| *x != &surge_iid).cloned().unwrap();
+        let payment2 = s
+            .a
+            .hand
+            .iter()
+            .find(|x| *x != &surge_iid && **x != payment)
+            .cloned()
+            .unwrap();
+        s.play_card(
+            PlayerId::A,
+            &surge_iid,
+            PlayChoices {
+                hand_payment_ids: vec![payment, payment2],
+            },
+            Some(registry.lua()),
+        )
+        .unwrap();
+
+        // Both A creatures untapped.
+        assert!(!s.card_pool.get(&cred1).unwrap().tapped);
+        assert!(!s.card_pool.get(&cred2).unwrap().tapped);
+        // B's creature unchanged.
+        assert!(s.card_pool.get(&b_creat).unwrap().tapped);
+    }
+
+    #[test]
     fn draw_two_instant_plays_from_graveyard_cost_and_draws() {
         let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
         let draw_two = registry

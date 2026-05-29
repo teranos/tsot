@@ -4,7 +4,7 @@
 //! macro inside `Lua::scope`, so closures can borrow `&mut GameState` for the
 //! duration of the handler call only.
 
-use super::state::{GameState, InstanceId, PlayerId, Zone};
+use super::state::{CombatState, GameState, InstanceId, PlayerId, Zone};
 use crate::card::EventName;
 use mlua::{Lua, Result, Value};
 use std::cell::RefCell;
@@ -132,6 +132,17 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     Ok(())
 }
 
+fn do_set_tapped(s: &mut GameState, iid: &str, tapped: bool) -> Result<()> {
+    let owner = s.card_pool.get(iid).map(|i| i.owner);
+    if let Some(inst) = s.card_pool.get_mut(iid) {
+        inst.tapped = tapped;
+    }
+    if let Some(o) = owner {
+        s.bump_action(if tapped { "tap" } else { "untap" }, o);
+    }
+    Ok(())
+}
+
 fn do_move(s: &mut GameState, iid: &str, dest_str: &str) -> Result<()> {
     let dest = parse_zone(dest_str)?;
     let controller = s
@@ -210,6 +221,54 @@ macro_rules! build_game_table {
                 let pid = parse_pid(&pid_str)?;
                 let s = cell_top.borrow();
                 Ok(s.player(pid).deck.first().cloned())
+            })?,
+        )?;
+
+        let cell_tap = &$cell;
+        game.set(
+            "tap",
+            $scope.create_function_mut(move |_, iid: String| {
+                do_set_tapped(&mut *cell_tap.borrow_mut(), &iid, true)
+            })?,
+        )?;
+
+        let cell_untap = &$cell;
+        game.set(
+            "untap",
+            $scope.create_function_mut(move |_, iid: String| {
+                do_set_tapped(&mut *cell_untap.borrow_mut(), &iid, false)
+            })?,
+        )?;
+
+        let cell_atk = &$cell;
+        game.set(
+            "attackers",
+            $scope.create_function_mut(move |lua, _: ()| -> Result<mlua::Table> {
+                let s = cell_atk.borrow();
+                let list: Vec<InstanceId> = match &s.combat {
+                    Some(CombatState::AwaitingBlockers { attacks }) => {
+                        attacks.iter().map(|a| a.attacker.clone()).collect()
+                    }
+                    _ => Vec::new(),
+                };
+                lua.create_sequence_from(list)
+            })?,
+        )?;
+
+        let cell_zones = &$cell;
+        game.set(
+            "zones",
+            $scope.create_function_mut(move |lua, pid_str: String| -> Result<mlua::Table> {
+                let pid = parse_pid(&pid_str)?;
+                let s = cell_zones.borrow();
+                let p = s.player(pid);
+                let t = lua.create_table()?;
+                t.set("hand", lua.create_sequence_from(p.hand.clone())?)?;
+                t.set("deck", lua.create_sequence_from(p.deck.clone())?)?;
+                t.set("graveyard", lua.create_sequence_from(p.graveyard.clone())?)?;
+                t.set("exile", lua.create_sequence_from(p.exile.clone())?)?;
+                t.set("board", lua.create_sequence_from(p.board.clone())?)?;
+                Ok(t)
             })?,
         )?;
 

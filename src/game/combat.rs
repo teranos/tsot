@@ -67,13 +67,13 @@ impl GameState {
         if self.phase != Phase::Combat {
             return Err(CombatError::NotCombatPhase);
         }
-        if !matches!(self.combat, Some(CombatState::AwaitingAttackers)) {
-            // First declare on this turn: initialize the combat state.
-            if self.combat.is_none() {
-                self.combat = Some(CombatState::AwaitingAttackers);
-            } else {
-                return Err(CombatError::NotAwaitingAttackers);
-            }
+        // First declare initializes combat state; subsequent declares append to
+        // the buffered attacker list. AwaitingBlockers (the data-shape used as
+        // a buffer during declaration) is also a valid pre-confirm state.
+        match &self.combat {
+            None => self.combat = Some(CombatState::AwaitingAttackers),
+            Some(CombatState::AwaitingAttackers)
+            | Some(CombatState::AwaitingBlockers { .. }) => {}
         }
 
         let active = self.active_player;
@@ -101,26 +101,14 @@ impl GameState {
         // Snapshot before mutating.
         let vigilant = inst.has_keyword("vigilance");
 
-        // Add to current attack list (initialize the state if needed).
-        if !matches!(self.combat, Some(CombatState::AwaitingAttackers)) {
-            self.combat = Some(CombatState::AwaitingAttackers);
-        }
-        // Track attackers in a temporary holder until confirm_attacks transitions.
-        // For simplicity, mutate as AwaitingBlockers-prep: append into a buffered list.
-        // We re-use AwaitingBlockers-shape internally during declaration too.
-        // (Cleaner: keep AwaitingAttackers state but with attacks accumulated.)
-        // To avoid an extra enum variant, store accumulated attackers as a side-cache:
-        // we just push into `pending_attackers` (added via this method).
-        // Simpler approach: store as AwaitingBlockers immediately and just not allow blocks until confirm.
-        // We'll keep AwaitingAttackers and use a small side Vec — but enum stays simple by reusing
-        // AwaitingBlockers with the understanding it's not yet "confirmed".
+        // Append to the buffered attacker list. The buffer is encoded as
+        // AwaitingBlockers from the start (data shape matches); confirm_attacks
+        // is the no-op marker that says "no more attackers, blockers may now
+        // declare." (The early-state-init block above already promoted None to
+        // AwaitingAttackers; the first attacker transitions that to
+        // AwaitingBlockers below.)
         match &mut self.combat {
             Some(CombatState::AwaitingAttackers) => {
-                // Transition into AwaitingBlockers shape with empty blockers; confirm_attacks is a no-op marker.
-                // We model accumulated attackers via AwaitingBlockers because the data shape matches.
-                // confirm_attacks() is required to "lock" attackers before blockers may be declared.
-                // To make this work we treat the *first* declare_attacker as transitioning to
-                // a "buffering" mode encoded as AwaitingBlockers with no entries.
                 self.combat = Some(CombatState::AwaitingBlockers {
                     attacks: vec![AttackDecl {
                         attacker: attacker.clone(),
@@ -563,6 +551,42 @@ mod tests {
             s.declare_attacker(&atk, None),
             Err(CombatError::NotCombatPhase)
         );
+    }
+
+    #[test]
+    fn battle_captain_untaps_other_attackers_on_attack() {
+        use crate::card::CardRegistry;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let captain = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "battle-captain")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let cap_iid = s.a.hand[0].clone();
+        let other_iid = s.a.hand[1].clone();
+        {
+            let inst = s.card_pool.get_mut(&cap_iid).unwrap();
+            inst.card.handlers = captain.handlers.clone();
+            inst.card.id = captain.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &cap_iid);
+        put_on_board(&mut s, PlayerId::A, &other_iid);
+        add_ability(&mut s, &cap_iid, "haste");
+        add_ability(&mut s, &other_iid, "haste");
+        enter_combat(&mut s);
+
+        // Other creature attacks first; it taps.
+        s.declare_attacker(&other_iid, Some(registry.lua())).unwrap();
+        assert!(s.card_pool.get(&other_iid).unwrap().tapped);
+
+        // Captain attacks; its handler untaps the other attacker.
+        s.declare_attacker(&cap_iid, Some(registry.lua())).unwrap();
+        assert!(s.card_pool.get(&cap_iid).unwrap().tapped); // captain itself stays tapped
+        assert!(!s.card_pool.get(&other_iid).unwrap().tapped);
     }
 
     fn registry_with_fixture(name: &str, source: &str) -> crate::card::CardRegistry {

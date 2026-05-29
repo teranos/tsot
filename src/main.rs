@@ -494,7 +494,7 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     println!();
     println!("Engine + handler actions (per-game averages):");
     println!("                          A         B");
-    for action in ["draw", "mill", "damage", "move", "discard"] {
+    for action in ["draw", "mill", "damage", "move", "discard", "tap", "untap"] {
         let a_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[0]).unwrap_or(0) as f64);
         let b_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[1]).unwrap_or(0) as f64);
         println!("  game.{action:16} {a_avg:>6.2}    {b_avg:>6.2}");

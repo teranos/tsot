@@ -32,8 +32,9 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 - [x] `game.move(card_id, dest_zone)` — searches zones AND attached lists; clears face_down when unattaching
 - [x] `game.opponent(player_id)`
 - [x] `game.deck_top(player_id) → iid_or_nil` — read top of deck without drawing
-- [ ] `game.tap(card_id)`, `game.untap(card_id)`
-- [ ] `game.zones(player_id).{hand, deck, graveyard, exile, board}`
+- [x] `game.tap(card_id)`, `game.untap(card_id)`
+- [x] `game.zones(player_id).{hand, deck, graveyard, exile, board}` — returns iid lists per zone
+- [x] `game.attackers() → list of iids` — currently-declared attackers (added beyond the original v1 list; needed for "untap other attackers"-style handlers)
 - [ ] `game.card(card_id)` — read-only view
 - [ ] `game.add_status(card_id, kind, duration)`
 - [ ] `game.discard(player_id, n)` — needs choice in the natural reading
@@ -47,6 +48,8 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 - `goblin-scribe` — `on_enter_board`: draw 1
 - `thorn-beetle` — `on_block`: deal 1 damage to attacker
 - `draw-two` — `on_play`: draw 2 (first instant — `play_card` now routes Instant → GRAVEYARD; GRAVEYARD cost source supported deterministically by exiling most-recent N)
+- `battle-captain` — `on_attack`: untap all other attacking creatures (static lord-effect ability still deferred to Phase 2)
+- `surge` — `on_play`: untap all your creatures (second instant; uses `game.zones`)
 
 **Cards in corpus awaiting Phase 2** (data + abilities text only, no handler):
 - `goblin-berserker`, `goblin-warlord`, `goblin-conspirator` — all need choice API (`discard a card`, `reveal a goblin`); `goblin-warlord` also needs `static`.
@@ -57,6 +60,8 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 - [x] Engine metrics: `event_fires: HashMap<EventName, [u32; 2]>` and `action_counts: HashMap<&'static str, [u32; 2]>` (per-action counts for `game.*` invocations and engine-driven actions like U.10 discards) — sim surfaces both as per-game averages
 
 **Plumbing pattern:** every event method (`play_card`, `declare_attacker`, `declare_blocker`, `confirm_blocks`) takes `Option<&Lua>`. `None` = tests of pure game logic; `Some(registry.lua())` = sim and integration tests. The trigger to introduce an `Engine` wrapper owning both `GameState` and `&CardRegistry` is when this `Option<&Lua>` becomes noisy across many more methods.
+
+**Surfaced engine bug fixed along the way:** `declare_attacker` had a hidden state-reset that silently dropped previously-declared attackers when a second `declare_attacker` was called on the same combat. Discovered while wiring `battle-captain`'s `on_attack` handler (which calls `game.attackers()` and expected the full list). Multi-attacker combats now work; the reset block was unreachable-by-design and got removed.
 
 **Scope (in):**
 - **Card file shape extended.** Each `.lua` card may add function fields alongside the existing data table:
