@@ -26,8 +26,12 @@ pub struct PlayChoices {
 pub enum PlayError {
     GameOver,
     NotInHand,
-    /// This slice supports CREATURE and INSTANT card types.
+    /// Card type not currently routable by `play_card`. Today: Creature,
+    /// Instant, Spell. Artifact and Environment still unsupported.
     UnsupportedType(CardType),
+    /// Spell (sorcery timing) cast while a response window is open. Per
+    /// R.1 + sorcery convention: sorceries are main-phase only.
+    SorceryAtInstantSpeed,
     /// This slice supports HAND, MILL, and GRAVEYARD cost sources.
     UnsupportedCostSource(CostSource),
     /// GRAVEYARD doesn't have enough cards to pay the GRAVEYARD cost.
@@ -81,10 +85,16 @@ impl GameState {
         let card_kind = inst_ref.card.kind;
         let card_cost = inst_ref.card.cost.clone();
 
-        if !matches!(card_kind, CardType::Creature | CardType::Instant) {
-            // TODO(types): handle Spell (→ GRAVEYARD per C.10), Artifact (→ BOARD per P.19),
+        if !matches!(card_kind, CardType::Creature | CardType::Spell) {
+            // TODO(types): Artifact (→ BOARD per P.19),
             // Environment (→ BOARD per P.21 + P.22 slot management).
             return Err(PlayError::UnsupportedType(card_kind));
+        }
+        // Sorcery timing: a Spell with Timing::Sorcery cannot be cast while
+        // a response window is open (main-phase only).
+        let card_timing = inst_ref.card.timing;
+        if card_timing == Some(crate::card::Timing::Sorcery) && self.priority.is_some() {
+            return Err(PlayError::SorceryAtInstantSpeed);
         }
 
         // Aggregate cost requirements per source.
@@ -290,7 +300,11 @@ impl GameState {
                     );
                 }
             }
-            CardType::Instant => {
+            CardType::Spell => {
+                // P.1 + C.10: spells resolve to GRAVEYARD. HAND payments
+                // follow (no host to attach to). Instant vs sorcery only
+                // affects cast timing (enforced in `play_card` validation);
+                // resolution is the same either way.
                 for hid in choices.hand_payment_ids.clone() {
                     let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
                 }

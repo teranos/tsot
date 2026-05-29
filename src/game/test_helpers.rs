@@ -11,6 +11,7 @@ pub(crate) fn card_with_stats(id: &str, x: i32, y: i32) -> Card {
         name: String::new(),
         colors: vec![],
         kind: CardType::Creature,
+        timing: None,
         subtypes: vec![],
         symbol: String::new(),
         cost: vec![],
@@ -21,11 +22,17 @@ pub(crate) fn card_with_stats(id: &str, x: i32, y: i32) -> Card {
 }
 
 pub(crate) fn card_no_stats(id: &str, kind: CardType) -> Card {
+    let timing = if kind == CardType::Spell {
+        Some(crate::card::Timing::Instant)
+    } else {
+        None
+    };
     Card {
         id: id.to_string(),
         name: String::new(),
         colors: vec![],
         kind,
+        timing,
         subtypes: vec![],
         symbol: String::new(),
         cost: vec![],

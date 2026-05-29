@@ -55,9 +55,10 @@ The following zones are part of the game.
 - **C.3** A card has two display states: face-up and face-down.
 - **C.4** Sleeves are not part of this game. Sleeves are permanently banned.
 - **C.5** A card is either colorless or of one or more colors.
-- **C.6** An instant is a card that can be played at any time.
-- **C.9** Every card is a spell. The card's specific type (e.g., creature, instant, spell, artifact) is a kind of spell.
-- **C.10** A card whose specific type is `SPELL` (with no further specialization) can only be played during its controller's turn.
+- **C.6** An instant is a spell with **instant timing**: it can be played at any time, including inside a response window opened by another player's action.
+- **C.7** A sorcery is a spell with **sorcery timing**: it can only be played during its controller's turn, and not inside any response window. "Plain spell" (the legacy `type = "spell"` declaration with no further specialization) is treated as sorcery timing.
+- **C.9** A card whose specific type is `SPELL` is non-permanent: when played, it resolves to GRAVEYARD per P.1. Instants and sorceries are spells distinguished by timing (C.6, C.7). Other card types (creature, artifact, environment) are permanents and follow their own play rules.
+- **C.10** A spell that is played resolves to GRAVEYARD. Its `on_play` handler fires after the card has left HAND and arrived in GRAVEYARD.
 - **C.11** A card's symbol is a structured property that may be referenced by game effects (e.g., "count cards with symbol ⨳ in your GRAVEYARD").
 - **C.12** A card's effective stats are recomputed continuously from the card's printed X/Y plus all active modifiers. Whenever game state changes, effective stats are re-evaluated.
 - **C.8** A card's X/Y stats may be modified by abilities while the card is on the BOARD.

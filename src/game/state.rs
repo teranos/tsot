@@ -389,11 +389,9 @@ impl GameState {
         }
     }
 
-    /// R.1.a / R.1.b — open a response window. `item` is the announced chain
-    /// entry (a played card, or an attack declaration). Per R.7, the active
-    /// player always gets priority first.
-    ///
-    /// Phase 1: no nesting. Errors if a window is already open.
+    /// R.1.a — open a response window with `item` already on the chain. Per
+    /// R.7, the active player gets priority first. Errors if a window is
+    /// already open (no nesting in Phase 1).
     pub fn open_response_window(&mut self, item: StackItem) -> Result<(), PriorityError> {
         if self.priority.is_some() {
             return Err(PriorityError::WindowAlreadyOpen);
@@ -401,6 +399,24 @@ impl GameState {
         let active = self.active_player;
         self.set_priority(Some(PriorityState {
             chain: vec![item],
+            next_to_act: active,
+            consecutive_passes: 0,
+        }));
+        Ok(())
+    }
+
+    /// R.1.b — open a response window with no chain item. The triggering
+    /// event (an attack declaration) has already happened by the time this
+    /// is called — the window exists so responders can add casts to the
+    /// chain before any consequential triggers fire. Closes naturally after
+    /// two consecutive passes on an empty chain.
+    pub fn open_response_window_empty(&mut self) -> Result<(), PriorityError> {
+        if self.priority.is_some() {
+            return Err(PriorityError::WindowAlreadyOpen);
+        }
+        let active = self.active_player;
+        self.set_priority(Some(PriorityState {
+            chain: Vec::new(),
             next_to_act: active,
             consecutive_passes: 0,
         }));
@@ -759,7 +775,7 @@ mod tests {
     fn effective_stats_returns_zero_for_card_without_printed_stats() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         let iid = s.a.hand[0].clone();
-        s.card_pool.get_mut(&iid).unwrap().card = card_no_stats("instant", CardType::Instant);
+        s.card_pool.get_mut(&iid).unwrap().card = card_no_stats("instant", CardType::Spell);
         assert_eq!(s.effective_stats(&iid), (0, 0));
     }
 

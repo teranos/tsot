@@ -162,7 +162,8 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
                 let Some(inst) = state.card_pool.get(*iid) else {
                     return false;
                 };
-                inst.card.kind == crate::card::CardType::Instant
+                inst.card.kind == crate::card::CardType::Spell
+                    && inst.card.timing == Some(crate::card::Timing::Instant)
                     && inst.card.cost.iter().all(|c| c.amount == 0 && !c.is_x)
             })
             .cloned()

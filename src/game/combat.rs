@@ -136,13 +136,17 @@ impl GameState {
         // scales with whether anyone attacked). Cleared on End → Untap.
         self.set_creature_attacked_this_turn(true);
 
-        // TODO(stack-phase-1): R.1.b — open a response window here. Per R.7,
-        // active player gets priority first (and typically just passes —
-        // they just attacked). The defender then has the meaningful chance
-        // to remove / counter the attacker before on_attack fires. Resolves
-        // after both pass consecutively. Until wired, on_attack fires
-        // immediately and defender has no response window before block
-        // declarations begin.
+        // R.1.b — open a response window with empty chain. Defender gets
+        // their chance (after active passes) to cast removal / counters /
+        // pumps before on_attack fires. The window has no chain item: the
+        // attack declaration itself is already a fait accompli (creature
+        // tapped, recorded in combat state). Window closes naturally after
+        // two consecutive passes on an empty chain. on_attack then fires
+        // inline as part of the resolution sequence.
+        let mut ctx = ctx;
+        let _ = self.open_response_window_empty();
+        let _ = self.drive_window_to_close(ctx.as_deref_mut());
+
         if let Some(c) = ctx {
             lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker);
         }

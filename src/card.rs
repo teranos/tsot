@@ -53,10 +53,21 @@ impl CardRegistry {
 pub enum CardType {
     Unspecified,
     Creature,
-    Instant,
+    /// Non-permanent card that resolves to GRAVEYARD. The timing class
+    /// (`Card.timing`) decides whether it can be cast at instant speed
+    /// (any priority window) or only in your main phase.
     Spell,
     Artifact,
     Environment,
+}
+
+/// When a spell can be cast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Timing {
+    /// Castable at any time, including inside response windows.
+    Instant,
+    /// Main phase only. Cannot be cast inside a response window.
+    Sorcery,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -126,6 +137,13 @@ pub struct Card {
     pub name: String,
     pub colors: Vec<String>,
     pub kind: CardType,
+    /// `Some(Timing::Instant)` for instants, `Some(Timing::Sorcery)` for
+    /// main-phase-only spells, `None` for permanents (Creature, Artifact,
+    /// Environment). Authors write `type = "instant"` or `type = "sorcery"`
+    /// in Lua; the parser translates both to `kind = Spell` with the
+    /// appropriate timing.
+    #[serde(default)]
+    pub timing: Option<Timing>,
     pub subtypes: Vec<String>,
     pub symbol: String,
     pub cost: Vec<CostComponent>,
@@ -149,6 +167,7 @@ impl std::fmt::Debug for Card {
             .field("name", &self.name)
             .field("colors", &self.colors)
             .field("kind", &self.kind)
+            .field("timing", &self.timing)
             .field("subtypes", &self.subtypes)
             .field("symbol", &self.symbol)
             .field("cost", &self.cost)
@@ -163,14 +182,17 @@ fn normalize_color(s: &str) -> String {
     s.to_ascii_lowercase()
 }
 
-fn parse_type(s: &str) -> Result<CardType, String> {
+/// Lua-side type strings translate to `(kind, timing)`. "instant" and
+/// "sorcery" are both Spell kind with different timing; "spell" (legacy
+/// alias) is treated as sorcery timing.
+fn parse_type(s: &str) -> Result<(CardType, Option<Timing>), String> {
     match s.to_ascii_lowercase().as_str() {
-        "" => Ok(CardType::Unspecified),
-        "creature" => Ok(CardType::Creature),
-        "instant" => Ok(CardType::Instant),
-        "spell" => Ok(CardType::Spell),
-        "artifact" => Ok(CardType::Artifact),
-        "environment" => Ok(CardType::Environment),
+        "" => Ok((CardType::Unspecified, None)),
+        "creature" => Ok((CardType::Creature, None)),
+        "instant" => Ok((CardType::Spell, Some(Timing::Instant))),
+        "sorcery" | "spell" => Ok((CardType::Spell, Some(Timing::Sorcery))),
+        "artifact" => Ok((CardType::Artifact, None)),
+        "environment" => Ok((CardType::Environment, None)),
         other => Err(format!("unknown type: {other}")),
     }
 }
@@ -279,7 +301,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     let name = table.get::<Option<String>>("name")?.unwrap_or_default();
     let symbol = table.get::<Option<String>>("symbol")?.unwrap_or_default();
     let kind_s = table.get::<Option<String>>("type")?.unwrap_or_default();
-    let kind = parse_type(&kind_s).map_err(mlua::Error::runtime)?;
+    let (kind, timing) = parse_type(&kind_s).map_err(mlua::Error::runtime)?;
     let subtypes = read_string_vec(&table, "subtypes")?;
     let abilities = read_string_vec(&table, "abilities")?;
     let colors = read_color_vec(&table)?;
@@ -292,6 +314,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         name,
         colors,
         kind,
+        timing,
         subtypes,
         symbol,
         cost,

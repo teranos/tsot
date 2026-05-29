@@ -64,7 +64,7 @@ fn main() -> mlua::Result<()> {
     let playable_pool: Vec<Card> = registry
         .cards()
         .iter()
-        .filter(|c| matches!(c.kind, CardType::Creature | CardType::Instant))
+        .filter(|c| matches!(c.kind, CardType::Creature | CardType::Spell))
         .filter(|c| !c.subtypes.iter().any(|s| s.eq_ignore_ascii_case("test")))
         .filter(|c| {
             c.cost.iter().all(|cc| {
@@ -82,14 +82,19 @@ fn main() -> mlua::Result<()> {
         .count();
     let instant_count = playable_pool
         .iter()
-        .filter(|c| matches!(c.kind, CardType::Instant))
+        .filter(|c| c.kind == CardType::Spell && c.timing == Some(tsot::Timing::Instant))
+        .count();
+    let sorcery_count = playable_pool
+        .iter()
+        .filter(|c| c.kind == CardType::Spell && c.timing == Some(tsot::Timing::Sorcery))
         .count();
 
     println!(
-        "loaded {} cards ({} creatures + {} instants in deck pool); running {} simulations",
+        "loaded {} cards ({} creatures + {} instants + {} sorceries in deck pool); running {} simulations",
         registry.cards().len(),
         creature_count,
         instant_count,
+        sorcery_count,
         ITERATIONS
     );
 
@@ -260,7 +265,7 @@ fn run_game(
                 }
             } else if matches!(kind, CardType::Creature) {
                 rig_creature_free_haste(&mut state, &picked);
-            } else if matches!(kind, CardType::Instant) {
+            } else if matches!(kind, CardType::Spell) {
                 // HAND cost: ask the oracle slot-by-slot which card to spend.
                 // Recorded by RecordingOracle so retry-on-suicide sees it.
                 let hand_needed: usize = cost
@@ -335,8 +340,16 @@ fn run_game(
                     }
                 }
                 bump_played(&mut stats, active);
+                let timing = state
+                    .card_pool
+                    .get(&picked)
+                    .and_then(|c| c.card.timing);
                 let label = match kind {
-                    CardType::Instant => format!("instant {}", short(&picked)),
+                    CardType::Spell => match timing {
+                        Some(tsot::Timing::Instant) => format!("instant {}", short(&picked)),
+                        Some(tsot::Timing::Sorcery) => format!("sorcery {}", short(&picked)),
+                        None => format!("spell {}", short(&picked)),
+                    },
                     _ => {
                         let (x, y) = state.effective_stats(&picked);
                         format!("{} ({x}/{y})", short(&picked))
@@ -381,17 +394,14 @@ fn run_game(
 
         if declared_atk_count > 0 {
             state.confirm_attacks().unwrap();
-            let blockers = eligible_blockers(&state, defender);
+            let assignments = pick_blocks(&state, defender);
             let mut block_count = 0u32;
-            if !attackers.is_empty() {
-                for (i, blk) in blockers.iter().enumerate() {
-                    let atk = &attackers[i % attackers.len()];
-                    if state
-                        .declare_blocker(blk, atk, Some(&mut EventContext::new(lua, &mut oracle)))
-                        .is_ok()
-                    {
-                        block_count += 1;
-                    }
+            for (blk, atk) in &assignments {
+                if state
+                    .declare_blocker(blk, atk, Some(&mut EventContext::new(lua, &mut oracle)))
+                    .is_ok()
+                {
+                    block_count += 1;
                 }
             }
             let outcome = state
@@ -493,7 +503,11 @@ fn pick_random_playable_in_hand(
             match inst.card.kind {
                 // Creatures get rigged free + haste before play, so always pickable.
                 CardType::Creature => true,
-                CardType::Instant => can_pay_instant_cost(state, player, iid),
+                // Spell (instant or sorcery timing) — main-phase loop here,
+                // so sorcery timing is legal. can_pay_instant_cost is
+                // shape-equivalent for both timings (HAND/MILL/GRAVEYARD
+                // cost rules don't differ).
+                CardType::Spell => can_pay_instant_cost(state, player, iid),
                 _ => false,
             }
         })
@@ -606,6 +620,148 @@ fn eligible_blockers(state: &GameState, player: PlayerId) -> Vec<InstanceId> {
         })
         .cloned()
         .collect()
+}
+
+/// Tiered block policy (replaces the round-robin distribution). For each
+/// declared attacker, sorted by power descending:
+///   T3 — clean kill: a blocker with X >= attacker.Y AND Y > attacker.X.
+///        Attacker dies, blocker survives. Always take.
+///   T2 — kill-trade: a blocker with X >= attacker.Y. Attacker dies, blocker
+///        may die. Take if surviving requires it OR if trading for a
+///        meaningful threat (attacker.X >= 2).
+///   T1 — chump: any blocker, just to absorb damage. Take only if remaining
+///        unblocked damage would still deck me.
+/// Otherwise let the attacker through (preserve the blocker on board).
+///
+/// Each blocker is used at most once across the assignment.
+fn pick_blocks(
+    state: &GameState,
+    defender: PlayerId,
+) -> Vec<(InstanceId, InstanceId)> {
+    use std::collections::BTreeSet;
+    use tsot::game::CombatState;
+
+    let declared: Vec<InstanceId> = match &state.combat {
+        Some(CombatState::AwaitingBlockers { attacks }) => {
+            attacks.iter().map(|a| a.attacker.clone()).collect()
+        }
+        _ => return Vec::new(),
+    };
+    if declared.is_empty() {
+        return Vec::new();
+    }
+
+    let blockers = eligible_blockers(state, defender);
+    if blockers.is_empty() {
+        return Vec::new();
+    }
+
+    // Total incoming if nothing is blocked.
+    let total_incoming: i32 = declared
+        .iter()
+        .map(|a| state.effective_stats(a).0.max(0))
+        .sum();
+    let deck = state.player(defender).deck.len() as i32;
+    let dying = total_incoming >= deck;
+
+    // Sort attackers by power desc — biggest threat handled first.
+    let mut sorted: Vec<(InstanceId, i32, i32)> = declared
+        .iter()
+        .map(|a| {
+            let (x, y) = state.effective_stats(a);
+            (a.clone(), x, y)
+        })
+        .collect();
+    sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
+
+    let mut assignments: Vec<(InstanceId, InstanceId)> = Vec::new();
+    let mut used: BTreeSet<InstanceId> = BTreeSet::new();
+    let mut remaining_incoming = total_incoming;
+
+    for (atk, atk_x, atk_y) in &sorted {
+        let avail: Vec<(InstanceId, i32, i32)> = blockers
+            .iter()
+            .filter(|b| !used.contains(*b))
+            .map(|b| {
+                let (x, y) = state.effective_stats(b);
+                (b.clone(), x, y)
+            })
+            .collect();
+        if avail.is_empty() {
+            break;
+        }
+
+        // T3: clean kill — blocker.X >= atk.Y AND blocker.Y > atk.X.
+        // Prefer the smallest qualifying blocker (save bigger ones for bigger threats).
+        let clean_kill = avail
+            .iter()
+            .filter(|(_, bx, by)| *bx >= *atk_y && *by > *atk_x)
+            .min_by_key(|(_, bx, _)| *bx)
+            .cloned();
+        if let Some((blk, _, _)) = clean_kill {
+            assignments.push((blk.clone(), atk.clone()));
+            used.insert(blk);
+            remaining_incoming -= atk_x;
+            continue;
+        }
+
+        // T2: kill-trade — blocker.X >= atk.Y. Take if dying OR atk_x >= 2.
+        let kill_trade = avail
+            .iter()
+            .filter(|(_, bx, _)| *bx >= *atk_y)
+            .min_by_key(|(_, bx, _)| *bx)
+            .cloned();
+        if let Some((blk, _, _)) = kill_trade {
+            if dying || *atk_x >= 2 {
+                assignments.push((blk.clone(), atk.clone()));
+                used.insert(blk);
+                remaining_incoming -= atk_x;
+                continue;
+            }
+        }
+
+        // T4: multi-block — pile blockers until combined X >= atk.Y to kill
+        // the attacker. Only worth the cost (multiple blockers taking atk.X
+        // damage each) when surviving requires removing this attacker.
+        // Greedy: biggest-X blockers first so we minimize how many we commit.
+        if dying {
+            let mut by_x = avail.clone();
+            by_x.sort_by_key(|(_, bx, _)| std::cmp::Reverse(*bx));
+            let mut combined_x = 0i32;
+            let mut picks: Vec<InstanceId> = Vec::new();
+            for (b, bx, _) in &by_x {
+                if combined_x >= *atk_y {
+                    break;
+                }
+                combined_x += *bx;
+                picks.push(b.clone());
+            }
+            if combined_x >= *atk_y && picks.len() >= 2 {
+                for blk in picks {
+                    assignments.push((blk.clone(), atk.clone()));
+                    used.insert(blk);
+                }
+                remaining_incoming -= atk_x;
+                continue;
+            }
+        }
+
+        // T1: chump — only if I'm still dying after assignments so far.
+        // Prefer the smallest available blocker (preserve big ones).
+        if remaining_incoming >= deck {
+            let chump = avail.iter().min_by_key(|(_, bx, _)| *bx).cloned();
+            if let Some((blk, _, _)) = chump {
+                assignments.push((blk.clone(), atk.clone()));
+                used.insert(blk);
+                remaining_incoming -= atk_x;
+                continue;
+            }
+        }
+
+        // Otherwise let this attacker through.
+    }
+
+    assignments
 }
 
 fn rig_creature_free_haste(state: &mut GameState, iid: &InstanceId) {

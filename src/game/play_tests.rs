@@ -274,10 +274,10 @@ fn play_card_errors_when_insufficient_deck_for_mill() {
 fn play_card_errors_on_unsupported_type() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
-    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Spell;
+    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Artifact;
     assert_eq!(
         s.play_card(PlayerId::A, &iid, PlayChoices::default(), None),
-        Err(PlayError::UnsupportedType(CardType::Spell))
+        Err(PlayError::UnsupportedType(CardType::Artifact))
     );
 }
 
@@ -734,7 +734,8 @@ fn play_card_during_open_window_pushes_to_chain_instead_of_opening_new() {
     // The instant should land on top of the chain, not open a new window.
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let b_instant = s.b.hand[0].clone();
-    s.card_pool.get_mut(&b_instant).unwrap().card.kind = crate::card::CardType::Instant;
+    s.card_pool.get_mut(&b_instant).unwrap().card.kind = crate::card::CardType::Spell;
+    s.card_pool.get_mut(&b_instant).unwrap().card.timing = Some(crate::card::Timing::Instant);
     s.card_pool.get_mut(&b_instant).unwrap().card.cost = vec![]; // free
 
     // Manually open a window with a placeholder A cast — bypasses play_card

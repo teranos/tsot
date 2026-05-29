@@ -5,7 +5,7 @@
 //! duration of the handler call only.
 
 use super::state::{CombatState, GameState, InstanceId, Modifier, PlayerId, StatusEffect, Zone};
-use crate::card::{CardType, EventName};
+use crate::card::{Card, CardType, EventName, Timing};
 use crate::choice::{ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest};
 use mlua::{Lua, Result, Value};
 use std::cell::RefCell;
@@ -17,12 +17,18 @@ pub(crate) fn pid_to_str(pid: PlayerId) -> &'static str {
     }
 }
 
-fn card_type_str(t: CardType) -> &'static str {
-    match t {
+/// Lua-visible type string. Surfaces the timing distinction for Spell cards
+/// so handlers can branch on "instant" vs "sorcery" without checking a
+/// separate timing field (`game.card(iid).type` matches what authors write).
+fn card_type_str(c: &Card) -> &'static str {
+    match c.kind {
         CardType::Unspecified => "unspecified",
         CardType::Creature => "creature",
-        CardType::Instant => "instant",
-        CardType::Spell => "spell",
+        CardType::Spell => match c.timing {
+            Some(Timing::Instant) => "instant",
+            Some(Timing::Sorcery) => "sorcery",
+            None => "spell",
+        },
         CardType::Artifact => "artifact",
         CardType::Environment => "environment",
     }
@@ -537,7 +543,7 @@ macro_rules! build_game_table {
                     let t = lua.create_table()?;
                     t.set("id", inst.card.id.clone())?;
                     t.set("instance_id", iid.clone())?;
-                    t.set("type", card_type_str(inst.card.kind))?;
+                    t.set("type", card_type_str(&inst.card))?;
                     t.set(
                         "subtypes",
                         lua.create_sequence_from(inst.card.subtypes.clone())?,
