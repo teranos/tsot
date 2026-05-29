@@ -5,7 +5,7 @@
 //! duration of the handler call only.
 
 use super::state::{CombatState, GameState, InstanceId, PlayerId, Zone};
-use crate::card::EventName;
+use crate::card::{CardType, EventName};
 use mlua::{Lua, Result, Value};
 use std::cell::RefCell;
 
@@ -15,6 +15,18 @@ pub(crate) fn pid_to_str(pid: PlayerId) -> &'static str {
         PlayerId::B => "b",
     }
 }
+
+fn card_type_str(t: CardType) -> &'static str {
+    match t {
+        CardType::Unspecified => "unspecified",
+        CardType::Creature => "creature",
+        CardType::Instant => "instant",
+        CardType::Spell => "spell",
+        CardType::Artifact => "artifact",
+        CardType::Environment => "environment",
+    }
+}
+
 
 fn parse_pid(s: &str) -> Result<PlayerId> {
     match s.to_ascii_lowercase().as_str() {
@@ -270,6 +282,40 @@ macro_rules! build_game_table {
                 t.set("board", lua.create_sequence_from(p.board.clone())?)?;
                 Ok(t)
             })?,
+        )?;
+
+        let cell_card = &$cell;
+        game.set(
+            "card",
+            $scope.create_function_mut(
+                move |lua, iid: String| -> Result<Option<mlua::Table>> {
+                    let s = cell_card.borrow();
+                    let Some(inst) = s.card_pool.get(&iid) else {
+                        return Ok(None);
+                    };
+                    let t = lua.create_table()?;
+                    t.set("id", inst.card.id.clone())?;
+                    t.set("instance_id", iid.clone())?;
+                    t.set("type", card_type_str(inst.card.kind))?;
+                    t.set(
+                        "subtypes",
+                        lua.create_sequence_from(inst.card.subtypes.clone())?,
+                    )?;
+                    t.set(
+                        "colors",
+                        lua.create_sequence_from(inst.card.colors.clone())?,
+                    )?;
+                    t.set("symbol", inst.card.symbol.clone())?;
+                    t.set("tapped", inst.tapped)?;
+                    t.set("face_down", inst.face_down)?;
+                    t.set("owner", pid_to_str(inst.owner))?;
+                    t.set("controller", pid_to_str(inst.controller))?;
+                    let (x, y) = s.effective_stats(&iid);
+                    t.set("x", x)?;
+                    t.set("y", y)?;
+                    Ok(Some(t))
+                },
+            )?,
         )?;
 
         game

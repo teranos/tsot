@@ -589,6 +589,64 @@ mod tests {
         assert!(!s.card_pool.get(&other_iid).unwrap().tapped);
     }
 
+    #[test]
+    fn game_card_exposes_id_type_subtypes_stats_tapped() {
+        // Fixture: an on_attack handler that captures fields from game.card() on a
+        // creature it knows about, dumping them to Lua globals for inspection.
+        let registry = registry_with_fixture(
+            "game_card_probe",
+            r#"return {
+                id = "card-probe",
+                on_attack = function(game, self)
+                    local c = game.card(self.instance_id)
+                    _G.probe_id = c.id
+                    _G.probe_type = c.type
+                    _G.probe_first_subtype = c.subtypes[1]
+                    _G.probe_x = c.x
+                    _G.probe_y = c.y
+                    _G.probe_tapped = c.tapped
+                    _G.probe_owner = c.owner
+                end,
+            }"#,
+        );
+        let probe = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "card-probe")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&atk).unwrap();
+            inst.card.handlers = probe.handlers.clone();
+            inst.card.id = probe.id.clone();
+            inst.card.subtypes = vec!["human".to_string()];
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+
+        let globals = registry.lua().globals();
+        let id: String = globals.get("probe_id").unwrap();
+        let ty: String = globals.get("probe_type").unwrap();
+        let sub: String = globals.get("probe_first_subtype").unwrap();
+        let x: i32 = globals.get("probe_x").unwrap();
+        let y: i32 = globals.get("probe_y").unwrap();
+        let tapped: bool = globals.get("probe_tapped").unwrap();
+        let owner: String = globals.get("probe_owner").unwrap();
+        assert_eq!(id, "card-probe");
+        assert_eq!(ty, "creature");
+        assert_eq!(sub, "human");
+        assert_eq!(x, 1);
+        assert_eq!(y, 1);
+        assert!(tapped, "attacker is tapped at on_attack fire time");
+        assert_eq!(owner, "a");
+    }
+
     fn registry_with_fixture(name: &str, source: &str) -> crate::card::CardRegistry {
         let tmp = std::env::temp_dir().join(format!("tsot_fixture_{name}"));
         std::fs::create_dir_all(&tmp).unwrap();

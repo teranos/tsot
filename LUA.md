@@ -35,7 +35,7 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 - [x] `game.tap(card_id)`, `game.untap(card_id)`
 - [x] `game.zones(player_id).{hand, deck, graveyard, exile, board}` — returns iid lists per zone
 - [x] `game.attackers() → list of iids` — currently-declared attackers (added beyond the original v1 list; needed for "untap other attackers"-style handlers)
-- [ ] `game.card(card_id)` — read-only view
+- [x] `game.card(card_id) → table_or_nil` — read-only view: `id, instance_id, type, subtypes, colors, symbol, tapped, face_down, owner, controller, x, y` (effective stats). Returns nil if iid not in pool.
 - [ ] `game.add_status(card_id, kind, duration)`
 - [ ] `game.discard(player_id, n)` — needs choice in the natural reading
 - [ ] `game.print(msg)` — debug

@@ -43,15 +43,11 @@ impl CardRegistry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Color {
-    Colorless,
-    White,
-    Blue,
-    Black,
-    Red,
-    Green,
-}
+// Colors are open-ended strings stored in `Card.colors: Vec<String>`. The
+// canonical wheel today is white/blue/black/red/green/colorless plus any
+// custom color a card chooses to introduce (e.g., "purple"). The engine
+// doesn't branch on color — it's identity/flavor data passed through to
+// handlers via `game.card(iid).colors`.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardType {
@@ -126,7 +122,7 @@ impl EventName {
 pub struct Card {
     pub id: String,
     pub name: String,
-    pub colors: Vec<Color>,
+    pub colors: Vec<String>,
     pub kind: CardType,
     pub subtypes: Vec<String>,
     pub symbol: String,
@@ -158,16 +154,8 @@ impl std::fmt::Debug for Card {
     }
 }
 
-fn parse_color(s: &str) -> Result<Color, String> {
-    match s.to_ascii_lowercase().as_str() {
-        "colorless" => Ok(Color::Colorless),
-        "white" => Ok(Color::White),
-        "blue" => Ok(Color::Blue),
-        "black" => Ok(Color::Black),
-        "red" => Ok(Color::Red),
-        "green" => Ok(Color::Green),
-        other => Err(format!("unknown color: {other}")),
-    }
+fn normalize_color(s: &str) -> String {
+    s.to_ascii_lowercase()
 }
 
 fn parse_type(s: &str) -> Result<CardType, String> {
@@ -203,11 +191,11 @@ fn read_string_vec(t: &Table, key: &str) -> mlua::Result<Vec<String>> {
     }
 }
 
-fn read_color_vec(t: &Table) -> mlua::Result<Vec<Color>> {
-    read_string_vec(t, "colors")?
+fn read_color_vec(t: &Table) -> mlua::Result<Vec<String>> {
+    Ok(read_string_vec(t, "colors")?
         .into_iter()
-        .map(|s| parse_color(&s).map_err(mlua::Error::runtime))
-        .collect()
+        .map(|s| normalize_color(&s))
+        .collect())
 }
 
 fn read_cost(t: &Table) -> mlua::Result<Vec<CostComponent>> {
