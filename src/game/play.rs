@@ -6,6 +6,7 @@ use super::context::EventContext;
 use super::lua_api;
 use super::state::{GameState, InstanceId, PlayerId, Zone};
 use crate::card::{CardType, CostSource, EventName};
+use crate::choice::{ChoiceOracle, ChooseCardRequest};
 use std::collections::BTreeSet;
 
 /// Player-supplied choices when playing a card.
@@ -223,6 +224,50 @@ impl GameState {
         }
 
         Ok(())
+    }
+
+    /// Build a HAND payment vector by asking `oracle.choose_card` once per
+    /// payment slot. Pool is `player.hand` minus the card being played and
+    /// any cards already picked for this payment. Pure read of state; the
+    /// oracle's recording captures each pick so a retry-on-suicide can flip
+    /// individual payment slots without altering call sites.
+    ///
+    /// Fallback: if the oracle returns None (RandomOracle for empty pool, or
+    /// a future oracle that declines), we pick the first remaining eligible
+    /// card — payment is mandatory, so we can't skip a slot.
+    pub fn resolve_hand_payment(
+        &self,
+        player: PlayerId,
+        instance: &InstanceId,
+        hand_needed: usize,
+        oracle: &mut dyn ChoiceOracle,
+    ) -> Vec<InstanceId> {
+        let mut chosen: Vec<InstanceId> = Vec::with_capacity(hand_needed);
+        let mut picked_set: BTreeSet<InstanceId> = BTreeSet::new();
+        for slot in 0..hand_needed {
+            let pool: Vec<InstanceId> = self
+                .player(player)
+                .hand
+                .iter()
+                .filter(|iid| *iid != instance && !picked_set.contains(*iid))
+                .cloned()
+                .collect();
+            if pool.is_empty() {
+                break;
+            }
+            let pool_for_fallback = pool.clone();
+            let req = ChooseCardRequest {
+                pool,
+                optional: false,
+                prompt: format!("hand payment slot {}", slot + 1),
+            };
+            let pick = oracle
+                .choose_card(req)
+                .unwrap_or_else(|| pool_for_fallback[0].clone());
+            picked_set.insert(pick.clone());
+            chosen.push(pick);
+        }
+        chosen
     }
 }
 

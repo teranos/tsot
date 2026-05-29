@@ -255,37 +255,22 @@ fn run_game(
                     .map(|_| x.max(0) as usize)
                     .sum();
                 if hand_needed > 0 {
-                    let payment: Vec<InstanceId> = state
-                        .player(active)
-                        .hand
-                        .iter()
-                        .filter(|iid| *iid != &picked)
-                        .take(hand_needed)
-                        .cloned()
-                        .collect();
-                    choices.hand_payment_ids = payment;
+                    choices.hand_payment_ids =
+                        state.resolve_hand_payment(active, &picked, hand_needed, &mut oracle);
                 }
             } else if matches!(kind, CardType::Creature) {
                 rig_creature_free_haste(&mut state, &picked);
             } else if matches!(kind, CardType::Instant) {
-                // Pay HAND cost honestly: take the leftmost N hand cards
-                // (excluding the card being played). Deterministic discard
-                // pending choice API.
+                // HAND cost: ask the oracle slot-by-slot which card to spend.
+                // Recorded by RecordingOracle so retry-on-suicide sees it.
                 let hand_needed: usize = cost
                     .iter()
                     .filter(|c| matches!(c.source, CostSource::Hand))
                     .map(|c| c.amount.max(0) as usize)
                     .sum();
                 if hand_needed > 0 {
-                    let payment: Vec<InstanceId> = state
-                        .player(active)
-                        .hand
-                        .iter()
-                        .filter(|iid| *iid != &picked)
-                        .take(hand_needed)
-                        .cloned()
-                        .collect();
-                    choices.hand_payment_ids = payment;
+                    choices.hand_payment_ids =
+                        state.resolve_hand_payment(active, &picked, hand_needed, &mut oracle);
                 }
             }
             // Preview-and-skip: open a journal, attempt the play. If the
@@ -312,6 +297,14 @@ fn run_game(
             // player" pick was the cause (or at least correlated). Roll
             // back, replay with a ScriptedOracle that flips the first
             // choose_player answer. If the flipped run survives, commit it.
+            //
+            // TODO(retry-eval): this is naive — any non-suicidal flipped
+            // outcome is accepted over skipping. That's actively wrong when
+            // we're ahead on board and the flipped play just hands the
+            // opponent free cards (e.g., Field Notes → opponent draws 2-3).
+            // Correct behavior needs a board-eval comparing score(skip) vs
+            // score(retry); commit retry only if it scores higher. Holding
+            // off until heuristic weights are designed.
             let mut result = result;
             if suicide {
                 if let Some(flipped) = ScriptedOracle::flip_first_player(oracle.recording()) {
