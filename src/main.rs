@@ -214,6 +214,11 @@ fn run_game(
             break;
         }
 
+        // TODO(stack-phase-2-sim): once instants + the response window exist,
+        // this loop needs a second decision point: between an opponent's
+        // stack-item being added and resolving, the sim AI must decide
+        // whether to play an instant in response (or pass). Today the sim
+        // only acts on its own Main1 and never sees a response window.
         if let Some(picked) = pick_random_playable_in_hand(&state, active, rng) {
             let kind = state
                 .card_pool

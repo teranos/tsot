@@ -3,6 +3,90 @@
 > Three-phase plan for the response chain, priority, and stack integration.
 > Resolves the `stack` theme in LIMITATIONS.md.
 
+## Status (2026-05-29)
+
+Phase 1 starting. Foundation pieces already in place from prior work:
+
+- **Engine plumbing.** `EventContext` flows through `play_card`,
+  `declare_attacker`, `declare_blocker`, `confirm_blocks`. New methods
+  (`submit_response`, `pass_priority`) slot into the same shape.
+- **Journal architecture.** The mutation log + rollback already exist.
+  Window-driven mutations (chain pushes, priority transitions) go through
+  the same journaled helpers as everything else; no special-casing needed.
+- **Choice infrastructure.** `ChoiceOracle` exists for the player-choice
+  questions Phase 2/3 of STACK will need ("respond? which card? which
+  target?"). Phase 1 doesn't surface them yet.
+- **Instant type routable.** `play_card` already supports Instant. Phase 1's
+  `submit_response` calls into the existing instant resolution.
+
+What this phase still owes: priority-state on `GameState`, the three
+window-opener fire sites, the resolution loop, and the integration tests.
+
+## Integration points (where stack touches existing code)
+
+Stack and priority cut across more of the engine than `events` did.
+Mapping the contact surfaces so future PRs know where to look:
+
+### Engine methods that must open a window (Phase 1)
+
+| Site | Per rule | What changes |
+|---|---|---|
+| `play_card` post-validation, pre-resolution | R.1.a | After cost is paid but before the card resolves, open a window. Both players get priority. Card resolves only when both pass. |
+| `declare_attacker` after attack recorded | R.1.b | After the attack is in the buffer, open a window for the defender to respond. |
+| `declare_blocker` after block assigned (or once after `confirm_blocks`) | R.1.c | Window opens for the attacker to respond to the block. |
+
+Each fire site is marked `TODO(stack-phase-1)` in the code.
+
+### How triggered abilities change (Phase 2)
+
+Today `fire_self_only` / `fire_with_partner` execute the handler
+immediately. Phase 2 changes them to:
+
+1. Build a `StackItem::Trigger { source, name, ctx }` capturing context
+2. Push to the chain
+3. Open a window
+4. When the trigger resolves (after two passes), execute the handler
+
+This means **every Lua handler currently in the corpus changes its
+firing semantics** — they go from "immediate during the engine call" to
+"queued and resolved after a response window." Cards working today
+(mortal-bee's exile, thorn-beetle's damage, jellyfish's bounce, etc.)
+will keep working but their timing relative to other handlers changes.
+
+Marked `TODO(stack-phase-2)` at the fire helpers.
+
+### Sim AI must learn to play instants in response
+
+Today the sim plays one card during Main1 and never touches instants
+during combat. Phase 1 only requires the sim to auto-pass every window
+(no behavior change). Phase 2 with smart prompting (UX X.1, X.2) the sim
+must:
+- Know which instants in hand are playable in the current window
+- Know which targets are legal (X-E.2)
+- Decide: respond or pass
+
+These hooks become the surface for AI lookahead (the recent
+discussion about previewing attack decisions extends naturally to
+"preview my response options"). Marked `TODO(stack-phase-2-sim)` in
+`main.rs`.
+
+### State-based actions (cross-cutting)
+
+In MTG, state-based actions (SBAs) fire between stack items — e.g.,
+"if any creature has lethal damage, it dies." tsot's current
+`resolve_combat` does the damage tally + death check in one go. With
+the stack, deaths should be checked between resolutions of stack items
+(so a "regenerate" response card can save a dying creature mid-resolve).
+
+This is partly orthogonal — could come with stack Phase 1 or later.
+Marked `TODO(sbas)` in `resolve_combat`.
+
+### Save/load and replay
+
+Both already serialize `GameState`. Once `priority: Option<PriorityState>`
+is populated, it serializes automatically. Replay's forward-apply needs
+new `JournalEntry` variants for chain pushes / passes — `TODO(stack-journal)`.
+
 ---
 
 ## Fundamentals

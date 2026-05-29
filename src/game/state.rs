@@ -126,6 +126,32 @@ pub struct AttackDecl {
     pub blockers: Vec<InstanceId>,
 }
 
+/// An item on the response chain. STACK Phase 1 only models played instants;
+/// triggered abilities still resolve immediately (Phase 2 will add a
+/// `Trigger` variant).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum StackItem {
+    PlayedCard {
+        card: InstanceId,
+        controller: PlayerId,
+    },
+}
+
+/// Response window state. `None` on `GameState.priority` means no window is
+/// currently open; engine has direct control. `Some` means a window is open
+/// and players may submit responses or pass.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PriorityState {
+    /// Bottom-to-top: `chain[0]` resolves last; `chain[N-1]` is the top
+    /// (next to resolve once both players pass).
+    pub chain: Vec<StackItem>,
+    /// Who has priority right now.
+    pub next_to_act: PlayerId,
+    /// 0, 1, or 2. Two consecutive passes → top of chain resolves
+    /// (or window closes if chain is empty).
+    pub consecutive_passes: u8,
+}
+
 /// The full game state.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GameState {
@@ -153,6 +179,10 @@ pub struct GameState {
     /// `None` (so committed previews are merged in via `extend_from` and
     /// rolled-back ones leave it untouched).
     pub replay_journal: Option<super::Journal>,
+    /// Open response window state, or `None` if no window is currently open.
+    /// STACK Phase 1 introduces the type; window-openers and resolution loop
+    /// arrive in subsequent steps.
+    pub priority: Option<PriorityState>,
 }
 
 impl GameState {
@@ -178,6 +208,7 @@ impl GameState {
             action_counts: BTreeMap::new(),
             journal: None,
             replay_journal: None,
+            priority: None,
         }
     }
 

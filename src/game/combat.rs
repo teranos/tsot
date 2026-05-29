@@ -132,11 +132,13 @@ impl GameState {
             self.set_tapped(attacker, true); // B.4
         }
 
-        // LUA Phase 1: fire on_attack on the declared attacker.
+        // TODO(stack-phase-1): R.1.b — open a response window here. Defender
+        // gets first priority; resolves after both pass. Until wired,
+        // on_attack fires immediately and defender has no response window
+        // before block declarations begin.
         if let Some(c) = ctx {
             lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker);
         }
-        // TODO(stack): open a response window per R.1 (attack-declared trigger).
 
         Ok(())
     }
@@ -248,8 +250,10 @@ impl GameState {
                 attacker,
             );
         }
-        // TODO(stack): when block-declaration is added as an R.1 window-opener (per design
-        // discussion), open a response window here.
+        // TODO(stack-phase-1): R.1.c — open a response window here. Attacker
+        // gets first priority (per APNAP); resolves after both pass. Until
+        // wired, on_blocked_by and on_block fire immediately and the attacker
+        // can't respond to the block before combat damage resolves.
 
         Ok(())
     }
@@ -314,6 +318,11 @@ impl GameState {
             }
         }
 
+        // TODO(sbas): MTG-style state-based actions fire BETWEEN stack-item
+        // resolutions, allowing "regenerate" / "prevent damage" responses to
+        // save a dying creature. tsot currently does the damage tally and
+        // death check in one pass, leaving no window. Reworking this to a
+        // proper SBA loop is part of the stack work (Phase 1 or 2).
         // B.8 death check: damage ≥ effective Y → dies to GRAVEYARD per P.4.
         let on_board: Vec<InstanceId> = self
             .a

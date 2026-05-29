@@ -567,6 +567,12 @@ fn build_self_table(
 
 /// Fire an event whose handler takes `(game, self)`. Used for `on_die`,
 /// `on_enter_board`, `on_attack`, `on_play`. Errors log and continue.
+// TODO(stack-phase-2): triggered abilities should push a
+// `StackItem::Trigger { source, name, ctx }` onto the response chain and
+// resolve only after the window closes — not execute the handler immediately.
+// Today these run synchronously. When the stack-based dispatch lands, the
+// handler-invocation logic moves from this fire helper to the stack-item
+// resolver; this function will become a "queue trigger" instead.
 pub(crate) fn fire_self_only(
     lua: &Lua,
     state: &mut GameState,
@@ -604,6 +610,9 @@ pub(crate) fn fire_self_only(
 /// Fire an event whose handler takes `(game, self, partner)`. Used for
 /// `on_blocked_by` (self=attacker, partner=blocker) and `on_block`
 /// (self=blocker, partner=attacker). Errors log and continue.
+// TODO(stack-phase-2): same as fire_self_only — when triggered abilities go
+// on the stack, this becomes a "queue trigger with partner context" rather
+// than an immediate handler call.
 pub(crate) fn fire_with_partner(
     lua: &Lua,
     state: &mut GameState,
