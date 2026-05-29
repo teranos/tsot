@@ -144,6 +144,11 @@ pub struct GameState {
     /// handler. Keyed by short action name ("draw", "mill", "damage", "move").
     /// Player attribution depends on the action — see `bump_action` callers.
     pub action_counts: BTreeMap<&'static str, [u32; 2]>,
+    /// Optional mutation journal. `None` = no recording (zero overhead path
+    /// for production sim). `Some(Journal::new())` opens a recording session
+    /// — every mutation through the journaled helpers below logs an entry.
+    /// See JOURNAL.md for the multi-session plan.
+    pub journal: Option<super::Journal>,
 }
 
 impl GameState {
@@ -167,6 +172,7 @@ impl GameState {
             combat: None,
             event_fires: BTreeMap::new(),
             action_counts: BTreeMap::new(),
+            journal: None,
         }
     }
 
@@ -178,6 +184,81 @@ impl GameState {
             PlayerId::B => 1,
         };
         entry[idx] += 1;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::BumpEventFire {
+                event,
+                player: owner,
+            });
+        }
+    }
+
+    /// Set `tapped` on a card, journaling the prior value if recording.
+    pub fn set_tapped(&mut self, iid: &InstanceId, tapped: bool) {
+        let Some(inst) = self.card_pool.get_mut(iid) else {
+            return;
+        };
+        let was = inst.tapped;
+        inst.tapped = tapped;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::SetTapped {
+                iid: iid.clone(),
+                was,
+            });
+        }
+    }
+
+    /// Set `damage` on a card, journaling the prior value.
+    pub fn set_damage(&mut self, iid: &InstanceId, damage: i32) {
+        let Some(inst) = self.card_pool.get_mut(iid) else {
+            return;
+        };
+        let was = inst.damage;
+        inst.damage = damage;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::SetDamage {
+                iid: iid.clone(),
+                was,
+            });
+        }
+    }
+
+    /// Set `face_down` on a card, journaling the prior value.
+    pub fn set_face_down(&mut self, iid: &InstanceId, face_down: bool) {
+        let Some(inst) = self.card_pool.get_mut(iid) else {
+            return;
+        };
+        let was = inst.face_down;
+        inst.face_down = face_down;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::SetFaceDown {
+                iid: iid.clone(),
+                was,
+            });
+        }
+    }
+
+    /// Set `summoning_sick` on a card, journaling the prior value.
+    pub fn set_summoning_sick(&mut self, iid: &InstanceId, summoning_sick: bool) {
+        let Some(inst) = self.card_pool.get_mut(iid) else {
+            return;
+        };
+        let was = inst.summoning_sick;
+        inst.summoning_sick = summoning_sick;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::SetSummoningSick {
+                iid: iid.clone(),
+                was,
+            });
+        }
+    }
+
+    /// Set the winner, journaling the prior value.
+    pub fn set_winner(&mut self, winner: Option<PlayerId>) {
+        let was = self.winner;
+        self.winner = winner;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::SetWinner { was });
+        }
     }
 
     /// Engine helper: credit a `game.*` action invocation to the affected player.
@@ -188,6 +269,12 @@ impl GameState {
             PlayerId::B => 1,
         };
         entry[idx] += 1;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::BumpAction {
+                action,
+                player: who,
+            });
+        }
     }
 
     /// Convenience: total fires across all events for a given player.

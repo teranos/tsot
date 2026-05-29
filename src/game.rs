@@ -8,6 +8,7 @@
 
 mod combat;
 mod context;
+mod journal;
 mod lua_api;
 mod movement;
 mod play;
@@ -19,6 +20,7 @@ mod test_helpers;
 
 pub use combat::{CombatError, CombatOutcome};
 pub use context::EventContext;
+pub use journal::{Journal, JournalEntry};
 pub use movement::MoveError;
 pub use play::{PlayChoices, PlayError};
 pub use state::{
