@@ -2,10 +2,10 @@
 //!
 //! Mirrors RULES.md P.1, P.2, P.6, P.7, P.11, P.17.
 
+use super::context::EventContext;
 use super::lua_api;
 use super::state::{GameState, InstanceId, PlayerId};
 use crate::card::{CardType, CostSource, EventName};
-use mlua::Lua;
 use std::collections::HashSet;
 
 /// Player-supplied choices when playing a card.
@@ -61,7 +61,7 @@ impl GameState {
         player: PlayerId,
         instance: &InstanceId,
         choices: PlayChoices,
-        lua: Option<&Lua>,
+        ctx: Option<&mut EventContext>,
     ) -> Result<(), PlayError> {
         if self.winner.is_some() {
             return Err(PlayError::GameOver);
@@ -163,8 +163,9 @@ impl GameState {
 
         // LUA Phase 1: on_play fires after cost is paid, before destination is set.
         // The card is in no zone at this moment — the handler is the resolution.
-        if let Some(lua) = lua {
-            lua_api::fire_self_only(lua, self, EventName::OnPlay, instance);
+        let mut ctx = ctx;
+        if let Some(c) = ctx.as_mut() {
+            lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
         }
 
         // Route to destination zone based on type.
@@ -185,8 +186,14 @@ impl GameState {
                     }
                 }
 
-                if let Some(lua) = lua {
-                    lua_api::fire_self_only(lua, self, EventName::OnEnterBoard, instance);
+                if let Some(c) = ctx.as_mut() {
+                    lua_api::fire_self_only(
+                        c.lua,
+                        self,
+                        c.oracle(),
+                        EventName::OnEnterBoard,
+                        instance,
+                    );
                 }
             }
             CardType::Instant => {
@@ -512,6 +519,67 @@ mod tests {
     }
 
     #[test]
+    fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
+        use crate::card::CardRegistry;
+        use crate::choice::{ScriptedAnswer, ScriptedOracle};
+        use crate::game::EventContext;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let jelly = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "jellyfish")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let jelly_iid = s.a.hand[0].clone();
+        let target_iid = s.b.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&jelly_iid).unwrap();
+            inst.card = jelly.clone();
+        }
+        // Put an opposing creature on B's board to be the target.
+        s.b.hand.retain(|x| x != &target_iid);
+        s.b.board.push(target_iid.clone());
+
+        // Seed graveyard for the 3-graveyard cost.
+        let gy_seeds: Vec<_> = s.a.deck.drain(0..3).collect();
+        s.a.graveyard.extend(gy_seeds.clone());
+
+        let b_hand_before = s.b.hand.len();
+        let b_board_before = s.b.board.len();
+
+        // 1-hand cost requires a payment; pick any non-self hand card.
+        let hand_payment = s
+            .a
+            .hand
+            .iter()
+            .find(|x| *x != &jelly_iid)
+            .cloned()
+            .unwrap();
+
+        // Scripted oracle: pick target_iid.
+        let mut oracle = ScriptedOracle::new(vec![ScriptedAnswer::Card(Some(target_iid.clone()))]);
+
+        s.play_card(
+            PlayerId::A,
+            &jelly_iid,
+            PlayChoices {
+                hand_payment_ids: vec![hand_payment],
+            },
+            Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+        )
+        .unwrap();
+
+        // Target moved from B's board to B's hand.
+        assert!(!s.b.board.contains(&target_iid));
+        assert!(s.b.hand.contains(&target_iid));
+        assert_eq!(s.b.hand.len(), b_hand_before + 1);
+        assert_eq!(s.b.board.len(), b_board_before - 1);
+    }
+
+    #[test]
     fn on_play_handler_fires_before_card_leaves_hand() {
         let registry = registry_with_fixture(
             "on_play",
@@ -547,7 +615,7 @@ mod tests {
             PlayerId::A,
             &creature,
             PlayChoices::default(),
-            Some(registry.lua()),
+            Some(&mut crate::game::EventContext::lua_only(registry.lua())),
         )
         .unwrap();
 
@@ -599,7 +667,7 @@ mod tests {
             PlayChoices {
                 hand_payment_ids: vec![payment, payment2],
             },
-            Some(registry.lua()),
+            Some(&mut crate::game::EventContext::lua_only(registry.lua())),
         )
         .unwrap();
 
@@ -640,7 +708,7 @@ mod tests {
             PlayerId::A,
             &instant_iid,
             PlayChoices::default(),
-            Some(registry.lua()),
+            Some(&mut crate::game::EventContext::lua_only(registry.lua())),
         )
         .unwrap();
 
@@ -683,7 +751,7 @@ mod tests {
             PlayerId::A,
             &creature,
             PlayChoices::default(),
-            Some(registry.lua()),
+            Some(&mut crate::game::EventContext::lua_only(registry.lua())),
         )
         .unwrap();
 
@@ -733,7 +801,7 @@ mod tests {
             PlayerId::A,
             &creature,
             PlayChoices::default(),
-            Some(registry.lua()),
+            Some(&mut crate::game::EventContext::lua_only(registry.lua())),
         )
         .unwrap();
 

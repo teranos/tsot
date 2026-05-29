@@ -6,6 +6,7 @@
 
 use super::state::{CombatState, GameState, InstanceId, PlayerId, StatusEffect, Zone};
 use crate::card::{CardType, EventName};
+use crate::choice::{ChoiceOracle, ChooseCardRequest};
 use mlua::{Lua, Result, Value};
 use std::cell::RefCell;
 
@@ -235,8 +236,48 @@ fn do_move(s: &mut GameState, iid: &str, dest_str: &str) -> Result<()> {
 /// the scoped closures need to capture borrows whose lifetimes are tied to the
 /// scope; a generic fn would need explicit `'scope` lifetime gymnastics.
 macro_rules! build_game_table {
-    ($lua:expr, $scope:expr, $cell:expr) => {{
+    ($lua:expr, $scope:expr, $cell:expr, $oracle_cell:expr, $owner:expr) => {{
         let game = $lua.create_table()?;
+
+        let cell_choose_o = &$oracle_cell;
+        let cell_choose_s = &$cell;
+        let choose_owner = $owner;
+        game.set(
+            "choose_card",
+            $scope.create_function_mut(
+                move |_, (pool, opts): (Vec<String>, Option<mlua::Table>)| -> Result<Option<String>> {
+                    let (optional, prompt) = match opts {
+                        Some(t) => (
+                            t.get::<Option<bool>>("optional")?.unwrap_or(false),
+                            t.get::<Option<String>>("prompt")?.unwrap_or_default(),
+                        ),
+                        None => (false, String::new()),
+                    };
+                    let req = ChooseCardRequest { pool, optional, prompt };
+                    let answer = {
+                        let mut o = cell_choose_o.borrow_mut();
+                        o.choose_card(req)
+                    };
+                    cell_choose_s.borrow_mut().bump_action("choose_card", choose_owner);
+                    Ok(answer)
+                },
+            )?,
+        )?;
+
+        let cell_confirm_o = &$oracle_cell;
+        let cell_confirm_s = &$cell;
+        let confirm_owner = $owner;
+        game.set(
+            "confirm",
+            $scope.create_function_mut(move |_, prompt: String| -> Result<bool> {
+                let answer = {
+                    let mut o = cell_confirm_o.borrow_mut();
+                    o.confirm(&prompt)
+                };
+                cell_confirm_s.borrow_mut().bump_action("confirm", confirm_owner);
+                Ok(answer)
+            })?,
+        )?;
 
         let cell_dmg = &$cell;
         game.set(
@@ -429,6 +470,7 @@ fn build_self_table(
 pub(crate) fn fire_self_only(
     lua: &Lua,
     state: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
     event: EventName,
     source: &InstanceId,
 ) {
@@ -442,8 +484,9 @@ pub(crate) fn fire_self_only(
     let card_id = inst.card.id.clone();
 
     let state_cell = RefCell::new(&mut *state);
+    let oracle_cell = RefCell::new(&mut *oracle);
     let result: Result<()> = lua.scope(|scope| {
-        let game = build_game_table!(lua, scope, state_cell);
+        let game = build_game_table!(lua, scope, state_cell, oracle_cell, owner);
         let self_table = build_self_table(lua, &state_cell.borrow(), source)?;
         handler.call::<()>((game, self_table))?;
         let _ = Value::Nil; // keep import warm
@@ -451,6 +494,7 @@ pub(crate) fn fire_self_only(
     });
 
     let _ = state_cell;
+    let _ = oracle_cell;
     match result {
         Ok(()) => credit_fire(state, event, owner),
         Err(e) => eprintln!("[lua] {} handler for {card_id} failed: {e}", event.lua_key()),
@@ -463,6 +507,7 @@ pub(crate) fn fire_self_only(
 pub(crate) fn fire_with_partner(
     lua: &Lua,
     state: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
     event: EventName,
     source: &InstanceId,
     partner: &InstanceId,
@@ -477,8 +522,9 @@ pub(crate) fn fire_with_partner(
     let card_id = inst.card.id.clone();
 
     let state_cell = RefCell::new(&mut *state);
+    let oracle_cell = RefCell::new(&mut *oracle);
     let result: Result<()> = lua.scope(|scope| {
-        let game = build_game_table!(lua, scope, state_cell);
+        let game = build_game_table!(lua, scope, state_cell, oracle_cell, owner);
         let self_table = build_self_table(lua, &state_cell.borrow(), source)?;
         let partner_table = build_self_table(lua, &state_cell.borrow(), partner)?;
         handler.call::<()>((game, self_table, partner_table))?;
@@ -486,6 +532,7 @@ pub(crate) fn fire_with_partner(
     });
 
     let _ = state_cell;
+    let _ = oracle_cell;
     match result {
         Ok(()) => credit_fire(state, event, owner),
         Err(e) => eprintln!("[lua] {} handler for {card_id} failed: {e}", event.lua_key()),

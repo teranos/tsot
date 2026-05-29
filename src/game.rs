@@ -7,6 +7,7 @@
 //!   - `play`: playing cards from hand, cost payment, attachment.
 
 mod combat;
+mod context;
 mod lua_api;
 mod movement;
 mod play;
@@ -17,6 +18,7 @@ mod turn;
 mod test_helpers;
 
 pub use combat::{CombatError, CombatOutcome};
+pub use context::EventContext;
 pub use movement::MoveError;
 pub use play::{PlayChoices, PlayError};
 pub use state::{

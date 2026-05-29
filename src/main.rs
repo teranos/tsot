@@ -1,9 +1,11 @@
+use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::collections::HashMap;
 use std::path::Path;
 use tsot::card::{Card, CardRegistry, CardType, CostSource, EventName};
-use tsot::game::{GameState, InstanceId, Phase, PlayChoices, PlayerId};
+use tsot::choice::RandomOracle;
+use tsot::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 const ITERATIONS: usize = 1000;
 
@@ -105,10 +107,11 @@ fn build_random_deck(pool: &[Card], rng: &mut impl Rng, size: usize) -> Vec<Card
 
 fn run_game(
     mut state: GameState,
-    rng: &mut impl Rng,
+    rng: &mut ThreadRng,
     log: &mut Vec<String>,
     lua: &mlua::Lua,
 ) -> GameStats {
+    let mut oracle = RandomOracle::new(rand::thread_rng());
     let mut stats = GameStats {
         turns: 0,
         winner: PlayerId::A,
@@ -180,7 +183,12 @@ fn run_game(
                 }
             }
             if state
-                .play_card(active, &picked, choices, Some(lua))
+                .play_card(
+                    active,
+                    &picked,
+                    choices,
+                    Some(&mut EventContext::new(lua, &mut oracle)),
+                )
                 .is_ok()
             {
                 bump_played(&mut stats, active);
@@ -212,7 +220,10 @@ fn run_game(
             .collect();
         let mut declared_atk_count = 0u32;
         for atk in &attackers {
-            if state.declare_attacker(atk, Some(lua)).is_ok() {
+            if state
+                .declare_attacker(atk, Some(&mut EventContext::new(lua, &mut oracle)))
+                .is_ok()
+            {
                 declared_atk_count += 1;
             }
         }
@@ -224,12 +235,17 @@ fn run_game(
             if !attackers.is_empty() {
                 for (i, blk) in blockers.iter().enumerate() {
                     let atk = &attackers[i % attackers.len()];
-                    if state.declare_blocker(blk, atk, Some(lua)).is_ok() {
+                    if state
+                        .declare_blocker(blk, atk, Some(&mut EventContext::new(lua, &mut oracle)))
+                        .is_ok()
+                    {
                         block_count += 1;
                     }
                 }
             }
-            let outcome = state.confirm_blocks(Some(lua)).unwrap();
+            let outcome = state
+                .confirm_blocks(Some(&mut EventContext::new(lua, &mut oracle)))
+                .unwrap();
             bump_attacks(&mut stats, active, declared_atk_count);
             bump_milled(&mut stats, defender, outcome.defender_milled_to_exile as u32);
             for death in &outcome.deaths {
@@ -495,7 +511,16 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     println!("Engine + handler actions (per-game averages):");
     println!("                          A         B");
     for action in [
-        "draw", "mill", "damage", "move", "discard", "tap", "untap", "add_status",
+        "draw",
+        "mill",
+        "damage",
+        "move",
+        "discard",
+        "tap",
+        "untap",
+        "add_status",
+        "choose_card",
+        "confirm",
     ] {
         let a_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[0]).unwrap_or(0) as f64);
         let b_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[1]).unwrap_or(0) as f64);

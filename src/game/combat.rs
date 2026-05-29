@@ -13,10 +13,10 @@
 //!   - P.8 attached-cards-go-to-exile on host death.
 //!   - Control changes (T.1) — caller treats owner == controller.
 
+use super::context::EventContext;
 use super::lua_api;
 use super::state::{AttackDecl, CombatState, GameState, InstanceId, Phase, Zone};
 use crate::card::EventName;
-use mlua::Lua;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CombatError {
@@ -59,7 +59,7 @@ impl GameState {
     pub fn declare_attacker(
         &mut self,
         attacker: &InstanceId,
-        lua: Option<&Lua>,
+        ctx: Option<&mut EventContext>,
     ) -> Result<(), CombatError> {
         if self.winner.is_some() {
             return Err(CombatError::GameOver);
@@ -136,8 +136,8 @@ impl GameState {
         }
 
         // LUA Phase 1: fire on_attack on the declared attacker.
-        if let Some(lua) = lua {
-            lua_api::fire_self_only(lua, self, EventName::OnAttack, attacker);
+        if let Some(c) = ctx {
+            lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker);
         }
         // TODO(stack): open a response window per R.1 (attack-declared trigger).
 
@@ -167,7 +167,7 @@ impl GameState {
         &mut self,
         blocker: &InstanceId,
         attacker: &InstanceId,
-        lua: Option<&Lua>,
+        ctx: Option<&mut EventContext>,
     ) -> Result<(), CombatError> {
         if self.winner.is_some() {
             return Err(CombatError::GameOver);
@@ -228,9 +228,26 @@ impl GameState {
         // LUA Phase 1: fire `on_blocked_by` on the attacker, then `on_block` on the blocker.
         // Per-blocker semantics for both. Order: attacker-side first, then blocker-side.
         // Errors log and continue per LUA.md Q #3.
-        if let Some(lua) = lua {
-            lua_api::fire_with_partner(lua, self, EventName::OnBlockedBy, attacker, blocker);
-            lua_api::fire_with_partner(lua, self, EventName::OnBlock, blocker, attacker);
+        let mut ctx = ctx;
+        if let Some(c) = ctx.as_mut() {
+            lua_api::fire_with_partner(
+                c.lua,
+                self,
+                c.oracle(),
+                EventName::OnBlockedBy,
+                attacker,
+                blocker,
+            );
+        }
+        if let Some(c) = ctx.as_mut() {
+            lua_api::fire_with_partner(
+                c.lua,
+                self,
+                c.oracle(),
+                EventName::OnBlock,
+                blocker,
+                attacker,
+            );
         }
         // TODO(stack): when block-declaration is added as an R.1 window-opener (per design
         // discussion), open a response window here.
@@ -242,7 +259,10 @@ impl GameState {
     ///
     /// `lua` is the long-lived VM from `CardRegistry`. When `Some`, dying
     /// creatures' `on_die` handlers fire. When `None`, handlers are skipped.
-    pub fn confirm_blocks(&mut self, lua: Option<&Lua>) -> Result<CombatOutcome, CombatError> {
+    pub fn confirm_blocks(
+        &mut self,
+        ctx: Option<&mut EventContext>,
+    ) -> Result<CombatOutcome, CombatError> {
         if self.phase != Phase::Combat {
             return Err(CombatError::NotCombatPhase);
         }
@@ -253,10 +273,14 @@ impl GameState {
                 return Err(CombatError::NotAwaitingBlockers);
             }
         };
-        Ok(self.resolve_combat(attacks, lua))
+        Ok(self.resolve_combat(attacks, ctx))
     }
 
-    fn resolve_combat(&mut self, attacks: Vec<AttackDecl>, lua: Option<&Lua>) -> CombatOutcome {
+    fn resolve_combat(
+        &mut self,
+        attacks: Vec<AttackDecl>,
+        ctx: Option<&mut EventContext>,
+    ) -> CombatOutcome {
         let mut outcome = CombatOutcome::default();
         let defender = self.active_player.opponent();
 
@@ -306,6 +330,7 @@ impl GameState {
                 to_kill.push(iid.clone());
             }
         }
+        let mut ctx = ctx;
         for iid in &to_kill {
             let owner = self
                 .card_pool
@@ -318,8 +343,8 @@ impl GameState {
             // handler observes the post-death zone state. Handlers may return
             // attached cards via game.move; P.8 (auto-exile of leftover
             // attached) is still TODO and will run after handlers when wired.
-            if let Some(lua) = lua {
-                lua_api::fire_self_only(lua, self, EventName::OnDie, iid);
+            if let Some(c) = ctx.as_mut() {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid);
             }
             // TODO(types): P.8 — when a card with attached cards moves to GRAVEYARD,
             // any attached cards still present must move to EXILE.
@@ -580,11 +605,11 @@ mod tests {
         enter_combat(&mut s);
 
         // Other creature attacks first; it taps.
-        s.declare_attacker(&other_iid, Some(registry.lua())).unwrap();
+        s.declare_attacker(&other_iid, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
         assert!(s.card_pool.get(&other_iid).unwrap().tapped);
 
         // Captain attacks; its handler untaps the other attacker.
-        s.declare_attacker(&cap_iid, Some(registry.lua())).unwrap();
+        s.declare_attacker(&cap_iid, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
         assert!(s.card_pool.get(&cap_iid).unwrap().tapped); // captain itself stays tapped
         assert!(!s.card_pool.get(&other_iid).unwrap().tapped);
     }
@@ -628,7 +653,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         enter_combat(&mut s);
 
-        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+        s.declare_attacker(&atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         let globals = registry.lua().globals();
         let id: String = globals.get("probe_id").unwrap();
@@ -674,7 +699,7 @@ mod tests {
         let b_exile_before = s.b.exile.len();
         let a_deck_before = s.a.deck.len();
 
-        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+        s.declare_attacker(&atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         // Opponent's deck shrinks by 1, exile grows by 1.
         assert_eq!(s.b.deck.len(), b_deck_before - 1);
@@ -724,7 +749,7 @@ mod tests {
         let hand_before = s.a.hand.len();
         let gy_before = s.a.graveyard.len();
 
-        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+        s.declare_attacker(&atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         assert_eq!(s.a.hand.len(), hand_before - 2);
         assert_eq!(s.a.graveyard.len(), gy_before + 2);
@@ -767,7 +792,7 @@ mod tests {
         add_ability(&mut s, &atk, "haste");
         enter_combat(&mut s);
 
-        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+        s.declare_attacker(&atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         let ran: bool = registry.lua().globals().get("print_probe_ran").unwrap();
         assert!(ran);
@@ -821,7 +846,7 @@ mod tests {
             .globals()
             .set("fire_on_attack_count", 0_i32)
             .unwrap();
-        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+        s.declare_attacker(&atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         let count: i32 = registry
             .lua()
@@ -871,7 +896,7 @@ mod tests {
             .unwrap();
         s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
-        s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
+        s.declare_blocker(&blk, &atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         let count: i32 = registry
             .lua()
@@ -910,7 +935,7 @@ mod tests {
         let bottom_before = s.a.deck.last().unwrap().clone();
         let deck_len = s.a.deck.len();
 
-        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+        s.declare_attacker(&atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         // Top card moved to bottom; deck length unchanged.
         assert_eq!(s.a.deck.len(), deck_len);
@@ -947,7 +972,7 @@ mod tests {
 
         s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
-        s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
+        s.declare_blocker(&blk, &atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         // Handler pinged the attacker for 1.
         assert_eq!(s.card_pool.get(&atk).unwrap().damage, 1);
@@ -1000,7 +1025,7 @@ mod tests {
 
         s.declare_attacker(&atk, None).unwrap();
         s.confirm_attacks().unwrap();
-        s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
+        s.declare_blocker(&blk, &atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         let count: i32 = registry
             .lua()
@@ -1045,7 +1070,7 @@ mod tests {
         let defender_deck_before = s.b.deck.len();
         let defender_exile_before = s.b.exile.len();
 
-        s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
+        s.declare_blocker(&blk, &atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         // Handler ran during declare_blocker (before resolve_combat):
         // blocker took 1 damage; defender's deck top went to exile.
@@ -1089,7 +1114,7 @@ mod tests {
         let a_hand_before = s.a.hand.len();
         let a_deck_before = s.a.deck.len();
 
-        s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
+        s.declare_blocker(&blk, &atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         assert_eq!(s.a.hand.len(), a_hand_before + 1);
         assert_eq!(s.a.deck.len(), a_deck_before - 1);
@@ -1139,7 +1164,7 @@ mod tests {
         s.declare_attacker(&lender_iid, None).unwrap();
         s.confirm_attacks().unwrap();
         s.declare_blocker(&killer_iid, &lender_iid, None).unwrap();
-        let outcome = s.confirm_blocks(Some(registry.lua())).unwrap();
+        let outcome = s.confirm_blocks(Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
         assert!(outcome.deaths.contains(&lender_iid));
         assert!(s.a.graveyard.contains(&lender_iid));
