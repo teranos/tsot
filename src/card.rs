@@ -1,6 +1,34 @@
-use mlua::{Lua, Table, Value};
+use mlua::{Function, Lua, Table, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+
+/// Owns the long-lived Lua VM and the cards loaded into it.
+///
+/// The VM outlives the cards because future card fields (event handlers like
+/// `on_die`, `static`) will be `mlua::Function` values whose validity is tied
+/// to this `Lua`. Built once at startup; not mutated during a game.
+pub struct CardRegistry {
+    lua: Lua,
+    cards: Vec<Card>,
+}
+
+impl CardRegistry {
+    /// Load every `.lua` file in `dir` into a fresh VM.
+    pub fn load(dir: &Path) -> mlua::Result<Self> {
+        let lua = Lua::new();
+        let cards = load_cards_dir(&lua, dir)?;
+        Ok(Self { lua, cards })
+    }
+
+    pub fn cards(&self) -> &[Card] {
+        &self.cards
+    }
+
+    pub fn lua(&self) -> &Lua {
+        &self.lua
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
@@ -44,7 +72,44 @@ pub struct Stats {
     pub y: i32,
 }
 
-#[derive(Debug, Clone)]
+/// Event handler keys recognised on card files. Matches LUA.md Phase 1 taxonomy
+/// plus `OnBlockedBy` (the squirrel-overrun canary — fires on the attacker when
+/// any blocker is declared against it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EventName {
+    OnEnterBoard,
+    OnDie,
+    OnAttack,
+    OnBlock,
+    OnBlockedBy,
+    OnPlay,
+}
+
+impl EventName {
+    /// The Lua field name used to declare this handler on a card table.
+    pub fn lua_key(self) -> &'static str {
+        match self {
+            EventName::OnEnterBoard => "on_enter_board",
+            EventName::OnDie => "on_die",
+            EventName::OnAttack => "on_attack",
+            EventName::OnBlock => "on_block",
+            EventName::OnBlockedBy => "on_blocked_by",
+            EventName::OnPlay => "on_play",
+        }
+    }
+
+    /// All known event names, for loader iteration.
+    pub const ALL: [EventName; 6] = [
+        EventName::OnEnterBoard,
+        EventName::OnDie,
+        EventName::OnAttack,
+        EventName::OnBlock,
+        EventName::OnBlockedBy,
+        EventName::OnPlay,
+    ];
+}
+
+#[derive(Clone)]
 pub struct Card {
     pub id: String,
     pub name: String,
@@ -55,6 +120,29 @@ pub struct Card {
     pub cost: Vec<CostComponent>,
     pub abilities: Vec<String>,
     pub stats: Option<Stats>,
+    /// Lua event handlers loaded from `on_*` fields. Empty for data-only cards.
+    /// Handles are refcounted into the owning `CardRegistry`'s VM and must not
+    /// outlive it.
+    pub handlers: HashMap<EventName, Function>,
+}
+
+impl std::fmt::Debug for Card {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let handler_keys: Vec<&'static str> =
+            self.handlers.keys().map(|e| e.lua_key()).collect();
+        f.debug_struct("Card")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("colors", &self.colors)
+            .field("kind", &self.kind)
+            .field("subtypes", &self.subtypes)
+            .field("symbol", &self.symbol)
+            .field("cost", &self.cost)
+            .field("abilities", &self.abilities)
+            .field("stats", &self.stats)
+            .field("handlers", &handler_keys)
+            .finish()
+    }
 }
 
 fn parse_color(s: &str) -> Result<Color, String> {
@@ -135,6 +223,25 @@ fn read_cost(t: &Table) -> mlua::Result<Vec<CostComponent>> {
     Ok(out)
 }
 
+fn read_handlers(t: &Table) -> mlua::Result<HashMap<EventName, Function>> {
+    let mut out = HashMap::new();
+    for ev in EventName::ALL {
+        match t.get::<Value>(ev.lua_key())? {
+            Value::Nil => {}
+            Value::Function(f) => {
+                out.insert(ev, f);
+            }
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "field `{}` must be a function, got {other:?}",
+                    ev.lua_key()
+                )))
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn read_stats(t: &Table) -> mlua::Result<Option<Stats>> {
     match t.get::<Value>("stats")? {
         Value::Nil => Ok(None),
@@ -172,6 +279,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     let colors = read_color_vec(&table)?;
     let cost = read_cost(&table)?;
     let stats = read_stats(&table)?;
+    let handlers = read_handlers(&table)?;
 
     Ok(Card {
         id,
@@ -183,6 +291,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         cost,
         abilities,
         stats,
+        handlers,
     })
 }
 
@@ -195,4 +304,87 @@ pub fn load_cards_dir(lua: &Lua, dir: &Path) -> mlua::Result<Vec<Card>> {
         .collect();
     entries.sort();
     entries.iter().map(|p| load_card(lua, p)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn handlers_from(lua: &Lua, src: &str) -> HashMap<EventName, Function> {
+        let value: Value = lua.load(src).eval().unwrap();
+        let table = match value {
+            Value::Table(t) => t,
+            _ => panic!("expected table"),
+        };
+        read_handlers(&table).unwrap()
+    }
+
+    #[test]
+    fn handler_field_captures_lua_function() {
+        let lua = Lua::new();
+        let handlers = handlers_from(
+            &lua,
+            r#"
+            return {
+                id = "fixture",
+                on_blocked_by = function(game, self, blocker)
+                    return "ran"
+                end,
+            }
+        "#,
+        );
+        let handler = handlers.get(&EventName::OnBlockedBy).unwrap();
+        let result: String = handler.call((Value::Nil, Value::Nil, Value::Nil)).unwrap();
+        assert_eq!(result, "ran");
+    }
+
+    #[test]
+    fn missing_handler_keys_are_absent() {
+        let lua = Lua::new();
+        let handlers = handlers_from(&lua, r#"return { id = "fixture" }"#);
+        assert!(handlers.is_empty());
+    }
+
+    #[test]
+    fn non_function_handler_value_errors() {
+        let lua = Lua::new();
+        let value: Value = lua
+            .load(r#"return { id = "x", on_die = 5 }"#)
+            .eval()
+            .unwrap();
+        let table = match value {
+            Value::Table(t) => t,
+            _ => panic!(),
+        };
+        assert!(read_handlers(&table).is_err());
+    }
+
+    #[test]
+    fn registry_keeps_handlers_callable() {
+        // The whole reason CardRegistry owns the Lua: handlers stay valid
+        // as long as the registry lives.
+        let tmp = std::env::temp_dir().join("tsot_card_handlers_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let card_path = tmp.join("test-handler.lua");
+        std::fs::write(
+            &card_path,
+            r#"return {
+                id = "test-handler",
+                on_die = function(game, self) return "fired" end,
+            }"#,
+        )
+        .unwrap();
+
+        let registry = CardRegistry::load(&tmp).unwrap();
+        let card = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "test-handler")
+            .unwrap();
+        let handler = card.handlers.get(&EventName::OnDie).unwrap();
+        let result: String = handler.call((Value::Nil, Value::Nil)).unwrap();
+        assert_eq!(result, "fired");
+
+        std::fs::remove_file(&card_path).ok();
+    }
 }

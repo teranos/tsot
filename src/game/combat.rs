@@ -13,7 +13,9 @@
 //!   - P.8 attached-cards-go-to-exile on host death.
 //!   - Control changes (T.1) — caller treats owner == controller.
 
+use super::lua_api;
 use super::state::{AttackDecl, CombatState, GameState, InstanceId, Phase, Zone};
+use mlua::Lua;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CombatError {
@@ -159,10 +161,15 @@ impl GameState {
     /// Declare one blocker against one specific attacker.
     /// Validates B.12 (not tapped), B.14 (attacker not **unblockable**),
     /// B.11 (flying restriction), and that the blocker is on the defending player's BOARD.
+    ///
+    /// `lua` is the long-lived VM from `CardRegistry`. When `Some`, the
+    /// attacker's `on_blocked_by` handler fires per blocker. When `None`,
+    /// handlers are skipped (used by unit tests of pure combat logic).
     pub fn declare_blocker(
         &mut self,
         blocker: &InstanceId,
         attacker: &InstanceId,
+        lua: Option<&Lua>,
     ) -> Result<(), CombatError> {
         if self.winner.is_some() {
             return Err(CombatError::GameOver);
@@ -220,9 +227,14 @@ impl GameState {
             _ => return Err(CombatError::NotAwaitingBlockers),
         }
 
-        // TODO(events): fire "whenever this creature blocks" + "whenever another creature
-        // blocks this creature" triggers per A.1. Squirrel-overrun and discard-defender both
-        // care about block events.
+        // LUA Phase 1: fire `on_blocked_by` on the attacker, once per blocker.
+        // Per-blocker (not once-per-attacker) — matches handler signature `(game, self, blocker)`.
+        // Errors log and continue per LUA.md Q #3.
+        if let Some(lua) = lua {
+            lua_api::fire_on_blocked_by(lua, self, attacker, blocker);
+        }
+        // TODO(events): also fire `on_block` on the blocker. Skipped for now — first
+        // wiring focuses on a single event end-to-end.
         // TODO(stack): when block-declaration is added as an R.1 window-opener (per design
         // discussion), open a response window here.
 
@@ -371,7 +383,7 @@ mod tests {
 
         s.declare_attacker(&atk).unwrap();
         s.confirm_attacks().unwrap();
-        s.declare_blocker(&blk, &atk).unwrap();
+        s.declare_blocker(&blk, &atk, None).unwrap();
         let outcome = s.confirm_blocks().unwrap();
         // Both are 1/1 — each deals 1 to other, both reach damage >= y → die.
         assert_eq!(outcome.defender_milled_to_exile, 0);
@@ -466,7 +478,7 @@ mod tests {
         s.declare_attacker(&atk).unwrap();
         s.confirm_attacks().unwrap();
         assert_eq!(
-            s.declare_blocker(&blk, &atk),
+            s.declare_blocker(&blk, &atk, None),
             Err(CombatError::AttackerUnblockable)
         );
     }
@@ -484,7 +496,7 @@ mod tests {
         enter_combat(&mut s);
         s.declare_attacker(&atk).unwrap();
         s.confirm_attacks().unwrap();
-        assert!(s.declare_blocker(&blk, &atk).is_ok());
+        assert!(s.declare_blocker(&blk, &atk, None).is_ok());
     }
 
     #[test]
@@ -500,7 +512,7 @@ mod tests {
         s.declare_attacker(&atk).unwrap();
         s.confirm_attacks().unwrap();
         assert_eq!(
-            s.declare_blocker(&blk, &atk),
+            s.declare_blocker(&blk, &atk, None),
             Err(CombatError::FlyingMustBeBlockedByFlyer)
         );
     }
@@ -518,7 +530,7 @@ mod tests {
         s.declare_attacker(&atk).unwrap();
         s.confirm_attacks().unwrap();
         assert_eq!(
-            s.declare_blocker(&blk, &atk),
+            s.declare_blocker(&blk, &atk, None),
             Err(CombatError::BlockerTapped)
         );
     }
@@ -534,6 +546,110 @@ mod tests {
             s.declare_attacker(&atk),
             Err(CombatError::NotCombatPhase)
         );
+    }
+
+    #[test]
+    fn on_blocked_by_handler_fires_when_block_declared() {
+        use crate::card::CardRegistry;
+        use std::fs;
+
+        // Write a fixture card whose on_blocked_by handler sets a Lua global,
+        // so we can observe the fire from the host side.
+        let tmp = std::env::temp_dir().join("tsot_on_blocked_by_test");
+        fs::create_dir_all(&tmp).unwrap();
+        let card_path = tmp.join("fire-on-block.lua");
+        fs::write(
+            &card_path,
+            r#"return {
+                id = "fire-on-block",
+                on_blocked_by = function(game, self, blocker)
+                    _G.fire_on_block_count = (_G.fire_on_block_count or 0) + 1
+                end,
+            }"#,
+        )
+        .unwrap();
+
+        let registry = CardRegistry::load(&tmp).unwrap();
+        let fixture = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "fire-on-block")
+            .unwrap()
+            .clone();
+
+        // Build a game where the fixture attacks; any vanilla creature blocks.
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        let blk = s.b.hand[0].clone();
+        // Swap the attacker's card data for the fixture (keep stats so combat math works).
+        {
+            let inst = s.card_pool.get_mut(&atk).unwrap();
+            inst.card.handlers = fixture.handlers.clone();
+            inst.card.id = fixture.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        put_on_board(&mut s, PlayerId::B, &blk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        s.declare_attacker(&atk).unwrap();
+        s.confirm_attacks().unwrap();
+        s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
+
+        let count: i32 = registry
+            .lua()
+            .globals()
+            .get("fire_on_block_count")
+            .unwrap();
+        assert_eq!(count, 1);
+
+        fs::remove_file(&card_path).ok();
+    }
+
+    #[test]
+    fn tantrum_imp_handler_damages_blocker_and_mills_defender() {
+        use crate::card::CardRegistry;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let tantrum = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "tantrum-imp")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        let blk = s.b.hand[0].clone();
+        // Replace attacker's card data with tantrum-imp's (handler + id),
+        // keep the 1/1 stats so combat math stays predictable.
+        {
+            let inst = s.card_pool.get_mut(&atk).unwrap();
+            inst.card.handlers = tantrum.handlers.clone();
+            inst.card.id = tantrum.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        put_on_board(&mut s, PlayerId::B, &blk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        s.declare_attacker(&atk).unwrap();
+        s.confirm_attacks().unwrap();
+
+        let defender_deck_before = s.b.deck.len();
+        let defender_exile_before = s.b.exile.len();
+
+        s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
+
+        // Handler ran during declare_blocker (before resolve_combat):
+        // blocker took 1 damage; defender's deck top went to exile.
+        assert_eq!(
+            s.card_pool.get(&blk).unwrap().damage,
+            1,
+            "blocker should have 1 damage from handler"
+        );
+        assert_eq!(s.b.deck.len(), defender_deck_before - 1);
+        assert_eq!(s.b.exile.len(), defender_exile_before + 1);
     }
 
     #[test]

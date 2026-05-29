@@ -1,8 +1,7 @@
-use mlua::Lua;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::path::Path;
-use tsot::card::{load_cards_dir, Card, CardType};
+use tsot::card::{Card, CardRegistry, CardType};
 use tsot::game::{GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 const ITERATIONS: usize = 1000;
@@ -23,13 +22,15 @@ struct GameStats {
     b_final_board: u32,
     a_final_gy: u32,
     b_final_gy: u32,
+    a_fires: u32,
+    b_fires: u32,
 }
 
 fn main() -> mlua::Result<()> {
-    let lua = Lua::new();
-    let cards = load_cards_dir(&lua, Path::new("cards"))?;
+    let registry = CardRegistry::load(Path::new("cards"))?;
     // Filter to standard-legal creatures (per S.5, the `test` subtype is excluded).
-    let creature_pool: Vec<Card> = cards
+    let creature_pool: Vec<Card> = registry
+        .cards()
         .iter()
         .filter(|c| matches!(c.kind, CardType::Creature))
         .filter(|c| !c.subtypes.iter().any(|s| s.eq_ignore_ascii_case("test")))
@@ -38,7 +39,7 @@ fn main() -> mlua::Result<()> {
 
     println!(
         "loaded {} cards ({} standard-legal creatures); running {} simulations",
-        cards.len(),
+        registry.cards().len(),
         creature_pool.len(),
         ITERATIONS
     );
@@ -53,7 +54,7 @@ fn main() -> mlua::Result<()> {
         let deck_b = build_random_deck(&creature_pool, &mut rng, 50);
         let state = GameState::new(deck_a, deck_b);
         last_log.clear();
-        all.push(run_game(state, &mut rng, &mut last_log));
+        all.push(run_game(state, &mut rng, &mut last_log, registry.lua()));
     }
     let elapsed = t0.elapsed();
 
@@ -81,7 +82,12 @@ fn build_random_deck(pool: &[Card], rng: &mut impl Rng, size: usize) -> Vec<Card
     deck
 }
 
-fn run_game(mut state: GameState, rng: &mut impl Rng, log: &mut Vec<String>) -> GameStats {
+fn run_game(
+    mut state: GameState,
+    rng: &mut impl Rng,
+    log: &mut Vec<String>,
+    lua: &mlua::Lua,
+) -> GameStats {
     let mut stats = GameStats {
         turns: 0,
         winner: PlayerId::A,
@@ -97,6 +103,8 @@ fn run_game(mut state: GameState, rng: &mut impl Rng, log: &mut Vec<String>) -> 
         b_final_board: 0,
         a_final_gy: 0,
         b_final_gy: 0,
+        a_fires: 0,
+        b_fires: 0,
     };
 
     let mut safety = 1000;
@@ -150,7 +158,7 @@ fn run_game(mut state: GameState, rng: &mut impl Rng, log: &mut Vec<String>) -> 
             if !attackers.is_empty() {
                 for (i, blk) in blockers.iter().enumerate() {
                     let atk = &attackers[i % attackers.len()];
-                    if state.declare_blocker(blk, atk).is_ok() {
+                    if state.declare_blocker(blk, atk, Some(lua)).is_ok() {
                         block_count += 1;
                     }
                 }
@@ -188,6 +196,8 @@ fn run_game(mut state: GameState, rng: &mut impl Rng, log: &mut Vec<String>) -> 
     stats.b_final_board = state.b.board.len() as u32;
     stats.a_final_gy = state.a.graveyard.len() as u32;
     stats.b_final_gy = state.b.graveyard.len() as u32;
+    stats.a_fires = state.triggered_fires_a;
+    stats.b_fires = state.triggered_fires_b;
     stats
 }
 
@@ -328,6 +338,9 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     println!("  final graveyard     {:>6.1}      {:>6.1}",
         avg(all, |s| s.a_final_gy as f64),
         avg(all, |s| s.b_final_gy as f64));
+    println!("  triggered fires (A.1){:>5.1}      {:>6.1}",
+        avg(all, |s| s.a_fires as f64),
+        avg(all, |s| s.b_fires as f64));
 
     println!();
     println!("Pending mechanics (zero today; nonzero once each engine piece lands):");
@@ -336,7 +349,6 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     print_pending("discards (HAND → GRAVEYARD)");
     print_pending("sacrifices (cost P.16)");
     print_pending("bounces (BOARD → HAND)");
-    print_pending("triggered abilities fired (A.1)");
     print_pending("activated abilities used");
     print_pending("attached cards on board (P.6)");
     print_pending("instant responses (R.1)");

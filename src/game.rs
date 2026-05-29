@@ -7,6 +7,7 @@
 //!   - `play`: playing cards from hand, cost payment, attachment.
 
 mod combat;
+mod lua_api;
 mod movement;
 mod play;
 mod state;

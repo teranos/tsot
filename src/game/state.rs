@@ -137,6 +137,10 @@ pub struct GameState {
     pub phase: Phase,
     pub winner: Option<PlayerId>,
     pub combat: Option<CombatState>,
+    /// Engine metric: count of Lua event handlers that fired successfully
+    /// this game, credited to the controller of the source card. Diagnostic.
+    pub triggered_fires_a: u32,
+    pub triggered_fires_b: u32,
 }
 
 impl GameState {
@@ -158,6 +162,8 @@ impl GameState {
             phase: Phase::Untap,
             winner: None,
             combat: None,
+            triggered_fires_a: 0,
+            triggered_fires_b: 0,
         }
     }
 
