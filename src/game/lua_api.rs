@@ -4,7 +4,7 @@
 //! macro inside `Lua::scope`, so closures can borrow `&mut GameState` for the
 //! duration of the handler call only.
 
-use super::state::{CombatState, GameState, InstanceId, PlayerId, StatusEffect, Zone};
+use super::state::{CombatState, GameState, InstanceId, Modifier, PlayerId, StatusEffect, Zone};
 use crate::card::{CardType, EventName};
 use crate::choice::{ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest};
 use mlua::{Lua, Result, Value};
@@ -189,6 +189,33 @@ fn do_add_status(s: &mut GameState, iid: &str, kind: &str, duration: i32) -> Res
     Ok(())
 }
 
+fn do_add_modifier(
+    s: &mut GameState,
+    iid: &str,
+    kind: &str,
+    x: i32,
+    y: i32,
+) -> Result<()> {
+    let owner = s.card_pool.get(iid).map(|i| i.owner);
+    let modifier = match kind.to_ascii_lowercase().as_str() {
+        "stat_boost" => Modifier::StatBoost { x, y },
+        "gains_flying" => Modifier::GainsFlying,
+        "cant_attack" => Modifier::CantAttack,
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "game.add_modifier: unknown kind {other:?} (known: \"stat_boost\", \"gains_flying\", \"cant_attack\")"
+            )))
+        }
+    };
+    if owner.is_some() {
+        s.add_modifier(&iid.to_string(), modifier);
+    }
+    if let Some(o) = owner {
+        s.bump_action("add_modifier", o);
+    }
+    Ok(())
+}
+
 fn do_set_tapped(s: &mut GameState, iid: &str, tapped: bool) -> Result<()> {
     let owner = s.card_pool.get(iid).map(|i| i.owner);
     if owner.is_some() {
@@ -273,6 +300,12 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // TODO(choose_player): API exposed but unused in the corpus today.
+        // In 1v1, "target player" effects use the deterministic
+        // `game.opponent(self.owner)` shortcut, which doesn't need a prompt.
+        // First card to use this would be one that explicitly asks the
+        // player to pick (e.g., "each chosen player draws a card" with
+        // bidirectional targeting). No such card exists yet.
         let cell_player_o = &$oracle_cell;
         let cell_player_s = &$cell;
         let player_owner = $owner;
@@ -453,6 +486,16 @@ macro_rules! build_game_table {
             $scope.create_function_mut(move |_, (pid, n): (String, i32)| {
                 do_discard(&mut *cell_discard.borrow_mut(), &pid, n)
             })?,
+        )?;
+
+        let cell_mod = &$cell;
+        game.set(
+            "add_modifier",
+            $scope.create_function_mut(
+                move |_, (iid, kind, x, y): (String, String, i32, i32)| {
+                    do_add_modifier(&mut *cell_mod.borrow_mut(), &iid, &kind, x, y)
+                },
+            )?,
         )?;
 
         let cell_card = &$cell;

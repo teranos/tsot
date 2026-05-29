@@ -15,6 +15,10 @@ use std::collections::BTreeSet;
 pub struct PlayChoices {
     /// One InstanceId per HAND cost-card the player chooses to spend.
     pub hand_payment_ids: Vec<InstanceId>,
+    /// The value of X for variable-X cost components. Required if any cost
+    /// component has `is_x: true`; the same X applies to every variable
+    /// component on the card (per recast's `X hand + X graveyard` pattern).
+    pub x_value: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,8 +31,8 @@ pub enum PlayError {
     UnsupportedCostSource(CostSource),
     /// GRAVEYARD doesn't have enough cards to pay the GRAVEYARD cost.
     InsufficientGraveyardForCost { needed: usize, have: usize },
-    /// This slice doesn't support variable-X costs yet.
-    VariableXNotSupported,
+    /// Card has a variable-X cost component but choices.x_value is None.
+    VariableXValueMissing,
     /// HAND payment count must equal the card's total HAND cost.
     WrongHandPaymentCount { expected: usize, got: usize },
     /// A chosen HAND payment isn't in the player's hand, or is the card being played itself.
@@ -86,11 +90,25 @@ impl GameState {
         let mut hand_needed: usize = 0;
         let mut mill_needed: usize = 0;
         let mut graveyard_needed: usize = 0;
-        for c in &card_cost {
-            if c.is_x {
-                return Err(PlayError::VariableXNotSupported);
+        // Variable-X: if any cost component has is_x, the player must have
+        // pre-chosen X (via oracle.choose_int) and supplied it in choices.
+        // The same X applies to every variable component.
+        let has_variable_x = card_cost.iter().any(|c| c.is_x);
+        let x_value = if has_variable_x {
+            match choices.x_value {
+                Some(v) => v.max(0) as usize,
+                None => return Err(PlayError::VariableXValueMissing),
             }
-            let amount = c.amount.max(0) as usize;
+        } else {
+            0
+        };
+
+        for c in &card_cost {
+            let amount = if c.is_x {
+                x_value
+            } else {
+                c.amount.max(0) as usize
+            };
             match c.source {
                 CostSource::Hand => hand_needed += amount,
                 CostSource::Mill => mill_needed += amount,
@@ -241,6 +259,7 @@ mod tests {
             &creature,
             PlayChoices {
                 hand_payment_ids: vec![payment],
+                x_value: None,
             },
             None,
         )
@@ -284,6 +303,7 @@ mod tests {
         );
         let choices = PlayChoices {
             hand_payment_ids: vec![payment.clone()],
+            x_value: None,
         };
         assert!(s
             .play_card(PlayerId::A, &creature, choices, None)
@@ -349,6 +369,7 @@ mod tests {
             &creature,
             PlayChoices {
                 hand_payment_ids: vec![pay.clone()],
+                x_value: None,
             },
             None,
         );
@@ -387,6 +408,7 @@ mod tests {
             &creature,
             PlayChoices {
                 hand_payment_ids: vec![pay],
+                x_value: None,
             },
             None,
         );
@@ -417,6 +439,7 @@ mod tests {
             &creature,
             PlayChoices {
                 hand_payment_ids: vec![creature.clone()],
+                x_value: None,
             },
             None,
         );
@@ -442,6 +465,7 @@ mod tests {
             &creature,
             PlayChoices {
                 hand_payment_ids: vec![pay.clone(), pay.clone()],
+                x_value: None,
             },
             None,
         );
@@ -496,7 +520,7 @@ mod tests {
             }],
         );
         let result = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
-        assert_eq!(result, Err(PlayError::VariableXNotSupported));
+        assert_eq!(result, Err(PlayError::VariableXValueMissing));
     }
 
     #[test]
@@ -605,6 +629,7 @@ mod tests {
             &jelly_iid,
             PlayChoices {
                 hand_payment_ids: vec![hand_payment],
+                x_value: None,
             },
             Some(&mut EventContext::new(registry.lua(), &mut oracle)),
         )
@@ -704,6 +729,7 @@ mod tests {
             &surge_iid,
             PlayChoices {
                 hand_payment_ids: vec![payment, payment2],
+                x_value: None,
             },
             Some(&mut crate::game::EventContext::lua_only(registry.lua())),
         )

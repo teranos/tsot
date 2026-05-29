@@ -4,7 +4,7 @@ use rand::{Rng, SeedableRng};
 use std::collections::BTreeMap;
 use std::path::Path;
 use tsot::card::{Card, CardRegistry, CardType, CostSource, EventName};
-use tsot::choice::RandomOracle;
+use tsot::choice::{ChoiceOracle, ChooseIntRequest, RandomOracle};
 use tsot::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 /// Master seed for the sim's RNG. Default: fresh per run (sampled from
@@ -66,11 +66,10 @@ fn main() -> mlua::Result<()> {
         .filter(|c| !c.subtypes.iter().any(|s| s.eq_ignore_ascii_case("test")))
         .filter(|c| {
             c.cost.iter().all(|cc| {
-                !cc.is_x
-                    && matches!(
-                        cc.source,
-                        CostSource::Hand | CostSource::Mill | CostSource::Graveyard
-                    )
+                matches!(
+                    cc.source,
+                    CostSource::Hand | CostSource::Mill | CostSource::Graveyard
+                )
             })
         })
         .cloned()
@@ -222,17 +221,49 @@ fn run_game(
                 .map(|c| c.card.kind)
                 .unwrap_or(CardType::Unspecified);
             let mut choices = PlayChoices::default();
-            if matches!(kind, CardType::Creature) {
+            // Variable-X handling: if the card has an is_x cost component,
+            // ask the oracle for X and build the hand payment accordingly.
+            // No rigging — X-cost cards earn their attached count by paying it.
+            let cost = state
+                .card_pool
+                .get(&picked)
+                .map(|c| c.card.cost.clone())
+                .unwrap_or_default();
+            let has_is_x = cost.iter().any(|c| c.is_x);
+
+            if has_is_x {
+                let hand_size = state.player(active).hand.len();
+                // Exclude the played card from the upper bound; cap for sanity.
+                let max_x = (hand_size.saturating_sub(1)).min(10) as i32;
+                let x = oracle.choose_int(ChooseIntRequest {
+                    min: 0,
+                    max: max_x,
+                    prompt: format!("X for {}", short(&picked)),
+                });
+                state.bump_action("choose_int", active);
+                choices.x_value = Some(x);
+                let hand_needed: usize = cost
+                    .iter()
+                    .filter(|c| c.is_x && matches!(c.source, CostSource::Hand))
+                    .map(|_| x.max(0) as usize)
+                    .sum();
+                if hand_needed > 0 {
+                    let payment: Vec<InstanceId> = state
+                        .player(active)
+                        .hand
+                        .iter()
+                        .filter(|iid| *iid != &picked)
+                        .take(hand_needed)
+                        .cloned()
+                        .collect();
+                    choices.hand_payment_ids = payment;
+                }
+            } else if matches!(kind, CardType::Creature) {
                 rig_creature_free_haste(&mut state, &picked);
             } else if matches!(kind, CardType::Instant) {
                 // Pay HAND cost honestly: take the leftmost N hand cards
                 // (excluding the card being played). Deterministic discard
                 // pending choice API.
-                let cost = state
-                    .card_pool
-                    .get(&picked)
-                    .map(|c| c.card.cost.clone())
-                    .unwrap_or_default();
                 let hand_needed: usize = cost
                     .iter()
                     .filter(|c| matches!(c.source, CostSource::Hand))
@@ -622,8 +653,8 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     }
 
     println!();
-    println!("Engine + handler actions (per-game averages):");
-    println!("                          A         B");
+    println!("Engine + handler actions (totals across {} games):", all.len());
+    println!("                              A         B");
     for action in [
         "draw",
         "mill",
@@ -633,6 +664,7 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
         "tap",
         "untap",
         "add_status",
+        "add_modifier",
         "choose_card",
         "choose_player",
         "choose_int",
@@ -640,9 +672,15 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
         "self_deckout_by_choice",
         "preview_skip_suicide",
     ] {
-        let a_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[0]).unwrap_or(0) as f64);
-        let b_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[1]).unwrap_or(0) as f64);
-        println!("  game.{action:16} {a_avg:>6.2}    {b_avg:>6.2}");
+        let a_total: u64 = all
+            .iter()
+            .map(|s| s.action_counts.get(action).map(|v| v[0]).unwrap_or(0) as u64)
+            .sum();
+        let b_total: u64 = all
+            .iter()
+            .map(|s| s.action_counts.get(action).map(|v| v[1]).unwrap_or(0) as u64)
+            .sum();
+        println!("  game.{action:24} {a_total:>6}    {b_total:>6}");
     }
 
     println!();

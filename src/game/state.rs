@@ -355,6 +355,20 @@ impl GameState {
         Some(pos)
     }
 
+    /// Append a `Modifier` to a card's `modifiers` vec, journaling the addition.
+    pub fn add_modifier(&mut self, iid: &InstanceId, modifier: Modifier) {
+        let Some(inst) = self.card_pool.get_mut(iid) else {
+            return;
+        };
+        inst.modifiers.push(modifier.clone());
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::AddModifier {
+                iid: iid.clone(),
+                modifier,
+            });
+        }
+    }
+
     /// Append an iid to host's attached vec, journaling the addition.
     pub fn add_attached(&mut self, host: &InstanceId, attached: &InstanceId) {
         let Some(inst) = self.card_pool.get_mut(host) else {

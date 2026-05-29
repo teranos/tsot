@@ -5,7 +5,7 @@
 //! (rollback) the mutation.
 
 use super::state::{
-    CombatState, GameState, InstanceId, Phase, PlayerId, StatusEffect, Zone,
+    CombatState, GameState, InstanceId, Modifier, Phase, PlayerId, StatusEffect, Zone,
 };
 use crate::card::EventName;
 use serde::{Deserialize, Serialize};
@@ -95,6 +95,12 @@ pub enum JournalEntry {
         host: InstanceId,
         attached: InstanceId,
         at_pos: usize,
+    },
+    /// Appended a `Modifier` to a card's `modifiers` vec. Inverse: pop last.
+    /// Forward: push to end.
+    AddModifier {
+        iid: InstanceId,
+        modifier: Modifier,
     },
 }
 
@@ -301,6 +307,11 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
                 inst.attached.insert(at_pos, attached);
             }
         }
+        JournalEntry::AddModifier { iid, modifier: _ } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.modifiers.pop();
+            }
+        }
     }
 }
 
@@ -392,6 +403,11 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         } => {
             if let Some(inst) = state.card_pool.get_mut(&host) {
                 inst.attached.remove(at_pos);
+            }
+        }
+        JournalEntry::AddModifier { iid, modifier } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.modifiers.push(modifier);
             }
         }
     }
