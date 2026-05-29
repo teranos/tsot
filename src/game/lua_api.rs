@@ -144,6 +144,24 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     Ok(())
 }
 
+fn do_discard(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
+    let pid = parse_pid(pid_str)?;
+    let take = (n.max(0) as usize).min(s.player(pid).hand.len());
+    // Deterministic: front-of-hand (oldest-held first), matching U.10's
+    // end-of-turn discard fallback. When the choice API lands (LUA Phase 2),
+    // this method should accept an optional `choices` argument or surface a
+    // prompt through the oracle, so card text reading "discard a card" can
+    // actually let the player pick. Until then, leftmost-N is the rule.
+    let p = s.player_mut(pid);
+    let drained: Vec<InstanceId> = p.hand.drain(0..take).collect();
+    let actually = drained.len() as u32;
+    p.graveyard.extend(drained);
+    for _ in 0..actually {
+        s.bump_action("discard", pid);
+    }
+    Ok(())
+}
+
 fn do_add_status(s: &mut GameState, iid: &str, kind: &str, duration: i32) -> Result<()> {
     let owner = s.card_pool.get(iid).map(|i| i.owner);
     let inst = match s.card_pool.get_mut(iid) {
@@ -334,6 +352,14 @@ macro_rules! build_game_table {
                     do_add_status(&mut *cell_status.borrow_mut(), &iid, &kind, duration)
                 },
             )?,
+        )?;
+
+        let cell_discard = &$cell;
+        game.set(
+            "discard",
+            $scope.create_function_mut(move |_, (pid, n): (String, i32)| {
+                do_discard(&mut *cell_discard.borrow_mut(), &pid, n)
+            })?,
         )?;
 
         let cell_card = &$cell;

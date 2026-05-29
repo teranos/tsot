@@ -13,7 +13,7 @@ Cards become modules; the engine fires a small set of events; a minimal `game` A
 
 ### Status (2026-05-29)
 
-Phase 1 is in progress. All six event fire sites are wired; the API surface and corpus retrofits are partial.
+Phase 1 spec is structurally complete. All six events are wired and firing in the sim; all originally-planned API methods plus a few additions (`deck_top`, `attackers`) are exposed; the mlua sandbox is in place. Some methods (`add_status`, `discard`) are deterministic placeholders for what becomes choice-driven in Phase 2.
 
 **Events wired** (fire site → `fire_self_only` or `fire_with_partner` in `lua_api.rs` → log-and-continue on error):
 - [x] `on_blocked_by` (per blocker, in `declare_blocker`) — added beyond the original v1 list as the squirrel-overrun canary
@@ -38,7 +38,7 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 - [x] `game.card(card_id) → table_or_nil` — read-only view: `id, instance_id, type, subtypes, colors, symbol, tapped, face_down, owner, controller, x, y` (effective stats). Returns nil if iid not in pool.
 - [x] `game.print(msg)` — debug; writes `[card] {msg}` to stderr
 - [x] `game.add_status(card_id, kind, duration)` — currently only `"skip_untap"` kind; accumulates with any existing entry of the same kind
-- [ ] `game.discard(player_id, n)` — needs choice in the natural reading
+- [x] `game.discard(player_id, n)` — deterministic front-of-hand pending choice API; bumps the same `action_counts["discard"]` as U.10 engine discards
 
 **Cards with active handlers:**
 - `tantrum-imp` — `on_blocked_by`: damage blocker 1, mill defender 1 to exile

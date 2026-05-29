@@ -691,6 +691,50 @@ mod tests {
     }
 
     #[test]
+    fn game_discard_removes_leftmost_n_from_hand_to_graveyard() {
+        let registry = registry_with_fixture(
+            "game_discard",
+            r#"return {
+                id = "discard-probe",
+                on_attack = function(game, self)
+                    game.discard(self.owner, 2)
+                end,
+            }"#,
+        );
+        let probe = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "discard-probe")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&atk).unwrap();
+            inst.card.handlers = probe.handlers.clone();
+            inst.card.id = probe.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        // Snapshot the first two hand cards before the discard fires.
+        let leftmost: Vec<InstanceId> = s.a.hand.iter().take(2).cloned().collect();
+        let hand_before = s.a.hand.len();
+        let gy_before = s.a.graveyard.len();
+
+        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+
+        assert_eq!(s.a.hand.len(), hand_before - 2);
+        assert_eq!(s.a.graveyard.len(), gy_before + 2);
+        for iid in &leftmost {
+            assert!(s.a.graveyard.contains(iid));
+            assert!(!s.a.hand.contains(iid));
+        }
+    }
+
+    #[test]
     fn game_print_handler_call_does_not_error() {
         // Smoke test only: calling game.print from a handler returns Ok and
         // the fire_self_only path completes normally. stderr capture isn't
