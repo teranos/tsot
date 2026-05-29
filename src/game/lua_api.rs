@@ -6,7 +6,7 @@
 
 use super::state::{CombatState, GameState, InstanceId, PlayerId, StatusEffect, Zone};
 use crate::card::{CardType, EventName};
-use crate::choice::{ChoiceOracle, ChooseCardRequest};
+use crate::choice::{ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest};
 use mlua::{Lua, Result, Value};
 use std::cell::RefCell;
 
@@ -271,6 +271,64 @@ macro_rules! build_game_table {
                 cell_confirm_s.borrow_mut().bump_action("confirm", confirm_owner);
                 Ok(answer)
             })?,
+        )?;
+
+        let cell_player_o = &$oracle_cell;
+        let cell_player_s = &$cell;
+        let player_owner = $owner;
+        game.set(
+            "choose_player",
+            $scope.create_function_mut(
+                move |_, opts: Option<mlua::Table>| -> Result<Option<String>> {
+                    let (exclude_str, optional, prompt) = match opts {
+                        Some(t) => (
+                            t.get::<Option<Vec<String>>>("exclude")?.unwrap_or_default(),
+                            t.get::<Option<bool>>("optional")?.unwrap_or(false),
+                            t.get::<Option<String>>("prompt")?.unwrap_or_default(),
+                        ),
+                        None => (Vec::new(), false, String::new()),
+                    };
+                    let mut exclude: Vec<PlayerId> = Vec::new();
+                    for s in &exclude_str {
+                        exclude.push(parse_pid(s)?);
+                    }
+                    let req = ChoosePlayerRequest {
+                        exclude,
+                        optional,
+                        prompt,
+                    };
+                    let answer = {
+                        let mut o = cell_player_o.borrow_mut();
+                        o.choose_player(req)
+                    };
+                    cell_player_s
+                        .borrow_mut()
+                        .bump_action("choose_player", player_owner);
+                    Ok(answer.map(|p| pid_to_str(p).to_string()))
+                },
+            )?,
+        )?;
+
+        let cell_int_o = &$oracle_cell;
+        let cell_int_s = &$cell;
+        let int_owner = $owner;
+        game.set(
+            "choose_int",
+            $scope.create_function_mut(
+                move |_, (min, max, prompt): (i32, i32, Option<String>)| -> Result<i32> {
+                    let req = ChooseIntRequest {
+                        min,
+                        max,
+                        prompt: prompt.unwrap_or_default(),
+                    };
+                    let answer = {
+                        let mut o = cell_int_o.borrow_mut();
+                        o.choose_int(req)
+                    };
+                    cell_int_s.borrow_mut().bump_action("choose_int", int_owner);
+                    Ok(answer)
+                },
+            )?,
         )?;
 
         let cell_dmg = &$cell;

@@ -634,6 +634,8 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
         "untap",
         "add_status",
         "choose_card",
+        "choose_player",
+        "choose_int",
         "confirm",
         "self_deckout_by_choice",
         "preview_skip_suicide",
