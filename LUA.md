@@ -11,6 +11,42 @@ Cards become modules; the engine fires a small set of events; a minimal `game` A
 
 **Goal:** prove the architecture. Three to five cards' abilities actually execute. No design questions deferred to later phases gate this.
 
+### Status (2026-05-29)
+
+Phase 1 is in progress.
+
+**Events wired** (fire site → handler call → log-and-continue on error):
+- [x] `on_blocked_by` (per blocker, in `declare_blocker`) — added beyond the original v1 list as the squirrel-overrun canary
+- [x] `on_die` (in `resolve_combat` death loop, after Board → Graveyard)
+- [ ] `on_enter_board` (in `play_card` after board.push)
+- [ ] `on_attack` (in `declare_attacker`)
+- [ ] `on_block` (in `declare_blocker`, blocker-side)
+- [ ] `on_play` (in `play_card` pre-resolution)
+
+**`game` API** (exposed via per-call scoped userdata in `src/game/lua_api.rs`):
+- [x] `game.damage(card_id, n)`
+- [x] `game.mill(player_id, n, "graveyard"|"exile")`
+- [x] `game.draw(player_id, n)` — empty-deck mid-effect assigns L.1 loss
+- [x] `game.move(card_id, dest_zone)` — searches zones AND attached lists; clears face_down when unattaching
+- [x] `game.opponent(player_id)`
+- [ ] `game.tap(card_id)`, `game.untap(card_id)`
+- [ ] `game.zones(player_id).{hand, deck, graveyard, exile, board}`
+- [ ] `game.card(card_id)` — read-only view
+- [ ] `game.add_status(card_id, kind, duration)`
+- [ ] `game.print(msg)` — debug
+
+**Cards with active handlers:**
+- `tantrum-imp` — `on_blocked_by`: damage blocker 1, mill defender 1 to exile
+- `squirrel-overrun` — `on_blocked_by`: draw 1
+- `trustworthy-lender` — `on_die`: return attached to controller's hand
+
+**Other Phase 1 spec items:**
+- [ ] mlua sandbox mode (strip `os`, `io`, `loadstring`)
+- [x] `CardRegistry` owns long-lived Lua VM; handlers stored as `mlua::Function` on `Card`
+- [x] Engine metric `triggered_fires_a/b` plumbed to sim output
+
+**Plumbing pattern:** every event method takes `Option<&Lua>`. `None` = tests of pure game logic; `Some(registry.lua())` = sim and integration tests. When this becomes noisy across many methods, the trigger is an `Engine` wrapper owning both `GameState` and `&CardRegistry`.
+
 **Scope (in):**
 - **Card file shape extended.** Each `.lua` card may add function fields alongside the existing data table:
   ```lua
