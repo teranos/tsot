@@ -21,10 +21,12 @@ pub struct PlayChoices {
 pub enum PlayError {
     GameOver,
     NotInHand,
-    /// This slice only supports playing CREATURE cards.
+    /// This slice supports CREATURE and INSTANT card types.
     UnsupportedType(CardType),
-    /// This slice only supports HAND and MILL cost sources.
+    /// This slice supports HAND, MILL, and GRAVEYARD cost sources.
     UnsupportedCostSource(CostSource),
+    /// GRAVEYARD doesn't have enough cards to pay the GRAVEYARD cost.
+    InsufficientGraveyardForCost { needed: usize, have: usize },
     /// This slice doesn't support variable-X costs yet.
     VariableXNotSupported,
     /// HAND payment count must equal the card's total HAND cost.
@@ -74,9 +76,8 @@ impl GameState {
         let card_kind = inst_ref.card.kind;
         let card_cost = inst_ref.card.cost.clone();
 
-        if !matches!(card_kind, CardType::Creature) {
-            // TODO(types): handle Instant (→ GRAVEYARD per P.1, timing per C.6),
-            // Spell (→ GRAVEYARD, timing per C.10), Artifact (→ BOARD per P.19),
+        if !matches!(card_kind, CardType::Creature | CardType::Instant) {
+            // TODO(types): handle Spell (→ GRAVEYARD per C.10), Artifact (→ BOARD per P.19),
             // Environment (→ BOARD per P.21 + P.22 slot management).
             return Err(PlayError::UnsupportedType(card_kind));
         }
@@ -84,6 +85,7 @@ impl GameState {
         // Aggregate cost requirements per source.
         let mut hand_needed: usize = 0;
         let mut mill_needed: usize = 0;
+        let mut graveyard_needed: usize = 0;
         for c in &card_cost {
             if c.is_x {
                 return Err(PlayError::VariableXNotSupported);
@@ -92,8 +94,8 @@ impl GameState {
             match c.source {
                 CostSource::Hand => hand_needed += amount,
                 CostSource::Mill => mill_needed += amount,
-                // TODO(costs): support GRAVEYARD (P.12), SACRIFICE (P.16),
-                // and SELF (P.5). Variable X (`is_x`) also belongs here.
+                CostSource::Graveyard => graveyard_needed += amount,
+                // TODO(costs): support SACRIFICE (P.16) and SELF (P.5).
                 other => return Err(PlayError::UnsupportedCostSource(other)),
             }
         }
@@ -126,46 +128,78 @@ impl GameState {
             });
         }
 
-        // LUA Phase 1: on_play fires after validation, before mutations.
-        // The played card is still in HAND when the handler runs.
-        if let Some(lua) = lua {
-            lua_api::fire_self_only(lua, self, EventName::OnPlay, instance);
+        let gy_have = self.player(player).graveyard.len();
+        if gy_have < graveyard_needed {
+            return Err(PlayError::InsufficientGraveyardForCost {
+                needed: graveyard_needed,
+                have: gy_have,
+            });
         }
 
         // All checks pass — apply mutations.
         let pm = self.player_mut(player);
 
+        // MILL cost: top N of DECK → GRAVEYARD (P.11).
         for _ in 0..mill_needed {
             let top = pm.deck.remove(0);
             pm.graveyard.push(top);
         }
 
+        // GRAVEYARD cost (P.12): most-recent N → EXILE. Deterministic interpretation
+        // pending choice API; uses the back of the graveyard vec (newest-first).
+        for _ in 0..graveyard_needed {
+            if let Some(gy_card) = pm.graveyard.pop() {
+                pm.exile.push(gy_card);
+            }
+        }
+
+        // Remove the played card and HAND payments from hand.
         let pos = pm.hand.iter().position(|x| x == instance).unwrap();
         pm.hand.remove(pos);
-
         for hid in &choices.hand_payment_ids {
             let pos = pm.hand.iter().position(|x| x == hid).unwrap();
             pm.hand.remove(pos);
         }
 
-        pm.board.push(instance.clone());
-
-        let inst_mut = self.card_pool.get_mut(instance).unwrap();
-        inst_mut.summoning_sick = true; // B.3
-        for hid in &choices.hand_payment_ids {
-            inst_mut.attached.push(hid.clone());
-        }
-
-        for hid in &choices.hand_payment_ids {
-            if let Some(a) = self.card_pool.get_mut(hid) {
-                a.face_down = true;
-            }
-        }
-
-        // LUA Phase 1: on_enter_board fires after the card is on BOARD and
-        // attachments are wired (so handlers see self.attached correctly).
+        // LUA Phase 1: on_play fires after cost is paid, before destination is set.
+        // The card is in no zone at this moment — the handler is the resolution.
         if let Some(lua) = lua {
-            lua_api::fire_self_only(lua, self, EventName::OnEnterBoard, instance);
+            lua_api::fire_self_only(lua, self, EventName::OnPlay, instance);
+        }
+
+        // Route to destination zone based on type.
+        match card_kind {
+            CardType::Creature => {
+                let pm = self.player_mut(player);
+                pm.board.push(instance.clone());
+
+                let inst_mut = self.card_pool.get_mut(instance).unwrap();
+                inst_mut.summoning_sick = true; // B.3
+                for hid in &choices.hand_payment_ids {
+                    inst_mut.attached.push(hid.clone());
+                }
+
+                for hid in &choices.hand_payment_ids {
+                    if let Some(a) = self.card_pool.get_mut(hid) {
+                        a.face_down = true;
+                    }
+                }
+
+                if let Some(lua) = lua {
+                    lua_api::fire_self_only(lua, self, EventName::OnEnterBoard, instance);
+                }
+            }
+            CardType::Instant => {
+                // P.1: instants resolve and go to GRAVEYARD. HAND payments
+                // don't attach to anything (no board host) — they also go
+                // to GRAVEYARD as discarded cost cards.
+                let pm = self.player_mut(player);
+                pm.graveyard.push(instance.clone());
+                for hid in &choices.hand_payment_ids {
+                    pm.graveyard.push(hid.clone());
+                }
+            }
+            _ => unreachable!("validated above"),
         }
 
         Ok(())
@@ -396,10 +430,10 @@ mod tests {
     fn play_card_errors_on_unsupported_type() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         let iid = s.a.hand[0].clone();
-        s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Instant;
+        s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Spell;
         assert_eq!(
             s.play_card(PlayerId::A, &iid, PlayChoices::default(), None),
-            Err(PlayError::UnsupportedType(CardType::Instant))
+            Err(PlayError::UnsupportedType(CardType::Spell))
         );
     }
 
@@ -429,14 +463,14 @@ mod tests {
             &creature,
             vec![CostComponent {
                 amount: 1,
-                source: CostSource::Graveyard,
+                source: CostSource::Sacrifice,
                 is_x: false,
             }],
         );
         let result = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
         assert_eq!(
             result,
-            Err(PlayError::UnsupportedCostSource(CostSource::Graveyard))
+            Err(PlayError::UnsupportedCostSource(CostSource::Sacrifice))
         );
     }
 
@@ -520,6 +554,55 @@ mod tests {
         let count: i32 = registry.lua().globals().get("fire_on_play_count").unwrap();
         assert_eq!(count, 1);
         assert_eq!(s.event_fires[&crate::card::EventName::OnPlay], [1, 0]);
+    }
+
+    #[test]
+    fn draw_two_instant_plays_from_graveyard_cost_and_draws() {
+        let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let draw_two = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "draw-two")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let instant_iid = s.a.hand[0].clone();
+        // Swap to draw-two's card data (instant type, graveyard cost, handler).
+        {
+            let inst = s.card_pool.get_mut(&instant_iid).unwrap();
+            inst.card = draw_two.clone();
+        }
+        // Seed the graveyard so the cost can be paid.
+        let gy_seeds: Vec<_> = s.a.deck.drain(0..3).collect();
+        s.a.graveyard.extend(gy_seeds.clone());
+
+        let hand_before = s.a.hand.len();
+        let deck_before = s.a.deck.len();
+        let gy_before = s.a.graveyard.len();
+        let exile_before = s.a.exile.len();
+
+        s.play_card(
+            PlayerId::A,
+            &instant_iid,
+            PlayChoices::default(),
+            Some(registry.lua()),
+        )
+        .unwrap();
+
+        // - Played card removed from hand.
+        // - 3 graveyard cards exiled (cost).
+        // - 2 cards drawn from deck into hand.
+        // - Played card lands in graveyard.
+        assert_eq!(s.a.hand.len(), hand_before - 1 + 2);
+        assert_eq!(s.a.deck.len(), deck_before - 2);
+        assert_eq!(s.a.graveyard.len(), gy_before - 3 + 1);
+        assert_eq!(s.a.exile.len(), exile_before + 3);
+        assert!(s.a.graveyard.contains(&instant_iid));
+        assert!(!s.a.board.contains(&instant_iid));
+        assert_eq!(s.event_fires[&crate::card::EventName::OnPlay], [1, 0]);
+        // on_enter_board does NOT fire for instants.
+        assert!(!s.event_fires.contains_key(&crate::card::EventName::OnEnterBoard));
     }
 
     #[test]

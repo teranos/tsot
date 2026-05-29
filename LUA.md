@@ -46,6 +46,7 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 - `midnight-raven` — `on_attack`: put top of deck on the bottom
 - `goblin-scribe` — `on_enter_board`: draw 1
 - `thorn-beetle` — `on_block`: deal 1 damage to attacker
+- `draw-two` — `on_play`: draw 2 (first instant — `play_card` now routes Instant → GRAVEYARD; GRAVEYARD cost source supported deterministically by exiling most-recent N)
 
 **Cards in corpus awaiting Phase 2** (data + abilities text only, no handler):
 - `goblin-berserker`, `goblin-warlord`, `goblin-conspirator` — all need choice API (`discard a card`, `reveal a goblin`); `goblin-warlord` also needs `static`.
