@@ -1,40 +1,41 @@
 //! Journal & rollback — see JOURNAL.md for the multi-session plan.
 //!
 //! Records every mutation through `GameState`'s journaled helpers. Each entry
-//! carries enough information to undo itself. `Journal::rollback` applies
-//! inverses in reverse order, leaving the state byte-identical to pre-mutation.
-//!
-//! Session 1 scope: the data types, the apply-inverse routine, helpers on
-//! `GameState` for the core mutations, and `movement.rs::move_card` rewritten
-//! through them. Other subsystems still mutate state directly — Sessions 2–3
-//! convert them.
+//! carries enough information to apply both forward (replay) and reverse
+//! (rollback) the mutation.
 
 use super::state::{
     CombatState, GameState, InstanceId, Phase, PlayerId, StatusEffect, Zone,
 };
 use crate::card::EventName;
+use serde::{Deserialize, Serialize};
 
-/// One mutation entry, carrying the data needed to undo it.
-#[derive(Debug, Clone)]
+/// One mutation entry. `Set*` variants carry both `was` and `now` so the
+/// entry can be applied forward or reverse. Bump-style entries are
+/// self-symmetric (+1 forward, -1 reverse). Move/Add/Remove variants store
+/// positional data sufficient for both directions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum JournalEntry {
     SetTapped {
         iid: InstanceId,
         was: bool,
+        now: bool,
     },
     SetDamage {
         iid: InstanceId,
         was: i32,
+        now: i32,
     },
     SetFaceDown {
         iid: InstanceId,
         was: bool,
+        now: bool,
     },
     SetSummoningSick {
         iid: InstanceId,
         was: bool,
+        now: bool,
     },
-    /// Moved `iid` from `from_zone[from_pos]` to the end of `to_zone`.
-    /// Inverse: pop from end of `to_zone`, insert at `from_pos` of `from_zone`.
     MoveCard {
         iid: InstanceId,
         owner: PlayerId,
@@ -42,11 +43,8 @@ pub enum JournalEntry {
         from_pos: usize,
         to_zone: Zone,
     },
-    /// Incremented `action_counts[action][player]` by 1.
-    /// Inverse: decrement; if both counts go to 0, remove the key entirely
-    /// so round-trip equality holds against pre-mutation state.
     BumpAction {
-        action: &'static str,
+        action: String,
         player: PlayerId,
     },
     BumpEventFire {
@@ -55,51 +53,44 @@ pub enum JournalEntry {
     },
     SetWinner {
         was: Option<PlayerId>,
+        now: Option<PlayerId>,
     },
     SetPhase {
         was: Phase,
+        now: Phase,
     },
     SetTurn {
         was: u32,
+        now: u32,
     },
     SetActivePlayer {
         was: PlayerId,
+        now: PlayerId,
     },
-    /// Coarse: replaces the entire combat state. Sufficient for declare /
-    /// confirm transitions; finer-grained "add blocker to attack" entries
-    /// could be added if needed.
     SetCombatState {
         was: Option<CombatState>,
+        now: Option<CombatState>,
     },
-    /// Coarse: replaces the full status_effects vec on a card. Inserts and
-    /// removes are rare enough that this is simpler than fine-grained.
     SetStatusEffects {
         iid: InstanceId,
         was: Vec<StatusEffect>,
+        now: Vec<StatusEffect>,
     },
-    /// Appended an iid to `host.attached`. Inverse: pop last from
-    /// `host.attached` (must match `attached`).
     AddAttached {
         host: InstanceId,
         attached: InstanceId,
     },
-    /// Removed an iid from a player's zone (without placing it elsewhere).
-    /// Inverse: insert iid back at `was_pos` in the zone.
     RemoveFromZone {
         iid: InstanceId,
         owner: PlayerId,
         zone: Zone,
         was_pos: usize,
     },
-    /// Pushed an iid to the end of a player's zone (without removing it from
-    /// elsewhere). Inverse: pop from end of zone (must match `iid`).
     AddToZone {
         iid: InstanceId,
         owner: PlayerId,
         zone: Zone,
     },
-    /// Removed an iid from host's attached vec at `at_pos`. Inverse: insert
-    /// back at `at_pos`.
     RemoveAttached {
         host: InstanceId,
         attached: InstanceId,
@@ -107,9 +98,8 @@ pub enum JournalEntry {
     },
 }
 
-/// Recording journal — owns a sequence of entries from a single "session"
-/// of mutations. Rollback consumes the journal.
-#[derive(Debug, Clone, Default)]
+/// Journal — sequence of mutation entries.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Journal {
     entries: Vec<JournalEntry>,
 }
@@ -133,6 +123,10 @@ impl Journal {
         self.entries.is_empty()
     }
 
+    pub fn entries(&self) -> &[JournalEntry] {
+        &self.entries
+    }
+
     /// Move every entry from `other` to the end of `self`. Used to commit
     /// a preview's mutations into the long-lived replay journal once the
     /// preview is accepted.
@@ -144,6 +138,14 @@ impl Journal {
     pub fn rollback(self, state: &mut GameState) {
         for entry in self.entries.into_iter().rev() {
             apply_inverse(state, entry);
+        }
+    }
+
+    /// Apply every entry forward, in order. Used to replay a recorded game
+    /// starting from a freshly-built initial state. Consumes the journal.
+    pub fn replay_forward(self, state: &mut GameState) {
+        for entry in self.entries {
+            apply_forward(state, entry);
         }
     }
 }
@@ -158,24 +160,64 @@ fn zone_mut(p: &mut super::state::PlayerState, zone: Zone) -> &mut Vec<InstanceI
     }
 }
 
+fn bump_action_count(state: &mut GameState, action: &str, player: PlayerId, delta: i32) {
+    let entry = state
+        .action_counts
+        .entry(action.to_string())
+        .or_insert([0, 0]);
+    let idx = match player {
+        PlayerId::A => 0,
+        PlayerId::B => 1,
+    };
+    if delta > 0 {
+        entry[idx] += delta as u32;
+    } else if entry[idx] > 0 {
+        entry[idx] = entry[idx].saturating_sub((-delta) as u32);
+    }
+    if entry[0] == 0 && entry[1] == 0 {
+        state.action_counts.remove(action);
+    }
+}
+
+fn bump_event_fire_count(
+    state: &mut GameState,
+    event: EventName,
+    player: PlayerId,
+    delta: i32,
+) {
+    let entry = state.event_fires.entry(event).or_insert([0, 0]);
+    let idx = match player {
+        PlayerId::A => 0,
+        PlayerId::B => 1,
+    };
+    if delta > 0 {
+        entry[idx] += delta as u32;
+    } else if entry[idx] > 0 {
+        entry[idx] = entry[idx].saturating_sub((-delta) as u32);
+    }
+    if entry[0] == 0 && entry[1] == 0 {
+        state.event_fires.remove(&event);
+    }
+}
+
 fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
     match entry {
-        JournalEntry::SetTapped { iid, was } => {
+        JournalEntry::SetTapped { iid, was, .. } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
                 inst.tapped = was;
             }
         }
-        JournalEntry::SetDamage { iid, was } => {
+        JournalEntry::SetDamage { iid, was, .. } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
                 inst.damage = was;
             }
         }
-        JournalEntry::SetFaceDown { iid, was } => {
+        JournalEntry::SetFaceDown { iid, was, .. } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
                 inst.face_down = was;
             }
         }
-        JournalEntry::SetSummoningSick { iid, was } => {
+        JournalEntry::SetSummoningSick { iid, was, .. } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
                 inst.summoning_sick = was;
             }
@@ -189,7 +231,6 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         } => {
             let p = state.player_mut(owner);
             let dst = zone_mut(p, to_zone);
-            // Pop the iid we appended. It must be at the end.
             if let Some(last) = dst.last() {
                 debug_assert_eq!(*last, iid, "move-card inverse: iid mismatch at to_zone tail");
                 dst.pop();
@@ -198,55 +239,27 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
             src.insert(from_pos, iid);
         }
         JournalEntry::BumpAction { action, player } => {
-            let remove_key = if let Some(entry) = state.action_counts.get_mut(action) {
-                let idx = match player {
-                    PlayerId::A => 0,
-                    PlayerId::B => 1,
-                };
-                if entry[idx] > 0 {
-                    entry[idx] -= 1;
-                }
-                entry[0] == 0 && entry[1] == 0
-            } else {
-                false
-            };
-            if remove_key {
-                state.action_counts.remove(action);
-            }
+            bump_action_count(state, &action, player, -1);
         }
         JournalEntry::BumpEventFire { event, player } => {
-            let remove_key = if let Some(entry) = state.event_fires.get_mut(&event) {
-                let idx = match player {
-                    PlayerId::A => 0,
-                    PlayerId::B => 1,
-                };
-                if entry[idx] > 0 {
-                    entry[idx] -= 1;
-                }
-                entry[0] == 0 && entry[1] == 0
-            } else {
-                false
-            };
-            if remove_key {
-                state.event_fires.remove(&event);
-            }
+            bump_event_fire_count(state, event, player, -1);
         }
-        JournalEntry::SetWinner { was } => {
+        JournalEntry::SetWinner { was, .. } => {
             state.winner = was;
         }
-        JournalEntry::SetPhase { was } => {
+        JournalEntry::SetPhase { was, .. } => {
             state.phase = was;
         }
-        JournalEntry::SetTurn { was } => {
+        JournalEntry::SetTurn { was, .. } => {
             state.turn = was;
         }
-        JournalEntry::SetActivePlayer { was } => {
+        JournalEntry::SetActivePlayer { was, .. } => {
             state.active_player = was;
         }
-        JournalEntry::SetCombatState { was } => {
+        JournalEntry::SetCombatState { was, .. } => {
             state.combat = was;
         }
-        JournalEntry::SetStatusEffects { iid, was } => {
+        JournalEntry::SetStatusEffects { iid, was, .. } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
                 inst.status_effects = was;
             }
@@ -286,6 +299,99 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         } => {
             if let Some(inst) = state.card_pool.get_mut(&host) {
                 inst.attached.insert(at_pos, attached);
+            }
+        }
+    }
+}
+
+fn apply_forward(state: &mut GameState, entry: JournalEntry) {
+    match entry {
+        JournalEntry::SetTapped { iid, now, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.tapped = now;
+            }
+        }
+        JournalEntry::SetDamage { iid, now, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.damage = now;
+            }
+        }
+        JournalEntry::SetFaceDown { iid, now, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.face_down = now;
+            }
+        }
+        JournalEntry::SetSummoningSick { iid, now, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.summoning_sick = now;
+            }
+        }
+        JournalEntry::MoveCard {
+            iid,
+            owner,
+            from_zone,
+            from_pos,
+            to_zone,
+        } => {
+            let p = state.player_mut(owner);
+            // Forward: remove at from_pos in from_zone, push to to_zone end.
+            zone_mut(p, from_zone).remove(from_pos);
+            zone_mut(p, to_zone).push(iid);
+        }
+        JournalEntry::BumpAction { action, player } => {
+            bump_action_count(state, &action, player, 1);
+        }
+        JournalEntry::BumpEventFire { event, player } => {
+            bump_event_fire_count(state, event, player, 1);
+        }
+        JournalEntry::SetWinner { now, .. } => {
+            state.winner = now;
+        }
+        JournalEntry::SetPhase { now, .. } => {
+            state.phase = now;
+        }
+        JournalEntry::SetTurn { now, .. } => {
+            state.turn = now;
+        }
+        JournalEntry::SetActivePlayer { now, .. } => {
+            state.active_player = now;
+        }
+        JournalEntry::SetCombatState { now, .. } => {
+            state.combat = now;
+        }
+        JournalEntry::SetStatusEffects { iid, now, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.status_effects = now;
+            }
+        }
+        JournalEntry::AddAttached { host, attached } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                inst.attached.push(attached);
+            }
+        }
+        JournalEntry::RemoveFromZone {
+            iid,
+            owner,
+            zone,
+            was_pos,
+        } => {
+            let p = state.player_mut(owner);
+            let v = zone_mut(p, zone);
+            // Forward: card should be at was_pos; remove it.
+            debug_assert_eq!(v.get(was_pos), Some(&iid));
+            v.remove(was_pos);
+        }
+        JournalEntry::AddToZone { iid, owner, zone } => {
+            let p = state.player_mut(owner);
+            zone_mut(p, zone).push(iid);
+        }
+        JournalEntry::RemoveAttached {
+            host,
+            attached: _,
+            at_pos,
+        } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                inst.attached.remove(at_pos);
             }
         }
     }

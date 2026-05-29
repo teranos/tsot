@@ -6,7 +6,7 @@ use crate::card::{Card, EventName};
 use std::collections::BTreeMap;
 
 /// F.2: exactly two players.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PlayerId {
     A,
     B,
@@ -22,7 +22,7 @@ impl PlayerId {
 }
 
 /// U.6: phases in canonical order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Phase {
     Untap,
     Draw,
@@ -33,7 +33,7 @@ pub enum Phase {
 }
 
 /// Z.1–Z.5: per-player zones. Z.6 (ATTACHED) is encoded as a child list under each on-board instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Zone {
     Board,
     Deck,
@@ -95,7 +95,7 @@ pub enum Modifier {
 }
 
 /// Status effects with bounded duration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum StatusEffect {
     /// Stinging-bee: skip the next N untap steps
     SkipUntap(u32),
@@ -113,14 +113,14 @@ pub struct PlayerState {
 }
 
 /// In-progress combat state during the Combat phase.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum CombatState {
     AwaitingAttackers,
     AwaitingBlockers { attacks: Vec<AttackDecl> },
 }
 
 /// One attacker and zero-or-more blockers assigned to it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AttackDecl {
     pub attacker: InstanceId,
     pub blockers: Vec<InstanceId>,
@@ -143,7 +143,7 @@ pub struct GameState {
     /// Engine metric: counts of each `game.*` action invoked from inside a
     /// handler. Keyed by short action name ("draw", "mill", "damage", "move").
     /// Player attribution depends on the action — see `bump_action` callers.
-    pub action_counts: BTreeMap<&'static str, [u32; 2]>,
+    pub action_counts: BTreeMap<String, [u32; 2]>,
     /// Optional per-action mutation journal. `None` = no recording. Used for
     /// preview-and-rollback (sim's "would this play kill me?" check). When
     /// `Some`, every mutation pushes here instead of `replay_journal`.
@@ -209,7 +209,8 @@ impl GameState {
         }
     }
 
-    /// Set `tapped` on a card, journaling the prior value if recording.
+    /// Set `tapped` on a card, journaling both the prior and new value
+    /// so the entry supports both rollback and forward-replay.
     pub fn set_tapped(&mut self, iid: &InstanceId, tapped: bool) {
         let Some(inst) = self.card_pool.get_mut(iid) else {
             return;
@@ -220,11 +221,11 @@ impl GameState {
             j.push(super::JournalEntry::SetTapped {
                 iid: iid.clone(),
                 was,
+                now: tapped,
             });
         }
     }
 
-    /// Set `damage` on a card, journaling the prior value.
     pub fn set_damage(&mut self, iid: &InstanceId, damage: i32) {
         let Some(inst) = self.card_pool.get_mut(iid) else {
             return;
@@ -235,11 +236,11 @@ impl GameState {
             j.push(super::JournalEntry::SetDamage {
                 iid: iid.clone(),
                 was,
+                now: damage,
             });
         }
     }
 
-    /// Set `face_down` on a card, journaling the prior value.
     pub fn set_face_down(&mut self, iid: &InstanceId, face_down: bool) {
         let Some(inst) = self.card_pool.get_mut(iid) else {
             return;
@@ -250,11 +251,11 @@ impl GameState {
             j.push(super::JournalEntry::SetFaceDown {
                 iid: iid.clone(),
                 was,
+                now: face_down,
             });
         }
     }
 
-    /// Set `summoning_sick` on a card, journaling the prior value.
     pub fn set_summoning_sick(&mut self, iid: &InstanceId, summoning_sick: bool) {
         let Some(inst) = self.card_pool.get_mut(iid) else {
             return;
@@ -265,16 +266,16 @@ impl GameState {
             j.push(super::JournalEntry::SetSummoningSick {
                 iid: iid.clone(),
                 was,
+                now: summoning_sick,
             });
         }
     }
 
-    /// Set the winner, journaling the prior value.
     pub fn set_winner(&mut self, winner: Option<PlayerId>) {
         let was = self.winner;
         self.winner = winner;
         if let Some(j) = self.active_journal() {
-            j.push(super::JournalEntry::SetWinner { was });
+            j.push(super::JournalEntry::SetWinner { was, now: winner });
         }
     }
 
@@ -282,7 +283,7 @@ impl GameState {
         let was = self.phase;
         self.phase = phase;
         if let Some(j) = self.active_journal() {
-            j.push(super::JournalEntry::SetPhase { was });
+            j.push(super::JournalEntry::SetPhase { was, now: phase });
         }
     }
 
@@ -290,7 +291,7 @@ impl GameState {
         let was = self.turn;
         self.turn = turn;
         if let Some(j) = self.active_journal() {
-            j.push(super::JournalEntry::SetTurn { was });
+            j.push(super::JournalEntry::SetTurn { was, now: turn });
         }
     }
 
@@ -298,28 +299,28 @@ impl GameState {
         let was = self.active_player;
         self.active_player = who;
         if let Some(j) = self.active_journal() {
-            j.push(super::JournalEntry::SetActivePlayer { was });
+            j.push(super::JournalEntry::SetActivePlayer { was, now: who });
         }
     }
 
     pub fn set_combat(&mut self, combat: Option<CombatState>) {
         let was = self.combat.clone();
-        self.combat = combat;
+        self.combat = combat.clone();
         if let Some(j) = self.active_journal() {
-            j.push(super::JournalEntry::SetCombatState { was });
+            j.push(super::JournalEntry::SetCombatState { was, now: combat });
         }
     }
 
-    /// Replace a card's status_effects vec wholesale, journaling the prior value.
     pub fn set_status_effects(&mut self, iid: &InstanceId, effects: Vec<StatusEffect>) {
         let Some(inst) = self.card_pool.get_mut(iid) else {
             return;
         };
-        let was = std::mem::replace(&mut inst.status_effects, effects);
+        let was = std::mem::replace(&mut inst.status_effects, effects.clone());
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetStatusEffects {
                 iid: iid.clone(),
                 was,
+                now: effects,
             });
         }
     }
@@ -411,8 +412,11 @@ impl GameState {
     }
 
     /// Engine helper: credit a `game.*` action invocation to the affected player.
-    pub fn bump_action(&mut self, action: &'static str, who: PlayerId) {
-        let entry = self.action_counts.entry(action).or_insert([0, 0]);
+    pub fn bump_action(&mut self, action: &str, who: PlayerId) {
+        let entry = self
+            .action_counts
+            .entry(action.to_string())
+            .or_insert([0, 0]);
         let idx = match who {
             PlayerId::A => 0,
             PlayerId::B => 1,
@@ -420,7 +424,7 @@ impl GameState {
         entry[idx] += 1;
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::BumpAction {
-                action,
+                action: action.to_string(),
                 player: who,
             });
         }

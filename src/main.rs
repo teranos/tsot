@@ -51,7 +51,7 @@ struct GameStats {
     // committed plays + engine-driven mutations (turn flow, combat, etc.).
     replay_journal_entries: u64,
     event_fires: BTreeMap<EventName, [u32; 2]>,
-    action_counts: BTreeMap<&'static str, [u32; 2]>,
+    action_counts: BTreeMap<String, [u32; 2]>,
 }
 
 fn main() -> mlua::Result<()> {
@@ -98,15 +98,41 @@ fn main() -> mlua::Result<()> {
     let mut all: Vec<GameStats> = Vec::with_capacity(ITERATIONS);
     let mut last_log: Vec<String> = Vec::new();
 
+    let replay_out_path = std::env::var("TSOT_REPLAY_OUT").ok();
+
     let t0 = std::time::Instant::now();
+    let mut last_deck_a_ids: Vec<String> = Vec::new();
+    let mut last_deck_b_ids: Vec<String> = Vec::new();
+    let mut last_journal: tsot::game::Journal = tsot::game::Journal::new();
     for _ in 0..ITERATIONS {
         let deck_a = build_random_deck(&playable_pool, &mut rng, 50);
         let deck_b = build_random_deck(&playable_pool, &mut rng, 50);
+        last_deck_a_ids = deck_a.iter().map(|c| c.id.clone()).collect();
+        last_deck_b_ids = deck_b.iter().map(|c| c.id.clone()).collect();
         let state = GameState::new(deck_a, deck_b);
         last_log.clear();
-        all.push(run_game(state, &mut rng, &mut last_log, registry.lua()));
+        let (stats, journal) = run_game(state, &mut rng, &mut last_log, registry.lua());
+        all.push(stats);
+        last_journal = journal;
     }
     let elapsed = t0.elapsed();
+
+    // If TSOT_REPLAY_OUT is set, dump the last game's ReplayFile to JSON.
+    if let Some(path) = replay_out_path.as_ref() {
+        let replay = tsot::replay::ReplayFile {
+            seed,
+            deck_a_card_ids: last_deck_a_ids,
+            deck_b_card_ids: last_deck_b_ids,
+            journal: last_journal,
+        };
+        match replay.to_json() {
+            Ok(json) => match std::fs::write(path, &json) {
+                Ok(()) => println!("[replay] wrote {} ({} bytes)", path, json.len()),
+                Err(e) => eprintln!("[replay] failed to write {path}: {e}"),
+            },
+            Err(e) => eprintln!("[replay] failed to serialize: {e}"),
+        }
+    }
 
     println!();
     println!("=== Last game: first 4 turns ===");
@@ -137,7 +163,7 @@ fn run_game(
     rng: &mut StdRng,
     log: &mut Vec<String>,
     lua: &mlua::Lua,
-) -> GameStats {
+) -> (GameStats, tsot::game::Journal) {
     // Oracle RNG derived from the master RNG so the whole sim is reproducible
     // from one seed.
     let oracle_seed: u64 = rng.gen();
@@ -346,12 +372,9 @@ fn run_game(
     stats.b_final_gy = state.b.graveyard.len() as u32;
     stats.event_fires = state.event_fires.clone();
     stats.action_counts = state.action_counts.clone();
-    stats.replay_journal_entries = state
-        .replay_journal
-        .as_ref()
-        .map(|j| j.len() as u64)
-        .unwrap_or(0);
-    stats
+    let replay_journal = state.replay_journal.take().unwrap_or_default();
+    stats.replay_journal_entries = replay_journal.len() as u64;
+    (stats, replay_journal)
 }
 
 fn bump_played(stats: &mut GameStats, p: PlayerId) {

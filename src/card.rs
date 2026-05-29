@@ -84,7 +84,9 @@ pub struct Stats {
 /// Event handler keys recognised on card files. Matches LUA.md Phase 1 taxonomy
 /// plus `OnBlockedBy` (the squirrel-overrun canary — fires on the attacker when
 /// any blocker is declared against it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum EventName {
     OnEnterBoard,
     OnDie,
