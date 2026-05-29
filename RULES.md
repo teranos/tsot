@@ -13,6 +13,7 @@
 - **S.1** Each player starts the game with 5 cards in their HAND.
 - **S.2** Each player may send up to 2 cards from their HAND to the bottom of their DECK.
 - **S.3** A player who sends cards back draws an equal number of replacement cards.
+- **S.4** A standard deck contains 50 cards.
 
 ## Turns (U)
 
