@@ -28,6 +28,7 @@
 - **U.7** During a Main Phase, the active player may play cards (subject to each card's timing rules) and activate abilities. The active player chooses when to leave the phase.
 - **U.8** During Combat, the active player may declare attackers per B.1, B.3, B.13. The defending player may declare blockers per B.5, B.11, B.12. Damage resolves per B.7–B.9.
 - **U.9** During the End Phase, end-of-turn triggers fire and accumulated damage on creatures clears (B.10).
+- **U.10** During the End Phase, the active player discards down to a maximum HAND size of 6 cards. Discarded cards go to GRAVEYARD. The active player chooses which cards to discard.
 
 ## Loss (L)
 

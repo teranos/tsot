@@ -54,7 +54,7 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 **Other Phase 1 spec items:**
 - [ ] mlua sandbox mode (strip `os`, `io`, `loadstring`)
 - [x] `CardRegistry` owns long-lived Lua VM; handlers stored as `mlua::Function` on `Card`
-- [x] Engine metric `event_fires: HashMap<EventName, [u32; 2]>` plumbed to sim output as a per-event breakdown with a `wired` column
+- [x] Engine metrics: `event_fires: HashMap<EventName, [u32; 2]>` and `action_counts: HashMap<&'static str, [u32; 2]>` (per-action counts for `game.*` invocations and engine-driven actions like U.10 discards) — sim surfaces both as per-game averages
 
 **Plumbing pattern:** every event method (`play_card`, `declare_attacker`, `declare_blocker`, `confirm_blocks`) takes `Option<&Lua>`. `None` = tests of pure game logic; `Some(registry.lua())` = sim and integration tests. The trigger to introduce an `Engine` wrapper owning both `GameState` and `&CardRegistry` is when this `Option<&Lua>` becomes noisy across many more methods.
 

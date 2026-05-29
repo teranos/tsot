@@ -34,6 +34,7 @@ impl GameState {
         match self.phase {
             Phase::Untap => self.do_untap_step(),
             Phase::Draw => self.do_draw_step(),
+            Phase::End => self.do_end_step(),
             // TODO(events): each phase entry should fire phase-begin triggers per A.1.
             // E.g., "at the beginning of your upkeep / draw step / combat / end step".
             // Also: end of turn must fire end-of-turn triggers (e.g., delayed effects
@@ -81,6 +82,29 @@ impl GameState {
         let p = self.player_mut(pid);
         let drawn = p.deck.remove(0);
         p.hand.push(drawn);
+    }
+
+    /// U.10: at End phase, the active player discards down to a HAND size of 6.
+    /// Discarded cards go to GRAVEYARD.
+    ///
+    /// The rule says the active player chooses which cards to discard. Until the
+    /// choice API lands (LUA Phase 2), this discards from the front of HAND
+    /// (oldest-held first). Replace the `drain(0..to_discard)` line with a
+    /// choice-driven selection when wiring `game.choose_card` for cleanup events.
+    fn do_end_step(&mut self) {
+        const MAX_HAND: usize = 6;
+        let pid = self.active_player;
+        let hand_len = self.player(pid).hand.len();
+        if hand_len <= MAX_HAND {
+            return;
+        }
+        let to_discard = hand_len - MAX_HAND;
+        let p = self.player_mut(pid);
+        let drained: Vec<InstanceId> = p.hand.drain(0..to_discard).collect();
+        p.graveyard.extend(drained);
+        for _ in 0..to_discard {
+            self.bump_action("discard", pid);
+        }
     }
 
     /// B.10: end of turn clears all accumulated damage on creatures.
@@ -244,6 +268,64 @@ mod tests {
             s.next_phase();
         }
         assert!(!s.card_pool.get(&iid).unwrap().tapped);
+    }
+
+    #[test]
+    fn end_phase_discards_active_player_down_to_six() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        // Stuff 9 cards into A's hand (5 default + 4 manually moved from deck).
+        for _ in 0..4 {
+            let top = s.a.deck.remove(0);
+            s.a.hand.push(top);
+        }
+        assert_eq!(s.a.hand.len(), 9);
+        let oldest_three: Vec<_> = s.a.hand[0..3].to_vec();
+        let gy_before = s.a.graveyard.len();
+
+        // Advance to End: Untap → Draw → Main1 → Combat → Main2 → End.
+        // Drawing adds one more card, making the hand 10 before discard.
+        for _ in 0..5 {
+            s.next_phase();
+        }
+        assert_eq!(s.phase, Phase::End);
+        assert_eq!(s.a.hand.len(), 6);
+        // The first three (oldest) should be gone, in graveyard.
+        for iid in &oldest_three {
+            assert!(s.a.graveyard.contains(iid), "expected {iid} in graveyard");
+            assert!(!s.a.hand.contains(iid), "expected {iid} out of hand");
+        }
+        assert_eq!(s.a.graveyard.len(), gy_before + 4); // 9 + 1 drawn - 6 = 4 discarded
+    }
+
+    #[test]
+    fn end_phase_does_nothing_when_hand_at_or_below_six() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        // Default hand size is 5; advance to End. Draw makes it 6, exactly the cap.
+        for _ in 0..5 {
+            s.next_phase();
+        }
+        assert_eq!(s.phase, Phase::End);
+        assert_eq!(s.a.hand.len(), 6);
+        assert!(s.a.graveyard.is_empty());
+    }
+
+    #[test]
+    fn end_phase_only_discards_active_player() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        // Stuff B's hand to 9 (the inactive player on A's turn).
+        for _ in 0..4 {
+            let top = s.b.deck.remove(0);
+            s.b.hand.push(top);
+        }
+        assert_eq!(s.b.hand.len(), 9);
+        for _ in 0..5 {
+            s.next_phase();
+        }
+        assert_eq!(s.phase, Phase::End);
+        assert_eq!(s.active_player, PlayerId::A);
+        // B is inactive, hand untouched.
+        assert_eq!(s.b.hand.len(), 9);
+        assert!(s.b.graveyard.is_empty());
     }
 
     #[test]

@@ -5,7 +5,9 @@
 
 ## 1. `events` — Lua execution and triggered-ability dispatch
 
-The single biggest gap. All card abilities are stored as **strings** in the Lua tables. The engine never executes them.
+Phase 1 is in progress. All six events from the v1 taxonomy (`on_enter_board`, `on_die`, `on_attack`, `on_block`, `on_blocked_by`, `on_play`) have wired fire sites and fire in the sim against real card handlers. The minimal `game` API surface (`damage`, `mill`, `draw`, `move`, `opponent`, `deck_top`) is exposed. **What remains in Phase 1:** the mlua sandbox is not enabled, and several API methods (`tap`, `untap`, `zones`, `card`, `add_status`, `discard`, `print`) are pending. **Phase 2** (choice, `static` continuous effects) is the next architectural slice and is the biggest gate on the corpus.
+
+See `LUA.md` for the working status block.
 
 **Scope:**
 - Event taxonomy and emitter (enter-the-board, attack, block, damage, die, draw, discard, end-of-turn, …).
@@ -21,31 +23,29 @@ The single biggest gap. All card abilities are stored as **strings** in the Lua 
 
 ## 2. `costs` — Cost-source coverage
 
-`play_card` currently supports only **HAND** and **MILL** cost components. Three more sources and variable X remain.
+`play_card` supports **HAND**, **MILL**, and **GRAVEYARD** cost sources (GRAVEYARD currently selects deterministically — most-recent N exiled — pending the choice API). Two sources and variable X remain.
 
 **Scope:**
-- `GRAVEYARD` cost (P.12): pick N cards in graveyard, exile them. Used by draw-two, jellyfish, amsterdam-city.
 - `SACRIFICE` cost (P.16): pick a creature you control, move BOARD → GRAVEYARD. Used by flesh-eating-plant.
 - `SELF` cost (P.5): the played card itself to EXILE. Used by opponent-draw.
 - Variable X (`is_x` flag): player picks X at cast time. Used by hydra, recast, stream-of-thought, DTST-creature2.
 - Linked-X across cost components (recast: `X hand` + `X graveyard` share the same X).
 
-**Unlocks:** flesh-eating-plant, jellyfish, draw-two, opponent-draw, amsterdam-city, hydra, recast, stream-of-thought — every card with one of these cost sources.
+**Unlocks:** flesh-eating-plant, opponent-draw, hydra, recast, stream-of-thought — every card with one of the remaining cost sources.
 
 **Hard parts:** the API for "player picks N cards from zone Z" needs to live on the choice surface (UX X-E.1, X-E.2). Linked-X needs schema consideration.
 
 ## 3. `types` — Non-creature card-type plays
 
-`play_card` only handles `CardType::Creature`. The other four types each have their own destination rule.
+`play_card` handles **Creature** and **Instant** (routes to GRAVEYARD per P.1; timing per C.6 not yet enforced). The other three types remain.
 
 **Scope:**
-- **INSTANT** (C.6) → GRAVEYARD on play; legal at any time (R.1).
 - **SPELL** (C.9–C.10) → GRAVEYARD on play; only during controller's turn.
 - **ARTIFACT** (P.19) → BOARD.
 - **ENVIRONMENT** (P.21) → BOARD, subject to P.22 (one at a time, global) and P.23 (can't replace).
 - Timing checks (U.7, U.8): non-instants only legal in Main phases.
 
-**Unlocks:** silent-murder, falter, easy-pickings, glaring-sunlight, draw-two, opponent-draw, recast, shift, stream-of-thought, untap (the instant), modern-lcd-clock, amsterdam-city — half the corpus.
+**Unlocks:** silent-murder, easy-pickings, glaring-sunlight, modern-lcd-clock, amsterdam-city — every card of one of the remaining types.
 
 **Hard parts:** mostly straightforward branching in `play_card`. Environment slot-management (P.22/P.23) needs the displacement question resolved (currently new can't be played while old exists).
 

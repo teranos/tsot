@@ -2,7 +2,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use std::collections::HashMap;
 use std::path::Path;
-use tsot::card::{Card, CardRegistry, CardType, EventName};
+use tsot::card::{Card, CardRegistry, CardType, CostSource, EventName};
 use tsot::game::{GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 const ITERATIONS: usize = 1000;
@@ -29,19 +29,39 @@ struct GameStats {
 
 fn main() -> mlua::Result<()> {
     let registry = CardRegistry::load(Path::new("cards"))?;
-    // Filter to standard-legal creatures (per S.5, the `test` subtype is excluded).
-    let creature_pool: Vec<Card> = registry
+    // Pool for deck construction: creatures + instants whose costs the engine
+    // currently supports (HAND, MILL, GRAVEYARD; no variable X; no SACRIFICE/SELF).
+    // Test subtype excluded per S.5.
+    let playable_pool: Vec<Card> = registry
         .cards()
         .iter()
-        .filter(|c| matches!(c.kind, CardType::Creature))
+        .filter(|c| matches!(c.kind, CardType::Creature | CardType::Instant))
         .filter(|c| !c.subtypes.iter().any(|s| s.eq_ignore_ascii_case("test")))
+        .filter(|c| {
+            c.cost.iter().all(|cc| {
+                !cc.is_x
+                    && matches!(
+                        cc.source,
+                        CostSource::Hand | CostSource::Mill | CostSource::Graveyard
+                    )
+            })
+        })
         .cloned()
         .collect();
+    let creature_count = playable_pool
+        .iter()
+        .filter(|c| matches!(c.kind, CardType::Creature))
+        .count();
+    let instant_count = playable_pool
+        .iter()
+        .filter(|c| matches!(c.kind, CardType::Instant))
+        .count();
 
     println!(
-        "loaded {} cards ({} standard-legal creatures); running {} simulations",
+        "loaded {} cards ({} creatures + {} instants in deck pool); running {} simulations",
         registry.cards().len(),
-        creature_pool.len(),
+        creature_count,
+        instant_count,
         ITERATIONS
     );
 
@@ -51,8 +71,8 @@ fn main() -> mlua::Result<()> {
 
     let t0 = std::time::Instant::now();
     for _ in 0..ITERATIONS {
-        let deck_a = build_random_deck(&creature_pool, &mut rng, 50);
-        let deck_b = build_random_deck(&creature_pool, &mut rng, 50);
+        let deck_a = build_random_deck(&playable_pool, &mut rng, 50);
+        let deck_b = build_random_deck(&playable_pool, &mut rng, 50);
         let state = GameState::new(deck_a, deck_b);
         last_log.clear();
         all.push(run_game(state, &mut rng, &mut last_log, registry.lua()));
@@ -124,15 +144,54 @@ fn run_game(
             break;
         }
 
-        if let Some(creature) = pick_random_creature_in_hand(&state, active, rng) {
-            rig_creature_free_haste(&mut state, &creature);
+        if let Some(picked) = pick_random_playable_in_hand(&state, active, rng) {
+            let kind = state
+                .card_pool
+                .get(&picked)
+                .map(|c| c.card.kind)
+                .unwrap_or(CardType::Unspecified);
+            let mut choices = PlayChoices::default();
+            if matches!(kind, CardType::Creature) {
+                rig_creature_free_haste(&mut state, &picked);
+            } else if matches!(kind, CardType::Instant) {
+                // Pay HAND cost honestly: take the leftmost N hand cards
+                // (excluding the card being played). Deterministic discard
+                // pending choice API.
+                let cost = state
+                    .card_pool
+                    .get(&picked)
+                    .map(|c| c.card.cost.clone())
+                    .unwrap_or_default();
+                let hand_needed: usize = cost
+                    .iter()
+                    .filter(|c| matches!(c.source, CostSource::Hand))
+                    .map(|c| c.amount.max(0) as usize)
+                    .sum();
+                if hand_needed > 0 {
+                    let payment: Vec<InstanceId> = state
+                        .player(active)
+                        .hand
+                        .iter()
+                        .filter(|iid| *iid != &picked)
+                        .take(hand_needed)
+                        .cloned()
+                        .collect();
+                    choices.hand_payment_ids = payment;
+                }
+            }
             if state
-                .play_card(active, &creature, PlayChoices::default(), Some(lua))
+                .play_card(active, &picked, choices, Some(lua))
                 .is_ok()
             {
                 bump_played(&mut stats, active);
-                let (x, y) = state.effective_stats(&creature);
-                events.push(format!("played {} ({x}/{y})", short(&creature)));
+                let label = match kind {
+                    CardType::Instant => format!("instant {}", short(&picked)),
+                    _ => {
+                        let (x, y) = state.effective_stats(&picked);
+                        format!("{} ({x}/{y})", short(&picked))
+                    }
+                };
+                events.push(format!("played {label}"));
             }
         }
 
@@ -229,23 +288,53 @@ fn bump_milled(stats: &mut GameStats, defender: PlayerId, n: u32) {
     }
 }
 
-fn pick_random_creature_in_hand(
+fn pick_random_playable_in_hand(
     state: &GameState,
     player: PlayerId,
     rng: &mut impl Rng,
 ) -> Option<InstanceId> {
-    let creatures: Vec<&InstanceId> = state
+    let candidates: Vec<&InstanceId> = state
         .player(player)
         .hand
         .iter()
         .filter(|iid| {
-            matches!(
-                state.card_pool.get(*iid).map(|c| c.card.kind),
-                Some(CardType::Creature)
-            )
+            let Some(inst) = state.card_pool.get(*iid) else {
+                return false;
+            };
+            match inst.card.kind {
+                // Creatures get rigged free + haste before play, so always pickable.
+                CardType::Creature => true,
+                CardType::Instant => can_pay_instant_cost(state, player, iid),
+                _ => false,
+            }
         })
         .collect();
-    creatures.choose(rng).map(|iid| (*iid).clone())
+    candidates.choose(rng).map(|iid| (*iid).clone())
+}
+
+fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceId) -> bool {
+    let Some(inst) = state.card_pool.get(iid) else {
+        return false;
+    };
+    let mut hand_need = 0usize;
+    let mut mill_need = 0usize;
+    let mut gy_need = 0usize;
+    for c in &inst.card.cost {
+        if c.is_x {
+            return false;
+        }
+        let amount = c.amount.max(0) as usize;
+        match c.source {
+            CostSource::Hand => hand_need += amount,
+            CostSource::Mill => mill_need += amount,
+            CostSource::Graveyard => gy_need += amount,
+            _ => return false,
+        }
+    }
+    let p = state.player(player);
+    // Subtract 1 for the card being played (it's also in hand).
+    let hand_have = p.hand.len().saturating_sub(1);
+    hand_have >= hand_need && p.deck.len() >= mill_need && p.graveyard.len() >= gy_need
 }
 
 /// Sim heuristic: skip an attack iff the defender has at least one legal
@@ -403,9 +492,9 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     }
 
     println!();
-    println!("Handler actions (per-game averages, what game.* methods did from inside handlers):");
+    println!("Engine + handler actions (per-game averages):");
     println!("                          A         B");
-    for action in ["draw", "mill", "damage", "move"] {
+    for action in ["draw", "mill", "damage", "move", "discard"] {
         let a_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[0]).unwrap_or(0) as f64);
         let b_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[1]).unwrap_or(0) as f64);
         println!("  game.{action:16} {a_avg:>6.2}    {b_avg:>6.2}");
@@ -414,7 +503,6 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     println!();
     println!("Pending mechanics (zero today; nonzero once each engine piece lands):");
     println!("                                  A         B");
-    print_pending("discards (HAND → GRAVEYARD)");
     print_pending("sacrifices (cost P.16)");
     print_pending("activated abilities used");
     print_pending("instant responses (R.1)");
