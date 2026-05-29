@@ -351,6 +351,48 @@ impl GameState {
         }
     }
 
+    /// Append an iid to a player's zone, journaling the push. (Counterpart of
+    /// `remove_from_zone` — together they let callers detach a card from
+    /// attached-limbo and place it back into a zone.)
+    pub fn add_to_zone(&mut self, iid: &InstanceId, owner: PlayerId, zone: Zone) {
+        let p = self.player_mut(owner);
+        let zone_vec = match zone {
+            Zone::Board => &mut p.board,
+            Zone::Hand => &mut p.hand,
+            Zone::Deck => &mut p.deck,
+            Zone::Graveyard => &mut p.graveyard,
+            Zone::Exile => &mut p.exile,
+        };
+        zone_vec.push(iid.clone());
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::AddToZone {
+                iid: iid.clone(),
+                owner,
+                zone,
+            });
+        }
+    }
+
+    /// Remove an iid from `host`'s attached vec, journaling the removal at
+    /// its position. Returns true if the iid was actually attached to host.
+    pub fn remove_attached(&mut self, host: &InstanceId, attached: &InstanceId) -> bool {
+        let Some(inst) = self.card_pool.get_mut(host) else {
+            return false;
+        };
+        let Some(pos) = inst.attached.iter().position(|x| x == attached) else {
+            return false;
+        };
+        inst.attached.remove(pos);
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::RemoveAttached {
+                host: host.clone(),
+                attached: attached.clone(),
+                at_pos: pos,
+            });
+        }
+        true
+    }
+
     /// Engine helper: credit a `game.*` action invocation to the affected player.
     pub fn bump_action(&mut self, action: &'static str, who: PlayerId) {
         let entry = self.action_counts.entry(action).or_insert([0, 0]);

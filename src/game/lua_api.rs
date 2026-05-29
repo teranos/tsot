@@ -62,53 +62,51 @@ fn parse_zone(s: &str) -> Result<Zone> {
     }
 }
 
-fn remove_from_zones(s: &mut GameState, controller: PlayerId, iid: &str) -> bool {
-    let p = s.player_mut(controller);
-    for vec in [
-        &mut p.board,
-        &mut p.hand,
-        &mut p.deck,
-        &mut p.graveyard,
-        &mut p.exile,
-    ] {
-        if let Some(pos) = vec.iter().position(|x| x == iid) {
-            vec.remove(pos);
-            return true;
+/// Search the owner's zones for the iid; returns the zone if found.
+fn find_zone_of(s: &GameState, owner: PlayerId, iid: &str) -> Option<Zone> {
+    let p = s.player(owner);
+    if p.board.iter().any(|x| x == iid) {
+        return Some(Zone::Board);
+    }
+    if p.hand.iter().any(|x| x == iid) {
+        return Some(Zone::Hand);
+    }
+    if p.deck.iter().any(|x| x == iid) {
+        return Some(Zone::Deck);
+    }
+    if p.graveyard.iter().any(|x| x == iid) {
+        return Some(Zone::Graveyard);
+    }
+    if p.exile.iter().any(|x| x == iid) {
+        return Some(Zone::Exile);
+    }
+    None
+}
+
+/// Search all card_pool instances for an `attached` containing `iid`.
+/// Returns the host's iid if found.
+fn find_host_of_attached(s: &GameState, iid: &str) -> Option<InstanceId> {
+    for (host_iid, host) in &s.card_pool {
+        if host.attached.iter().any(|x| x == iid) {
+            return Some(host_iid.clone());
         }
     }
-    false
+    None
 }
 
-fn remove_from_attached(s: &mut GameState, iid: &str) -> bool {
-    for host in s.card_pool.values_mut() {
-        if let Some(pos) = host.attached.iter().position(|x| x == iid) {
-            host.attached.remove(pos);
-            return true;
-        }
-    }
-    false
-}
-
-fn push_to_zone(s: &mut GameState, controller: PlayerId, zone: Zone, iid: String) {
-    let p = s.player_mut(controller);
-    match zone {
-        Zone::Board => p.board.push(iid),
-        Zone::Hand => p.hand.push(iid),
-        Zone::Deck => p.deck.push(iid),
-        Zone::Graveyard => p.graveyard.push(iid),
-        Zone::Exile => p.exile.push(iid),
-    }
-}
-
-// --- Pure logic for each API method. -----------------------------------------
+// --- Pure logic for each API method. All mutations go through journaled
+// helpers on GameState so handler effects are rollback-safe.
 
 fn do_damage(s: &mut GameState, iid: &str, n: i32) -> Result<()> {
-    let owner = s.card_pool.get(iid).map(|i| i.owner);
-    if let Some(inst) = s.card_pool.get_mut(iid) {
-        inst.damage += n;
+    let (owner, current) = match s.card_pool.get(iid) {
+        Some(inst) => (Some(inst.owner), inst.damage),
+        None => (None, 0),
+    };
+    if owner.is_some() {
+        s.set_damage(&iid.to_string(), current + n);
     }
-    if let Some(owner) = owner {
-        s.bump_action("damage", owner);
+    if let Some(o) = owner {
+        s.bump_action("damage", o);
     }
     Ok(())
 }
@@ -117,14 +115,11 @@ fn do_mill(s: &mut GameState, pid_str: &str, n: i32, dest_str: &str) -> Result<(
     let pid = parse_pid(pid_str)?;
     let dest = parse_mill_zone(dest_str)?;
     let take = (n.max(0) as usize).min(s.player(pid).deck.len());
-    let drained: Vec<InstanceId> = s.player_mut(pid).deck.drain(0..take).collect();
-    let actually_milled = drained.len() as u32;
-    match dest {
-        Zone::Graveyard => s.player_mut(pid).graveyard.extend(drained),
-        Zone::Exile => s.player_mut(pid).exile.extend(drained),
-        _ => unreachable!("parse_mill_zone restricts this"),
-    }
-    for _ in 0..actually_milled {
+    for _ in 0..take {
+        let Some(top) = s.player(pid).deck.first().cloned() else {
+            break;
+        };
+        let _ = s.move_card(&top, pid, Zone::Deck, dest);
         s.bump_action("mill", pid);
     }
     Ok(())
@@ -135,14 +130,14 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     for _ in 0..n.max(0) {
         if s.player(pid).deck.is_empty() {
             // L.1 (effect-draw, same as the draw step's empty-deck rule).
-            // The drawing player loses; we credit this as "decked themselves
-            // by choice" — the controller chose to play the draw effect.
             s.bump_action("self_deckout_by_choice", pid);
-            s.winner = Some(pid.opponent());
+            s.set_winner(Some(pid.opponent()));
             break;
         }
-        let top = s.player_mut(pid).deck.remove(0);
-        s.player_mut(pid).hand.push(top);
+        let Some(top) = s.player(pid).deck.first().cloned() else {
+            break;
+        };
+        let _ = s.move_card(&top, pid, Zone::Deck, Zone::Hand);
         s.bump_action("draw", pid);
     }
     Ok(())
@@ -151,42 +146,36 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
 fn do_discard(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     let pid = parse_pid(pid_str)?;
     let take = (n.max(0) as usize).min(s.player(pid).hand.len());
-    // Deterministic: front-of-hand (oldest-held first), matching U.10's
-    // end-of-turn discard fallback. When the choice API lands (LUA Phase 2),
-    // this method should accept an optional `choices` argument or surface a
-    // prompt through the oracle, so card text reading "discard a card" can
-    // actually let the player pick. Until then, leftmost-N is the rule.
-    let p = s.player_mut(pid);
-    let drained: Vec<InstanceId> = p.hand.drain(0..take).collect();
-    let actually = drained.len() as u32;
-    p.graveyard.extend(drained);
-    for _ in 0..actually {
+    // Deterministic front-of-hand pending choice API surface (Phase 2+).
+    for _ in 0..take {
+        let Some(front) = s.player(pid).hand.first().cloned() else {
+            break;
+        };
+        let _ = s.move_card(&front, pid, Zone::Hand, Zone::Graveyard);
         s.bump_action("discard", pid);
     }
     Ok(())
 }
 
 fn do_add_status(s: &mut GameState, iid: &str, kind: &str, duration: i32) -> Result<()> {
-    let owner = s.card_pool.get(iid).map(|i| i.owner);
-    let inst = match s.card_pool.get_mut(iid) {
-        Some(i) => i,
+    let (owner, current_effects) = match s.card_pool.get(iid) {
+        Some(inst) => (Some(inst.owner), inst.status_effects.clone()),
         None => return Ok(()),
     };
     match kind.to_ascii_lowercase().as_str() {
         "skip_untap" => {
             let n = duration.max(0) as u32;
-            // Accumulate with any existing SkipUntap rather than stacking
-            // multiple entries (the untap step only inspects the first match).
-            let existing = inst
-                .status_effects
+            let mut new_effects = current_effects;
+            let existing = new_effects
                 .iter()
                 .position(|s| matches!(s, StatusEffect::SkipUntap(_)));
             if let Some(idx) = existing {
-                let StatusEffect::SkipUntap(old) = inst.status_effects[idx];
-                inst.status_effects[idx] = StatusEffect::SkipUntap(old + n);
+                let StatusEffect::SkipUntap(old) = new_effects[idx];
+                new_effects[idx] = StatusEffect::SkipUntap(old + n);
             } else {
-                inst.status_effects.push(StatusEffect::SkipUntap(n));
+                new_effects.push(StatusEffect::SkipUntap(n));
             }
+            s.set_status_effects(&iid.to_string(), new_effects);
         }
         other => {
             return Err(mlua::Error::runtime(format!(
@@ -202,8 +191,8 @@ fn do_add_status(s: &mut GameState, iid: &str, kind: &str, duration: i32) -> Res
 
 fn do_set_tapped(s: &mut GameState, iid: &str, tapped: bool) -> Result<()> {
     let owner = s.card_pool.get(iid).map(|i| i.owner);
-    if let Some(inst) = s.card_pool.get_mut(iid) {
-        inst.tapped = tapped;
+    if owner.is_some() {
+        s.set_tapped(&iid.to_string(), tapped);
     }
     if let Some(o) = owner {
         s.bump_action(if tapped { "tap" } else { "untap" }, o);
@@ -213,22 +202,24 @@ fn do_set_tapped(s: &mut GameState, iid: &str, tapped: bool) -> Result<()> {
 
 fn do_move(s: &mut GameState, iid: &str, dest_str: &str) -> Result<()> {
     let dest = parse_zone(dest_str)?;
+    let iid_owned = iid.to_string();
     let controller = s
         .card_pool
         .get(iid)
         .ok_or_else(|| mlua::Error::runtime(format!("game.move: card not in pool: {iid}")))?
         .controller;
-    if !remove_from_zones(s, controller, iid) {
-        if !remove_from_attached(s, iid) {
-            return Err(mlua::Error::runtime(format!(
-                "game.move: card not found in any zone or attached list: {iid}"
-            )));
-        }
-        if let Some(inst) = s.card_pool.get_mut(iid) {
-            inst.face_down = false;
-        }
+
+    if let Some(from) = find_zone_of(s, controller, iid) {
+        let _ = s.move_card(&iid_owned, controller, from, dest);
+    } else if let Some(host) = find_host_of_attached(s, iid) {
+        s.remove_attached(&host, &iid_owned);
+        s.set_face_down(&iid_owned, false);
+        s.add_to_zone(&iid_owned, controller, dest);
+    } else {
+        return Err(mlua::Error::runtime(format!(
+            "game.move: card not found in any zone or attached list: {iid}"
+        )));
     }
-    push_to_zone(s, controller, dest, iid.to_string());
     s.bump_action("move", controller);
     Ok(())
 }

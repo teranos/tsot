@@ -827,6 +827,64 @@ mod tests {
         assert!(ran);
     }
 
+    #[test]
+    fn handler_mutations_round_trip_through_journal() {
+        // A fixture handler that calls many game.* methods at once, so the
+        // round-trip exercises do_damage / do_mill / do_draw / do_set_tapped /
+        // do_add_status / do_discard / do_move / bump_action / bump_event_fire.
+        let registry = registry_with_fixture(
+            "round_trip",
+            r#"return {
+                id = "round-trip-probe",
+                on_attack = function(game, self)
+                    local opp = game.opponent(self.owner)
+                    game.draw(self.owner, 1)
+                    game.mill(opp, 2, "exile")
+                    game.damage(self.instance_id, 1)
+                    game.add_status(self.instance_id, "skip_untap", 2)
+                    game.tap(self.instance_id)
+                    game.discard(self.owner, 1)
+                end,
+            }"#,
+        );
+        let probe = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "round-trip-probe")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&atk).unwrap();
+            inst.card.handlers = probe.handlers.clone();
+            inst.card.id = probe.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        let snapshot = format!("{:?}", s);
+        s.journal = Some(crate::game::Journal::new());
+
+        s.declare_attacker(
+            &atk,
+            Some(&mut crate::game::EventContext::lua_only(registry.lua())),
+        )
+        .unwrap();
+
+        assert_ne!(snapshot, format!("{:?}", s));
+        let journal = s.journal.take().unwrap();
+        journal.rollback(&mut s);
+        assert!(s.journal.is_none());
+        assert_eq!(
+            snapshot,
+            format!("{:?}", s),
+            "handler-driven mutations should round-trip through the journal"
+        );
+    }
+
     fn registry_with_fixture(name: &str, source: &str) -> crate::card::CardRegistry {
         let tmp = std::env::temp_dir().join(format!("tsot_fixture_{name}"));
         std::fs::create_dir_all(&tmp).unwrap();

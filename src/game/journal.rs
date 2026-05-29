@@ -91,6 +91,20 @@ pub enum JournalEntry {
         zone: Zone,
         was_pos: usize,
     },
+    /// Pushed an iid to the end of a player's zone (without removing it from
+    /// elsewhere). Inverse: pop from end of zone (must match `iid`).
+    AddToZone {
+        iid: InstanceId,
+        owner: PlayerId,
+        zone: Zone,
+    },
+    /// Removed an iid from host's attached vec at `at_pos`. Inverse: insert
+    /// back at `at_pos`.
+    RemoveAttached {
+        host: InstanceId,
+        attached: InstanceId,
+        at_pos: usize,
+    },
 }
 
 /// Recording journal — owns a sequence of entries from a single "session"
@@ -249,6 +263,23 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         } => {
             let p = state.player_mut(owner);
             zone_mut(p, zone).insert(was_pos, iid);
+        }
+        JournalEntry::AddToZone { iid, owner, zone } => {
+            let p = state.player_mut(owner);
+            let v = zone_mut(p, zone);
+            if let Some(last) = v.last() {
+                debug_assert_eq!(*last, iid, "add-to-zone inverse: iid mismatch at tail");
+                v.pop();
+            }
+        }
+        JournalEntry::RemoveAttached {
+            host,
+            attached,
+            at_pos,
+        } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                inst.attached.insert(at_pos, attached);
+            }
         }
     }
 }
