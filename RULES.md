@@ -21,6 +21,10 @@
 - **U.3** After untapping, that player draws cards.
 - **U.4** The default number of cards drawn at the beginning of a turn is 1.
 - **U.5** The active player is the player whose turn is in progress.
+- **U.6** A turn consists of these phases in order: Untap, Draw, Main Phase 1, Combat, Main Phase 2, End.
+- **U.7** During a Main Phase, the active player may play cards (subject to each card's timing rules) and activate abilities. The active player chooses when to leave the phase.
+- **U.8** During Combat, the active player may declare attackers per B.1, B.3, B.13. The defending player may declare blockers per B.5, B.11, B.12. Damage resolves per B.7–B.9.
+- **U.9** During the End Phase, end-of-turn triggers fire and accumulated damage on creatures clears (B.10).
 
 ## Loss (L)
 
@@ -51,6 +55,7 @@ The following zones are part of the game.
 - **C.9** Every card is a spell. The card's specific type (e.g., creature, instant, spell, artifact) is a kind of spell.
 - **C.10** A card whose specific type is `SPELL` (with no further specialization) can only be played during its controller's turn.
 - **C.11** A card's symbol is a structured property that may be referenced by game effects (e.g., "count cards with symbol ⨳ in your GRAVEYARD").
+- **C.12** A card's effective stats are recomputed continuously from the card's printed X/Y plus all active modifiers. Whenever game state changes, effective stats are re-evaluated.
 - **C.7** A wall is a card type, distinct from creature and instant.
 - **C.8** A card's X/Y stats may be modified by abilities while the card is on the BOARD.
 
