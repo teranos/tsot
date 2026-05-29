@@ -13,4 +13,7 @@ return {
     "whenever another creature blocks this creature, draw a card.",
   },
   stats = {x = 0, y = 0},
+  on_blocked_by = function(game, self, blocker)
+    game.draw(self.owner, 1)
+  end,
 }

@@ -99,6 +99,25 @@ pub(crate) fn fire_on_blocked_by(
             )?,
         )?;
 
+        let cell_draw = &state_cell;
+        game.set(
+            "draw",
+            scope.create_function_mut(move |_, (pid_str, n): (String, i32)| {
+                let pid = parse_pid(&pid_str)?;
+                let mut s = cell_draw.borrow_mut();
+                for _ in 0..n.max(0) {
+                    if s.player(pid).deck.is_empty() {
+                        // L.1 (effect-draw, same as the draw step's empty-deck rule).
+                        s.winner = Some(pid.opponent());
+                        break;
+                    }
+                    let top = s.player_mut(pid).deck.remove(0);
+                    s.player_mut(pid).hand.push(top);
+                }
+                Ok(())
+            })?,
+        )?;
+
         game.set(
             "opponent",
             lua.create_function(|_, pid_str: String| -> Result<String> {

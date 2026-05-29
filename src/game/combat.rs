@@ -653,6 +653,45 @@ mod tests {
     }
 
     #[test]
+    fn squirrel_overrun_handler_draws_a_card_when_blocked() {
+        use crate::card::CardRegistry;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let squirrel = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "squirrel-overrun")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        let blk = s.b.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&atk).unwrap();
+            inst.card.handlers = squirrel.handlers.clone();
+            inst.card.id = squirrel.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        put_on_board(&mut s, PlayerId::B, &blk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        s.declare_attacker(&atk).unwrap();
+        s.confirm_attacks().unwrap();
+
+        let a_hand_before = s.a.hand.len();
+        let a_deck_before = s.a.deck.len();
+
+        s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
+
+        assert_eq!(s.a.hand.len(), a_hand_before + 1);
+        assert_eq!(s.a.deck.len(), a_deck_before - 1);
+        assert_eq!(s.triggered_fires_a, 1);
+        assert_eq!(s.triggered_fires_b, 0);
+    }
+
+    #[test]
     fn unblocked_attack_can_cause_deckout_win() {
         // Defender has only 1 card left in deck; 1-power attack mills it → defender loses.
         let mut s = GameState::new(deck_of(50, "a"), deck_of(6, "b"));
