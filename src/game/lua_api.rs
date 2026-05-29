@@ -4,7 +4,7 @@
 //! macro inside `Lua::scope`, so closures can borrow `&mut GameState` for the
 //! duration of the handler call only.
 
-use super::state::{CombatState, GameState, InstanceId, PlayerId, Zone};
+use super::state::{CombatState, GameState, InstanceId, PlayerId, StatusEffect, Zone};
 use crate::card::{CardType, EventName};
 use mlua::{Lua, Result, Value};
 use std::cell::RefCell;
@@ -140,6 +140,40 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
         let top = s.player_mut(pid).deck.remove(0);
         s.player_mut(pid).hand.push(top);
         s.bump_action("draw", pid);
+    }
+    Ok(())
+}
+
+fn do_add_status(s: &mut GameState, iid: &str, kind: &str, duration: i32) -> Result<()> {
+    let owner = s.card_pool.get(iid).map(|i| i.owner);
+    let inst = match s.card_pool.get_mut(iid) {
+        Some(i) => i,
+        None => return Ok(()),
+    };
+    match kind.to_ascii_lowercase().as_str() {
+        "skip_untap" => {
+            let n = duration.max(0) as u32;
+            // Accumulate with any existing SkipUntap rather than stacking
+            // multiple entries (the untap step only inspects the first match).
+            let existing = inst
+                .status_effects
+                .iter()
+                .position(|s| matches!(s, StatusEffect::SkipUntap(_)));
+            if let Some(idx) = existing {
+                let StatusEffect::SkipUntap(old) = inst.status_effects[idx];
+                inst.status_effects[idx] = StatusEffect::SkipUntap(old + n);
+            } else {
+                inst.status_effects.push(StatusEffect::SkipUntap(n));
+            }
+        }
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "game.add_status: unknown kind {other:?} (known: \"skip_untap\")"
+            )))
+        }
+    }
+    if let Some(o) = owner {
+        s.bump_action("add_status", o);
     }
     Ok(())
 }
@@ -282,6 +316,24 @@ macro_rules! build_game_table {
                 t.set("board", lua.create_sequence_from(p.board.clone())?)?;
                 Ok(t)
             })?,
+        )?;
+
+        game.set(
+            "print",
+            $lua.create_function(|_, msg: String| -> Result<()> {
+                eprintln!("[card] {msg}");
+                Ok(())
+            })?,
+        )?;
+
+        let cell_status = &$cell;
+        game.set(
+            "add_status",
+            $scope.create_function_mut(
+                move |_, (iid, kind, duration): (String, String, i32)| {
+                    do_add_status(&mut *cell_status.borrow_mut(), &iid, &kind, duration)
+                },
+            )?,
         )?;
 
         let cell_card = &$cell;

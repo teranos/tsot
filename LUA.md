@@ -36,9 +36,9 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 - [x] `game.zones(player_id).{hand, deck, graveyard, exile, board}` — returns iid lists per zone
 - [x] `game.attackers() → list of iids` — currently-declared attackers (added beyond the original v1 list; needed for "untap other attackers"-style handlers)
 - [x] `game.card(card_id) → table_or_nil` — read-only view: `id, instance_id, type, subtypes, colors, symbol, tapped, face_down, owner, controller, x, y` (effective stats). Returns nil if iid not in pool.
-- [ ] `game.add_status(card_id, kind, duration)`
+- [x] `game.print(msg)` — debug; writes `[card] {msg}` to stderr
+- [x] `game.add_status(card_id, kind, duration)` — currently only `"skip_untap"` kind; accumulates with any existing entry of the same kind
 - [ ] `game.discard(player_id, n)` — needs choice in the natural reading
-- [ ] `game.print(msg)` — debug
 
 **Cards with active handlers:**
 - `tantrum-imp` — `on_blocked_by`: damage blocker 1, mill defender 1 to exile
@@ -50,6 +50,7 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 - `draw-two` — `on_play`: draw 2 (first instant — `play_card` now routes Instant → GRAVEYARD; GRAVEYARD cost source supported deterministically by exiling most-recent N)
 - `battle-captain` — `on_attack`: untap all other attacking creatures (static lord-effect ability still deferred to Phase 2)
 - `surge` — `on_play`: untap all your creatures (second instant; uses `game.zones`)
+- `mortal-bee` — `on_attack`: exile 1 from opponent's deck, self-skip next untap (white flying insect; demonstrates `game.add_status` with `"skip_untap"`)
 
 **Cards in corpus awaiting Phase 2** (data + abilities text only, no handler):
 - `goblin-berserker`, `goblin-warlord`, `goblin-conspirator` — all need choice API (`discard a card`, `reveal a goblin`); `goblin-warlord` also needs `static`.

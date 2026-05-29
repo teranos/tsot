@@ -331,7 +331,7 @@ impl GameState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::state::PlayerId;
+    use super::super::state::{PlayerId, StatusEffect};
     use crate::game::test_helpers::*;
 
     fn put_on_board(s: &mut GameState, side: PlayerId, iid: &InstanceId) {
@@ -645,6 +645,88 @@ mod tests {
         assert_eq!(y, 1);
         assert!(tapped, "attacker is tapped at on_attack fire time");
         assert_eq!(owner, "a");
+    }
+
+    #[test]
+    fn mortal_bee_attack_exiles_opponent_deck_and_self_taxes() {
+        use crate::card::CardRegistry;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let bee = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "mortal-bee")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&atk).unwrap();
+            inst.card.handlers = bee.handlers.clone();
+            inst.card.id = bee.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        let b_deck_before = s.b.deck.len();
+        let b_exile_before = s.b.exile.len();
+        let a_deck_before = s.a.deck.len();
+
+        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+
+        // Opponent's deck shrinks by 1, exile grows by 1.
+        assert_eq!(s.b.deck.len(), b_deck_before - 1);
+        assert_eq!(s.b.exile.len(), b_exile_before + 1);
+        // Owner's deck untouched.
+        assert_eq!(s.a.deck.len(), a_deck_before);
+        // SkipUntap(1) status on self.
+        let bee_inst = s.card_pool.get(&atk).unwrap();
+        assert!(bee_inst.tapped);
+        assert!(matches!(
+            bee_inst.status_effects.first(),
+            Some(StatusEffect::SkipUntap(1))
+        ));
+    }
+
+    #[test]
+    fn game_print_handler_call_does_not_error() {
+        // Smoke test only: calling game.print from a handler returns Ok and
+        // the fire_self_only path completes normally. stderr capture isn't
+        // worth the test scaffolding for a debug primitive.
+        let registry = registry_with_fixture(
+            "game_print",
+            r#"return {
+                id = "print-probe",
+                on_attack = function(game, self)
+                    game.print("hello from " .. self.instance_id)
+                    _G.print_probe_ran = true
+                end,
+            }"#,
+        );
+        let probe = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "print-probe")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&atk).unwrap();
+            inst.card.handlers = probe.handlers.clone();
+            inst.card.id = probe.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        s.declare_attacker(&atk, Some(registry.lua())).unwrap();
+
+        let ran: bool = registry.lua().globals().get("print_probe_ran").unwrap();
+        assert!(ran);
     }
 
     fn registry_with_fixture(name: &str, source: &str) -> crate::card::CardRegistry {
