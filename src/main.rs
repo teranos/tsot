@@ -146,7 +146,11 @@ fn run_game(
             break;
         }
 
-        let attackers = eligible_attackers(&state, active);
+        let defender = active.opponent();
+        let attackers: Vec<InstanceId> = eligible_attackers(&state, active)
+            .into_iter()
+            .filter(|atk| is_attack_worth_declaring(&state, atk, defender))
+            .collect();
         let mut declared_atk_count = 0u32;
         for atk in &attackers {
             if state.declare_attacker(atk, Some(lua)).is_ok() {
@@ -156,7 +160,6 @@ fn run_game(
 
         if declared_atk_count > 0 {
             state.confirm_attacks().unwrap();
-            let defender = active.opponent();
             let blockers = eligible_blockers(&state, defender);
             let mut block_count = 0u32;
             if !attackers.is_empty() {
@@ -243,6 +246,49 @@ fn pick_random_creature_in_hand(
         })
         .collect();
     creatures.choose(rng).map(|iid| (*iid).clone())
+}
+
+/// Sim heuristic: skip an attack iff the defender has at least one legal
+/// blocker AND no legal blocker dies to this attacker's effective X (and the
+/// attacker isn't unblockable). When all conceivable blocks leave the blocker
+/// alive AND the attack can't reach the player, declaring is strictly bad —
+/// the attacker would die or take damage for no gain.
+fn is_attack_worth_declaring(
+    state: &GameState,
+    attacker: &InstanceId,
+    defender: PlayerId,
+) -> bool {
+    let Some(atk_inst) = state.card_pool.get(attacker) else {
+        return false;
+    };
+    if atk_inst.has_keyword("unblockable") {
+        return true;
+    }
+    let atk_x = state.effective_stats(attacker).0;
+    let atk_flying = atk_inst.has_keyword("flying");
+
+    let mut any_legal_blocker = false;
+    let mut any_kill_possible = false;
+    for blk_iid in &state.player(defender).board {
+        let Some(blk_inst) = state.card_pool.get(blk_iid) else {
+            continue;
+        };
+        if blk_inst.tapped {
+            continue;
+        }
+        // B.11: flying attacker requires flying blocker.
+        if atk_flying && !blk_inst.has_keyword("flying") {
+            continue;
+        }
+        any_legal_blocker = true;
+        let blk_y = state.effective_stats(blk_iid).1;
+        if atk_x >= blk_y {
+            any_kill_possible = true;
+            break;
+        }
+    }
+
+    !any_legal_blocker || any_kill_possible
 }
 
 fn eligible_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> {
