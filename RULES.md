@@ -2,6 +2,7 @@
 
 > Working draft. Each rule has a stable identifier for review and reference.
 > The document states only what has been confirmed. Inferences and CCG conventions are not assumed unless explicitly ratified.
+> Rule IDs are **never renumbered**. When a rule is removed, its ID becomes a permanent gap.
 
 ## Format (F)
 
@@ -14,6 +15,7 @@
 - **S.2** Each player may send up to 2 cards from their HAND to the bottom of their DECK.
 - **S.3** A player who sends cards back draws an equal number of replacement cards.
 - **S.4** A standard deck contains 50 cards.
+- **S.5** A card with the subtype `test` is not legal in standard tournament play and is excluded from standard decks.
 
 ## Turns (U)
 

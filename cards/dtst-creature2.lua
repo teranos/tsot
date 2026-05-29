@@ -4,7 +4,7 @@ return {
   id = "dtst-creature2",
   name = "DTST-creature2",
   type = "creature",
-  subtypes = {"Creature Test"},
+  subtypes = {"test"},
   abilities = {
     "1 mill: change a card's type",
     "1 mill, 1 graveyard: put a card from exile into your hand",

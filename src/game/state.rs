@@ -54,9 +54,33 @@ pub struct CardInstance {
     pub tapped: bool,              // B.4
     pub face_down: bool,           // P.17 (for attached)
     pub damage: i32,               // B.7–B.8 accumulated
+    pub summoning_sick: bool,      // B.3 (cleared at start of controller's turn)
     pub attached: Vec<InstanceId>, // Z.6
     pub modifiers: Vec<Modifier>,  // C.12 continuous effects
     pub status_effects: Vec<StatusEffect>,
+}
+
+impl CardInstance {
+    /// True if the card has the given (lowercase) keyword as one of its
+    /// printed abilities, e.g. "flying", "haste", "vigilance", "defender", "unblockable".
+    /// Also true if the card has a matching Modifier (Modifier::GainsFlying for "flying").
+    pub fn has_keyword(&self, keyword: &str) -> bool {
+        let printed = self.card.abilities.iter().any(|a| {
+            let normalized = a.trim().trim_end_matches('.').to_lowercase();
+            normalized == keyword
+        });
+        if printed {
+            return true;
+        }
+        for m in &self.modifiers {
+            if let Modifier::GainsFlying = m {
+                if keyword == "flying" {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 /// Continuous modifiers applied to a card's effective state.
@@ -88,6 +112,20 @@ pub struct PlayerState {
     pub exile: Vec<InstanceId>,
 }
 
+/// In-progress combat state during the Combat phase.
+#[derive(Debug, Clone)]
+pub enum CombatState {
+    AwaitingAttackers,
+    AwaitingBlockers { attacks: Vec<AttackDecl> },
+}
+
+/// One attacker and zero-or-more blockers assigned to it.
+#[derive(Debug, Clone)]
+pub struct AttackDecl {
+    pub attacker: InstanceId,
+    pub blockers: Vec<InstanceId>,
+}
+
 /// The full game state.
 #[derive(Debug, Clone)]
 pub struct GameState {
@@ -98,6 +136,7 @@ pub struct GameState {
     pub turn: u32,
     pub phase: Phase,
     pub winner: Option<PlayerId>,
+    pub combat: Option<CombatState>,
 }
 
 impl GameState {
@@ -118,6 +157,7 @@ impl GameState {
             turn: 1,
             phase: Phase::Untap,
             winner: None,
+            combat: None,
         }
     }
 
@@ -138,6 +178,7 @@ impl GameState {
                 tapped: false,
                 face_down: false,
                 damage: 0,
+                summoning_sick: false,
                 attached: Vec::new(),
                 modifiers: Vec::new(),
                 status_effects: Vec::new(),

@@ -72,6 +72,9 @@ impl GameState {
         let card_cost = inst_ref.card.cost.clone();
 
         if !matches!(card_kind, CardType::Creature) {
+            // TODO(types): handle Instant (→ GRAVEYARD per P.1, timing per C.6),
+            // Spell (→ GRAVEYARD, timing per C.10), Artifact (→ BOARD per P.19),
+            // Environment (→ BOARD per P.21 + P.22 slot management).
             return Err(PlayError::UnsupportedType(card_kind));
         }
 
@@ -86,6 +89,8 @@ impl GameState {
             match c.source {
                 CostSource::Hand => hand_needed += amount,
                 CostSource::Mill => mill_needed += amount,
+                // TODO(costs): support GRAVEYARD (P.12), SACRIFICE (P.16),
+                // and SELF (P.5). Variable X (`is_x`) also belongs here.
                 other => return Err(PlayError::UnsupportedCostSource(other)),
             }
         }
@@ -136,7 +141,12 @@ impl GameState {
 
         pm.board.push(instance.clone());
 
+        // TODO(events): fire "enter the BOARD" triggers per A.1 here.
+        // E.g., jellyfish's "when this creature enters the board, return target creature
+        // to its owner's hand"; mesopelagic-fish has none, but many cards will.
+
         let inst_mut = self.card_pool.get_mut(instance).unwrap();
+        inst_mut.summoning_sick = true; // B.3
         for hid in &choices.hand_payment_ids {
             inst_mut.attached.push(hid.clone());
         }

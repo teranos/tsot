@@ -6,6 +6,7 @@
 //!   - `movement`: zone transitions.
 //!   - `play`: playing cards from hand, cost payment, attachment.
 
+mod combat;
 mod movement;
 mod play;
 mod state;
@@ -14,8 +15,10 @@ mod turn;
 #[cfg(test)]
 mod test_helpers;
 
+pub use combat::{CombatError, CombatOutcome};
 pub use movement::MoveError;
 pub use play::{PlayChoices, PlayError};
 pub use state::{
-    CardInstance, GameState, InstanceId, Modifier, Phase, PlayerId, PlayerState, StatusEffect, Zone,
+    AttackDecl, CardInstance, CombatState, GameState, InstanceId, Modifier, Phase, PlayerId,
+    PlayerState, StatusEffect, Zone,
 };

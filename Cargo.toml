@@ -12,3 +12,4 @@ path = "src/main.rs"
 
 [dependencies]
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
+rand = "0.8"

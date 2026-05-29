@@ -4,7 +4,7 @@ return {
   id = "dtst-creature",
   name = "DTST_creature",
   type = "creature",
-  subtypes = {"Creature Test"},
+  subtypes = {"test"},
   abilities = {
     "Tap: kill target creature",
     "Tap: draw a card",

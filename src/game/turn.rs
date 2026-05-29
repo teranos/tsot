@@ -34,6 +34,10 @@ impl GameState {
         match self.phase {
             Phase::Untap => self.do_untap_step(),
             Phase::Draw => self.do_draw_step(),
+            // TODO(events): each phase entry should fire phase-begin triggers per A.1.
+            // E.g., "at the beginning of your upkeep / draw step / combat / end step".
+            // Also: end of turn must fire end-of-turn triggers (e.g., delayed effects
+            // queued by attach-shuffler's "return this creature to your hand at end of turn").
             _ => {}
         }
     }
@@ -61,6 +65,8 @@ impl GameState {
             } else {
                 inst.tapped = false;
             }
+            // B.3 sickness clears at the start of controller's turn.
+            inst.summoning_sick = false;
         }
     }
 
