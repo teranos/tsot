@@ -57,7 +57,6 @@ The following zones are part of the game.
 - **C.10** A card whose specific type is `SPELL` (with no further specialization) can only be played during its controller's turn.
 - **C.11** A card's symbol is a structured property that may be referenced by game effects (e.g., "count cards with symbol ⨳ in your GRAVEYARD").
 - **C.12** A card's effective stats are recomputed continuously from the card's printed X/Y plus all active modifiers. Whenever game state changes, effective stats are re-evaluated.
-- **C.7** A wall is a card type, distinct from creature and instant.
 - **C.8** A card's X/Y stats may be modified by abilities while the card is on the BOARD.
 
 ## Exclusions (X)
@@ -79,8 +78,6 @@ The following are not part of this game.
 - **P.11** A cost component written as `N mill` means: place the top N cards of your DECK into your GRAVEYARD.
 - **P.12** A cost component written as `N graveyard` means: exile N cards from your GRAVEYARD.
 - **P.13** A cost component of `N hand` is valid only on cards that are placed on the BOARD when played.
-- **P.14** When a wall is played, it is placed on the BOARD.
-- **P.15** A wall does not die. Triggers and effects that reference creature death do not apply to walls.
 - **P.16** A cost component of `sacrifice <criterion>` means: choose a card you control on the BOARD matching the criterion and move it from BOARD to GRAVEYARD as part of paying the cost.
 - **P.17** A card placed in the ATTACHED zone is placed face-down.
 - **P.18** The controller of an attached card may look at it at any time.
@@ -131,11 +128,10 @@ The following are not part of this game.
 - **B.2** When a creature attacks a player successfully, that player exiles X cards from their DECK, where X is the first value in the creature's X/Y stats.
 - **B.3** A creature cannot attack during the turn it enters the BOARD, regardless of how it entered.
 - **B.4** When a creature attacks, its card is tapped (turned sideways).
-- **B.5** During combat, the defending player may declare one or more of their creatures or walls as blockers, each assigned to a specific attacking creature.
+- **B.5** During combat, the defending player may declare one or more of their creatures as blockers, each assigned to a specific attacking creature.
 - **B.6** An attack on a player is "successful" (per B.2) if and only if it is not blocked.
 - **B.7** When an attacker is blocked, the attacker deals damage equal to its X to each of its blockers, and each blocker deals damage equal to its X to the attacker.
 - **B.8** A creature with accumulated damage equal to or greater than its Y dies (placed in GRAVEYARD per P.4).
-- **B.9** Walls do not die from damage (per P.15). Accumulated damage on a wall is cleared at the end of combat.
 - **B.10** At the end of the turn, all accumulated damage on creatures is cleared.
 - **B.11** A flying creature can only be blocked by a card with flying, or by a card whose text explicitly grants it the ability to block flying.
 - **B.12** A tapped creature cannot block.
