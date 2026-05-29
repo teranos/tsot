@@ -1,4 +1,4 @@
-use mlua::{Function, Lua, Table, Value};
+use mlua::{Function, Lua, LuaOptions, StdLib, Table, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -14,9 +14,22 @@ pub struct CardRegistry {
 }
 
 impl CardRegistry {
-    /// Load every `.lua` file in `dir` into a fresh VM.
+    /// Load every `.lua` file in `dir` into a fresh sandboxed VM.
+    ///
+    /// `os`, `io`, `package`, and `debug` are not loaded as stdlib. The base
+    /// library is always loaded in Lua, so the dangerous loader functions
+    /// (`load`, `loadstring`, `loadfile`, `dofile`) are explicitly nil'd in
+    /// globals afterward. `math`, `string`, `table`, and `coroutine` remain
+    /// (coroutine is required for Phase 2's choice API).
     pub fn load(dir: &Path) -> mlua::Result<Self> {
-        let lua = Lua::new();
+        let safe_libs = StdLib::MATH | StdLib::STRING | StdLib::TABLE | StdLib::COROUTINE;
+        let lua = Lua::new_with(safe_libs, LuaOptions::default())?;
+        {
+            let globals = lua.globals();
+            for forbidden in ["load", "loadstring", "loadfile", "dofile"] {
+                globals.set(forbidden, Value::Nil)?;
+            }
+        }
         let cards = load_cards_dir(&lua, dir)?;
         Ok(Self { lua, cards })
     }
@@ -386,5 +399,34 @@ mod tests {
         assert_eq!(result, "fired");
 
         std::fs::remove_file(&card_path).ok();
+    }
+
+    #[test]
+    fn sandbox_denies_dangerous_stdlib() {
+        // Empty registry — just inspect the VM's globals.
+        let tmp = std::env::temp_dir().join("tsot_sandbox_probe");
+        std::fs::create_dir_all(&tmp).unwrap();
+        if let Ok(rd) = std::fs::read_dir(&tmp) {
+            for entry in rd.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let registry = CardRegistry::load(&tmp).unwrap();
+        let globals = registry.lua().globals();
+
+        for forbidden in ["os", "io", "package", "debug", "loadstring", "dofile", "loadfile", "require"] {
+            let v: Value = globals.get(forbidden).unwrap();
+            assert!(
+                matches!(v, Value::Nil),
+                "expected `{forbidden}` to be nil in sandboxed VM, got {v:?}"
+            );
+        }
+        for allowed in ["math", "string", "table"] {
+            let v: Value = globals.get(allowed).unwrap();
+            assert!(
+                matches!(v, Value::Table(_)),
+                "expected `{allowed}` to be present in sandboxed VM"
+            );
+        }
     }
 }

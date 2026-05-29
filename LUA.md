@@ -52,7 +52,7 @@ Phase 1 is in progress. All six event fire sites are wired; the API surface and 
 - `goblin-berserker`, `goblin-warlord`, `goblin-conspirator` — all need choice API (`discard a card`, `reveal a goblin`); `goblin-warlord` also needs `static`.
 
 **Other Phase 1 spec items:**
-- [ ] mlua sandbox mode (strip `os`, `io`, `loadstring`)
+- [x] mlua sandbox: VM constructed via `Lua::new_with(MATH | STRING | TABLE | COROUTINE)`; base-lib loader functions (`load`, `loadstring`, `loadfile`, `dofile`) nil'd in globals. Test in `card::tests::sandbox_denies_dangerous_stdlib`.
 - [x] `CardRegistry` owns long-lived Lua VM; handlers stored as `mlua::Function` on `Card`
 - [x] Engine metrics: `event_fires: HashMap<EventName, [u32; 2]>` and `action_counts: HashMap<&'static str, [u32; 2]>` (per-action counts for `game.*` invocations and engine-driven actions like U.10 discards) — sim surfaces both as per-game averages
 
