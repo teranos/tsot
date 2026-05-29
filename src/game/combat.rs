@@ -71,7 +71,7 @@ impl GameState {
         // the buffered attacker list. AwaitingBlockers (the data-shape used as
         // a buffer during declaration) is also a valid pre-confirm state.
         match &self.combat {
-            None => self.combat = Some(CombatState::AwaitingAttackers),
+            None => self.set_combat(Some(CombatState::AwaitingAttackers)),
             Some(CombatState::AwaitingAttackers)
             | Some(CombatState::AwaitingBlockers { .. }) => {}
         }
@@ -101,22 +101,19 @@ impl GameState {
         // Snapshot before mutating.
         let vigilant = inst.has_keyword("vigilance");
 
-        // Append to the buffered attacker list. The buffer is encoded as
-        // AwaitingBlockers from the start (data shape matches); confirm_attacks
-        // is the no-op marker that says "no more attackers, blockers may now
-        // declare." (The early-state-init block above already promoted None to
-        // AwaitingAttackers; the first attacker transitions that to
-        // AwaitingBlockers below.)
-        match &mut self.combat {
-            Some(CombatState::AwaitingAttackers) => {
-                self.combat = Some(CombatState::AwaitingBlockers {
-                    attacks: vec![AttackDecl {
-                        attacker: attacker.clone(),
-                        blockers: Vec::new(),
-                    }],
-                });
-            }
-            Some(CombatState::AwaitingBlockers { attacks }) => {
+        // Append to the buffered attacker list (clone-modify-set so the
+        // mutation goes through the journal). The buffer is encoded as
+        // AwaitingBlockers from the start (data shape matches);
+        // confirm_attacks is the no-op marker that says "no more attackers,
+        // blockers may now declare."
+        let new_combat = match self.combat.clone() {
+            Some(CombatState::AwaitingAttackers) => CombatState::AwaitingBlockers {
+                attacks: vec![AttackDecl {
+                    attacker: attacker.clone(),
+                    blockers: Vec::new(),
+                }],
+            },
+            Some(CombatState::AwaitingBlockers { mut attacks }) => {
                 if attacks.iter().any(|a| &a.attacker == attacker) {
                     return Err(CombatError::AttackerAlreadyDeclared);
                 }
@@ -124,15 +121,15 @@ impl GameState {
                     attacker: attacker.clone(),
                     blockers: Vec::new(),
                 });
+                CombatState::AwaitingBlockers { attacks }
             }
             None => unreachable!(),
-        }
+        };
+        self.set_combat(Some(new_combat));
 
         // Tap unless vigilance.
         if !vigilant {
-            if let Some(a) = self.card_pool.get_mut(attacker) {
-                a.tapped = true; // B.4
-            }
+            self.set_tapped(attacker, true); // B.4
         }
 
         // LUA Phase 1: fire on_attack on the declared attacker.
@@ -210,9 +207,9 @@ impl GameState {
             return Err(CombatError::FlyingMustBeBlockedByFlyer);
         }
 
-        match &mut self.combat {
-            Some(CombatState::AwaitingBlockers { attacks }) => {
-                // Verify the attacker was declared.
+        // Clone-modify-set so the mutation goes through the journal.
+        let new_combat = match self.combat.clone() {
+            Some(CombatState::AwaitingBlockers { mut attacks }) => {
                 let atk = attacks
                     .iter_mut()
                     .find(|a| &a.attacker == attacker)
@@ -221,9 +218,11 @@ impl GameState {
                     return Err(CombatError::BlockerAlreadyAssigned);
                 }
                 atk.blockers.push(blocker.clone());
+                CombatState::AwaitingBlockers { attacks }
             }
             _ => return Err(CombatError::NotAwaitingBlockers),
-        }
+        };
+        self.set_combat(Some(new_combat));
 
         // LUA Phase 1: fire `on_blocked_by` on the attacker, then `on_block` on the blocker.
         // Per-blocker semantics for both. Order: attacker-side first, then blocker-side.
@@ -266,13 +265,11 @@ impl GameState {
         if self.phase != Phase::Combat {
             return Err(CombatError::NotCombatPhase);
         }
-        let attacks = match self.combat.take() {
+        let attacks = match self.combat.clone() {
             Some(CombatState::AwaitingBlockers { attacks }) => attacks,
-            other => {
-                self.combat = other;
-                return Err(CombatError::NotAwaitingBlockers);
-            }
+            _ => return Err(CombatError::NotAwaitingBlockers),
         };
+        self.set_combat(None);
         Ok(self.resolve_combat(attacks, ctx))
     }
 
@@ -290,13 +287,14 @@ impl GameState {
                 // B.6 unblocked → B.2 mill defender's DECK to EXILE.
                 let mill_n = (attacker_x.max(0) as usize).min(self.player(defender).deck.len());
                 outcome.defender_milled_to_exile += mill_n as i32;
-                let pm = self.player_mut(defender);
                 for _ in 0..mill_n {
-                    let top = pm.deck.remove(0);
-                    pm.exile.push(top);
+                    let Some(top) = self.player(defender).deck.first().cloned() else {
+                        break;
+                    };
+                    let _ = self.move_card(&top, defender, Zone::Deck, Zone::Exile);
                 }
                 if self.player(defender).deck.is_empty() {
-                    self.winner = Some(defender.opponent());
+                    self.set_winner(Some(defender.opponent()));
                 }
             } else {
                 // B.7: attacker deals X to each blocker; each blocker deals their X to attacker.
@@ -304,13 +302,15 @@ impl GameState {
                 for bid in &atk.blockers {
                     let blocker_x = self.effective_stats(bid).0;
                     attacker_dmg += blocker_x;
-                    if let Some(b) = self.card_pool.get_mut(bid) {
-                        b.damage += attacker_x;
-                    }
+                    let current = self.card_pool.get(bid).map(|i| i.damage).unwrap_or(0);
+                    self.set_damage(bid, current + attacker_x);
                 }
-                if let Some(a) = self.card_pool.get_mut(&atk.attacker) {
-                    a.damage += attacker_dmg;
-                }
+                let current = self
+                    .card_pool
+                    .get(&atk.attacker)
+                    .map(|i| i.damage)
+                    .unwrap_or(0);
+                self.set_damage(&atk.attacker, current + attacker_dmg);
             }
         }
 
@@ -378,6 +378,35 @@ mod tests {
         while s.phase != Phase::Combat {
             s.next_phase();
         }
+    }
+
+    #[test]
+    fn combat_subsystem_round_trips_through_journal() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        let blk = s.b.hand[0].clone();
+        put_on_board(&mut s, PlayerId::A, &atk);
+        put_on_board(&mut s, PlayerId::B, &blk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        let snapshot = format!("{:?}", s);
+        s.journal = Some(crate::game::Journal::new());
+
+        s.declare_attacker(&atk, None).unwrap();
+        s.confirm_attacks().unwrap();
+        s.declare_blocker(&blk, &atk, None).unwrap();
+        let _ = s.confirm_blocks(None).unwrap();
+
+        assert_ne!(snapshot, format!("{:?}", s));
+        let journal = s.journal.take().unwrap();
+        journal.rollback(&mut s);
+        assert!(s.journal.is_none());
+        assert_eq!(
+            snapshot,
+            format!("{:?}", s),
+            "combat subsystem rollback should restore prior state"
+        );
     }
 
     #[test]

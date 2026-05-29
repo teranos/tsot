@@ -4,7 +4,7 @@
 
 use super::context::EventContext;
 use super::lua_api;
-use super::state::{GameState, InstanceId, PlayerId};
+use super::state::{GameState, InstanceId, PlayerId, Zone};
 use crate::card::{CardType, CostSource, EventName};
 use std::collections::BTreeSet;
 
@@ -136,56 +136,44 @@ impl GameState {
             });
         }
 
-        // All checks pass — apply mutations.
-        let pm = self.player_mut(player);
+        // All checks pass — apply mutations through journaled helpers.
 
         // MILL cost: top N of DECK → GRAVEYARD (P.11).
         for _ in 0..mill_needed {
-            let top = pm.deck.remove(0);
-            pm.graveyard.push(top);
+            let Some(top) = self.player(player).deck.first().cloned() else {
+                break;
+            };
+            let _ = self.move_card(&top, player, Zone::Deck, Zone::Graveyard);
         }
 
-        // GRAVEYARD cost (P.12): most-recent N → EXILE. Deterministic interpretation
-        // pending choice API; uses the back of the graveyard vec (newest-first).
+        // GRAVEYARD cost (P.12): most-recent N → EXILE. Deterministic
+        // interpretation pending choice API; uses the back of the graveyard.
         for _ in 0..graveyard_needed {
-            if let Some(gy_card) = pm.graveyard.pop() {
-                pm.exile.push(gy_card);
-            }
+            let Some(back) = self.player(player).graveyard.last().cloned() else {
+                break;
+            };
+            let _ = self.move_card(&back, player, Zone::Graveyard, Zone::Exile);
         }
 
-        // Remove the played card and HAND payments from hand.
-        let pos = pm.hand.iter().position(|x| x == instance).unwrap();
-        pm.hand.remove(pos);
-        for hid in &choices.hand_payment_ids {
-            let pos = pm.hand.iter().position(|x| x == hid).unwrap();
-            pm.hand.remove(pos);
-        }
-
-        // LUA Phase 1: on_play fires after cost is paid, before destination is set.
-        // The card is in no zone at this moment — the handler is the resolution.
+        // Route to destination zone based on type. on_play fires after the
+        // card and its payments have left hand and arrived at their final
+        // locations — handlers observe the post-resolution state.
         let mut ctx = ctx;
-        if let Some(c) = ctx.as_mut() {
-            lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
-        }
-
-        // Route to destination zone based on type.
         match card_kind {
             CardType::Creature => {
-                let pm = self.player_mut(player);
-                pm.board.push(instance.clone());
-
-                let inst_mut = self.card_pool.get_mut(instance).unwrap();
-                inst_mut.summoning_sick = true; // B.3
-                for hid in &choices.hand_payment_ids {
-                    inst_mut.attached.push(hid.clone());
+                // HAND payments leave hand and attach to the played card.
+                for hid in choices.hand_payment_ids.clone() {
+                    let _ = self.remove_from_zone(&hid, player, Zone::Hand);
+                    self.add_attached(instance, &hid);
+                    self.set_face_down(&hid, true);
                 }
+                // Played card → BOARD.
+                let _ = self.move_card(instance, player, Zone::Hand, Zone::Board);
+                self.set_summoning_sick(instance, true); // B.3
 
-                for hid in &choices.hand_payment_ids {
-                    if let Some(a) = self.card_pool.get_mut(hid) {
-                        a.face_down = true;
-                    }
+                if let Some(c) = ctx.as_mut() {
+                    lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
                 }
-
                 if let Some(c) = ctx.as_mut() {
                     lua_api::fire_self_only(
                         c.lua,
@@ -197,13 +185,15 @@ impl GameState {
                 }
             }
             CardType::Instant => {
-                // P.1: instants resolve and go to GRAVEYARD. HAND payments
-                // don't attach to anything (no board host) — they also go
-                // to GRAVEYARD as discarded cost cards.
-                let pm = self.player_mut(player);
-                pm.graveyard.push(instance.clone());
-                for hid in &choices.hand_payment_ids {
-                    pm.graveyard.push(hid.clone());
+                // P.1: instants resolve to GRAVEYARD. HAND payments follow
+                // (no host to attach to).
+                for hid in choices.hand_payment_ids.clone() {
+                    let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
+                }
+                let _ = self.move_card(instance, player, Zone::Hand, Zone::Graveyard);
+
+                if let Some(c) = ctx.as_mut() {
+                    lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
                 }
             }
             _ => unreachable!("validated above"),
@@ -218,6 +208,54 @@ mod tests {
     use super::*;
     use crate::card::CostComponent;
     use crate::game::test_helpers::*;
+
+    #[test]
+    fn play_subsystem_round_trips_through_journal() {
+        // Play a creature with HAND + MILL + GRAVEYARD cost components, then
+        // rollback. State should equal pre-play exactly.
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let creature = s.a.hand[0].clone();
+        let payment = s.a.hand[1].clone();
+        set_cost(
+            &mut s,
+            &creature,
+            vec![
+                CostComponent {
+                    amount: 1,
+                    source: CostSource::Hand,
+                    is_x: false,
+                },
+                CostComponent {
+                    amount: 2,
+                    source: CostSource::Mill,
+                    is_x: false,
+                },
+            ],
+        );
+
+        let snapshot = format!("{:?}", s);
+        s.journal = Some(crate::game::Journal::new());
+
+        s.play_card(
+            PlayerId::A,
+            &creature,
+            PlayChoices {
+                hand_payment_ids: vec![payment],
+            },
+            None,
+        )
+        .unwrap();
+
+        assert_ne!(snapshot, format!("{:?}", s));
+        let journal = s.journal.take().unwrap();
+        journal.rollback(&mut s);
+        assert!(s.journal.is_none());
+        assert_eq!(
+            snapshot,
+            format!("{:?}", s),
+            "play subsystem rollback should restore prior state"
+        );
+    }
 
     #[test]
     fn play_creature_with_no_cost_moves_to_board() {

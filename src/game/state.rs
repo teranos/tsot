@@ -261,6 +261,96 @@ impl GameState {
         }
     }
 
+    pub fn set_phase(&mut self, phase: Phase) {
+        let was = self.phase;
+        self.phase = phase;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::SetPhase { was });
+        }
+    }
+
+    pub fn set_turn(&mut self, turn: u32) {
+        let was = self.turn;
+        self.turn = turn;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::SetTurn { was });
+        }
+    }
+
+    pub fn set_active_player(&mut self, who: PlayerId) {
+        let was = self.active_player;
+        self.active_player = who;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::SetActivePlayer { was });
+        }
+    }
+
+    pub fn set_combat(&mut self, combat: Option<CombatState>) {
+        let was = self.combat.clone();
+        self.combat = combat;
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::SetCombatState { was });
+        }
+    }
+
+    /// Replace a card's status_effects vec wholesale, journaling the prior value.
+    pub fn set_status_effects(&mut self, iid: &InstanceId, effects: Vec<StatusEffect>) {
+        let Some(inst) = self.card_pool.get_mut(iid) else {
+            return;
+        };
+        let was = std::mem::replace(&mut inst.status_effects, effects);
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::SetStatusEffects {
+                iid: iid.clone(),
+                was,
+            });
+        }
+    }
+
+    /// Remove an iid from a player's zone without placing it elsewhere.
+    /// Returns the position it was at (for callers that want to follow up with
+    /// e.g. an `add_attached`). Returns None if the iid wasn't in that zone.
+    pub fn remove_from_zone(
+        &mut self,
+        iid: &InstanceId,
+        owner: PlayerId,
+        zone: Zone,
+    ) -> Option<usize> {
+        let p = self.player_mut(owner);
+        let zone_vec = match zone {
+            Zone::Board => &mut p.board,
+            Zone::Hand => &mut p.hand,
+            Zone::Deck => &mut p.deck,
+            Zone::Graveyard => &mut p.graveyard,
+            Zone::Exile => &mut p.exile,
+        };
+        let pos = zone_vec.iter().position(|x| x == iid)?;
+        zone_vec.remove(pos);
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::RemoveFromZone {
+                iid: iid.clone(),
+                owner,
+                zone,
+                was_pos: pos,
+            });
+        }
+        Some(pos)
+    }
+
+    /// Append an iid to host's attached vec, journaling the addition.
+    pub fn add_attached(&mut self, host: &InstanceId, attached: &InstanceId) {
+        let Some(inst) = self.card_pool.get_mut(host) else {
+            return;
+        };
+        inst.attached.push(attached.clone());
+        if let Some(j) = &mut self.journal {
+            j.push(super::JournalEntry::AddAttached {
+                host: host.clone(),
+                attached: attached.clone(),
+            });
+        }
+    }
+
     /// Engine helper: credit a `game.*` action invocation to the affected player.
     pub fn bump_action(&mut self, action: &'static str, who: PlayerId) {
         let entry = self.action_counts.entry(action).or_insert([0, 0]);

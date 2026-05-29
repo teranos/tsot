@@ -2,7 +2,7 @@
 //!
 //! Mirrors RULES.md sections U (turns) and B.10 (end-of-turn damage clear).
 
-use super::state::{GameState, InstanceId, Phase, StatusEffect};
+use super::state::{GameState, InstanceId, Phase, StatusEffect, Zone};
 
 impl GameState {
     /// Advance to the next phase, firing the entry action for the new phase.
@@ -21,12 +21,14 @@ impl GameState {
             Phase::End => {
                 // Transition into the next turn.
                 self.clear_all_damage();
-                self.active_player = self.active_player.opponent();
-                self.turn += 1;
+                let next_active = self.active_player.opponent();
+                self.set_active_player(next_active);
+                let new_turn = self.turn + 1;
+                self.set_turn(new_turn);
                 Phase::Untap
             }
         };
-        self.phase = next;
+        self.set_phase(next);
         self.enter_phase_action();
     }
 
@@ -49,25 +51,32 @@ impl GameState {
         let pid = self.active_player;
         let board_ids: Vec<InstanceId> = self.player(pid).board.clone();
         for iid in board_ids {
-            let Some(inst) = self.card_pool.get_mut(&iid) else {
-                continue;
-            };
-            let skip_pos = inst
-                .status_effects
-                .iter()
-                .position(|s| matches!(s, StatusEffect::SkipUntap(_)));
-            if let Some(pos) = skip_pos {
-                let StatusEffect::SkipUntap(n) = inst.status_effects[pos];
-                if n <= 1 {
-                    inst.status_effects.remove(pos);
-                } else {
-                    inst.status_effects[pos] = StatusEffect::SkipUntap(n - 1);
+            let (skip_pos, skip_n) = match self.card_pool.get(&iid) {
+                Some(inst) => {
+                    let pos = inst
+                        .status_effects
+                        .iter()
+                        .position(|s| matches!(s, StatusEffect::SkipUntap(_)));
+                    let n = pos.map(|p| match inst.status_effects[p] {
+                        StatusEffect::SkipUntap(n) => n,
+                    });
+                    (pos, n)
                 }
+                None => continue,
+            };
+            if let (Some(pos), Some(n)) = (skip_pos, skip_n) {
+                let mut new_effects = self.card_pool.get(&iid).unwrap().status_effects.clone();
+                if n <= 1 {
+                    new_effects.remove(pos);
+                } else {
+                    new_effects[pos] = StatusEffect::SkipUntap(n - 1);
+                }
+                self.set_status_effects(&iid, new_effects);
             } else {
-                inst.tapped = false;
+                self.set_tapped(&iid, false);
             }
             // B.3 sickness clears at the start of controller's turn.
-            inst.summoning_sick = false;
+            self.set_summoning_sick(&iid, false);
         }
     }
 
@@ -76,21 +85,15 @@ impl GameState {
     fn do_draw_step(&mut self) {
         let pid = self.active_player;
         if self.player(pid).deck.is_empty() {
-            self.winner = Some(pid.opponent());
+            self.set_winner(Some(pid.opponent()));
             return;
         }
-        let p = self.player_mut(pid);
-        let drawn = p.deck.remove(0);
-        p.hand.push(drawn);
+        let top = self.player(pid).deck[0].clone();
+        let _ = self.move_card(&top, pid, Zone::Deck, Zone::Hand);
     }
 
     /// U.10: at End phase, the active player discards down to a HAND size of 6.
     /// Discarded cards go to GRAVEYARD.
-    ///
-    /// The rule says the active player chooses which cards to discard. Until the
-    /// choice API lands (LUA Phase 2), this discards from the front of HAND
-    /// (oldest-held first). Replace the `drain(0..to_discard)` line with a
-    /// choice-driven selection when wiring `game.choose_card` for cleanup events.
     fn do_end_step(&mut self) {
         const MAX_HAND: usize = 6;
         let pid = self.active_player;
@@ -99,18 +102,20 @@ impl GameState {
             return;
         }
         let to_discard = hand_len - MAX_HAND;
-        let p = self.player_mut(pid);
-        let drained: Vec<InstanceId> = p.hand.drain(0..to_discard).collect();
-        p.graveyard.extend(drained);
         for _ in 0..to_discard {
+            let Some(front) = self.player(pid).hand.first().cloned() else {
+                break;
+            };
+            let _ = self.move_card(&front, pid, Zone::Hand, Zone::Graveyard);
             self.bump_action("discard", pid);
         }
     }
 
     /// B.10: end of turn clears all accumulated damage on creatures.
     fn clear_all_damage(&mut self) {
-        for inst in self.card_pool.values_mut() {
-            inst.damage = 0;
+        let iids: Vec<InstanceId> = self.card_pool.keys().cloned().collect();
+        for iid in &iids {
+            self.set_damage(iid, 0);
         }
     }
 }
@@ -190,6 +195,40 @@ mod tests {
         s.next_phase();
         assert_eq!(s.phase, phase_before);
         assert_eq!(s.turn, turn_before);
+    }
+
+    #[test]
+    fn turn_subsystem_round_trips_through_journal() {
+        // Open journal, run several phases including untap/draw/end/clear,
+        // rollback, assert state byte-identical.
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        // Place a creature on A's board with damage + skip_untap, so the
+        // untap step has meaningful mutations to capture.
+        let iid = s.a.hand[0].clone();
+        s.a.hand.remove(0);
+        s.a.board.push(iid.clone());
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.tapped = true;
+        inst.damage = 3;
+        inst.status_effects.push(StatusEffect::SkipUntap(2));
+
+        let snapshot = format!("{:?}", s);
+        s.journal = Some(crate::game::Journal::new());
+
+        // Advance through a full cycle: Untap → Draw → ... → End → Untap.
+        for _ in 0..6 {
+            s.next_phase();
+        }
+
+        assert_ne!(snapshot, format!("{:?}", s));
+        let journal = s.journal.take().unwrap();
+        journal.rollback(&mut s);
+        assert!(s.journal.is_none());
+        assert_eq!(
+            snapshot,
+            format!("{:?}", s),
+            "turn subsystem rollback should restore prior state"
+        );
     }
 
     #[test]

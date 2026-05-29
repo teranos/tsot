@@ -9,7 +9,9 @@
 //! through them. Other subsystems still mutate state directly — Sessions 2–3
 //! convert them.
 
-use super::state::{GameState, InstanceId, PlayerId, Zone};
+use super::state::{
+    CombatState, GameState, InstanceId, Phase, PlayerId, StatusEffect, Zone,
+};
 use crate::card::EventName;
 
 /// One mutation entry, carrying the data needed to undo it.
@@ -53,6 +55,41 @@ pub enum JournalEntry {
     },
     SetWinner {
         was: Option<PlayerId>,
+    },
+    SetPhase {
+        was: Phase,
+    },
+    SetTurn {
+        was: u32,
+    },
+    SetActivePlayer {
+        was: PlayerId,
+    },
+    /// Coarse: replaces the entire combat state. Sufficient for declare /
+    /// confirm transitions; finer-grained "add blocker to attack" entries
+    /// could be added if needed.
+    SetCombatState {
+        was: Option<CombatState>,
+    },
+    /// Coarse: replaces the full status_effects vec on a card. Inserts and
+    /// removes are rare enough that this is simpler than fine-grained.
+    SetStatusEffects {
+        iid: InstanceId,
+        was: Vec<StatusEffect>,
+    },
+    /// Appended an iid to `host.attached`. Inverse: pop last from
+    /// `host.attached` (must match `attached`).
+    AddAttached {
+        host: InstanceId,
+        attached: InstanceId,
+    },
+    /// Removed an iid from a player's zone (without placing it elsewhere).
+    /// Inverse: insert iid back at `was_pos` in the zone.
+    RemoveFromZone {
+        iid: InstanceId,
+        owner: PlayerId,
+        zone: Zone,
+        was_pos: usize,
     },
 }
 
@@ -175,6 +212,43 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         }
         JournalEntry::SetWinner { was } => {
             state.winner = was;
+        }
+        JournalEntry::SetPhase { was } => {
+            state.phase = was;
+        }
+        JournalEntry::SetTurn { was } => {
+            state.turn = was;
+        }
+        JournalEntry::SetActivePlayer { was } => {
+            state.active_player = was;
+        }
+        JournalEntry::SetCombatState { was } => {
+            state.combat = was;
+        }
+        JournalEntry::SetStatusEffects { iid, was } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.status_effects = was;
+            }
+        }
+        JournalEntry::AddAttached { host, attached } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                if let Some(last) = inst.attached.last() {
+                    debug_assert_eq!(
+                        *last, attached,
+                        "add-attached inverse: iid mismatch at tail"
+                    );
+                    inst.attached.pop();
+                }
+            }
+        }
+        JournalEntry::RemoveFromZone {
+            iid,
+            owner,
+            zone,
+            was_pos,
+        } => {
+            let p = state.player_mut(owner);
+            zone_mut(p, zone).insert(was_pos, iid);
         }
     }
 }

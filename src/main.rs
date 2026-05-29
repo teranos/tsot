@@ -7,10 +7,20 @@ use tsot::card::{Card, CardRegistry, CardType, CostSource, EventName};
 use tsot::choice::RandomOracle;
 use tsot::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
-/// Master seed for the sim's RNG. Deterministic per-cargo-run; change to
-/// sample a different distribution of games. Exposed via env var
-/// `TSOT_SEED` if set, otherwise this default.
-const DEFAULT_SEED: u64 = 0x7507_5707_7507_5707;
+/// Master seed for the sim's RNG. Default: fresh per run (sampled from
+/// system entropy via `StdRng::from_entropy`) so normal `cargo run`
+/// shows varied games. Override via env var `TSOT_SEED=<integer>` for
+/// reproducible runs (replay, regression debugging, before/after card
+/// comparisons).
+fn pick_seed() -> u64 {
+    std::env::var("TSOT_SEED")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or_else(|| {
+            use rand::RngCore;
+            StdRng::from_entropy().next_u64()
+        })
+}
 
 const ITERATIONS: usize = 1000;
 
@@ -72,10 +82,8 @@ fn main() -> mlua::Result<()> {
         ITERATIONS
     );
 
-    let seed = std::env::var("TSOT_SEED")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_SEED);
+    let seed = pick_seed();
+    println!("seed: {seed}");
     let mut rng = StdRng::seed_from_u64(seed);
     let mut all: Vec<GameStats> = Vec::with_capacity(ITERATIONS);
     let mut last_log: Vec<String> = Vec::new();
