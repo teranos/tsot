@@ -1,17 +1,39 @@
-//! Replay file format and dump/load helpers.
+//! Replay file format and save/load helpers.
 //!
-//! A `ReplayFile` captures everything needed to deterministically reconstruct
-//! a single game: the master seed, the initial deck composition (card ids per
-//! player), and the journal of every committed mutation from game start to
-//! game end.
+//! Two related artifacts:
 //!
-//! To replay: rebuild initial `GameState` from the decks (via `CardRegistry`),
-//! then call `journal.replay_forward(state)`. The result is byte-identical to
-//! the original game's final state.
+//! - `ReplayFile`: seed + deck composition + full journal. Reconstructs a
+//!   game from its initial state by applying the journal forward.
+//! - `SaveFile`: serialized `GameState` (current snapshot) + optional
+//!   replay journal so far. Resumes from any point mid-game.
+//!
+//! Both use serde + JSON. `Card.handlers` (mlua::Function values) are not
+//! serializable — they're skipped at serialization time and re-bound from a
+//! live `CardRegistry` via `rebind_handlers` after deserialization.
 
 use crate::card::CardRegistry;
 use crate::game::{GameState, Journal};
 use serde::{Deserialize, Serialize};
+
+/// Walk a deserialized `GameState`'s `card_pool` and re-attach Lua handlers
+/// by looking up each card's id in the live `CardRegistry`. Required after
+/// loading from JSON: serialized cards have empty handler maps.
+pub fn rebind_handlers(state: &mut GameState, registry: &CardRegistry) -> Result<(), String> {
+    for (iid, inst) in &mut state.card_pool {
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == inst.card.id)
+            .ok_or_else(|| {
+                format!(
+                    "rebind_handlers: card id {:?} (on instance {iid}) not in registry",
+                    inst.card.id
+                )
+            })?;
+        inst.card.handlers = template.handlers.clone();
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayFile {
@@ -57,5 +79,38 @@ impl ReplayFile {
                     .ok_or_else(|| format!("ReplayFile: card id not in registry: {id}"))
             })
             .collect()
+    }
+}
+
+/// Mid-game snapshot. Serializes the entire current `GameState` plus any
+/// open replay journal so far. Distinct from `ReplayFile`, which carries
+/// only the initial setup + full mutation log.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveFile {
+    pub master_seed: u64,
+    pub state: GameState,
+}
+
+impl SaveFile {
+    pub fn from_state(state: &GameState, master_seed: u64) -> Self {
+        Self {
+            master_seed,
+            state: state.clone(),
+        }
+    }
+
+    pub fn to_json(&self) -> serde_json::Result<String> {
+        serde_json::to_string_pretty(self)
+    }
+
+    pub fn from_json(s: &str) -> serde_json::Result<Self> {
+        serde_json::from_str(s)
+    }
+
+    /// Consume the save and rebuild a live `GameState` with handlers re-bound
+    /// against the given registry.
+    pub fn restore(mut self, registry: &CardRegistry) -> Result<GameState, String> {
+        rebind_handlers(&mut self.state, registry)?;
+        Ok(self.state)
     }
 }

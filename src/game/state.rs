@@ -45,7 +45,7 @@ pub enum Zone {
 pub type InstanceId = String;
 
 /// A specific copy of a card in the game.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CardInstance {
     pub instance_id: InstanceId,
     pub card: Card,
@@ -84,7 +84,7 @@ impl CardInstance {
 }
 
 /// Continuous modifiers applied to a card's effective state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Modifier {
     /// e.g., +1/+1
     StatBoost { x: i32, y: i32 },
@@ -103,7 +103,7 @@ pub enum StatusEffect {
 
 /// Per-player state. Zones reference instances by ID; the canonical
 /// CardInstance lives in GameState.card_pool.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlayerState {
     pub board: Vec<InstanceId>,
     pub hand: Vec<InstanceId>,
@@ -127,7 +127,7 @@ pub struct AttackDecl {
 }
 
 /// The full game state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GameState {
     pub a: PlayerState,
     pub b: PlayerState,

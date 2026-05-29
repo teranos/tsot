@@ -3,6 +3,18 @@
 > Multi-session architectural plan for journal-based mutation tracking.
 > Foundation for preview-for-AI, replay, save/load, undo, multiplayer rollback.
 
+## Status (2026-05-29)
+
+- **Sessions 1–4: complete.** Mutation logging across every subsystem
+  (turn, combat, play, lua_api), in-place preview-and-rollback in the sim,
+  suicide-play skipping, future-simulation telemetry surfaced.
+- **Session 5, steps 1–4: complete.** In-memory replay capture, file dump
+  via `TSOT_REPLAY_OUT=<path>`, round-trip JSON serialization with
+  forward-apply, and mid-game save/load with Lua-handler rebinding. Tests
+  in `tests/replay.rs` and `tests/save_load.rs` cover both round-trips.
+- **Session 5, step 5 (undo):** deferred — gated on interactive UI.
+- **Session 6+ (AI search, multiplayer rollback):** deferred.
+
 ---
 
 ## Why this exists
@@ -173,39 +185,78 @@ structures (Box<JournalEntry> chains, etc.).
 
 ---
 
-## Session 5+ — replay, save/load, undo (separate arcs)
+## Session 5 — replay, save/load, undo (separate arcs)
 
-These are independent landings on top of the journal infrastructure
-that Sessions 1–3 built. Each is its own session(s).
+These are independent landings on top of the journal infrastructure that
+Sessions 1–3 built. Sub-step labels match the implementation order.
 
-**Replay capture:**
-- Game opens a journal at start, never closes
-- At game end, journal contains the entire sequence of mutations
-- Serialize to JSON / protobuf / etc.
-- Replay = restart from initial state, apply journal forward
-- Useful for: shared game replays, bug reports ("here's the seed +
-  journal"), tournament adjudication
+### Step 1 — in-memory replay capture (DONE)
 
-**Save / load:**
-- Save = serialize current `GameState` + open `Journal` (so far)
-- Load = deserialize, resume
-- Engine doesn't need to know about it — relies on `Serialize`/
-  `Deserialize` on all types
+- `GameState.replay_journal: Option<Journal>` opened at game start
+- Every committed mutation records into it (preview mutations stay
+  isolated in the per-action `journal` slot)
+- At game end, journal contains the full mutation sequence
+- Sim reports avg / min / max entries per game
 
-**Undo:**
-- During interactive play, retain the journal
-- Undo button = `rollback` last N entries (chosen by "since last
-  user input boundary")
-- Card author note: handlers that have side effects outside `GameState`
-  (Lua VM mutation, network calls if any) can't be undone
+### Step 2 — file dump (DONE)
 
-**AI search trees (much later):**
+- `ReplayFile { seed, deck_a_card_ids, deck_b_card_ids, journal }` in
+  `src/replay.rs`
+- `JournalEntry`'s `Set*` variants carry both `was` and `now` so
+  `apply_forward` and `apply_inverse` are both defined
+- `Serialize` / `Deserialize` derives on `PlayerId`, `Phase`, `Zone`,
+  `EventName`, `StatusEffect`, `CombatState`, `AttackDecl`,
+  `JournalEntry`, `Journal`
+- `action_counts: BTreeMap<String, [u32; 2]>` (was `&'static str` keys;
+  changed for serializability — any action name now works)
+- `TSOT_REPLAY_OUT=<path>` env var dumps the last game's `ReplayFile` to
+  pretty JSON
+
+### Step 3 — load + replay (DONE)
+
+- `ReplayFile::from_json` deserializes
+- `rebuild_initial_state(&CardRegistry)` rebuilds initial `GameState`
+  from the recorded deck ids
+- `Journal::replay_forward(&mut state)` applies entries in order
+- `tests/replay.rs` round-trip: capture → JSON → deserialize → rebuild
+  → forward apply → final state byte-identical to original
+
+### Step 4 — save/load (DONE)
+
+Distinct from replay: save/load resumes mid-game by serializing the
+**current state**, not the journal-from-start.
+
+What landed:
+- `Serialize` / `Deserialize` on `Card`, `CardInstance`, `PlayerState`,
+  `GameState`, `Modifier`, `CostComponent`, `CostSource`, `CardType`,
+  `Stats`
+- `#[serde(skip, default)]` on `Card.handlers` — `mlua::Function` isn't
+  serializable. `rebind_handlers(state, registry)` in `src/replay.rs`
+  walks `card_pool` after deserialization and re-attaches handlers from
+  a live registry
+- `SaveFile { master_seed, state }` with `from_state`/`to_json`/
+  `from_json`/`restore`
+- `tests/save_load.rs` covers the round-trip (save → JSON →
+  deserialize → restore → continue playing matches uninterrupted
+  control) and the handler rebind (handlers execute after restore)
+
+### Step 5 — undo (gated)
+
+- Add `Journal::rollback_to(checkpoint: usize)` for partial rollback
+- Define "user input boundary" = where to roll back to (per turn / per
+  decision)
+- Needs interactive UI / CLI to be useful — not reachable until
+  someone's actually playing tsot interactively
+
+## Session 6+ (later)
+
+**AI search trees:**
 - Branch the journal at decision points
 - Explore down each branch
 - Rollback when returning from a branch
 - Foundation for MCTS / minimax over tsot game states
 
-**Multiplayer rollback (much later):**
+**Multiplayer rollback:**
 - Each client runs the journal forward in lockstep
 - Diverged inputs trigger rollback to last common frame, replay forward
 - Foundation for online play with low-latency input

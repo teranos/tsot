@@ -49,7 +49,7 @@ impl CardRegistry {
 // doesn't branch on color — it's identity/flavor data passed through to
 // handlers via `game.card(iid).colors`.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CardType {
     Unspecified,
     Creature,
@@ -59,7 +59,7 @@ pub enum CardType {
     Environment,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CostSource {
     Hand,
     Mill,
@@ -68,14 +68,14 @@ pub enum CostSource {
     SelfExile,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CostComponent {
     pub amount: i32,
     pub source: CostSource,
     pub is_x: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Stats {
     pub x: i32,
     pub y: i32,
@@ -120,7 +120,7 @@ impl EventName {
     ];
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Card {
     pub id: String,
     pub name: String,
@@ -133,7 +133,10 @@ pub struct Card {
     pub stats: Option<Stats>,
     /// Lua event handlers loaded from `on_*` fields. Empty for data-only cards.
     /// Handles are refcounted into the owning `CardRegistry`'s VM and must not
-    /// outlive it.
+    /// outlive it. **Not serialized** — on load, the deserialized `Card` has
+    /// an empty handler map; callers must rebind handlers from a live
+    /// `CardRegistry` (see `replay::rebind_handlers`).
+    #[serde(skip, default)]
     pub handlers: BTreeMap<EventName, Function>,
 }
 
