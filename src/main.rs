@@ -1,7 +1,8 @@
 use rand::seq::SliceRandom;
 use rand::Rng;
+use std::collections::HashMap;
 use std::path::Path;
-use tsot::card::{Card, CardRegistry, CardType};
+use tsot::card::{Card, CardRegistry, CardType, EventName};
 use tsot::game::{GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 const ITERATIONS: usize = 1000;
@@ -22,8 +23,7 @@ struct GameStats {
     b_final_board: u32,
     a_final_gy: u32,
     b_final_gy: u32,
-    a_fires: u32,
-    b_fires: u32,
+    event_fires: HashMap<EventName, [u32; 2]>,
 }
 
 fn main() -> mlua::Result<()> {
@@ -103,8 +103,7 @@ fn run_game(
         b_final_board: 0,
         a_final_gy: 0,
         b_final_gy: 0,
-        a_fires: 0,
-        b_fires: 0,
+        event_fires: HashMap::new(),
     };
 
     let mut safety = 1000;
@@ -196,8 +195,7 @@ fn run_game(
     stats.b_final_board = state.b.board.len() as u32;
     stats.a_final_gy = state.a.graveyard.len() as u32;
     stats.b_final_gy = state.b.graveyard.len() as u32;
-    stats.a_fires = state.triggered_fires_a;
-    stats.b_fires = state.triggered_fires_b;
+    stats.event_fires = state.event_fires.clone();
     stats
 }
 
@@ -338,9 +336,19 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     println!("  final graveyard     {:>6.1}      {:>6.1}",
         avg(all, |s| s.a_final_gy as f64),
         avg(all, |s| s.b_final_gy as f64));
-    println!("  triggered fires (A.1){:>5.1}      {:>6.1}",
-        avg(all, |s| s.a_fires as f64),
-        avg(all, |s| s.b_fires as f64));
+
+    println!();
+    println!("Event firing breakdown (per-game averages, A.1 triggered abilities):");
+    println!("                          A         B    wired");
+    for ev in EventName::ALL {
+        let a_avg = avg(all, |s| s.event_fires.get(&ev).map(|v| v[0]).unwrap_or(0) as f64);
+        let b_avg = avg(all, |s| s.event_fires.get(&ev).map(|v| v[1]).unwrap_or(0) as f64);
+        let any_fired = all
+            .iter()
+            .any(|s| s.event_fires.get(&ev).is_some_and(|v| v[0] + v[1] > 0));
+        let marker = if any_fired { "yes" } else { " no" };
+        println!("  {:20} {:>6.2}    {:>6.2}    {}", ev.lua_key(), a_avg, b_avg, marker);
+    }
 
     println!();
     println!("Pending mechanics (zero today; nonzero once each engine piece lands):");

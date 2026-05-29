@@ -197,11 +197,8 @@ macro_rules! build_game_table {
     }};
 }
 
-fn credit_fire(state: &mut GameState, owner: PlayerId) {
-    match owner {
-        PlayerId::A => state.triggered_fires_a += 1,
-        PlayerId::B => state.triggered_fires_b += 1,
-    }
+fn credit_fire(state: &mut GameState, event: EventName, owner: PlayerId) {
+    state.bump_event_fire(event, owner);
 }
 
 // --- Fire helpers per event. -------------------------------------------------
@@ -251,7 +248,7 @@ pub(crate) fn fire_on_blocked_by(
 
     let _ = state_cell;
     match result {
-        Ok(()) => credit_fire(state, attacker_owner),
+        Ok(()) => credit_fire(state, EventName::OnBlockedBy, attacker_owner),
         Err(e) => eprintln!("[lua] on_blocked_by handler for {card_id} failed: {e}"),
     }
 }
@@ -294,7 +291,7 @@ pub(crate) fn fire_on_die(lua: &Lua, state: &mut GameState, dying: &InstanceId) 
 
     let _ = state_cell;
     match result {
-        Ok(()) => credit_fire(state, owner),
+        Ok(()) => credit_fire(state, EventName::OnDie, owner),
         Err(e) => eprintln!("[lua] on_die handler for {card_id} failed: {e}"),
     }
 }

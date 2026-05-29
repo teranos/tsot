@@ -2,7 +2,7 @@
 //!
 //! Mirrors RULES.md sections F, U, L, S, Z, T, C.
 
-use crate::card::Card;
+use crate::card::{Card, EventName};
 use std::collections::HashMap;
 
 /// F.2: exactly two players.
@@ -137,10 +137,9 @@ pub struct GameState {
     pub phase: Phase,
     pub winner: Option<PlayerId>,
     pub combat: Option<CombatState>,
-    /// Engine metric: count of Lua event handlers that fired successfully
-    /// this game, credited to the controller of the source card. Diagnostic.
-    pub triggered_fires_a: u32,
-    pub triggered_fires_b: u32,
+    /// Engine metric: per-event handler-fire counts, credited to the owner of
+    /// the source card. `[u32; 2]` indexed by player (0 = A, 1 = B). Diagnostic.
+    pub event_fires: HashMap<EventName, [u32; 2]>,
 }
 
 impl GameState {
@@ -162,9 +161,27 @@ impl GameState {
             phase: Phase::Untap,
             winner: None,
             combat: None,
-            triggered_fires_a: 0,
-            triggered_fires_b: 0,
+            event_fires: HashMap::new(),
         }
+    }
+
+    /// Engine helper: credit a successful handler fire to `owner` under `event`.
+    pub fn bump_event_fire(&mut self, event: EventName, owner: PlayerId) {
+        let entry = self.event_fires.entry(event).or_insert([0, 0]);
+        let idx = match owner {
+            PlayerId::A => 0,
+            PlayerId::B => 1,
+        };
+        entry[idx] += 1;
+    }
+
+    /// Convenience: total fires across all events for a given player.
+    pub fn total_fires(&self, who: PlayerId) -> u32 {
+        let idx = match who {
+            PlayerId::A => 0,
+            PlayerId::B => 1,
+        };
+        self.event_fires.values().map(|v| v[idx]).sum()
     }
 
     fn init_player(

@@ -695,8 +695,9 @@ mod tests {
 
         assert_eq!(s.a.hand.len(), a_hand_before + 1);
         assert_eq!(s.a.deck.len(), a_deck_before - 1);
-        assert_eq!(s.triggered_fires_a, 1);
-        assert_eq!(s.triggered_fires_b, 0);
+        assert_eq!(s.total_fires(PlayerId::A), 1);
+        assert_eq!(s.total_fires(PlayerId::B), 0);
+        assert_eq!(s.event_fires[&crate::card::EventName::OnBlockedBy], [1, 0]);
     }
 
     #[test]
@@ -754,7 +755,8 @@ mod tests {
             .attached
             .contains(&attached_iid));
         assert!(!s.card_pool.get(&attached_iid).unwrap().face_down);
-        assert_eq!(s.triggered_fires_a, 1);
+        assert_eq!(s.total_fires(PlayerId::A), 1);
+        assert_eq!(s.event_fires[&crate::card::EventName::OnDie], [1, 0]);
     }
 
     #[test]
