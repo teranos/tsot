@@ -163,7 +163,7 @@ fn run_game(
                     }
                 }
             }
-            let outcome = state.confirm_blocks().unwrap();
+            let outcome = state.confirm_blocks(Some(lua)).unwrap();
             bump_attacks(&mut stats, active, declared_atk_count);
             bump_milled(&mut stats, defender, outcome.defender_milled_to_exile as u32);
             for death in &outcome.deaths {

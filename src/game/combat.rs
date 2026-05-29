@@ -242,7 +242,10 @@ impl GameState {
     }
 
     /// Finalize blockers and resolve combat: damage, deaths, B.2 mill.
-    pub fn confirm_blocks(&mut self) -> Result<CombatOutcome, CombatError> {
+    ///
+    /// `lua` is the long-lived VM from `CardRegistry`. When `Some`, dying
+    /// creatures' `on_die` handlers fire. When `None`, handlers are skipped.
+    pub fn confirm_blocks(&mut self, lua: Option<&Lua>) -> Result<CombatOutcome, CombatError> {
         if self.phase != Phase::Combat {
             return Err(CombatError::NotCombatPhase);
         }
@@ -253,10 +256,10 @@ impl GameState {
                 return Err(CombatError::NotAwaitingBlockers);
             }
         };
-        Ok(self.resolve_combat(attacks))
+        Ok(self.resolve_combat(attacks, lua))
     }
 
-    fn resolve_combat(&mut self, attacks: Vec<AttackDecl>) -> CombatOutcome {
+    fn resolve_combat(&mut self, attacks: Vec<AttackDecl>, lua: Option<&Lua>) -> CombatOutcome {
         let mut outcome = CombatOutcome::default();
         let defender = self.active_player.opponent();
 
@@ -314,10 +317,15 @@ impl GameState {
                 .unwrap_or(self.active_player);
             let _ = self.move_card(iid, owner, Zone::Board, Zone::Graveyard);
             outcome.deaths.push(iid.clone());
-            // TODO(events): fire "when this creature dies" triggers per A.1.
-            // E.g., mesopelagic-fish, flesh-eating-plant, trustworthy-lender, attach-shuffler.
-            // TODO(types): P.8 — when a card with attached cards moves to GRAVEYARD, those
-            // attached cards must move to EXILE. Currently dropped on the floor.
+            // LUA Phase 1: fire on_die after the Board → Graveyard move so the
+            // handler observes the post-death zone state. Handlers may return
+            // attached cards via game.move; P.8 (auto-exile of leftover
+            // attached) is still TODO and will run after handlers when wired.
+            if let Some(lua) = lua {
+                lua_api::fire_on_die(lua, self, iid);
+            }
+            // TODO(types): P.8 — when a card with attached cards moves to GRAVEYARD,
+            // any attached cards still present must move to EXILE.
         }
         outcome
     }
@@ -363,7 +371,7 @@ mod tests {
         let defender_exile_before = s.b.exile.len();
         s.declare_attacker(&atk).unwrap();
         s.confirm_attacks().unwrap();
-        let outcome = s.confirm_blocks().unwrap();
+        let outcome = s.confirm_blocks(None).unwrap();
         // deck_of(...) makes 1/1 cards, so attacker_x = 1.
         assert_eq!(outcome.defender_milled_to_exile, 1);
         assert_eq!(s.b.deck.len(), defender_deck_before - 1);
@@ -384,7 +392,7 @@ mod tests {
         s.declare_attacker(&atk).unwrap();
         s.confirm_attacks().unwrap();
         s.declare_blocker(&blk, &atk, None).unwrap();
-        let outcome = s.confirm_blocks().unwrap();
+        let outcome = s.confirm_blocks(None).unwrap();
         // Both are 1/1 — each deals 1 to other, both reach damage >= y → die.
         assert_eq!(outcome.defender_milled_to_exile, 0);
         assert!(outcome.deaths.contains(&atk));
@@ -692,6 +700,64 @@ mod tests {
     }
 
     #[test]
+    fn trustworthy_lender_on_die_returns_attached_to_hand() {
+        use crate::card::CardRegistry;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let lender = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "trustworthy-lender")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let lender_iid = s.a.hand[0].clone();
+        let attached_iid = s.a.hand[1].clone();
+        let killer_iid = s.b.hand[0].clone();
+
+        // Swap lender's card data in (keep stats so 1/1 vs 1/1 is mutual kill).
+        {
+            let inst = s.card_pool.get_mut(&lender_iid).unwrap();
+            inst.card.handlers = lender.handlers.clone();
+            inst.card.id = lender.id.clone();
+        }
+
+        put_on_board(&mut s, PlayerId::A, &lender_iid);
+        put_on_board(&mut s, PlayerId::B, &killer_iid);
+        // Attach the payment to lender (replicates what play_card would do).
+        s.a.hand.retain(|x| x != &attached_iid);
+        s.card_pool
+            .get_mut(&lender_iid)
+            .unwrap()
+            .attached
+            .push(attached_iid.clone());
+        s.card_pool.get_mut(&attached_iid).unwrap().face_down = true;
+
+        add_ability(&mut s, &lender_iid, "haste");
+        enter_combat(&mut s);
+
+        s.declare_attacker(&lender_iid).unwrap();
+        s.confirm_attacks().unwrap();
+        s.declare_blocker(&killer_iid, &lender_iid, None).unwrap();
+        let outcome = s.confirm_blocks(Some(registry.lua())).unwrap();
+
+        assert!(outcome.deaths.contains(&lender_iid));
+        assert!(s.a.graveyard.contains(&lender_iid));
+
+        // Handler returned attached to A's hand and flipped it face-up.
+        assert!(s.a.hand.contains(&attached_iid));
+        assert!(!s
+            .card_pool
+            .get(&lender_iid)
+            .unwrap()
+            .attached
+            .contains(&attached_iid));
+        assert!(!s.card_pool.get(&attached_iid).unwrap().face_down);
+        assert_eq!(s.triggered_fires_a, 1);
+    }
+
+    #[test]
     fn unblocked_attack_can_cause_deckout_win() {
         // Defender has only 1 card left in deck; 1-power attack mills it → defender loses.
         let mut s = GameState::new(deck_of(50, "a"), deck_of(6, "b"));
@@ -701,7 +767,7 @@ mod tests {
         enter_combat(&mut s);
         s.declare_attacker(&atk).unwrap();
         s.confirm_attacks().unwrap();
-        let outcome = s.confirm_blocks().unwrap();
+        let outcome = s.confirm_blocks(None).unwrap();
         assert_eq!(outcome.defender_milled_to_exile, 1);
         assert_eq!(s.winner, Some(PlayerId::A));
     }
