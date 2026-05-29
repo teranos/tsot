@@ -713,6 +713,40 @@ mod tests {
     }
 
     #[test]
+    fn thorn_beetle_on_block_damages_attacker() {
+        use crate::card::CardRegistry;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let beetle = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "thorn-beetle")
+            .unwrap()
+            .clone();
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let atk = s.a.hand[0].clone();
+        let blk = s.b.hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&blk).unwrap();
+            inst.card.handlers = beetle.handlers.clone();
+            inst.card.id = beetle.id.clone();
+        }
+        put_on_board(&mut s, PlayerId::A, &atk);
+        put_on_board(&mut s, PlayerId::B, &blk);
+        add_ability(&mut s, &atk, "haste");
+        enter_combat(&mut s);
+
+        s.declare_attacker(&atk, None).unwrap();
+        s.confirm_attacks().unwrap();
+        s.declare_blocker(&blk, &atk, Some(registry.lua())).unwrap();
+
+        // Handler pinged the attacker for 1.
+        assert_eq!(s.card_pool.get(&atk).unwrap().damage, 1);
+        assert_eq!(s.event_fires[&crate::card::EventName::OnBlock], [0, 1]);
+    }
+
+    #[test]
     fn on_blocked_by_handler_fires_when_block_declared() {
         use crate::card::CardRegistry;
         use std::fs;
