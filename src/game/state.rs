@@ -144,11 +144,15 @@ pub struct GameState {
     /// handler. Keyed by short action name ("draw", "mill", "damage", "move").
     /// Player attribution depends on the action — see `bump_action` callers.
     pub action_counts: BTreeMap<&'static str, [u32; 2]>,
-    /// Optional mutation journal. `None` = no recording (zero overhead path
-    /// for production sim). `Some(Journal::new())` opens a recording session
-    /// — every mutation through the journaled helpers below logs an entry.
-    /// See JOURNAL.md for the multi-session plan.
+    /// Optional per-action mutation journal. `None` = no recording. Used for
+    /// preview-and-rollback (sim's "would this play kill me?" check). When
+    /// `Some`, every mutation pushes here instead of `replay_journal`.
     pub journal: Option<super::Journal>,
+    /// Optional game-long mutation journal. Opened at game start by callers
+    /// who want a complete replay. Helpers push here only when `journal` is
+    /// `None` (so committed previews are merged in via `extend_from` and
+    /// rolled-back ones leave it untouched).
+    pub replay_journal: Option<super::Journal>,
 }
 
 impl GameState {
@@ -173,6 +177,19 @@ impl GameState {
             event_fires: BTreeMap::new(),
             action_counts: BTreeMap::new(),
             journal: None,
+            replay_journal: None,
+        }
+    }
+
+    /// Internal: returns whichever journal should receive the next mutation.
+    /// Preview journal wins if open (so previews can be cleanly rolled back
+    /// without polluting the replay journal). Falls back to replay journal,
+    /// which accumulates only committed mutations.
+    pub(crate) fn active_journal(&mut self) -> Option<&mut super::Journal> {
+        if self.journal.is_some() {
+            self.journal.as_mut()
+        } else {
+            self.replay_journal.as_mut()
         }
     }
 
@@ -184,7 +201,7 @@ impl GameState {
             PlayerId::B => 1,
         };
         entry[idx] += 1;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::BumpEventFire {
                 event,
                 player: owner,
@@ -199,7 +216,7 @@ impl GameState {
         };
         let was = inst.tapped;
         inst.tapped = tapped;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetTapped {
                 iid: iid.clone(),
                 was,
@@ -214,7 +231,7 @@ impl GameState {
         };
         let was = inst.damage;
         inst.damage = damage;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetDamage {
                 iid: iid.clone(),
                 was,
@@ -229,7 +246,7 @@ impl GameState {
         };
         let was = inst.face_down;
         inst.face_down = face_down;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetFaceDown {
                 iid: iid.clone(),
                 was,
@@ -244,7 +261,7 @@ impl GameState {
         };
         let was = inst.summoning_sick;
         inst.summoning_sick = summoning_sick;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetSummoningSick {
                 iid: iid.clone(),
                 was,
@@ -256,7 +273,7 @@ impl GameState {
     pub fn set_winner(&mut self, winner: Option<PlayerId>) {
         let was = self.winner;
         self.winner = winner;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetWinner { was });
         }
     }
@@ -264,7 +281,7 @@ impl GameState {
     pub fn set_phase(&mut self, phase: Phase) {
         let was = self.phase;
         self.phase = phase;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetPhase { was });
         }
     }
@@ -272,7 +289,7 @@ impl GameState {
     pub fn set_turn(&mut self, turn: u32) {
         let was = self.turn;
         self.turn = turn;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetTurn { was });
         }
     }
@@ -280,7 +297,7 @@ impl GameState {
     pub fn set_active_player(&mut self, who: PlayerId) {
         let was = self.active_player;
         self.active_player = who;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetActivePlayer { was });
         }
     }
@@ -288,7 +305,7 @@ impl GameState {
     pub fn set_combat(&mut self, combat: Option<CombatState>) {
         let was = self.combat.clone();
         self.combat = combat;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetCombatState { was });
         }
     }
@@ -299,7 +316,7 @@ impl GameState {
             return;
         };
         let was = std::mem::replace(&mut inst.status_effects, effects);
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetStatusEffects {
                 iid: iid.clone(),
                 was,
@@ -326,7 +343,7 @@ impl GameState {
         };
         let pos = zone_vec.iter().position(|x| x == iid)?;
         zone_vec.remove(pos);
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::RemoveFromZone {
                 iid: iid.clone(),
                 owner,
@@ -343,7 +360,7 @@ impl GameState {
             return;
         };
         inst.attached.push(attached.clone());
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::AddAttached {
                 host: host.clone(),
                 attached: attached.clone(),
@@ -364,7 +381,7 @@ impl GameState {
             Zone::Exile => &mut p.exile,
         };
         zone_vec.push(iid.clone());
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::AddToZone {
                 iid: iid.clone(),
                 owner,
@@ -383,7 +400,7 @@ impl GameState {
             return false;
         };
         inst.attached.remove(pos);
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::RemoveAttached {
                 host: host.clone(),
                 attached: attached.clone(),
@@ -401,7 +418,7 @@ impl GameState {
             PlayerId::B => 1,
         };
         entry[idx] += 1;
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::BumpAction {
                 action,
                 player: who,

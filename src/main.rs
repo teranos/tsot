@@ -47,6 +47,9 @@ struct GameStats {
     b_preview_rollbacks: u32,
     a_preview_journal_size_total: u64,
     b_preview_journal_size_total: u64,
+    // Game-long replay journal: total mutations captured across all
+    // committed plays + engine-driven mutations (turn flow, combat, etc.).
+    replay_journal_entries: u64,
     event_fires: BTreeMap<EventName, [u32; 2]>,
     action_counts: BTreeMap<&'static str, [u32; 2]>,
 }
@@ -139,6 +142,11 @@ fn run_game(
     // from one seed.
     let oracle_seed: u64 = rng.gen();
     let mut oracle = RandomOracle::new(StdRng::seed_from_u64(oracle_seed));
+
+    // Open a game-long replay journal. Every committed mutation will be
+    // recorded into this for the duration of the game; previewed-and-skipped
+    // mutations stay isolated in the per-action `state.journal`.
+    state.replay_journal = Some(tsot::game::Journal::new());
     let mut stats = GameStats {
         turns: 0,
         winner: PlayerId::A,
@@ -160,6 +168,7 @@ fn run_game(
         b_preview_rollbacks: 0,
         a_preview_journal_size_total: 0,
         b_preview_journal_size_total: 0,
+        replay_journal_entries: 0,
         event_fires: BTreeMap::new(),
         action_counts: BTreeMap::new(),
     };
@@ -233,7 +242,13 @@ fn run_game(
             bump_preview_attempt(&mut stats, active, preview_size);
 
             if result.is_ok() && !suicide {
-                state.journal = None;
+                // Commit: transfer preview entries into the replay journal,
+                // then drop the preview.
+                if let Some(mut preview) = state.journal.take() {
+                    if let Some(replay) = state.replay_journal.as_mut() {
+                        replay.extend_from(&mut preview);
+                    }
+                }
                 bump_played(&mut stats, active);
                 let label = match kind {
                     CardType::Instant => format!("instant {}", short(&picked)),
@@ -331,6 +346,11 @@ fn run_game(
     stats.b_final_gy = state.b.graveyard.len() as u32;
     stats.event_fires = state.event_fires.clone();
     stats.action_counts = state.action_counts.clone();
+    stats.replay_journal_entries = state
+        .replay_journal
+        .as_ref()
+        .map(|j| j.len() as u64)
+        .unwrap_or(0);
     stats
 }
 
@@ -629,6 +649,22 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     println!(
         "  avg mutations / play  {avg_size_a:>6.2}    {avg_size_b:>6.2}    (depth of each previewed future)"
     );
+    let replay_avg = avg(all, |s| s.replay_journal_entries as f64);
+    let replay_min = all
+        .iter()
+        .map(|s| s.replay_journal_entries)
+        .min()
+        .unwrap_or(0);
+    let replay_max = all
+        .iter()
+        .map(|s| s.replay_journal_entries)
+        .max()
+        .unwrap_or(0);
+    println!();
+    println!(
+        "Replay journal (per game, captures every committed mutation from start to game-end):"
+    );
+    println!("  entries   avg {replay_avg:>6.1}   min {replay_min:>4}   max {replay_max:>4}");
 
     println!();
     println!("Pending mechanics (zero today; nonzero once each engine piece lands):");

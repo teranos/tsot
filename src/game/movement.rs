@@ -41,7 +41,7 @@ impl GameState {
         zone_mut(p, from).remove(from_pos);
         zone_mut(p, to).push(iid.clone());
 
-        if let Some(j) = &mut self.journal {
+        if let Some(j) = self.active_journal() {
             j.push(JournalEntry::MoveCard {
                 iid: iid.clone(),
                 owner: side,

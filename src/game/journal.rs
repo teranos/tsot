@@ -133,6 +133,13 @@ impl Journal {
         self.entries.is_empty()
     }
 
+    /// Move every entry from `other` to the end of `self`. Used to commit
+    /// a preview's mutations into the long-lived replay journal once the
+    /// preview is accepted.
+    pub fn extend_from(&mut self, other: &mut Journal) {
+        self.entries.append(&mut other.entries);
+    }
+
     /// Apply inverses of every entry, in reverse order. Consumes the journal.
     pub fn rollback(self, state: &mut GameState) {
         for entry in self.entries.into_iter().rev() {
