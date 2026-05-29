@@ -3,7 +3,7 @@
 
 use super::state::{GameState, InstanceId};
 use crate::card::{Card, CardType, CostComponent, Stats};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 pub(crate) fn card_with_stats(id: &str, x: i32, y: i32) -> Card {
     Card {
@@ -16,7 +16,7 @@ pub(crate) fn card_with_stats(id: &str, x: i32, y: i32) -> Card {
         cost: vec![],
         abilities: vec![],
         stats: Some(Stats { x, y }),
-        handlers: HashMap::new(),
+        handlers: BTreeMap::new(),
     }
 }
 
@@ -31,7 +31,7 @@ pub(crate) fn card_no_stats(id: &str, kind: CardType) -> Card {
         cost: vec![],
         abilities: vec![],
         stats: None,
-        handlers: HashMap::new(),
+        handlers: BTreeMap::new(),
     }
 }
 

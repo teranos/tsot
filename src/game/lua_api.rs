@@ -135,6 +135,9 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     for _ in 0..n.max(0) {
         if s.player(pid).deck.is_empty() {
             // L.1 (effect-draw, same as the draw step's empty-deck rule).
+            // The drawing player loses; we credit this as "decked themselves
+            // by choice" — the controller chose to play the draw effect.
+            s.bump_action("self_deckout_by_choice", pid);
             s.winner = Some(pid.opponent());
             break;
         }

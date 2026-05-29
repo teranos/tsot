@@ -1,0 +1,14 @@
+# Determinism-enforcing lints. tsot's game logic must produce identical
+# outputs given identical inputs (seed, decks, decisions). The bans below
+# block the most common ways non-determinism leaks in.
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "use BTreeMap for deterministic iteration" },
+    { path = "std::collections::HashSet", reason = "use BTreeSet for deterministic iteration" },
+]
+
+disallowed-methods = [
+    { path = "rand::thread_rng", reason = "use a seeded Rng passed via context" },
+    { path = "rand::random", reason = "use a seeded Rng passed via context" },
+    { path = "std::time::SystemTime::now", reason = "external clock leaks non-determinism into game state" },
+]

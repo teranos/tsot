@@ -6,7 +6,7 @@ use super::context::EventContext;
 use super::lua_api;
 use super::state::{GameState, InstanceId, PlayerId};
 use crate::card::{CardType, CostSource, EventName};
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 /// Player-supplied choices when playing a card.
 /// In this slice, only HAND payments require choice (which cards to spend).
@@ -107,7 +107,7 @@ impl GameState {
             });
         }
 
-        let mut seen: HashSet<&InstanceId> = HashSet::new();
+        let mut seen: BTreeSet<&InstanceId> = BTreeSet::new();
         for hid in &choices.hand_payment_ids {
             if !seen.insert(hid) {
                 return Err(PlayError::DuplicateHandPayment(hid.clone()));

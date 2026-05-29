@@ -3,7 +3,7 @@
 //! Mirrors RULES.md sections F, U, L, S, Z, T, C.
 
 use crate::card::{Card, EventName};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// F.2: exactly two players.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -131,7 +131,7 @@ pub struct AttackDecl {
 pub struct GameState {
     pub a: PlayerState,
     pub b: PlayerState,
-    pub card_pool: HashMap<InstanceId, CardInstance>,
+    pub card_pool: BTreeMap<InstanceId, CardInstance>,
     pub active_player: PlayerId,
     pub turn: u32,
     pub phase: Phase,
@@ -139,11 +139,11 @@ pub struct GameState {
     pub combat: Option<CombatState>,
     /// Engine metric: per-event handler-fire counts, credited to the owner of
     /// the source card. `[u32; 2]` indexed by player (0 = A, 1 = B). Diagnostic.
-    pub event_fires: HashMap<EventName, [u32; 2]>,
+    pub event_fires: BTreeMap<EventName, [u32; 2]>,
     /// Engine metric: counts of each `game.*` action invoked from inside a
     /// handler. Keyed by short action name ("draw", "mill", "damage", "move").
     /// Player attribution depends on the action — see `bump_action` callers.
-    pub action_counts: HashMap<&'static str, [u32; 2]>,
+    pub action_counts: BTreeMap<&'static str, [u32; 2]>,
 }
 
 impl GameState {
@@ -152,7 +152,7 @@ impl GameState {
     /// Cards passed in are dealt in order: first 5 become HAND, rest become DECK.
     /// Real games will shuffle the deck before this call; this function does not.
     pub fn new(deck_a: Vec<Card>, deck_b: Vec<Card>) -> Self {
-        let mut card_pool = HashMap::new();
+        let mut card_pool = BTreeMap::new();
         let a = Self::init_player(PlayerId::A, deck_a, &mut card_pool);
         let b = Self::init_player(PlayerId::B, deck_b, &mut card_pool);
 
@@ -165,8 +165,8 @@ impl GameState {
             phase: Phase::Untap,
             winner: None,
             combat: None,
-            event_fires: HashMap::new(),
-            action_counts: HashMap::new(),
+            event_fires: BTreeMap::new(),
+            action_counts: BTreeMap::new(),
         }
     }
 
@@ -202,7 +202,7 @@ impl GameState {
     fn init_player(
         pid: PlayerId,
         cards: Vec<Card>,
-        pool: &mut HashMap<InstanceId, CardInstance>,
+        pool: &mut BTreeMap<InstanceId, CardInstance>,
     ) -> PlayerState {
         let mut state = PlayerState::default();
         let mut ids: Vec<InstanceId> = Vec::with_capacity(cards.len());

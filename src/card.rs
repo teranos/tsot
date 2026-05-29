@@ -1,5 +1,5 @@
 use mlua::{Function, Lua, LuaOptions, StdLib, Table, Value};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -84,7 +84,7 @@ pub struct Stats {
 /// Event handler keys recognised on card files. Matches LUA.md Phase 1 taxonomy
 /// plus `OnBlockedBy` (the squirrel-overrun canary — fires on the attacker when
 /// any blocker is declared against it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EventName {
     OnEnterBoard,
     OnDie,
@@ -132,7 +132,7 @@ pub struct Card {
     /// Lua event handlers loaded from `on_*` fields. Empty for data-only cards.
     /// Handles are refcounted into the owning `CardRegistry`'s VM and must not
     /// outlive it.
-    pub handlers: HashMap<EventName, Function>,
+    pub handlers: BTreeMap<EventName, Function>,
 }
 
 impl std::fmt::Debug for Card {
@@ -224,8 +224,8 @@ fn read_cost(t: &Table) -> mlua::Result<Vec<CostComponent>> {
     Ok(out)
 }
 
-fn read_handlers(t: &Table) -> mlua::Result<HashMap<EventName, Function>> {
-    let mut out = HashMap::new();
+fn read_handlers(t: &Table) -> mlua::Result<BTreeMap<EventName, Function>> {
+    let mut out = BTreeMap::new();
     for ev in EventName::ALL {
         match t.get::<Value>(ev.lua_key())? {
             Value::Nil => {}
@@ -311,7 +311,7 @@ pub fn load_cards_dir(lua: &Lua, dir: &Path) -> mlua::Result<Vec<Card>> {
 mod tests {
     use super::*;
 
-    fn handlers_from(lua: &Lua, src: &str) -> HashMap<EventName, Function> {
+    fn handlers_from(lua: &Lua, src: &str) -> BTreeMap<EventName, Function> {
         let value: Value = lua.load(src).eval().unwrap();
         let table = match value {
             Value::Table(t) => t,

@@ -13,3 +13,8 @@ path = "src/main.rs"
 [dependencies]
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 rand = "0.8"
+
+[lints.clippy]
+# Determinism: see clippy.toml for the disallowed sets.
+disallowed_types = "deny"
+disallowed_methods = "deny"

@@ -68,6 +68,18 @@ R.1–R.7 describe a recursive response chain. None of it exists in code.
 
 ---
 
+## Cross-cutting: journal & rollback
+
+Independent of the four themes but enabling for all of them: tsot's
+engine mutates state at scattered sites with no way to preview, rewind,
+or replay. The plan is a journal-based mutation log with per-entry
+inverses. Foundation for sim AI preview (skip suicide plays), replay
+capture, save / load, undo, AI search trees, and multiplayer rollback.
+
+See `JOURNAL.md` for the multi-session plan.
+
+---
+
 ## Other smaller items (not their own theme)
 
 - **Mulligan** (S.2/S.3) — small once we wire UI choice.

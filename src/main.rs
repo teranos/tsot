@@ -1,11 +1,16 @@
-use rand::rngs::ThreadRng;
+use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::Rng;
-use std::collections::HashMap;
+use rand::{Rng, SeedableRng};
+use std::collections::BTreeMap;
 use std::path::Path;
 use tsot::card::{Card, CardRegistry, CardType, CostSource, EventName};
 use tsot::choice::RandomOracle;
 use tsot::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
+
+/// Master seed for the sim's RNG. Deterministic per-cargo-run; change to
+/// sample a different distribution of games. Exposed via env var
+/// `TSOT_SEED` if set, otherwise this default.
+const DEFAULT_SEED: u64 = 0x7507_5707_7507_5707;
 
 const ITERATIONS: usize = 1000;
 
@@ -25,8 +30,8 @@ struct GameStats {
     b_final_board: u32,
     a_final_gy: u32,
     b_final_gy: u32,
-    event_fires: HashMap<EventName, [u32; 2]>,
-    action_counts: HashMap<&'static str, [u32; 2]>,
+    event_fires: BTreeMap<EventName, [u32; 2]>,
+    action_counts: BTreeMap<&'static str, [u32; 2]>,
 }
 
 fn main() -> mlua::Result<()> {
@@ -67,7 +72,11 @@ fn main() -> mlua::Result<()> {
         ITERATIONS
     );
 
-    let mut rng = rand::thread_rng();
+    let seed = std::env::var("TSOT_SEED")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_SEED);
+    let mut rng = StdRng::seed_from_u64(seed);
     let mut all: Vec<GameStats> = Vec::with_capacity(ITERATIONS);
     let mut last_log: Vec<String> = Vec::new();
 
@@ -107,11 +116,14 @@ fn build_random_deck(pool: &[Card], rng: &mut impl Rng, size: usize) -> Vec<Card
 
 fn run_game(
     mut state: GameState,
-    rng: &mut ThreadRng,
+    rng: &mut StdRng,
     log: &mut Vec<String>,
     lua: &mlua::Lua,
 ) -> GameStats {
-    let mut oracle = RandomOracle::new(rand::thread_rng());
+    // Oracle RNG derived from the master RNG so the whole sim is reproducible
+    // from one seed.
+    let oracle_seed: u64 = rng.gen();
+    let mut oracle = RandomOracle::new(StdRng::seed_from_u64(oracle_seed));
     let mut stats = GameStats {
         turns: 0,
         winner: PlayerId::A,
@@ -127,8 +139,8 @@ fn run_game(
         b_final_board: 0,
         a_final_gy: 0,
         b_final_gy: 0,
-        event_fires: HashMap::new(),
-        action_counts: HashMap::new(),
+        event_fires: BTreeMap::new(),
+        action_counts: BTreeMap::new(),
     };
 
     let mut safety = 1000;
@@ -521,6 +533,7 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
         "add_status",
         "choose_card",
         "confirm",
+        "self_deckout_by_choice",
     ] {
         let a_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[0]).unwrap_or(0) as f64);
         let b_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[1]).unwrap_or(0) as f64);
