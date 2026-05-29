@@ -40,6 +40,13 @@ struct GameStats {
     b_final_board: u32,
     a_final_gy: u32,
     b_final_gy: u32,
+    // Future-simulation telemetry — every play opens a journal.
+    a_preview_attempts: u32,
+    b_preview_attempts: u32,
+    a_preview_rollbacks: u32,
+    b_preview_rollbacks: u32,
+    a_preview_journal_size_total: u64,
+    b_preview_journal_size_total: u64,
     event_fires: BTreeMap<EventName, [u32; 2]>,
     action_counts: BTreeMap<&'static str, [u32; 2]>,
 }
@@ -147,6 +154,12 @@ fn run_game(
         b_final_board: 0,
         a_final_gy: 0,
         b_final_gy: 0,
+        a_preview_attempts: 0,
+        b_preview_attempts: 0,
+        a_preview_rollbacks: 0,
+        b_preview_rollbacks: 0,
+        a_preview_journal_size_total: 0,
+        b_preview_journal_size_total: 0,
         event_fires: BTreeMap::new(),
         action_counts: BTreeMap::new(),
     };
@@ -202,15 +215,25 @@ fn run_game(
                     choices.hand_payment_ids = payment;
                 }
             }
-            if state
-                .play_card(
-                    active,
-                    &picked,
-                    choices,
-                    Some(&mut EventContext::new(lua, &mut oracle)),
-                )
-                .is_ok()
-            {
+            // Preview-and-skip: open a journal, attempt the play. If the
+            // play would deck the active player (suicide), rollback and
+            // skip. Otherwise discard the journal and keep the mutations.
+            state.journal = Some(tsot::game::Journal::new());
+            let opponent_of_active = active.opponent();
+            let result = state.play_card(
+                active,
+                &picked,
+                choices,
+                Some(&mut EventContext::new(lua, &mut oracle)),
+            );
+            let suicide = state.winner == Some(opponent_of_active);
+            let preview_size = state.journal.as_ref().map(|j| j.len()).unwrap_or(0) as u64;
+
+            // Telemetry: every play opened a journal, so we count it.
+            bump_preview_attempt(&mut stats, active, preview_size);
+
+            if result.is_ok() && !suicide {
+                state.journal = None;
                 bump_played(&mut stats, active);
                 let label = match kind {
                     CardType::Instant => format!("instant {}", short(&picked)),
@@ -220,6 +243,14 @@ fn run_game(
                     }
                 };
                 events.push(format!("played {label}"));
+            } else {
+                if let Some(journal) = state.journal.take() {
+                    journal.rollback(&mut state);
+                }
+                bump_preview_rollback(&mut stats, active);
+                if suicide {
+                    state.bump_action("preview_skip_suicide", active);
+                }
             }
         }
 
@@ -321,6 +352,26 @@ fn bump_milled(stats: &mut GameStats, defender: PlayerId, n: u32) {
     match defender {
         PlayerId::A => stats.a_milled_to_exile += n,
         PlayerId::B => stats.b_milled_to_exile += n,
+    }
+}
+
+fn bump_preview_attempt(stats: &mut GameStats, p: PlayerId, journal_size: u64) {
+    match p {
+        PlayerId::A => {
+            stats.a_preview_attempts += 1;
+            stats.a_preview_journal_size_total += journal_size;
+        }
+        PlayerId::B => {
+            stats.b_preview_attempts += 1;
+            stats.b_preview_journal_size_total += journal_size;
+        }
+    }
+}
+
+fn bump_preview_rollback(stats: &mut GameStats, p: PlayerId) {
+    match p {
+        PlayerId::A => stats.a_preview_rollbacks += 1,
+        PlayerId::B => stats.b_preview_rollbacks += 1,
     }
 }
 
@@ -542,11 +593,42 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
         "choose_card",
         "confirm",
         "self_deckout_by_choice",
+        "preview_skip_suicide",
     ] {
         let a_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[0]).unwrap_or(0) as f64);
         let b_avg = avg(all, |s| s.action_counts.get(action).map(|v| v[1]).unwrap_or(0) as f64);
         println!("  game.{action:16} {a_avg:>6.2}    {b_avg:>6.2}");
     }
+
+    println!();
+    println!("Future-simulation telemetry (per-game averages — every play opens a journal):");
+    println!("                          A         B");
+    let attempts_a = avg(all, |s| s.a_preview_attempts as f64);
+    let attempts_b = avg(all, |s| s.b_preview_attempts as f64);
+    println!("  preview attempts      {attempts_a:>6.2}    {attempts_b:>6.2}");
+    println!(
+        "  rolled back           {:>6.2}    {:>6.2}",
+        avg(all, |s| s.a_preview_rollbacks as f64),
+        avg(all, |s| s.b_preview_rollbacks as f64)
+    );
+    println!(
+        "  mutations explored    {:>6.1}    {:>6.1}    (sum of journal entries per game)",
+        avg(all, |s| s.a_preview_journal_size_total as f64),
+        avg(all, |s| s.b_preview_journal_size_total as f64)
+    );
+    let avg_size_a = if attempts_a > 0.0 {
+        avg(all, |s| s.a_preview_journal_size_total as f64) / attempts_a
+    } else {
+        0.0
+    };
+    let avg_size_b = if attempts_b > 0.0 {
+        avg(all, |s| s.b_preview_journal_size_total as f64) / attempts_b
+    } else {
+        0.0
+    };
+    println!(
+        "  avg mutations / play  {avg_size_a:>6.2}    {avg_size_b:>6.2}    (depth of each previewed future)"
+    );
 
     println!();
     println!("Pending mechanics (zero today; nonzero once each engine piece lands):");
