@@ -107,13 +107,13 @@ The following are not part of this game.
 
 ## Responses (R)
 
-- **R.1** A response window opens when (a) a card is played, or (b) an attack is declared. Outside these moments, actions and events resolve atomically.
+- **R.1** A response window — a period during which both players may play a card (subject to its timing) or pass, before the triggering event resolves — opens when (a) a card is played, or (b) an attack is declared. Outside these moments, actions and events resolve atomically.
 - **R.2** Responses resolve in reverse order: the most recently added response resolves first.
 - **R.3** A player may play a card as a response only if its normal timing permits it at that moment.
 - **R.4** A response is itself an action and may also be responded to.
 - **R.5** When both players consecutively pass, the most recently added unresolved item in the response chain resolves.
 - **R.6** When both players consecutively pass and the response chain is empty, the response window closes.
-- **R.7** Within a response window, the active player has the first opportunity to respond or pass.
+- **R.7** When a response window opens, the active player (the one whose turn it is) acts first. They may respond by playing a card, or pass. Their opponent only gets a chance to act after the active player passes or responds.
 
 ## Visibility (V)
 

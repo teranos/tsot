@@ -75,6 +75,10 @@ pub enum JournalEntry {
         was: bool,
         now: bool,
     },
+    SetPriorityState {
+        was: Option<super::PriorityState>,
+        now: Option<super::PriorityState>,
+    },
     SetStatusEffects {
         iid: InstanceId,
         was: Vec<StatusEffect>,
@@ -272,6 +276,9 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::SetCreatureAttackedThisTurn { was, .. } => {
             state.creature_attacked_this_turn = was;
         }
+        JournalEntry::SetPriorityState { was, .. } => {
+            state.priority = was;
+        }
         JournalEntry::SetStatusEffects { iid, was, .. } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
                 inst.status_effects = was;
@@ -379,6 +386,9 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         }
         JournalEntry::SetCreatureAttackedThisTurn { now, .. } => {
             state.creature_attacked_this_turn = now;
+        }
+        JournalEntry::SetPriorityState { now, .. } => {
+            state.priority = now;
         }
         JournalEntry::SetStatusEffects { iid, now, .. } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {

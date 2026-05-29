@@ -29,31 +29,20 @@ Mapping the contact surfaces so future PRs know where to look:
 
 ### Engine methods that must open a window (Phase 1)
 
+Per RULES.md R.1, only two events open a window: card-played and attack-declared. Block declarations resolve atomically (no window) — `on_block` / `on_blocked_by` fire inline. Per R.7, the active player gets priority first in every window.
+
 | Site | Per rule | What changes |
 |---|---|---|
-| `play_card` post-validation, pre-resolution | R.1.a | After cost is paid but before the card resolves, open a window. Both players get priority. Card resolves only when both pass. |
-| `declare_attacker` after attack recorded | R.1.b | After the attack is in the buffer, open a window for the defender to respond. |
-| `declare_blocker` after block assigned (or once after `confirm_blocks`) | R.1.c | Window opens for the attacker to respond to the block. |
+| `play_card` post-validation, pre-resolution | R.1.a | After cost is paid but before the card resolves, open a window. Active player first per R.7. Card resolves only when both pass consecutively. |
+| `declare_attacker` after attack recorded | R.1.b | After the attack is in the buffer, open a window. Active player first per R.7; defender typically gets the first meaningful pick after active passes. |
 
-Each fire site is marked `TODO(stack-phase-1)` in the code.
+Each fire site is marked `TODO(stack-phase-1)` in the code. The third site (block declaration) was previously planned as R.1.c but dropped: RULES doesn't open a window there, and the design intent (`on_block` resolves atomically) matches the no-stack-trigger principle.
 
-### How triggered abilities change (Phase 2)
+### Triggered abilities stay inline (design ratified 2026-05-30)
 
-Today `fire_self_only` / `fire_with_partner` execute the handler
-immediately. Phase 2 changes them to:
+Earlier drafts of this doc proposed moving triggered abilities onto the stack in Phase 2. That's been **dropped**: consequential triggers (`OnEnterBoard`, `OnPlay`, `OnAttack`, `OnBlock`, `OnBlockedBy`, `OnDie`) fire inline as part of resolving the action that caused them. The stack only carries casts and attack declarations, plus instants cast in response.
 
-1. Build a `StackItem::Trigger { source, name, ctx }` capturing context
-2. Push to the chain
-3. Open a window
-4. When the trigger resolves (after two passes), execute the handler
-
-This means **every Lua handler currently in the corpus changes its
-firing semantics** — they go from "immediate during the engine call" to
-"queued and resolved after a response window." Cards working today
-(mortal-bee's exile, thorn-beetle's damage, jellyfish's bounce, etc.)
-will keep working but their timing relative to other handlers changes.
-
-Marked `TODO(stack-phase-2)` at the fire helpers.
+This kills the MTG "kill-with-priority-on-the-trigger" two-shot but keeps the cleaner "counter the spell / kill the attacker before its effect fires" windows. `fire_self_only` / `fire_with_partner` stay synchronous; no rework needed.
 
 ### Sim AI must learn to play instants in response
 
@@ -115,11 +104,7 @@ struct PriorityState {
 }
 ```
 
-**Window-openers.** Per a rule extension ratified by this document:
-
-> **R.1** A response window opens when: (a) a card is played, (b) an attack is declared, **(c) blocks are declared**.
-
-Block-declaration as a third opener was discussed in design conversation but never written. This document ratifies it.
+**Window-openers.** Per RULES.md R.1: a response window opens when (a) a card is played, or (b) an attack is declared. Outside these moments, actions and events resolve atomically. (An earlier draft of this doc proposed an R.1.c for block-declaration windows; that was dropped — blocks are atomic.)
 
 **Active player goes first.** Per R.7. Every window starts with `next_to_act = active_player`.
 
@@ -135,10 +120,9 @@ Smallest piece that's actually a stack. No Lua integration; triggered abilities 
 
 **Scope (in):**
 - **`ResponseChain` field** on `GameState` (or a new `PriorityState` substruct holding chain + priority bookkeeping).
-- **Three window-openers** wired:
+- **Two window-openers** wired:
   - In `play_card` (post-validation, pre-resolution): open R.1.a window.
   - In `declare_attacker` (after the attack is recorded): open R.1.b window.
-  - In `declare_blocker` (after each block is assigned, or once after `confirm_blocks` — pick one): open R.1.c window.
 - **Player actions:**
   - `submit_response(card_id)` — adds a `PlayedCard` to the chain top; the card type must be INSTANT or the timing must allow it (per R.3 + C.6). Resets pass counter.
   - `pass_priority()` — increments pass counter; passes priority to the other player.
@@ -271,10 +255,9 @@ LUA and STACK Phase 2s should be designed and tested together. They share the tr
 
 ## Open rule extensions to ratify in RULES.md alongside this work
 
-- **R.1.c** (new clause): block-declaration opens a response window.
 - **B.x** (new): state-based actions — creatures die between stack items (or queue, depending on the SBA decision).
 - **Counter** definition: an effect that removes a stack item without resolving its effect. Targeted or untargeted.
 - **APNAP** (if adopted): priority and trigger-ordering rule for simultaneous events.
 - **Cost-payment atomicity** statement: payments resolve without intervening priority.
 
-These should be ratified in RULES.md before Phase 1 lands, so the implementation has rules to encode.
+These should be ratified in RULES.md before Phase 1 lands, so the implementation has rules to encode. (The previously listed R.1.c block-declaration clause was dropped — block declarations are atomic per existing R.1.)

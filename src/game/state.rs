@@ -126,21 +126,25 @@ pub struct AttackDecl {
     pub blockers: Vec<InstanceId>,
 }
 
-/// An item on the response chain. STACK Phase 1 only models played instants;
-/// triggered abilities still resolve immediately (Phase 2 will add a
-/// `Trigger` variant).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// An item on the response chain. STACK Phase 1 only models played cards
+/// (creatures and instants); triggered abilities resolve inline per the
+/// inline-triggers design.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StackItem {
     PlayedCard {
         card: InstanceId,
         controller: PlayerId,
+        /// Resolution-time data. The cast's non-hand cost is paid at
+        /// announce time, but HAND payments + destination move + handler
+        /// fires happen at resolution. The choices have to ride along.
+        choices: super::PlayChoices,
     },
 }
 
 /// Response window state. `None` on `GameState.priority` means no window is
 /// currently open; engine has direct control. `Some` means a window is open
 /// and players may submit responses or pass.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PriorityState {
     /// Bottom-to-top: `chain[0]` resolves last; `chain[N-1]` is the top
     /// (next to resolve once both players pass).
@@ -150,6 +154,17 @@ pub struct PriorityState {
     /// 0, 1, or 2. Two consecutive passes → top of chain resolves
     /// (or window closes if chain is empty).
     pub consecutive_passes: u8,
+}
+
+/// Errors from the priority/pass engine. Phase 1 only flags structural
+/// mistakes (no window when one is required, or double-open).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PriorityError {
+    /// `pass_priority` or `respond_with` called with `state.priority == None`.
+    NoWindowOpen,
+    /// `open_response_window` called while a window is already open. Phase 1
+    /// doesn't nest windows; Phase 2 may relax this.
+    WindowAlreadyOpen,
 }
 
 /// The full game state.
@@ -360,6 +375,93 @@ impl GameState {
             j.push(super::JournalEntry::SetCreatureAttackedThisTurn { was, now });
         }
     }
+
+    /// Journal-aware setter for the priority/response-window field. Skips a
+    /// no-op write so the journal stays tight.
+    pub fn set_priority(&mut self, now: Option<PriorityState>) {
+        let was = self.priority.clone();
+        if was == now {
+            return;
+        }
+        self.priority = now.clone();
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetPriorityState { was, now });
+        }
+    }
+
+    /// R.1.a / R.1.b — open a response window. `item` is the announced chain
+    /// entry (a played card, or an attack declaration). Per R.7, the active
+    /// player always gets priority first.
+    ///
+    /// Phase 1: no nesting. Errors if a window is already open.
+    pub fn open_response_window(&mut self, item: StackItem) -> Result<(), PriorityError> {
+        if self.priority.is_some() {
+            return Err(PriorityError::WindowAlreadyOpen);
+        }
+        let active = self.active_player;
+        self.set_priority(Some(PriorityState {
+            chain: vec![item],
+            next_to_act: active,
+            consecutive_passes: 0,
+        }));
+        Ok(())
+    }
+
+    /// Current priority holder passes. Returns `Ok(Some(popped))` when this
+    /// is the second consecutive pass — the top of the chain has resolved
+    /// and is handed back to the caller for it to apply the resolution.
+    /// Returns `Ok(None)` when priority just hands to the other player.
+    ///
+    /// After a pop: if the chain still has items, priority returns to the
+    /// game's active player (R.1: active player gets priority after each
+    /// resolution) with the pass counter reset. If the chain is empty, the
+    /// window closes (`priority = None`).
+    pub fn pass_priority(&mut self) -> Result<Option<StackItem>, PriorityError> {
+        let mut p = self.priority.clone().ok_or(PriorityError::NoWindowOpen)?;
+        p.consecutive_passes = p.consecutive_passes.saturating_add(1);
+        if p.consecutive_passes < 2 {
+            p.next_to_act = p.next_to_act.opponent();
+            self.set_priority(Some(p));
+            return Ok(None);
+        }
+        // Two passes in a row → resolve top of chain.
+        let popped = p.chain.pop();
+        if p.chain.is_empty() {
+            self.set_priority(None);
+        } else {
+            p.consecutive_passes = 0;
+            p.next_to_act = self.active_player;
+            self.set_priority(Some(p));
+        }
+        Ok(popped)
+    }
+
+    /// Push a new item onto the chain in response to whatever's currently on
+    /// top. Resets the pass counter and hands priority to the other player.
+    pub fn respond_with(&mut self, item: StackItem) -> Result<(), PriorityError> {
+        let mut p = self.priority.clone().ok_or(PriorityError::NoWindowOpen)?;
+        let responder = p.next_to_act;
+        p.chain.push(item);
+        p.consecutive_passes = 0;
+        p.next_to_act = responder.opponent();
+        self.set_priority(Some(p));
+        Ok(())
+    }
+
+    /// Remove the top of the chain without resolving it (counterspell-style).
+    /// Returns the countered item, or None if the chain is empty / no window
+    /// is open. After counter, the pass counter resets and priority returns
+    /// to the active player (R.7) — the outer driver will close the window
+    /// naturally if nothing else gets played.
+    pub fn counter_top(&mut self) -> Option<StackItem> {
+        let mut p = self.priority.as_ref()?.clone();
+        let removed = p.chain.pop()?;
+        p.consecutive_passes = 0;
+        p.next_to_act = self.active_player;
+        self.set_priority(Some(p));
+        Some(removed)
+    }
+
 
     pub fn set_status_effects(&mut self, iid: &InstanceId, effects: Vec<StatusEffect>) {
         let Some(inst) = self.card_pool.get_mut(iid) else {
@@ -665,5 +767,117 @@ mod tests {
     fn player_id_opponent_swaps() {
         assert_eq!(PlayerId::A.opponent(), PlayerId::B);
         assert_eq!(PlayerId::B.opponent(), PlayerId::A);
+    }
+
+    fn dummy_played(s: &GameState) -> StackItem {
+        StackItem::PlayedCard {
+            card: s.a.hand[0].clone(),
+            controller: PlayerId::A,
+            choices: super::super::PlayChoices::default(),
+        }
+    }
+
+    fn dummy_played_for(card: InstanceId, controller: PlayerId) -> StackItem {
+        StackItem::PlayedCard {
+            card,
+            controller,
+            choices: super::super::PlayChoices::default(),
+        }
+    }
+
+    #[test]
+    fn open_window_sets_priority_and_chain() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let item = dummy_played(&s);
+        s.open_response_window(item.clone()).unwrap();
+        let p = s.priority.as_ref().unwrap();
+        assert_eq!(p.chain, vec![item]);
+        assert_eq!(p.next_to_act, s.active_player); // R.7
+        assert_eq!(p.consecutive_passes, 0);
+    }
+
+    #[test]
+    fn open_window_twice_errors() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let item = dummy_played(&s);
+        s.open_response_window(item.clone()).unwrap();
+        assert_eq!(
+            s.open_response_window(item),
+            Err(PriorityError::WindowAlreadyOpen),
+        );
+    }
+
+    #[test]
+    fn pass_priority_without_window_errors() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        assert_eq!(s.pass_priority(), Err(PriorityError::NoWindowOpen));
+    }
+
+    #[test]
+    fn one_pass_hands_priority_to_opponent() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let item = dummy_played(&s);
+        s.open_response_window(item).unwrap();
+        // Opens with active (A); one pass hands to B.
+        assert_eq!(s.pass_priority().unwrap(), None);
+        let p = s.priority.as_ref().unwrap();
+        assert_eq!(p.next_to_act, PlayerId::B);
+        assert_eq!(p.consecutive_passes, 1);
+    }
+
+    #[test]
+    fn two_passes_pop_and_close_when_chain_empties() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let item = dummy_played(&s);
+        s.open_response_window(item.clone()).unwrap();
+        assert_eq!(s.pass_priority().unwrap(), None);
+        assert_eq!(s.pass_priority().unwrap(), Some(item));
+        assert!(s.priority.is_none());
+    }
+
+    #[test]
+    fn respond_pushes_and_flips_priority() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let item_a = dummy_played(&s);
+        let item_b = dummy_played_for(s.b.hand[0].clone(), PlayerId::B);
+        s.open_response_window(item_a.clone()).unwrap();
+        s.pass_priority().unwrap(); // A → B
+        s.respond_with(item_b.clone()).unwrap(); // B responds → A
+        let p = s.priority.as_ref().unwrap();
+        assert_eq!(p.chain, vec![item_a, item_b]);
+        assert_eq!(p.next_to_act, PlayerId::A);
+        assert_eq!(p.consecutive_passes, 0);
+    }
+
+    #[test]
+    fn two_passes_with_two_items_pop_top_and_continue() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let item_a = dummy_played(&s);
+        let item_b = dummy_played_for(s.b.hand[0].clone(), PlayerId::B);
+        s.open_response_window(item_a.clone()).unwrap();
+        s.pass_priority().unwrap();
+        s.respond_with(item_b.clone()).unwrap();
+        // Two passes → item_b resolves; window stays open with item_a as new top.
+        s.pass_priority().unwrap();
+        let popped = s.pass_priority().unwrap();
+        assert_eq!(popped, Some(item_b));
+        let p = s.priority.as_ref().unwrap();
+        assert_eq!(p.chain, vec![item_a]);
+        assert_eq!(p.next_to_act, s.active_player);
+        assert_eq!(p.consecutive_passes, 0);
+    }
+
+    #[test]
+    fn priority_state_round_trips_through_journal() {
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        s.journal = Some(crate::game::Journal::new());
+        let snapshot = s.clone();
+        let item = dummy_played(&s);
+        let response = dummy_played_for(s.b.hand[0].clone(), PlayerId::B);
+        s.open_response_window(item.clone()).unwrap();
+        s.pass_priority().unwrap();
+        s.respond_with(response).unwrap();
+        s.journal.take().unwrap().rollback(&mut s);
+        assert_eq!(s.priority, snapshot.priority);
     }
 }

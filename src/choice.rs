@@ -4,9 +4,29 @@
 //! delegates the decision to an oracle. Different oracle implementations
 //! plug in for different contexts (sim, tests, future UI).
 
-use crate::game::{InstanceId, PlayerId};
+use crate::game::{GameState, InstanceId, PlayChoices, PlayerId, StackItem};
 use rand::Rng;
 use std::collections::VecDeque;
+
+/// Decision returned from `ChoiceOracle::respond_or_pass`. Either pass
+/// priority, or play a card from hand as a response (currently zero-cost
+/// instants only — the policy is intentionally narrow).
+///
+/// TODO(stack-phase-2-driver): the right architecture is Option B from the
+/// design discussion — `play_card` just announces, the caller (sim main
+/// loop or UI) drives the priority loop and feeds decisions in. That
+/// matches how the UI will work (human is the outer driver) and keeps
+/// engine policy-free. Option A (this trait method) is Phase 1 expedience:
+/// it gets counterspell firing in the sim without restructuring `play_card`
+/// and the existing call sites. Revisit before the UX work starts.
+#[derive(Debug, Clone)]
+pub enum ResponseAction {
+    Pass,
+    Respond {
+        card: InstanceId,
+        choices: PlayChoices,
+    },
+}
 
 /// A choose-card prompt with the pool and options.
 #[derive(Debug, Clone)]
@@ -51,6 +71,17 @@ pub trait ChoiceOracle {
 
     /// Pick an integer in `[min, max]`. Mandatory — no opt-out.
     fn choose_int(&mut self, req: ChooseIntRequest) -> i32;
+
+    /// Inside an open response window, `player` has priority — should they
+    /// cast something from hand as a response, or pass? Default impl: Pass.
+    /// Every oracle keeps its existing behavior (NoopOracle, ScriptedOracle
+    /// in old tests) unless it explicitly overrides.
+    ///
+    /// See `ResponseAction` for the architectural caveat (Option B is the
+    /// long-term path).
+    fn respond_or_pass(&mut self, _state: &GameState, _player: PlayerId) -> ResponseAction {
+        ResponseAction::Pass
+    }
 }
 
 /// Random oracle — sim default. Picks uniformly random from the pool,
@@ -103,6 +134,101 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
         let hi = req.min.max(req.max);
         self.rng.gen_range(lo..=hi)
     }
+
+    /// Phase 1 response policy: respond when an opponent's cast is on top
+    /// of the chain, with a zero-cost instant we own. Probability is
+    /// threat-aware — high when the cast accelerates fast death, lower
+    /// otherwise (so the AI doesn't completely freeze counters when it's
+    /// ahead, but doesn't waste them on irrelevant casts either). Narrow
+    /// on purpose — anything with HAND cost requires payment selection
+    /// which would need the full `resolve_hand_payment` flow inside the
+    /// policy. Today only counterspell qualifies.
+    fn respond_or_pass(&mut self, state: &GameState, player: PlayerId) -> ResponseAction {
+        let Some(p) = &state.priority else {
+            return ResponseAction::Pass;
+        };
+        let Some(top) = p.chain.last() else {
+            return ResponseAction::Pass;
+        };
+        let StackItem::PlayedCard { controller, .. } = top;
+        if *controller == player {
+            return ResponseAction::Pass;
+        }
+        let candidates: Vec<InstanceId> = state
+            .player(player)
+            .hand
+            .iter()
+            .filter(|iid| {
+                let Some(inst) = state.card_pool.get(*iid) else {
+                    return false;
+                };
+                inst.card.kind == crate::card::CardType::Instant
+                    && inst.card.cost.iter().all(|c| c.amount == 0 && !c.is_x)
+            })
+            .cloned()
+            .collect();
+        if candidates.is_empty() {
+            return ResponseAction::Pass;
+        }
+        // Threat-aware probability. would_die_soon = high; otherwise = low.
+        let prob = if would_die_soon(state, player) {
+            0.95
+        } else {
+            0.25
+        };
+        if !self.rng.gen_bool(prob) {
+            return ResponseAction::Pass;
+        }
+        let pick = candidates[self.rng.gen_range(0..candidates.len())].clone();
+        ResponseAction::Respond {
+            card: pick,
+            choices: PlayChoices::default(),
+        }
+    }
+}
+
+/// "Will this player be decked within ~2 turns at the opponent's current
+/// pace?" Sums opponent's untapped board power + any opposing creature on
+/// the chain, divides into my deck size. Cheap heuristic used by
+/// `RandomOracle` to decide whether a counter is worth burning.
+fn would_die_soon(state: &GameState, victim: PlayerId) -> bool {
+    let opponent = victim.opponent();
+    let board_power: i32 = state
+        .player(opponent)
+        .board
+        .iter()
+        .filter_map(|iid| state.card_pool.get(iid).map(|inst| (iid, inst)))
+        .filter(|(_, inst)| !inst.tapped)
+        .map(|(iid, _)| state.effective_stats(iid).0)
+        .sum();
+    let chain_power: i32 = state
+        .priority
+        .as_ref()
+        .map(|p| {
+            p.chain
+                .iter()
+                .map(|item| {
+                    let StackItem::PlayedCard {
+                        card, controller, ..
+                    } = item;
+                    if *controller != opponent {
+                        return 0;
+                    }
+                    let Some(inst) = state.card_pool.get(card) else {
+                        return 0;
+                    };
+                    if inst.card.kind == crate::card::CardType::Creature {
+                        state.effective_stats(card).0
+                    } else {
+                        0
+                    }
+                })
+                .sum()
+        })
+        .unwrap_or(0);
+    let incoming = board_power + chain_power;
+    let deck = state.player(victim).deck.len() as i32;
+    incoming > 0 && deck < incoming * 2
 }
 
 /// Noop oracle — convenience for tests that exercise a handler but don't
@@ -268,5 +394,14 @@ impl<O: ChoiceOracle> ChoiceOracle for RecordingOracle<O> {
         let ans = self.inner.choose_int(req);
         self.recording.push(ScriptedAnswer::Int(ans));
         ans
+    }
+
+    /// Forwards to inner. Not added to the recording — `ResponseAction`
+    /// isn't a `ScriptedAnswer` variant and the suicide-retry replay only
+    /// flips the first `choose_player`, not response decisions. Re-running
+    /// the same handler with the same answer sequence will produce the
+    /// same response decisions because RandomOracle's rng is deterministic.
+    fn respond_or_pass(&mut self, state: &GameState, player: PlayerId) -> ResponseAction {
+        self.inner.respond_or_pass(state, player)
     }
 }

@@ -656,3 +656,112 @@ fn on_enter_board_handler_fires_after_card_on_board() {
         [1, 0]
     );
 }
+
+#[test]
+fn counterspell_resolves_and_removes_underlying_cast() {
+    // End-to-end: A's cast sits on the chain, B casts counterspell in
+    // response, drive_window_to_close runs counterspell which calls
+    // game.counter_top() and removes A's cast. A's creature never reaches
+    // the board; A's HAND payment refunds (stays in hand) because cost
+    // wasn't paid at resolution time (it never resolved).
+    use crate::card::CardRegistry;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let counterspell = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "counterspell")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+    let a_creature = s.a.hand[0].clone();
+    let a_hand_payment = s.a.hand[1].clone();
+    let cs_iid = s.b.hand[0].clone();
+    s.card_pool.get_mut(&cs_iid).unwrap().card = counterspell;
+
+    // A's cast announced manually (bypasses play_card so we control the
+    // chain). HAND payment recorded in the chain item but NOT yet moved
+    // out of hand — that happens at resolve time.
+    let a_cast = crate::game::StackItem::PlayedCard {
+        card: a_creature.clone(),
+        controller: PlayerId::A,
+        choices: PlayChoices {
+            hand_payment_ids: vec![a_hand_payment.clone()],
+            x_value: None,
+        },
+    };
+    s.open_response_window(a_cast).unwrap();
+    s.pass_priority().unwrap(); // A → B
+
+    // B casts counterspell — routes to respond_with (piece 2).
+    let mut oracle = crate::choice::NoopOracle;
+    s.play_card(
+        PlayerId::B,
+        &cs_iid,
+        PlayChoices::default(),
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    )
+    .unwrap();
+
+    // Drive the window to close. Counterspell pops, resolves, calls
+    // game.counter_top() which removes A's cast from the chain. Then
+    // auto-pass drains the empty chain and the window closes.
+    s.drive_window_to_close(Some(&mut EventContext::new(registry.lua(), &mut oracle)))
+        .unwrap();
+
+    // A's cast got countered: creature stays in hand, payment stays in
+    // hand (cost refunded), nothing on board.
+    assert!(s.a.hand.contains(&a_creature));
+    assert!(s.a.hand.contains(&a_hand_payment));
+    assert!(!s.a.board.contains(&a_creature));
+    // Counterspell itself resolved → B's graveyard.
+    assert!(s.b.graveyard.contains(&cs_iid));
+    // Window closed.
+    assert!(s.priority.is_none());
+    // counter_top bumped for B (counterspell's controller).
+    assert_eq!(
+        s.action_counts.get("counter_top").map(|v| v[1]).unwrap_or(0),
+        1
+    );
+}
+
+#[test]
+fn play_card_during_open_window_pushes_to_chain_instead_of_opening_new() {
+    // Simulate B casting an instant in response to A's cast: A's cast sits
+    // on the chain (window open), then B calls play_card on a free instant.
+    // The instant should land on top of the chain, not open a new window.
+    let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+    let b_instant = s.b.hand[0].clone();
+    s.card_pool.get_mut(&b_instant).unwrap().card.kind = crate::card::CardType::Instant;
+    s.card_pool.get_mut(&b_instant).unwrap().card.cost = vec![]; // free
+
+    // Manually open a window with a placeholder A cast — bypasses play_card
+    // so we control the chain shape exactly.
+    let a_placeholder = crate::game::StackItem::PlayedCard {
+        card: s.a.hand[0].clone(),
+        controller: PlayerId::A,
+        choices: PlayChoices::default(),
+    };
+    s.open_response_window(a_placeholder.clone()).unwrap();
+    s.pass_priority().unwrap(); // A passes → B has priority
+
+    // B casts the free instant — play_card sees priority.is_some() and
+    // routes to respond_with instead of opening a nested window.
+    s.play_card(PlayerId::B, &b_instant, PlayChoices::default(), None)
+        .unwrap();
+
+    let chain = &s.priority.as_ref().unwrap().chain;
+    assert_eq!(chain.len(), 2, "B's instant should sit on top of A's cast");
+    assert_eq!(chain[0], a_placeholder);
+    match &chain[1] {
+        crate::game::StackItem::PlayedCard { card, controller, .. } => {
+            assert_eq!(card, &b_instant);
+            assert_eq!(*controller, PlayerId::B);
+        }
+    }
+    // B's instant is NOT resolved yet — it's still in B's hand.
+    assert!(s.b.hand.contains(&b_instant));
+    assert!(!s.b.graveyard.contains(&b_instant));
+}

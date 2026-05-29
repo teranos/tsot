@@ -25,5 +25,5 @@ pub use movement::MoveError;
 pub use play::{PlayChoices, PlayError};
 pub use state::{
     AttackDecl, CardInstance, CombatState, GameState, InstanceId, Modifier, Phase, PlayerId,
-    PlayerState, PriorityState, StackItem, StatusEffect, Zone,
+    PlayerState, PriorityError, PriorityState, StackItem, StatusEffect, Zone,
 };

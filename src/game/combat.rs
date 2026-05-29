@@ -136,10 +136,13 @@ impl GameState {
         // scales with whether anyone attacked). Cleared on End → Untap.
         self.set_creature_attacked_this_turn(true);
 
-        // TODO(stack-phase-1): R.1.b — open a response window here. Defender
-        // gets first priority; resolves after both pass. Until wired,
-        // on_attack fires immediately and defender has no response window
-        // before block declarations begin.
+        // TODO(stack-phase-1): R.1.b — open a response window here. Per R.7,
+        // active player gets priority first (and typically just passes —
+        // they just attacked). The defender then has the meaningful chance
+        // to remove / counter the attacker before on_attack fires. Resolves
+        // after both pass consecutively. Until wired, on_attack fires
+        // immediately and defender has no response window before block
+        // declarations begin.
         if let Some(c) = ctx {
             lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker);
         }
@@ -254,10 +257,12 @@ impl GameState {
                 attacker,
             );
         }
-        // TODO(stack-phase-1): R.1.c — open a response window here. Attacker
-        // gets first priority (per APNAP); resolves after both pass. Until
-        // wired, on_blocked_by and on_block fire immediately and the attacker
-        // can't respond to the block before combat damage resolves.
+        // RULES R.1 lists only two window-openers: card-played and
+        // attack-declared. Block declarations are atomic — no window opens
+        // here. on_blocked_by / on_block fire inline as part of the
+        // declaration (consistent with the "consequential triggers stay
+        // inline" design). Earlier drafts proposed an R.1.c for this site;
+        // dropped 2026-05-30.
 
         Ok(())
     }

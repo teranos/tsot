@@ -700,6 +700,8 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
         "decked_by_handler_draw",
         "preview_skip_suicide",
         "preview_retry_rescued",
+        "counter_top",
+        "instant_response_played",
     ] {
         let a_total: u64 = all
             .iter()
@@ -763,7 +765,31 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     println!("                                  A         B");
     print_pending("sacrifices (cost P.16)");
     print_pending("activated abilities used");
-    print_pending("instant responses (R.1)");
+    // Instant responses now wired via piece 4 — read from action_counts.
+    let resp_a: f64 = all
+        .iter()
+        .map(|s| {
+            s.action_counts
+                .get("instant_response_played")
+                .map(|v| v[0] as f64)
+                .unwrap_or(0.0)
+        })
+        .sum::<f64>()
+        / all.len() as f64;
+    let resp_b: f64 = all
+        .iter()
+        .map(|s| {
+            s.action_counts
+                .get("instant_response_played")
+                .map(|v| v[1] as f64)
+                .unwrap_or(0.0)
+        })
+        .sum::<f64>()
+        / all.len() as f64;
+    println!(
+        "  {:35} {:>6.2}    {:>6.2}",
+        "instant responses (R.1)", resp_a, resp_b
+    );
     print_pending("artifacts played (P.19)");
     print_pending("environments played (P.21)");
     print_pending("mulligans (S.2/S.3)");

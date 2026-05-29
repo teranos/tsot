@@ -4,15 +4,15 @@
 
 use super::context::EventContext;
 use super::lua_api;
-use super::state::{GameState, InstanceId, PlayerId, Zone};
+use super::state::{GameState, InstanceId, PlayerId, StackItem, Zone};
 use crate::card::{CardType, CostSource, EventName};
-use crate::choice::{ChoiceOracle, ChooseCardRequest};
+use crate::choice::{ChoiceOracle, ChooseCardRequest, ResponseAction};
 use std::collections::BTreeSet;
 
 /// Player-supplied choices when playing a card.
 /// In this slice, only HAND payments require choice (which cards to spend).
 /// MILL payments are deterministic (top N of DECK).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlayChoices {
     /// One InstanceId per HAND cost-card the player chooses to spend.
     pub hand_payment_ids: Vec<InstanceId>,
@@ -174,24 +174,106 @@ impl GameState {
             let _ = self.move_card(&back, player, Zone::Graveyard, Zone::Exile);
         }
 
-        // TODO(stack-phase-1): R.1.a — open a response window here, after
-        // cost is paid but before resolution. Both players get priority;
-        // resolution proceeds only after both pass. Until this is wired,
-        // cards resolve immediately and instants can't be cast in response.
-        //
-        // Route to destination zone based on type. on_play fires after the
-        // card and its payments have left hand and arrived at their final
-        // locations — handlers observe the post-resolution state.
+        // Announce the cast. Non-hand cost (mill, graveyard) is already
+        // paid; HAND payments stay in hand until resolution (mirrors MTG:
+        // if the cast gets countered, HAND payments don't leave hand, but
+        // mill/graveyard payments don't refund).
+        let cast = StackItem::PlayedCard {
+            card: instance.clone(),
+            controller: player,
+            choices,
+        };
+
+        // If a response window is already open, this is a cast-in-response:
+        // push onto the chain and return. The outer driver (the play_card
+        // call that opened the window) will pop and resolve it. If no
+        // window is open, this is a normal cast: open one and drive it.
+        if self.priority.is_some() {
+            self.respond_with(cast)
+                .expect("priority.is_some() checked above");
+            return Ok(());
+        }
+
+        self.open_response_window(cast)
+            .expect("priority.is_none() checked above");
+        self.drive_window_to_close(ctx)
+    }
+
+    /// Drive the currently-open response window to close. At each priority
+    /// handoff, asks the oracle (via `ctx`) "respond or pass?". A `Respond`
+    /// re-enters `play_card` which routes to `respond_with` (priority is
+    /// open). A `Pass` calls `pass_priority`; if that pops an item, the
+    /// item is resolved before the loop continues. The loop exits when the
+    /// window closes (chain empty + both pass).
+    ///
+    /// TODO(stack-phase-2-driver): Option B — the right long-term shape is
+    /// for `play_card` to just announce, and this loop to live in the
+    /// outer caller (sim or UI). That removes the re-entrant `play_card`
+    /// call and matches how human-driven play actually works. Option A
+    /// (here) is Phase 1 expedience.
+    pub fn drive_window_to_close(
+        &mut self,
+        ctx: Option<&mut EventContext>,
+    ) -> Result<(), PlayError> {
+        let mut ctx = ctx;
+        while self.priority.is_some() {
+            let next = self.priority.as_ref().expect("checked is_some").next_to_act;
+            let action = match ctx.as_mut() {
+                Some(c) => c.oracle().respond_or_pass(self, next),
+                None => ResponseAction::Pass,
+            };
+            match action {
+                ResponseAction::Respond { card, choices } => {
+                    self.bump_action("instant_response_played", next);
+                    let _ = self.play_card(next, &card, choices, ctx.as_deref_mut());
+                }
+                ResponseAction::Pass => match self.pass_priority() {
+                    Ok(Some(item)) => match item {
+                        StackItem::PlayedCard {
+                            card,
+                            controller,
+                            choices,
+                        } => {
+                            self.resolve_played_card(
+                                &card,
+                                controller,
+                                choices,
+                                ctx.as_deref_mut(),
+                            )?;
+                        }
+                    },
+                    Ok(None) => continue,
+                    Err(_) => return Ok(()),
+                },
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolution of a popped `StackItem::PlayedCard`: HAND payments leave
+    /// hand, the played card moves to its destination zone, and post-play
+    /// triggers fire inline. Mirrors RULES P.1 (instants → GRAVEYARD) and
+    /// the creature ETB sequence.
+    fn resolve_played_card(
+        &mut self,
+        instance: &InstanceId,
+        player: PlayerId,
+        choices: PlayChoices,
+        ctx: Option<&mut EventContext>,
+    ) -> Result<(), PlayError> {
+        let card_kind = self
+            .card_pool
+            .get(instance)
+            .map(|i| i.card.kind)
+            .unwrap_or(CardType::Unspecified);
         let mut ctx = ctx;
         match card_kind {
             CardType::Creature => {
-                // HAND payments leave hand and attach to the played card.
                 for hid in choices.hand_payment_ids.clone() {
                     let _ = self.remove_from_zone(&hid, player, Zone::Hand);
                     self.add_attached(instance, &hid);
                     self.set_face_down(&hid, true);
                 }
-                // Played card → BOARD.
                 let _ = self.move_card(instance, player, Zone::Hand, Zone::Board);
                 self.set_summoning_sick(instance, true); // B.3
 
@@ -209,8 +291,6 @@ impl GameState {
                 }
             }
             CardType::Instant => {
-                // P.1: instants resolve to GRAVEYARD. HAND payments follow
-                // (no host to attach to).
                 for hid in choices.hand_payment_ids.clone() {
                     let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
                 }
@@ -220,9 +300,8 @@ impl GameState {
                     lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
                 }
             }
-            _ => unreachable!("validated above"),
+            _ => unreachable!("validated by play_card"),
         }
-
         Ok(())
     }
 

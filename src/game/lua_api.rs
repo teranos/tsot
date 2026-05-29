@@ -411,6 +411,26 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // Counter-the-top: removes the stack item directly underneath the
+        // resolving handler (the spell this counterspell-like card targets).
+        // Returns true if something was countered, false if the chain is
+        // empty (target already gone). Phase 1 has no explicit targeting —
+        // every "counter target spell" effect resolves as "counter the
+        // spell directly under me."
+        let cell_counter = &$cell;
+        let counter_owner = $owner;
+        game.set(
+            "counter_top",
+            $scope.create_function_mut(move |_, ()| -> Result<bool> {
+                let mut s = cell_counter.borrow_mut();
+                let removed = s.counter_top();
+                if removed.is_some() {
+                    s.bump_action("counter_top", counter_owner);
+                }
+                Ok(removed.is_some())
+            })?,
+        )?;
+
         let cell_top = &$cell;
         game.set(
             "deck_top",
@@ -569,12 +589,13 @@ fn build_self_table(
 
 /// Fire an event whose handler takes `(game, self)`. Used for `on_die`,
 /// `on_enter_board`, `on_attack`, `on_play`. Errors log and continue.
-// TODO(stack-phase-2): triggered abilities should push a
-// `StackItem::Trigger { source, name, ctx }` onto the response chain and
-// resolve only after the window closes — not execute the handler immediately.
-// Today these run synchronously. When the stack-based dispatch lands, the
-// handler-invocation logic moves from this fire helper to the stack-item
-// resolver; this function will become a "queue trigger" instead.
+// Design (2026-05-30): consequential triggers do NOT go on the stack. ETB
+// (`OnEnterBoard`), `OnPlay`, `OnAttack`, `OnBlock`, `OnBlockedBy`, `OnDie`
+// all fire inline as part of resolving the action that caused them. The
+// stack only carries the cast / declaration itself, plus instants cast in
+// response. This kills the MTG "kill-with-priority-on-the-trigger" two-shot
+// but keeps the cleaner "counter the spell / kill the attacker before its
+// effect fires" windows. No "queue trigger" rework needed here.
 pub(crate) fn fire_self_only(
     lua: &Lua,
     state: &mut GameState,
@@ -612,9 +633,9 @@ pub(crate) fn fire_self_only(
 /// Fire an event whose handler takes `(game, self, partner)`. Used for
 /// `on_blocked_by` (self=attacker, partner=blocker) and `on_block`
 /// (self=blocker, partner=attacker). Errors log and continue.
-// TODO(stack-phase-2): same as fire_self_only — when triggered abilities go
-// on the stack, this becomes a "queue trigger with partner context" rather
-// than an immediate handler call.
+// Same design as fire_self_only: `OnBlock` / `OnBlockedBy` fire inline as
+// part of resolving the block declaration. Stack carries the declaration
+// itself (R.1.c), not the trigger.
 pub(crate) fn fire_with_partner(
     lua: &Lua,
     state: &mut GameState,
