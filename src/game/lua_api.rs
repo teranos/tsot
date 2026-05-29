@@ -305,12 +305,6 @@ macro_rules! build_game_table {
             })?,
         )?;
 
-        // TODO(choose_player): API exposed but unused in the corpus today.
-        // In 1v1, "target player" effects use the deterministic
-        // `game.opponent(self.owner)` shortcut, which doesn't need a prompt.
-        // First card to use this would be one that explicitly asks the
-        // player to pick (e.g., "each chosen player draws a card" with
-        // bidirectional targeting). No such card exists yet.
         let cell_player_o = &$oracle_cell;
         let cell_player_s = &$cell;
         let player_owner = $owner;
@@ -406,6 +400,14 @@ macro_rules! build_game_table {
             $lua.create_function(|_, pid_str: String| -> Result<String> {
                 let pid = parse_pid(&pid_str)?;
                 Ok(pid_to_str(pid.opponent()).to_string())
+            })?,
+        )?;
+
+        let cell_atk_q = &$cell;
+        game.set(
+            "creature_attacked_this_turn",
+            $scope.create_function_mut(move |_, ()| -> Result<bool> {
+                Ok(cell_atk_q.borrow().creature_attacked_this_turn)
             })?,
         )?;
 

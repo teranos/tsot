@@ -132,6 +132,10 @@ impl GameState {
             self.set_tapped(attacker, true); // B.4
         }
 
+        // Record that combat happened this turn (read by cards whose effect
+        // scales with whether anyone attacked). Cleared on End → Untap.
+        self.set_creature_attacked_this_turn(true);
+
         // TODO(stack-phase-1): R.1.b — open a response window here. Defender
         // gets first priority; resolves after both pass. Until wired,
         // on_attack fires immediately and defender has no response window

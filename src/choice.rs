@@ -146,6 +146,33 @@ impl ScriptedOracle {
     }
 }
 
+impl ScriptedOracle {
+    /// Build a new sequence with the first `Player` answer swapped to the
+    /// alternative candidate from `req`. Returns `None` if no `Player` answer
+    /// is present, or no alternative exists. Used by the sim to retry a
+    /// suicidal play with a different "target player" pick.
+    pub fn flip_first_player(answers: &[ScriptedAnswer]) -> Option<Vec<ScriptedAnswer>> {
+        let pos = answers
+            .iter()
+            .position(|a| matches!(a, ScriptedAnswer::Player(_)))?;
+        let original = match &answers[pos] {
+            ScriptedAnswer::Player(p) => *p,
+            _ => unreachable!(),
+        };
+        // 1v1: flip A↔B. If the original was None, force A as a fallback —
+        // None means the oracle declined an optional pick, and retrying with
+        // an actual pick is the whole point.
+        let alt = match original {
+            Some(PlayerId::A) => Some(PlayerId::B),
+            Some(PlayerId::B) => Some(PlayerId::A),
+            None => Some(PlayerId::A),
+        };
+        let mut out: Vec<ScriptedAnswer> = answers.to_vec();
+        out[pos] = ScriptedAnswer::Player(alt);
+        Some(out)
+    }
+}
+
 impl ChoiceOracle for ScriptedOracle {
     fn choose_card(&mut self, _req: ChooseCardRequest) -> Option<InstanceId> {
         match self.answers.pop_front() {
@@ -185,5 +212,61 @@ impl ChoiceOracle for ScriptedOracle {
             ),
             None => panic!("ScriptedOracle: out of answers"),
         }
+    }
+}
+
+/// Recording wrapper around any inner oracle. Captures the exact answer
+/// sequence so the sim can replay a play with a modified answer set when the
+/// first attempt suicides. The recording lives outside `GameState`, so journal
+/// rollback doesn't clear it.
+pub struct RecordingOracle<O: ChoiceOracle> {
+    inner: O,
+    recording: Vec<ScriptedAnswer>,
+}
+
+impl<O: ChoiceOracle> RecordingOracle<O> {
+    pub fn new(inner: O) -> Self {
+        Self {
+            inner,
+            recording: Vec::new(),
+        }
+    }
+
+    pub fn recording(&self) -> &[ScriptedAnswer] {
+        &self.recording
+    }
+
+    pub fn clear(&mut self) {
+        self.recording.clear();
+    }
+
+    pub fn inner_mut(&mut self) -> &mut O {
+        &mut self.inner
+    }
+}
+
+impl<O: ChoiceOracle> ChoiceOracle for RecordingOracle<O> {
+    fn choose_card(&mut self, req: ChooseCardRequest) -> Option<InstanceId> {
+        let ans = self.inner.choose_card(req);
+        self.recording.push(ScriptedAnswer::Card(ans.clone()));
+        ans
+    }
+
+    fn confirm(&mut self, prompt: &str) -> bool {
+        let ans = self.inner.confirm(prompt);
+        self.recording.push(ScriptedAnswer::Confirm(ans));
+        ans
+    }
+
+    fn choose_player(&mut self, req: ChoosePlayerRequest) -> Option<PlayerId> {
+        let ans = self.inner.choose_player(req);
+        self.recording.push(ScriptedAnswer::Player(ans));
+        ans
+    }
+
+    fn choose_int(&mut self, req: ChooseIntRequest) -> i32 {
+        let ans = self.inner.choose_int(req);
+        self.recording.push(ScriptedAnswer::Int(ans));
+        ans
     }
 }

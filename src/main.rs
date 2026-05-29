@@ -4,7 +4,9 @@ use rand::{Rng, SeedableRng};
 use std::collections::BTreeMap;
 use std::path::Path;
 use tsot::card::{Card, CardRegistry, CardType, CostSource, EventName};
-use tsot::choice::{ChoiceOracle, ChooseIntRequest, RandomOracle};
+use tsot::choice::{
+    ChoiceOracle, ChooseIntRequest, RandomOracle, RecordingOracle, ScriptedOracle,
+};
 use tsot::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 /// Master seed for the sim's RNG. Default: fresh per run (sampled from
@@ -166,7 +168,7 @@ fn run_game(
     // Oracle RNG derived from the master RNG so the whole sim is reproducible
     // from one seed.
     let oracle_seed: u64 = rng.gen();
-    let mut oracle = RandomOracle::new(StdRng::seed_from_u64(oracle_seed));
+    let mut oracle = RecordingOracle::new(RandomOracle::new(StdRng::seed_from_u64(oracle_seed)));
 
     // Open a game-long replay journal. Every committed mutation will be
     // recorded into this for the duration of the game; previewed-and-skipped
@@ -289,19 +291,47 @@ fn run_game(
             // Preview-and-skip: open a journal, attempt the play. If the
             // play would deck the active player (suicide), rollback and
             // skip. Otherwise discard the journal and keep the mutations.
+            oracle.clear();
             state.journal = Some(tsot::game::Journal::new());
             let opponent_of_active = active.opponent();
+            let choices_for_retry = choices.clone();
             let result = state.play_card(
                 active,
                 &picked,
                 choices,
                 Some(&mut EventContext::new(lua, &mut oracle)),
             );
-            let suicide = state.winner == Some(opponent_of_active);
+            let mut suicide = state.winner == Some(opponent_of_active);
             let preview_size = state.journal.as_ref().map(|j| j.len()).unwrap_or(0) as u64;
 
             // Telemetry: every play opened a journal, so we count it.
             bump_preview_attempt(&mut stats, active, preview_size);
+
+            // Retry-on-suicide: if the play suicided and the recording
+            // contains a choose_player answer, the active player's "target
+            // player" pick was the cause (or at least correlated). Roll
+            // back, replay with a ScriptedOracle that flips the first
+            // choose_player answer. If the flipped run survives, commit it.
+            let mut result = result;
+            if suicide {
+                if let Some(flipped) = ScriptedOracle::flip_first_player(oracle.recording()) {
+                    if let Some(journal) = state.journal.take() {
+                        journal.rollback(&mut state);
+                    }
+                    state.journal = Some(tsot::game::Journal::new());
+                    let mut scripted = ScriptedOracle::new(flipped);
+                    result = state.play_card(
+                        active,
+                        &picked,
+                        choices_for_retry,
+                        Some(&mut EventContext::new(lua, &mut scripted)),
+                    );
+                    suicide = state.winner == Some(opponent_of_active);
+                    if !suicide && result.is_ok() {
+                        state.bump_action("preview_retry_rescued", active);
+                    }
+                }
+            }
 
             if result.is_ok() && !suicide {
                 // Commit: transfer preview entries into the replay journal,
@@ -676,6 +706,7 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
         "confirm",
         "decked_by_handler_draw",
         "preview_skip_suicide",
+        "preview_retry_rescued",
     ] {
         let a_total: u64 = all
             .iter()

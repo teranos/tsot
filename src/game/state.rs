@@ -183,6 +183,13 @@ pub struct GameState {
     /// STACK Phase 1 introduces the type; window-openers and resolution loop
     /// arrive in subsequent steps.
     pub priority: Option<PriorityState>,
+    /// Set true the first time `declare_attacker` succeeds in the current turn,
+    /// reset to false on End → Untap transition. Read by cards whose effect
+    /// scales with whether combat happened (e.g., "draw 3 if a creature
+    /// attacked this turn, otherwise 2"). Global, not per-player: a 1v1 game
+    /// only has one attacking side per turn anyway.
+    #[serde(default)]
+    pub creature_attacked_this_turn: bool,
 }
 
 impl GameState {
@@ -209,6 +216,7 @@ impl GameState {
             journal: None,
             replay_journal: None,
             priority: None,
+            creature_attacked_this_turn: false,
         }
     }
 
@@ -339,6 +347,17 @@ impl GameState {
         self.combat = combat.clone();
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetCombatState { was, now: combat });
+        }
+    }
+
+    pub fn set_creature_attacked_this_turn(&mut self, now: bool) {
+        let was = self.creature_attacked_this_turn;
+        if was == now {
+            return;
+        }
+        self.creature_attacked_this_turn = now;
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetCreatureAttackedThisTurn { was, now });
         }
     }
 

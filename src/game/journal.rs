@@ -71,6 +71,10 @@ pub enum JournalEntry {
         was: Option<CombatState>,
         now: Option<CombatState>,
     },
+    SetCreatureAttackedThisTurn {
+        was: bool,
+        now: bool,
+    },
     SetStatusEffects {
         iid: InstanceId,
         was: Vec<StatusEffect>,
@@ -265,6 +269,9 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::SetCombatState { was, .. } => {
             state.combat = was;
         }
+        JournalEntry::SetCreatureAttackedThisTurn { was, .. } => {
+            state.creature_attacked_this_turn = was;
+        }
         JournalEntry::SetStatusEffects { iid, was, .. } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
                 inst.status_effects = was;
@@ -369,6 +376,9 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         }
         JournalEntry::SetCombatState { now, .. } => {
             state.combat = now;
+        }
+        JournalEntry::SetCreatureAttackedThisTurn { now, .. } => {
+            state.creature_attacked_this_turn = now;
         }
         JournalEntry::SetStatusEffects { iid, now, .. } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
