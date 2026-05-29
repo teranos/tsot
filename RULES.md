@@ -133,6 +133,10 @@ The following are not part of this game.
 - **B.7** When an attacker is blocked, the attacker deals damage equal to its X to each of its blockers, and each blocker deals damage equal to its X to the attacker.
 - **B.8** A creature with accumulated damage equal to or greater than its Y dies (placed in GRAVEYARD per P.4).
 - **B.10** At the end of the turn, all accumulated damage on creatures is cleared.
-- **B.11** A flying creature can only be blocked by a card with flying, or by a card whose text explicitly grants it the ability to block flying.
+- **B.11** **Flying** is a keyword ability: a creature with flying can only be blocked by a card with flying, or by a card whose text explicitly grants the ability to block flying.
 - **B.12** A tapped creature cannot block.
 - **B.13** A tapped creature cannot attack.
+- **B.14** **Unblockable** is a keyword ability: a creature with this keyword cannot be blocked.
+- **B.15** **Haste** is a keyword ability: a creature with this keyword may attack the turn it enters the BOARD, overriding B.3.
+- **B.16** **Vigilance** is a keyword ability: a creature with this keyword does not tap when it attacks, overriding B.4.
+- **B.17** **Defender** is a keyword ability: a creature with this keyword cannot attack.
