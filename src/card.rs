@@ -41,6 +41,13 @@ impl CardRegistry {
     pub fn lua(&self) -> &Lua {
         &self.lua
     }
+
+    /// Look up a card by its `id` field. Linear scan — the registry holds
+    /// a few dozen cards, and EA-side helpers calling this stay well under
+    /// the per-game budget.
+    pub fn get(&self, id: &str) -> Option<&Card> {
+        self.cards.iter().find(|c| c.id == id)
+    }
 }
 
 // Colors are open-ended strings stored in `Card.colors: Vec<String>`. The
