@@ -205,6 +205,28 @@ Statics that grant keywords (flying, vigilance, defender, etc.) to qualifying ca
 
 ---
 
+## Phase 3.5 — Cost-modification layer
+
+### Status (2026-05-30)
+
+**Phase 3.5 complete.** Statics can now reduce per-source costs on cards being cast.
+
+1. ✅ `StaticDef.cost_modifiers: Vec<CostModifier>` — each entry pairs a `CostSource` with an integer `amount` to subtract.
+2. ✅ Lua parser reads `cost_modifiers = {{source = "hand", amount = 1}, ...}`.
+3. ✅ `GameState::cost_reduction(iid, source)` mirrors `has_static_keyword` iteration over `static_source_iids()`, sums all matching reductions.
+4. ✅ `play_card` pre-pass subtracts per-source totals from `hand_needed` / `mill_needed` / `graveyard_needed` / `sacrifice_needed`, clamping each to 0 (P.20).
+5. ✅ Sim's `can_pay_instant_cost` and the play-loop spell/artifact hand cost calculation both consult `cost_reduction` so discounted cards become playable.
+6. ✅ Cards wired:
+   - **Modern LCD Clock** — `affects.kind = "creature"`, reduces creature HAND by 1 + GRAVEYARD by 1. Symmetric (no controller filter, both players benefit). Exclusive to Hu / Go variants.
+   - **Methylene Blue** — `affects.colors = {"blue"}`, `affects.controller = "owner"`, reduces blue-card HAND by 1 + GRAVEYARD by 2. Controller-scoped (only owner benefits). Exclusive to Uu variant.
+
+### Out (deferred)
+
+- **Cost INCREASES** — `cost_modifiers` can only subtract today (no negative amounts validated). A "tax" static ("creatures your opponents control cost 1 more hand") would need either negative amounts allowed or a parallel field. Not blocking any current card.
+- **Per-cost-component identity** — current pre-pass aggregates by source. A card with two distinct HAND components (rare) sees the reduction applied to the total. No corpus card currently has two HAND components.
+
+---
+
 ## Phase 4 — Replacement effects
 
 **Goal:** statics that intercept events and transform them. "If this creature would die, exile it instead." "If you would draw a card, draw two instead."

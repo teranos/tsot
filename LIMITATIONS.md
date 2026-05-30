@@ -1,7 +1,7 @@
 # tsot — Known Limitations
 
 > What the engine cannot do today. Code TODOs are tagged so they map back
-> to a section here. Last refresh: 2026-05-30.
+> to a section here. Last refresh: 2026-05-30 (post-Pattern-B / Phase 3.5).
 
 ## events
 
@@ -12,12 +12,12 @@
 ## costs
 
 - **SELF / SelfExile** (P.5) — played card itself → EXILE on resolution. Originally on opponent-draw (currently a HAND substitute).
-- **Subtype filter on SACRIFICE** — `CostComponent.kind` now restricts by CardType (cinder-wurm / mortal-bee / unfair-stomper require `kind = "creature"`). A `subtypes` filter ("sacrifice a goblin") is the next gap; not blocking any current card.
-- **Cost-modification layer** — costs are read directly from `card.cost`. No mechanism to modify them via statics or external effects. Modern-LCD-Clock's "all creatures cost 5 less mill" is unbuildable without a cost-modification pre-pass that consults statics during `play_card` validation.
+- **Subtype filter on SACRIFICE** — `CostComponent.kind` filters by CardType today. A `subtypes` filter ("sacrifice a goblin") is the next gap; no current card needs it.
+- **Variable X for spells in playability filter** — `pick_random_playable_in_hand` rejects spells with `is_x` cost. Shift can't be selected by the sim AI as a result. Creatures with X cost bypass this gate (hydra plays normally).
+- **Temporary stat modifiers** — `Modifier::StatBoost` is permanent. No "until end of turn" mechanism. Blocks bring-down's true -3/-3 (currently approximated via damage), unblockable-human's `+2/+0 UEOT` line.
 
 ## types
 
-- **Artifact play resolution** — Artifact cards are in the deck pool but `play_card` rejects them (jewels work because they're pitched, not played). Wiring artifact-to-BOARD unlocks future on-board artifact effects.
 - **Environment** (P.21) → BOARD with P.22 (one at a time, global) + P.23 (can't replace). Displacement question unresolved.
 
 ## targeting
@@ -54,8 +54,8 @@ Not started. `combat.rs:321` has a TODO marker. tsot does combat damage + death 
 
 These aren't engine bugs but they limit the validity of sim-based playtest signals. The AI:
 
-- **Plays at most one creature + one non-creature per turn** (Pattern A — single creature, single spell). No further multi-card sequencing — three+ cheap creatures in hand still only deploy one this turn. No "play A, evaluate, then play B" planning.
-- **Attacks with everything eligible, always.** No "hold back this 1/1 to chump-block next turn." No "don't attack into the obvious bitter-dawn." Block policy got smart (tiered survival → kill-trade → chump → multi-block); attack policy did not.
+- **At most one creature per turn** (Pattern B). Multiple non-creatures per turn are allowed as long as the AI can afford their costs. No "play A, evaluate, then play B" planning beyond the priority-score tier ordering.
+- **Attacks with everything eligible, always.** No "hold back this 1/1 to chump-block next turn." No "don't attack into the obvious bitter-dawn." Block policy got smart (tiered survival → kill-trade with trade-up → chump → multi-block); attack policy did not.
 - **No mulligan decision.** Engine deals first 5 cards as the hand, period. Real games have S.2/S.3 redraw. The sim never explores "this opening hand is unplayable."
 - **No proactive instant timing in main phase.** Instants only fire from the response policy in R.1.a/R.1.b windows. Pre-emptive "cast surge before combat to enable a vigilance line" never happens.
 

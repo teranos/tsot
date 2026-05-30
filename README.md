@@ -10,9 +10,16 @@ A **1v1 collectible card game**, digital-first, where every card is identified b
 
 ## Status
 
-Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, supports preview/rollback/replay/save-load. The simulator runs 3,600 games per `cargo run` (6 deck-variants × 6 matchups × 100 games; configurable via `TSOT_GAMES_PER_MATCHUP=<n>`; seeded via `TSOT_SEED=<n>`) and skips suicide plays via journal preview. An HTML report (`tsot-report.html`) writes per run with matchup heatmaps, per-variant breakdowns, and per-card win rates.
+Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, supports preview/rollback/replay/save-load. The simulator runs **4,900 games per `cargo run`** (7 deck-variants × 7 matchups × 100 games; configurable via `TSOT_GAMES_PER_MATCHUP=<n>`; seeded via `TSOT_SEED=<n>`) and skips suicide plays via journal preview. An HTML report (`tsot-report.html`) writes per run with matchup heatmaps, per-variant breakdowns, per-card win rates with hover tooltips, sacrifice/discard victim tracking, and first/last-turn-played columns.
 
-STACK and response windows are done (Phase 1 + 2): instants get cast in response, counterspell works, threat-aware AI policy fires combat tricks during opponent's combat. STATIC Phase 1 (continuous stat anthems) is done — battle-captain and goblin-warlord modify stats on the board. Spell (Instant + Sorcery via timing) routes through `play_card`. Artifact lands in pool as pitch fuel. **Remaining gaps**: activated abilities (`T: ...`), STATIC Phase 2-4 (keyword grants, restrictions, replacements), delayed triggers, a targeting layer, SACRIFICE/SELF cost sources, Environment type. See `LIMITATIONS.md` for the tight current list.
+**Done in the engine:**
+- **STACK Phase 1 + 2** — response windows, counterspell, threat-aware AI combat tricks.
+- **STATIC Phase 1 + 2 + 3 + 3.5** — stat anthems, keyword grants (flying, haste, vigilance), state-reading predicates, source-only / attached-host scopes, kind / has-keyword filters, action restrictions (cannot-attack, cannot-be-cost-paid), cost-reduction modifiers.
+- **Costs** — HAND, MILL, GRAVEYARD, SACRIFICE (with kind filter); P.24a jewel tap and P.24b crystal tap as HAND-payment substitutions.
+- **Card types routed by play_card** — Creature, Spell (Instant + Sorcery via timing), Artifact (with the no-summoning-sickness P.25 rule).
+- **Sim AI heuristics** — Pattern B multi-noncreature per turn, play-priority scoring (cost-reducers + anthems land first), smart-pitch, smart-discard, smart-target, trade-up block policy, investment-aware sacrifice picker.
+
+**Remaining gaps** (see `LIMITATIONS.md`): activated abilities (`T: ...`), targeting layer, phase-entry / delayed triggers, SELF cost source, Environment type, STATIC Phase 4 (replacement effects), temporary stat modifiers, OnDealtDamageToPlayer event, static-recompute on attached-set change.
 
 ## Building & running
 
@@ -43,7 +50,7 @@ mlua bundles Lua 5.4 from source via the `vendored` feature; no system Lua insta
 - **`LIMITATIONS.md`** — what the engine can't do today.
 - **`LUA.md`** — phased plan for card-ability execution.
 - **`STACK.md`** — phased plan for response windows. Phase 1 + 2 done.
-- **`STATIC.md`** — phased plan for continuous effects. Phase 1 done.
+- **`STATIC.md`** — phased plan for continuous effects. Phase 1 + 2 + 3 + 3.5 done.
 - **`JOURNAL.md`** — multi-session plan for mutation journaling, rollback, replay, save/load.
 
 ## The archived v1 garden
