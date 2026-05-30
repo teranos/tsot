@@ -853,7 +853,7 @@ impl GameState {
         // on-board cards plus cards attached to them. If a source's static
         // matches this candidate via affects, add the declared modifier.
         for source_iid in self.static_source_iids() {
-            if let Some((dx, dy)) = self.evaluate_static_stat_modifier(&source_iid, iid) {
+            if let Some((dx, dy)) = self.evaluate_static_stat_modifier(source_iid, iid) {
                 x += dx;
                 y += dy;
             }
@@ -1039,24 +1039,39 @@ impl GameState {
     /// then attached-on-each-host. Used by `effective_stats` and
     /// `has_static_keyword` so attached sources (e.g., companion-bird with
     /// `scope = "attached_host"`) participate in static evaluation.
-    fn static_source_iids(&self) -> Vec<InstanceId> {
-        let mut out: Vec<InstanceId> = Vec::new();
-        for board_iid in self.a.board.iter().chain(self.b.board.iter()) {
-            out.push(board_iid.clone());
-            if let Some(host) = self.card_pool.get(board_iid) {
-                for att_iid in &host.attached {
-                    out.push(att_iid.clone());
-                }
-            }
-        }
-        out
+    /// Iterator over every potential static source — on-board cards plus
+    /// every card in those cards' `attached` lists, FILTERED to entries
+    /// that have a `static_def`. Most board cards have no static, and
+    /// pre-filtering here saves the downstream `static_def_if_matches`
+    /// from doing a card_pool lookup + None branch per call. Hot path:
+    /// called from effective_stats, has_static_keyword, has_restriction,
+    /// and cost_reduction, multiple times per AI decision.
+    fn static_source_iids(&self) -> impl Iterator<Item = &InstanceId> + '_ {
+        self.a
+            .board
+            .iter()
+            .chain(self.b.board.iter())
+            .flat_map(move |board_iid| {
+                let host = self.card_pool.get(board_iid);
+                let attached = host
+                    .map(|h| h.attached.iter())
+                    .into_iter()
+                    .flatten();
+                std::iter::once(board_iid).chain(attached)
+            })
+            .filter(move |iid| {
+                self.card_pool
+                    .get(*iid)
+                    .map(|i| i.card.static_def.is_some())
+                    .unwrap_or(false)
+            })
     }
 
     /// Phase 2: true if any on-board static source grants `keyword` to the
     /// card at `iid`. Mirrors `effective_stats`'s iteration shape.
     pub fn has_static_keyword(&self, iid: &InstanceId, keyword: &str) -> bool {
         for source_iid in self.static_source_iids() {
-            if let Some(granted) = self.evaluate_static_keyword_grant(&source_iid, iid) {
+            if let Some(granted) = self.evaluate_static_keyword_grant(source_iid, iid) {
                 if granted == keyword {
                     return true;
                 }
@@ -1082,7 +1097,7 @@ impl GameState {
     /// on the card at `iid`. Mirrors `has_static_keyword` iteration shape.
     pub fn has_restriction(&self, iid: &InstanceId, restriction: crate::card::Restriction) -> bool {
         for source_iid in self.static_source_iids() {
-            if let Some(def) = self.static_def_if_matches(&source_iid, iid) {
+            if let Some(def) = self.static_def_if_matches(source_iid, iid) {
                 if def.restrictions.contains(&restriction) {
                     return true;
                 }
@@ -1103,7 +1118,7 @@ impl GameState {
     ) -> i32 {
         let mut total = 0i32;
         for source_iid in self.static_source_iids() {
-            if let Some(def) = self.static_def_if_matches(&source_iid, iid) {
+            if let Some(def) = self.static_def_if_matches(source_iid, iid) {
                 for m in &def.cost_modifiers {
                     if m.source == source {
                         total += m.amount;

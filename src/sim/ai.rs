@@ -67,17 +67,17 @@ pub fn pick_random_playable_in_hand(
     if candidates.is_empty() {
         return None;
     }
-    // Priority-tiered pick: among eligibles, find the highest play_priority
-    // tier and random-pick within it.
-    let max_priority = candidates
+    // Priority-tiered pick: score each candidate once, find the max,
+    // then filter to that tier. (Earlier version computed the score
+    // twice per candidate.)
+    let scored: Vec<(&InstanceId, i32)> = candidates
         .iter()
-        .map(|iid| play_priority_score(state, iid))
-        .max()
-        .unwrap_or(0);
-    let top: Vec<&InstanceId> = candidates
-        .iter()
-        .filter(|iid| play_priority_score(state, iid) == max_priority)
-        .copied()
+        .map(|iid| (*iid, play_priority_score(state, iid)))
+        .collect();
+    let max_priority = scored.iter().map(|(_, s)| *s).max().unwrap_or(0);
+    let top: Vec<&InstanceId> = scored
+        .into_iter()
+        .filter_map(|(iid, s)| if s == max_priority { Some(iid) } else { None })
         .collect();
     top.choose(rng).map(|iid| (*iid).clone())
 }
