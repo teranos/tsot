@@ -623,7 +623,10 @@ fn run_game(
                         })
                         .cloned()
                         .collect();
-                    sac_candidates.sort_by_key(|iid| state.effective_stats(iid).0);
+                    // Sort by "keep value" — investment + body + attached
+                    // payments-that-would-exile (P.8). Ascending = lowest
+                    // value first = preferred sacrifice victim.
+                    sac_candidates.sort_by_key(|iid| sacrifice_keep_value(&state, iid));
                     if let Some(pick) = sac_candidates.into_iter().next() {
                         // Record which card_id is about to be sacrificed
                         // (read before mutation; the card moves to graveyard
@@ -1036,6 +1039,28 @@ fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceId) -
         && p.deck.len() >= mill_need
         && p.graveyard.len() >= gy_need
         && sac_ok
+}
+
+/// Sim heuristic: how valuable would it be to KEEP this on-board card?
+/// Higher = more valuable = less preferred for sacrifice. Used by the
+/// sacrifice picker to prefer low-investment / low-body / low-attachment
+/// victims. Pure read of state.
+///
+/// Signals:
+/// - Effective stats (X + Y): bigger body = harder to replace.
+/// - Printed cost amount sum: harder cards to recast are worth keeping.
+///   Weighted ×2 because investment is the user's explicit axis here.
+/// - Attached count: payments attached to this card (P.6) follow it to
+///   EXILE when it leaves BOARD via non-BOARD destination (P.8). Each
+///   attached card is sunk value. Weighted ×2.
+fn sacrifice_keep_value(state: &GameState, iid: &InstanceId) -> i32 {
+    let Some(inst) = state.card_pool.get(iid) else {
+        return 0;
+    };
+    let (x, y) = state.effective_stats(iid);
+    let cost_weight: i32 = inst.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    let attached_count = inst.attached.len() as i32;
+    x + y + cost_weight * 2 + attached_count * 2
 }
 
 /// Sim heuristic: skip an attack iff the defender has at least one legal

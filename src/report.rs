@@ -116,8 +116,8 @@ fn build_report(
                 div.panel { (card_performance(all, pools)) }
 
                 h2 { "sacrifice victims" }
-                div.note { "Which cards get fed to the sacrifice mill most often, pooled across both seats. Counts per game-appearance of the sacrificed card." }
-                div.panel { (sacrifice_victims(all)) }
+                div.note { "Which cards get fed to the sacrifice mill most often, pooled across both seats. Counts per game-appearance of the sacrificed card. Hover a card name to see its printed text." }
+                div.panel { (sacrifice_victims(all, pools)) }
 
                 h2 { "pending mechanics" }
                 div.note { "Zero today; nonzero once each engine piece lands." }
@@ -785,7 +785,17 @@ fn card_tooltip_markup(c: &tsot::Card) -> Markup {
     }
 }
 
-fn sacrifice_victims(all: &[GameStats]) -> Markup {
+fn sacrifice_victims(
+    all: &[GameStats],
+    pools: &[(DeckVariant, Vec<tsot::Card>)],
+) -> Markup {
+    let mut card_lookup: std::collections::BTreeMap<String, &tsot::Card> =
+        std::collections::BTreeMap::new();
+    for (_, pool) in pools {
+        for c in pool {
+            card_lookup.entry(c.id.clone()).or_insert(c);
+        }
+    }
     let mut totals: std::collections::BTreeMap<String, u32> =
         std::collections::BTreeMap::new();
     for s in all {
@@ -808,8 +818,14 @@ fn sacrifice_victims(all: &[GameStats]) -> Markup {
                 }}
                 tbody {
                     @for (id, n) in &rows {
+                        @let card_ref = card_lookup.get(id).copied();
                         tr {
-                            th { (id) }
+                            th.card-cell {
+                                span.card-id { (id) }
+                                @if let Some(c) = card_ref {
+                                    (card_tooltip_markup(c))
+                                }
+                            }
                             td.num { (n) }
                             td.bar-cell {
                                 div.bar {
