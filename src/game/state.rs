@@ -498,11 +498,14 @@ impl GameState {
 
     /// Phase 2 introspection (X-E.1): instances in `player`'s hand that
     /// could be cast as a response right now. Filter: instant timing,
-    /// HAND-only cost (no MILL / GRAVEYARD / X — those need the full
-    /// payment flow), with enough other cards in hand to pay. Same surface
-    /// the UI will use to populate the "respond?" prompt.
+    /// HAND / MILL / GRAVEYARD cost (no X, no SACRIFICE/SELF), with the
+    /// resources available to pay each component. Same surface the UI will
+    /// use to populate the "respond?" prompt.
     pub fn playable_responses(&self, player: PlayerId) -> Vec<InstanceId> {
-        let hand = &self.player(player).hand;
+        let p = self.player(player);
+        let hand = &p.hand;
+        let gy_len = p.graveyard.len();
+        let deck_len = p.deck.len();
         hand.iter()
             .filter(|iid| {
                 let Some(inst) = self.card_pool.get(*iid) else {
@@ -515,19 +518,21 @@ impl GameState {
                     return false;
                 }
                 let mut hand_need: usize = 0;
+                let mut mill_need: usize = 0;
+                let mut gy_need: usize = 0;
                 for c in &inst.card.cost {
                     if c.is_x {
                         return false;
                     }
+                    let amount = c.amount.max(0) as usize;
                     match c.source {
-                        crate::card::CostSource::Hand => {
-                            hand_need += c.amount.max(0) as usize;
-                        }
+                        crate::card::CostSource::Hand => hand_need += amount,
+                        crate::card::CostSource::Mill => mill_need += amount,
+                        crate::card::CostSource::Graveyard => gy_need += amount,
                         _ => return false,
                     }
                 }
-                // Need hand_need OTHER cards in hand (excluding the cast).
-                hand.len() > hand_need
+                hand.len() > hand_need && deck_len >= mill_need && gy_len >= gy_need
             })
             .cloned()
             .collect()
