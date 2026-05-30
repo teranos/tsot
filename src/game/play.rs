@@ -162,6 +162,20 @@ impl GameState {
             }
         }
 
+        // Phase 3.5 cost-modification pre-pass: each on-board static whose
+        // `affects` matches the cast card can reduce per-source costs (per
+        // CostModifier entries). P.20 clamps each component to 0 minimum.
+        let hand_red = self.cost_reduction(instance, CostSource::Hand).max(0) as usize;
+        let mill_red = self.cost_reduction(instance, CostSource::Mill).max(0) as usize;
+        let gy_red = self.cost_reduction(instance, CostSource::Graveyard).max(0) as usize;
+        let sac_red = self
+            .cost_reduction(instance, CostSource::Sacrifice)
+            .max(0) as usize;
+        hand_needed = hand_needed.saturating_sub(hand_red);
+        mill_needed = mill_needed.saturating_sub(mill_red);
+        graveyard_needed = graveyard_needed.saturating_sub(gy_red);
+        sacrifice_needed = sacrifice_needed.saturating_sub(sac_red);
+
         // P.24: validate optional jewel-tap. Pull card colors once for both
         // the jewel-color check (here) and any future uses. After validation,
         // reduce `hand_needed` by 1 — the jewel substitutes for one HAND slot.

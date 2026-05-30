@@ -1002,6 +1002,29 @@ impl GameState {
         }
         false
     }
+
+    /// Phase 3.5: total cost reduction applied to casting `iid` from
+    /// `source`-typed components, summed across all matching on-board
+    /// static sources. Used by play_card to reduce per-source cost
+    /// requirements before validation; per P.20 the caller clamps each
+    /// resulting amount to a minimum of 0.
+    pub fn cost_reduction(
+        &self,
+        iid: &InstanceId,
+        source: crate::card::CostSource,
+    ) -> i32 {
+        let mut total = 0i32;
+        for source_iid in self.static_source_iids() {
+            if let Some(def) = self.static_def_if_matches(&source_iid, iid) {
+                for m in &def.cost_modifiers {
+                    if m.source == source {
+                        total += m.amount;
+                    }
+                }
+            }
+        }
+        total
+    }
 }
 
 #[cfg(test)]
@@ -1264,6 +1287,7 @@ mod tests {
             modifier_keyword: None,
             condition: None,
             restrictions: Vec::new(),
+            cost_modifiers: Vec::new(),
         });
     }
 
@@ -1333,6 +1357,7 @@ mod tests {
             modifier_keyword: Some("flying".into()),
             condition: None,
             restrictions: Vec::new(),
+            cost_modifiers: Vec::new(),
         });
         // Move host + bystander to board.
         s.a.hand.retain(|i| i != &bird && i != &host && i != &bystander);
@@ -1367,6 +1392,7 @@ mod tests {
             modifier_keyword: Some("flying".into()),
             condition: None,
             restrictions: Vec::new(),
+            cost_modifiers: Vec::new(),
         });
         s.a.hand.retain(|i| i != &bird && i != &target);
         s.a.board.push(bird);
@@ -1396,6 +1422,7 @@ mod tests {
             modifier_keyword: Some("flying".into()),
             condition: Some(crate::card::StaticCondition::OwnerGraveyardSize { min: 5 }),
             restrictions: Vec::new(),
+            cost_modifiers: Vec::new(),
         });
         s.a.hand.retain(|i| i != &source && i != &target);
         s.a.board.push(source);
@@ -1439,6 +1466,7 @@ mod tests {
             modifier_keyword: Some("flying".into()),
             condition: Some(crate::card::StaticCondition::OwnerGraveyardNonCreatures { min: 4 }),
             restrictions: Vec::new(),
+            cost_modifiers: Vec::new(),
         });
         s.a.hand.retain(|i| i != &wizard);
         s.a.board.push(wizard.clone());
@@ -1484,6 +1512,7 @@ mod tests {
             modifier_keyword: Some("flying".into()),
             condition: None,
             restrictions: Vec::new(),
+            cost_modifiers: Vec::new(),
         });
         s.a.hand.retain(|i| i != &wizard && i != &other);
         s.a.board.push(wizard.clone());
@@ -1519,6 +1548,7 @@ mod tests {
                 crate::card::Restriction::CannotAttack,
                 crate::card::Restriction::CannotBeCostPaid,
             ],
+            cost_modifiers: Vec::new(),
         });
         s.b.hand.retain(|i| i != &plant && i != &own_insect);
         s.a.hand.retain(|i| i != &opp_insect);
@@ -1560,6 +1590,7 @@ mod tests {
             modifier_keyword: None,
             condition: None,
             restrictions: vec![crate::card::Restriction::CannotAttack],
+            cost_modifiers: Vec::new(),
         });
         s.b.hand.retain(|i| i != &plant);
         s.a.hand.retain(|i| i != &attacker);
@@ -1600,6 +1631,7 @@ mod tests {
             modifier_keyword: None,
             condition: None,
             restrictions: vec![crate::card::Restriction::CannotAttack],
+            cost_modifiers: Vec::new(),
         });
         s.b.hand.retain(|i| i != &source);
         s.a.hand.retain(|i| i != &flyer && i != &grounder);

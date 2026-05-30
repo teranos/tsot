@@ -187,6 +187,23 @@ pub struct StaticDef {
     /// `cannot_attack` AND `cannot_be_cost_paid`).
     #[serde(default)]
     pub restrictions: Vec<Restriction>,
+    /// Phase 3.5: cost reductions applied to matching candidates when they
+    /// are cast. The `affects` predicate gates which cards get the discount;
+    /// each entry reduces one cost-source by `amount` (clamped to 0 per P.20).
+    /// Modern LCD Clock uses this with `affects.kind = creature` and one
+    /// entry each for HAND and GRAVEYARD reductions.
+    #[serde(default)]
+    pub cost_modifiers: Vec<CostModifier>,
+}
+
+/// Phase 3.5 cost reduction component on a static ability. Applied during
+/// `play_card` cost computation: each on-board static whose `affects`
+/// matches the cast card subtracts `amount` from the matching cost
+/// source's requirement (minimum 0 per P.20).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CostModifier {
+    pub source: CostSource,
+    pub amount: i32,
 }
 
 /// Phase 3 action restriction. Each variant maps to one engine choke point.
@@ -566,6 +583,25 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
             )))
         }
     };
+    let cost_modifiers = match static_t.get::<Value>("cost_modifiers")? {
+        Value::Nil => Vec::new(),
+        Value::Table(t) => {
+            let mut out = Vec::new();
+            for item in t.sequence_values::<Table>() {
+                let item = item?;
+                let source_s: String = item.get("source")?;
+                let source = parse_source(&source_s).map_err(mlua::Error::runtime)?;
+                let amount = item.get::<Option<i32>>("amount")?.unwrap_or(1);
+                out.push(CostModifier { source, amount });
+            }
+            out
+        }
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "static.cost_modifiers must be a sequence of tables, got {other:?}"
+            )))
+        }
+    };
     Ok(Some(StaticDef {
         affects,
         modifier_x,
@@ -573,6 +609,7 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
         modifier_keyword,
         condition,
         restrictions,
+        cost_modifiers,
     }))
 }
 

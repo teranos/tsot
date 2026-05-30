@@ -48,9 +48,11 @@ pub(crate) enum DeckVariant {
     /// Full pool, no filter (identical to Ra; kept distinct so the matchup
     /// matrix shows the Ra↔Ra and Ra↔Rb baselines symmetrically).
     Rb,
-    /// No goblins — exercises anti-tribal play against goblin-warlord etc.
+    /// Humans tribe: no goblins. 2× modern-lcd-clock mandatory.
     Hu,
-    /// No humans, fish, insects, or beasts (was: G).
+    /// Goblins tribe: filters out humans/fish/insects/beasts. Pre-fills
+    /// 2× modern-lcd-clock plus 4 guaranteed goblins (eager-goblin +
+    /// goblin-warlord). LCD Clock is exclusive to Hu and Go.
     Go,
     /// Colorless or blue only — heavy on draw / counter / interaction.
     Uu,
@@ -83,8 +85,19 @@ pub(crate) fn variant_label(v: DeckVariant) -> &'static str {
     }
 }
 
+/// Cards that are exclusive to specific deck variants. Any card listed
+/// here is filtered OUT of every variant NOT in its allow-list. Used to
+/// make modern-lcd-clock a thematic-artifact exclusive to the Hu and Go
+/// tribal variants — other decks never include it.
+fn card_is_allowed_in(card_id: &str, v: DeckVariant) -> bool {
+    match card_id {
+        "modern-lcd-clock" => matches!(v, DeckVariant::Hu | DeckVariant::Go),
+        _ => true,
+    }
+}
+
 fn variant_pool(playable: &[Card], v: DeckVariant) -> Vec<Card> {
-    match v {
+    let base: Vec<Card> = match v {
         DeckVariant::Ra | DeckVariant::Rb => playable.to_vec(),
         DeckVariant::Hu => playable
             .iter()
@@ -132,7 +145,11 @@ fn variant_pool(playable: &[Card], v: DeckVariant) -> Vec<Card> {
             })
             .cloned()
             .collect(),
-    }
+    };
+    // Apply per-card variant-exclusivity (LCD Clock for Hu/Go only).
+    base.into_iter()
+        .filter(|c| card_is_allowed_in(&c.id, v))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -410,6 +427,15 @@ fn mandatory_for_variant(v: DeckVariant) -> &'static [(&'static str, u32)] {
         DeckVariant::Pr => &[("red-jewel", 4)],
         DeckVariant::Uu => &[("blue-jewel", 4)],
         DeckVariant::Gg => &[("green-jewel", 4)],
+        DeckVariant::Hu => &[("modern-lcd-clock", 2)],
+        // Go is the goblin tribal: 2 LCD Clocks (thematic artifact shared
+        // with Hu) plus 4 guaranteed goblins (2 eager-goblin + 2 goblin-
+        // warlord — aggro body + anthem).
+        DeckVariant::Go => &[
+            ("modern-lcd-clock", 2),
+            ("eager-goblin", 2),
+            ("goblin-warlord", 2),
+        ],
         _ => &[],
     }
 }
@@ -574,11 +600,16 @@ fn run_game(
                 // Recorded by RecordingOracle so retry-on-suicide sees it.
                 // Spell + Artifact share this cost-resolution path (both route
                 // through play_card, both pay HAND from hand).
-                let mut hand_needed: usize = cost
+                let raw_hand_needed: usize = cost
                     .iter()
                     .filter(|c| matches!(c.source, CostSource::Hand))
                     .map(|c| c.amount.max(0) as usize)
                     .sum();
+                // Phase 3.5: subtract on-board static cost reductions.
+                let hand_red = state
+                    .cost_reduction(&picked, CostSource::Hand)
+                    .max(0) as usize;
+                let mut hand_needed = raw_hand_needed.saturating_sub(hand_red);
                 // P.24: if a same-color untapped jewel is on board, prefer
                 // tapping it (saves a hand card). At most 1 jewel per cast.
                 if hand_needed > 0 {
@@ -1022,6 +1053,14 @@ fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceId) -
             _ => return false,
         }
     }
+    // Phase 3.5: apply cost reduction from on-board statics before
+    // checking affordability. P.20 clamp.
+    let hand_red = state.cost_reduction(iid, CostSource::Hand).max(0) as usize;
+    let mill_red = state.cost_reduction(iid, CostSource::Mill).max(0) as usize;
+    let gy_red = state.cost_reduction(iid, CostSource::Graveyard).max(0) as usize;
+    hand_need = hand_need.saturating_sub(hand_red);
+    mill_need = mill_need.saturating_sub(mill_red);
+    gy_need = gy_need.saturating_sub(gy_red);
     let p = state.player(player);
     // Subtract 1 for the card being played (it's also in hand).
     let hand_have = p.hand.len().saturating_sub(1);
