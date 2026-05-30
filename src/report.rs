@@ -32,8 +32,6 @@ fn build_report(
 ) -> Markup {
     let n = all.len();
     let nf = n.max(1) as f64;
-    let a_wins = all.iter().filter(|s| s.winner == PlayerId::A).count();
-    let b_wins = n - a_wins;
     let per_game = elapsed / n.max(1) as u32;
 
     let mut turn_values: Vec<u32> = all.iter().map(|s| s.turns).collect();
@@ -59,9 +57,6 @@ fn build_report(
                     div { span.k { "elapsed" } b { (format!("{:.2?}", elapsed)) } }
                     div { span.k { "per game" } b { (format!("{:.1?}", per_game)) } }
                 }
-
-                h2 { "overall" }
-                div.panel { (win_split("winners", a_wins, b_wins)) }
 
                 h2 { "turn count" }
                 div.panel {
@@ -140,25 +135,6 @@ fn stat_f(label: &str, value: f64) -> Markup {
         div.stat {
             div.label { (label) }
             b { (format!("{value:.1}")) }
-        }
-    }
-}
-
-fn win_split(label: &str, a: usize, b: usize) -> Markup {
-    let total = (a + b).max(1) as f64;
-    let a_pct = 100.0 * a as f64 / total;
-    let b_pct = 100.0 * b as f64 / total;
-    html! {
-        div.win-split {
-            div.win-label { (label) }
-            div.win-bar {
-                div.win-a style=(format!("width:{a_pct:.1}%")) {
-                    span { (format!("A {a} · {a_pct:.0}%")) }
-                }
-                div.win-b style=(format!("width:{b_pct:.1}%")) {
-                    span { (format!("B {b} · {b_pct:.0}%")) }
-                }
-            }
         }
     }
 }

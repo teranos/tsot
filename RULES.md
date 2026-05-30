@@ -144,3 +144,4 @@ The following are not part of this game.
 - **B.15** **Haste** is a keyword ability: a creature with this keyword may attack the turn it enters the BOARD, overriding B.3.
 - **B.16** **Vigilance** is a keyword ability: a creature with this keyword does not tap when it attacks, overriding B.4.
 - **B.17** **Defender** is a keyword ability: a creature with this keyword cannot attack.
+- **B.18** **cannot-block** is a keyword ability: a creature with this keyword cannot be declared as a blocker. The mirror of defender — defender prevents attacking, cannot-block prevents blocking.

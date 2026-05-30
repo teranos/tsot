@@ -33,6 +33,7 @@ pub enum CombatError {
     BlockerNotOnBoard,
     BlockerNotControlled,
     BlockerTapped,
+    BlockerCannotBlock,
     BlockerIsAttacker,
     AttackerNotDeclared,
     AttackerUnblockable,
@@ -199,6 +200,9 @@ impl GameState {
         }
         if blocker_inst.tapped {
             return Err(CombatError::BlockerTapped);
+        }
+        if blocker_inst.has_keyword("cannot-block") {
+            return Err(CombatError::BlockerCannotBlock);
         }
         if blocker == attacker {
             return Err(CombatError::BlockerIsAttacker);

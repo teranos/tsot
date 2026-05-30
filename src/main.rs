@@ -768,7 +768,7 @@ fn eligible_blockers(state: &GameState, player: PlayerId) -> Vec<InstanceId> {
             let Some(inst) = state.card_pool.get(*iid) else {
                 return false;
             };
-            !inst.tapped
+            !inst.tapped && !inst.has_keyword("cannot-block")
         })
         .cloned()
         .collect()
