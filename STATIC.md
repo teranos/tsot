@@ -150,17 +150,21 @@ The smallest meaningful slice. Anthem-style buffs.
 
 ### Status (2026-05-30)
 
-Phase 2 in flight. Pieces landed:
+**Phase 2 complete.** Pieces landed:
 
 1. ✅ `StaticDef.modifier_keyword: Option<String>` field + parser reads `modifier.keyword` from Lua.
 2. ✅ `GameState::evaluate_static_keyword_grant(source, target)` + `has_static_keyword(iid, kw)` mirror the Phase 1 stat-modifier iteration via a shared `static_def_if_matches` helper.
 3. ✅ `GameState::has_keyword(iid, kw)` combines intrinsic (printed + modifiers) with static-granted; all call sites in main.rs and combat.rs migrated. `CardInstance::has_keyword` stays as the intrinsic-only check for places without state access.
 4. ✅ First wired card: goblin-warchief — *"Other goblins you control get +1/+1 and have haste."* Combined stat + keyword on one static.
-5. ✅ `StaticAffects.scope = "attached_host"` scope + `static_source_iids` iteration includes cards attached to on-board hosts. Companion-bird-style "while attached, host has [keyword]" statics now expressible.
-6. ✅ Companion-bird wired: `static = { affects = { scope = "attached_host" }, modifier = { keyword = "flying" } }`. Two unit tests cover the AttachedHost path (attaches → host gains flying; unattached on board → nothing).
+5. ✅ `StaticAffects.scope = "attached_host"` scope + `static_source_iids` iteration includes cards attached to on-board hosts.
+6. ✅ Companion-bird wired with AttachedHost scope.
+7. ✅ State-reading predicates: `StaticCondition` enum (declarative — not Lua escape hatch). Variants: `OwnerGraveyardSize { min }` and `OwnerGraveyardNonCreatures { min }`. New variants added as cards need them.
+8. ✅ `StaticScope::SourceOnly` — for "this creature has [keyword] when [condition]" style cards.
+9. ✅ `StaticAffects.kind: Option<CardType>` — lets cards say "creatures you control" without subtype enumeration.
+10. ✅ Ossuary wired: graveyard-threshold + creature-kind filter + stat+keyword on one static. All three Phase 2 capabilities exercised together. Win rate 0.58 in 30-game smoke.
+11. ✅ Wandering-wizard wired: SourceOnly + OwnerGraveyardNonCreatures predicate. Win rate 0.53.
 
-Remaining:
-7. ⬜ **State-reading predicate escape hatch** — needed for ossuary's graveyard-threshold predicate and wandering-wizard's conditional flying. Design call landed: declarative predicate enum (not Lua escape hatch). Blocks ossuary + wandering-wizard.
+Phase 2 unit-test coverage: keyword grant; AttachedHost scope (grants to host, no grants when unattached); condition gate (block then trigger on threshold); non-creature count (correctly excludes creature cards); SourceOnly scope (targets only the source).
 
 ### Goal
 
@@ -168,12 +172,12 @@ Statics that grant keywords (flying, vigilance, defender, etc.) to qualifying ca
 
 ### Scope (in)
 
-- Extend Phase 1 `modifier` shape to include `{keyword = "flying"}` variant — ✅ data structure landed (`StaticDef.modifier_keyword`).
+- Extend Phase 1 `modifier` shape to include `{keyword = "flying"}` variant — ✅ landed (`StaticDef.modifier_keyword`).
 - `has_keyword(iid, keyword)` iterates on-board static sources the same way `effective_stats` does — ✅ landed via `GameState::has_keyword`.
-- State-reading predicate (e.g., "owner.graveyard.len() >= 5") — ⬜ pending, blocks ossuary + wandering-wizard.
-- Cards:
-  - A future "flying anthem" — "Other birds you control have flying."
-  - Equipment-style attaches that grant keywords (not yet a card kind, but the system is ready).
+- State-reading predicate (e.g., "owner.graveyard.len() >= 5") — ✅ landed as `StaticCondition` enum.
+- AttachedHost scope (companion-bird) — ✅ landed.
+- SourceOnly scope (wandering-wizard) — ✅ landed.
+- Kind filter ("creatures you control" without enumerating subtypes) — ✅ landed.
 
 ### Out
 

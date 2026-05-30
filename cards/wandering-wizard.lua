@@ -10,21 +10,18 @@
 --   - U-variant decks (heavy on instants/sorceries) fill the graveyard
 --     fast, so the flying condition triggers earlier for them.
 --
--- Engine support:
---   - 2/1 stats, blue color, human/wizard subtypes: ✅ read by effective_stats
---     and the anthem system.
---   - 1 hand cost: ✅ routed by play_card.
---   - on_die cantrip: ✅ wired (game.draw is a primitive).
---   - flying (conditional on graveyard composition): ❌ pending. Needs
---     STATIC Phase 2 (keyword grants) + a state-reading predicate (the
---     declarative Phase 1 affects struct doesn't express "owner's graveyard
---     has > N non-creature cards"). When wired, the static would be a
---     self-targeting keyword grant whose predicate evaluates on every
---     has_keyword call (lazy eval already accommodates this).
---   - cannot block: ❌ pending. Same blocker as flesh-eating-plant —
---     STATIC.md Phase 3 restriction statics. New keyword "cannot-block"
---     would be enforced in declare_blocker.
+-- Blue 2/1 human wizard. Cheap (1 hand), self-replacing (cantrip on death),
+-- with conditional evasion: flying only when your graveyard has filled up
+-- with non-creature cards (mid-late game). The "cannot block" pushes it
+-- as a one-way attacker — chip damage in the air, replace itself on trade.
 --
+-- Synergy: battle-captain (other humans +1/+1) buffs to 3/2 flying with
+-- cantrip-on-death. U-variant decks fill the graveyard with spells fast,
+-- triggering the flying condition earlier.
+--
+-- Conditional flying wired via STATIC Phase 2: `scope = "source_only"`
+-- targets the wizard itself; `condition.owner_graveyard_non_creatures
+-- min=4` is "> 3" non-creature cards. `cannot-block` is intrinsic (B.18).
 -- Symbol not yet specified.
 return {
   id = "wandering-wizard",
@@ -36,10 +33,16 @@ return {
   abilities = {
     "this creature has flying when more than 3 non-creature cards are in your graveyard.",
     "cannot-block.",
-    "this creature cannot block.",
     "when this creature dies, draw a card.",
   },
   stats = {x = 2, y = 1},
+  static = {
+    affects = {
+      scope = "source_only",
+    },
+    modifier = {keyword = "flying"},
+    condition = {kind = "owner_graveyard_non_creatures", min = 4},
+  },
   on_die = function(game, self)
     game.draw(self.owner, 1)
   end,

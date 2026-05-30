@@ -834,7 +834,8 @@ impl GameState {
     }
 
     /// Shared affects-predicate check. Returns the source's StaticDef iff
-    /// `source_iid` has one AND `target_iid` matches its `affects` predicate.
+    /// `source_iid` has one AND its `condition` (if any) is satisfied AND
+    /// `target_iid` matches its `affects` predicate.
     fn static_def_if_matches(
         &self,
         source_iid: &InstanceId,
@@ -844,16 +845,29 @@ impl GameState {
         let def = source.card.static_def.as_ref()?;
         let target = self.card_pool.get(target_iid)?;
 
+        // Phase 2 condition gate: short-circuit before any affects logic.
+        if let Some(cond) = &def.condition {
+            if !self.evaluate_static_condition(source.controller, cond) {
+                return None;
+            }
+        }
+
         let affects = &def.affects;
         if affects.exclude_self && source_iid == target_iid {
             return None;
         }
         // Scope check. AttachedHost requires that the source is in the
         // target's `attached` list (i.e., target IS the host of source).
+        // SourceOnly requires target == source (the static targets itself).
         match affects.scope {
             crate::card::StaticScope::Board => {}
             crate::card::StaticScope::AttachedHost => {
                 if !target.attached.iter().any(|x| x == source_iid) {
+                    return None;
+                }
+            }
+            crate::card::StaticScope::SourceOnly => {
+                if source_iid != target_iid {
                     return None;
                 }
             }
@@ -888,7 +902,37 @@ impl GameState {
                 return None;
             }
         }
+        if let Some(k) = affects.kind {
+            if target.card.kind != k {
+                return None;
+            }
+        }
         Some(def)
+    }
+
+    /// Phase 2: evaluate a state-reading static condition against game
+    /// state. `owner` is the source's controller — all `Owner*` variants
+    /// look up against that player's zones.
+    fn evaluate_static_condition(
+        &self,
+        owner: PlayerId,
+        cond: &crate::card::StaticCondition,
+    ) -> bool {
+        match cond {
+            crate::card::StaticCondition::OwnerGraveyardSize { min } => {
+                self.player(owner).graveyard.len() >= *min
+            }
+            crate::card::StaticCondition::OwnerGraveyardNonCreatures { min } => {
+                let non_creatures = self
+                    .player(owner)
+                    .graveyard
+                    .iter()
+                    .filter_map(|iid| self.card_pool.get(iid))
+                    .filter(|inst| inst.card.kind != crate::card::CardType::Creature)
+                    .count();
+                non_creatures >= *min
+            }
+        }
     }
 
     /// Iterator yielding every potential static source: every on-board card,
@@ -1188,10 +1232,12 @@ mod tests {
                 controller: Some(crate::card::StaticController::Owner),
                 exclude_self: true,
                 scope: crate::card::StaticScope::Board,
+                kind: None,
             },
             modifier_x: dx,
             modifier_y: dy,
             modifier_keyword: None,
+            condition: None,
         });
     }
 
@@ -1253,10 +1299,12 @@ mod tests {
                 controller: None,
                 exclude_self: false,
                 scope: crate::card::StaticScope::AttachedHost,
+                kind: None,
             },
             modifier_x: 0,
             modifier_y: 0,
             modifier_keyword: Some("flying".into()),
+            condition: None,
         });
         // Move host + bystander to board.
         s.a.hand.retain(|i| i != &bird && i != &host && i != &bystander);
@@ -1283,15 +1331,129 @@ mod tests {
                 controller: None,
                 exclude_self: false,
                 scope: crate::card::StaticScope::AttachedHost,
+                kind: None,
             },
             modifier_x: 0,
             modifier_y: 0,
             modifier_keyword: Some("flying".into()),
+            condition: None,
         });
         s.a.hand.retain(|i| i != &bird && i != &target);
         s.a.board.push(bird);
         s.a.board.push(target.clone());
         assert!(!s.has_keyword(&target, "flying"));
+    }
+
+    #[test]
+    fn condition_gate_blocks_static_until_graveyard_threshold() {
+        // Ossuary-shape: static fires only when owner's graveyard has 5+ cards.
+        let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+        let source = s.a.hand[0].clone();
+        let target = s.a.hand[1].clone();
+        s.card_pool.get_mut(&target).unwrap().card.kind = crate::card::CardType::Creature;
+        s.card_pool.get_mut(&source).unwrap().card.static_def = Some(crate::card::StaticDef {
+            affects: crate::card::StaticAffects {
+                subtypes: vec![],
+                colors: vec![],
+                controller: Some(crate::card::StaticController::Owner),
+                exclude_self: true,
+                scope: crate::card::StaticScope::Board,
+                kind: Some(crate::card::CardType::Creature),
+            },
+            modifier_x: 1,
+            modifier_y: 1,
+            modifier_keyword: Some("flying".into()),
+            condition: Some(crate::card::StaticCondition::OwnerGraveyardSize { min: 5 }),
+        });
+        s.a.hand.retain(|i| i != &source && i != &target);
+        s.a.board.push(source);
+        s.a.board.push(target.clone());
+
+        // Empty graveyard: condition fails, no boost, no flying.
+        assert_eq!(s.effective_stats(&target), (1, 1));
+        assert!(!s.has_keyword(&target, "flying"));
+
+        // Move 5 cards from A's deck to graveyard.
+        let to_mill: Vec<_> = s.a.deck.iter().take(5).cloned().collect();
+        for iid in to_mill {
+            s.a.deck.retain(|x| x != &iid);
+            s.a.graveyard.push(iid);
+        }
+        assert_eq!(s.a.graveyard.len(), 5);
+
+        // Now the condition is met: +1/+1 + flying applies.
+        assert_eq!(s.effective_stats(&target), (2, 2));
+        assert!(s.has_keyword(&target, "flying"));
+    }
+
+    #[test]
+    fn condition_non_creatures_counts_only_non_creature_kinds() {
+        // Wandering-wizard-shape: the static counts NON-creature cards in
+        // graveyard. A graveyard full of creatures should NOT trigger it.
+        let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+        let wizard = s.a.hand[0].clone();
+        s.card_pool.get_mut(&wizard).unwrap().card.static_def = Some(crate::card::StaticDef {
+            affects: crate::card::StaticAffects {
+                subtypes: vec![],
+                colors: vec![],
+                controller: None,
+                exclude_self: false,
+                scope: crate::card::StaticScope::SourceOnly,
+                kind: None,
+            },
+            modifier_x: 0,
+            modifier_y: 0,
+            modifier_keyword: Some("flying".into()),
+            condition: Some(crate::card::StaticCondition::OwnerGraveyardNonCreatures { min: 4 }),
+        });
+        s.a.hand.retain(|i| i != &wizard);
+        s.a.board.push(wizard.clone());
+
+        // Fill graveyard with creatures: deck_of() makes every card a creature.
+        let to_mill: Vec<_> = s.a.deck.iter().take(6).cloned().collect();
+        for iid in to_mill {
+            s.a.deck.retain(|x| x != &iid);
+            s.a.graveyard.push(iid);
+        }
+        // Graveyard has 6 cards but they're all creatures → non-creature count
+        // is 0 → flying NOT granted.
+        assert_eq!(s.a.graveyard.len(), 6);
+        assert!(!s.has_keyword(&wizard, "flying"));
+
+        // Flip 4 of them to Spell — non-creature count hits 4 → flying ON.
+        let gy = s.a.graveyard.clone();
+        for iid in gy.iter().take(4) {
+            s.card_pool.get_mut(iid).unwrap().card.kind = crate::card::CardType::Spell;
+        }
+        assert!(s.has_keyword(&wizard, "flying"));
+    }
+
+    #[test]
+    fn source_only_scope_targets_only_the_source() {
+        // SourceOnly scope: the static targets the source card itself, not
+        // other on-board cards even if they match other predicates.
+        let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+        let wizard = s.a.hand[0].clone();
+        let other = s.a.hand[1].clone();
+        s.card_pool.get_mut(&wizard).unwrap().card.static_def = Some(crate::card::StaticDef {
+            affects: crate::card::StaticAffects {
+                subtypes: vec![],
+                colors: vec![],
+                controller: None,
+                exclude_self: false,
+                scope: crate::card::StaticScope::SourceOnly,
+                kind: None,
+            },
+            modifier_x: 0,
+            modifier_y: 0,
+            modifier_keyword: Some("flying".into()),
+            condition: None,
+        });
+        s.a.hand.retain(|i| i != &wizard && i != &other);
+        s.a.board.push(wizard.clone());
+        s.a.board.push(other.clone());
+        assert!(s.has_keyword(&wizard, "flying"));
+        assert!(!s.has_keyword(&other, "flying"));
     }
 
     #[test]

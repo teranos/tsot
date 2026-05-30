@@ -38,8 +38,7 @@ STATIC Phase 3 (restriction statics) partially overlaps here; the targeting infr
 
 ## static
 
-- **Phase 2 — keyword grants.** Static-granted `flying`, `vigilance`, etc. Plus state-reading predicate escape hatch (declarative predicate too narrow for Wandering Wizard's conditional flying / Reef Phantom's tap-untargetability).
-- **Phase 3 — restriction statics.** "Opponents' insects cannot attack" (flesh-eating-plant). "Cannot be cast while X" — currently auto-enforced only by Artifact type not being routable.
+- **Phase 3 — restriction statics.** "Opponents' insects cannot attack" (flesh-eating-plant). Reef Phantom's tapped-untargetability also lives here once a targeting layer exists.
 - **Phase 4 — replacement effects.** "Would die → exile instead." No corpus card requires it yet.
 - **Static-driven recomputation when attached set changes.** Hydra's ETB stat snapshot persists after falter strips its attached cards.
 

@@ -118,6 +118,10 @@ pub struct StaticAffects {
     /// predicates still apply (e.g., subtype filter further narrows).
     #[serde(default)]
     pub scope: StaticScope,
+    /// Phase 2: candidate's CardType must match. None = no kind filter.
+    /// Lets cards say "creatures you control" without enumerating subtypes.
+    #[serde(default)]
+    pub kind: Option<CardType>,
 }
 
 /// What set of cards a static can target.
@@ -130,6 +134,9 @@ pub enum StaticScope {
     /// some host's `attached` list. Companion-bird grants flying to its
     /// host via this scope.
     AttachedHost,
+    /// Only the source card itself. Used for "this creature has [keyword]
+    /// when [condition]" — wandering-wizard's conditional flying.
+    SourceOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -142,10 +149,11 @@ pub enum StaticController {
 
 /// A static ability declared on a card. Phase 1: stat modifier only.
 /// Phase 2: also `modifier_keyword` for keyword-grant statics (flying,
-/// vigilance, etc.). Either field can be set; both can be set on the
-/// same static (`+1/+1 and have flying`). `affects` is the predicate
-/// against the candidate; everything applies while the source is on
-/// the BOARD and the predicate matches.
+/// vigilance, etc.) and `condition` for state-reading predicates (graveyard
+/// count thresholds, etc.). All fields can be set; e.g., ossuary combines
+/// stat + keyword + condition. `affects` is the predicate against the
+/// candidate; everything applies while the source is on the BOARD, the
+/// `condition` (if any) is satisfied, and the `affects` predicate matches.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaticDef {
     pub affects: StaticAffects,
@@ -156,6 +164,24 @@ pub struct StaticDef {
     /// "flying", "vigilance", "haste", "cannot-block".
     #[serde(default)]
     pub modifier_keyword: Option<String>,
+    /// Phase 2: state-reading gate. None = always active when the source
+    /// is on board. Some(cond) = the static only fires when the engine's
+    /// evaluation of `cond` against game state is true.
+    #[serde(default)]
+    pub condition: Option<StaticCondition>,
+}
+
+/// Declarative state-reading predicate for STATIC Phase 2. Each variant
+/// is evaluated by the engine against game state at static-application
+/// time. "Owner" means the source's controller.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StaticCondition {
+    /// Owner's GRAVEYARD has at least `min` cards. Ossuary uses this with
+    /// `min = 5`.
+    OwnerGraveyardSize { min: usize },
+    /// Owner's GRAVEYARD contains at least `min` cards whose kind is not
+    /// `CardType::Creature`. Wandering Wizard uses this with `min = 4`.
+    OwnerGraveyardNonCreatures { min: usize },
 }
 
 /// Event handler keys recognised on card files. Matches LUA.md Phase 1 taxonomy
@@ -424,12 +450,17 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
                 Some(s) => match s.to_ascii_lowercase().as_str() {
                     "board" => StaticScope::Board,
                     "attached_host" => StaticScope::AttachedHost,
+                    "source_only" => StaticScope::SourceOnly,
                     other => {
                         return Err(mlua::Error::runtime(format!(
-                            "static.affects.scope must be 'board' or 'attached_host', got '{other}'"
+                            "static.affects.scope must be 'board', 'attached_host', or 'source_only', got '{other}'"
                         )))
                     }
                 },
+            };
+            let kind = match a.get::<Option<String>>("kind")? {
+                None => None,
+                Some(k) => Some(parse_type(&k).map_err(mlua::Error::runtime)?.0),
             };
             StaticAffects {
                 subtypes,
@@ -437,6 +468,7 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
                 controller,
                 exclude_self,
                 scope,
+                kind,
             }
         }
         other => {
@@ -461,12 +493,39 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
             )))
         }
     };
+    let condition = match static_t.get::<Value>("condition")? {
+        Value::Nil => None,
+        Value::Table(c) => Some(read_condition(&c)?),
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "static.condition must be a table, got {other:?}"
+            )))
+        }
+    };
     Ok(Some(StaticDef {
         affects,
         modifier_x,
         modifier_y,
         modifier_keyword,
+        condition,
     }))
+}
+
+fn read_condition(c: &Table) -> mlua::Result<StaticCondition> {
+    let kind: String = c.get("kind")?;
+    match kind.to_ascii_lowercase().as_str() {
+        "owner_graveyard_size" => {
+            let min = c.get::<i64>("min")?.max(0) as usize;
+            Ok(StaticCondition::OwnerGraveyardSize { min })
+        }
+        "owner_graveyard_non_creatures" => {
+            let min = c.get::<i64>("min")?.max(0) as usize;
+            Ok(StaticCondition::OwnerGraveyardNonCreatures { min })
+        }
+        other => Err(mlua::Error::runtime(format!(
+            "static.condition.kind must be 'owner_graveyard_size' or 'owner_graveyard_non_creatures', got '{other}'"
+        ))),
+    }
 }
 
 pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
