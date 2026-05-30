@@ -27,9 +27,10 @@ return {
   },
   stats = {x = 1, y = 1},
   on_die = function(game, self)
-    if not game.confirm("return a non-creature card from your graveyard?") then
-      return
-    end
+    -- Build the pool BEFORE the may-confirm so we only prompt when there's
+    -- actually something to recur. This is the pattern all "may" cards
+    -- should follow — the oracle can't read the prompt string to decide
+    -- whether confirming is meaningful, so cards have to be defensive.
     local gy = game.zones(self.owner).graveyard
     local pool = {}
     for _, iid in ipairs(gy) do
@@ -39,6 +40,9 @@ return {
       end
     end
     if #pool == 0 then return end
+    if not game.confirm("return a non-creature card from your graveyard?") then
+      return
+    end
     local target = game.choose_card(pool, {prompt = "return from graveyard"})
     if not target then return end
     game.move(target, "hand")
