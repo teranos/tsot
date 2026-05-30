@@ -156,11 +156,11 @@ Phase 2 in flight. Pieces landed:
 2. ✅ `GameState::evaluate_static_keyword_grant(source, target)` + `has_static_keyword(iid, kw)` mirror the Phase 1 stat-modifier iteration via a shared `static_def_if_matches` helper.
 3. ✅ `GameState::has_keyword(iid, kw)` combines intrinsic (printed + modifiers) with static-granted; all call sites in main.rs and combat.rs migrated. `CardInstance::has_keyword` stays as the intrinsic-only check for places without state access.
 4. ✅ First wired card: goblin-warchief — *"Other goblins you control get +1/+1 and have haste."* Combined stat + keyword on one static.
-5. ✅ `StaticAffects.scope = "attached_host"` scope + `static_source_iids` iteration includes cards attached to on-board hosts. Companion-bird-style "while attached, host has [keyword]" statics now expressible. Companion-bird itself not yet wired (needs `static = {...}` block added).
+5. ✅ `StaticAffects.scope = "attached_host"` scope + `static_source_iids` iteration includes cards attached to on-board hosts. Companion-bird-style "while attached, host has [keyword]" statics now expressible.
+6. ✅ Companion-bird wired: `static = { affects = { scope = "attached_host" }, modifier = { keyword = "flying" } }`. Two unit tests cover the AttachedHost path (attaches → host gains flying; unattached on board → nothing).
 
 Remaining:
-6. ⬜ **State-reading predicate escape hatch** — needed for ossuary's graveyard-threshold predicate and wandering-wizard's conditional flying. Separate sub-piece; defer until the simple cases work.
-7. ⬜ **Wire companion-bird** — add the `static` block with `affects.scope = "attached_host"` + `modifier_keyword = "flying"`. Trivial once authored.
+7. ⬜ **State-reading predicate escape hatch** — needed for ossuary's graveyard-threshold predicate and wandering-wizard's conditional flying. Design call landed: declarative predicate enum (not Lua escape hatch). Blocks ossuary + wandering-wizard.
 
 ### Goal
 

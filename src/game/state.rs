@@ -1237,6 +1237,64 @@ mod tests {
     }
 
     #[test]
+    fn attached_host_scope_grants_keyword_to_host() {
+        // Companion-bird shape: a card with `scope = AttachedHost` +
+        // `modifier_keyword = "flying"` grants flying to whatever host it's
+        // attached to, and to nothing else.
+        let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+        let bird = s.a.hand[0].clone();
+        let host = s.a.hand[1].clone();
+        let bystander = s.a.hand[2].clone();
+        // Bird = attached-host flying-granter.
+        s.card_pool.get_mut(&bird).unwrap().card.static_def = Some(crate::card::StaticDef {
+            affects: crate::card::StaticAffects {
+                subtypes: vec![],
+                colors: vec![],
+                controller: None,
+                exclude_self: false,
+                scope: crate::card::StaticScope::AttachedHost,
+            },
+            modifier_x: 0,
+            modifier_y: 0,
+            modifier_keyword: Some("flying".into()),
+        });
+        // Move host + bystander to board.
+        s.a.hand.retain(|i| i != &bird && i != &host && i != &bystander);
+        s.a.board.push(host.clone());
+        s.a.board.push(bystander.clone());
+        // Attach bird to host (companion-bird arrives as a HAND payment).
+        s.add_attached(&host, &bird);
+        // Host gains flying via the AttachedHost static. Bystander does not.
+        assert!(s.has_keyword(&host, "flying"));
+        assert!(!s.has_keyword(&bystander, "flying"));
+    }
+
+    #[test]
+    fn attached_host_scope_does_not_grant_when_unattached() {
+        // Same source card, but the bird is on the BOARD (not attached) —
+        // the AttachedHost predicate has no host to point at.
+        let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+        let bird = s.a.hand[0].clone();
+        let target = s.a.hand[1].clone();
+        s.card_pool.get_mut(&bird).unwrap().card.static_def = Some(crate::card::StaticDef {
+            affects: crate::card::StaticAffects {
+                subtypes: vec![],
+                colors: vec![],
+                controller: None,
+                exclude_self: false,
+                scope: crate::card::StaticScope::AttachedHost,
+            },
+            modifier_x: 0,
+            modifier_y: 0,
+            modifier_keyword: Some("flying".into()),
+        });
+        s.a.hand.retain(|i| i != &bird && i != &target);
+        s.a.board.push(bird);
+        s.a.board.push(target.clone());
+        assert!(!s.has_keyword(&target, "flying"));
+    }
+
+    #[test]
     fn two_anthems_stack() {
         let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
         let anthem_a = s.a.hand[0].clone();
