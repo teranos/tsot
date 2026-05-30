@@ -57,7 +57,29 @@ for each opponent in gauntlet:
 | 5  | 70    | ~140ms        | 100 × 100 ≈ 23min                |
 | 10 | 140   | ~280ms        | 100 × 100 ≈ 47min                |
 
-N=5 is the starting point — variance still real, cost manageable.
+### Variance measurement (commit `34e1453`)
+
+Measured on the current card pool (`cargo test --release measure_fitness_variance -- --ignored --nocapture`):
+
+```
+within-genome stddev (1 baseline, 10 base_seeds):
+  n=3:  0.037     n=5:  0.053     n=10: 0.043     n=20: 0.032
+between-genome stddev (10 random genomes, 1 base_seed):
+  n=3:  0.111     n=5:  0.057     n=10: 0.088     n=20: 0.076
+SNR (between / within):
+  n=3:  2.99      n=5:  1.08      n=10: 2.03      n=20: 2.38
+```
+
+Random decks span fitness `[0.32, 0.60]` against the gauntlet — the engine
+discriminates decks; there is something to optimize.
+
+The n=3 SNR is misleading: with K=10 stddev estimates, the within-stddev
+itself has high uncertainty at small N. Same caveat on the n=5 between-stddev
+outlier (0.057 vs the 0.08-0.10 cluster at n=10/20).
+
+**Revised recommendation: N=10.** SNR=2.0 is comfortable signal; n=20 buys
+little for 2× the cost; n=5 is too noisy. Per-evaluation cost ~280ms,
+100 × 100 EA run ≈ 47 minutes wall.
 
 ## Operators
 

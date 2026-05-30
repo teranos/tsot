@@ -216,4 +216,126 @@ mod tests {
             "n=0 should short-circuit to 0.0"
         );
     }
+
+    // ---------------------------------------------------------------
+    // Variance measurement — load-bearing for the EA design.
+    //
+    // The EA only produces signal if `between-genome stddev` (the
+    // spread of fitness across different decks) exceeds `within-genome
+    // stddev` (the noise from re-evaluating the same deck with
+    // different base_seeds). If within > between, generation-to-
+    // generation improvement is indistinguishable from RNG.
+    //
+    // Run with:
+    //   cargo test --release --bin tsot measure_fitness_variance \
+    //              -- --ignored --nocapture
+    //
+    // Numbers go into EA.md once measured.
+    // ---------------------------------------------------------------
+
+    use super::super::genome::random_genome;
+
+    fn mean_stddev(xs: &[f64]) -> (f64, f64) {
+        let n = xs.len() as f64;
+        let mean = xs.iter().sum::<f64>() / n;
+        let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
+        (mean, var.sqrt())
+    }
+
+    #[test]
+    #[ignore]
+    fn measure_fitness_variance() {
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+
+        // Build a single baseline genome for within-genome variance,
+        // and 10 random genomes for between-genome spread.
+        let mut g_rng = StdRng::seed_from_u64(0xBA5E);
+        let baseline = random_genome(&pool, 50, 3, &mut g_rng).unwrap();
+        let genomes: Vec<Vec<String>> = (0..10)
+            .map(|i| {
+                let mut rng = StdRng::seed_from_u64(0xC0FFEE + i);
+                random_genome(&pool, 50, 3, &mut rng).unwrap()
+            })
+            .collect();
+
+        let n_values = [3u32, 5, 10, 20];
+        let k_seeds = 10;
+
+        println!();
+        println!("=== Within-genome variance (1 baseline, {k_seeds} base_seeds) ===");
+        println!(
+            "{:>4}  {:>6}  {:>10}  {:>6}  {:>6}  {:>6}  {:>6}  {:>6}",
+            "n", "games", "wall/eval", "mean", "stddev", "cv", "min", "max"
+        );
+        for &n in &n_values {
+            let t0 = std::time::Instant::now();
+            let xs: Vec<f64> = (0..k_seeds)
+                .map(|s| fitness(&reg, &baseline, &gauntlet, n, 0xD00D + s).unwrap())
+                .collect();
+            let elapsed = t0.elapsed();
+            let (mean, stddev) = mean_stddev(&xs);
+            let cv = if mean > 0.0 { stddev / mean } else { 0.0 };
+            let min = xs.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let per_eval = elapsed / (k_seeds as u32);
+            let games = 2 * gauntlet.len() as u32 * n;
+            println!(
+                "{n:>4}  {games:>6}  {per_eval:>10.0?}  {mean:>6.3}  {stddev:>6.3}  {cv:>6.3}  {min:>6.3}  {max:>6.3}"
+            );
+        }
+
+        println!();
+        println!(
+            "=== Between-genome spread ({} random genomes, 1 base_seed) ===",
+            genomes.len()
+        );
+        println!(
+            "{:>4}  {:>6}  {:>6}  {:>6}  {:>6}  {:>6}",
+            "n", "games", "mean", "stddev", "min", "max"
+        );
+        let mut between_stddev_by_n: Vec<(u32, f64)> = Vec::new();
+        for &n in &n_values {
+            let xs: Vec<f64> = genomes
+                .iter()
+                .map(|g| fitness(&reg, g, &gauntlet, n, 0xD00D).unwrap())
+                .collect();
+            let (mean, stddev) = mean_stddev(&xs);
+            let min = xs.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let games = 2 * gauntlet.len() as u32 * n;
+            println!(
+                "{n:>4}  {games:>6}  {mean:>6.3}  {stddev:>6.3}  {min:>6.3}  {max:>6.3}"
+            );
+            between_stddev_by_n.push((n, stddev));
+        }
+
+        println!();
+        println!("=== Signal-to-noise (between_stddev / within_stddev) ===");
+        println!("{:>4}  {:>8}  {:>8}  {:>6}", "n", "within", "between", "SNR");
+        for &n in &n_values {
+            let within_xs: Vec<f64> = (0..k_seeds)
+                .map(|s| fitness(&reg, &baseline, &gauntlet, n, 0xD00D + s).unwrap())
+                .collect();
+            let (_, within_sd) = mean_stddev(&within_xs);
+            let between_sd = between_stddev_by_n
+                .iter()
+                .find(|(nn, _)| *nn == n)
+                .map(|(_, sd)| *sd)
+                .unwrap();
+            let snr = if within_sd > 0.0 {
+                between_sd / within_sd
+            } else {
+                f64::INFINITY
+            };
+            println!(
+                "{n:>4}  {within_sd:>8.3}  {between_sd:>8.3}  {snr:>6.2}"
+            );
+        }
+        println!();
+        println!(
+            "Interpretation: SNR > 1 means the EA can discriminate decks. SNR >= 2 is comfortable signal."
+        );
+    }
 }
