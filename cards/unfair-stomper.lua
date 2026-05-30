@@ -18,6 +18,7 @@ return {
   name = "Unfair Stomper",
   colors = {"black", "green"},
   type = "creature",
+  subtypes = {"beast"},
   cost = {
     {amount = 2, source = "hand"},
     {amount = 3, source = "graveyard"},

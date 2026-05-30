@@ -50,7 +50,7 @@ pub(crate) enum DeckVariant {
     B,
     /// No goblins — exercises anti-tribal play against goblin-warlord etc.
     H,
-    /// No humans, fish, or insects.
+    /// No humans, fish, insects, or beasts.
     G,
     /// Colorless or blue only — heavy on draw / counter / interaction.
     U,
@@ -93,6 +93,7 @@ fn variant_pool(playable: &[Card], v: DeckVariant) -> Vec<Card> {
                     s.eq_ignore_ascii_case("human")
                         || s.eq_ignore_ascii_case("fish")
                         || s.eq_ignore_ascii_case("insect")
+                        || s.eq_ignore_ascii_case("beast")
                 })
             })
             .cloned()
