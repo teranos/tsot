@@ -8,7 +8,7 @@
 
 #![allow(clippy::type_complexity, clippy::manual_checked_ops, clippy::manual_div_ceil)]
 
-use crate::{variant_label, DeckVariant, GameStats, VARIANTS};
+use crate::sim::{variant_label, DeckVariant, GameStats, VARIANTS};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use std::time::Duration;
 use tsot::{EventName, PlayerId};
