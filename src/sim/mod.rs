@@ -19,6 +19,7 @@ pub mod ai;
 pub mod deck_token;
 pub mod fitness;
 pub mod genome;
+pub mod ops;
 pub mod run;
 pub mod stats;
 pub mod variants;
