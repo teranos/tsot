@@ -391,11 +391,14 @@ fn run_game(
                 let hand_size = state.player(active).hand.len();
                 // Exclude the played card from the upper bound; cap for sanity.
                 let max_x = (hand_size.saturating_sub(1)).min(10) as i32;
-                let x = oracle.choose_int(ChooseIntRequest {
-                    min: 0,
-                    max: max_x,
-                    prompt: format!("X for {}", short(&picked)),
-                });
+                let x = oracle.choose_int(
+                    &state,
+                    ChooseIntRequest {
+                        min: 0,
+                        max: max_x,
+                        prompt: format!("X for {}", short(&picked)),
+                    },
+                );
                 state.bump_action("choose_int", active);
                 choices.x_value = Some(x);
                 let hand_needed: usize = cost

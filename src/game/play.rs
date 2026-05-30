@@ -367,17 +367,18 @@ impl GameState {
             }
             let pool_for_fallback = pool.clone();
             // Hand-payment pool is entirely the player's own hand — the
-            // prefer-opponent heuristic doesn't apply here. Asker=None so
-            // the oracle picks uniformly.
+            // Pass asker + host so the oracle can score candidates via the
+            // pitch-score heuristic (pitch-payoff cards preferred when the
+            // host color matches; jewels / mantis-shrimp / zebra benefit).
             let req = ChooseCardRequest {
                 pool,
-                controllers: Vec::new(),
-                asker: None,
+                asker: Some(player),
+                host: Some(instance.clone()),
                 optional: false,
                 prompt: format!("hand payment slot {}", slot + 1),
             };
             let pick = oracle
-                .choose_card(req)
+                .choose_card(self, req)
                 .unwrap_or_else(|| pool_for_fallback[0].clone());
             picked_set.insert(pick.clone());
             chosen.push(pick);

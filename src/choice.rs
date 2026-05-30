@@ -28,30 +28,21 @@ pub enum ResponseAction {
     },
 }
 
-/// A choose-card prompt with the pool and options.
-///
-/// TODO(state-passing-oracle): the parallel `controllers` vec only exists
-/// because `ChoiceOracle::choose_card` doesn't receive a `&GameState`.
-/// State-passing would also unlock within-pool ranking heuristics like
-/// "prefer the candidate with the highest `effective_stats(iid).0`" —
-/// covers silent-murder, sabotage, beguile, falter without per-card hints.
-/// User-rejected the hint-passing alternative; this is the path forward.
-/// Refactor scope: trait signature on all four choose methods, all impls
-/// (NoopOracle, ScriptedOracle, RecordingOracle, RandomOracle), all
-/// callers (Lua bindings, play.rs::resolve_hand_payment, main.rs retry).
+/// A choose-card prompt with the pool and options. All call sites now pass
+/// `state` to the oracle separately, so the oracle reads controllers /
+/// stats / handlers itself — no parallel metadata vecs on the request.
 #[derive(Debug, Clone)]
 pub struct ChooseCardRequest {
     pub pool: Vec<InstanceId>,
-    /// Parallel to `pool`: the controller of each candidate at request time.
-    /// Empty if the binding couldn't determine controllers (e.g., cards in
-    /// zones where controller is conceptually ambiguous). When populated and
-    /// `asker` is set, RandomOracle prefers candidates whose controller is
-    /// NOT the asker — the "don't grief yourself with removal" default.
-    pub controllers: Vec<PlayerId>,
     /// The owner of the handler issuing the choice. None when the caller
-    /// doesn't have a player context (tests, headless eval). When set, used
-    /// by RandomOracle for the prefer-opponent-controlled heuristic.
+    /// doesn't have a player context (tests, headless eval).
     pub asker: Option<PlayerId>,
+    /// When this `choose_card` is for a hand-payment slot, `host` is the
+    /// InstanceId of the card being paid for. The oracle uses it to score
+    /// candidates against pitch-payoff effects (jewels / zebra / mantis-shrimp
+    /// matching the host's color). None for non-payment choices (target
+    /// pickers, recur pickers, etc.).
+    pub host: Option<InstanceId>,
     /// If true, the oracle may return None (skip the choice).
     pub optional: bool,
     /// Free-form prompt for UI; ignored by random/scripted oracles.
@@ -77,28 +68,33 @@ pub struct ChooseIntRequest {
     pub prompt: String,
 }
 
-/// Oracle trait — implementors answer choice questions on behalf of a player.
+/// Oracle trait — implementors answer choice questions on behalf of a
+/// player. All choice methods receive `&GameState` so the oracle can
+/// introspect: controllers, stats, handlers, zones, etc.
 pub trait ChoiceOracle {
     /// Pick one card from a pool, or None if optional and skipped.
-    fn choose_card(&mut self, req: ChooseCardRequest) -> Option<InstanceId>;
+    fn choose_card(
+        &mut self,
+        state: &GameState,
+        req: ChooseCardRequest,
+    ) -> Option<InstanceId>;
 
     /// Yes/no decision. Used by `game.confirm`.
-    fn confirm(&mut self, prompt: &str) -> bool;
+    fn confirm(&mut self, state: &GameState, asker: PlayerId, prompt: &str) -> bool;
 
     /// Pick a player from `{A, B} - exclude`. Returns None if the candidate
     /// pool is empty, or if optional and the oracle declines.
-    fn choose_player(&mut self, req: ChoosePlayerRequest) -> Option<PlayerId>;
+    fn choose_player(
+        &mut self,
+        state: &GameState,
+        req: ChoosePlayerRequest,
+    ) -> Option<PlayerId>;
 
     /// Pick an integer in `[min, max]`. Mandatory — no opt-out.
-    fn choose_int(&mut self, req: ChooseIntRequest) -> i32;
+    fn choose_int(&mut self, state: &GameState, req: ChooseIntRequest) -> i32;
 
     /// Inside an open response window, `player` has priority — should they
     /// cast something from hand as a response, or pass? Default impl: Pass.
-    /// Every oracle keeps its existing behavior (NoopOracle, ScriptedOracle
-    /// in old tests) unless it explicitly overrides.
-    ///
-    /// See `ResponseAction` for the architectural caveat (Option B is the
-    /// long-term path).
     fn respond_or_pass(&mut self, _state: &GameState, _player: PlayerId) -> ResponseAction {
         ResponseAction::Pass
     }
@@ -119,44 +115,53 @@ impl<R: Rng> RandomOracle<R> {
 }
 
 impl<R: Rng> ChoiceOracle for RandomOracle<R> {
-    fn choose_card(&mut self, req: ChooseCardRequest) -> Option<InstanceId> {
+    fn choose_card(
+        &mut self,
+        state: &GameState,
+        req: ChooseCardRequest,
+    ) -> Option<InstanceId> {
         if req.pool.is_empty() {
             return None;
         }
         if req.optional && self.rng.gen_bool(0.3) {
             return None;
         }
-        // Prefer-opponent heuristic: when the binding gave us per-candidate
-        // controllers AND we know who's asking, split the pool by side and
-        // prefer opponent-controlled candidates. Falls back to the whole
-        // pool if no opponent candidates exist OR if metadata is missing
-        // (tests, scripted scenarios). This is the "don't grief yourself
-        // with removal" default — most target-effects want opponent.
-        let candidate_indices: Vec<usize> = if req.controllers.len() == req.pool.len() {
-            if let Some(asker) = req.asker {
-                let opp_indices: Vec<usize> = (0..req.pool.len())
-                    .filter(|i| req.controllers[*i] != asker)
-                    .collect();
-                if !opp_indices.is_empty() {
-                    opp_indices
+
+        // Score each candidate. Higher = preferred.
+        let scores: Vec<i32> = req
+            .pool
+            .iter()
+            .map(|iid| {
+                if let Some(host_iid) = &req.host {
+                    pitch_score(state, iid, host_iid)
+                } else if let Some(asker) = req.asker {
+                    target_score(state, iid, asker)
                 } else {
-                    (0..req.pool.len()).collect()
+                    0
                 }
-            } else {
-                (0..req.pool.len()).collect()
-            }
-        } else {
-            (0..req.pool.len()).collect()
-        };
-        let pick = candidate_indices[self.rng.gen_range(0..candidate_indices.len())];
+            })
+            .collect();
+
+        let max_score = *scores.iter().max().unwrap_or(&0);
+        let top: Vec<usize> = scores
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| **s == max_score)
+            .map(|(i, _)| i)
+            .collect();
+        let pick = top[self.rng.gen_range(0..top.len())];
         Some(req.pool[pick].clone())
     }
 
-    fn confirm(&mut self, _prompt: &str) -> bool {
+    fn confirm(&mut self, _state: &GameState, _asker: PlayerId, _prompt: &str) -> bool {
         self.rng.gen_bool(0.7)
     }
 
-    fn choose_player(&mut self, req: ChoosePlayerRequest) -> Option<PlayerId> {
+    fn choose_player(
+        &mut self,
+        _state: &GameState,
+        req: ChoosePlayerRequest,
+    ) -> Option<PlayerId> {
         let candidates: Vec<PlayerId> = [PlayerId::A, PlayerId::B]
             .into_iter()
             .filter(|p| !req.exclude.contains(p))
@@ -171,7 +176,7 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
         Some(candidates[idx])
     }
 
-    fn choose_int(&mut self, req: ChooseIntRequest) -> i32 {
+    fn choose_int(&mut self, _state: &GameState, req: ChooseIntRequest) -> i32 {
         let lo = req.min.min(req.max);
         let hi = req.min.max(req.max);
         self.rng.gen_range(lo..=hi)
@@ -257,6 +262,89 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
     }
 }
 
+/// Heuristic: "should I pitch this candidate to pay for `host`?" Higher =
+/// more preferable. Used by RandomOracle when `req.host` is set. Signals:
+/// pitch-payoff handler + color match (big bonus), artifact / uncastable
+/// (bonus), cast-value handlers (penalty), effective stats (penalty).
+fn pitch_score(state: &GameState, candidate_iid: &InstanceId, host_iid: &InstanceId) -> i32 {
+    let Some(cand) = state.card_pool.get(candidate_iid) else {
+        return 0;
+    };
+    let Some(host) = state.card_pool.get(host_iid) else {
+        return 0;
+    };
+    let mut score = 0i32;
+
+    if cand
+        .card
+        .handlers
+        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+    {
+        let host_is_creature = host.card.kind == crate::card::CardType::Creature;
+        let color_overlap = cand
+            .card
+            .colors
+            .iter()
+            .any(|cc| host.card.colors.iter().any(|hc| hc.eq_ignore_ascii_case(cc)));
+        if host_is_creature && color_overlap {
+            score += 100;
+        } else if host_is_creature {
+            score += 30;
+        } else {
+            score -= 50;
+        }
+    }
+
+    if matches!(cand.card.kind, crate::card::CardType::Artifact) {
+        score += 50;
+    }
+
+    if cand
+        .card
+        .handlers
+        .contains_key(&crate::card::EventName::OnPlay)
+    {
+        score -= 20;
+    }
+    if cand
+        .card
+        .handlers
+        .contains_key(&crate::card::EventName::OnEnterBoard)
+    {
+        score -= 10;
+    }
+    if cand
+        .card
+        .handlers
+        .contains_key(&crate::card::EventName::OnAttack)
+    {
+        score -= 10;
+    }
+
+    let (x, y) = state.effective_stats(candidate_iid);
+    score -= x + y / 2;
+
+    score
+}
+
+/// Heuristic: "should I target this candidate?" Used by RandomOracle when
+/// `req.host` is None but `req.asker` is set. Today: prefer opponent-controlled
+/// (the "don't grief yourself" default) and, within the filtered set, prefer
+/// candidates with higher effective X (= more threatening). Returns 0 when
+/// state lookups fail or there's no useful signal.
+fn target_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) -> i32 {
+    let Some(cand) = state.card_pool.get(candidate_iid) else {
+        return 0;
+    };
+    let mut score = 0i32;
+    if cand.controller != asker {
+        score += 100;
+    }
+    let (x, y) = state.effective_stats(candidate_iid);
+    score += x * 4 + y;
+    score
+}
+
 /// "Will this player be decked within ~2 turns at the opponent's current
 /// pace?" Sums opponent's on-board creature power (tapped or not — tapped
 /// creatures will untap and attack again, or are CURRENTLY attacking in
@@ -306,16 +394,24 @@ fn would_die_soon(state: &GameState, victim: PlayerId) -> bool {
 pub struct NoopOracle;
 
 impl ChoiceOracle for NoopOracle {
-    fn choose_card(&mut self, _req: ChooseCardRequest) -> Option<InstanceId> {
+    fn choose_card(
+        &mut self,
+        _state: &GameState,
+        _req: ChooseCardRequest,
+    ) -> Option<InstanceId> {
         None
     }
-    fn confirm(&mut self, _prompt: &str) -> bool {
+    fn confirm(&mut self, _state: &GameState, _asker: PlayerId, _prompt: &str) -> bool {
         false
     }
-    fn choose_player(&mut self, _req: ChoosePlayerRequest) -> Option<PlayerId> {
+    fn choose_player(
+        &mut self,
+        _state: &GameState,
+        _req: ChoosePlayerRequest,
+    ) -> Option<PlayerId> {
         None
     }
-    fn choose_int(&mut self, req: ChooseIntRequest) -> i32 {
+    fn choose_int(&mut self, _state: &GameState, req: ChooseIntRequest) -> i32 {
         req.min
     }
 }
@@ -370,42 +466,42 @@ impl ScriptedOracle {
 }
 
 impl ChoiceOracle for ScriptedOracle {
-    fn choose_card(&mut self, _req: ChooseCardRequest) -> Option<InstanceId> {
+    fn choose_card(
+        &mut self,
+        _state: &GameState,
+        _req: ChooseCardRequest,
+    ) -> Option<InstanceId> {
         match self.answers.pop_front() {
             Some(ScriptedAnswer::Card(c)) => c,
-            Some(other) => panic!(
-                "ScriptedOracle: expected Card answer, got {other:?}"
-            ),
+            Some(other) => panic!("ScriptedOracle: expected Card answer, got {other:?}"),
             None => panic!("ScriptedOracle: out of answers"),
         }
     }
 
-    fn confirm(&mut self, _prompt: &str) -> bool {
+    fn confirm(&mut self, _state: &GameState, _asker: PlayerId, _prompt: &str) -> bool {
         match self.answers.pop_front() {
             Some(ScriptedAnswer::Confirm(b)) => b,
-            Some(other) => panic!(
-                "ScriptedOracle: expected Confirm answer, got {other:?}"
-            ),
+            Some(other) => panic!("ScriptedOracle: expected Confirm answer, got {other:?}"),
             None => panic!("ScriptedOracle: out of answers"),
         }
     }
 
-    fn choose_player(&mut self, _req: ChoosePlayerRequest) -> Option<PlayerId> {
+    fn choose_player(
+        &mut self,
+        _state: &GameState,
+        _req: ChoosePlayerRequest,
+    ) -> Option<PlayerId> {
         match self.answers.pop_front() {
             Some(ScriptedAnswer::Player(p)) => p,
-            Some(other) => panic!(
-                "ScriptedOracle: expected Player answer, got {other:?}"
-            ),
+            Some(other) => panic!("ScriptedOracle: expected Player answer, got {other:?}"),
             None => panic!("ScriptedOracle: out of answers"),
         }
     }
 
-    fn choose_int(&mut self, _req: ChooseIntRequest) -> i32 {
+    fn choose_int(&mut self, _state: &GameState, _req: ChooseIntRequest) -> i32 {
         match self.answers.pop_front() {
             Some(ScriptedAnswer::Int(n)) => n,
-            Some(other) => panic!(
-                "ScriptedOracle: expected Int answer, got {other:?}"
-            ),
+            Some(other) => panic!("ScriptedOracle: expected Int answer, got {other:?}"),
             None => panic!("ScriptedOracle: out of answers"),
         }
     }
@@ -442,26 +538,34 @@ impl<O: ChoiceOracle> RecordingOracle<O> {
 }
 
 impl<O: ChoiceOracle> ChoiceOracle for RecordingOracle<O> {
-    fn choose_card(&mut self, req: ChooseCardRequest) -> Option<InstanceId> {
-        let ans = self.inner.choose_card(req);
+    fn choose_card(
+        &mut self,
+        state: &GameState,
+        req: ChooseCardRequest,
+    ) -> Option<InstanceId> {
+        let ans = self.inner.choose_card(state, req);
         self.recording.push(ScriptedAnswer::Card(ans.clone()));
         ans
     }
 
-    fn confirm(&mut self, prompt: &str) -> bool {
-        let ans = self.inner.confirm(prompt);
+    fn confirm(&mut self, state: &GameState, asker: PlayerId, prompt: &str) -> bool {
+        let ans = self.inner.confirm(state, asker, prompt);
         self.recording.push(ScriptedAnswer::Confirm(ans));
         ans
     }
 
-    fn choose_player(&mut self, req: ChoosePlayerRequest) -> Option<PlayerId> {
-        let ans = self.inner.choose_player(req);
+    fn choose_player(
+        &mut self,
+        state: &GameState,
+        req: ChoosePlayerRequest,
+    ) -> Option<PlayerId> {
+        let ans = self.inner.choose_player(state, req);
         self.recording.push(ScriptedAnswer::Player(ans));
         ans
     }
 
-    fn choose_int(&mut self, req: ChooseIntRequest) -> i32 {
-        let ans = self.inner.choose_int(req);
+    fn choose_int(&mut self, state: &GameState, req: ChooseIntRequest) -> i32 {
+        let ans = self.inner.choose_int(state, req);
         self.recording.push(ScriptedAnswer::Int(ans));
         ans
     }

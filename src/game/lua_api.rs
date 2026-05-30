@@ -326,27 +326,20 @@ macro_rules! build_game_table {
                         ),
                         None => (false, String::new()),
                     };
-                    // Build parallel `controllers` so the oracle can apply
-                    // the prefer-opponent heuristic. Read controller for
-                    // each pool member; if a member isn't in card_pool
-                    // (shouldn't happen), the controllers vec falls out of
-                    // sync and the oracle skips the heuristic.
-                    let controllers: Vec<PlayerId> = {
-                        let s = cell_choose_s.borrow();
-                        pool.iter()
-                            .filter_map(|iid| s.card_pool.get(iid).map(|i| i.controller))
-                            .collect()
-                    };
+                    // Handler-side game.choose_card has no payment context
+                    // (host = None). State is passed through to the oracle
+                    // which now reads controllers / stats directly.
                     let req = ChooseCardRequest {
                         pool,
-                        controllers,
                         asker: Some(choose_owner),
+                        host: None,
                         optional,
                         prompt,
                     };
                     let answer = {
+                        let s = cell_choose_s.borrow();
                         let mut o = cell_choose_o.borrow_mut();
-                        o.choose_card(req)
+                        o.choose_card(&s, req)
                     };
                     cell_choose_s.borrow_mut().bump_action("choose_card", choose_owner);
                     Ok(answer)
@@ -361,8 +354,9 @@ macro_rules! build_game_table {
             "confirm",
             $scope.create_function_mut(move |_, prompt: String| -> Result<bool> {
                 let answer = {
+                    let s = cell_confirm_s.borrow();
                     let mut o = cell_confirm_o.borrow_mut();
-                    o.confirm(&prompt)
+                    o.confirm(&s, confirm_owner, &prompt)
                 };
                 cell_confirm_s.borrow_mut().bump_action("confirm", confirm_owner);
                 Ok(answer)
@@ -394,8 +388,9 @@ macro_rules! build_game_table {
                         prompt,
                     };
                     let answer = {
+                        let s = cell_player_s.borrow();
                         let mut o = cell_player_o.borrow_mut();
-                        o.choose_player(req)
+                        o.choose_player(&s, req)
                     };
                     cell_player_s
                         .borrow_mut()
@@ -418,8 +413,9 @@ macro_rules! build_game_table {
                         prompt: prompt.unwrap_or_default(),
                     };
                     let answer = {
+                        let s = cell_int_s.borrow();
                         let mut o = cell_int_o.borrow_mut();
-                        o.choose_int(req)
+                        o.choose_int(&s, req)
                     };
                     cell_int_s.borrow_mut().bump_action("choose_int", int_owner);
                     Ok(answer)
