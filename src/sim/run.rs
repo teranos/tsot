@@ -464,3 +464,49 @@ pub fn short(iid: &InstanceId) -> String {
         iid.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tsot::card::CardRegistry;
+
+    /// EA prerequisite: fitness(genome) is meaningful only if
+    /// `run_game(state, &mut rng, &mut log, lua)` produces byte-identical
+    /// outputs for byte-identical inputs. If this ever fails, the EA's
+    /// generation-to-generation signal is noise and everything downstream
+    /// is chasing it.
+    #[test]
+    fn run_game_is_deterministic_per_seed_and_decks() {
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| matches!(c.kind, tsot::card::CardType::Creature))
+            .unwrap()
+            .clone();
+        let deck_a: Vec<tsot::card::Card> = (0..50).map(|_| template.clone()).collect();
+        let deck_b = deck_a.clone();
+
+        let state_1 = GameState::new(deck_a.clone(), deck_b.clone());
+        let state_2 = GameState::new(deck_a, deck_b);
+        let mut rng_1 = StdRng::seed_from_u64(0xEA_C8);
+        let mut rng_2 = StdRng::seed_from_u64(0xEA_C8);
+        let mut log_1: Vec<String> = Vec::new();
+        let mut log_2: Vec<String> = Vec::new();
+
+        let (stats_1, journal_1) = run_game(state_1, &mut rng_1, &mut log_1, registry.lua());
+        let (stats_2, journal_2) = run_game(state_2, &mut rng_2, &mut log_2, registry.lua());
+
+        assert_eq!(log_1, log_2, "logs diverged across identical runs");
+        assert_eq!(
+            format!("{stats_1:?}"),
+            format!("{stats_2:?}"),
+            "GameStats diverged across identical runs"
+        );
+        assert_eq!(
+            format!("{journal_1:?}"),
+            format!("{journal_2:?}"),
+            "journals diverged across identical runs"
+        );
+    }
+}
