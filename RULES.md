@@ -91,7 +91,10 @@ The following are not part of this game.
 - **P.21** When an environment is played, it is placed on the BOARD.
 - **P.22** At most one environment may be on the BOARD at any time, across both players.
 - **P.23** A new environment cannot be played while another environment is on the BOARD.
-- **P.24** When casting a card, the controller may tap one untapped card with subtype `jewel` they control on the BOARD whose colors share at least one with the card being cast, to substitute for exactly one HAND-source component of that card's cost. At most one jewel may be tapped per cast. Tapping is part of paying the cost.
+- **P.24a** When casting a card, the controller may tap one untapped card with subtype `jewel` they control on the BOARD whose printed colors share at least one with the card being cast, to substitute for exactly one HAND-source component of that card's cost.
+- **P.24b** When casting a card, the controller may tap one untapped card with subtype `crystal` they control on the BOARD if at least one card attached to that crystal shares a color with the card being cast, to substitute for exactly one HAND-source component of that card's cost.
+- **P.24c** At most one P.24a or P.24b tap-substitution may be made per cast. Tapping is part of paying the cost.
+- **P.25** A non-creature card on the BOARD has no summoning sickness restriction: it may be tapped on the turn it is played. (B.3 governs only creatures; tap-activated abilities and P.24 tap-substitutions on freshly-played artifacts are legal.)
 - **P.8** When a card is placed in the GRAVEYARD or EXILE and it has attached cards, those attached cards are placed in EXILE.
 - **P.9** When a card moves from the BOARD to a different position on the BOARD, its attached cards remain attached.
 - **P.10** When a card moves from the BOARD to the HAND or to the DECK, its attached cards are placed in EXILE.

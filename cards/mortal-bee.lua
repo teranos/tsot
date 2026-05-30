@@ -9,7 +9,7 @@ return {
     "flying.",
     "whenever this creature attacks, exile 1 card from each opponent's deck. this creature doesn't untap on your next turn.",
   },
-  stats = {x = 3, y = 3},
+  stats = {x = 2, y = 3},
   on_attack = function(game, self)
     game.mill(game.opponent(self.owner), 1, "exile")
     game.add_status(self.instance_id, "skip_untap", 1)

@@ -36,6 +36,7 @@ fn play_subsystem_round_trips_through_journal() {
             hand_payment_ids: vec![payment],
             x_value: None,
             jewel_tap: None,
+            sacrifice_ids: vec![],
         },
         None,
     )
@@ -81,6 +82,7 @@ fn play_creature_with_hand_cost_attaches_payments() {
         hand_payment_ids: vec![payment.clone()],
         x_value: None,
         jewel_tap: None,
+        sacrifice_ids: vec![],
     };
     assert!(s
         .play_card(PlayerId::A, &creature, choices, None)
@@ -148,6 +150,7 @@ fn play_combined_hand_and_mill_cost() {
             hand_payment_ids: vec![pay.clone()],
             x_value: None,
             jewel_tap: None,
+            sacrifice_ids: vec![],
         },
         None,
     );
@@ -188,6 +191,7 @@ fn play_card_errors_when_hand_payment_count_wrong() {
             hand_payment_ids: vec![pay],
             x_value: None,
             jewel_tap: None,
+            sacrifice_ids: vec![],
         },
         None,
     );
@@ -220,6 +224,7 @@ fn play_card_errors_when_paying_with_self() {
             hand_payment_ids: vec![creature.clone()],
             x_value: None,
             jewel_tap: None,
+            sacrifice_ids: vec![],
         },
         None,
     );
@@ -247,6 +252,7 @@ fn play_card_errors_on_duplicate_hand_payment() {
             hand_payment_ids: vec![pay.clone(), pay.clone()],
             x_value: None,
             jewel_tap: None,
+            sacrifice_ids: vec![],
         },
         None,
     );
@@ -347,6 +353,7 @@ fn jewel_tap_substitutes_for_one_hand_slot() {
             hand_payment_ids: vec![], // Jewel substitutes for the 1 HAND slot.
             x_value: None,
             jewel_tap: Some(jewel.clone()),
+            sacrifice_ids: vec![],
         },
         None,
     );
@@ -378,6 +385,7 @@ fn jewel_tap_rejected_when_jewel_tapped() {
             hand_payment_ids: vec![],
             x_value: None,
             jewel_tap: Some(jewel.clone()),
+            sacrifice_ids: vec![],
         },
         None,
     );
@@ -396,6 +404,7 @@ fn jewel_tap_rejected_on_color_mismatch() {
             hand_payment_ids: vec![],
             x_value: None,
             jewel_tap: Some(jewel.clone()),
+            sacrifice_ids: vec![],
         },
         None,
     );
@@ -414,6 +423,7 @@ fn jewel_tap_rejected_on_non_jewel_artifact() {
             hand_payment_ids: vec![],
             x_value: None,
             jewel_tap: Some(jewel.clone()),
+            sacrifice_ids: vec![],
         },
         None,
     );
@@ -432,6 +442,7 @@ fn jewel_tap_rejected_when_cast_has_no_hand_cost() {
             hand_payment_ids: vec![],
             x_value: None,
             jewel_tap: Some(jewel),
+            sacrifice_ids: vec![],
         },
         None,
     );
@@ -458,6 +469,7 @@ fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
             hand_payment_ids: vec![payment.clone()],
             x_value: None,
             jewel_tap: Some(jewel.clone()),
+            sacrifice_ids: vec![],
         },
         None,
     );
@@ -465,6 +477,211 @@ fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
     assert!(s.card_pool.get(&jewel).unwrap().tapped);
     // The payment card is now attached to the cast (creature ETB path).
     assert!(!s.a.hand.contains(&payment));
+}
+
+#[test]
+fn crystal_tap_matches_by_attached_card_color() {
+    // Crystal-tap variant of P.24: crystal's own colors don't matter
+    // (they're all six); the match is against attached cards' colors.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let crystal = s.a.hand[0].clone();
+    let attached = s.a.hand[1].clone();
+    let cast = s.a.hand[2].clone();
+    // Crystal: artifact, "crystal" subtype, all six colors.
+    {
+        let c = s.card_pool.get_mut(&crystal).unwrap();
+        c.card.kind = CardType::Artifact;
+        c.card.subtypes = vec!["crystal".into()];
+        c.card.colors = vec![
+            "black".into(),
+            "blue".into(),
+            "green".into(),
+            "purple".into(),
+            "red".into(),
+            "white".into(),
+        ];
+    }
+    // Move crystal to BOARD and attach a red card to it.
+    let _ = s.move_card(&crystal, PlayerId::A, Zone::Hand, Zone::Board);
+    s.card_pool.get_mut(&attached).unwrap().card.colors = vec!["red".into()];
+    let _ = s.move_card(&attached, PlayerId::A, Zone::Hand, Zone::Exile); // remove from hand
+    s.a.exile.retain(|x| x != &attached);
+    s.add_attached(&crystal, &attached);
+    // Cast card: red, 1 hand cost.
+    s.card_pool.get_mut(&cast).unwrap().card.colors = vec!["red".into()];
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Hand,
+            is_x: false,
+        }],
+    );
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(crystal.clone()),
+            sacrifice_ids: vec![],
+        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    assert!(s.card_pool.get(&crystal).unwrap().tapped);
+}
+
+#[test]
+fn crystal_tap_rejected_when_no_attached_color_matches() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let crystal = s.a.hand[0].clone();
+    let attached = s.a.hand[1].clone();
+    let cast = s.a.hand[2].clone();
+    {
+        let c = s.card_pool.get_mut(&crystal).unwrap();
+        c.card.kind = CardType::Artifact;
+        c.card.subtypes = vec!["crystal".into()];
+        c.card.colors = vec!["black".into(), "red".into(), "blue".into()];
+    }
+    let _ = s.move_card(&crystal, PlayerId::A, Zone::Hand, Zone::Board);
+    // Attached card is GREEN — does not match the BLUE cast card.
+    s.card_pool.get_mut(&attached).unwrap().card.colors = vec!["green".into()];
+    let _ = s.move_card(&attached, PlayerId::A, Zone::Hand, Zone::Exile);
+    s.a.exile.retain(|x| x != &attached);
+    s.add_attached(&crystal, &attached);
+    s.card_pool.get_mut(&cast).unwrap().card.colors = vec!["blue".into()];
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Hand,
+            is_x: false,
+        }],
+    );
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(crystal.clone()),
+            sacrifice_ids: vec![],
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::InvalidJewelTap(crystal)));
+}
+
+/// Set up: a card in A's hand with SACRIFICE 1 cost, and a sacrificable
+/// creature on A's board. Returns (state, cast_iid, sacrifice_iid).
+fn setup_sacrifice_scenario() -> (GameState, InstanceId, InstanceId) {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    let victim = s.a.hand[1].clone();
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Sacrifice,
+            is_x: false,
+        }],
+    );
+    // Move victim to A's board so it can be sacrificed.
+    let _ = s.move_card(&victim, PlayerId::A, Zone::Hand, Zone::Board);
+    (s, cast, victim)
+}
+
+#[test]
+fn sacrifice_cost_moves_victim_to_graveyard() {
+    let (mut s, cast, victim) = setup_sacrifice_scenario();
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![victim.clone()],
+        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    assert!(!s.a.board.contains(&victim));
+    assert!(s.a.graveyard.contains(&victim));
+    let bumps = s
+        .action_counts
+        .get("sacrificed_as_cost")
+        .map(|v| v[0])
+        .unwrap_or(0);
+    assert_eq!(bumps, 1);
+}
+
+#[test]
+fn sacrifice_count_mismatch_errors() {
+    let (mut s, cast, _victim) = setup_sacrifice_scenario();
+    // Cost wants 1 sacrifice, supply 0.
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+        },
+        None,
+    );
+    assert_eq!(
+        result,
+        Err(PlayError::WrongSacrificeCount {
+            expected: 1,
+            got: 0
+        })
+    );
+}
+
+#[test]
+fn sacrifice_rejected_when_victim_not_on_board() {
+    let (mut s, cast, _victim) = setup_sacrifice_scenario();
+    // Pick a card that's still in A's hand, not on board.
+    let phantom = s.a.hand[2].clone();
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![phantom.clone()],
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::SacrificePaymentInvalid(phantom)));
+}
+
+#[test]
+fn sacrifice_rejected_when_opponent_controls_victim() {
+    let (mut s, cast, _victim) = setup_sacrifice_scenario();
+    // Try to sacrifice one of B's hand cards (not controlled by A, not on
+    // A's board).
+    let opp_card = s.b.hand[0].clone();
+    let _ = s.move_card(&opp_card, PlayerId::B, Zone::Hand, Zone::Board);
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![opp_card.clone()],
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::SacrificePaymentInvalid(opp_card)));
 }
 
 #[test]
@@ -486,6 +703,8 @@ fn play_card_errors_on_variable_x_cost() {
 
 #[test]
 fn play_card_errors_on_unsupported_cost_source() {
+    // SelfExile (P.5) is the last unsupported source; Hand / Mill /
+    // Graveyard / Sacrifice are all routable.
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let creature = s.a.hand[0].clone();
     set_cost(
@@ -493,14 +712,14 @@ fn play_card_errors_on_unsupported_cost_source() {
         &creature,
         vec![CostComponent {
             amount: 1,
-            source: CostSource::Sacrifice,
+            source: CostSource::SelfExile,
             is_x: false,
         }],
     );
     let result = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
     assert_eq!(
         result,
-        Err(PlayError::UnsupportedCostSource(CostSource::Sacrifice))
+        Err(PlayError::UnsupportedCostSource(CostSource::SelfExile))
     );
 }
 
@@ -592,6 +811,7 @@ fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
             hand_payment_ids: vec![hand_payment],
             x_value: None,
             jewel_tap: None,
+            sacrifice_ids: vec![],
         },
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
@@ -693,6 +913,7 @@ fn surge_instant_untaps_all_your_creatures_on_play() {
             hand_payment_ids: vec![payment, payment2],
             x_value: None,
             jewel_tap: None,
+            sacrifice_ids: vec![],
         },
         Some(&mut crate::game::EventContext::lua_only(registry.lua())),
     )
@@ -879,6 +1100,7 @@ fn counterspell_resolves_and_removes_underlying_cast() {
             hand_payment_ids: vec![a_hand_payment.clone()],
             x_value: None,
             jewel_tap: None,
+            sacrifice_ids: vec![],
         },
     };
     s.open_response_window(a_cast).unwrap();

@@ -258,6 +258,7 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
                 hand_payment_ids,
                 x_value: None,
                 jewel_tap: None,
+                sacrifice_ids: vec![],
             },
         }
     }

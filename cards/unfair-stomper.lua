@@ -1,4 +1,4 @@
--- Black/green stomper. "Unfair" because it ignores two normal combat rules:
+-- Green stomper. "Unfair" because it ignores two normal combat rules:
 -- it can defend on multiple fronts at once, and it doesn't tap to attack.
 --
 -- Engine support:
@@ -16,7 +16,7 @@
 return {
   id = "unfair-stomper",
   name = "Unfair Stomper",
-  colors = {"black", "green"},
+  colors = {"green"},
   type = "creature",
   subtypes = {"beast"},
   cost = {

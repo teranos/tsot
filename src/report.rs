@@ -112,8 +112,8 @@ fn build_report(
                 div.panel { (replay_journal_stats(all)) }
 
                 h2 { "card performance" }
-                div.note { "Per-card win rate when present in a deck. Cards on top are dragging the decks they appear in; cards on bottom are pulling them up. Sample = unique-card-per-game appearances pooled across both seats." }
-                div.panel { (card_performance(all)) }
+                div.note { "Per-card win rate when present in a deck. Cards on top are dragging the decks they appear in; cards on bottom are pulling them up. Sample = unique-card-per-game appearances pooled across both seats. Hover a card name to see its printed text." }
+                div.panel { (card_performance(all, pools)) }
 
                 h2 { "pending mechanics" }
                 div.note { "Zero today; nonzero once each engine piece lands." }
@@ -538,7 +538,36 @@ fn replay_journal_stats(all: &[GameStats]) -> Markup {
     }
 }
 
-fn card_performance(all: &[GameStats]) -> Markup {
+fn card_performance(all: &[GameStats], pools: &[(DeckVariant, Vec<tsot::Card>)]) -> Markup {
+    // Build a card-id → Card lookup so we can render the printed text in a
+    // hover tooltip. Pull from every variant's pool; dedupe by id.
+    let mut card_lookup: std::collections::BTreeMap<String, &tsot::Card> =
+        std::collections::BTreeMap::new();
+    for (_, pool) in pools {
+        for c in pool {
+            card_lookup.entry(c.id.clone()).or_insert(c);
+        }
+    }
+    // Aggregate first-turn / last-turn per card across all games.
+    // (min_of_mins, max_of_maxes) — i.e., the earliest turn this card was
+    // EVER played and the latest. None until the card sees its first play.
+    let mut turn_range: std::collections::BTreeMap<String, (u32, u32)> =
+        std::collections::BTreeMap::new();
+    for s in all {
+        for (id, (min_t, max_t)) in &s.card_play_turns {
+            turn_range
+                .entry(id.clone())
+                .and_modify(|(mn, mx)| {
+                    if *min_t < *mn {
+                        *mn = *min_t;
+                    }
+                    if *max_t > *mx {
+                        *mx = *max_t;
+                    }
+                })
+                .or_insert((*min_t, *max_t));
+        }
+    }
     // Two metrics per card:
     //   (deck_w, deck_l) — was the card in the winner's / loser's STARTING
     //     deck? Includes never-drawn and held-in-hand cards.
@@ -620,6 +649,8 @@ fn card_performance(all: &[GameStats]) -> Markup {
                 th {}
                 th { "actually played" }
                 th { "play rate" }
+                th { "first turn" }
+                th { "last turn" }
                 th { "played win rate" }
                 th {}
             }}
@@ -629,8 +660,10 @@ fn card_performance(all: &[GameStats]) -> Markup {
                     @let deck_bg = rate_to_color(*deck_rate);
                     @let played_bg = if *total_played > 0 { rate_to_color(*played_rate) } else { "transparent".to_string() };
                     @let play_rate = (*total_played as f64) / (total_games.max(1) as f64) / 2.0;
+                    @let tooltip = card_lookup.get(id).map(|c| card_tooltip(c)).unwrap_or_default();
+                    @let turns = turn_range.get(id);
                     tr {
-                        th { (id) }
+                        th title=(tooltip) { (id) }
                         td.num { (deck_total) }
                         td.num style=(format!("background:{deck_bg}")) { (format!("{deck_rate:.2}")) }
                         td.bar-cell {
@@ -640,6 +673,13 @@ fn card_performance(all: &[GameStats]) -> Markup {
                         }
                         td.num { (total_played) }
                         td.num { (format!("{play_rate:.2}")) }
+                        @if let Some((mn, mx)) = turns {
+                            td.num { (mn) }
+                            td.num { (mx) }
+                        } @else {
+                            td.num.muted { "—" }
+                            td.num.muted { "—" }
+                        }
                         @if *total_played > 0 {
                             td.num style=(format!("background:{played_bg}")) { (format!("{played_rate:.2}")) }
                         } @else {
@@ -659,20 +699,90 @@ fn card_performance(all: &[GameStats]) -> Markup {
     }
 }
 
+/// Multi-line plain-text summary of a card for use as an HTML `title`
+/// attribute (browser tooltip on hover). Keeps it simple: name, type/colors,
+/// cost, stats, abilities. Maud auto-escapes the result.
+fn card_tooltip(c: &tsot::Card) -> String {
+    let mut out = String::new();
+    if !c.name.is_empty() {
+        out.push_str(&c.name);
+        out.push('\n');
+    }
+    // Type + colors line.
+    let kind_str = match c.kind {
+        tsot::CardType::Creature => "creature",
+        tsot::CardType::Spell => match c.timing {
+            Some(tsot::Timing::Instant) => "instant",
+            Some(tsot::Timing::Sorcery) => "sorcery",
+            None => "spell",
+        },
+        tsot::CardType::Artifact => "artifact",
+        tsot::CardType::Environment => "environment",
+        tsot::CardType::Unspecified => "—",
+    };
+    let colors = if c.colors.is_empty() {
+        "colorless".to_string()
+    } else {
+        c.colors.join("/")
+    };
+    out.push_str(&format!("{colors} {kind_str}"));
+    if !c.subtypes.is_empty() {
+        out.push_str(&format!(" — {}", c.subtypes.join(", ")));
+    }
+    out.push('\n');
+    if !c.cost.is_empty() {
+        let cost_str: Vec<String> = c
+            .cost
+            .iter()
+            .map(|cc| {
+                let amt = if cc.is_x {
+                    "X".to_string()
+                } else {
+                    cc.amount.to_string()
+                };
+                let src = match cc.source {
+                    tsot::CostSource::Hand => "hand",
+                    tsot::CostSource::Mill => "mill",
+                    tsot::CostSource::Graveyard => "graveyard",
+                    tsot::CostSource::Sacrifice => "sacrifice",
+                    tsot::CostSource::SelfExile => "self-exile",
+                };
+                format!("{amt} {src}")
+            })
+            .collect();
+        out.push_str(&format!("cost: {}\n", cost_str.join(" + ")));
+    }
+    if let Some(stats) = c.stats {
+        out.push_str(&format!("{}/{}\n", stats.x, stats.y));
+    }
+    for line in &c.abilities {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
 fn pending_mechanics(all: &[GameStats]) -> Markup {
-    let resp = per_variant_avg_f(all, |s| {
-        let v = s.action_counts.get("instant_response_played");
-        (
-            v.map(|x| x[0] as f64).unwrap_or(0.0),
-            v.map(|x| x[1] as f64).unwrap_or(0.0),
-        )
-    });
+    let avg_of = |key: &'static str| -> Vec<(DeckVariant, f64)> {
+        per_variant_avg_f(all, move |s| {
+            let v = s.action_counts.get(key);
+            (
+                v.map(|x| x[0] as f64).unwrap_or(0.0),
+                v.map(|x| x[1] as f64).unwrap_or(0.0),
+            )
+        })
+    };
+    let resp = avg_of("instant_response_played");
+    let sacs = avg_of("sacrificed_as_cost");
+    let arts = avg_of("artifact_played");
+    let jewels = avg_of("jewel_tap_substitution");
     let zero_row: Vec<(DeckVariant, f64)> = VARIANTS.iter().map(|v| (*v, 0.0)).collect();
-    let pending: [(&str, &Vec<(DeckVariant, f64)>); 8] = [
-        ("sacrifices (cost P.16)", &zero_row),
+    let pending: [(&str, &Vec<(DeckVariant, f64)>); 9] = [
+        ("sacrifices (cost P.16)", &sacs),
         ("activated abilities used", &zero_row),
         ("instant responses (R.1)", &resp),
-        ("artifacts played (P.19)", &zero_row),
+        ("artifacts played (P.19)", &arts),
+        ("jewel/crystal tap (P.24)", &jewels),
         ("environments played (P.21)", &zero_row),
         ("mulligans (S.2/S.3)", &zero_row),
         ("counters on the stack", &zero_row),

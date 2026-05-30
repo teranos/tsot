@@ -388,7 +388,12 @@ fn mortal_bee_attack_exiles_opponent_deck_and_self_taxes() {
 }
 
 #[test]
-fn game_discard_removes_leftmost_n_from_hand_to_graveyard() {
+fn game_discard_moves_n_from_hand_to_graveyard() {
+    // game.discard moves N cards from hand to graveyard. The smart-discard
+    // heuristic in do_discard picks the highest-discard-score card per
+    // slot; with this fixture's identical 1/1 vanilla hand cards, all
+    // scores tie, so we only assert the count-level invariant here. See
+    // the heuristic-targeted tests for the prioritization assertions.
     let registry = registry_with_fixture(
         "game_discard",
         r#"return {
@@ -416,8 +421,6 @@ fn game_discard_removes_leftmost_n_from_hand_to_graveyard() {
     add_ability(&mut s, &atk, "haste");
     enter_combat(&mut s);
 
-    // Snapshot the first two hand cards before the discard fires.
-    let leftmost: Vec<InstanceId> = s.a.hand.iter().take(2).cloned().collect();
     let hand_before = s.a.hand.len();
     let gy_before = s.a.graveyard.len();
 
@@ -425,10 +428,69 @@ fn game_discard_removes_leftmost_n_from_hand_to_graveyard() {
 
     assert_eq!(s.a.hand.len(), hand_before - 2);
     assert_eq!(s.a.graveyard.len(), gy_before + 2);
-    for iid in &leftmost {
-        assert!(s.a.graveyard.contains(iid));
-        assert!(!s.a.hand.contains(iid));
+}
+
+#[test]
+fn smart_discard_prefers_vanilla_over_pitch_payoff_jewel() {
+    // The smart-discard heuristic must NOT throw away a jewel (OnAttachedAsCost
+    // handler) when a vanilla creature is available. Big negative score on
+    // pitch-payoff handlers is the design call — jewels are tools.
+    let registry = registry_with_fixture(
+        "smart_discard",
+        r#"return {
+            id = "discard-probe",
+            on_attack = function(game, self)
+                game.discard(self.owner, 1)
+            end,
+        }"#,
+    );
+    let probe = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "discard-probe")
+        .unwrap()
+        .clone();
+
+    // Hand: [atk, jewel, vanilla, vanilla, vanilla]. After atk moves to
+    // BOARD, the heuristic ranks the remainder. Jewel scores -52
+    // (OnAttachedAsCost -50, stats -2); each vanilla scores -2. So one of
+    // the vanillas should be discarded and the jewel must stay.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let atk = s.a.hand[0].clone();
+    let jewel = s.a.hand[1].clone();
+    {
+        let inst = s.card_pool.get_mut(&atk).unwrap();
+        inst.card.handlers = probe.handlers.clone();
+        inst.card.id = probe.id.clone();
     }
+    // Give the jewel an OnAttachedAsCost handler so discard_score sees it.
+    // Reuse the probe's on_attack Function (mlua::Function is a Lua reference,
+    // cheap to clone). Body is irrelevant — discard_score only checks key
+    // presence in the handlers map.
+    let probe_handler = probe
+        .handlers
+        .get(&crate::card::EventName::OnAttack)
+        .unwrap()
+        .clone();
+    s.card_pool
+        .get_mut(&jewel)
+        .unwrap()
+        .card
+        .handlers
+        .insert(crate::card::EventName::OnAttachedAsCost, probe_handler);
+    put_on_board(&mut s, PlayerId::A, &atk);
+    add_ability(&mut s, &atk, "haste");
+    enter_combat(&mut s);
+
+    let hand_before = s.a.hand.len();
+    s.declare_attacker(&atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
+
+    // Jewel must still be in hand; exactly one card was discarded.
+    assert!(s.a.hand.contains(&jewel), "jewel must not be discarded");
+    assert_eq!(s.a.hand.len(), hand_before - 1);
+    assert_eq!(s.a.graveyard.len(), 1);
+    let discarded = s.a.graveyard[0].clone();
+    assert_ne!(discarded, jewel, "discarded card must not be the jewel");
 }
 
 #[test]

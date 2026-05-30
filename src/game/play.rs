@@ -26,6 +26,10 @@ pub struct PlayChoices {
     /// count is reduced by 1 (so `hand_payment_ids.len()` should be the
     /// already-reduced count).
     pub jewel_tap: Option<InstanceId>,
+    /// P.16: one InstanceId per SACRIFICE cost component. Each ID must be
+    /// on the player's BOARD and they control it. Moves BOARD → GRAVEYARD
+    /// as part of cost payment; on_die fires per sacrificed card.
+    pub sacrifice_ids: Vec<InstanceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +66,14 @@ pub enum PlayError {
     /// Phase 3: a static restriction (e.g., flesh-eating-plant's
     /// `cannot_be_cost_paid`) forbids using this card as a HAND payment.
     HandPaymentForbidden(InstanceId),
+    /// P.16: SACRIFICE payment count doesn't match the card's total
+    /// SACRIFICE cost.
+    WrongSacrificeCount { expected: usize, got: usize },
+    /// P.16: a chosen sacrifice ID isn't on the player's BOARD, or the
+    /// player doesn't control it.
+    SacrificePaymentInvalid(InstanceId),
+    /// P.16: a sacrifice ID appears more than once in the choices.
+    DuplicateSacrifice(InstanceId),
 }
 
 impl GameState {
@@ -88,6 +100,7 @@ impl GameState {
         choices: PlayChoices,
         ctx: Option<&mut EventContext>,
     ) -> Result<(), PlayError> {
+        let mut ctx = ctx;
         if self.winner.is_some() {
             return Err(PlayError::GameOver);
         }
@@ -119,6 +132,7 @@ impl GameState {
         let mut hand_needed: usize = 0;
         let mut mill_needed: usize = 0;
         let mut graveyard_needed: usize = 0;
+        let mut sacrifice_needed: usize = 0;
         // Variable-X: if any cost component has is_x, the player must have
         // pre-chosen X (via oracle.choose_int) and supplied it in choices.
         // The same X applies to every variable component.
@@ -142,7 +156,8 @@ impl GameState {
                 CostSource::Hand => hand_needed += amount,
                 CostSource::Mill => mill_needed += amount,
                 CostSource::Graveyard => graveyard_needed += amount,
-                // TODO(costs): support SACRIFICE (P.16) and SELF (P.5).
+                CostSource::Sacrifice => sacrifice_needed += amount,
+                // TODO(costs): support SELF (P.5).
                 other => return Err(PlayError::UnsupportedCostSource(other)),
             }
         }
@@ -213,6 +228,31 @@ impl GameState {
             });
         }
 
+        // P.16: SACRIFICE cost validation. Each chosen sacrifice ID must be
+        // on the player's BOARD and they must control it. Caller chooses
+        // which board cards to sacrifice (sim AI prefers low-value targets).
+        if choices.sacrifice_ids.len() != sacrifice_needed {
+            return Err(PlayError::WrongSacrificeCount {
+                expected: sacrifice_needed,
+                got: choices.sacrifice_ids.len(),
+            });
+        }
+        let mut sac_seen: BTreeSet<&InstanceId> = BTreeSet::new();
+        for sid in &choices.sacrifice_ids {
+            if !sac_seen.insert(sid) {
+                return Err(PlayError::DuplicateSacrifice(sid.clone()));
+            }
+            if !self.player(player).board.contains(sid) {
+                return Err(PlayError::SacrificePaymentInvalid(sid.clone()));
+            }
+            let Some(inst) = self.card_pool.get(sid) else {
+                return Err(PlayError::SacrificePaymentInvalid(sid.clone()));
+            };
+            if inst.controller != player {
+                return Err(PlayError::SacrificePaymentInvalid(sid.clone()));
+            }
+        }
+
         // All checks pass — apply mutations through journaled helpers.
 
         // MILL cost: top N of DECK → GRAVEYARD (P.11).
@@ -236,6 +276,19 @@ impl GameState {
         if let Some(jewel_iid) = &choices.jewel_tap {
             self.set_tapped(jewel_iid, true);
             self.bump_action("jewel_tap_substitution", player);
+        }
+
+        // P.16: SACRIFICE — move chosen BOARD cards to GRAVEYARD and fire
+        // on_die per card (matches combat's death-detection sequence).
+        let sac_ids: Vec<InstanceId> = choices.sacrifice_ids.clone();
+        for sid in &sac_ids {
+            let _ = self.move_card(sid, player, Zone::Board, Zone::Graveyard);
+            self.bump_action("sacrificed_as_cost", player);
+        }
+        if let Some(c) = ctx.as_mut() {
+            for sid in &sac_ids {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, sid);
+            }
         }
 
         // Announce the cast. Non-hand cost (mill, graveyard) is already
@@ -431,42 +484,66 @@ impl GameState {
     }
 
     /// Build a HAND payment vector by asking `oracle.choose_card` once per
-    /// P.24: returns true iff `jewel_iid` is an untapped jewel on `player`'s
-    /// BOARD whose colors intersect `cast_colors`. Used by `play_card` to
-    /// validate the optional jewel-tap substitution.
+    /// P.24: returns true iff `tap_iid` is an untapped jewel OR crystal on
+    /// `player`'s BOARD whose color source intersects `cast_colors`.
+    ///
+    /// Color source differs by subtype:
+    /// - `jewel` matches by the jewel's own printed colors.
+    /// - `crystal` matches by the colors of cards ATTACHED to the crystal
+    ///   (since crystals print with all colors, matching their own would
+    ///   be trivial — the attached cards carry the meaningful constraint).
     pub fn is_valid_jewel_tap(
         &self,
         player: PlayerId,
-        jewel_iid: &InstanceId,
+        tap_iid: &InstanceId,
         cast_colors: &[String],
     ) -> bool {
-        if !self.player(player).board.contains(jewel_iid) {
+        if !self.player(player).board.contains(tap_iid) {
             return false;
         }
-        let Some(jewel) = self.card_pool.get(jewel_iid) else {
+        let Some(tap_card) = self.card_pool.get(tap_iid) else {
             return false;
         };
-        if jewel.tapped {
+        if tap_card.tapped {
             return false;
         }
-        if jewel.controller != player {
-            return false;
-        }
-        let is_jewel = jewel
-            .card
-            .subtypes
-            .iter()
-            .any(|s| s.eq_ignore_ascii_case("jewel"));
-        if !is_jewel {
+        if tap_card.controller != player {
             return false;
         }
         if cast_colors.is_empty() {
             return false;
         }
-        jewel.card.colors.iter().any(|c| {
-            let lc = c.to_ascii_lowercase();
-            cast_colors.contains(&lc)
-        })
+        let is_jewel = tap_card
+            .card
+            .subtypes
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("jewel"));
+        let is_crystal = tap_card
+            .card
+            .subtypes
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("crystal"));
+        if is_jewel {
+            return tap_card.card.colors.iter().any(|c| {
+                let lc = c.to_ascii_lowercase();
+                cast_colors.contains(&lc)
+            });
+        }
+        if is_crystal {
+            // Match against colors of attached cards.
+            for att_iid in &tap_card.attached {
+                if let Some(att) = self.card_pool.get(att_iid) {
+                    for col in &att.card.colors {
+                        let lc = col.to_ascii_lowercase();
+                        if cast_colors.contains(&lc) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        false
     }
 
     /// First untapped same-color jewel on `player`'s BOARD that's a valid

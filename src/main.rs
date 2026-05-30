@@ -151,6 +151,11 @@ pub(crate) struct GameStats {
     /// "was this card drawn-and-played" vs "just sitting in the deck."
     a_played_card_ids: BTreeSet<String>,
     b_played_card_ids: BTreeSet<String>,
+    /// Per-card (min_turn, max_turn) the card was played by EITHER side.
+    /// Pooled across A and B because the question is "when in the game
+    /// does this card show up", not "which side plays it." Empty if the
+    /// card never resolved a play this game.
+    card_play_turns: BTreeMap<String, (u32, u32)>,
     a_played: u32,
     b_played: u32,
     a_attacks: u32,
@@ -196,7 +201,10 @@ fn main() -> mlua::Result<()> {
             c.cost.iter().all(|cc| {
                 matches!(
                     cc.source,
-                    CostSource::Hand | CostSource::Mill | CostSource::Graveyard
+                    CostSource::Hand
+                        | CostSource::Mill
+                        | CostSource::Graveyard
+                        | CostSource::Sacrifice
                 )
             })
         })
@@ -423,6 +431,7 @@ fn run_game(
         deck_b_ids: BTreeSet::new(),
         a_played_card_ids: BTreeSet::new(),
         b_played_card_ids: BTreeSet::new(),
+        card_play_turns: BTreeMap::new(),
         a_played: 0,
         b_played: 0,
         a_attacks: 0,
@@ -535,7 +544,15 @@ fn run_game(
                         state.resolve_hand_payment(active, &picked, hand_needed, &mut oracle);
                 }
             } else if matches!(kind, CardType::Creature) {
-                rig_creature_free_haste(&mut state, &picked);
+                // Skip the free-haste rig if the cost contains SACRIFICE —
+                // we want the sacrifice payment to actually exercise. Without
+                // the rig, the engine reads the printed cost as-is.
+                let has_sacrifice = cost
+                    .iter()
+                    .any(|c| matches!(c.source, CostSource::Sacrifice));
+                if !has_sacrifice {
+                    rig_creature_free_haste(&mut state, &picked);
+                }
             } else if matches!(kind, CardType::Spell | CardType::Artifact) {
                 // HAND cost: ask the oracle slot-by-slot which card to spend.
                 // Recorded by RecordingOracle so retry-on-suicide sees it.
@@ -558,6 +575,25 @@ fn run_game(
                     choices.hand_payment_ids =
                         state.resolve_hand_payment(active, &picked, hand_needed, &mut oracle);
                 }
+            }
+            // P.16: SACRIFICE — pick board cards to sacrifice for any
+            // sacrifice cost components. Simple heuristic: prefer creatures
+            // with the lowest effective X (least board impact). Excludes
+            // the cast card (it's in HAND anyway). Applies across all
+            // payment shapes (creature/spell/artifact).
+            let sacrifice_needed: usize = cost
+                .iter()
+                .filter(|c| matches!(c.source, CostSource::Sacrifice))
+                .map(|c| c.amount.max(0) as usize)
+                .sum();
+            if sacrifice_needed > 0 {
+                let mut sac_candidates: Vec<InstanceId> =
+                    state.player(active).board.clone();
+                sac_candidates.sort_by_key(|iid| state.effective_stats(iid).0);
+                choices.sacrifice_ids = sac_candidates
+                    .into_iter()
+                    .take(sacrifice_needed)
+                    .collect();
             }
             // Preview-and-skip: open a journal, attempt the play. If the
             // play would deck the active player (suicide), rollback and
@@ -651,12 +687,26 @@ fn run_game(
                 if let Some(card_id) = state.card_pool.get(&picked).map(|c| c.card.id.clone()) {
                     match active {
                         PlayerId::A => {
-                            stats.a_played_card_ids.insert(card_id);
+                            stats.a_played_card_ids.insert(card_id.clone());
                         }
                         PlayerId::B => {
-                            stats.b_played_card_ids.insert(card_id);
+                            stats.b_played_card_ids.insert(card_id.clone());
                         }
                     }
+                    // Track first/last turn the card saw play this game.
+                    let turn_now = state.turn;
+                    stats
+                        .card_play_turns
+                        .entry(card_id)
+                        .and_modify(|(min_t, max_t)| {
+                            if turn_now < *min_t {
+                                *min_t = turn_now;
+                            }
+                            if turn_now > *max_t {
+                                *max_t = turn_now;
+                            }
+                        })
+                        .or_insert((turn_now, turn_now));
                 }
                 let timing = state
                     .card_pool
@@ -852,8 +902,17 @@ fn pick_random_playable_in_hand(
                 _ => {}
             }
             match inst.card.kind {
-                // Creatures get rigged free + haste before play, so always pickable.
-                CardType::Creature => true,
+                // Creatures get rigged free + haste unless their cost has
+                // SACRIFICE (which we honor). Gate on can_pay_instant_cost
+                // only when sacrifice is present.
+                CardType::Creature => {
+                    let has_sac = inst
+                        .card
+                        .cost
+                        .iter()
+                        .any(|c| matches!(c.source, CostSource::Sacrifice));
+                    !has_sac || can_pay_instant_cost(state, player, iid)
+                }
                 // Spell (instant or sorcery timing) — main-phase loop here,
                 // so sorcery timing is legal. can_pay_instant_cost is
                 // shape-equivalent for both timings (HAND/MILL/GRAVEYARD
@@ -876,6 +935,7 @@ fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceId) -
     let mut hand_need = 0usize;
     let mut mill_need = 0usize;
     let mut gy_need = 0usize;
+    let mut sac_need = 0usize;
     for c in &inst.card.cost {
         if c.is_x {
             return false;
@@ -885,13 +945,17 @@ fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceId) -
             CostSource::Hand => hand_need += amount,
             CostSource::Mill => mill_need += amount,
             CostSource::Graveyard => gy_need += amount,
+            CostSource::Sacrifice => sac_need += amount,
             _ => return false,
         }
     }
     let p = state.player(player);
     // Subtract 1 for the card being played (it's also in hand).
     let hand_have = p.hand.len().saturating_sub(1);
-    hand_have >= hand_need && p.deck.len() >= mill_need && p.graveyard.len() >= gy_need
+    hand_have >= hand_need
+        && p.deck.len() >= mill_need
+        && p.graveyard.len() >= gy_need
+        && p.board.len() >= sac_need
 }
 
 /// Sim heuristic: skip an attack iff the defender has at least one legal
@@ -1278,7 +1342,30 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     println!();
     println!("Pending mechanics (zero today; nonzero once each engine piece lands):");
     println!("                                  A         B");
-    print_pending("sacrifices (cost P.16)");
+    let sac_a = all
+        .iter()
+        .map(|s| {
+            s.action_counts
+                .get("sacrificed_as_cost")
+                .map(|v| v[0] as f64)
+                .unwrap_or(0.0)
+        })
+        .sum::<f64>()
+        / all.len() as f64;
+    let sac_b = all
+        .iter()
+        .map(|s| {
+            s.action_counts
+                .get("sacrificed_as_cost")
+                .map(|v| v[1] as f64)
+                .unwrap_or(0.0)
+        })
+        .sum::<f64>()
+        / all.len() as f64;
+    println!(
+        "  {:35} {:>6.2}    {:>6.2}",
+        "sacrifices (cost P.16)", sac_a, sac_b
+    );
     print_pending("activated abilities used");
     // Instant responses now wired via piece 4 — read from action_counts.
     let resp_a: f64 = all

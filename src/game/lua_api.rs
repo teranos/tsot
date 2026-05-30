@@ -159,15 +159,82 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
 fn do_discard(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     let pid = parse_pid(pid_str)?;
     let take = (n.max(0) as usize).min(s.player(pid).hand.len());
-    // Deterministic front-of-hand pending choice API surface (Phase 2+).
+    // Smart-discard heuristic: at each slot, score every hand card and
+    // pick the highest score (= the most-discardable). See `discard_score`
+    // for the signal mix.
+    //
+    // TODO(smart-discard): this v1 heuristic has known gaps:
+    //   - It doesn't consider AFFORDABILITY. A 4-mill card you can't pay
+    //     right now is a stronger discard candidate than the same-cost
+    //     card when you have 4+ deck. Would need to walk card.cost vs
+    //     player state per scoring call — measurable engine cost.
+    //   - It treats every payoff handler with a fixed bonus, not weighted
+    //     by ACTUAL payoff value. A draw-2 spell scores the same OnPlay
+    //     bonus as a coin-flip spell.
+    //   - It doesn't model "this card WANTS to be in the graveyard"
+    //     (slow-recall-style cards, future graveyard-payoff). Would need
+    //     a per-card `discard_payoff` field or `OnDiscarded` event.
+    //   - Self-discard only. A future opponent-discard primitive (mantis-
+    //     shrimp-style) should pick the worst card from the OPPONENT'S
+    //     perspective — same heuristic but applied to their hand from
+    //     their angle. Today, mantis-shrimp's "discard" still hits the
+    //     opponent's hand[0] because it uses game.discard(opp_player, 1).
+    //     Wait — actually mantis-shrimp goes through do_discard with
+    //     pid = opponent, so it ALSO uses this heuristic now, picking the
+    //     opponent's "least useful" card by the discarder's read. That's
+    //     a free side-grade (sees opponent's hand symmetrically) but it's
+    //     a kindness, not a strategy.
+    //   - No tie-break. If two cards score equal the first hand position
+    //     wins (deterministic but arbitrary).
     for _ in 0..take {
-        let Some(front) = s.player(pid).hand.first().cloned() else {
+        let hand_snapshot: Vec<InstanceId> = s.player(pid).hand.clone();
+        let chosen = hand_snapshot
+            .iter()
+            .max_by_key(|iid| discard_score(s, iid))
+            .cloned();
+        let Some(iid) = chosen else {
             break;
         };
-        let _ = s.move_card(&front, pid, Zone::Hand, Zone::Graveyard);
+        let _ = s.move_card(&iid, pid, Zone::Hand, Zone::Graveyard);
         s.bump_action("discard", pid);
     }
     Ok(())
+}
+
+/// Heuristic: "how much do I want to throw this card away?" Higher score =
+/// better candidate for discard. Used by `do_discard` to pick the lowest-
+/// value card in hand. Same shape as `choice::pitch_score` but for discard.
+///
+/// Signals (v1):
+/// - Body value: bigger creatures are worth keeping (negative score).
+/// - Handler-bearing cards have play-value worth holding (negative bonus
+///   per handler kind).
+/// - Pitch-payoff cards (OnAttachedAsCost handlers, e.g. jewels) are tools
+///   for cost-substitution and have outsized loss-on-discard — big penalty.
+fn discard_score(state: &GameState, iid: &InstanceId) -> i32 {
+    let Some(c) = state.card_pool.get(iid) else {
+        return 0;
+    };
+    let mut s = 0i32;
+    let (x, y) = state.effective_stats(iid);
+    s -= x + y;
+    let h = &c.card.handlers;
+    if h.contains_key(&crate::card::EventName::OnPlay) {
+        s -= 10;
+    }
+    if h.contains_key(&crate::card::EventName::OnEnterBoard) {
+        s -= 10;
+    }
+    if h.contains_key(&crate::card::EventName::OnDie) {
+        s -= 5;
+    }
+    if h.contains_key(&crate::card::EventName::OnAttack) {
+        s -= 5;
+    }
+    if h.contains_key(&crate::card::EventName::OnAttachedAsCost) {
+        s -= 50;
+    }
+    s
 }
 
 fn do_add_status(s: &mut GameState, iid: &str, kind: &str, duration: i32) -> Result<()> {
@@ -361,6 +428,63 @@ macro_rules! build_game_table {
                 cell_confirm_s.borrow_mut().bump_action("confirm", confirm_owner);
                 Ok(answer)
             })?,
+        )?;
+
+        // Ask a SPECIFIC player a yes/no question. Used by cards like
+        // BCI MegaFly where the trigger asks the OPPONENT (not the card's
+        // owner) to decide. The asker plumbs to the oracle for recording /
+        // future biased heuristics; RandomOracle still answers via gen_bool.
+        let cell_confirm_for_o = &$oracle_cell;
+        let cell_confirm_for_s = &$cell;
+        game.set(
+            "confirm_for",
+            $scope.create_function_mut(
+                move |_, (pid_str, prompt): (String, String)| -> Result<bool> {
+                    let pid = parse_pid(&pid_str)?;
+                    let answer = {
+                        let s = cell_confirm_for_s.borrow();
+                        let mut o = cell_confirm_for_o.borrow_mut();
+                        o.confirm(&s, pid, &prompt)
+                    };
+                    cell_confirm_for_s.borrow_mut().bump_action("confirm", pid);
+                    Ok(answer)
+                },
+            )?,
+        )?;
+
+        // Same as `choose_card` but the asker is an explicit player id
+        // rather than the card's owner. For opponent-side picks like BCI
+        // MegaFly's "opponent picks an artifact to sacrifice."
+        let cell_cc_for_o = &$oracle_cell;
+        let cell_cc_for_s = &$cell;
+        game.set(
+            "choose_card_for",
+            $scope.create_function_mut(
+                move |_, (pid_str, pool, opts): (String, Vec<String>, Option<mlua::Table>)| -> Result<Option<String>> {
+                    let pid = parse_pid(&pid_str)?;
+                    let (optional, prompt) = match opts {
+                        Some(t) => (
+                            t.get::<Option<bool>>("optional")?.unwrap_or(false),
+                            t.get::<Option<String>>("prompt")?.unwrap_or_default(),
+                        ),
+                        None => (false, String::new()),
+                    };
+                    let req = ChooseCardRequest {
+                        pool,
+                        asker: Some(pid),
+                        host: None,
+                        optional,
+                        prompt,
+                    };
+                    let answer = {
+                        let s = cell_cc_for_s.borrow();
+                        let mut o = cell_cc_for_o.borrow_mut();
+                        o.choose_card(&s, req)
+                    };
+                    cell_cc_for_s.borrow_mut().bump_action("choose_card", pid);
+                    Ok(answer)
+                },
+            )?,
         )?;
 
         let cell_player_o = &$oracle_cell;

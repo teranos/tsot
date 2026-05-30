@@ -122,6 +122,12 @@ pub struct StaticAffects {
     /// Lets cards say "creatures you control" without enumerating subtypes.
     #[serde(default)]
     pub kind: Option<CardType>,
+    /// Phase 3: candidate must have this (lowercase) keyword, evaluated
+    /// via `GameState::has_keyword` (intrinsic OR static-granted). Lets
+    /// cards say "creatures with flying you control cannot attack" without
+    /// enumerating which creatures fly.
+    #[serde(default)]
+    pub has_keyword: Option<String>,
 }
 
 /// What set of cards a static can target.
@@ -481,6 +487,9 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
                 None => None,
                 Some(k) => Some(parse_type(&k).map_err(mlua::Error::runtime)?.0),
             };
+            let has_keyword = a
+                .get::<Option<String>>("has_keyword")?
+                .map(|s| s.to_ascii_lowercase());
             StaticAffects {
                 subtypes,
                 colors,
@@ -488,6 +497,7 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
                 exclude_self,
                 scope,
                 kind,
+                has_keyword,
             }
         }
         other => {

@@ -195,7 +195,7 @@ Statics that grant keywords (flying, vigilance, defender, etc.) to qualifying ca
 2. ✅ `Restriction::CannotAttack` — checked in `declare_attacker`. New error `CombatError::AttackerForbiddenByRestriction`. Sim's `eligible_attackers` filters it out.
 3. ✅ `Restriction::CannotBeCostPaid` — `resolve_hand_payment` filters the candidate pool; `play_card` validates explicit payments. New error `PlayError::HandPaymentForbidden`.
 4. ✅ `GameState::has_restriction(iid, restriction)` mirrors `has_static_keyword`'s iteration.
-5. ✅ Flesh-eating-plant wired (static with both restrictions, controller = opponent, subtype = insect). Note: the plant itself still can't be cast because its cost source is SACRIFICE (not yet routable), but the restriction fires once it reaches BOARD by any other path.
+5. ✅ Flesh-eating-plant wired (static with both restrictions, controller = opponent, subtype = insect). SACRIFICE cost source (P.16) is now routable through `play_card`, so the plant lands on BOARD via normal play. Sim plays it ~0.17 times per game per side.
 6. ✅ 2 unit tests: restriction propagates to opponent insects (own insects unaffected); `declare_attacker` returns `AttackerForbiddenByRestriction` for a restricted attacker.
 
 ### Out (deferred)

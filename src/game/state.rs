@@ -907,6 +907,17 @@ impl GameState {
                 return None;
             }
         }
+        if let Some(kw) = &affects.has_keyword {
+            // Cycle guard: only check INTRINSIC keywords (printed + intrinsic
+            // modifiers), not static-granted. Otherwise this matcher would
+            // recurse: static_def_if_matches → has_keyword → has_static_keyword
+            // → static_def_if_matches → ... A future stratified evaluator
+            // could handle the static-on-static case; for now the corpus
+            // doesn't need it.
+            if !target.has_keyword(kw) {
+                return None;
+            }
+        }
         Some(def)
     }
 
@@ -1246,6 +1257,7 @@ mod tests {
                 exclude_self: true,
                 scope: crate::card::StaticScope::Board,
                 kind: None,
+                has_keyword: None,
             },
             modifier_x: dx,
             modifier_y: dy,
@@ -1314,6 +1326,7 @@ mod tests {
                 exclude_self: false,
                 scope: crate::card::StaticScope::AttachedHost,
                 kind: None,
+                has_keyword: None,
             },
             modifier_x: 0,
             modifier_y: 0,
@@ -1347,6 +1360,7 @@ mod tests {
                 exclude_self: false,
                 scope: crate::card::StaticScope::AttachedHost,
                 kind: None,
+                has_keyword: None,
             },
             modifier_x: 0,
             modifier_y: 0,
@@ -1375,6 +1389,7 @@ mod tests {
                 exclude_self: true,
                 scope: crate::card::StaticScope::Board,
                 kind: Some(crate::card::CardType::Creature),
+                has_keyword: None,
             },
             modifier_x: 1,
             modifier_y: 1,
@@ -1417,6 +1432,7 @@ mod tests {
                 exclude_self: false,
                 scope: crate::card::StaticScope::SourceOnly,
                 kind: None,
+                has_keyword: None,
             },
             modifier_x: 0,
             modifier_y: 0,
@@ -1461,6 +1477,7 @@ mod tests {
                 exclude_self: false,
                 scope: crate::card::StaticScope::SourceOnly,
                 kind: None,
+                has_keyword: None,
             },
             modifier_x: 0,
             modifier_y: 0,
@@ -1492,6 +1509,7 @@ mod tests {
                 exclude_self: false,
                 scope: crate::card::StaticScope::Board,
                 kind: None,
+                has_keyword: None,
             },
             modifier_x: 0,
             modifier_y: 0,
@@ -1535,6 +1553,7 @@ mod tests {
                 exclude_self: false,
                 scope: crate::card::StaticScope::Board,
                 kind: None,
+                has_keyword: None,
             },
             modifier_x: 0,
             modifier_y: 0,
@@ -1553,6 +1572,44 @@ mod tests {
         s.card_pool.get_mut(&attacker).unwrap().summoning_sick = false;
         let err = s.declare_attacker(&attacker, None).unwrap_err();
         assert_eq!(err, crate::game::combat::CombatError::AttackerForbiddenByRestriction);
+    }
+
+    #[test]
+    fn affects_has_keyword_filters_by_intrinsic_or_static_grant() {
+        // Scarecrow-shape: a restriction static that only affects opponent
+        // creatures with the `flying` keyword (either printed or static-granted).
+        let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+        let source = s.b.hand[0].clone();
+        let flyer = s.a.hand[0].clone();
+        let grounder = s.a.hand[1].clone();
+        s.card_pool.get_mut(&flyer).unwrap().card.abilities = vec!["flying.".into()];
+        s.card_pool.get_mut(&flyer).unwrap().card.kind = crate::card::CardType::Creature;
+        s.card_pool.get_mut(&grounder).unwrap().card.kind = crate::card::CardType::Creature;
+        s.card_pool.get_mut(&source).unwrap().card.static_def = Some(crate::card::StaticDef {
+            affects: crate::card::StaticAffects {
+                subtypes: vec![],
+                colors: vec![],
+                controller: Some(crate::card::StaticController::Opponent),
+                exclude_self: false,
+                scope: crate::card::StaticScope::Board,
+                kind: Some(crate::card::CardType::Creature),
+                has_keyword: Some("flying".into()),
+            },
+            modifier_x: 0,
+            modifier_y: 0,
+            modifier_keyword: None,
+            condition: None,
+            restrictions: vec![crate::card::Restriction::CannotAttack],
+        });
+        s.b.hand.retain(|i| i != &source);
+        s.a.hand.retain(|i| i != &flyer && i != &grounder);
+        s.b.board.push(source);
+        s.a.board.push(flyer.clone());
+        s.a.board.push(grounder.clone());
+
+        // Flyer restricted; ground creature unaffected.
+        assert!(s.has_restriction(&flyer, crate::card::Restriction::CannotAttack));
+        assert!(!s.has_restriction(&grounder, crate::card::Restriction::CannotAttack));
     }
 
     #[test]
