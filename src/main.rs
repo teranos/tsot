@@ -1247,14 +1247,20 @@ fn pick_blocks(
             continue;
         }
 
-        // T2: kill-trade — blocker.X >= atk.Y. Take if dying OR atk_x >= 2.
+        // T2: kill-trade — blocker.X >= atk.Y. Take if dying OR atk_x >= 2
+        // OR the trade is investment-positive (attacker meaningfully more
+        // expensive than blocker). "Trade up": sacrifice cheap fodder to
+        // kill expensive threats. Uses sacrifice_keep_value as the cost-
+        // weighted investment proxy. +4 buffer prevents micro-trades.
         let kill_trade = avail
             .iter()
             .filter(|(_, bx, _)| *bx >= *atk_y)
             .min_by_key(|(_, bx, _)| *bx)
             .cloned();
         if let Some((blk, _, _)) = kill_trade {
-            if dying || *atk_x >= 2 {
+            let trade_up = sacrifice_keep_value(state, atk)
+                > sacrifice_keep_value(state, &blk) + 4;
+            if dying || *atk_x >= 2 || trade_up {
                 assignments.push((blk.clone(), atk.clone()));
                 used.insert(blk);
                 remaining_incoming -= atk_x;
