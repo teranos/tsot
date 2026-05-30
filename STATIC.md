@@ -148,16 +148,30 @@ The smallest meaningful slice. Anthem-style buffs.
 
 ## Phase 2 — Keyword grants
 
-**Goal:** statics that grant keywords (flying, vigilance, defender, etc.) to qualifying cards.
+### Status (2026-05-30)
 
-**Scope (in):**
-- Extend Phase 1 `modifier` shape to include `{keyword = "flying"}` variant.
-- `has_keyword(iid, keyword)` iterates on-board static sources the same way `effective_stats` does.
+Phase 2 starting. First piece landed: `StaticDef.modifier_keyword: Option<String>` field added. Parser reads `modifier.keyword` from Lua. **Not yet wired into `has_keyword`** — the field exists but reading it via `has_keyword` is the next step. Same incremental shape as STACK Phase 1's "types only, then wiring."
+
+Next steps in order:
+1. **Wire `has_keyword` to consult on-board static sources** mirroring how `effective_stats` already iterates them. ~30 lines in state.rs.
+2. **Pick a motivating card** — companion-bird ("while attached, host has flying") OR a new "flying anthem" artifact. Companion-bird is harder (static targets a host, not a candidate-by-predicate); a banner-style artifact is the simpler test.
+3. **State-reading predicate escape hatch** — needed for ossuary's graveyard-threshold predicate and wandering-wizard's conditional flying. Separate sub-piece; defer until the simple cases work.
+
+### Goal
+
+Statics that grant keywords (flying, vigilance, defender, etc.) to qualifying cards.
+
+### Scope (in)
+
+- Extend Phase 1 `modifier` shape to include `{keyword = "flying"}` variant — ✅ data structure landed (`StaticDef.modifier_keyword`).
+- `has_keyword(iid, keyword)` iterates on-board static sources the same way `effective_stats` does — ⬜ pending.
+- State-reading predicate (e.g., "owner.graveyard.len() >= 5") — ⬜ pending, blocks ossuary + wandering-wizard.
 - Cards:
   - A future "flying anthem" — "Other birds you control have flying."
   - Equipment-style attaches that grant keywords (not yet a card kind, but the system is ready).
 
-**Out:**
+### Out
+
 - Removing keywords (Phase 3 territory — restriction-flavored).
 
 ---

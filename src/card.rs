@@ -122,13 +122,21 @@ pub enum StaticController {
 }
 
 /// A static ability declared on a card. Phase 1: stat modifier only.
-/// `effects` is the predicate; `modifier` is the (x, y) delta applied to
-/// every matching candidate while the source is on the BOARD.
+/// Phase 2: also `modifier_keyword` for keyword-grant statics (flying,
+/// vigilance, etc.). Either field can be set; both can be set on the
+/// same static (`+1/+1 and have flying`). `affects` is the predicate
+/// against the candidate; everything applies while the source is on
+/// the BOARD and the predicate matches.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaticDef {
     pub affects: StaticAffects,
     pub modifier_x: i32,
     pub modifier_y: i32,
+    /// Phase 2: keyword granted to matching candidates. None = no keyword
+    /// grant. Lowercase string matching `has_keyword` lookup. Examples:
+    /// "flying", "vigilance", "haste", "cannot-block".
+    #[serde(default)]
+    pub modifier_keyword: Option<String>,
 }
 
 /// Event handler keys recognised on card files. Matches LUA.md Phase 1 taxonomy
@@ -405,12 +413,15 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
             )))
         }
     };
-    let (modifier_x, modifier_y) = match static_t.get::<Value>("modifier")? {
-        Value::Nil => (0, 0),
+    let (modifier_x, modifier_y, modifier_keyword) = match static_t.get::<Value>("modifier")? {
+        Value::Nil => (0, 0, None),
         Value::Table(m) => {
             let x = m.get::<Option<i32>>("x")?.unwrap_or(0);
             let y = m.get::<Option<i32>>("y")?.unwrap_or(0);
-            (x, y)
+            let keyword = m
+                .get::<Option<String>>("keyword")?
+                .map(|s| s.to_ascii_lowercase());
+            (x, y, keyword)
         }
         other => {
             return Err(mlua::Error::runtime(format!(
@@ -422,6 +433,7 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
         affects,
         modifier_x,
         modifier_y,
+        modifier_keyword,
     }))
 }
 

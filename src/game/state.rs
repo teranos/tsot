@@ -1113,6 +1113,7 @@ mod tests {
             },
             modifier_x: dx,
             modifier_y: dy,
+            modifier_keyword: None,
         });
     }
 
