@@ -55,7 +55,7 @@ Not started. `combat.rs:321` has a TODO marker. tsot does combat damage + death 
 
 These aren't engine bugs but they limit the validity of sim-based playtest signals. The AI:
 
-- **Plays exactly one card per turn.** `pick_random_playable_in_hand` picks one and moves on. No multi-card sequence planning. For hand sizes >2 this systematically undervalues empty-hand plays.
+- **Plays at most one creature + one non-creature per turn** (Pattern A — single creature, single spell). No further multi-card sequencing — three+ cheap creatures in hand still only deploy one this turn. No "play A, evaluate, then play B" planning.
 - **Attacks with everything eligible, always.** No "hold back this 1/1 to chump-block next turn." No "don't attack into the obvious bitter-dawn." Block policy got smart (tiered survival → kill-trade → chump → multi-block); attack policy did not.
 - **No mulligan decision.** Engine deals first 5 cards as the hand, period. Real games have S.2/S.3 redraw. The sim never explores "this opening hand is unplayable."
 - **No proactive instant timing in main phase.** Instants only fire from the response policy in R.1.a/R.1.b windows. Pre-emptive "cast surge before combat to enable a vigilance line" never happens.

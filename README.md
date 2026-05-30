@@ -10,9 +10,9 @@ A **1v1 collectible card game**, digital-first, where every card is identified b
 
 ## Status
 
-Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, supports preview/rollback/replay/save-load. The simulator runs 1000 games per `cargo run` (seeded via `TSOT_SEED=<n>`, or random per run otherwise) and skips suicide plays via journal preview.
+Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, supports preview/rollback/replay/save-load. The simulator runs 3,600 games per `cargo run` (6 deck-variants × 6 matchups × 100 games; configurable via `TSOT_GAMES_PER_MATCHUP=<n>`; seeded via `TSOT_SEED=<n>`) and skips suicide plays via journal preview. An HTML report (`tsot-report.html`) writes per run with matchup heatmaps, per-variant breakdowns, and per-card win rates.
 
-The big remaining gaps are **static / continuous effects** (lord/anthem-style abilities), the **stack and response windows** (no mid-combat instant casting yet), and **spell/artifact/environment** types in `play_card`. See `LIMITATIONS.md` for the full open-themes view.
+STACK and response windows are done (Phase 1 + 2): instants get cast in response, counterspell works, threat-aware AI policy fires combat tricks during opponent's combat. STATIC Phase 1 (continuous stat anthems) is done — battle-captain and goblin-warlord modify stats on the board. Spell (Instant + Sorcery via timing) routes through `play_card`. Artifact lands in pool as pitch fuel. **Remaining gaps**: activated abilities (`T: ...`), STATIC Phase 2-4 (keyword grants, restrictions, replacements), delayed triggers, a targeting layer, SACRIFICE/SELF cost sources, Environment type. See `LIMITATIONS.md` for the tight current list.
 
 ## Building & running
 
@@ -40,9 +40,10 @@ mlua bundles Lua 5.4 from source via the `vendored` feature; no system Lua insta
 
 - **`RULES.md`** — the rules of the game. Each rule has a stable ID (e.g., `U.6`, `B.7`).
 - **`UX.md`** — baseline UX requirements and the engine API surface those imply.
-- **`LIMITATIONS.md`** — open themes (`events`, `costs`, `types`, `stack`) and how they decompose.
+- **`LIMITATIONS.md`** — what the engine can't do today.
 - **`LUA.md`** — phased plan for card-ability execution.
-- **`STACK.md`** — phased plan for response windows.
+- **`STACK.md`** — phased plan for response windows. Phase 1 + 2 done.
+- **`STATIC.md`** — phased plan for continuous effects. Phase 1 done.
 - **`JOURNAL.md`** — multi-session plan for mutation journaling, rollback, replay, save/load.
 
 ## The archived v1 garden
