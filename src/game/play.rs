@@ -349,8 +349,13 @@ impl GameState {
                 break;
             }
             let pool_for_fallback = pool.clone();
+            // Hand-payment pool is entirely the player's own hand — the
+            // prefer-opponent heuristic doesn't apply here. Asker=None so
+            // the oracle picks uniformly.
             let req = ChooseCardRequest {
                 pool,
+                controllers: Vec::new(),
+                asker: None,
                 optional: false,
                 prompt: format!("hand payment slot {}", slot + 1),
             };

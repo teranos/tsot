@@ -287,7 +287,24 @@ macro_rules! build_game_table {
                         ),
                         None => (false, String::new()),
                     };
-                    let req = ChooseCardRequest { pool, optional, prompt };
+                    // Build parallel `controllers` so the oracle can apply
+                    // the prefer-opponent heuristic. Read controller for
+                    // each pool member; if a member isn't in card_pool
+                    // (shouldn't happen), the controllers vec falls out of
+                    // sync and the oracle skips the heuristic.
+                    let controllers: Vec<PlayerId> = {
+                        let s = cell_choose_s.borrow();
+                        pool.iter()
+                            .filter_map(|iid| s.card_pool.get(iid).map(|i| i.controller))
+                            .collect()
+                    };
+                    let req = ChooseCardRequest {
+                        pool,
+                        controllers,
+                        asker: Some(choose_owner),
+                        optional,
+                        prompt,
+                    };
                     let answer = {
                         let mut o = cell_choose_o.borrow_mut();
                         o.choose_card(req)

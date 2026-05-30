@@ -32,6 +32,16 @@ pub enum ResponseAction {
 #[derive(Debug, Clone)]
 pub struct ChooseCardRequest {
     pub pool: Vec<InstanceId>,
+    /// Parallel to `pool`: the controller of each candidate at request time.
+    /// Empty if the binding couldn't determine controllers (e.g., cards in
+    /// zones where controller is conceptually ambiguous). When populated and
+    /// `asker` is set, RandomOracle prefers candidates whose controller is
+    /// NOT the asker — the "don't grief yourself with removal" default.
+    pub controllers: Vec<PlayerId>,
+    /// The owner of the handler issuing the choice. None when the caller
+    /// doesn't have a player context (tests, headless eval). When set, used
+    /// by RandomOracle for the prefer-opponent-controlled heuristic.
+    pub asker: Option<PlayerId>,
     /// If true, the oracle may return None (skip the choice).
     pub optional: bool,
     /// Free-form prompt for UI; ignored by random/scripted oracles.
@@ -106,8 +116,30 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
         if req.optional && self.rng.gen_bool(0.3) {
             return None;
         }
-        let idx = self.rng.gen_range(0..req.pool.len());
-        Some(req.pool[idx].clone())
+        // Prefer-opponent heuristic: when the binding gave us per-candidate
+        // controllers AND we know who's asking, split the pool by side and
+        // prefer opponent-controlled candidates. Falls back to the whole
+        // pool if no opponent candidates exist OR if metadata is missing
+        // (tests, scripted scenarios). This is the "don't grief yourself
+        // with removal" default — most target-effects want opponent.
+        let candidate_indices: Vec<usize> = if req.controllers.len() == req.pool.len() {
+            if let Some(asker) = req.asker {
+                let opp_indices: Vec<usize> = (0..req.pool.len())
+                    .filter(|i| req.controllers[*i] != asker)
+                    .collect();
+                if !opp_indices.is_empty() {
+                    opp_indices
+                } else {
+                    (0..req.pool.len()).collect()
+                }
+            } else {
+                (0..req.pool.len()).collect()
+            }
+        } else {
+            (0..req.pool.len()).collect()
+        };
+        let pick = candidate_indices[self.rng.gen_range(0..candidate_indices.len())];
+        Some(req.pool[pick].clone())
     }
 
     fn confirm(&mut self, _prompt: &str) -> bool {
