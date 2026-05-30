@@ -1,18 +1,17 @@
--- Purple instant: -3/-3 until end of turn on a target creature, with a
--- goblin-tribal rider that cantrips when you control a goblin.
+-- Purple instant: -3/-3 until end of turn on a target creature, plus a
+-- goblin-tribal cantrip. Uses Phase 1.5 temporary stat modifiers — the
+-- earlier game.damage proxy is replaced with the real -X/-Y mechanism.
 --
--- Implementation note on "-3/-3 until end of turn":
---   tsot has no time-bound modifier system today — `Modifier::StatBoost`
---   is permanent. The closest mechanical proxy is `game.damage(target, 3)`:
---     - Damage clears at end of turn naturally (B.10).
---     - If the creature's effective Y <= 3, it dies via the death check.
---     - Power reduction (-3 X) is NOT modeled — damage doesn't touch X.
---   So this handler captures the lethal toughness case but not the
---   "make a 4/4 into a 1/1 for blocking math" case. When temporary
---   modifiers land (STATIC Phase 2-ish), revisit.
+-- Behavior:
+--   - Apply Modifier::EotStatBoost{x=-3, y=-3} to the chosen target.
+--   - Re-read the target's effective stats. If Y <= 0, manually move it
+--     to graveyard (tsot has no state-based-action loop, so handlers
+--     that drop a creature's toughness to 0 must enforce death directly;
+--     same pattern silent-murder uses).
+--   - At end of turn, the engine strips EOT modifiers — surviving
+--     creatures return to their original stats automatically.
 --
--- The goblin rider only fires when you control a goblin on board. Uses
--- the defensive-may pattern: check the condition before the confirm.
+-- The goblin rider only fires when you control a goblin on board.
 return {
   id = "bring-down",
   name = "Bring Down",
@@ -35,7 +34,13 @@ return {
     if #pool > 0 then
       local target = game.choose_card(pool, {prompt = "bring down"})
       if target then
-        game.damage(target, 3)
+        game.add_modifier(target, "stat_boost", -3, -3, "end_of_turn")
+        -- Manual death check: tsot has no SBA loop, so we look at the
+        -- post-modifier effective Y and kill if it dropped to 0 or below.
+        local after = game.card(target)
+        if after and after.y <= 0 then
+          game.move(target, "graveyard")
+        end
       end
     end
     -- Goblin rider: check own board for any goblin

@@ -115,6 +115,15 @@ pub enum JournalEntry {
         iid: InstanceId,
         modifier: Modifier,
     },
+    /// Cleared all `EotStatBoost` modifiers from a single card's `modifiers`
+    /// vec at end-of-turn. `removed` captures the variants in original order
+    /// so a rollback can splice them back in. Forward: re-clear.
+    ClearEotModifiers {
+        iid: InstanceId,
+        /// Original positions and values, sorted by index ascending.
+        /// Rollback reinserts at the stored positions.
+        removed: Vec<(usize, Modifier)>,
+    },
 }
 
 /// Journal — sequence of mutation entries.
@@ -336,6 +345,20 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
                 inst.modifiers.pop();
             }
         }
+        JournalEntry::ClearEotModifiers { iid, removed } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                // Reinsert in ascending-index order. After each insertion
+                // the tail indices shift, but we recorded positions BEFORE
+                // any removal so iterating ascending is correct.
+                for (pos, m) in removed {
+                    if pos <= inst.modifiers.len() {
+                        inst.modifiers.insert(pos, m);
+                    } else {
+                        inst.modifiers.push(m);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -443,6 +466,14 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::AddModifier { iid, modifier } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
                 inst.modifiers.push(modifier);
+            }
+        }
+        JournalEntry::ClearEotModifiers { iid, removed: _ } => {
+            // Forward: re-strip all EOT modifiers. (The `removed` field is
+            // used only for rollback; replay just re-applies the operation.)
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.modifiers
+                    .retain(|m| !matches!(m, Modifier::EotStatBoost { .. }));
             }
         }
     }

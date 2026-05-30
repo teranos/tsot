@@ -21,6 +21,7 @@ impl GameState {
             Phase::End => {
                 // Transition into the next turn.
                 self.clear_all_damage();
+                self.clear_eot_modifiers();
                 self.set_creature_attacked_this_turn(false);
                 let next_active = self.active_player.opponent();
                 self.set_active_player(next_active);

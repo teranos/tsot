@@ -92,6 +92,11 @@ pub enum Modifier {
     GainsFlying,
     /// e.g., Flesh-eating Plant
     CantAttack,
+    /// Temporary stat boost that expires at the end of the current turn.
+    /// Used for cards like unblockable-human's `+2/+0 until end of turn`
+    /// trigger and bring-down's `-3/-3 until end of turn` (once that
+    /// migrates off the damage-proxy approximation).
+    EotStatBoost { x: i32, y: i32 },
 }
 
 /// Status effects with bounded duration.
@@ -638,6 +643,46 @@ impl GameState {
         }
     }
 
+    /// Strip all `Modifier::EotStatBoost` entries from every card_pool
+    /// instance. Called at end-of-turn so "until end of turn" pump effects
+    /// (unblockable-human's +2/+0, bring-down's -3/-3 when migrated) expire
+    /// on the right boundary. Journaled per-card so rollback restores the
+    /// pre-clear state exactly.
+    pub fn clear_eot_modifiers(&mut self) {
+        // Snapshot the iid list to avoid borrow issues. card_pool is a
+        // BTreeMap so iteration order is stable.
+        let iids: Vec<InstanceId> = self.card_pool.keys().cloned().collect();
+        for iid in iids {
+            let Some(inst) = self.card_pool.get(&iid) else {
+                continue;
+            };
+            // Capture (pos, modifier) for each EOT entry before mutation.
+            let removed: Vec<(usize, Modifier)> = inst
+                .modifiers
+                .iter()
+                .enumerate()
+                .filter_map(|(i, m)| match m {
+                    Modifier::EotStatBoost { .. } => Some((i, m.clone())),
+                    _ => None,
+                })
+                .collect();
+            if removed.is_empty() {
+                continue;
+            }
+            if let Some(inst_mut) = self.card_pool.get_mut(&iid) {
+                inst_mut
+                    .modifiers
+                    .retain(|m| !matches!(m, Modifier::EotStatBoost { .. }));
+            }
+            if let Some(j) = self.active_journal() {
+                j.push(super::JournalEntry::ClearEotModifiers {
+                    iid: iid.clone(),
+                    removed,
+                });
+            }
+        }
+    }
+
     /// Append an iid to host's attached vec, journaling the addition.
     pub fn add_attached(&mut self, host: &InstanceId, attached: &InstanceId) {
         let Some(inst) = self.card_pool.get_mut(host) else {
@@ -792,9 +837,16 @@ impl GameState {
         };
         let (mut x, mut y) = inst.card.stats.map(|s| (s.x, s.y)).unwrap_or((0, 0));
         for m in &inst.modifiers {
-            if let Modifier::StatBoost { x: dx, y: dy } = m {
-                x += dx;
-                y += dy;
+            match m {
+                Modifier::StatBoost { x: dx, y: dy } => {
+                    x += dx;
+                    y += dy;
+                }
+                Modifier::EotStatBoost { x: dx, y: dy } => {
+                    x += dx;
+                    y += dy;
+                }
+                _ => {}
             }
         }
         // STATIC.md Phase 1 + 2: iterate every potential static source —
@@ -1132,6 +1184,48 @@ mod tests {
         inst.modifiers.push(Modifier::StatBoost { x: 2, y: 2 });
         inst.modifiers.push(Modifier::StatBoost { x: -1, y: 1 });
         assert_eq!(s.effective_stats(&iid), (3, 4));
+    }
+
+    #[test]
+    fn effective_stats_includes_eot_stat_boost() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let iid = s.a.hand[0].clone();
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.modifiers.push(Modifier::StatBoost { x: 1, y: 1 });
+        inst.modifiers.push(Modifier::EotStatBoost { x: 2, y: 0 });
+        // Baseline 1/1 + perm +1/+1 + EOT +2/+0 = (4, 2).
+        assert_eq!(s.effective_stats(&iid), (4, 2));
+    }
+
+    #[test]
+    fn clear_eot_modifiers_strips_only_eot_variants() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let iid = s.a.hand[0].clone();
+        s.add_modifier(&iid, Modifier::StatBoost { x: 1, y: 1 });
+        s.add_modifier(&iid, Modifier::EotStatBoost { x: 2, y: 0 });
+        s.add_modifier(&iid, Modifier::EotStatBoost { x: 1, y: 1 });
+        // Before clear: (1,1) base + 1/1 perm + 2/0 eot + 1/1 eot = (5, 3).
+        assert_eq!(s.effective_stats(&iid), (5, 3));
+        s.clear_eot_modifiers();
+        // After clear: only the permanent +1/+1 remains. (2, 2).
+        assert_eq!(s.effective_stats(&iid), (2, 2));
+        let inst = s.card_pool.get(&iid).unwrap();
+        assert_eq!(inst.modifiers.len(), 1);
+    }
+
+    #[test]
+    fn clear_eot_modifiers_rollback_restores_original_state() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let iid = s.a.hand[0].clone();
+        s.add_modifier(&iid, Modifier::StatBoost { x: 1, y: 1 });
+        s.add_modifier(&iid, Modifier::EotStatBoost { x: 2, y: 0 });
+        let pre = format!("{:?}", s.card_pool.get(&iid).unwrap().modifiers);
+        s.journal = Some(crate::game::Journal::new());
+        s.clear_eot_modifiers();
+        let journal = s.journal.take().unwrap();
+        journal.rollback(&mut s);
+        let post = format!("{:?}", s.card_pool.get(&iid).unwrap().modifiers);
+        assert_eq!(pre, post, "rollback must restore the EOT modifiers in order");
     }
 
     #[test]

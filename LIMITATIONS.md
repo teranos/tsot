@@ -14,7 +14,6 @@
 - **SELF / SelfExile** (P.5) — played card itself → EXILE on resolution. Originally on opponent-draw (currently a HAND substitute).
 - **Subtype filter on SACRIFICE** — `CostComponent.kind` filters by CardType today. A `subtypes` filter ("sacrifice a goblin") is the next gap; no current card needs it.
 - **Variable X for spells in playability filter** — `pick_random_playable_in_hand` rejects spells with `is_x` cost. Shift can't be selected by the sim AI as a result. Creatures with X cost bypass this gate (hydra plays normally).
-- **Temporary stat modifiers** — `Modifier::StatBoost` is permanent. No "until end of turn" mechanism. Blocks bring-down's true -3/-3 (currently approximated via damage), unblockable-human's `+2/+0 UEOT` line.
 
 ## types
 

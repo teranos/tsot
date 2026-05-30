@@ -283,9 +283,14 @@ fn do_add_modifier(
     kind: &str,
     x: i32,
     y: i32,
+    duration: Option<&str>,
 ) -> Result<()> {
     let owner = s.card_pool.get(iid).map(|i| i.owner);
+    // duration == Some("end_of_turn") promotes a stat_boost to an
+    // EotStatBoost variant that the engine clears at end-of-turn.
+    let eot = matches!(duration.map(str::to_ascii_lowercase).as_deref(), Some("end_of_turn"));
     let modifier = match kind.to_ascii_lowercase().as_str() {
+        "stat_boost" if eot => Modifier::EotStatBoost { x, y },
         "stat_boost" => Modifier::StatBoost { x, y },
         "gains_flying" => Modifier::GainsFlying,
         "cant_attack" => Modifier::CantAttack,
@@ -780,8 +785,22 @@ macro_rules! build_game_table {
         game.set(
             "add_modifier",
             $scope.create_function_mut(
-                move |_, (iid, kind, x, y): (String, String, i32, i32)| {
-                    do_add_modifier(&mut *cell_mod.borrow_mut(), &iid, &kind, x, y)
+                move |_,
+                      (iid, kind, x, y, duration): (
+                    String,
+                    String,
+                    i32,
+                    i32,
+                    Option<String>,
+                )| {
+                    do_add_modifier(
+                        &mut *cell_mod.borrow_mut(),
+                        &iid,
+                        &kind,
+                        x,
+                        y,
+                        duration.as_deref(),
+                    )
                 },
             )?,
         )?;
