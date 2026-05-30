@@ -29,6 +29,16 @@ pub enum ResponseAction {
 }
 
 /// A choose-card prompt with the pool and options.
+///
+/// TODO(state-passing-oracle): the parallel `controllers` vec only exists
+/// because `ChoiceOracle::choose_card` doesn't receive a `&GameState`.
+/// State-passing would also unlock within-pool ranking heuristics like
+/// "prefer the candidate with the highest `effective_stats(iid).0`" —
+/// covers silent-murder, sabotage, beguile, falter without per-card hints.
+/// User-rejected the hint-passing alternative; this is the path forward.
+/// Refactor scope: trait signature on all four choose methods, all impls
+/// (NoopOracle, ScriptedOracle, RecordingOracle, RandomOracle), all
+/// callers (Lua bindings, play.rs::resolve_hand_payment, main.rs retry).
 #[derive(Debug, Clone)]
 pub struct ChooseCardRequest {
     pub pool: Vec<InstanceId>,
