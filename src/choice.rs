@@ -330,10 +330,19 @@ fn pitch_score(state: &GameState, candidate_iid: &InstanceId, host_iid: &Instanc
 }
 
 /// Heuristic: "should I target this candidate?" Used by RandomOracle when
-/// `req.host` is None but `req.asker` is set. Today: prefer opponent-controlled
-/// (the "don't grief yourself" default) and, within the filtered set, prefer
-/// candidates with higher effective X (= more threatening). Returns 0 when
-/// state lookups fail or there's no useful signal.
+/// `req.host` is None but `req.asker` is set. Higher score = more
+/// preferable target. Signals:
+/// - Controller bonus: prefer opponent-controlled candidates (the
+///   "don't grief yourself" default) with a large +100 anchor so the
+///   filter dominates the within-group ranking.
+/// - Body weight: effective X is the primary threat axis on board;
+///   X×4 + Y captures both damage and durability. Applies to hand
+///   cards via printed stats too — a 4/4 in hand is still a threat.
+/// - Cost weight: high-investment cards are tomorrow's threats.
+///   Exiling them denies more value than removing cheap stuff. Sums
+///   the printed cost amounts × 3.
+/// - Handler density: each event handler is a payoff. Anthem statics,
+///   pitch-payoff jewels, and on_attack triggers all add signal.
 fn target_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) -> i32 {
     let Some(cand) = state.card_pool.get(candidate_iid) else {
         return 0;
@@ -344,6 +353,24 @@ fn target_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) 
     }
     let (x, y) = state.effective_stats(candidate_iid);
     score += x * 4 + y;
+    let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    score += cost_sum * 3;
+    // Each handler is a payoff; flat +5 per kind present so a card with
+    // multiple triggers ranks above a vanilla body of similar size.
+    score += (cand.card.handlers.len() as i32) * 5;
+    // Anthem / restriction / keyword-grant statics are board-wide impact.
+    if cand.card.static_def.is_some() {
+        score += 15;
+    }
+    // Pitch-payoff (OnAttachedAsCost) cards — jewels, mantis-shrimp,
+    // zebra — are recurring tools. Exiling them denies future leverage.
+    if cand
+        .card
+        .handlers
+        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+    {
+        score += 10;
+    }
     score
 }
 

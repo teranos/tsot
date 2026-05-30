@@ -160,6 +160,10 @@ pub(crate) struct GameStats {
     /// across A and B. Surfaces which creatures are getting fed to the
     /// sacrifice mill the most (cheap fodder vs. real loss).
     card_sacrificed_count: BTreeMap<String, u32>,
+    /// Per-card count of "this card_id was discarded via game.discard."
+    /// Pooled across A and B. Mirrors `card_sacrificed_count`. Sourced
+    /// from `GameState.cards_discarded_count` at game end.
+    card_discarded_count: BTreeMap<String, u32>,
     a_played: u32,
     b_played: u32,
     a_attacks: u32,
@@ -437,6 +441,7 @@ fn run_game(
         b_played_card_ids: BTreeSet::new(),
         card_play_turns: BTreeMap::new(),
         card_sacrificed_count: BTreeMap::new(),
+        card_discarded_count: BTreeMap::new(),
         a_played: 0,
         b_played: 0,
         a_attacks: 0,
@@ -872,6 +877,17 @@ fn run_game(
     stats.b_final_gy = state.b.graveyard.len() as u32;
     stats.event_fires = state.event_fires.clone();
     stats.action_counts = state.action_counts.clone();
+    // Per-card discard totals: scan action_counts for "discarded:<id>"
+    // entries. Both players' bumps are summed into a single per-card total.
+    for (key, counts) in &state.action_counts {
+        if let Some(cid) = key.strip_prefix("discarded:") {
+            let total = counts[0] + counts[1];
+            *stats
+                .card_discarded_count
+                .entry(cid.to_string())
+                .or_insert(0) += total;
+        }
+    }
     let replay_journal = state.replay_journal.take().unwrap_or_default();
     stats.replay_journal_entries = replay_journal.len() as u64;
     (stats, replay_journal)

@@ -195,8 +195,15 @@ fn do_discard(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
         let Some(iid) = chosen else {
             break;
         };
+        // Per-card-id telemetry: bump a prefixed action_counts key. This
+        // piggybacks on the existing journaled bump_action plumbing so a
+        // preview-and-rollback correctly undoes the count too.
+        let card_id = s.card_pool.get(&iid).map(|c| c.card.id.clone());
         let _ = s.move_card(&iid, pid, Zone::Hand, Zone::Graveyard);
         s.bump_action("discard", pid);
+        if let Some(cid) = card_id {
+            s.bump_action(&format!("discarded:{cid}"), pid);
+        }
     }
     Ok(())
 }

@@ -115,9 +115,9 @@ fn build_report(
                 div.note { "Per-card win rate when present in a deck. Cards on top are dragging the decks they appear in; cards on bottom are pulling them up. Sample = unique-card-per-game appearances pooled across both seats. Hover a card name to see its printed text." }
                 div.panel { (card_performance(all, pools)) }
 
-                h2 { "sacrifice victims" }
-                div.note { "Which cards get fed to the sacrifice mill most often, pooled across both seats. Counts per game-appearance of the sacrificed card. Hover a card name to see its printed text." }
-                div.panel { (sacrifice_victims(all, pools)) }
+                h2 { "expended cards" }
+                div.note { "Which cards get burned (sacrificed as cost or discarded via game.discard), pooled across both seats. Sacrificed = chosen as SACRIFICE cost-payment. Discarded = pushed out of hand via the discard primitive (loot effects, mantis-shrimp, etc.). Total ranks the row. Hover a card name to see its printed text." }
+                div.panel { (expended_cards(all, pools)) }
 
                 h2 { "pending mechanics" }
                 div.note { "Zero today; nonzero once each engine piece lands." }
@@ -785,7 +785,7 @@ fn card_tooltip_markup(c: &tsot::Card) -> Markup {
     }
 }
 
-fn sacrifice_victims(
+fn expended_cards(
     all: &[GameStats],
     pools: &[(DeckVariant, Vec<tsot::Card>)],
 ) -> Markup {
@@ -796,29 +796,45 @@ fn sacrifice_victims(
             card_lookup.entry(c.id.clone()).or_insert(c);
         }
     }
-    let mut totals: std::collections::BTreeMap<String, u32> =
+    // Per-card (sacrificed, discarded) totals across all games.
+    let mut totals: std::collections::BTreeMap<String, (u32, u32)> =
         std::collections::BTreeMap::new();
     for s in all {
         for (id, n) in &s.card_sacrificed_count {
-            *totals.entry(id.clone()).or_insert(0) += n;
+            totals.entry(id.clone()).or_insert((0, 0)).0 += n;
+        }
+        for (id, n) in &s.card_discarded_count {
+            totals.entry(id.clone()).or_insert((0, 0)).1 += n;
         }
     }
-    let mut rows: Vec<(String, u32)> = totals.into_iter().collect();
-    rows.sort_by_key(|b| std::cmp::Reverse(b.1));
-    let max = rows.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
+    let mut rows: Vec<(String, u32, u32)> = totals
+        .into_iter()
+        .map(|(k, (s, d))| (k, s, d))
+        .collect();
+    // Sort by total descending.
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1 + r.2));
+    let max_total = rows
+        .iter()
+        .map(|(_, s, d)| s + d)
+        .max()
+        .unwrap_or(1)
+        .max(1);
     html! {
         @if rows.is_empty() {
-            div.note { "No sacrifices recorded this run." }
+            div.note { "No sacrifices or discards recorded this run." }
         } @else {
             table.summary {
                 thead { tr {
                     th { "card" }
-                    th { "sacrificed (count)" }
+                    th { "sacrificed" }
+                    th { "discarded" }
+                    th { "total" }
                     th {}
                 }}
                 tbody {
-                    @for (id, n) in &rows {
+                    @for (id, sac, disc) in &rows {
                         @let card_ref = card_lookup.get(id).copied();
+                        @let total = sac + disc;
                         tr {
                             th.card-cell {
                                 span.card-id { (id) }
@@ -826,10 +842,12 @@ fn sacrifice_victims(
                                     (card_tooltip_markup(c))
                                 }
                             }
-                            td.num { (n) }
+                            td.num { (sac) }
+                            td.num { (disc) }
+                            td.num { (total) }
                             td.bar-cell {
                                 div.bar {
-                                    div.bar-fill style=(format!("width:{:.0}%; background:var(--accent)", (*n as f64 / max as f64) * 100.0)) {}
+                                    div.bar-fill style=(format!("width:{:.0}%; background:var(--accent)", (total as f64 / max_total as f64) * 100.0)) {}
                                 }
                             }
                         }
