@@ -425,7 +425,7 @@ fn build_random_deck(
 fn mandatory_for_variant(v: DeckVariant) -> &'static [(&'static str, u32)] {
     match v {
         DeckVariant::Pr => &[("red-jewel", 4)],
-        DeckVariant::Uu => &[("blue-jewel", 4)],
+        DeckVariant::Uu => &[("blue-jewel", 4), ("methylene-blue", 2)],
         DeckVariant::Gg => &[("green-jewel", 4)],
         DeckVariant::Hu => &[("modern-lcd-clock", 2)],
         // Go is the goblin tribal: 2 LCD Clocks (thematic artifact shared
