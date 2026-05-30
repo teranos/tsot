@@ -2,27 +2,26 @@
 -- rule (B.4): attack with it → tapped → untargetable until your next
 -- untap. The natural play pattern is "swing and duck" — chip damage every
 -- turn while staying immune to removal during the most exposed window
--- (your opponent's turn). No explicit tap-cost ability needed; combat is
--- the activation.
+-- (your opponent's turn).
 --
--- Costs: 4 graveyard gates it past ~turn 4 (need 4 cards already milled),
--- 2 hand keeps it from being free-rolled. Late-game finisher, not early
--- pressure.
+-- Cost: 2 hand + 2 graveyard + 2 mill. The 2 graveyard gates it past
+-- early game (need 2 cards already milled). The 2 hand fuels the
+-- attached-blue scaling mechanic — players who pitch blue cards as the
+-- HAND payment get a stat boost per blue attached.
+--
+-- "+1/+1 per attached blue card" wired via on_enter_board snapshot. At
+-- ETB time, the engine has already attached the HAND payments (P.6) to
+-- the phantom. We count attached cards whose colors include blue and
+-- apply stat_boost modifiers per match. This is a SNAPSHOT — the buff
+-- doesn't recompute if attached set changes later (same Phase 1.5 gap
+-- as hydra's ETB stat snapshot persisting through falter strips).
 --
 -- Engine support:
---   - flying: enforced via has_keyword("flying") in declare_blocker (only
---     flyers can block flyers per B.11).
---   - 3/4 stats: read by effective_stats; picks up any anthems and
---     contributes to the threat-aware response policy.
---   - 2 hand + 4 graveyard cost: routed by play_card today.
---   - "when tapped, can't be targeted" — NOT wired. Needs two prerequisites:
---       1. A targeting system (today game.choose_card pools are provided
---          by handlers; there's no engine-level "valid targets for this
---          effect" check that statics could intercept).
---       2. STATIC.md Phase 3 restriction statics — a conditional static
---          predicated on tapped state. Same blocker as flesh-eating-plant.
---     Until both land, the line is design intent only; today the phantom
---     IS targetable while tapped just like any other creature.
+--   - flying: enforced via has_keyword("flying") in declare_blocker.
+--   - "when tapped, can't be targeted" — still NOT wired. Needs the
+--     targeting layer + STATIC Phase 3 restriction statics with a
+--     state-reading predicate on tapped. Today the phantom IS targetable
+--     while tapped just like any other creature.
 --
 -- Symbol not yet specified.
 return {
@@ -33,11 +32,26 @@ return {
   subtypes = {"phantom"},
   cost = {
     {amount = 2, source = "hand"},
-    {amount = 4, source = "graveyard"},
+    {amount = 2, source = "graveyard"},
+    {amount = 2, source = "mill"},
   },
   abilities = {
     "flying.",
+    "this creature gets +1/+1 for every blue card attached to it.",
     "when this creature is tapped, it cannot be targeted by spells or abilities your opponents control.",
   },
   stats = {x = 3, y = 4},
+  on_enter_board = function(game, self)
+    for _, aid in ipairs(self.attached) do
+      local c = game.card(aid)
+      if c and c.colors then
+        for _, col in ipairs(c.colors) do
+          if col == "blue" then
+            game.add_modifier(self.instance_id, "stat_boost", 1, 1)
+            break
+          end
+        end
+      end
+    end
+  end,
 }
