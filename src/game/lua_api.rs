@@ -616,6 +616,10 @@ macro_rules! build_game_table {
                     let (x, y) = s.effective_stats(&iid);
                     t.set("x", x)?;
                     t.set("y", y)?;
+                    t.set(
+                        "attached",
+                        lua.create_sequence_from(inst.attached.clone())?,
+                    )?;
                     Ok(Some(t))
                 },
             )?,
