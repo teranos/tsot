@@ -92,6 +92,45 @@ pub struct Stats {
     pub y: i32,
 }
 
+/// Predicate side of a static ability: which cards on the BOARD receive
+/// the effect. Phase 1 is declarative — engine evaluates against the
+/// candidate's Card / CardInstance fields directly, no Lua call needed.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct StaticAffects {
+    /// Candidate must have at least one of these subtypes (case-insensitive
+    /// match). Empty = no subtype filter.
+    #[serde(default)]
+    pub subtypes: Vec<String>,
+    /// Candidate must have at least one of these colors. Empty = no color filter.
+    #[serde(default)]
+    pub colors: Vec<String>,
+    /// "owner" → candidate.controller == source.controller. "opponent" →
+    /// candidate.controller != source.controller. None → no controller filter.
+    #[serde(default)]
+    pub controller: Option<StaticController>,
+    /// Candidate must not be the source itself.
+    #[serde(default)]
+    pub exclude_self: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StaticController {
+    /// Same controller as the source.
+    Owner,
+    /// Different controller from the source.
+    Opponent,
+}
+
+/// A static ability declared on a card. Phase 1: stat modifier only.
+/// `effects` is the predicate; `modifier` is the (x, y) delta applied to
+/// every matching candidate while the source is on the BOARD.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StaticDef {
+    pub affects: StaticAffects,
+    pub modifier_x: i32,
+    pub modifier_y: i32,
+}
+
 /// Event handler keys recognised on card files. Matches LUA.md Phase 1 taxonomy
 /// plus `OnBlockedBy` (the squirrel-overrun canary — fires on the attacker when
 /// any blocker is declared against it).
@@ -149,6 +188,12 @@ pub struct Card {
     pub cost: Vec<CostComponent>,
     pub abilities: Vec<String>,
     pub stats: Option<Stats>,
+    /// Phase 1 static ability declaration. `None` for most cards. When set,
+    /// the engine evaluates `affects` against every on-board candidate at
+    /// `effective_stats` read time and applies `modifier_x/y` to matches.
+    /// Source must be on the BOARD for the effect to apply.
+    #[serde(default)]
+    pub static_def: Option<StaticDef>,
     /// Lua event handlers loaded from `on_*` fields. Empty for data-only cards.
     /// Handles are refcounted into the owning `CardRegistry`'s VM and must not
     /// outlive it. **Not serialized** — on load, the deserialized `Card` has
@@ -173,6 +218,7 @@ impl std::fmt::Debug for Card {
             .field("cost", &self.cost)
             .field("abilities", &self.abilities)
             .field("stats", &self.stats)
+            .field("static_def", &self.static_def)
             .field("handlers", &handler_keys)
             .finish()
     }
@@ -284,6 +330,94 @@ fn read_stats(t: &Table) -> mlua::Result<Option<Stats>> {
     }
 }
 
+fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
+    let static_val = t.get::<Value>("static")?;
+    let static_t = match static_val {
+        Value::Nil => return Ok(None),
+        Value::Table(t) => t,
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "field `static` must be a table, got {other:?}"
+            )))
+        }
+    };
+    let affects = match static_t.get::<Value>("affects")? {
+        Value::Nil => StaticAffects::default(),
+        Value::Table(a) => {
+            let subtypes = match a.get::<Value>("subtypes")? {
+                Value::Nil => Vec::new(),
+                Value::Table(st) => st
+                    .sequence_values::<String>()
+                    .collect::<mlua::Result<Vec<_>>>()?
+                    .into_iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "static.affects.subtypes must be a table, got {other:?}"
+                    )))
+                }
+            };
+            let colors = match a.get::<Value>("colors")? {
+                Value::Nil => Vec::new(),
+                Value::Table(ct) => ct
+                    .sequence_values::<String>()
+                    .collect::<mlua::Result<Vec<_>>>()?
+                    .into_iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "static.affects.colors must be a table, got {other:?}"
+                    )))
+                }
+            };
+            let controller = match a.get::<Option<String>>("controller")? {
+                None => None,
+                Some(s) => match s.to_ascii_lowercase().as_str() {
+                    "owner" => Some(StaticController::Owner),
+                    "opponent" => Some(StaticController::Opponent),
+                    other => {
+                        return Err(mlua::Error::runtime(format!(
+                            "static.affects.controller must be 'owner' or 'opponent', got '{other}'"
+                        )))
+                    }
+                },
+            };
+            let exclude_self = a.get::<Option<bool>>("exclude_self")?.unwrap_or(false);
+            StaticAffects {
+                subtypes,
+                colors,
+                controller,
+                exclude_self,
+            }
+        }
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "static.affects must be a table, got {other:?}"
+            )))
+        }
+    };
+    let (modifier_x, modifier_y) = match static_t.get::<Value>("modifier")? {
+        Value::Nil => (0, 0),
+        Value::Table(m) => {
+            let x = m.get::<Option<i32>>("x")?.unwrap_or(0);
+            let y = m.get::<Option<i32>>("y")?.unwrap_or(0);
+            (x, y)
+        }
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "static.modifier must be a table, got {other:?}"
+            )))
+        }
+    };
+    Ok(Some(StaticDef {
+        affects,
+        modifier_x,
+        modifier_y,
+    }))
+}
+
 pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     let source = fs::read_to_string(path).map_err(mlua::Error::external)?;
     let chunk_name = path.display().to_string();
@@ -307,6 +441,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     let colors = read_color_vec(&table)?;
     let cost = read_cost(&table)?;
     let stats = read_stats(&table)?;
+    let static_def = read_static(&table)?;
     let handlers = read_handlers(&table)?;
 
     Ok(Card {
@@ -320,6 +455,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         cost,
         abilities,
         stats,
+        static_def,
         handlers,
     })
 }

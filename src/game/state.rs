@@ -757,9 +757,9 @@ impl GameState {
         None
     }
 
-    /// C.12: effective stats = printed X/Y + sum of active stat modifiers.
-    /// Re-evaluated on every call (no caching).
-    /// Returns (0, 0) for cards without printed stats (instants, spells, artifacts).
+    /// C.12: effective stats = printed X/Y + stored stat modifiers + static
+    /// stat modifiers broadcast by on-board sources. Re-evaluated on every
+    /// call (no caching). Returns (0, 0) for cards without printed stats.
     pub fn effective_stats(&self, iid: &InstanceId) -> (i32, i32) {
         let Some(inst) = self.card_pool.get(iid) else {
             return (0, 0);
@@ -771,7 +771,65 @@ impl GameState {
                 y += dy;
             }
         }
+        // STATIC.md Phase 1: iterate every on-board card on both sides; if
+        // its static (if any) matches this candidate via affects, add the
+        // declared modifier.
+        for source_iid in self.a.board.iter().chain(self.b.board.iter()) {
+            if let Some((dx, dy)) = self.evaluate_static_stat_modifier(source_iid, iid) {
+                x += dx;
+                y += dy;
+            }
+        }
         (x, y)
+    }
+
+    /// Phase 1 static evaluator: if `source_iid` is a card with a static
+    /// stat-modifier whose `affects` predicate matches `target_iid`, returns
+    /// the (x, y) delta. None otherwise.
+    pub fn evaluate_static_stat_modifier(
+        &self,
+        source_iid: &InstanceId,
+        target_iid: &InstanceId,
+    ) -> Option<(i32, i32)> {
+        let source = self.card_pool.get(source_iid)?;
+        let def = source.card.static_def.as_ref()?;
+        let target = self.card_pool.get(target_iid)?;
+
+        let affects = &def.affects;
+        if affects.exclude_self && source_iid == target_iid {
+            return None;
+        }
+        if let Some(ctrl) = affects.controller {
+            let same_side = source.controller == target.controller;
+            match ctrl {
+                crate::card::StaticController::Owner if !same_side => return None,
+                crate::card::StaticController::Opponent if same_side => return None,
+                _ => {}
+            }
+        }
+        if !affects.subtypes.is_empty() {
+            let target_subs: Vec<String> = target
+                .card
+                .subtypes
+                .iter()
+                .map(|s| s.to_ascii_lowercase())
+                .collect();
+            if !affects.subtypes.iter().any(|s| target_subs.contains(s)) {
+                return None;
+            }
+        }
+        if !affects.colors.is_empty() {
+            let target_colors: Vec<String> = target
+                .card
+                .colors
+                .iter()
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            if !affects.colors.iter().any(|c| target_colors.contains(c)) {
+                return None;
+            }
+        }
+        Some((def.modifier_x, def.modifier_y))
     }
 }
 
@@ -1015,6 +1073,99 @@ mod tests {
         s.pass_priority().unwrap();
         s.respond_with(item_b).unwrap();
         assert_eq!(s.legal_counter_targets(), vec![a_card, b_card]);
+    }
+
+    fn make_anthem_source(s: &mut GameState, iid: &InstanceId, subtype: &str, dx: i32, dy: i32) {
+        let inst = s.card_pool.get_mut(iid).unwrap();
+        inst.card.subtypes.push(subtype.to_string());
+        inst.card.static_def = Some(crate::card::StaticDef {
+            affects: crate::card::StaticAffects {
+                subtypes: vec![subtype.to_ascii_lowercase()],
+                colors: vec![],
+                controller: Some(crate::card::StaticController::Owner),
+                exclude_self: true,
+            },
+            modifier_x: dx,
+            modifier_y: dy,
+        });
+    }
+
+    #[test]
+    fn anthem_applies_to_matching_subtype_on_board() {
+        let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+        let anthem = s.a.hand[0].clone();
+        let target = s.a.hand[1].clone();
+        let unrelated = s.a.hand[2].clone();
+        // Make target a human, unrelated a goblin.
+        s.card_pool.get_mut(&target).unwrap().card.subtypes = vec!["human".into()];
+        s.card_pool.get_mut(&unrelated).unwrap().card.subtypes = vec!["goblin".into()];
+        // anthem source is a human anthem.
+        make_anthem_source(&mut s, &anthem, "human", 1, 1);
+        // Put all three on A's board.
+        s.a.hand.retain(|i| i != &anthem && i != &target && i != &unrelated);
+        s.a.board.push(anthem.clone());
+        s.a.board.push(target.clone());
+        s.a.board.push(unrelated.clone());
+
+        // Target (human) gets boosted; unrelated (goblin) does not; source
+        // doesn't self-boost.
+        assert_eq!(s.effective_stats(&target), (2, 2));
+        assert_eq!(s.effective_stats(&unrelated), (1, 1));
+        assert_eq!(s.effective_stats(&anthem), (1, 1));
+    }
+
+    #[test]
+    fn anthem_removed_when_source_leaves_board() {
+        let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+        let anthem = s.a.hand[0].clone();
+        let target = s.a.hand[1].clone();
+        s.card_pool.get_mut(&target).unwrap().card.subtypes = vec!["human".into()];
+        make_anthem_source(&mut s, &anthem, "human", 1, 1);
+        s.a.hand.retain(|i| i != &anthem && i != &target);
+        s.a.board.push(anthem.clone());
+        s.a.board.push(target.clone());
+        assert_eq!(s.effective_stats(&target), (2, 2));
+        // Move anthem to graveyard — boost evaporates.
+        s.a.board.retain(|i| i != &anthem);
+        s.a.graveyard.push(anthem);
+        assert_eq!(s.effective_stats(&target), (1, 1));
+    }
+
+    #[test]
+    fn two_anthems_stack() {
+        let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+        let anthem_a = s.a.hand[0].clone();
+        let anthem_b = s.a.hand[1].clone();
+        let target = s.a.hand[2].clone();
+        s.card_pool.get_mut(&target).unwrap().card.subtypes = vec!["human".into()];
+        make_anthem_source(&mut s, &anthem_a, "human", 1, 1);
+        make_anthem_source(&mut s, &anthem_b, "human", 2, 0);
+        s.a.hand.retain(|i| i != &anthem_a && i != &anthem_b && i != &target);
+        s.a.board.push(anthem_a);
+        s.a.board.push(anthem_b);
+        s.a.board.push(target.clone());
+        // Both anthems are humans too (via make_anthem_source push), but
+        // exclude_self skips self. They DO boost each other though, and the
+        // target. Target: 1 + 1 + 2 = 4 / 1 + 1 + 0 = 2.
+        assert_eq!(s.effective_stats(&target), (4, 2));
+    }
+
+    #[test]
+    fn opponent_controlled_anthem_does_not_affect_owner_filtered() {
+        let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+        // B has an "owner" anthem for humans — only B's humans should be
+        // boosted, not A's.
+        let b_anthem = s.b.hand[0].clone();
+        let a_human = s.a.hand[0].clone();
+        s.card_pool.get_mut(&a_human).unwrap().card.subtypes = vec!["human".into()];
+        make_anthem_source(&mut s, &b_anthem, "human", 1, 1);
+        s.b.hand.retain(|i| i != &b_anthem);
+        s.a.hand.retain(|i| i != &a_human);
+        s.b.board.push(b_anthem);
+        s.a.board.push(a_human.clone());
+        // A's human is on board, B's anthem is on board, but controller
+        // filter is "owner" — B's anthem boosts only B's humans.
+        assert_eq!(s.effective_stats(&a_human), (1, 1));
     }
 
     #[test]

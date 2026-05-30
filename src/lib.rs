@@ -3,7 +3,10 @@ pub mod choice;
 pub mod game;
 pub mod replay;
 
-pub use card::{Card, CardRegistry, CardType, CostComponent, CostSource, EventName, Stats, Timing};
+pub use card::{
+    Card, CardRegistry, CardType, CostComponent, CostSource, EventName, Stats, StaticAffects,
+    StaticController, StaticDef, Timing,
+};
 pub use choice::{
     ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest, NoopOracle,
     RandomOracle, RecordingOracle, ScriptedAnswer, ScriptedOracle,

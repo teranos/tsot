@@ -1,3 +1,5 @@
+mod report;
+
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -24,12 +26,90 @@ fn pick_seed() -> u64 {
         })
 }
 
-const ITERATIONS: usize = 1000;
+/// Games per matchup cell (25 cells × this = total iterations). Default
+/// chosen for ~tight win-rate intervals (±5% at 95% confidence). Override
+/// with `TSOT_GAMES_PER_MATCHUP=<n>` env var.
+const DEFAULT_GAMES_PER_MATCHUP: usize = 100;
+
+fn games_per_matchup() -> usize {
+    std::env::var("TSOT_GAMES_PER_MATCHUP")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_GAMES_PER_MATCHUP)
+}
+
+/// Deck-build variants. A and B are full-pool baselines; H/G/U are
+/// filtered pools meant to stress-test specific corpus interactions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum DeckVariant {
+    /// Full pool, no filter.
+    A,
+    /// Full pool, no filter (identical to A; kept distinct so the matchup
+    /// matrix shows the A↔A and A↔B baselines symmetrically).
+    B,
+    /// No goblins — exercises anti-tribal play against goblin-warlord etc.
+    H,
+    /// No humans, fish, or insects.
+    G,
+    /// Colorless or blue only — heavy on draw / counter / interaction.
+    U,
+}
+
+pub(crate) const VARIANTS: [DeckVariant; 5] = [
+    DeckVariant::A,
+    DeckVariant::B,
+    DeckVariant::H,
+    DeckVariant::G,
+    DeckVariant::U,
+];
+
+pub(crate) fn variant_label(v: DeckVariant) -> &'static str {
+    match v {
+        DeckVariant::A => "A",
+        DeckVariant::B => "B",
+        DeckVariant::H => "H",
+        DeckVariant::G => "G",
+        DeckVariant::U => "U",
+    }
+}
+
+fn variant_pool(playable: &[Card], v: DeckVariant) -> Vec<Card> {
+    match v {
+        DeckVariant::A | DeckVariant::B => playable.to_vec(),
+        DeckVariant::H => playable
+            .iter()
+            .filter(|c| !c.subtypes.iter().any(|s| s.eq_ignore_ascii_case("goblin")))
+            .cloned()
+            .collect(),
+        DeckVariant::G => playable
+            .iter()
+            .filter(|c| {
+                !c.subtypes.iter().any(|s| {
+                    s.eq_ignore_ascii_case("human")
+                        || s.eq_ignore_ascii_case("fish")
+                        || s.eq_ignore_ascii_case("insect")
+                })
+            })
+            .cloned()
+            .collect(),
+        DeckVariant::U => playable
+            .iter()
+            .filter(|c| {
+                c.colors.is_empty()
+                    || c.colors.iter().any(|col| col.eq_ignore_ascii_case("blue"))
+            })
+            .cloned()
+            .collect(),
+    }
+}
 
 #[derive(Debug, Clone)]
-struct GameStats {
+pub(crate) struct GameStats {
     turns: u32,
     winner: PlayerId,
+    variant_a: DeckVariant,
+    variant_b: DeckVariant,
     a_played: u32,
     b_played: u32,
     a_attacks: u32,
@@ -90,18 +170,17 @@ fn main() -> mlua::Result<()> {
         .count();
 
     println!(
-        "loaded {} cards ({} creatures + {} instants + {} sorceries in deck pool); running {} simulations",
+        "loaded {} cards ({} creatures + {} instants + {} sorceries in deck pool)",
         registry.cards().len(),
         creature_count,
         instant_count,
         sorcery_count,
-        ITERATIONS
     );
 
     let seed = pick_seed();
     println!("seed: {seed}");
     let mut rng = StdRng::seed_from_u64(seed);
-    let mut all: Vec<GameStats> = Vec::with_capacity(ITERATIONS);
+    let mut all: Vec<GameStats> = Vec::new();
     let mut last_log: Vec<String> = Vec::new();
 
     let replay_out_path = std::env::var("TSOT_REPLAY_OUT").ok();
@@ -110,16 +189,48 @@ fn main() -> mlua::Result<()> {
     let mut last_deck_a_ids: Vec<String> = Vec::new();
     let mut last_deck_b_ids: Vec<String> = Vec::new();
     let mut last_journal: tsot::game::Journal = tsot::game::Journal::new();
-    for _ in 0..ITERATIONS {
-        let deck_a = build_random_deck(&playable_pool, &mut rng, 50);
-        let deck_b = build_random_deck(&playable_pool, &mut rng, 50);
-        last_deck_a_ids = deck_a.iter().map(|c| c.id.clone()).collect();
-        last_deck_b_ids = deck_b.iter().map(|c| c.id.clone()).collect();
-        let state = GameState::new(deck_a, deck_b);
-        last_log.clear();
-        let (stats, journal) = run_game(state, &mut rng, &mut last_log, registry.lua());
-        all.push(stats);
-        last_journal = journal;
+    // Pre-build the per-variant pools once — pure subsets of playable_pool.
+    let pools: Vec<(DeckVariant, Vec<Card>)> = VARIANTS
+        .iter()
+        .map(|v| (*v, variant_pool(&playable_pool, *v)))
+        .collect();
+    let games_per_cell = games_per_matchup();
+    let total_games = games_per_cell * VARIANTS.len() * VARIANTS.len();
+    println!();
+    println!("Variant pools:");
+    for (v, pool) in &pools {
+        println!("  {} — {} cards", variant_label(*v), pool.len());
+    }
+    println!();
+    println!(
+        "Running {} games per matchup × {} matchups = {} total",
+        games_per_cell,
+        VARIANTS.len() * VARIANTS.len(),
+        total_games
+    );
+    println!();
+
+    // Deterministic matchup cycling: each (A_variant, B_variant) cell gets
+    // exactly `games_per_cell` games. Total = 25 × games_per_cell.
+    for &v_a in &VARIANTS {
+        for &v_b in &VARIANTS {
+            let pool_a = &pools.iter().find(|(v, _)| *v == v_a).unwrap().1;
+            let pool_b = &pools.iter().find(|(v, _)| *v == v_b).unwrap().1;
+            for _ in 0..games_per_cell {
+                let deck_a = build_random_deck(pool_a, &mut rng, 50);
+                let deck_b = build_random_deck(pool_b, &mut rng, 50);
+                last_deck_a_ids = deck_a.iter().map(|c| c.id.clone()).collect();
+                last_deck_b_ids = deck_b.iter().map(|c| c.id.clone()).collect();
+                let state = GameState::new(deck_a, deck_b);
+                last_log.clear();
+                let (mut stats, journal) =
+                    run_game(state, &mut rng, &mut last_log, registry.lua());
+                stats.variant_a = v_a;
+                stats.variant_b = v_b;
+                all.push(stats);
+                last_journal = journal;
+            }
+        }
     }
     let elapsed = t0.elapsed();
 
@@ -153,6 +264,18 @@ fn main() -> mlua::Result<()> {
     }
 
     print_aggregate(&all, elapsed);
+
+    // Write the HTML report. Default path: tsot-report.html in cwd.
+    // Override with TSOT_REPORT_OUT=<path>. Set TSOT_REPORT_OUT=- to skip.
+    let report_path = std::env::var("TSOT_REPORT_OUT")
+        .unwrap_or_else(|_| "tsot-report.html".to_string());
+    if report_path != "-" {
+        match report::write_html_report(&all, &pools, seed, elapsed, &report_path) {
+            Ok(()) => println!("\n[report] wrote {report_path}"),
+            Err(e) => eprintln!("[report] failed to write {report_path}: {e}"),
+        }
+    }
+
     Ok(())
 }
 
@@ -182,6 +305,9 @@ fn run_game(
     let mut stats = GameStats {
         turns: 0,
         winner: PlayerId::A,
+        // Caller overwrites these after run_game returns.
+        variant_a: DeckVariant::A,
+        variant_b: DeckVariant::B,
         a_played: 0,
         b_played: 0,
         a_attacks: 0,
@@ -282,6 +408,20 @@ fn run_game(
             // play would deck the active player (suicide), rollback and
             // skip. Otherwise discard the journal and keep the mutations.
             oracle.clear();
+            // Snapshot response-played count so we can detect whether the
+            // response policy fired during this preview. If it did, the
+            // ScriptedOracle replay can't reproduce the same call sequence
+            // (its respond_or_pass defaults to Pass) — gate retry to skip.
+            let resp_before_a = state
+                .action_counts
+                .get("instant_response_played")
+                .map(|v| v[0])
+                .unwrap_or(0);
+            let resp_before_b = state
+                .action_counts
+                .get("instant_response_played")
+                .map(|v| v[1])
+                .unwrap_or(0);
             state.journal = Some(tsot::game::Journal::new());
             let opponent_of_active = active.opponent();
             let choices_for_retry = choices.clone();
@@ -291,6 +431,18 @@ fn run_game(
                 choices,
                 Some(&mut EventContext::new(lua, &mut oracle)),
             );
+            let resp_after_a = state
+                .action_counts
+                .get("instant_response_played")
+                .map(|v| v[0])
+                .unwrap_or(0);
+            let resp_after_b = state
+                .action_counts
+                .get("instant_response_played")
+                .map(|v| v[1])
+                .unwrap_or(0);
+            let response_fired =
+                resp_after_a > resp_before_a || resp_after_b > resp_before_b;
             let mut suicide = state.winner == Some(opponent_of_active);
             let preview_size = state.journal.as_ref().map(|j| j.len()).unwrap_or(0) as u64;
 
@@ -311,7 +463,7 @@ fn run_game(
             // score(retry); commit retry only if it scores higher. Holding
             // off until heuristic weights are designed.
             let mut result = result;
-            if suicide {
+            if suicide && !response_fired {
                 if let Some(flipped) = ScriptedOracle::flip_first_player(oracle.recording()) {
                     if let Some(journal) = state.journal.take() {
                         journal.rollback(&mut state);
@@ -951,6 +1103,59 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     print_pending("mulligans (S.2/S.3)");
     print_pending("counters on the stack");
     print_pending("color/symbol/type mutations");
+
+    println!();
+    println!("Matchup matrix (cell = A-side win rate; n = games in that pairing):");
+    print!("           ");
+    for v in &VARIANTS {
+        print!("  B:{}    ", variant_label(*v));
+    }
+    println!();
+    for va in &VARIANTS {
+        print!("  A:{}     ", variant_label(*va));
+        for vb in &VARIANTS {
+            let games: Vec<&GameStats> = all
+                .iter()
+                .filter(|s| s.variant_a == *va && s.variant_b == *vb)
+                .collect();
+            if games.is_empty() {
+                print!("  --  ({:>2})", 0);
+                continue;
+            }
+            let wins = games.iter().filter(|s| s.winner == PlayerId::A).count();
+            let rate = wins as f64 / games.len() as f64;
+            print!(" {:>4.2} ({:>3})", rate, games.len());
+        }
+        println!();
+    }
+
+    println!();
+    println!("Per-variant aggregate win rate (across all opponents, both sides):");
+    println!("  Variant   games   wins   rate");
+    for v in &VARIANTS {
+        let mut games = 0u32;
+        let mut wins = 0u32;
+        for s in all {
+            if s.variant_a == *v {
+                games += 1;
+                if s.winner == PlayerId::A {
+                    wins += 1;
+                }
+            }
+            if s.variant_b == *v {
+                games += 1;
+                if s.winner == PlayerId::B {
+                    wins += 1;
+                }
+            }
+        }
+        let rate = if games > 0 {
+            wins as f64 / games as f64
+        } else {
+            0.0
+        };
+        println!("  {}        {:>5}   {:>4}   {:.2}", variant_label(*v), games, wins, rate);
+    }
 }
 
 fn print_pending(label: &str) {

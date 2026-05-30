@@ -1,7 +1,12 @@
 -- Green goblin of the cycle: 1/1, 1 hand + 2 mill, lord + on-block discard.
--- Both abilities deferred:
---   - The +1/+1 lord effect needs the static system (LUA Phase 2).
---   - "discard a card" on block needs the choice API (LUA Phase 2).
+-- Lord wired via STATIC.md Phase 1. on-block discard still deferred (needs
+-- discard-choice integration).
+--
+-- Reading the literal text "all other goblins" (no controller qualifier),
+-- this is a GLOBAL anthem — also boosts opponent's goblins. That's
+-- intentional per the literal text and creates a "goblin mirror" dynamic
+-- where dropping a warlord buffs both sides equally. If unintended, change
+-- controller = "owner" to scope to the caster's side only.
 return {
   id = "goblin-warlord",
   name = "Goblin Warlord",
@@ -17,4 +22,11 @@ return {
     "whenever this creature blocks, discard a card.",
   },
   stats = {x = 1, y = 1},
+  static = {
+    affects = {
+      subtypes = {"goblin"},
+      exclude_self = true,
+    },
+    modifier = {x = 1, y = 1},
+  },
 }
