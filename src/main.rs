@@ -157,7 +157,12 @@ fn main() -> mlua::Result<()> {
     let playable_pool: Vec<Card> = registry
         .cards()
         .iter()
-        .filter(|c| matches!(c.kind, CardType::Creature | CardType::Spell))
+        .filter(|c| {
+            matches!(
+                c.kind,
+                CardType::Creature | CardType::Spell | CardType::Artifact
+            )
+        })
         .filter(|c| !c.subtypes.iter().any(|s| s.eq_ignore_ascii_case("test")))
         .filter(|c| {
             c.cost.iter().all(|cc| {

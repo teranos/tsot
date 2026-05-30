@@ -17,7 +17,7 @@ return {
   },
   stats = {x = 2, y = 2},
   on_attached_as_cost = function(game, self, partner)
-    local p = game.card(partner)
+    local p = game.card(partner.instance_id)
     if not p or not p.colors then return end
     local matches = false
     for _, col in ipairs(p.colors) do
