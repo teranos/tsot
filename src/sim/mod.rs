@@ -17,6 +17,7 @@
 pub mod aggregate;
 pub mod ai;
 pub mod deck_token;
+pub mod evolve;
 pub mod fitness;
 pub mod genome;
 pub mod ops;
