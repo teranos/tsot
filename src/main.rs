@@ -92,6 +92,7 @@ pub(crate) fn variant_label(v: DeckVariant) -> &'static str {
 fn card_is_allowed_in(card_id: &str, v: DeckVariant) -> bool {
     match card_id {
         "modern-lcd-clock" => matches!(v, DeckVariant::Hu | DeckVariant::Go),
+        "methylene-blue" => matches!(v, DeckVariant::Uu),
         _ => true,
     }
 }
@@ -513,18 +514,20 @@ fn run_game(
         // whether to play an instant in response (or pass). Today the sim
         // only acts on its own Main1 and never sees a response window.
         //
-        // Multi-card-per-turn (Pattern A): the AI plays at most one
-        // creature AND at most one non-creature per turn. After the first
-        // play, the kind filter constrains the second pick to a different
-        // kind. The inner loop breaks when both slots are used or no
-        // eligible card is found.
+        // Multi-card-per-turn (Pattern B): at most one creature per turn,
+        // but as many non-creatures as the AI can afford. Cost economy
+        // (HAND/MILL/GRAVEYARD running out) is the natural cap. Lets
+        // cost-reduction effects like methylene-blue / lcd-clock compound
+        // — under Pattern A's 1-noncreature cap they were strictly
+        // upfront-loss because the discount only mattered if you could
+        // cast more.
         let mut played_creature = false;
-        let mut played_noncreature = false;
-        while !(played_creature && played_noncreature) && state.winner.is_none() {
+        loop {
+            if state.winner.is_some() {
+                break;
+            }
             let kind_filter = if played_creature {
                 PickKindFilter::NonCreatureOnly
-            } else if played_noncreature {
-                PickKindFilter::CreatureOnly
             } else {
                 PickKindFilter::Any
             };
@@ -811,8 +814,6 @@ fn run_game(
                 events.push(format!("played {label}"));
                 if picked_is_creature {
                     played_creature = true;
-                } else {
-                    played_noncreature = true;
                 }
             } else {
                 if let Some(journal) = state.journal.take() {
@@ -822,13 +823,15 @@ fn run_game(
                 if suicide {
                     state.bump_action("preview_skip_suicide", active);
                 }
-                // Play didn't commit. Mark this kind as "tried" so the
-                // loop moves on to the other kind instead of infinitely
-                // re-trying the same failed pick.
+                // Play didn't commit. For creatures, mark slot used (we
+                // tried one). For non-creatures, break out of the loop
+                // entirely — we've hit a non-castable card and continuing
+                // would re-pick the same one. The priority-pick is stable
+                // so the same failed candidate would be picked again.
                 if picked_is_creature {
                     played_creature = true;
                 } else {
-                    played_noncreature = true;
+                    break;
                 }
             }
             }
@@ -970,6 +973,7 @@ fn bump_preview_rollback(stats: &mut GameStats, p: PlayerId) {
 /// by the multi-card-per-turn loop in run_game to enforce "at most one
 /// creature + one non-creature per turn."
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // CreatureOnly currently unused under Pattern B but kept for future per-kind filtering.
 enum PickKindFilter {
     Any,
     CreatureOnly,
@@ -1023,7 +1027,54 @@ fn pick_random_playable_in_hand(
             }
         })
         .collect();
-    candidates.choose(rng).map(|iid| (*iid).clone())
+    if candidates.is_empty() {
+        return None;
+    }
+    // Priority-tiered pick: among eligibles, find the highest play_priority
+    // tier and random-pick within it. Cards with compounding board-state
+    // effects (cost reductions, anthems, restrictions) go first so the AI
+    // doesn't waste turn 1 on a vanilla 1/1 when methylene-blue or
+    // battle-captain is in hand.
+    let max_priority = candidates
+        .iter()
+        .map(|iid| play_priority_score(state, iid))
+        .max()
+        .unwrap_or(0);
+    let top: Vec<&InstanceId> = candidates
+        .iter()
+        .filter(|iid| play_priority_score(state, iid) == max_priority)
+        .copied()
+        .collect();
+    top.choose(rng).map(|iid| (*iid).clone())
+}
+
+/// Heuristic: how urgent is this card to play THIS TURN? Higher = play
+/// sooner. Cards with on-board statics that compound over many turns
+/// (cost reductions, anthems, restrictions) should land early so their
+/// benefit accrues. Pure read of card data; doesn't look at state.
+fn play_priority_score(state: &GameState, iid: &InstanceId) -> i32 {
+    let Some(inst) = state.card_pool.get(iid) else {
+        return 0;
+    };
+    let mut s = 0i32;
+    if let Some(def) = &inst.card.static_def {
+        // Cost-modifiers compound the most — every future cast benefits.
+        // Highest urgency. Methylene-blue / modern-lcd-clock land here.
+        if !def.cost_modifiers.is_empty() {
+            s += 50;
+        }
+        // Stat/keyword anthems benefit every matching creature you cast
+        // after they're on board. Goblin-warchief / battle-captain land here.
+        if def.modifier_x != 0 || def.modifier_y != 0 || def.modifier_keyword.is_some() {
+            s += 20;
+        }
+        // Restrictions on opponent (flesh-eating-plant, scarecrow's flying
+        // restriction): land early to lock down their plans.
+        if !def.restrictions.is_empty() {
+            s += 15;
+        }
+    }
+    s
 }
 
 fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceId) -> bool {
