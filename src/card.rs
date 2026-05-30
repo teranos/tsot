@@ -144,6 +144,11 @@ pub enum EventName {
     OnBlock,
     OnBlockedBy,
     OnPlay,
+    /// Fires on a card the moment it gets attached as a HAND-payment cost
+    /// to a played card. Handler receives `(game, self, partner)` where
+    /// `partner` is the card being paid for. Powers the zebra / mantis-shrimp
+    /// "if attached as cost to matching-color, may reveal & draw" cycle.
+    OnAttachedAsCost,
 }
 
 impl EventName {
@@ -156,17 +161,19 @@ impl EventName {
             EventName::OnBlock => "on_block",
             EventName::OnBlockedBy => "on_blocked_by",
             EventName::OnPlay => "on_play",
+            EventName::OnAttachedAsCost => "on_attached_as_cost",
         }
     }
 
     /// All known event names, for loader iteration.
-    pub const ALL: [EventName; 6] = [
+    pub const ALL: [EventName; 7] = [
         EventName::OnEnterBoard,
         EventName::OnDie,
         EventName::OnAttack,
         EventName::OnBlock,
         EventName::OnBlockedBy,
         EventName::OnPlay,
+        EventName::OnAttachedAsCost,
     ];
 }
 

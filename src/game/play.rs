@@ -279,14 +279,31 @@ impl GameState {
         let mut ctx = ctx;
         match card_kind {
             CardType::Creature => {
-                for hid in choices.hand_payment_ids.clone() {
-                    let _ = self.remove_from_zone(&hid, player, Zone::Hand);
-                    self.add_attached(instance, &hid);
-                    self.set_face_down(&hid, true);
+                let payments = choices.hand_payment_ids.clone();
+                for hid in &payments {
+                    let _ = self.remove_from_zone(hid, player, Zone::Hand);
+                    self.add_attached(instance, hid);
+                    self.set_face_down(hid, true);
                 }
                 let _ = self.move_card(instance, player, Zone::Hand, Zone::Board);
                 self.set_summoning_sick(instance, true); // B.3
 
+                // Fire OnAttachedAsCost on each payment card BEFORE on_play.
+                // The handler sees the attached card as `self` and the host
+                // (the played card) as `partner`. Powers mantis-shrimp /
+                // zebra / future pitch-synergy cantrips.
+                for hid in &payments {
+                    if let Some(c) = ctx.as_mut() {
+                        lua_api::fire_with_partner(
+                            c.lua,
+                            self,
+                            c.oracle(),
+                            EventName::OnAttachedAsCost,
+                            hid,
+                            instance,
+                        );
+                    }
+                }
                 if let Some(c) = ctx.as_mut() {
                     lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
                 }

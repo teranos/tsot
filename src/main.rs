@@ -54,14 +54,17 @@ pub(crate) enum DeckVariant {
     G,
     /// Colorless or blue only — heavy on draw / counter / interaction.
     U,
+    /// Red or purple cards (must list at least one of those colors).
+    R,
 }
 
-pub(crate) const VARIANTS: [DeckVariant; 5] = [
+pub(crate) const VARIANTS: [DeckVariant; 6] = [
     DeckVariant::A,
     DeckVariant::B,
     DeckVariant::H,
     DeckVariant::G,
     DeckVariant::U,
+    DeckVariant::R,
 ];
 
 pub(crate) fn variant_label(v: DeckVariant) -> &'static str {
@@ -71,6 +74,7 @@ pub(crate) fn variant_label(v: DeckVariant) -> &'static str {
         DeckVariant::H => "H",
         DeckVariant::G => "G",
         DeckVariant::U => "U",
+        DeckVariant::R => "R",
     }
 }
 
@@ -98,6 +102,15 @@ fn variant_pool(playable: &[Card], v: DeckVariant) -> Vec<Card> {
             .filter(|c| {
                 c.colors.is_empty()
                     || c.colors.iter().any(|col| col.eq_ignore_ascii_case("blue"))
+            })
+            .cloned()
+            .collect(),
+        DeckVariant::R => playable
+            .iter()
+            .filter(|c| {
+                c.colors.iter().any(|col| {
+                    col.eq_ignore_ascii_case("red") || col.eq_ignore_ascii_case("purple")
+                })
             })
             .cloned()
             .collect(),

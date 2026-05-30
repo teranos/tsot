@@ -1,16 +1,15 @@
--- Purple goblin — free 0/0. Designed to combo with goblin lord effects:
--- a goblin anthem turns the 0/0 into a real threat for zero cost.
+-- Purple goblin — free 0/0 with a discard-for-counter on_enter_board.
+-- All primitives now exist: game.confirm for the may, game.discard for
+-- the pay, game.add_modifier for the +1/+1 effect.
 --
--- Handler deferred — needs three things we don't have:
---   1. `game.discard(player_id, n)`: lands (deterministic front-of-hand) but
---      the natural reading is "which card to discard?" — full choice arrives
---      in Phase 2 when `game.choose_card` is widely adopted.
---   2. A counter/modifier-add API (e.g. `game.add_modifier(iid, "+1/+1")`):
---      `Modifier::StatBoost` exists in state.rs but isn't exposed to handlers.
---   3. The "may" pattern uses `game.confirm("Discard for +1/+1?")`.
+-- Combo with goblin lord effects: a goblin anthem turns the 0/0 (or 1/1
+-- with the discard) into a real threat for ~zero cost. In the R-purple
+-- pool, this pairs naturally with goblin-warlord's global anthem.
 --
--- Until then, the card lands as a free 0/0 with no on_enter_board effect;
--- still useful as a chump blocker or anthem fodder.
+-- Hand check before confirm: if no other cards exist to discard, skip the
+-- prompt entirely (saves the wasted oracle confirm cost). The played
+-- card has already moved Hand→Board by the time on_enter_board fires,
+-- so the hand check looks at what's left.
 return {
   id = "eager-goblin",
   name = "Eager Goblin",
@@ -22,4 +21,13 @@ return {
     "when this creature enters the board, you may discard a card. if you do, this creature enters with a +1/+1 counter.",
   },
   stats = {x = 0, y = 0},
+  on_enter_board = function(game, self)
+    local hand = game.zones(self.owner).hand
+    if #hand == 0 then return end
+    if not game.confirm("discard a card for +1/+1 on Eager Goblin?") then
+      return
+    end
+    game.discard(self.owner, 1)
+    game.add_modifier(self.instance_id, "stat_boost", 1, 1)
+  end,
 }
