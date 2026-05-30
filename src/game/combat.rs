@@ -30,6 +30,9 @@ pub enum CombatError {
     AttackerSummoningSick,
     AttackerIsDefender,
     AttackerAlreadyDeclared,
+    /// Phase 3: a restriction static (e.g., flesh-eating-plant's
+    /// insects-cannot-attack) blocks this attacker from being declared.
+    AttackerForbiddenByRestriction,
     BlockerNotOnBoard,
     BlockerNotControlled,
     BlockerTapped,
@@ -97,6 +100,9 @@ impl GameState {
         }
         if inst.summoning_sick && !self.has_keyword(attacker, "haste") {
             return Err(CombatError::AttackerSummoningSick);
+        }
+        if self.has_restriction(attacker, crate::card::Restriction::CannotAttack) {
+            return Err(CombatError::AttackerForbiddenByRestriction);
         }
 
         // Snapshot before mutating.

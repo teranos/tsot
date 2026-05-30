@@ -978,6 +978,19 @@ impl GameState {
         }
         self.has_static_keyword(iid, keyword)
     }
+
+    /// Phase 3: true if any on-board static source imposes `restriction`
+    /// on the card at `iid`. Mirrors `has_static_keyword` iteration shape.
+    pub fn has_restriction(&self, iid: &InstanceId, restriction: crate::card::Restriction) -> bool {
+        for source_iid in self.static_source_iids() {
+            if let Some(def) = self.static_def_if_matches(&source_iid, iid) {
+                if def.restrictions.contains(&restriction) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 #[cfg(test)]
@@ -1238,6 +1251,7 @@ mod tests {
             modifier_y: dy,
             modifier_keyword: None,
             condition: None,
+            restrictions: Vec::new(),
         });
     }
 
@@ -1305,6 +1319,7 @@ mod tests {
             modifier_y: 0,
             modifier_keyword: Some("flying".into()),
             condition: None,
+            restrictions: Vec::new(),
         });
         // Move host + bystander to board.
         s.a.hand.retain(|i| i != &bird && i != &host && i != &bystander);
@@ -1337,6 +1352,7 @@ mod tests {
             modifier_y: 0,
             modifier_keyword: Some("flying".into()),
             condition: None,
+            restrictions: Vec::new(),
         });
         s.a.hand.retain(|i| i != &bird && i != &target);
         s.a.board.push(bird);
@@ -1364,6 +1380,7 @@ mod tests {
             modifier_y: 1,
             modifier_keyword: Some("flying".into()),
             condition: Some(crate::card::StaticCondition::OwnerGraveyardSize { min: 5 }),
+            restrictions: Vec::new(),
         });
         s.a.hand.retain(|i| i != &source && i != &target);
         s.a.board.push(source);
@@ -1405,6 +1422,7 @@ mod tests {
             modifier_y: 0,
             modifier_keyword: Some("flying".into()),
             condition: Some(crate::card::StaticCondition::OwnerGraveyardNonCreatures { min: 4 }),
+            restrictions: Vec::new(),
         });
         s.a.hand.retain(|i| i != &wizard);
         s.a.board.push(wizard.clone());
@@ -1448,12 +1466,93 @@ mod tests {
             modifier_y: 0,
             modifier_keyword: Some("flying".into()),
             condition: None,
+            restrictions: Vec::new(),
         });
         s.a.hand.retain(|i| i != &wizard && i != &other);
         s.a.board.push(wizard.clone());
         s.a.board.push(other.clone());
         assert!(s.has_keyword(&wizard, "flying"));
         assert!(!s.has_keyword(&other, "flying"));
+    }
+
+    #[test]
+    fn restriction_cannot_attack_propagates_to_opponent_insects() {
+        // Flesh-eating-plant shape: opponent's insects get CannotAttack.
+        let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+        let plant = s.b.hand[0].clone();
+        let opp_insect = s.a.hand[0].clone();
+        let own_insect = s.b.hand[1].clone();
+        s.card_pool.get_mut(&opp_insect).unwrap().card.subtypes = vec!["insect".into()];
+        s.card_pool.get_mut(&own_insect).unwrap().card.subtypes = vec!["insect".into()];
+        s.card_pool.get_mut(&plant).unwrap().card.static_def = Some(crate::card::StaticDef {
+            affects: crate::card::StaticAffects {
+                subtypes: vec!["insect".into()],
+                colors: vec![],
+                controller: Some(crate::card::StaticController::Opponent),
+                exclude_self: false,
+                scope: crate::card::StaticScope::Board,
+                kind: None,
+            },
+            modifier_x: 0,
+            modifier_y: 0,
+            modifier_keyword: None,
+            condition: None,
+            restrictions: vec![
+                crate::card::Restriction::CannotAttack,
+                crate::card::Restriction::CannotBeCostPaid,
+            ],
+        });
+        s.b.hand.retain(|i| i != &plant && i != &own_insect);
+        s.a.hand.retain(|i| i != &opp_insect);
+        s.b.board.push(plant);
+        s.b.board.push(own_insect.clone());
+        s.a.board.push(opp_insect.clone());
+
+        // Plant is on B's board; A's insect is opponent's insect → restricted.
+        // B's own insect is NOT restricted (controller filter = "opponent" of
+        // the source = A; B's insect is on the same side as the source).
+        assert!(s.has_restriction(&opp_insect, crate::card::Restriction::CannotAttack));
+        assert!(s.has_restriction(&opp_insect, crate::card::Restriction::CannotBeCostPaid));
+        assert!(!s.has_restriction(&own_insect, crate::card::Restriction::CannotAttack));
+        assert!(!s.has_restriction(&own_insect, crate::card::Restriction::CannotBeCostPaid));
+    }
+
+    #[test]
+    fn restriction_cannot_attack_blocks_declare_attacker() {
+        use crate::card::CardType;
+        // End-to-end: declare_attacker errors out when the would-be attacker
+        // has the CannotAttack restriction.
+        let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+        let plant = s.b.hand[0].clone();
+        let attacker = s.a.hand[0].clone();
+        s.card_pool.get_mut(&attacker).unwrap().card.subtypes = vec!["insect".into()];
+        s.card_pool.get_mut(&attacker).unwrap().card.kind = CardType::Creature;
+        s.card_pool.get_mut(&plant).unwrap().card.static_def = Some(crate::card::StaticDef {
+            affects: crate::card::StaticAffects {
+                subtypes: vec!["insect".into()],
+                colors: vec![],
+                controller: Some(crate::card::StaticController::Opponent),
+                exclude_self: false,
+                scope: crate::card::StaticScope::Board,
+                kind: None,
+            },
+            modifier_x: 0,
+            modifier_y: 0,
+            modifier_keyword: None,
+            condition: None,
+            restrictions: vec![crate::card::Restriction::CannotAttack],
+        });
+        s.b.hand.retain(|i| i != &plant);
+        s.a.hand.retain(|i| i != &attacker);
+        s.b.board.push(plant);
+        s.a.board.push(attacker.clone());
+
+        // Set up combat phase for player A (the would-be attacker's controller).
+        s.active_player = PlayerId::A;
+        s.phase = crate::game::Phase::Combat;
+        s.card_pool.get_mut(&attacker).unwrap().summoning_sick = false;
+        let err = s.declare_attacker(&attacker, None).unwrap_err();
+        assert_eq!(err, crate::game::combat::CombatError::AttackerForbiddenByRestriction);
     }
 
     #[test]

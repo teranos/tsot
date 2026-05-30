@@ -38,9 +38,9 @@ STATIC Phase 3 (restriction statics) partially overlaps here; the targeting infr
 
 ## static
 
-- **Phase 3 — restriction statics.** "Opponents' insects cannot attack" (flesh-eating-plant). Reef Phantom's tapped-untargetability also lives here once a targeting layer exists.
 - **Phase 4 — replacement effects.** "Would die → exile instead." No corpus card requires it yet.
 - **Static-driven recomputation when attached set changes.** Hydra's ETB stat snapshot persists after falter strips its attached cards.
+- **Reef Phantom's tapped-untargetability.** Needs a targeting layer first (see the `targeting` section); once that exists it's a one-line restriction static.
 
 ## activated abilities
 

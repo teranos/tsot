@@ -955,6 +955,9 @@ fn eligible_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> {
             if inst.summoning_sick && !state.has_keyword(iid, "haste") {
                 return false;
             }
+            if state.has_restriction(iid, tsot::card::Restriction::CannotAttack) {
+                return false;
+            }
             true
         })
         .cloned()

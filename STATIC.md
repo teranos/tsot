@@ -187,16 +187,21 @@ Statics that grant keywords (flying, vigilance, defender, etc.) to qualifying ca
 
 ## Phase 3 — Restriction statics
 
-**Goal:** statics that prevent actions ("cannot attack", "cannot block", "cannot be played", etc.).
+### Status (2026-05-30)
 
-**Scope (in):**
-- New `static.restriction` field on cards, declaring what action is blocked and against whom.
-- Engine pre-checks at action sites: `declare_attacker` looks for "cannot attack" statics targeting the would-be attacker; `declare_blocker` looks for "cannot block" or "cannot be blocked"; `play_card` looks for "cannot be played."
-- Cards:
-  - `flesh-eating-plant`: "Insects your opponents control cannot attack or be used as a cost paid."
+**Phase 3 complete** for the two restriction types the corpus needs.
 
-**Out:**
-- Cost-side restrictions (the "cannot be used as cost paid" part of flesh-eating-plant needs cost-payment validation to check the same statics). Might be a Phase 3.5.
+1. ✅ `StaticDef.restrictions: Vec<Restriction>` (one static can carry multiple restrictions; flesh-eating-plant uses two on one static).
+2. ✅ `Restriction::CannotAttack` — checked in `declare_attacker`. New error `CombatError::AttackerForbiddenByRestriction`. Sim's `eligible_attackers` filters it out.
+3. ✅ `Restriction::CannotBeCostPaid` — `resolve_hand_payment` filters the candidate pool; `play_card` validates explicit payments. New error `PlayError::HandPaymentForbidden`.
+4. ✅ `GameState::has_restriction(iid, restriction)` mirrors `has_static_keyword`'s iteration.
+5. ✅ Flesh-eating-plant wired (static with both restrictions, controller = opponent, subtype = insect). Note: the plant itself still can't be cast because its cost source is SACRIFICE (not yet routable), but the restriction fires once it reaches BOARD by any other path.
+6. ✅ 2 unit tests: restriction propagates to opponent insects (own insects unaffected); `declare_attacker` returns `AttackerForbiddenByRestriction` for a restricted attacker.
+
+### Out (deferred)
+
+- "Cannot be played" / "Cannot be cast" — no corpus card needs this. The stripped "you cannot cast this card" lines on jewels/ossuary became permissive when artifacts became routable; there's no current static asking for cast-time restriction.
+- "Cannot be blocked" as a restriction — handled today by the `unblockable` keyword (intrinsic). A static-granted unblockable could be expressed as `modifier.keyword = "unblockable"` and the existing combat machinery already consults `has_keyword`.
 
 ---
 

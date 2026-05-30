@@ -1,12 +1,13 @@
 -- Symbol not yet specified.
 --
--- The two other abilities ("defender" and the insects-suppression static)
--- are unwired:
---   - The static "insects your opponents control cannot attack or be used
---     as a cost paid" needs the static-effect system (Phase 2 LUA `static`).
---   - The card also has a SACRIFICE cost, so it can't be played through
---     `play_card` yet (costs theme). The on_die handler still fires
---     correctly from any state where the card sits on the BOARD.
+-- Defender + the insects-suppression static + the SACRIFICE cost.
+-- Cost is still un-routable through `play_card` (SACRIFICE source not
+-- supported), but the static fires whenever the card is on BOARD, however
+-- it got there (e.g., a future "return from graveyard" path).
+--
+-- The static uses STATIC Phase 3 restrictions: `cannot_attack` blocks
+-- declare_attacker for opponent insects, `cannot_be_cost_paid` filters
+-- them out of HAND-payment pools in resolve_hand_payment.
 return {
   id = "flesh-eating-plant",
   name = "Flesh-eating Plant",
@@ -18,6 +19,13 @@ return {
     "defender.",
     "insects your opponents control cannot attack or be used as a cost paid.",
     "When this creature dies you may return an insect card from your graveyard to your hand.",
+  },
+  static = {
+    affects = {
+      subtypes = {"insect"},
+      controller = "opponent",
+    },
+    restrictions = {"cannot_attack", "cannot_be_cost_paid"},
   },
   stats = {x = 1, y = 2},
   on_die = function(game, self)

@@ -59,6 +59,9 @@ pub enum PlayError {
     /// P.24: jewel-tap declared on a card with no HAND-source cost component
     /// to substitute (would substitute nothing).
     JewelTapWithoutHandCost,
+    /// Phase 3: a static restriction (e.g., flesh-eating-plant's
+    /// `cannot_be_cost_paid`) forbids using this card as a HAND payment.
+    HandPaymentForbidden(InstanceId),
 }
 
 impl GameState {
@@ -186,6 +189,11 @@ impl GameState {
             }
             if !self.player(player).hand.contains(hid) {
                 return Err(PlayError::HandPaymentInvalid(hid.clone()));
+            }
+            // P.24/Phase 3: a static restriction can make a card unpayable
+            // as a HAND cost (flesh-eating-plant on opponent insects).
+            if self.has_restriction(hid, crate::card::Restriction::CannotBeCostPaid) {
+                return Err(PlayError::HandPaymentForbidden(hid.clone()));
             }
         }
 
@@ -515,6 +523,11 @@ impl GameState {
                 .hand
                 .iter()
                 .filter(|iid| *iid != instance && !picked_set.contains(*iid))
+                // Phase 3: filter out cards with a `cannot_be_cost_paid`
+                // restriction so the oracle never sees them as candidates.
+                .filter(|iid| {
+                    !self.has_restriction(iid, crate::card::Restriction::CannotBeCostPaid)
+                })
                 .cloned()
                 .collect();
             if pool.is_empty() {

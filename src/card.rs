@@ -169,6 +169,25 @@ pub struct StaticDef {
     /// evaluation of `cond` against game state is true.
     #[serde(default)]
     pub condition: Option<StaticCondition>,
+    /// Phase 3: restrictions imposed on matching candidates. Each restriction
+    /// is consulted by the engine at the corresponding choke point
+    /// (declare_attacker, resolve_hand_payment, etc.). Empty = no
+    /// restrictions. One static can carry multiple (flesh-eating-plant:
+    /// `cannot_attack` AND `cannot_be_cost_paid`).
+    #[serde(default)]
+    pub restrictions: Vec<Restriction>,
+}
+
+/// Phase 3 action restriction. Each variant maps to one engine choke point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Restriction {
+    /// Candidate cannot be declared as an attacker. Checked by
+    /// `declare_attacker` before tap-and-attack mutations.
+    CannotAttack,
+    /// Candidate cannot be chosen as a HAND payment when paying a cost.
+    /// Checked by `resolve_hand_payment` (filtered out of the pool) and
+    /// by `play_card`'s payment validation.
+    CannotBeCostPaid,
 }
 
 /// Declarative state-reading predicate for STATIC Phase 2. Each variant
@@ -502,12 +521,38 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
             )))
         }
     };
+    let restrictions = match static_t.get::<Value>("restrictions")? {
+        Value::Nil => Vec::new(),
+        Value::Table(r) => {
+            let mut out = Vec::new();
+            for s in r.sequence_values::<String>() {
+                let s = s?;
+                let restriction = match s.to_ascii_lowercase().as_str() {
+                    "cannot_attack" => Restriction::CannotAttack,
+                    "cannot_be_cost_paid" => Restriction::CannotBeCostPaid,
+                    other => {
+                        return Err(mlua::Error::runtime(format!(
+                            "static.restrictions entry must be 'cannot_attack' or 'cannot_be_cost_paid', got '{other}'"
+                        )))
+                    }
+                };
+                out.push(restriction);
+            }
+            out
+        }
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "static.restrictions must be a sequence of strings, got {other:?}"
+            )))
+        }
+    };
     Ok(Some(StaticDef {
         affects,
         modifier_x,
         modifier_y,
         modifier_keyword,
         condition,
+        restrictions,
     }))
 }
 
