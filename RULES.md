@@ -16,6 +16,7 @@
 - **S.3** A player who sends cards back draws an equal number of replacement cards.
 - **S.4** A standard deck contains 50 cards.
 - **S.5** A card with the subtype `test` is not legal in standard tournament play and is excluded from standard decks.
+- **S.6** A standard deck contains at most 4 copies of any card (identified by `id`). Smaller pools may produce fewer copies; this is the upper bound, not a target.
 
 ## Turns (U)
 
@@ -90,6 +91,7 @@ The following are not part of this game.
 - **P.21** When an environment is played, it is placed on the BOARD.
 - **P.22** At most one environment may be on the BOARD at any time, across both players.
 - **P.23** A new environment cannot be played while another environment is on the BOARD.
+- **P.24** When casting a card, the controller may tap one untapped card with subtype `jewel` they control on the BOARD whose colors share at least one with the card being cast, to substitute for exactly one HAND-source component of that card's cost. At most one jewel may be tapped per cast. Tapping is part of paying the cost.
 - **P.8** When a card is placed in the GRAVEYARD or EXILE and it has attached cards, those attached cards are placed in EXILE.
 - **P.9** When a card moves from the BOARD to a different position on the BOARD, its attached cards remain attached.
 - **P.10** When a card moves from the BOARD to the HAND or to the DECK, its attached cards are placed in EXILE.

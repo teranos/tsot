@@ -1,13 +1,12 @@
--- Red jewel — artifact pitch resource. Sits in hand (can't be cast — the
--- engine auto-enforces this because Artifact isn't routable by play_card),
--- waiting to be attached as a HAND-payment cost to a red card. When
--- attached to a red host, that host gets +1/+1 and (deferred) the
--- activated ability "T: draw a card, discard a card."
+-- Red jewel — artifact pitch resource. Two modes:
+--   1. Pitched from HAND as a payment cost on a red card → attaches to
+--      that host and grants +1/+1 (via on_attached_as_cost).
+--   2. Cast directly to BOARD for 0 cost (artifacts route through play_card
+--      since the artifact-castable change). On BOARD it's currently inert
+--      until the jewel-tap-as-cost mechanic lands.
 --
--- Wired today: the +1/+1 via game.add_modifier from the
--- on_attached_as_cost event.
--- Deferred: the granted Tap-activated ability — needs the activated
--- abilities slice + a static-grant-ability mechanism.
+-- The granted "T: draw a card, discard a card" is deferred until
+-- activated abilities + static-grant-ability land.
 return {
   id = "red-jewel",
   name = "Red Jewel",
@@ -16,7 +15,6 @@ return {
   subtypes = {"jewel"},
   cost = {},
   abilities = {
-    "you cannot cast this card.",
     "when this card is attached as a cost to a red card, that creature gets +1/+1 and gains: T: draw a card, discard a card.",
   },
   on_attached_as_cost = function(game, self, partner)

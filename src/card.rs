@@ -111,6 +111,25 @@ pub struct StaticAffects {
     /// Candidate must not be the source itself.
     #[serde(default)]
     pub exclude_self: bool,
+    /// Phase 2: scope of who the static can affect. Default = any on-board
+    /// candidate matching the other predicates. `AttachedHost` = only the
+    /// card this source is attached to (requires the source to be in some
+    /// other card's `attached` list). When `AttachedHost`, the other
+    /// predicates still apply (e.g., subtype filter further narrows).
+    #[serde(default)]
+    pub scope: StaticScope,
+}
+
+/// What set of cards a static can target.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StaticScope {
+    /// Any card on either BOARD passing the other affects predicates.
+    #[default]
+    Board,
+    /// Only the card this source is attached to (host). Source must be in
+    /// some host's `attached` list. Companion-bird grants flying to its
+    /// host via this scope.
+    AttachedHost,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -400,11 +419,24 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
                 },
             };
             let exclude_self = a.get::<Option<bool>>("exclude_self")?.unwrap_or(false);
+            let scope = match a.get::<Option<String>>("scope")? {
+                None => StaticScope::Board,
+                Some(s) => match s.to_ascii_lowercase().as_str() {
+                    "board" => StaticScope::Board,
+                    "attached_host" => StaticScope::AttachedHost,
+                    other => {
+                        return Err(mlua::Error::runtime(format!(
+                            "static.affects.scope must be 'board' or 'attached_host', got '{other}'"
+                        )))
+                    }
+                },
+            };
             StaticAffects {
                 subtypes,
                 colors,
                 controller,
                 exclude_self,
+                scope,
             }
         }
         other => {

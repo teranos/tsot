@@ -9,7 +9,6 @@ return {
   subtypes = {"jewel"},
   cost = {},
   abilities = {
-    "you cannot cast this card.",
     "when this card is attached as a cost to a blue card, that creature gets +1/+1 and gains: T: draw a card, discard a card.",
   },
   on_attached_as_cost = function(game, self, partner)

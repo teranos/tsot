@@ -92,15 +92,15 @@ impl GameState {
         if inst.tapped {
             return Err(CombatError::AttackerTapped);
         }
-        if inst.has_keyword("defender") {
+        if self.has_keyword(attacker, "defender") {
             return Err(CombatError::AttackerIsDefender);
         }
-        if inst.summoning_sick && !inst.has_keyword("haste") {
+        if inst.summoning_sick && !self.has_keyword(attacker, "haste") {
             return Err(CombatError::AttackerSummoningSick);
         }
 
         // Snapshot before mutating.
-        let vigilant = inst.has_keyword("vigilance");
+        let vigilant = self.has_keyword(attacker, "vigilance");
 
         // Append to the buffered attacker list (clone-modify-set so the
         // mutation goes through the journal). The buffer is encoded as
@@ -201,22 +201,22 @@ impl GameState {
         if blocker_inst.tapped {
             return Err(CombatError::BlockerTapped);
         }
-        if blocker_inst.has_keyword("cannot-block") {
+        if self.has_keyword(blocker, "cannot-block") {
             return Err(CombatError::BlockerCannotBlock);
         }
         if blocker == attacker {
             return Err(CombatError::BlockerIsAttacker);
         }
-        let blocker_has_flying = blocker_inst.has_keyword("flying");
+        let blocker_has_flying = self.has_keyword(blocker, "flying");
 
-        let attacker_inst = self
+        let _attacker_inst = self
             .card_pool
             .get(attacker)
             .ok_or(CombatError::AttackerNotDeclared)?;
-        if attacker_inst.has_keyword("unblockable") {
+        if self.has_keyword(attacker, "unblockable") {
             return Err(CombatError::AttackerUnblockable);
         }
-        let attacker_has_flying = attacker_inst.has_keyword("flying");
+        let attacker_has_flying = self.has_keyword(attacker, "flying");
 
         // B.11: if attacker has flying, blocker must have flying.
         // (The "explicit anti-flying" exception has no anchor in the current corpus.)

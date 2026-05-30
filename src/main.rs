@@ -39,54 +39,59 @@ fn games_per_matchup() -> usize {
         .unwrap_or(DEFAULT_GAMES_PER_MATCHUP)
 }
 
-/// Deck-build variants. A and B are full-pool baselines; H/G/U are
+/// Deck-build variants. Ra and Rb are full-pool baselines; the rest are
 /// filtered pools meant to stress-test specific corpus interactions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum DeckVariant {
     /// Full pool, no filter.
-    A,
-    /// Full pool, no filter (identical to A; kept distinct so the matchup
-    /// matrix shows the A↔A and A↔B baselines symmetrically).
-    B,
+    Ra,
+    /// Full pool, no filter (identical to Ra; kept distinct so the matchup
+    /// matrix shows the Ra↔Ra and Ra↔Rb baselines symmetrically).
+    Rb,
     /// No goblins — exercises anti-tribal play against goblin-warlord etc.
-    H,
-    /// No humans, fish, insects, or beasts.
-    G,
+    Hu,
+    /// No humans, fish, insects, or beasts (was: G).
+    Go,
     /// Colorless or blue only — heavy on draw / counter / interaction.
-    U,
+    Uu,
     /// Red or purple cards (must list at least one of those colors).
-    R,
+    Pr,
+    /// Green or colorless only. Excludes purple, blue, red, black, white
+    /// cards. 4× green-jewel mandatory.
+    Gg,
 }
 
-pub(crate) const VARIANTS: [DeckVariant; 6] = [
-    DeckVariant::A,
-    DeckVariant::B,
-    DeckVariant::H,
-    DeckVariant::G,
-    DeckVariant::U,
-    DeckVariant::R,
+pub(crate) const VARIANTS: [DeckVariant; 7] = [
+    DeckVariant::Ra,
+    DeckVariant::Rb,
+    DeckVariant::Hu,
+    DeckVariant::Go,
+    DeckVariant::Uu,
+    DeckVariant::Pr,
+    DeckVariant::Gg,
 ];
 
 pub(crate) fn variant_label(v: DeckVariant) -> &'static str {
     match v {
-        DeckVariant::A => "A",
-        DeckVariant::B => "B",
-        DeckVariant::H => "H",
-        DeckVariant::G => "G",
-        DeckVariant::U => "U",
-        DeckVariant::R => "R",
+        DeckVariant::Ra => "ra",
+        DeckVariant::Rb => "rb",
+        DeckVariant::Hu => "hu",
+        DeckVariant::Go => "go",
+        DeckVariant::Uu => "uu",
+        DeckVariant::Pr => "pr",
+        DeckVariant::Gg => "gg",
     }
 }
 
 fn variant_pool(playable: &[Card], v: DeckVariant) -> Vec<Card> {
     match v {
-        DeckVariant::A | DeckVariant::B => playable.to_vec(),
-        DeckVariant::H => playable
+        DeckVariant::Ra | DeckVariant::Rb => playable.to_vec(),
+        DeckVariant::Hu => playable
             .iter()
             .filter(|c| !c.subtypes.iter().any(|s| s.eq_ignore_ascii_case("goblin")))
             .cloned()
             .collect(),
-        DeckVariant::G => playable
+        DeckVariant::Go => playable
             .iter()
             .filter(|c| {
                 !c.subtypes.iter().any(|s| {
@@ -98,7 +103,7 @@ fn variant_pool(playable: &[Card], v: DeckVariant) -> Vec<Card> {
             })
             .cloned()
             .collect(),
-        DeckVariant::U => playable
+        DeckVariant::Uu => playable
             .iter()
             .filter(|c| {
                 c.colors.is_empty()
@@ -106,12 +111,24 @@ fn variant_pool(playable: &[Card], v: DeckVariant) -> Vec<Card> {
             })
             .cloned()
             .collect(),
-        DeckVariant::R => playable
+        DeckVariant::Pr => playable
             .iter()
             .filter(|c| {
                 c.colors.iter().any(|col| {
                     col.eq_ignore_ascii_case("red") || col.eq_ignore_ascii_case("purple")
                 })
+            })
+            .cloned()
+            .collect(),
+        DeckVariant::Gg => playable
+            .iter()
+            .filter(|c| {
+                // Colorless OR green-only. Reject if any color is in the
+                // exclusion set.
+                let banned = ["purple", "blue", "red", "black", "white"];
+                !c.colors
+                    .iter()
+                    .any(|col| banned.iter().any(|b| col.eq_ignore_ascii_case(b)))
             })
             .cloned()
             .collect(),
@@ -246,8 +263,8 @@ fn main() -> mlua::Result<()> {
             let pool_a = &pools.iter().find(|(v, _)| *v == v_a).unwrap().1;
             let pool_b = &pools.iter().find(|(v, _)| *v == v_b).unwrap().1;
             for _ in 0..games_per_cell {
-                let deck_a = build_random_deck(pool_a, &mut rng, 50);
-                let deck_b = build_random_deck(pool_b, &mut rng, 50);
+                let deck_a = build_random_deck(pool_a, &mut rng, 50, mandatory_for_variant(v_a));
+                let deck_b = build_random_deck(pool_b, &mut rng, 50, mandatory_for_variant(v_b));
                 last_deck_a_ids = deck_a.iter().map(|c| c.id.clone()).collect();
                 last_deck_b_ids = deck_b.iter().map(|c| c.id.clone()).collect();
                 let deck_a_uniq: BTreeSet<String> =
@@ -314,12 +331,71 @@ fn main() -> mlua::Result<()> {
     Ok(())
 }
 
-fn build_random_deck(pool: &[Card], rng: &mut impl Rng, size: usize) -> Vec<Card> {
-    let mut deck: Vec<Card> = (0..size)
-        .map(|_| pool.choose(rng).unwrap().clone())
-        .collect();
+/// Builds a deck of `size` cards from `pool`. Enforces RULES S.6: at most
+/// 4 copies of any single card id. If the pool is too small to fill the
+/// deck without exceeding the cap, the result has fewer than `size`
+/// cards — the caller's filter is responsible for ensuring the pool can
+/// sustain the deck size (pool >= ceil(size/4)).
+///
+/// `mandatory` is a list of `(card_id, count)` pre-fills: the deck starts
+/// with exactly `count` copies of each id before random fill begins. The
+/// pre-fills still count toward the 4-of S.6 cap. Each id in `mandatory`
+/// must also be present in `pool` (silently skipped if absent).
+fn build_random_deck(
+    pool: &[Card],
+    rng: &mut impl Rng,
+    size: usize,
+    mandatory: &[(&str, u32)],
+) -> Vec<Card> {
+    use std::collections::BTreeMap;
+    let mut copies: BTreeMap<String, u32> = BTreeMap::new();
+    let mut deck: Vec<Card> = Vec::with_capacity(size);
+
+    // Pre-fill mandatory copies. Cap at 4 per id (S.6).
+    for (id, want) in mandatory {
+        let want = (*want).min(4) as usize;
+        if let Some(card) = pool.iter().find(|c| c.id == *id) {
+            for _ in 0..want {
+                if deck.len() >= size {
+                    break;
+                }
+                *copies.entry(card.id.clone()).or_insert(0) += 1;
+                deck.push(card.clone());
+            }
+        }
+    }
+
+    // Try up to `size * 8` picks to avoid an unbounded loop if the pool
+    // is degenerately small (size/4 cards = exactly enough; bad luck
+    // could thrash). Effectively impossible to exhaust for normal pools.
+    let mut attempts = 0;
+    let max_attempts = size * 8 + 32;
+    while deck.len() < size && attempts < max_attempts {
+        attempts += 1;
+        let Some(candidate) = pool.choose(rng) else {
+            break;
+        };
+        let count = copies.entry(candidate.id.clone()).or_insert(0);
+        if *count >= 4 {
+            continue;
+        }
+        *count += 1;
+        deck.push(candidate.clone());
+    }
     deck.shuffle(rng);
     deck
+}
+
+/// Variant-specific mandatory pre-fills for deck construction. Mono-color
+/// variants always run 4× their matching jewel so the jewel pitch economy
+/// is reliably exercised.
+fn mandatory_for_variant(v: DeckVariant) -> &'static [(&'static str, u32)] {
+    match v {
+        DeckVariant::Pr => &[("red-jewel", 4)],
+        DeckVariant::Uu => &[("blue-jewel", 4)],
+        DeckVariant::Gg => &[("green-jewel", 4)],
+        _ => &[],
+    }
 }
 
 fn run_game(
@@ -341,8 +417,8 @@ fn run_game(
         turns: 0,
         winner: PlayerId::A,
         // Caller overwrites these after run_game returns.
-        variant_a: DeckVariant::A,
-        variant_b: DeckVariant::B,
+        variant_a: DeckVariant::Ra,
+        variant_b: DeckVariant::Rb,
         deck_a_ids: BTreeSet::new(),
         deck_b_ids: BTreeSet::new(),
         a_played_card_ids: BTreeSet::new(),
@@ -460,14 +536,24 @@ fn run_game(
                 }
             } else if matches!(kind, CardType::Creature) {
                 rig_creature_free_haste(&mut state, &picked);
-            } else if matches!(kind, CardType::Spell) {
+            } else if matches!(kind, CardType::Spell | CardType::Artifact) {
                 // HAND cost: ask the oracle slot-by-slot which card to spend.
                 // Recorded by RecordingOracle so retry-on-suicide sees it.
-                let hand_needed: usize = cost
+                // Spell + Artifact share this cost-resolution path (both route
+                // through play_card, both pay HAND from hand).
+                let mut hand_needed: usize = cost
                     .iter()
                     .filter(|c| matches!(c.source, CostSource::Hand))
                     .map(|c| c.amount.max(0) as usize)
                     .sum();
+                // P.24: if a same-color untapped jewel is on board, prefer
+                // tapping it (saves a hand card). At most 1 jewel per cast.
+                if hand_needed > 0 {
+                    if let Some(jewel) = state.find_jewel_tap_candidate(active, &picked) {
+                        choices.jewel_tap = Some(jewel);
+                        hand_needed -= 1;
+                    }
+                }
                 if hand_needed > 0 {
                     choices.hand_payment_ids =
                         state.resolve_hand_payment(active, &picked, hand_needed, &mut oracle);
@@ -773,6 +859,9 @@ fn pick_random_playable_in_hand(
                 // shape-equivalent for both timings (HAND/MILL/GRAVEYARD
                 // cost rules don't differ).
                 CardType::Spell => can_pay_instant_cost(state, player, iid),
+                // Artifact: same payable-cost rule as Spell. Routes to BOARD
+                // on resolution per P.19.
+                CardType::Artifact => can_pay_instant_cost(state, player, iid),
                 _ => false,
             }
         })
@@ -815,14 +904,14 @@ fn is_attack_worth_declaring(
     attacker: &InstanceId,
     defender: PlayerId,
 ) -> bool {
-    let Some(atk_inst) = state.card_pool.get(attacker) else {
+    if !state.card_pool.contains_key(attacker) {
         return false;
-    };
-    if atk_inst.has_keyword("unblockable") {
+    }
+    if state.has_keyword(attacker, "unblockable") {
         return true;
     }
     let atk_x = state.effective_stats(attacker).0;
-    let atk_flying = atk_inst.has_keyword("flying");
+    let atk_flying = state.has_keyword(attacker, "flying");
 
     let mut any_legal_blocker = false;
     let mut any_kill_possible = false;
@@ -834,7 +923,7 @@ fn is_attack_worth_declaring(
             continue;
         }
         // B.11: flying attacker requires flying blocker.
-        if atk_flying && !blk_inst.has_keyword("flying") {
+        if atk_flying && !state.has_keyword(blk_iid, "flying") {
             continue;
         }
         any_legal_blocker = true;
@@ -860,10 +949,10 @@ fn eligible_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> {
             if inst.tapped {
                 return false;
             }
-            if inst.has_keyword("defender") {
+            if state.has_keyword(iid, "defender") {
                 return false;
             }
-            if inst.summoning_sick && !inst.has_keyword("haste") {
+            if inst.summoning_sick && !state.has_keyword(iid, "haste") {
                 return false;
             }
             true
@@ -881,7 +970,7 @@ fn eligible_blockers(state: &GameState, player: PlayerId) -> Vec<InstanceId> {
             let Some(inst) = state.card_pool.get(*iid) else {
                 return false;
             };
-            !inst.tapped && !inst.has_keyword("cannot-block")
+            !inst.tapped && !state.has_keyword(iid, "cannot-block")
         })
         .cloned()
         .collect()
@@ -1123,6 +1212,8 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
         "preview_retry_rescued",
         "counter_top",
         "instant_response_played",
+        "artifact_played",
+        "jewel_tap_substitution",
     ] {
         let a_total: u64 = all
             .iter()
@@ -1211,7 +1302,30 @@ fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
         "  {:35} {:>6.2}    {:>6.2}",
         "instant responses (R.1)", resp_a, resp_b
     );
-    print_pending("artifacts played (P.19)");
+    let arts_a = all
+        .iter()
+        .map(|s| {
+            s.action_counts
+                .get("artifact_played")
+                .map(|v| v[0] as f64)
+                .unwrap_or(0.0)
+        })
+        .sum::<f64>()
+        / all.len() as f64;
+    let arts_b = all
+        .iter()
+        .map(|s| {
+            s.action_counts
+                .get("artifact_played")
+                .map(|v| v[1] as f64)
+                .unwrap_or(0.0)
+        })
+        .sum::<f64>()
+        / all.len() as f64;
+    println!(
+        "  {:35} {:>6.2}    {:>6.2}",
+        "artifacts played (P.19)", arts_a, arts_b
+    );
     print_pending("environments played (P.21)");
     print_pending("mulligans (S.2/S.3)");
     print_pending("counters on the stack");

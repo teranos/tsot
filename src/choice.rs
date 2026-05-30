@@ -257,6 +257,7 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
             choices: PlayChoices {
                 hand_payment_ids,
                 x_value: None,
+                jewel_tap: None,
             },
         }
     }

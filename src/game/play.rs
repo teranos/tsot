@@ -20,6 +20,12 @@ pub struct PlayChoices {
     /// component has `is_x: true`; the same X applies to every variable
     /// component on the card (per recast's `X hand + X graveyard` pattern).
     pub x_value: Option<i32>,
+    /// P.24: optionally tap one untapped jewel on the player's BOARD whose
+    /// colors share at least one with the cast card, to substitute for one
+    /// HAND-source cost component. Max one per cast. The substituted HAND
+    /// count is reduced by 1 (so `hand_payment_ids.len()` should be the
+    /// already-reduced count).
+    pub jewel_tap: Option<InstanceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,7 +33,7 @@ pub enum PlayError {
     GameOver,
     NotInHand,
     /// Card type not currently routable by `play_card`. Today: Creature,
-    /// Instant, Spell. Artifact and Environment still unsupported.
+    /// Spell, Artifact. Environment still unsupported.
     UnsupportedType(CardType),
     /// Spell (sorcery timing) cast while a response window is open. Per
     /// R.1 + sorcery convention: sorceries are main-phase only.
@@ -46,6 +52,13 @@ pub enum PlayError {
     DuplicateHandPayment(InstanceId),
     /// DECK doesn't have enough cards to pay the MILL cost.
     InsufficientDeckForMill { needed: usize, have: usize },
+    /// P.24: jewel-tap substitution declared, but the chosen card isn't a
+    /// valid jewel for this cast (not on player's BOARD, not untapped, not
+    /// a jewel subtype, or color mismatch with cast card).
+    InvalidJewelTap(InstanceId),
+    /// P.24: jewel-tap declared on a card with no HAND-source cost component
+    /// to substitute (would substitute nothing).
+    JewelTapWithoutHandCost,
 }
 
 impl GameState {
@@ -85,9 +98,11 @@ impl GameState {
         let card_kind = inst_ref.card.kind;
         let card_cost = inst_ref.card.cost.clone();
 
-        if !matches!(card_kind, CardType::Creature | CardType::Spell) {
-            // TODO(types): Artifact (→ BOARD per P.19),
-            // Environment (→ BOARD per P.21 + P.22 slot management).
+        if !matches!(
+            card_kind,
+            CardType::Creature | CardType::Spell | CardType::Artifact
+        ) {
+            // TODO(types): Environment (→ BOARD per P.21 + P.22 slot management).
             return Err(PlayError::UnsupportedType(card_kind));
         }
         // Sorcery timing: a Spell with Timing::Sorcery cannot be cast while
@@ -127,6 +142,31 @@ impl GameState {
                 // TODO(costs): support SACRIFICE (P.16) and SELF (P.5).
                 other => return Err(PlayError::UnsupportedCostSource(other)),
             }
+        }
+
+        // P.24: validate optional jewel-tap. Pull card colors once for both
+        // the jewel-color check (here) and any future uses. After validation,
+        // reduce `hand_needed` by 1 — the jewel substitutes for one HAND slot.
+        let cast_card_colors: Vec<String> = self
+            .card_pool
+            .get(instance)
+            .map(|i| {
+                i.card
+                    .colors
+                    .iter()
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(jewel_iid) = &choices.jewel_tap {
+            if hand_needed == 0 {
+                return Err(PlayError::JewelTapWithoutHandCost);
+            }
+            let valid = self.is_valid_jewel_tap(player, jewel_iid, &cast_card_colors);
+            if !valid {
+                return Err(PlayError::InvalidJewelTap(jewel_iid.clone()));
+            }
+            hand_needed -= 1;
         }
 
         if choices.hand_payment_ids.len() != hand_needed {
@@ -182,6 +222,12 @@ impl GameState {
                 break;
             };
             let _ = self.move_card(&back, player, Zone::Graveyard, Zone::Exile);
+        }
+
+        // P.24: tap the substituting jewel as part of cost payment.
+        if let Some(jewel_iid) = &choices.jewel_tap {
+            self.set_tapped(jewel_iid, true);
+            self.bump_action("jewel_tap_substitution", player);
         }
 
         // Announce the cast. Non-hand cost (mill, graveyard) is already
@@ -317,6 +363,46 @@ impl GameState {
                     );
                 }
             }
+            CardType::Artifact => {
+                // P.19: artifact → BOARD. HAND payments attach (P.6), same
+                // pattern as creature except: artifacts don't get summoning
+                // sickness (B.3 is creature-specific; artifacts don't attack).
+                // on_play + on_enter_board fire so artifact statics participate
+                // in the standard ETB flow.
+                let payments = choices.hand_payment_ids.clone();
+                for hid in &payments {
+                    let _ = self.remove_from_zone(hid, player, Zone::Hand);
+                    self.add_attached(instance, hid);
+                    self.set_face_down(hid, true);
+                }
+                let _ = self.move_card(instance, player, Zone::Hand, Zone::Board);
+                self.bump_action("artifact_played", player);
+
+                for hid in &payments {
+                    if let Some(c) = ctx.as_mut() {
+                        lua_api::fire_with_partner(
+                            c.lua,
+                            self,
+                            c.oracle(),
+                            EventName::OnAttachedAsCost,
+                            hid,
+                            instance,
+                        );
+                    }
+                }
+                if let Some(c) = ctx.as_mut() {
+                    lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
+                }
+                if let Some(c) = ctx.as_mut() {
+                    lua_api::fire_self_only(
+                        c.lua,
+                        self,
+                        c.oracle(),
+                        EventName::OnEnterBoard,
+                        instance,
+                    );
+                }
+            }
             CardType::Spell => {
                 // P.1 + C.10: spells resolve to GRAVEYARD. HAND payments
                 // follow (no host to attach to). Instant vs sorcery only
@@ -337,6 +423,75 @@ impl GameState {
     }
 
     /// Build a HAND payment vector by asking `oracle.choose_card` once per
+    /// P.24: returns true iff `jewel_iid` is an untapped jewel on `player`'s
+    /// BOARD whose colors intersect `cast_colors`. Used by `play_card` to
+    /// validate the optional jewel-tap substitution.
+    pub fn is_valid_jewel_tap(
+        &self,
+        player: PlayerId,
+        jewel_iid: &InstanceId,
+        cast_colors: &[String],
+    ) -> bool {
+        if !self.player(player).board.contains(jewel_iid) {
+            return false;
+        }
+        let Some(jewel) = self.card_pool.get(jewel_iid) else {
+            return false;
+        };
+        if jewel.tapped {
+            return false;
+        }
+        if jewel.controller != player {
+            return false;
+        }
+        let is_jewel = jewel
+            .card
+            .subtypes
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("jewel"));
+        if !is_jewel {
+            return false;
+        }
+        if cast_colors.is_empty() {
+            return false;
+        }
+        jewel.card.colors.iter().any(|c| {
+            let lc = c.to_ascii_lowercase();
+            cast_colors.contains(&lc)
+        })
+    }
+
+    /// First untapped same-color jewel on `player`'s BOARD that's a valid
+    /// jewel-tap substitute for casting `cast_iid` (which must be in hand
+    /// or otherwise have known colors via card_pool). Returns None if no
+    /// such jewel exists. Used by the sim AI to opportunistically prefer
+    /// jewel-tap over pitching a hand card.
+    pub fn find_jewel_tap_candidate(
+        &self,
+        player: PlayerId,
+        cast_iid: &InstanceId,
+    ) -> Option<InstanceId> {
+        let cast_colors: Vec<String> = self
+            .card_pool
+            .get(cast_iid)
+            .map(|i| {
+                i.card
+                    .colors
+                    .iter()
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if cast_colors.is_empty() {
+            return None;
+        }
+        self.player(player)
+            .board
+            .iter()
+            .find(|iid| self.is_valid_jewel_tap(player, iid, &cast_colors))
+            .cloned()
+    }
+
     /// payment slot. Pool is `player.hand` minus the card being played and
     /// any cards already picked for this payment. Pure read of state; the
     /// oracle's recording captures each pick so a retry-on-suicide can flip

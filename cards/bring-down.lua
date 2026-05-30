@@ -14,8 +14,8 @@
 -- The goblin rider only fires when you control a goblin on board. Uses
 -- the defensive-may pattern: check the condition before the confirm.
 return {
-  id = "hex",
-  name = "Hex",
+  id = "bring-down",
+  name = "Bring Down",
   colors = {"purple"},
   type = "instant",
   cost = {{amount = 1, source = "hand"}},
@@ -33,7 +33,7 @@ return {
       end
     end
     if #pool > 0 then
-      local target = game.choose_card(pool, {prompt = "hex target"})
+      local target = game.choose_card(pool, {prompt = "bring down"})
       if target then
         game.damage(target, 3)
       end

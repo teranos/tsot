@@ -35,6 +35,7 @@ fn play_subsystem_round_trips_through_journal() {
         PlayChoices {
             hand_payment_ids: vec![payment],
             x_value: None,
+            jewel_tap: None,
         },
         None,
     )
@@ -79,6 +80,7 @@ fn play_creature_with_hand_cost_attaches_payments() {
     let choices = PlayChoices {
         hand_payment_ids: vec![payment.clone()],
         x_value: None,
+        jewel_tap: None,
     };
     assert!(s
         .play_card(PlayerId::A, &creature, choices, None)
@@ -145,6 +147,7 @@ fn play_combined_hand_and_mill_cost() {
         PlayChoices {
             hand_payment_ids: vec![pay.clone()],
             x_value: None,
+            jewel_tap: None,
         },
         None,
     );
@@ -184,6 +187,7 @@ fn play_card_errors_when_hand_payment_count_wrong() {
         PlayChoices {
             hand_payment_ids: vec![pay],
             x_value: None,
+            jewel_tap: None,
         },
         None,
     );
@@ -215,6 +219,7 @@ fn play_card_errors_when_paying_with_self() {
         PlayChoices {
             hand_payment_ids: vec![creature.clone()],
             x_value: None,
+            jewel_tap: None,
         },
         None,
     );
@@ -241,6 +246,7 @@ fn play_card_errors_on_duplicate_hand_payment() {
         PlayChoices {
             hand_payment_ids: vec![pay.clone(), pay.clone()],
             x_value: None,
+            jewel_tap: None,
         },
         None,
     );
@@ -272,13 +278,193 @@ fn play_card_errors_when_insufficient_deck_for_mill() {
 
 #[test]
 fn play_card_errors_on_unsupported_type() {
+    // Environment is still unsupported (P.21 + P.22 slot management not done).
+    // Creature / Spell / Artifact are all routable.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Environment;
+    assert_eq!(
+        s.play_card(PlayerId::A, &iid, PlayChoices::default(), None),
+        Err(PlayError::UnsupportedType(CardType::Environment))
+    );
+}
+
+#[test]
+fn play_card_routes_artifact_to_board() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
     s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Artifact;
+    // No cost — empty payment is valid for an artifact with cost = {}.
     assert_eq!(
         s.play_card(PlayerId::A, &iid, PlayChoices::default(), None),
-        Err(PlayError::UnsupportedType(CardType::Artifact))
+        Ok(())
     );
+    assert!(s.a.board.contains(&iid));
+    assert!(!s.a.hand.contains(&iid));
+}
+
+/// Set up: a red jewel on A's BOARD (untapped), a red creature in A's hand
+/// with 1 HAND cost, a payment-eligible second card in A's hand. Returns
+/// (state, jewel_iid, cast_iid, payment_iid).
+fn setup_jewel_tap_scenario() -> (GameState, InstanceId, InstanceId, InstanceId) {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let jewel = s.a.hand[0].clone();
+    let cast = s.a.hand[1].clone();
+    let payment = s.a.hand[2].clone();
+    // Build the jewel: artifact, subtype "jewel", red.
+    {
+        let j = s.card_pool.get_mut(&jewel).unwrap();
+        j.card.kind = CardType::Artifact;
+        j.card.subtypes = vec!["jewel".to_string()];
+        j.card.colors = vec!["red".to_string()];
+    }
+    // Move the jewel to BOARD (untapped) so it can be tapped as cost.
+    let _ = s.move_card(&jewel, PlayerId::A, Zone::Hand, Zone::Board);
+    // Build the cast card: creature, red, 1 hand cost.
+    {
+        let c = s.card_pool.get_mut(&cast).unwrap();
+        c.card.colors = vec!["red".to_string()];
+    }
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Hand,
+            is_x: false,
+        }],
+    );
+    (s, jewel, cast, payment)
+}
+
+#[test]
+fn jewel_tap_substitutes_for_one_hand_slot() {
+    let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![], // Jewel substitutes for the 1 HAND slot.
+            x_value: None,
+            jewel_tap: Some(jewel.clone()),
+        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    // Jewel is now tapped on BOARD.
+    let jewel_inst = s.card_pool.get(&jewel).unwrap();
+    assert!(jewel_inst.tapped);
+    assert!(s.a.board.contains(&jewel));
+    // Cast card on BOARD (it's a creature).
+    assert!(s.a.board.contains(&cast));
+    // The substituted payment slot wasn't pitched from hand: bump_action
+    // for jewel_tap_substitution recorded.
+    let bumps = s
+        .action_counts
+        .get("jewel_tap_substitution")
+        .map(|v| v[0])
+        .unwrap_or(0);
+    assert_eq!(bumps, 1);
+}
+
+#[test]
+fn jewel_tap_rejected_when_jewel_tapped() {
+    let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
+    s.set_tapped(&jewel, true); // pre-tap the jewel
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(jewel.clone()),
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::InvalidJewelTap(jewel)));
+}
+
+#[test]
+fn jewel_tap_rejected_on_color_mismatch() {
+    let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
+    // Recolor the cast card to blue — jewel is red, no overlap.
+    s.card_pool.get_mut(&cast).unwrap().card.colors = vec!["blue".to_string()];
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(jewel.clone()),
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::InvalidJewelTap(jewel)));
+}
+
+#[test]
+fn jewel_tap_rejected_on_non_jewel_artifact() {
+    let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
+    // Strip the "jewel" subtype — still a red artifact on board, but not a jewel.
+    s.card_pool.get_mut(&jewel).unwrap().card.subtypes.clear();
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(jewel.clone()),
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::InvalidJewelTap(jewel)));
+}
+
+#[test]
+fn jewel_tap_rejected_when_cast_has_no_hand_cost() {
+    let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
+    // Clear the cost — nothing to substitute.
+    set_cost(&mut s, &cast, vec![]);
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(jewel),
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::JewelTapWithoutHandCost));
+}
+
+#[test]
+fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
+    // 2 HAND cost, 1 jewel-tap + 1 hand payment.
+    let (mut s, jewel, cast, payment) = setup_jewel_tap_scenario();
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 2,
+            source: CostSource::Hand,
+            is_x: false,
+        }],
+    );
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![payment.clone()],
+            x_value: None,
+            jewel_tap: Some(jewel.clone()),
+        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    assert!(s.card_pool.get(&jewel).unwrap().tapped);
+    // The payment card is now attached to the cast (creature ETB path).
+    assert!(!s.a.hand.contains(&payment));
 }
 
 #[test]
@@ -405,6 +591,7 @@ fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
         PlayChoices {
             hand_payment_ids: vec![hand_payment],
             x_value: None,
+            jewel_tap: None,
         },
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
@@ -505,6 +692,7 @@ fn surge_instant_untaps_all_your_creatures_on_play() {
         PlayChoices {
             hand_payment_ids: vec![payment, payment2],
             x_value: None,
+            jewel_tap: None,
         },
         Some(&mut crate::game::EventContext::lua_only(registry.lua())),
     )
@@ -690,6 +878,7 @@ fn counterspell_resolves_and_removes_underlying_cast() {
         choices: PlayChoices {
             hand_payment_ids: vec![a_hand_payment.clone()],
             x_value: None,
+            jewel_tap: None,
         },
     };
     s.open_response_window(a_cast).unwrap();

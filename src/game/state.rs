@@ -797,11 +797,11 @@ impl GameState {
                 y += dy;
             }
         }
-        // STATIC.md Phase 1: iterate every on-board card on both sides; if
-        // its static (if any) matches this candidate via affects, add the
-        // declared modifier.
-        for source_iid in self.a.board.iter().chain(self.b.board.iter()) {
-            if let Some((dx, dy)) = self.evaluate_static_stat_modifier(source_iid, iid) {
+        // STATIC.md Phase 1 + 2: iterate every potential static source —
+        // on-board cards plus cards attached to them. If a source's static
+        // matches this candidate via affects, add the declared modifier.
+        for source_iid in self.static_source_iids() {
+            if let Some((dx, dy)) = self.evaluate_static_stat_modifier(&source_iid, iid) {
                 x += dx;
                 y += dy;
             }
@@ -817,6 +817,29 @@ impl GameState {
         source_iid: &InstanceId,
         target_iid: &InstanceId,
     ) -> Option<(i32, i32)> {
+        let def = self.static_def_if_matches(source_iid, target_iid)?;
+        Some((def.modifier_x, def.modifier_y))
+    }
+
+    /// Phase 2 static evaluator: if `source_iid` is a card with a static
+    /// keyword-grant whose `affects` predicate matches `target_iid`, returns
+    /// the granted (lowercase) keyword. None otherwise.
+    pub fn evaluate_static_keyword_grant(
+        &self,
+        source_iid: &InstanceId,
+        target_iid: &InstanceId,
+    ) -> Option<&str> {
+        let def = self.static_def_if_matches(source_iid, target_iid)?;
+        def.modifier_keyword.as_deref()
+    }
+
+    /// Shared affects-predicate check. Returns the source's StaticDef iff
+    /// `source_iid` has one AND `target_iid` matches its `affects` predicate.
+    fn static_def_if_matches(
+        &self,
+        source_iid: &InstanceId,
+        target_iid: &InstanceId,
+    ) -> Option<&crate::card::StaticDef> {
         let source = self.card_pool.get(source_iid)?;
         let def = source.card.static_def.as_ref()?;
         let target = self.card_pool.get(target_iid)?;
@@ -824,6 +847,16 @@ impl GameState {
         let affects = &def.affects;
         if affects.exclude_self && source_iid == target_iid {
             return None;
+        }
+        // Scope check. AttachedHost requires that the source is in the
+        // target's `attached` list (i.e., target IS the host of source).
+        match affects.scope {
+            crate::card::StaticScope::Board => {}
+            crate::card::StaticScope::AttachedHost => {
+                if !target.attached.iter().any(|x| x == source_iid) {
+                    return None;
+                }
+            }
         }
         if let Some(ctrl) = affects.controller {
             let same_side = source.controller == target.controller;
@@ -855,7 +888,51 @@ impl GameState {
                 return None;
             }
         }
-        Some((def.modifier_x, def.modifier_y))
+        Some(def)
+    }
+
+    /// Iterator yielding every potential static source: every on-board card,
+    /// plus every card attached to an on-board card. Order is board-first,
+    /// then attached-on-each-host. Used by `effective_stats` and
+    /// `has_static_keyword` so attached sources (e.g., companion-bird with
+    /// `scope = "attached_host"`) participate in static evaluation.
+    fn static_source_iids(&self) -> Vec<InstanceId> {
+        let mut out: Vec<InstanceId> = Vec::new();
+        for board_iid in self.a.board.iter().chain(self.b.board.iter()) {
+            out.push(board_iid.clone());
+            if let Some(host) = self.card_pool.get(board_iid) {
+                for att_iid in &host.attached {
+                    out.push(att_iid.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// Phase 2: true if any on-board static source grants `keyword` to the
+    /// card at `iid`. Mirrors `effective_stats`'s iteration shape.
+    pub fn has_static_keyword(&self, iid: &InstanceId, keyword: &str) -> bool {
+        for source_iid in self.static_source_iids() {
+            if let Some(granted) = self.evaluate_static_keyword_grant(&source_iid, iid) {
+                if granted == keyword {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Phase 2: full keyword check. Combines `CardInstance::has_keyword`
+    /// (printed + intrinsic modifiers) with `has_static_keyword` (on-board
+    /// static grants). Prefer this over the bare `CardInstance::has_keyword`
+    /// wherever a `GameState` is reachable.
+    pub fn has_keyword(&self, iid: &InstanceId, keyword: &str) -> bool {
+        if let Some(inst) = self.card_pool.get(iid) {
+            if inst.has_keyword(keyword) {
+                return true;
+            }
+        }
+        self.has_static_keyword(iid, keyword)
     }
 }
 
@@ -1110,6 +1187,7 @@ mod tests {
                 colors: vec![],
                 controller: Some(crate::card::StaticController::Owner),
                 exclude_self: true,
+                scope: crate::card::StaticScope::Board,
             },
             modifier_x: dx,
             modifier_y: dy,
