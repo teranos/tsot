@@ -58,7 +58,7 @@ The following zones are part of the game.
 - **C.5** A card is either colorless or of one or more colors.
 - **C.6** An instant is a spell with **instant timing**: it can be played at any time, including inside a response window opened by another player's action.
 - **C.7** A sorcery is a spell with **sorcery timing**: it can only be played during its controller's turn, and not inside any response window. "Plain spell" (the legacy `type = "spell"` declaration with no further specialization) is treated as sorcery timing.
-- **C.9** A card whose specific type is `SPELL` is non-permanent: when played, it resolves to GRAVEYARD per P.1. Instants and sorceries are spells distinguished by timing (C.6, C.7). Other card types (creature, artifact, environment) are permanents and follow their own play rules.
+- **C.9** A card whose specific type is `SPELL` is non-permanent: when played, it resolves to GRAVEYARD per P.1. Instants and sorceries are spells distinguished by timing (C.6, C.7). Other card types (creature, artifact, environment) are permanents and follow their own play rules. A mutation card is permanent-like in that it remains in the game state after casting, but does not occupy a BOARD slot — it lives in its host's attached zone (P.26).
 - **C.10** A spell that is played resolves to GRAVEYARD. Its `on_play` handler fires after the card has left HAND and arrived in GRAVEYARD.
 - **C.11** A card's symbol is a structured property that may be referenced by game effects (e.g., "count cards with symbol ⨳ in your GRAVEYARD").
 - **C.12** A card's effective stats are recomputed continuously from the card's printed X/Y plus all active modifiers. Whenever game state changes, effective stats are re-evaluated.
@@ -95,6 +95,10 @@ The following are not part of this game.
 - **P.24b** When casting a card, the controller may tap one untapped card with subtype `crystal` they control on the BOARD if at least one card attached to that crystal shares a color with the card being cast, to substitute for exactly one HAND-source component of that card's cost.
 - **P.24c** At most one P.24a or P.24b tap-substitution may be made per cast. Tapping is part of paying the cost.
 - **P.25** A non-creature card on the BOARD has no summoning sickness restriction: it may be tapped on the turn it is played. (B.3 governs only creatures; tap-activated abilities and P.24 tap-substitutions on freshly-played artifacts are legal.)
+- **P.26** A mutation card is played by targeting a creature on the BOARD. The mutation does not enter the BOARD itself: it attaches to the targeted creature (face-down per P.17), and remains attached for as long as that creature is on the BOARD. HAND-source payments for the mutation do not attach to the host — they resolve to GRAVEYARD per the spell-payment convention (C.10).
+- **P.27** Any creature on either player's BOARD is a legal target for a mutation cast — friendly or opposing. The controller of the mutation cast chooses the target.
+- **P.28** A mutation's effects (statics, granted keywords, granted activated abilities) apply to its host creature for as long as the mutation is attached. P.17's face-down state does not suppress those effects: the engine still resolves the mutation's static block while it is in the host's attached zone.
+- **P.29** If the host creature leaves the BOARD by any means (death, control change to a non-BOARD zone, return to hand, exile, etc.), the attached mutation is placed in EXILE per P.8.
 - **P.8** When a card is placed in the GRAVEYARD or EXILE and it has attached cards, those attached cards are placed in EXILE.
 - **P.9** When a card moves from the BOARD to a different position on the BOARD, its attached cards remain attached.
 - **P.10** When a card moves from the BOARD to the HAND or to the DECK, its attached cards are placed in EXILE.
