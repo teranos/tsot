@@ -111,6 +111,10 @@ fn build_report(
                 div.note { "Per game, every committed mutation from start to game-end." }
                 div.panel { (replay_journal_stats(all)) }
 
+                h2 { "card performance" }
+                div.note { "Per-card win rate when present in a deck. Cards on top are dragging the decks they appear in; cards on bottom are pulling them up. Sample = unique-card-per-game appearances pooled across both seats." }
+                div.panel { (card_performance(all)) }
+
                 h2 { "pending mechanics" }
                 div.note { "Zero today; nonzero once each engine piece lands." }
                 div.panel { (pending_mechanics(all)) }
@@ -527,6 +531,127 @@ fn replay_journal_stats(all: &[GameStats]) -> Markup {
                     tr {
                         th.vlabel { (variant_label(*v)) }
                         td.num style=(format!("background:{bg}")) { (format!("{val:.1}")) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn card_performance(all: &[GameStats]) -> Markup {
+    // Two metrics per card:
+    //   (deck_w, deck_l) — was the card in the winner's / loser's STARTING
+    //     deck? Includes never-drawn and held-in-hand cards.
+    //   (played_w, played_l) — did the card actually get PLAYED in this
+    //     game by the winner / loser? Filters out dead-in-deck noise.
+    //   played_in_games — total games where this card was played by EITHER
+    //     side (sample size for the play-rate column).
+    let mut stats: std::collections::BTreeMap<String, (u32, u32, u32, u32, u32)> =
+        std::collections::BTreeMap::new();
+    for s in all {
+        let (winner_deck, loser_deck, winner_played, loser_played) = match s.winner {
+            PlayerId::A => (
+                &s.deck_a_ids,
+                &s.deck_b_ids,
+                &s.a_played_card_ids,
+                &s.b_played_card_ids,
+            ),
+            PlayerId::B => (
+                &s.deck_b_ids,
+                &s.deck_a_ids,
+                &s.b_played_card_ids,
+                &s.a_played_card_ids,
+            ),
+        };
+        for id in winner_deck {
+            stats.entry(id.clone()).or_default().0 += 1;
+        }
+        for id in loser_deck {
+            stats.entry(id.clone()).or_default().1 += 1;
+        }
+        for id in winner_played {
+            stats.entry(id.clone()).or_default().2 += 1;
+            stats.entry(id.clone()).or_default().4 += 1;
+        }
+        for id in loser_played {
+            stats.entry(id.clone()).or_default().3 += 1;
+            stats.entry(id.clone()).or_default().4 += 1;
+        }
+    }
+    let total_games = all.len();
+    // Build sorted rows by played-win-rate ascending (worst PLAYED first).
+    // Cards with low play count get sample-size-discounted (we sort by
+    // played rate but only when sample is meaningful).
+    let mut rows: Vec<(String, u32, u32, f64, u32, u32, f64, u32)> = stats
+        .into_iter()
+        .map(|(id, (dw, dl, pw, pl, total_played))| {
+            let deck_total = dw + dl;
+            let deck_rate = if deck_total > 0 {
+                dw as f64 / deck_total as f64
+            } else {
+                0.0
+            };
+            let played_total = pw + pl;
+            let played_rate = if played_total > 0 {
+                pw as f64 / played_total as f64
+            } else {
+                0.5
+            };
+            (id, dw, dl, deck_rate, pw, pl, played_rate, total_played)
+        })
+        .collect();
+    // Sort by played-rate ascending (worst-when-played first), but push
+    // never-played cards to the bottom so the head is meaningful.
+    rows.sort_by(|a, b| {
+        let a_played = a.7 > 0;
+        let b_played = b.7 > 0;
+        match (a_played, b_played) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.6.partial_cmp(&b.6).unwrap_or(std::cmp::Ordering::Equal),
+        }
+    });
+    html! {
+        table.summary {
+            thead { tr {
+                th { "card" }
+                th { "in deck" }
+                th { "deck rate" }
+                th {}
+                th { "actually played" }
+                th { "play rate" }
+                th { "played win rate" }
+                th {}
+            }}
+            tbody {
+                @for (id, dw, dl, deck_rate, _pw, _pl, played_rate, total_played) in &rows {
+                    @let deck_total = dw + dl;
+                    @let deck_bg = rate_to_color(*deck_rate);
+                    @let played_bg = if *total_played > 0 { rate_to_color(*played_rate) } else { "transparent".to_string() };
+                    @let play_rate = (*total_played as f64) / (total_games.max(1) as f64) / 2.0;
+                    tr {
+                        th { (id) }
+                        td.num { (deck_total) }
+                        td.num style=(format!("background:{deck_bg}")) { (format!("{deck_rate:.2}")) }
+                        td.bar-cell {
+                            div.bar {
+                                div.bar-fill style=(format!("width:{:.0}%; background:{deck_bg}", deck_rate * 100.0)) {}
+                            }
+                        }
+                        td.num { (total_played) }
+                        td.num { (format!("{play_rate:.2}")) }
+                        @if *total_played > 0 {
+                            td.num style=(format!("background:{played_bg}")) { (format!("{played_rate:.2}")) }
+                        } @else {
+                            td.num.muted { "n/a" }
+                        }
+                        td.bar-cell {
+                            @if *total_played > 0 {
+                                div.bar {
+                                    div.bar-fill style=(format!("width:{:.0}%; background:{played_bg}", played_rate * 100.0)) {}
+                                }
+                            }
+                        }
                     }
                 }
             }

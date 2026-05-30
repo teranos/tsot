@@ -3,7 +3,7 @@ mod report;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use tsot::card::{Card, CardRegistry, CardType, CostSource, EventName};
 use tsot::choice::{
@@ -123,6 +123,16 @@ pub(crate) struct GameStats {
     winner: PlayerId,
     variant_a: DeckVariant,
     variant_b: DeckVariant,
+    /// Unique card IDs in A's starting deck. Same card repeated in the
+    /// 50-card deck only counts once. Used for per-card win-rate analysis
+    /// in the HTML report.
+    deck_a_ids: BTreeSet<String>,
+    deck_b_ids: BTreeSet<String>,
+    /// Unique card IDs that actually got played at least once during the
+    /// game (via the play loop). Compared against `deck_*_ids` to surface
+    /// "was this card drawn-and-played" vs "just sitting in the deck."
+    a_played_card_ids: BTreeSet<String>,
+    b_played_card_ids: BTreeSet<String>,
     a_played: u32,
     b_played: u32,
     a_attacks: u32,
@@ -239,12 +249,18 @@ fn main() -> mlua::Result<()> {
                 let deck_b = build_random_deck(pool_b, &mut rng, 50);
                 last_deck_a_ids = deck_a.iter().map(|c| c.id.clone()).collect();
                 last_deck_b_ids = deck_b.iter().map(|c| c.id.clone()).collect();
+                let deck_a_uniq: BTreeSet<String> =
+                    deck_a.iter().map(|c| c.id.clone()).collect();
+                let deck_b_uniq: BTreeSet<String> =
+                    deck_b.iter().map(|c| c.id.clone()).collect();
                 let state = GameState::new(deck_a, deck_b);
                 last_log.clear();
                 let (mut stats, journal) =
                     run_game(state, &mut rng, &mut last_log, registry.lua());
                 stats.variant_a = v_a;
                 stats.variant_b = v_b;
+                stats.deck_a_ids = deck_a_uniq;
+                stats.deck_b_ids = deck_b_uniq;
                 all.push(stats);
                 last_journal = journal;
             }
@@ -326,6 +342,10 @@ fn run_game(
         // Caller overwrites these after run_game returns.
         variant_a: DeckVariant::A,
         variant_b: DeckVariant::B,
+        deck_a_ids: BTreeSet::new(),
+        deck_b_ids: BTreeSet::new(),
+        a_played_card_ids: BTreeSet::new(),
+        b_played_card_ids: BTreeSet::new(),
         a_played: 0,
         b_played: 0,
         a_attacks: 0,
@@ -540,6 +560,17 @@ fn run_game(
                     }
                 }
                 bump_played(&mut stats, active);
+                // Record card-id-was-played for per-card performance.
+                if let Some(card_id) = state.card_pool.get(&picked).map(|c| c.card.id.clone()) {
+                    match active {
+                        PlayerId::A => {
+                            stats.a_played_card_ids.insert(card_id);
+                        }
+                        PlayerId::B => {
+                            stats.b_played_card_ids.insert(card_id);
+                        }
+                    }
+                }
                 let timing = state
                     .card_pool
                     .get(&picked)
