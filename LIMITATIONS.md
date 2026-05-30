@@ -1,99 +1,69 @@
 # tsot — Known Limitations
 
-> What the engine cannot do today, organized into four slices of work.
-> Code TODOs are tagged with `events`, `costs`, `types`, or `stack` to map back here.
+> What the engine cannot do today. Code TODOs are tagged so they map back
+> to a section here. Last refresh: 2026-05-30.
 
-## 1. `events` — Lua execution and triggered-ability dispatch
+## events
 
-Phase 1 is in progress. All six events from the v1 taxonomy (`on_enter_board`, `on_die`, `on_attack`, `on_block`, `on_blocked_by`, `on_play`) have wired fire sites and fire in the sim against real card handlers. The minimal `game` API surface (`damage`, `mill`, `draw`, `move`, `opponent`, `deck_top`) is exposed. **What remains in Phase 1:** the mlua sandbox is not enabled, and several API methods (`tap`, `untap`, `zones`, `card`, `add_status`, `discard`, `print`) are pending. **Phase 2** (choice, `static` continuous effects) is the next architectural slice and is the biggest gate on the corpus.
+- **`OnDealtDamageToPlayer`** — no per-attacker post-combat trigger for "this creature successfully damaged the defender's deck." Cinder Wurm currently uses `on_attack` as a workaround (fires whether blocked or not).
+- **Phase-entry triggers** — `on_turn_end`, `on_upkeep`, `on_untap_step`. Coupled with the delayed-trigger registry; usually wired together.
+- **Delayed-trigger registry** — handlers can't queue future triggers. Required by slow-recall (recurring exile return), attach-shuffler (delayed bounce), bitter-dawn's effect 2 (next-turn sacrifice).
 
-See `LUA.md` for the working status block.
+## costs
 
-**Scope:**
-- Event taxonomy and emitter (enter-the-board, attack, block, damage, die, draw, discard, end-of-turn, …).
-- Lua function-as-ability pattern: cards return `on_die = function(game, self) … end` etc.
-- Trigger registry: when an event fires, look up matching handlers across cards in play.
-- Game-side API surface for Lua (move, draw, choose, ask-player, etc.).
-- Continuous-modifier dispatch (Squirrel-overrun's `+1/+1 per attached`, Companion Bird's flying-grant, Modern LCD Clock's cost reduction).
-- Sandboxing (mlua sandbox mode).
+- **SACRIFICE** (P.16) — pick a creature you control, BOARD → GRAVEYARD as cost. Used by flesh-eating-plant, bitter-dawn effect 2.
+- **SELF / SelfExile** (P.5) — played card itself → EXILE on resolution. Originally on opponent-draw (currently a HAND substitute).
+- **Cost-modification layer** — costs are read directly from `card.cost`. No mechanism to modify them via statics or external effects. Modern-LCD-Clock's "all creatures cost 5 less mill" is unbuildable without a cost-modification pre-pass that consults statics during `play_card` validation.
 
-**Unlocks:** every existing card's ability. mesopelagic-fish's death-trigger, stinging-bee's damage-lockdown, squirrel-overrun's attack-trigger, etc. — none of these fire today.
+## types
 
-**Hard parts:** designing the game-API surface that Lua scripts can call. Once that exists, individual card abilities are typically 5–20 LOC of Lua each.
+- **Artifact play resolution** — Artifact cards are in the deck pool but `play_card` rejects them (jewels work because they're pitched, not played). Wiring artifact-to-BOARD unlocks future on-board artifact effects.
+- **Environment** (P.21) → BOARD with P.22 (one at a time, global) + P.23 (can't replace). Displacement question unresolved.
 
-## 2. `costs` — Cost-source coverage
+## targeting
 
-`play_card` supports **HAND**, **MILL**, and **GRAVEYARD** cost sources (GRAVEYARD currently selects deterministically — most-recent N exiled — pending the choice API). Two sources and variable X remain.
+No engine concept of "what is legal to target." Every "target X" card today works because the handler builds the pool itself. Affects every removal/redirect/buff card with explicit targeting.
 
-**Scope:**
-- `SACRIFICE` cost (P.16): pick a creature you control, move BOARD → GRAVEYARD. Used by flesh-eating-plant.
-- `SELF` cost (P.5): the played card itself to EXILE. Used by opponent-draw.
-- Variable X (`is_x` flag): player picks X at cast time. Used by hydra, recast, stream-of-thought, DTST-creature2.
-- Linked-X across cost components (recast: `X hand` + `X graveyard` share the same X).
+- **Targetability protection** — Reef Phantom's "tapped → untargetable" can't be enforced. Hexproof / shroud / "can't be targeted by opponents" all need this layer.
+- **Multi-target / divided effects** — handlers can call `choose_card` multiple times but no API for "deal 3 damage divided as you choose among any number of targets." Single-choice multi-output patterns aren't expressible.
+- **Target-validity recomputation** — if a target becomes illegal between cast and resolution (e.g., it left the board), the engine has no "fizzle if target is gone" check.
 
-**Unlocks:** flesh-eating-plant, opponent-draw, hydra, recast, stream-of-thought — every card with one of the remaining cost sources.
+STATIC Phase 3 (restriction statics) partially overlaps here; the targeting infrastructure is its own slice.
 
-**Hard parts:** the API for "player picks N cards from zone Z" needs to live on the choice surface (UX X-E.1, X-E.2). Linked-X needs schema consideration.
+## stack
 
-## 3. `types` — Non-creature card-type plays
+- **UX X.1, X.2, X.3 skip-logic** — auto-pass when no playables, auto-pass when no legal target, "opponent considering response" marker.
+- **Resolution event metadata** — `unopposed` / `declined` flags on resolved items.
+- **Option B refactor** — `play_card` stops driving the priority loop internally; caller drives. Matches the UI shape.
 
-`play_card` handles **Creature** and **Instant** (routes to GRAVEYARD per P.1; timing per C.6 not yet enforced). The other three types remain.
+## static
 
-**Scope:**
-- **SPELL** (C.9–C.10) → GRAVEYARD on play; only during controller's turn.
-- **ARTIFACT** (P.19) → BOARD.
-- **ENVIRONMENT** (P.21) → BOARD, subject to P.22 (one at a time, global) and P.23 (can't replace).
-- Timing checks (U.7, U.8): non-instants only legal in Main phases.
+- **Phase 2 — keyword grants.** Static-granted `flying`, `vigilance`, etc. Plus state-reading predicate escape hatch (declarative predicate too narrow for Wandering Wizard's conditional flying / Reef Phantom's tap-untargetability).
+- **Phase 3 — restriction statics.** "Opponents' insects cannot attack" (flesh-eating-plant). "Cannot be cast while X" — currently auto-enforced only by Artifact type not being routable.
+- **Phase 4 — replacement effects.** "Would die → exile instead." No corpus card requires it yet.
+- **Static-driven recomputation when attached set changes.** Hydra's ETB stat snapshot persists after falter strips its attached cards.
 
-**Unlocks:** silent-murder, easy-pickings, glaring-sunlight, modern-lcd-clock, amsterdam-city — every card of one of the remaining types.
+## activated abilities
 
-**Hard parts:** mostly straightforward branching in `play_card`. Environment slot-management (P.22/P.23) needs the displacement question resolved (currently new can't be played while old exists).
+Not started. Player-initiated `T: ...` activations. Needed by DTST-creature (5 Tap-abilities), DTST-creature2, vigilant-human, the jewel cycle's granted `T: draw, discard` rider. Scope: Lua declaration syntax, activation flow that puts the ability on the stack, sim AI decision hook, cost-payment integration.
 
-## 4. `stack` — Response windows and priority
+## state-based actions (SBAs)
 
-R.1–R.7 describe a recursive response chain. None of it exists in code.
+Not started. `combat.rs:321` has a TODO marker. tsot does combat damage + death check in one atomic pass; MTG-style SBAs fire BETWEEN stack-item resolutions so "regenerate" / "prevent damage" responses can save a dying creature.
 
-**Scope:**
-- Open a response window on (a) card played, (b) attack declared per R.1.
-- Track the response chain in GameState (an additional state field).
-- Priority sequence: active player first (R.7), then non-active, alternating until both pass.
-- LIFO resolution (R.2). Recursive responses (R.4).
-- Window closes when chain is empty and both pass (R.5, R.6).
-- Smart prompting per UX X.1–X.7: skip when no playable instants, skip when no legal target, show the active player what they're waiting on, tight timer, hold-priority, pre-declared responses, distinguish unopposed vs declined.
-- Engine introspection per UX X-E.1–X-E.5: `playable_instants`, `legal_targets`, queued-response register, resolution-event metadata.
+## sim AI strategic depth
 
-**Unlocks:** all instant casting and combat-trick play. Until this exists, falter and silent-murder and draw-two are unreachable mid-combat.
+These aren't engine bugs but they limit the validity of sim-based playtest signals. The AI:
 
-**Hard parts:** the priority/pass state machine is fiddly. UX skip-logic depends on knowing "what would the opponent's legal responses be," which requires the introspection API.
+- **Plays exactly one card per turn.** `pick_random_playable_in_hand` picks one and moves on. No multi-card sequence planning. For hand sizes >2 this systematically undervalues empty-hand plays.
+- **Attacks with everything eligible, always.** No "hold back this 1/1 to chump-block next turn." No "don't attack into the obvious bitter-dawn." Block policy got smart (tiered survival → kill-trade → chump → multi-block); attack policy did not.
+- **No mulligan decision.** Engine deals first 5 cards as the hand, period. Real games have S.2/S.3 redraw. The sim never explores "this opening hand is unplayable."
+- **No proactive instant timing in main phase.** Instants only fire from the response policy in R.1.a/R.1.b windows. Pre-emptive "cast surge before combat to enable a vigilance line" never happens.
+
+## smaller items
+
+- **P.8 attached → EXILE on host's death** — attached cards currently get dropped on the floor or stay attached depending on path. RULES says exile.
 
 ---
 
-## Cross-cutting: journal & rollback
-
-Independent of the four themes but enabling for all of them: tsot's
-engine mutates state at scattered sites with no way to preview, rewind,
-or replay. The plan is a journal-based mutation log with per-entry
-inverses. Foundation for sim AI preview (skip suicide plays), replay
-capture, save / load, undo, AI search trees, and multiplayer rollback.
-
-See `JOURNAL.md` for the multi-session plan.
-
----
-
-## Other smaller items (not their own theme)
-
-- **Mulligan** (S.2/S.3) — small once we wire UI choice.
-- **Control changes** (T.1 — current code assumes owner == controller).
-- **P.8 attached → EXILE on host's death** (currently dropped on the floor).
-- **Decks aren't shuffled by the engine** (sim does this manually; future deck loader should too).
-- **No artifact-as-permanent** death/destruction rules separate from P.4 (P.4 is creature-specific).
-- **No "wall" type or rules**, deliberately purged.
-
-These slot into one of the four themes or are independent small items handled per-need.
-
----
-
-## Code TODOs
-
-Code sites are tagged `// TODO(events|costs|types|stack): …` and reference rule IDs.
-Grep `grep -rn 'TODO(' src/` for the full list.
+Code TODOs are tagged in source. Grep `grep -rn 'TODO(' src/` for the full list.

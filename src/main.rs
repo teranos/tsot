@@ -370,7 +370,34 @@ fn run_game(
         // stack-item being added and resolving, the sim AI must decide
         // whether to play an instant in response (or pass). Today the sim
         // only acts on its own Main1 and never sees a response window.
-        if let Some(picked) = pick_random_playable_in_hand(&state, active, rng) {
+        //
+        // Multi-card-per-turn (Pattern A): the AI plays at most one
+        // creature AND at most one non-creature per turn. After the first
+        // play, the kind filter constrains the second pick to a different
+        // kind. The inner loop breaks when both slots are used or no
+        // eligible card is found.
+        let mut played_creature = false;
+        let mut played_noncreature = false;
+        while !(played_creature && played_noncreature) && state.winner.is_none() {
+            let kind_filter = if played_creature {
+                PickKindFilter::NonCreatureOnly
+            } else if played_noncreature {
+                PickKindFilter::CreatureOnly
+            } else {
+                PickKindFilter::Any
+            };
+            let Some(picked) = pick_random_playable_in_hand(&state, active, rng, kind_filter)
+            else {
+                break;
+            };
+            let picked_is_creature = state
+                .card_pool
+                .get(&picked)
+                .map(|c| c.card.kind == CardType::Creature)
+                .unwrap_or(false);
+            // Indent: the existing block needs to know `picked` and produce
+            // play outcome that we feed back into the loop flags.
+            {
             let kind = state
                 .card_pool
                 .get(&picked)
@@ -529,6 +556,11 @@ fn run_game(
                     }
                 };
                 events.push(format!("played {label}"));
+                if picked_is_creature {
+                    played_creature = true;
+                } else {
+                    played_noncreature = true;
+                }
             } else {
                 if let Some(journal) = state.journal.take() {
                     journal.rollback(&mut state);
@@ -537,6 +569,15 @@ fn run_game(
                 if suicide {
                     state.bump_action("preview_skip_suicide", active);
                 }
+                // Play didn't commit. Mark this kind as "tried" so the
+                // loop moves on to the other kind instead of infinitely
+                // re-trying the same failed pick.
+                if picked_is_creature {
+                    played_creature = true;
+                } else {
+                    played_noncreature = true;
+                }
+            }
             }
         }
 
@@ -660,10 +701,22 @@ fn bump_preview_rollback(stats: &mut GameStats, p: PlayerId) {
     }
 }
 
+/// Filter for which kinds the picker is allowed to return. `Any` allows
+/// either; `CreatureOnly` / `NonCreatureOnly` constrain to one kind. Used
+/// by the multi-card-per-turn loop in run_game to enforce "at most one
+/// creature + one non-creature per turn."
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PickKindFilter {
+    Any,
+    CreatureOnly,
+    NonCreatureOnly,
+}
+
 fn pick_random_playable_in_hand(
     state: &GameState,
     player: PlayerId,
     rng: &mut impl Rng,
+    kind_filter: PickKindFilter,
 ) -> Option<InstanceId> {
     let candidates: Vec<&InstanceId> = state
         .player(player)
@@ -673,6 +726,13 @@ fn pick_random_playable_in_hand(
             let Some(inst) = state.card_pool.get(*iid) else {
                 return false;
             };
+            let is_creature = inst.card.kind == CardType::Creature;
+            match kind_filter {
+                PickKindFilter::Any => {}
+                PickKindFilter::CreatureOnly if !is_creature => return false,
+                PickKindFilter::NonCreatureOnly if is_creature => return false,
+                _ => {}
+            }
             match inst.card.kind {
                 // Creatures get rigged free + haste before play, so always pickable.
                 CardType::Creature => true,
