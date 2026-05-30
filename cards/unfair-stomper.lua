@@ -20,9 +20,10 @@ return {
   type = "creature",
   subtypes = {"beast"},
   cost = {
-    {amount = 2, source = "hand"},
+    {amount = 1, source = "hand"},
     {amount = 3, source = "graveyard"},
     {amount = 2, source = "mill"},
+    {amount = 1, source = "sacrifice", kind = "creature"},
   },
   abilities = {
     "vigilance.",

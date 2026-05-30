@@ -24,8 +24,8 @@ return {
   type = "creature",
   subtypes = {"wurm"},
   cost = {
-    {amount = 1, source = "hand"},
     {amount = 2, source = "mill"},
+    {amount = 1, source = "sacrifice", kind = "creature"},
   },
   abilities = {
     "whenever this creature deals damage to a player, you may deal 2 damage to any target.",

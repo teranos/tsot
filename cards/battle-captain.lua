@@ -7,7 +7,7 @@ return {
   colors = {"white"},
   type = "creature",
   subtypes = {"human"},
-  cost = {{amount = 1, source = "hand"}},
+  cost = {{amount = 1, source = "hand"}, {amount = 1, source = "graveyard"}},
   abilities = {
     "all other humans you control get +1/+1.",
     "whenever this creature attacks, untap all other creatures you control that are attacking.",

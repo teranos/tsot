@@ -12,7 +12,7 @@
 ## costs
 
 - **SELF / SelfExile** (P.5) — played card itself → EXILE on resolution. Originally on opponent-draw (currently a HAND substitute).
-- **Sacrifice criterion filter** — `cost = {amount=1, source="sacrifice"}` accepts any BOARD card the controller owns. Bitter-dawn's "sacrifice a creature" needs a kind/subtype filter on the sacrifice; the current shape doesn't carry one.
+- **Subtype filter on SACRIFICE** — `CostComponent.kind` now restricts by CardType (cinder-wurm / mortal-bee / unfair-stomper require `kind = "creature"`). A `subtypes` filter ("sacrifice a goblin") is the next gap; not blocking any current card.
 - **Cost-modification layer** — costs are read directly from `card.cost`. No mechanism to modify them via statics or external effects. Modern-LCD-Clock's "all creatures cost 5 less mill" is unbuildable without a cost-modification pre-pass that consults statics during `play_card` validation.
 
 ## types

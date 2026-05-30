@@ -84,6 +84,11 @@ pub struct CostComponent {
     pub amount: i32,
     pub source: CostSource,
     pub is_x: bool,
+    /// For SACRIFICE-source components: restricts the sacrificable pool to
+    /// cards of this CardType. None = any board card. Cinder-wurm uses
+    /// `kind = Creature` to express "sacrifice a creature."
+    #[serde(default)]
+    pub kind: Option<CardType>,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -373,10 +378,15 @@ fn read_cost(t: &Table) -> mlua::Result<Vec<CostComponent>> {
         let is_x = item.get::<Option<bool>>("is_x")?.unwrap_or(false);
         let source_s = item.get::<String>("source")?;
         let source = parse_source(&source_s).map_err(mlua::Error::runtime)?;
+        let kind = match item.get::<Option<String>>("kind")? {
+            None => None,
+            Some(k) => Some(parse_type(&k).map_err(mlua::Error::runtime)?.0),
+        };
         out.push(CostComponent {
             amount,
             source,
             is_x,
+            kind,
         });
     }
     Ok(out)

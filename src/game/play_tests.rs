@@ -17,11 +17,13 @@ fn play_subsystem_round_trips_through_journal() {
                 amount: 1,
                 source: CostSource::Hand,
                 is_x: false,
+                kind: None,
             },
             CostComponent {
                 amount: 2,
                 source: CostSource::Mill,
                 is_x: false,
+                kind: None,
             },
         ],
     );
@@ -76,6 +78,7 @@ fn play_creature_with_hand_cost_attaches_payments() {
             amount: 1,
             source: CostSource::Hand,
             is_x: false,
+            kind: None,
         }],
     );
     let choices = PlayChoices {
@@ -109,6 +112,7 @@ fn play_creature_with_mill_cost_mills_top_of_deck() {
             amount: 3,
             source: CostSource::Mill,
             is_x: false,
+            kind: None,
         }],
     );
     assert!(s
@@ -135,11 +139,13 @@ fn play_combined_hand_and_mill_cost() {
                 amount: 1,
                 source: CostSource::Hand,
                 is_x: false,
+                kind: None,
             },
             CostComponent {
                 amount: 2,
                 source: CostSource::Mill,
                 is_x: false,
+                kind: None,
             },
         ],
     );
@@ -182,6 +188,7 @@ fn play_card_errors_when_hand_payment_count_wrong() {
             amount: 2,
             source: CostSource::Hand,
             is_x: false,
+            kind: None,
         }],
     );
     let result = s.play_card(
@@ -215,6 +222,7 @@ fn play_card_errors_when_paying_with_self() {
             amount: 1,
             source: CostSource::Hand,
             is_x: false,
+            kind: None,
         }],
     );
     let result = s.play_card(
@@ -243,6 +251,7 @@ fn play_card_errors_on_duplicate_hand_payment() {
             amount: 2,
             source: CostSource::Hand,
             is_x: false,
+            kind: None,
         }],
     );
     let result = s.play_card(
@@ -270,6 +279,7 @@ fn play_card_errors_when_insufficient_deck_for_mill() {
             amount: 100,
             source: CostSource::Mill,
             is_x: false,
+            kind: None,
         }],
     );
     let result = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
@@ -338,6 +348,7 @@ fn setup_jewel_tap_scenario() -> (GameState, InstanceId, InstanceId, InstanceId)
             amount: 1,
             source: CostSource::Hand,
             is_x: false,
+            kind: None,
         }],
     );
     (s, jewel, cast, payment)
@@ -460,6 +471,7 @@ fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
             amount: 2,
             source: CostSource::Hand,
             is_x: false,
+            kind: None,
         }],
     );
     let result = s.play_card(
@@ -516,6 +528,7 @@ fn crystal_tap_matches_by_attached_card_color() {
             amount: 1,
             source: CostSource::Hand,
             is_x: false,
+            kind: None,
         }],
     );
     let result = s.play_card(
@@ -559,6 +572,7 @@ fn crystal_tap_rejected_when_no_attached_color_matches() {
             amount: 1,
             source: CostSource::Hand,
             is_x: false,
+            kind: None,
         }],
     );
     let result = s.play_card(
@@ -588,6 +602,7 @@ fn setup_sacrifice_scenario() -> (GameState, InstanceId, InstanceId) {
             amount: 1,
             source: CostSource::Sacrifice,
             is_x: false,
+            kind: None,
         }],
     );
     // Move victim to A's board so it can be sacrificed.
@@ -695,6 +710,7 @@ fn play_card_errors_on_variable_x_cost() {
             amount: 0,
             source: CostSource::Hand,
             is_x: true,
+            kind: None,
         }],
     );
     let result = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
@@ -714,6 +730,7 @@ fn play_card_errors_on_unsupported_cost_source() {
             amount: 1,
             source: CostSource::SelfExile,
             is_x: false,
+            kind: None,
         }],
     );
     let result = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
@@ -734,6 +751,7 @@ fn play_card_leaves_state_unchanged_on_error() {
             amount: 100,
             source: CostSource::Mill,
             is_x: false,
+            kind: None,
         }],
     );
     let hand_before = s.a.hand.clone();

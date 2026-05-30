@@ -8,7 +8,7 @@ return {
   type = "creature",
   colors = {"red"},
   subtypes = {"human"},
-  cost = {{amount = 1, source = "hand"}},
+  cost = {{amount = 1, source = "hand"}, {amount = 1, source = "graveyard"}},
   abilities = {
     "haste.",
     "whenever this creature attacks, mill 2.",

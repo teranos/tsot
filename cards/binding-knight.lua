@@ -4,7 +4,7 @@ return {
   colors = {"white"},
   type = "creature",
   subtypes = {"human"},
-  cost = {{amount = 1, source = "hand"}},
+  cost = {{amount = 1, source = "hand"}, {amount = 1, source = "graveyard"}},
   abilities = {
     "whenever this creature attacks, tap an untapped creature an opponent controls.",
   },

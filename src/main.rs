@@ -156,6 +156,10 @@ pub(crate) struct GameStats {
     /// does this card show up", not "which side plays it." Empty if the
     /// card never resolved a play this game.
     card_play_turns: BTreeMap<String, (u32, u32)>,
+    /// Per-card count of "this card_id was sacrificed as a cost." Pooled
+    /// across A and B. Surfaces which creatures are getting fed to the
+    /// sacrifice mill the most (cheap fodder vs. real loss).
+    card_sacrificed_count: BTreeMap<String, u32>,
     a_played: u32,
     b_played: u32,
     a_attacks: u32,
@@ -432,6 +436,7 @@ fn run_game(
         a_played_card_ids: BTreeSet::new(),
         b_played_card_ids: BTreeSet::new(),
         card_play_turns: BTreeMap::new(),
+        card_sacrificed_count: BTreeMap::new(),
         a_played: 0,
         b_played: 0,
         a_attacks: 0,
@@ -544,13 +549,19 @@ fn run_game(
                         state.resolve_hand_payment(active, &picked, hand_needed, &mut oracle);
                 }
             } else if matches!(kind, CardType::Creature) {
-                // Skip the free-haste rig if the cost contains SACRIFICE —
-                // we want the sacrifice payment to actually exercise. Without
-                // the rig, the engine reads the printed cost as-is.
-                let has_sacrifice = cost
-                    .iter()
-                    .any(|c| matches!(c.source, CostSource::Sacrifice));
-                if !has_sacrifice {
+                // Skip the free-haste rig if the cost contains any SETUP
+                // component (SACRIFICE or GRAVEYARD). Those costs gate the
+                // card behind prior turns of play — exactly the design
+                // intent the rig would erase. HAND/MILL costs stay rigged
+                // because they don't require setup; rigging keeps sim
+                // throughput up.
+                let has_setup_cost = cost.iter().any(|c| {
+                    matches!(
+                        c.source,
+                        CostSource::Sacrifice | CostSource::Graveyard
+                    )
+                });
+                if !has_setup_cost {
                     rig_creature_free_haste(&mut state, &picked);
                 }
             } else if matches!(kind, CardType::Spell | CardType::Artifact) {
@@ -576,24 +587,59 @@ fn run_game(
                         state.resolve_hand_payment(active, &picked, hand_needed, &mut oracle);
                 }
             }
-            // P.16: SACRIFICE — pick board cards to sacrifice for any
-            // sacrifice cost components. Simple heuristic: prefer creatures
-            // with the lowest effective X (least board impact). Excludes
-            // the cast card (it's in HAND anyway). Applies across all
-            // payment shapes (creature/spell/artifact).
-            let sacrifice_needed: usize = cost
+            // P.16: SACRIFICE — pick board cards to sacrifice, honoring
+            // any per-component kind filter. Builds a per-slot expansion
+            // of (kind, slot_index) then picks the lowest-effective-X
+            // matching board card per slot. Skips a slot if no candidate
+            // fits the kind filter (play_card will then error out, which
+            // is the correct signal that the cast is illegal right now).
+            let sacrifice_slots: Vec<Option<CardType>> = cost
                 .iter()
                 .filter(|c| matches!(c.source, CostSource::Sacrifice))
-                .map(|c| c.amount.max(0) as usize)
-                .sum();
-            if sacrifice_needed > 0 {
-                let mut sac_candidates: Vec<InstanceId> =
-                    state.player(active).board.clone();
-                sac_candidates.sort_by_key(|iid| state.effective_stats(iid).0);
-                choices.sacrifice_ids = sac_candidates
-                    .into_iter()
-                    .take(sacrifice_needed)
-                    .collect();
+                .flat_map(|c| {
+                    let n = c.amount.max(0) as usize;
+                    std::iter::repeat_n(c.kind, n)
+                })
+                .collect();
+            if !sacrifice_slots.is_empty() {
+                let mut used: std::collections::BTreeSet<InstanceId> =
+                    std::collections::BTreeSet::new();
+                for required_kind in sacrifice_slots {
+                    let mut sac_candidates: Vec<InstanceId> = state
+                        .player(active)
+                        .board
+                        .iter()
+                        .filter(|iid| !used.contains(*iid))
+                        .filter(|iid| {
+                            if let Some(k) = required_kind {
+                                state
+                                    .card_pool
+                                    .get(*iid)
+                                    .map(|i| i.card.kind == k)
+                                    .unwrap_or(false)
+                            } else {
+                                true
+                            }
+                        })
+                        .cloned()
+                        .collect();
+                    sac_candidates.sort_by_key(|iid| state.effective_stats(iid).0);
+                    if let Some(pick) = sac_candidates.into_iter().next() {
+                        // Record which card_id is about to be sacrificed
+                        // (read before mutation; the card moves to graveyard
+                        // during play_card resolution).
+                        if let Some(card_id) =
+                            state.card_pool.get(&pick).map(|c| c.card.id.clone())
+                        {
+                            *stats
+                                .card_sacrificed_count
+                                .entry(card_id)
+                                .or_insert(0) += 1;
+                        }
+                        used.insert(pick.clone());
+                        choices.sacrifice_ids.push(pick);
+                    }
+                }
             }
             // Preview-and-skip: open a journal, attempt the play. If the
             // play would deck the active player (suicide), rollback and
@@ -903,15 +949,17 @@ fn pick_random_playable_in_hand(
             }
             match inst.card.kind {
                 // Creatures get rigged free + haste unless their cost has
-                // SACRIFICE (which we honor). Gate on can_pay_instant_cost
-                // only when sacrifice is present.
+                // a SETUP component (SACRIFICE or GRAVEYARD) which we
+                // honor as a tempo gate. Gate on can_pay_instant_cost
+                // when setup is present.
                 CardType::Creature => {
-                    let has_sac = inst
-                        .card
-                        .cost
-                        .iter()
-                        .any(|c| matches!(c.source, CostSource::Sacrifice));
-                    !has_sac || can_pay_instant_cost(state, player, iid)
+                    let has_setup = inst.card.cost.iter().any(|c| {
+                        matches!(
+                            c.source,
+                            CostSource::Sacrifice | CostSource::Graveyard
+                        )
+                    });
+                    !has_setup || can_pay_instant_cost(state, player, iid)
                 }
                 // Spell (instant or sorcery timing) — main-phase loop here,
                 // so sorcery timing is legal. can_pay_instant_cost is
@@ -935,7 +983,9 @@ fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceId) -
     let mut hand_need = 0usize;
     let mut mill_need = 0usize;
     let mut gy_need = 0usize;
-    let mut sac_need = 0usize;
+    // Track sacrifice slots with optional kind so we can verify the BOARD
+    // has enough cards of the right kind (not just enough cards period).
+    let mut sac_slots: Vec<Option<CardType>> = Vec::new();
     for c in &inst.card.cost {
         if c.is_x {
             return false;
@@ -945,17 +995,47 @@ fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceId) -
             CostSource::Hand => hand_need += amount,
             CostSource::Mill => mill_need += amount,
             CostSource::Graveyard => gy_need += amount,
-            CostSource::Sacrifice => sac_need += amount,
+            CostSource::Sacrifice => {
+                for _ in 0..amount {
+                    sac_slots.push(c.kind);
+                }
+            }
             _ => return false,
         }
     }
     let p = state.player(player);
     // Subtract 1 for the card being played (it's also in hand).
     let hand_have = p.hand.len().saturating_sub(1);
+    // For sacrifice slots, count BOARD cards matching each kind. We
+    // greedily assign per slot: each board card can only fill one slot.
+    let mut available: Vec<InstanceId> = p.board.clone();
+    let mut sac_ok = true;
+    for required_kind in &sac_slots {
+        let pos = available.iter().position(|iid| {
+            if let Some(k) = required_kind {
+                state
+                    .card_pool
+                    .get(iid)
+                    .map(|i| i.card.kind == *k)
+                    .unwrap_or(false)
+            } else {
+                true
+            }
+        });
+        match pos {
+            Some(idx) => {
+                available.remove(idx);
+            }
+            None => {
+                sac_ok = false;
+                break;
+            }
+        }
+    }
     hand_have >= hand_need
         && p.deck.len() >= mill_need
         && p.graveyard.len() >= gy_need
-        && p.board.len() >= sac_need
+        && sac_ok
 }
 
 /// Sim heuristic: skip an attack iff the defender has at least one legal

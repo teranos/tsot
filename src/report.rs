@@ -115,6 +115,10 @@ fn build_report(
                 div.note { "Per-card win rate when present in a deck. Cards on top are dragging the decks they appear in; cards on bottom are pulling them up. Sample = unique-card-per-game appearances pooled across both seats. Hover a card name to see its printed text." }
                 div.panel { (card_performance(all, pools)) }
 
+                h2 { "sacrifice victims" }
+                div.note { "Which cards get fed to the sacrifice mill most often, pooled across both seats. Counts per game-appearance of the sacrificed card." }
+                div.panel { (sacrifice_victims(all)) }
+
                 h2 { "pending mechanics" }
                 div.note { "Zero today; nonzero once each engine piece lands." }
                 div.panel { (pending_mechanics(all)) }
@@ -644,6 +648,7 @@ fn card_performance(all: &[GameStats], pools: &[(DeckVariant, Vec<tsot::Card>)])
         table.summary {
             thead { tr {
                 th { "card" }
+                th { "cost" }
                 th { "in deck" }
                 th { "deck rate" }
                 th {}
@@ -660,10 +665,17 @@ fn card_performance(all: &[GameStats], pools: &[(DeckVariant, Vec<tsot::Card>)])
                     @let deck_bg = rate_to_color(*deck_rate);
                     @let played_bg = if *total_played > 0 { rate_to_color(*played_rate) } else { "transparent".to_string() };
                     @let play_rate = (*total_played as f64) / (total_games.max(1) as f64) / 2.0;
-                    @let tooltip = card_lookup.get(id).map(|c| card_tooltip(c)).unwrap_or_default();
+                    @let card_ref = card_lookup.get(id).copied();
+                    @let cost_summary = card_ref.map(card_cost_summary).unwrap_or_default();
                     @let turns = turn_range.get(id);
                     tr {
-                        th title=(tooltip) { (id) }
+                        th.card-cell {
+                            span.card-id { (id) }
+                            @if let Some(c) = card_ref {
+                                (card_tooltip_markup(c))
+                            }
+                        }
+                        td.num.muted { (cost_summary) }
                         td.num { (deck_total) }
                         td.num style=(format!("background:{deck_bg}")) { (format!("{deck_rate:.2}")) }
                         td.bar-cell {
@@ -699,9 +711,123 @@ fn card_performance(all: &[GameStats], pools: &[(DeckVariant, Vec<tsot::Card>)])
     }
 }
 
-/// Multi-line plain-text summary of a card for use as an HTML `title`
-/// attribute (browser tooltip on hover). Keeps it simple: name, type/colors,
-/// cost, stats, abilities. Maud auto-escapes the result.
+/// One-line cost summary for the cost column. Examples: "1 hand", "1 hand + 1 graveyard".
+fn card_cost_summary(c: &tsot::Card) -> String {
+    if c.cost.is_empty() {
+        return "—".to_string();
+    }
+    c.cost
+        .iter()
+        .map(|cc| {
+            let amt = if cc.is_x {
+                "X".to_string()
+            } else {
+                cc.amount.to_string()
+            };
+            let src = match cc.source {
+                tsot::CostSource::Hand => "hand",
+                tsot::CostSource::Mill => "mill",
+                tsot::CostSource::Graveyard => "graveyard",
+                tsot::CostSource::Sacrifice => "sacrifice",
+                tsot::CostSource::SelfExile => "self-exile",
+            };
+            format!("{amt} {src}")
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+/// CSS-driven hover tooltip with the QNTX dark theme. Replaces the native
+/// `title` attribute (browser-default ~700ms delay, OS-tooltip styling).
+/// Tooltip is a child element of the card cell; `:hover` toggles display
+/// instantly. No JS.
+fn card_tooltip_markup(c: &tsot::Card) -> Markup {
+    let kind_str = match c.kind {
+        tsot::CardType::Creature => "creature",
+        tsot::CardType::Spell => match c.timing {
+            Some(tsot::Timing::Instant) => "instant",
+            Some(tsot::Timing::Sorcery) => "sorcery",
+            None => "spell",
+        },
+        tsot::CardType::Artifact => "artifact",
+        tsot::CardType::Environment => "environment",
+        tsot::CardType::Unspecified => "—",
+    };
+    let colors = if c.colors.is_empty() {
+        "colorless".to_string()
+    } else {
+        c.colors.join("/")
+    };
+    let cost_line = card_cost_summary(c);
+    html! {
+        div.card-tooltip {
+            @if !c.name.is_empty() {
+                div.ct-name { (c.name) }
+            }
+            div.ct-meta {
+                (colors) " " (kind_str)
+                @if !c.subtypes.is_empty() {
+                    " — " (c.subtypes.join(", "))
+                }
+            }
+            div.ct-cost { "cost: " (cost_line) }
+            @if let Some(stats) = c.stats {
+                div.ct-stats { (stats.x) "/" (stats.y) }
+            }
+            @if !c.abilities.is_empty() {
+                div.ct-abilities {
+                    @for line in &c.abilities {
+                        div { (line) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn sacrifice_victims(all: &[GameStats]) -> Markup {
+    let mut totals: std::collections::BTreeMap<String, u32> =
+        std::collections::BTreeMap::new();
+    for s in all {
+        for (id, n) in &s.card_sacrificed_count {
+            *totals.entry(id.clone()).or_insert(0) += n;
+        }
+    }
+    let mut rows: Vec<(String, u32)> = totals.into_iter().collect();
+    rows.sort_by_key(|b| std::cmp::Reverse(b.1));
+    let max = rows.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
+    html! {
+        @if rows.is_empty() {
+            div.note { "No sacrifices recorded this run." }
+        } @else {
+            table.summary {
+                thead { tr {
+                    th { "card" }
+                    th { "sacrificed (count)" }
+                    th {}
+                }}
+                tbody {
+                    @for (id, n) in &rows {
+                        tr {
+                            th { (id) }
+                            td.num { (n) }
+                            td.bar-cell {
+                                div.bar {
+                                    div.bar-fill style=(format!("width:{:.0}%; background:var(--accent)", (*n as f64 / max as f64) * 100.0)) {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// LEGACY plain-text summary kept for compatibility / future use. The
+/// card_performance view now uses `card_tooltip_markup` for a styled,
+/// hover-fast tooltip instead.
+#[allow(dead_code)]
 fn card_tooltip(c: &tsot::Card) -> String {
     let mut out = String::new();
     if !c.name.is_empty() {
@@ -1038,5 +1164,72 @@ table tbody tr:hover { background: var(--bg-row-hover); }
   color: var(--text-tertiary);
   margin-top: 4px;
   padding: 0 2px;
+}
+
+/* Card tooltip — QNTX dark theme, instant hover (no browser default delay). */
+.card-cell {
+  position: relative;
+  cursor: help;
+}
+.card-cell .card-tooltip {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  z-index: 50;
+  min-width: 320px;
+  max-width: 480px;
+  margin-left: 8px;
+  padding: 12px 16px;
+  background: #1a1b1a;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  pointer-events: none;
+}
+.card-cell:hover .card-tooltip,
+.card-cell:focus-within .card-tooltip {
+  display: block;
+}
+.card-tooltip .ct-name {
+  color: var(--text-emphasis);
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.card-tooltip .ct-meta {
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+.card-tooltip .ct-cost,
+.card-tooltip .ct-stats {
+  color: var(--accent);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.card-tooltip .ct-abilities {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+}
+.card-tooltip .ct-abilities div {
+  margin-bottom: 4px;
+}
+.card-tooltip .ct-abilities div:last-child {
+  margin-bottom: 0;
+}
+.card-cell .card-id {
+  display: inline-block;
 }
 "#;

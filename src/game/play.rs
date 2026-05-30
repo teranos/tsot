@@ -229,16 +229,30 @@ impl GameState {
         }
 
         // P.16: SACRIFICE cost validation. Each chosen sacrifice ID must be
-        // on the player's BOARD and they must control it. Caller chooses
+        // on the player's BOARD, controlled by them, and (if the cost
+        // component specifies a kind) match that kind. Caller chooses
         // which board cards to sacrifice (sim AI prefers low-value targets).
+        //
+        // Multiple SACRIFICE cost components on one card are matched by
+        // order — the i-th sacrifice_id pairs with the i-th SACRIFICE
+        // component for kind-filter checking. Today no card has more than
+        // one SACRIFICE component, so this is forward-looking.
         if choices.sacrifice_ids.len() != sacrifice_needed {
             return Err(PlayError::WrongSacrificeCount {
                 expected: sacrifice_needed,
                 got: choices.sacrifice_ids.len(),
             });
         }
+        let sac_kinds: Vec<Option<CardType>> = card_cost
+            .iter()
+            .filter(|c| matches!(c.source, CostSource::Sacrifice))
+            .flat_map(|c| {
+                let n = if c.is_x { x_value } else { c.amount.max(0) as usize };
+                std::iter::repeat_n(c.kind, n)
+            })
+            .collect();
         let mut sac_seen: BTreeSet<&InstanceId> = BTreeSet::new();
-        for sid in &choices.sacrifice_ids {
+        for (i, sid) in choices.sacrifice_ids.iter().enumerate() {
             if !sac_seen.insert(sid) {
                 return Err(PlayError::DuplicateSacrifice(sid.clone()));
             }
@@ -250,6 +264,11 @@ impl GameState {
             };
             if inst.controller != player {
                 return Err(PlayError::SacrificePaymentInvalid(sid.clone()));
+            }
+            if let Some(required_kind) = sac_kinds.get(i).copied().flatten() {
+                if inst.card.kind != required_kind {
+                    return Err(PlayError::SacrificePaymentInvalid(sid.clone()));
+                }
             }
         }
 

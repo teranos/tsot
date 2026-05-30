@@ -4,7 +4,7 @@ return {
   type = "creature",
   colors = {"white"},
   subtypes = {"human"},
-  cost = {{amount = 1, source = "hand"}},
+  cost = {{amount = 1, source = "hand"}, {amount = 1, source = "graveyard"}},
   abilities = {
     "vigilance.",
     "Tap: if this creature attacked this turn, draw a card.",
