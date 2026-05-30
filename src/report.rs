@@ -56,6 +56,11 @@ fn build_report(
                     div { span.k { "games" } b { (n) } }
                     div { span.k { "elapsed" } b { (format!("{:.2?}", elapsed)) } }
                     div { span.k { "per game" } b { (format!("{:.1?}", per_game)) } }
+                    @if let Some(first) = all.first() {
+                        @if first.token_a.len() == 16 {
+                            div { span.k { "master sig" } b { (first.token_a[4..16].to_string()) } }
+                        }
+                    }
                 }
 
                 h2 { "turn count" }
@@ -114,6 +119,10 @@ fn build_report(
                 h2 { "card performance" }
                 div.note { "Per-card win rate when present in a deck. Cards on top are dragging the decks they appear in; cards on bottom are pulling them up. Sample = unique-card-per-game appearances pooled across both seats. Hover a card name to see its printed text." }
                 div.panel { (card_performance(all, pools)) }
+
+                h2 { "interesting games" }
+                div.note { "Top games by various criteria, with deck tokens for replay. Set TSOT_DECK_A_TOKEN=<token> and TSOT_DECK_B_TOKEN=<token> to rerun the same matchup." }
+                div.panel { (interesting_games(all)) }
 
                 h2 { "expended cards" }
                 div.note { "Which cards get burned (sacrificed as cost or discarded via game.discard), pooled across both seats. Sacrificed = chosen as SACRIFICE cost-payment. Discarded = pushed out of hand via the discard primitive (loot effects, mantis-shrimp, etc.). Total ranks the row. Hover a card name to see its printed text." }
@@ -784,6 +793,56 @@ fn card_tooltip_markup(c: &tsot::Card) -> Markup {
             }
             @if !c.flavor.is_empty() {
                 div.ct-flavor { (c.flavor) }
+            }
+        }
+    }
+}
+
+fn interesting_games(all: &[GameStats]) -> Markup {
+    if all.is_empty() {
+        return html! {};
+    }
+    let mut by_turns_asc = all.iter().collect::<Vec<_>>();
+    by_turns_asc.sort_by_key(|s| s.turns);
+    let mut by_turns_desc = all.iter().collect::<Vec<_>>();
+    by_turns_desc.sort_by_key(|s| std::cmp::Reverse(s.turns));
+    let mut by_mill = all.iter().collect::<Vec<_>>();
+    by_mill.sort_by_key(|s| {
+        std::cmp::Reverse((s.a_milled_to_exile as i64 - s.b_milled_to_exile as i64).abs())
+    });
+    let shortest: Vec<&GameStats> = by_turns_asc.iter().take(5).copied().collect();
+    let longest: Vec<&GameStats> = by_turns_desc.iter().take(5).copied().collect();
+    let rout: Vec<&GameStats> = by_mill.iter().take(5).copied().collect();
+    html! {
+        @for (label, rows) in [("shortest", &shortest), ("longest", &longest), ("biggest rout", &rout)] {
+            h3 style="margin-top:1em; color: var(--text-secondary); font-size:12px; text-transform:uppercase; letter-spacing:1px;" { (label) }
+            table.summary {
+                thead { tr {
+                    th { "turns" }
+                    th { "matchup" }
+                    th { "g" }
+                    th { "winner" }
+                    th { "mill A" }
+                    th { "mill B" }
+                    th { "A" }
+                    th { "B" }
+                }}
+                tbody {
+                    @for s in rows.iter() {
+                        @let short_a = if s.token_a.len() >= 4 { &s.token_a[0..4] } else { s.token_a.as_str() };
+                        @let short_b = if s.token_b.len() >= 4 { &s.token_b[0..4] } else { s.token_b.as_str() };
+                        tr {
+                            td.num { (s.turns) }
+                            td.num { (variant_label(s.variant_a)) "↔" (variant_label(s.variant_b)) }
+                            td.num { (s.game_index) }
+                            td.num { ({ format!("{:?}", s.winner) }) }
+                            td.num { (s.a_milled_to_exile) }
+                            td.num { (s.b_milled_to_exile) }
+                            td.num title=(s.token_a.clone()) { (short_a) }
+                            td.num title=(s.token_b.clone()) { (short_b) }
+                        }
+                    }
+                }
             }
         }
     }

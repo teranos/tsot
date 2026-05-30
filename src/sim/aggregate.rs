@@ -249,6 +249,17 @@ pub fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
     }
 
     println!();
+    if let Some(first) = all.first() {
+        if first.token_a.len() == 16 {
+            println!(
+                "Master seed signature: {}    (trailing 12 chars of every token in this run)",
+                &first.token_a[4..16]
+            );
+        }
+    }
+    println!("Interesting games (deck tokens — short = first 4 chars of full 16-char token):");
+    print_interesting_games(all);
+    println!();
     println!("Per-variant aggregate win rate (across all opponents, both sides):");
     println!("  Variant   games   wins   rate");
     for v in &VARIANTS {
@@ -285,6 +296,57 @@ pub fn print_aggregate(all: &[GameStats], elapsed: std::time::Duration) {
 
 fn print_pending(label: &str) {
     println!("  {label:35} {:>6.1}    {:>6.1}", 0.0_f64, 0.0_f64);
+}
+
+/// Pick a handful of "interesting" games and print their deck tokens so
+/// you can replay them via TSOT_DECK_A_TOKEN / TSOT_DECK_B_TOKEN. Picks
+/// by three criteria: shortest game (decisive opening), longest game
+/// (close race), and biggest mill-imbalance (one-sided rout).
+fn print_interesting_games(all: &[GameStats]) {
+    if all.is_empty() {
+        return;
+    }
+    // Shortest by turn count.
+    let mut by_turns = all.iter().collect::<Vec<_>>();
+    by_turns.sort_by_key(|s| s.turns);
+    print_one_game("shortest", by_turns[0]);
+    // Longest by turn count.
+    print_one_game("longest ", by_turns[by_turns.len() - 1]);
+    // Biggest mill imbalance: absolute difference between defenders milled.
+    let mut by_mill = all.iter().collect::<Vec<_>>();
+    by_mill.sort_by_key(|s| {
+        std::cmp::Reverse(
+            (s.a_milled_to_exile as i64 - s.b_milled_to_exile as i64).abs(),
+        )
+    });
+    print_one_game("rout    ", by_mill[0]);
+}
+
+fn print_one_game(label: &str, s: &GameStats) {
+    // Show the 4-char short forms (per-game tuple bits) — the master
+    // seed signature is shared across all games in the run and is
+    // already printed once at the top. Full 16-char tokens stay in
+    // GameStats and surface in the HTML report tooltips.
+    let short_a = if s.token_a.len() >= 4 {
+        &s.token_a[0..4]
+    } else {
+        s.token_a.as_str()
+    };
+    let short_b = if s.token_b.len() >= 4 {
+        &s.token_b[0..4]
+    } else {
+        s.token_b.as_str()
+    };
+    println!(
+        "  {label}  turns={:>2}  winner={:?}  {}/{}/g{}  A={} B={}",
+        s.turns,
+        s.winner,
+        variant_label(s.variant_a),
+        variant_label(s.variant_b),
+        s.game_index,
+        short_a,
+        short_b,
+    );
 }
 
 fn avg<F: Fn(&GameStats) -> f64>(all: &[GameStats], f: F) -> f64 {

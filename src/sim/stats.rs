@@ -14,6 +14,13 @@ pub struct GameStats {
     pub winner: PlayerId,
     pub variant_a: DeckVariant,
     pub variant_b: DeckVariant,
+    /// Deck token encoding A's deck (Crockford base32, 16 chars).
+    /// Sufficient to reproduce the deck from `(master_seed, side, v_a, v_b, game_index)`.
+    pub token_a: String,
+    /// Deck token encoding B's deck. Same format.
+    pub token_b: String,
+    /// Game-within-cell index (0-based). Forms part of the deck token.
+    pub game_index: u32,
     /// Unique card IDs in A's starting deck. Same card repeated in the
     /// 50-card deck only counts once. Used for per-card win-rate analysis
     /// in the HTML report.

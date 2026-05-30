@@ -16,11 +16,13 @@
 
 pub mod aggregate;
 pub mod ai;
+pub mod deck_token;
 pub mod run;
 pub mod stats;
 pub mod variants;
 
 pub use aggregate::print_aggregate;
+pub use deck_token::{DeckToken, Side};
 pub use run::run_game;
 pub use stats::GameStats;
 pub use variants::{
