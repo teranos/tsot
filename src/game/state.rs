@@ -349,6 +349,27 @@ impl GameState {
         }
     }
 
+    /// Journal-aware setter for a card's controller. Used by theft effects
+    /// (e.g., opponent-draw) that take cards from one player into the
+    /// other's hand. Owner is immutable per T.2; controller is what changes.
+    pub fn set_controller(&mut self, iid: &InstanceId, now: PlayerId) {
+        let Some(inst) = self.card_pool.get_mut(iid) else {
+            return;
+        };
+        let was = inst.controller;
+        if was == now {
+            return;
+        }
+        inst.controller = now;
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetController {
+                iid: iid.clone(),
+                was,
+                now,
+            });
+        }
+    }
+
     pub fn set_active_player(&mut self, who: PlayerId) {
         let was = self.active_player;
         self.active_player = who;

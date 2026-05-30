@@ -67,6 +67,11 @@ pub enum JournalEntry {
         was: PlayerId,
         now: PlayerId,
     },
+    SetController {
+        iid: InstanceId,
+        was: PlayerId,
+        now: PlayerId,
+    },
     SetCombatState {
         was: Option<CombatState>,
         now: Option<CombatState>,
@@ -270,6 +275,11 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::SetActivePlayer { was, .. } => {
             state.active_player = was;
         }
+        JournalEntry::SetController { iid, was, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.controller = was;
+            }
+        }
         JournalEntry::SetCombatState { was, .. } => {
             state.combat = was;
         }
@@ -380,6 +390,11 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         }
         JournalEntry::SetActivePlayer { now, .. } => {
             state.active_player = now;
+        }
+        JournalEntry::SetController { iid, now, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.controller = now;
+            }
         }
         JournalEntry::SetCombatState { now, .. } => {
             state.combat = now;

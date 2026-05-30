@@ -240,6 +240,45 @@ fn do_set_tapped(s: &mut GameState, iid: &str, tapped: bool) -> Result<()> {
     Ok(())
 }
 
+/// Cross-player move: takes `iid` (wherever it is — its current owner's
+/// zone OR attached to a host) and places it in `target_player`'s `dest`
+/// zone, updating controller to `target_player`. Owner stays put per T.2.
+/// Used by theft effects like opponent-draw's literal "take cards from
+/// opponent's deck into your hand."
+fn do_move_to(
+    s: &mut GameState,
+    iid: &str,
+    target_player_str: &str,
+    dest_str: &str,
+) -> Result<()> {
+    let dest = parse_zone(dest_str)?;
+    let target = parse_pid(target_player_str)?;
+    let iid_owned = iid.to_string();
+    let inst = s
+        .card_pool
+        .get(iid)
+        .ok_or_else(|| mlua::Error::runtime(format!("game.move_to: card not in pool: {iid}")))?;
+    let owner = inst.owner;
+    // Try owner-side zones first, then controller-side, then attached.
+    if let Some(from) = find_zone_of(s, owner, iid) {
+        s.remove_from_zone(&iid_owned, owner, from);
+    } else if let Some(from) = find_zone_of(s, inst.controller, iid) {
+        let ctrl = inst.controller;
+        s.remove_from_zone(&iid_owned, ctrl, from);
+    } else if let Some(host) = find_host_of_attached(s, iid) {
+        s.remove_attached(&host, &iid_owned);
+        s.set_face_down(&iid_owned, false);
+    } else {
+        return Err(mlua::Error::runtime(format!(
+            "game.move_to: card not found in any zone or attached list: {iid}"
+        )));
+    }
+    s.add_to_zone(&iid_owned, target, dest);
+    s.set_controller(&iid_owned, target);
+    s.bump_action("move_to", target);
+    Ok(())
+}
+
 fn do_move(s: &mut GameState, iid: &str, dest_str: &str) -> Result<()> {
     let dest = parse_zone(dest_str)?;
     let iid_owned = iid.to_string();
@@ -418,6 +457,21 @@ macro_rules! build_game_table {
             $scope.create_function_mut(move |_, (iid, dest): (String, String)| {
                 do_move(&mut *cell_move.borrow_mut(), &iid, &dest)
             })?,
+        )?;
+
+        let cell_move_to = &$cell;
+        game.set(
+            "move_to",
+            $scope.create_function_mut(
+                move |_, (iid, target_player, dest): (String, String, String)| {
+                    do_move_to(
+                        &mut *cell_move_to.borrow_mut(),
+                        &iid,
+                        &target_player,
+                        &dest,
+                    )
+                },
+            )?,
         )?;
 
         game.set(
