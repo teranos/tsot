@@ -41,17 +41,10 @@ return {
     "when this creature is tapped, it cannot be targeted by spells or abilities your opponents control.",
   },
   stats = {x = 3, y = 4},
-  on_enter_board = function(game, self)
-    for _, aid in ipairs(self.attached) do
-      local c = game.card(aid)
-      if c and c.colors then
-        for _, col in ipairs(c.colors) do
-          if col == "blue" then
-            game.add_modifier(self.instance_id, "stat_boost", 1, 1)
-            break
-          end
-        end
-      end
-    end
-  end,
+  static = {
+    affects = {
+      scope = "source_only",
+    },
+    modifier = {x = "attached:blue", y = "attached:blue"},
+  },
 }

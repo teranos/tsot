@@ -751,6 +751,7 @@ fn card_tooltip_markup(c: &tsot::Card) -> Markup {
         },
         tsot::CardType::Artifact => "artifact",
         tsot::CardType::Environment => "environment",
+        tsot::CardType::Mutation => "mutation",
         tsot::CardType::Unspecified => "—",
     };
     let colors = if c.colors.is_empty() {
@@ -780,6 +781,9 @@ fn card_tooltip_markup(c: &tsot::Card) -> Markup {
                         div { (line) }
                     }
                 }
+            }
+            @if !c.flavor.is_empty() {
+                div.ct-flavor { (c.flavor) }
             }
         }
     }
@@ -878,6 +882,7 @@ fn card_tooltip(c: &tsot::Card) -> String {
         },
         tsot::CardType::Artifact => "artifact",
         tsot::CardType::Environment => "environment",
+        tsot::CardType::Mutation => "mutation",
         tsot::CardType::Unspecified => "—",
     };
     let colors = if c.colors.is_empty() {
@@ -1262,6 +1267,14 @@ table tbody tr:hover { background: var(--bg-row-hover); }
 }
 .card-tooltip .ct-abilities div:last-child {
   margin-bottom: 0;
+}
+.card-tooltip .ct-flavor {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-secondary);
+  font-style: italic;
+  font-size: 11px;
 }
 .card-cell .card-id {
   display: inline-block;

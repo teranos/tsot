@@ -59,6 +59,11 @@ pub enum CardType {
     Spell,
     Artifact,
     Environment,
+    /// Aura-style attachment: casts targeting a creature on BOARD,
+    /// attaches to that creature, carries on-board static effects via
+    /// `scope = "attached_host"`. HAND payments go to GRAVEYARD (like
+    /// spells); the mutation itself attaches to the target.
+    Mutation,
 }
 
 /// When a spell can be cast.
@@ -168,8 +173,13 @@ pub enum StaticController {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaticDef {
     pub affects: StaticAffects,
-    pub modifier_x: i32,
-    pub modifier_y: i32,
+    /// Phase 1.5: stat modifier values are no longer fixed integers — each
+    /// is a `ModifierValue` that resolves to an `i32` against the source's
+    /// current state at every read. Lets cards scale with their attached
+    /// set (hydra: +1/+1 per attached; reef-phantom: +1/+1 per attached blue)
+    /// without the snapshot leak that imperative `add_modifier` had.
+    pub modifier_x: ModifierValue,
+    pub modifier_y: ModifierValue,
     /// Phase 2: keyword granted to matching candidates. None = no keyword
     /// grant. Lowercase string matching `has_keyword` lookup. Examples:
     /// "flying", "vigilance", "haste", "cannot-block".
@@ -204,6 +214,29 @@ pub struct StaticDef {
 pub struct CostModifier {
     pub source: CostSource,
     pub amount: i32,
+}
+
+/// Phase 1.5 dynamic stat-modifier value. Resolved to an `i32` against the
+/// source CardInstance's current state every time `effective_stats` runs,
+/// so the value automatically tracks attached-set changes.
+///
+/// Lua parser accepts either a bare integer (`x = 2` → `Fixed(2)`) or a
+/// short string descriptor. `"attached"` maps to `AttachedCount`;
+/// `"attached:blue"` maps to `AttachedCountByColor("blue")`. Extensible
+/// to subtype / kind filters when corpus demands.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ModifierValue {
+    Fixed(i32),
+    /// Count of cards in the source's `attached` list.
+    AttachedCount,
+    /// Count of attached cards whose `colors` contains the given lowercase color.
+    AttachedCountByColor(String),
+}
+
+impl Default for ModifierValue {
+    fn default() -> Self {
+        ModifierValue::Fixed(0)
+    }
 }
 
 /// Phase 3 action restriction. Each variant maps to one engine choke point.
@@ -294,6 +327,10 @@ pub struct Card {
     pub symbol: String,
     pub cost: Vec<CostComponent>,
     pub abilities: Vec<String>,
+    /// Flavor text. Non-mechanical. Optional. Displayed under abilities in
+    /// the report tooltip and (eventually) UIs.
+    #[serde(default)]
+    pub flavor: String,
     pub stats: Option<Stats>,
     /// Phase 1 static ability declaration. `None` for most cards. When set,
     /// the engine evaluates `affects` against every on-board candidate at
@@ -346,6 +383,7 @@ fn parse_type(s: &str) -> Result<(CardType, Option<Timing>), String> {
         "sorcery" | "spell" => Ok((CardType::Spell, Some(Timing::Sorcery))),
         "artifact" => Ok((CardType::Artifact, None)),
         "environment" => Ok((CardType::Environment, None)),
+        "mutation" => Ok((CardType::Mutation, None)),
         other => Err(format!("unknown type: {other}")),
     }
 }
@@ -534,10 +572,10 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
         }
     };
     let (modifier_x, modifier_y, modifier_keyword) = match static_t.get::<Value>("modifier")? {
-        Value::Nil => (0, 0, None),
+        Value::Nil => (ModifierValue::Fixed(0), ModifierValue::Fixed(0), None),
         Value::Table(m) => {
-            let x = m.get::<Option<i32>>("x")?.unwrap_or(0);
-            let y = m.get::<Option<i32>>("y")?.unwrap_or(0);
+            let x = read_modifier_value(m.get::<Value>("x")?)?;
+            let y = read_modifier_value(m.get::<Value>("y")?)?;
             let keyword = m
                 .get::<Option<String>>("keyword")?
                 .map(|s| s.to_ascii_lowercase());
@@ -613,6 +651,35 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
     }))
 }
 
+/// Parse a `ModifierValue` from a Lua value. Accepts either:
+/// - Nil → `Fixed(0)` (back-compat for omitted entries)
+/// - Integer N → `Fixed(N)`
+/// - String "attached" → `AttachedCount`
+/// - String "attached:<color>" → `AttachedCountByColor(color)`
+fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
+    match v {
+        Value::Nil => Ok(ModifierValue::Fixed(0)),
+        Value::Integer(n) => Ok(ModifierValue::Fixed(n as i32)),
+        Value::Number(n) => Ok(ModifierValue::Fixed(n as i32)),
+        Value::String(s) => {
+            let s = s.to_str()?.to_string();
+            let lower = s.to_ascii_lowercase();
+            if lower == "attached" {
+                return Ok(ModifierValue::AttachedCount);
+            }
+            if let Some(rest) = lower.strip_prefix("attached:") {
+                return Ok(ModifierValue::AttachedCountByColor(rest.to_string()));
+            }
+            Err(mlua::Error::runtime(format!(
+                "modifier value string must be 'attached' or 'attached:<color>', got {s:?}"
+            )))
+        }
+        other => Err(mlua::Error::runtime(format!(
+            "modifier value must be integer or string, got {other:?}"
+        ))),
+    }
+}
+
 fn read_condition(c: &Table) -> mlua::Result<StaticCondition> {
     let kind: String = c.get("kind")?;
     match kind.to_ascii_lowercase().as_str() {
@@ -650,6 +717,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     let (kind, timing) = parse_type(&kind_s).map_err(mlua::Error::runtime)?;
     let subtypes = read_string_vec(&table, "subtypes")?;
     let abilities = read_string_vec(&table, "abilities")?;
+    let flavor = table.get::<Option<String>>("flavor")?.unwrap_or_default();
     let colors = read_color_vec(&table)?;
     let cost = read_cost(&table)?;
     let stats = read_stats(&table)?;
@@ -666,6 +734,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         symbol,
         cost,
         abilities,
+        flavor,
         stats,
         static_def,
         handlers,

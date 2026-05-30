@@ -39,6 +39,7 @@ fn play_subsystem_round_trips_through_journal() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     )
@@ -86,6 +87,7 @@ fn play_creature_with_hand_cost_attaches_payments() {
         x_value: None,
         jewel_tap: None,
         sacrifice_ids: vec![],
+        mutation_target: None,
     };
     assert!(s
         .play_card(PlayerId::A, &creature, choices, None)
@@ -157,6 +159,7 @@ fn play_combined_hand_and_mill_cost() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -199,6 +202,7 @@ fn play_card_errors_when_hand_payment_count_wrong() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -233,6 +237,7 @@ fn play_card_errors_when_paying_with_self() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -262,6 +267,7 @@ fn play_card_errors_on_duplicate_hand_payment() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -365,6 +371,7 @@ fn jewel_tap_substitutes_for_one_hand_slot() {
             x_value: None,
             jewel_tap: Some(jewel.clone()),
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -397,6 +404,7 @@ fn jewel_tap_rejected_when_jewel_tapped() {
             x_value: None,
             jewel_tap: Some(jewel.clone()),
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -416,6 +424,7 @@ fn jewel_tap_rejected_on_color_mismatch() {
             x_value: None,
             jewel_tap: Some(jewel.clone()),
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -435,6 +444,7 @@ fn jewel_tap_rejected_on_non_jewel_artifact() {
             x_value: None,
             jewel_tap: Some(jewel.clone()),
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -454,6 +464,7 @@ fn jewel_tap_rejected_when_cast_has_no_hand_cost() {
             x_value: None,
             jewel_tap: Some(jewel),
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -482,6 +493,7 @@ fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
             x_value: None,
             jewel_tap: Some(jewel.clone()),
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -539,6 +551,7 @@ fn crystal_tap_matches_by_attached_card_color() {
             x_value: None,
             jewel_tap: Some(crystal.clone()),
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -583,6 +596,7 @@ fn crystal_tap_rejected_when_no_attached_color_matches() {
             x_value: None,
             jewel_tap: Some(crystal.clone()),
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -621,6 +635,7 @@ fn sacrifice_cost_moves_victim_to_graveyard() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![victim.clone()],
+            mutation_target: None,
         },
         None,
     );
@@ -647,6 +662,7 @@ fn sacrifice_count_mismatch_errors() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         None,
     );
@@ -672,6 +688,7 @@ fn sacrifice_rejected_when_victim_not_on_board() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![phantom.clone()],
+            mutation_target: None,
         },
         None,
     );
@@ -693,6 +710,7 @@ fn sacrifice_rejected_when_opponent_controls_victim() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![opp_card.clone()],
+            mutation_target: None,
         },
         None,
     );
@@ -830,6 +848,7 @@ fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
@@ -932,6 +951,7 @@ fn surge_instant_untaps_all_your_creatures_on_play() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
         Some(&mut crate::game::EventContext::lua_only(registry.lua())),
     )
@@ -1119,6 +1139,7 @@ fn counterspell_resolves_and_removes_underlying_cast() {
             x_value: None,
             jewel_tap: None,
             sacrifice_ids: vec![],
+            mutation_target: None,
         },
     };
     s.open_response_window(a_cast).unwrap();

@@ -219,7 +219,10 @@ fn main() -> mlua::Result<()> {
         .filter(|c| {
             matches!(
                 c.kind,
-                CardType::Creature | CardType::Spell | CardType::Artifact
+                CardType::Creature
+                    | CardType::Spell
+                    | CardType::Artifact
+                    | CardType::Mutation
             )
         })
         .filter(|c| !c.subtypes.iter().any(|s| s.eq_ignore_ascii_case("test")))
@@ -598,7 +601,7 @@ fn run_game(
                 if !has_setup_cost {
                     rig_creature_free_haste(&mut state, &picked);
                 }
-            } else if matches!(kind, CardType::Spell | CardType::Artifact) {
+            } else if matches!(kind, CardType::Spell | CardType::Artifact | CardType::Mutation) {
                 // HAND cost: ask the oracle slot-by-slot which card to spend.
                 // Recorded by RecordingOracle so retry-on-suicide sees it.
                 // Spell + Artifact share this cost-resolution path (both route
@@ -624,6 +627,34 @@ fn run_game(
                 if hand_needed > 0 {
                     choices.hand_payment_ids =
                         state.resolve_hand_payment(active, &picked, hand_needed, &mut oracle);
+                }
+                // Mutation: pick a target creature. AI prefers own creatures
+                // (buff) but accepts opponent's too. Picks the highest
+                // effective-X candidate to maximize impact.
+                if matches!(kind, CardType::Mutation) {
+                    let mut pool: Vec<InstanceId> = state
+                        .a
+                        .board
+                        .iter()
+                        .chain(state.b.board.iter())
+                        .filter(|t| {
+                            state
+                                .card_pool
+                                .get(*t)
+                                .map(|i| i.card.kind == CardType::Creature)
+                                .unwrap_or(false)
+                        })
+                        .cloned()
+                        .collect();
+                    // Prefer own creatures first, then sort by X descending.
+                    pool.sort_by_key(|t| {
+                        let inst = state.card_pool.get(t);
+                        let own = inst.map(|i| i.controller == active).unwrap_or(false);
+                        let x = state.effective_stats(t).0;
+                        // Lower key = earlier. Own → -1 prefix; high X → -X tiebreak.
+                        (if own { 0 } else { 1 }, -x)
+                    });
+                    choices.mutation_target = pool.first().cloned();
                 }
             }
             // P.16: SACRIFICE — pick board cards to sacrifice, honoring
@@ -1023,6 +1054,20 @@ fn pick_random_playable_in_hand(
                 // Artifact: same payable-cost rule as Spell. Routes to BOARD
                 // on resolution per P.19.
                 CardType::Artifact => can_pay_instant_cost(state, player, iid),
+                // Mutation: pays like Spell + requires at least one creature
+                // on either BOARD to target. Gates on both checks.
+                CardType::Mutation => {
+                    if !can_pay_instant_cost(state, player, iid) {
+                        return false;
+                    }
+                    state.a.board.iter().chain(state.b.board.iter()).any(|t| {
+                        state
+                            .card_pool
+                            .get(t)
+                            .map(|i| i.card.kind == CardType::Creature)
+                            .unwrap_or(false)
+                    })
+                }
                 _ => false,
             }
         })
@@ -1065,7 +1110,11 @@ fn play_priority_score(state: &GameState, iid: &InstanceId) -> i32 {
         }
         // Stat/keyword anthems benefit every matching creature you cast
         // after they're on board. Goblin-warchief / battle-captain land here.
-        if def.modifier_x != 0 || def.modifier_y != 0 || def.modifier_keyword.is_some() {
+        // Detect non-trivial stat anthem: either modifier is non-zero-fixed
+        // OR not the Fixed variant (scaling values are always significant).
+        let stat_active = !matches!(def.modifier_x, tsot::ModifierValue::Fixed(0))
+            || !matches!(def.modifier_y, tsot::ModifierValue::Fixed(0));
+        if stat_active || def.modifier_keyword.is_some() {
             s += 20;
         }
         // Restrictions on opponent (flesh-eating-plant, scarecrow's flying

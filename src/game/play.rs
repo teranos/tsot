@@ -30,6 +30,10 @@ pub struct PlayChoices {
     /// on the player's BOARD and they control it. Moves BOARD → GRAVEYARD
     /// as part of cost payment; on_die fires per sacrificed card.
     pub sacrifice_ids: Vec<InstanceId>,
+    /// MUTATION target: required when the cast card has `kind = Mutation`.
+    /// Names the on-board creature the mutation will attach to. Any
+    /// creature is a legal target (friendly or opposing).
+    pub mutation_target: Option<InstanceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +70,10 @@ pub enum PlayError {
     /// Phase 3: a static restriction (e.g., flesh-eating-plant's
     /// `cannot_be_cost_paid`) forbids using this card as a HAND payment.
     HandPaymentForbidden(InstanceId),
+    /// MUTATION cast missing a target creature.
+    MutationTargetMissing,
+    /// MUTATION target isn't a creature on either BOARD.
+    MutationTargetInvalid(InstanceId),
     /// P.16: SACRIFICE payment count doesn't match the card's total
     /// SACRIFICE cost.
     WrongSacrificeCount { expected: usize, got: usize },
@@ -116,7 +124,7 @@ impl GameState {
 
         if !matches!(
             card_kind,
-            CardType::Creature | CardType::Spell | CardType::Artifact
+            CardType::Creature | CardType::Spell | CardType::Artifact | CardType::Mutation
         ) {
             // TODO(types): Environment (→ BOARD per P.21 + P.22 slot management).
             return Err(PlayError::UnsupportedType(card_kind));
@@ -240,6 +248,24 @@ impl GameState {
                 needed: graveyard_needed,
                 have: gy_have,
             });
+        }
+
+        // Mutation target validation: a Mutation cast must name a creature
+        // on either BOARD to attach to. Any creature qualifies.
+        if matches!(card_kind, CardType::Mutation) {
+            let Some(target) = &choices.mutation_target else {
+                return Err(PlayError::MutationTargetMissing);
+            };
+            let on_a = self.a.board.contains(target);
+            let on_b = self.b.board.contains(target);
+            let is_creature = self
+                .card_pool
+                .get(target)
+                .map(|i| i.card.kind == CardType::Creature)
+                .unwrap_or(false);
+            if !(on_a || on_b) || !is_creature {
+                return Err(PlayError::MutationTargetInvalid(target.clone()));
+            }
         }
 
         // P.16: SACRIFICE cost validation. Each chosen sacrifice ID must be
@@ -506,6 +532,28 @@ impl GameState {
                     let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
                 }
                 let _ = self.move_card(instance, player, Zone::Hand, Zone::Graveyard);
+
+                if let Some(c) = ctx.as_mut() {
+                    lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
+                }
+            }
+            CardType::Mutation => {
+                // Mutation: HAND payments → GRAVEYARD (like spells, no
+                // host accrual on the mutation itself). The mutation card
+                // leaves HAND and ATTACHES to the chosen target creature
+                // via add_attached + face-down per P.17. Its on-board
+                // static effects fire from the attached position (the
+                // static system already iterates attached cards as sources).
+                for hid in choices.hand_payment_ids.clone() {
+                    let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
+                }
+                let target = choices
+                    .mutation_target
+                    .as_ref()
+                    .expect("validated by play_card");
+                let _ = self.remove_from_zone(instance, player, Zone::Hand);
+                self.add_attached(target, instance);
+                self.set_face_down(instance, true);
 
                 if let Some(c) = ctx.as_mut() {
                     lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);

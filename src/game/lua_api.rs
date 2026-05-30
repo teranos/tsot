@@ -33,6 +33,7 @@ fn card_type_str(c: &Card) -> &'static str {
         },
         CardType::Artifact => "artifact",
         CardType::Environment => "environment",
+        CardType::Mutation => "mutation",
     }
 }
 

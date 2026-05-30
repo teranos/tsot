@@ -818,7 +818,43 @@ impl GameState {
         target_iid: &InstanceId,
     ) -> Option<(i32, i32)> {
         let def = self.static_def_if_matches(source_iid, target_iid)?;
-        Some((def.modifier_x, def.modifier_y))
+        let source = self.card_pool.get(source_iid)?;
+        let dx = self.resolve_modifier_value(source, &def.modifier_x);
+        let dy = self.resolve_modifier_value(source, &def.modifier_y);
+        Some((dx, dy))
+    }
+
+    /// Phase 1.5: resolve a `ModifierValue` against the source's current
+    /// state. Counts walk the source's attached list every call, so the
+    /// returned i32 tracks attached-set changes automatically — no
+    /// snapshot leak.
+    fn resolve_modifier_value(
+        &self,
+        source: &CardInstance,
+        mv: &crate::card::ModifierValue,
+    ) -> i32 {
+        match mv {
+            crate::card::ModifierValue::Fixed(n) => *n,
+            crate::card::ModifierValue::AttachedCount => source.attached.len() as i32,
+            crate::card::ModifierValue::AttachedCountByColor(color) => {
+                let needle = color.to_ascii_lowercase();
+                source
+                    .attached
+                    .iter()
+                    .filter(|aid| {
+                        self.card_pool
+                            .get(*aid)
+                            .map(|c| {
+                                c.card
+                                    .colors
+                                    .iter()
+                                    .any(|col| col.eq_ignore_ascii_case(&needle))
+                            })
+                            .unwrap_or(false)
+                    })
+                    .count() as i32
+            }
+        }
     }
 
     /// Phase 2 static evaluator: if `source_iid` is a card with a static
@@ -1282,8 +1318,8 @@ mod tests {
                 kind: None,
                 has_keyword: None,
             },
-            modifier_x: dx,
-            modifier_y: dy,
+            modifier_x: crate::card::ModifierValue::Fixed(dx),
+            modifier_y: crate::card::ModifierValue::Fixed(dy),
             modifier_keyword: None,
             condition: None,
             restrictions: Vec::new(),
@@ -1352,8 +1388,8 @@ mod tests {
                 kind: None,
                 has_keyword: None,
             },
-            modifier_x: 0,
-            modifier_y: 0,
+            modifier_x: crate::card::ModifierValue::Fixed(0),
+            modifier_y: crate::card::ModifierValue::Fixed(0),
             modifier_keyword: Some("flying".into()),
             condition: None,
             restrictions: Vec::new(),
@@ -1387,8 +1423,8 @@ mod tests {
                 kind: None,
                 has_keyword: None,
             },
-            modifier_x: 0,
-            modifier_y: 0,
+            modifier_x: crate::card::ModifierValue::Fixed(0),
+            modifier_y: crate::card::ModifierValue::Fixed(0),
             modifier_keyword: Some("flying".into()),
             condition: None,
             restrictions: Vec::new(),
@@ -1417,8 +1453,8 @@ mod tests {
                 kind: Some(crate::card::CardType::Creature),
                 has_keyword: None,
             },
-            modifier_x: 1,
-            modifier_y: 1,
+            modifier_x: crate::card::ModifierValue::Fixed(1),
+            modifier_y: crate::card::ModifierValue::Fixed(1),
             modifier_keyword: Some("flying".into()),
             condition: Some(crate::card::StaticCondition::OwnerGraveyardSize { min: 5 }),
             restrictions: Vec::new(),
@@ -1461,8 +1497,8 @@ mod tests {
                 kind: None,
                 has_keyword: None,
             },
-            modifier_x: 0,
-            modifier_y: 0,
+            modifier_x: crate::card::ModifierValue::Fixed(0),
+            modifier_y: crate::card::ModifierValue::Fixed(0),
             modifier_keyword: Some("flying".into()),
             condition: Some(crate::card::StaticCondition::OwnerGraveyardNonCreatures { min: 4 }),
             restrictions: Vec::new(),
@@ -1507,8 +1543,8 @@ mod tests {
                 kind: None,
                 has_keyword: None,
             },
-            modifier_x: 0,
-            modifier_y: 0,
+            modifier_x: crate::card::ModifierValue::Fixed(0),
+            modifier_y: crate::card::ModifierValue::Fixed(0),
             modifier_keyword: Some("flying".into()),
             condition: None,
             restrictions: Vec::new(),
@@ -1540,8 +1576,8 @@ mod tests {
                 kind: None,
                 has_keyword: None,
             },
-            modifier_x: 0,
-            modifier_y: 0,
+            modifier_x: crate::card::ModifierValue::Fixed(0),
+            modifier_y: crate::card::ModifierValue::Fixed(0),
             modifier_keyword: None,
             condition: None,
             restrictions: vec![
@@ -1585,8 +1621,8 @@ mod tests {
                 kind: None,
                 has_keyword: None,
             },
-            modifier_x: 0,
-            modifier_y: 0,
+            modifier_x: crate::card::ModifierValue::Fixed(0),
+            modifier_y: crate::card::ModifierValue::Fixed(0),
             modifier_keyword: None,
             condition: None,
             restrictions: vec![crate::card::Restriction::CannotAttack],
@@ -1626,8 +1662,8 @@ mod tests {
                 kind: Some(crate::card::CardType::Creature),
                 has_keyword: Some("flying".into()),
             },
-            modifier_x: 0,
-            modifier_y: 0,
+            modifier_x: crate::card::ModifierValue::Fixed(0),
+            modifier_y: crate::card::ModifierValue::Fixed(0),
             modifier_keyword: None,
             condition: None,
             restrictions: vec![crate::card::Restriction::CannotAttack],

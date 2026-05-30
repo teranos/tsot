@@ -1,12 +1,11 @@
--- Name and symbol not yet specified.
--- Variable-X cost: X hand cards become attached. ETB applies a one-shot
--- +N/+N StatBoost where N = number of attached cards at play time.
+-- Green hydra. Variable-X cost: X hand cards attach as payment. Stats
+-- scale +1/+1 per attached card and STAY accurate as the attached set
+-- changes — wired via STATIC Phase 1.5 dynamic modifier (ModifierValue::
+-- AttachedCount). If falter strips the attached cards later, hydra's
+-- stats shrink with them. Same shape works for any future "X/Y per
+-- attached <thing>" creature.
 --
--- Note: hydra's printed ability is "+1/+1 per attached card" which is
--- technically static (re-evaluates if attached changes). The ETB-modifier
--- below is a deterministic snapshot — if attached cards are later removed
--- or added, hydra's stats don't update. Phase 2 LUA `static` will close
--- this gap when it lands.
+-- Symbol not yet specified.
 return {
   id = "hydra",
   colors = {"green"},
@@ -17,10 +16,10 @@ return {
     "this creature gets +1/+1 for each attached card.",
   },
   stats = {x = 0, y = 0},
-  on_enter_board = function(game, self)
-    local n = #self.attached
-    if n > 0 then
-      game.add_modifier(self.instance_id, "stat_boost", n, n)
-    end
-  end,
+  static = {
+    affects = {
+      scope = "source_only",
+    },
+    modifier = {x = "attached", y = "attached"},
+  },
 }
