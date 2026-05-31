@@ -23,7 +23,7 @@ CHAMPS := champions
 HTML   := champions-report.html
 DIR    ?= baselines
 
-.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool archetypes
+.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool archetypes prune-champions
 
 help:
 	@echo ""
@@ -31,6 +31,7 @@ help:
 	@echo "  make evolve              one EA round (~25min); auto-numbered round, unique seed, top-5 → $(CHAMPS)/"
 	@echo "  make report              HTML champions-report aggregating $(CHAMPS)/ (50 sample games/champion)"
 	@echo "  make curate-baselines    live re-evaluate champions, promote winners into baselines/"
+	@echo "  make prune-champions     cluster champions by Jaccard, keep top-K per cluster, delete the rest"
 	@echo ""
 	@echo "Matchup grid:"
 	@echo "  make matchup-decks       round-robin grid over a deck directory (DIR=baselines default)"
@@ -85,6 +86,9 @@ report:
 
 curate-baselines:
 	cargo run --release -- curate-baselines
+
+prune-champions:
+	cargo run --release -- prune-champions
 
 clean-champions:
 	rm -rf $(CHAMPS) $(HTML) matchup-*.html

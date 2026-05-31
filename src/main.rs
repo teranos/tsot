@@ -3,6 +3,7 @@ mod cli_champions_report;
 mod cli_curate;
 mod cli_evolve;
 mod cli_matchup_evolved;
+mod cli_prune_champions;
 mod evolve_report;
 mod report_style;
 mod sim;
@@ -15,6 +16,7 @@ use cli_champions_report::ChampionsReportArgs;
 use cli_curate::CurateBaselinesArgs;
 use cli_evolve::EvolveArgs;
 use cli_matchup_evolved::MatchupEvolvedArgs;
+use cli_prune_champions::PruneChampionsArgs;
 
 #[derive(Parser)]
 #[command(
@@ -39,6 +41,10 @@ enum Command {
     /// against the current baselines, replace the baseline with the
     /// best live performer.
     CurateBaselines(CurateBaselinesArgs),
+    /// Cluster champions by Jaccard, live-rank within each cluster,
+    /// keep top K per cluster, delete the rest. Bounds gauntlet by
+    /// (archetypes × K), not by round count.
+    PruneChampions(PruneChampionsArgs),
 }
 
 /// Parse a u64 from `--seed`, accepting hex (`0xEA03`) or decimal.
@@ -114,6 +120,9 @@ fn main() -> mlua::Result<()> {
         }
         Some(Command::CurateBaselines(args)) => {
             cli_curate::run_curate_baselines(&registry, &args)
+        }
+        Some(Command::PruneChampions(args)) => {
+            cli_prune_champions::run_prune_champions(&registry, &args)
         }
         None => {
             eprintln!("no subcommand specified. run with --help to see the available commands.");

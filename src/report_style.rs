@@ -10,6 +10,17 @@
 use maud::{html, Markup};
 use tsot::card::{Card, CardType, CostComponent, CostSource};
 
+// TODO(report-css-extraction): the CSS lives inline as a Rust string
+// constant, which forces a recompile for any tweak and duplicates the
+// styling between this file and the Lua dashboards
+// (tools/cards-report.lua, tools/archetypes-report.lua). The mini-card
+// widget added 2026-05-31 made the awkwardness obvious. Move to a
+// shared `tools/report.css` that both Rust and Lua read at report-write
+// time — single source of truth, no rebuild needed for visual tweaks.
+// Trade-off: reports stop being single-file portable artifacts, but
+// they already aren't (they reference the CSS in <style>), so it's
+// a wash. Defer until the CSS is large enough that maintenance pain
+// outweighs the migration cost.
 pub(crate) const CSS: &str = r#"
 :root {
   --bg-page: #1a1b1a;
@@ -198,6 +209,61 @@ table tbody tr:hover { background: var(--bg-row-hover); }
   font-style: italic;
   font-size: 11px;
 }
+
+/* Mini-card widget — compact visual chip showing name, color stripe,
+   stats, and a snippet of the first ability. Used by the prune report's
+   cluster signature lists and reusable by other archetype-style views. */
+.mini-card-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.mini-card {
+  display: inline-block;
+  width: 146px;
+  min-height: 70px;
+  padding: 5px 7px;
+  border-radius: 4px;
+  border-left: 3px solid #888;
+  background: var(--bg-panel-alt);
+  vertical-align: top;
+  font-size: 10px;
+  line-height: 1.35;
+  position: relative;
+  cursor: help;
+}
+.mini-card.mini-red { border-left-color: #d4604e; }
+.mini-card.mini-blue { border-left-color: #5d8ec4; }
+.mini-card.mini-green { border-left-color: #6fa86a; }
+.mini-card.mini-purple { border-left-color: #9a6bbd; }
+.mini-card.mini-black { border-left-color: #3a3a3a; background: #1f1f1f; }
+.mini-card.mini-white { border-left-color: #d6d4c8; }
+.mini-card.mini-colorless { border-left-color: #86878a; }
+.mini-card .mc-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 6px; margin-bottom: 2px;
+}
+.mini-card .mc-name {
+  /* Sans-serif for titles — JetBrains Mono Bold renders chunky at
+     small sizes. The body of the card stays monospace; titles get a
+     cleaner UI font. */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  color: var(--text); font-weight: 500; font-size: 11.5px;
+  letter-spacing: 0.01em;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 1;
+}
+.mini-card .mc-stats {
+  color: var(--accent); font-size: 10px; font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.mini-card .mc-cost { color: var(--text-secondary); font-size: 9px; margin-top: 1px; }
+.mini-card .mc-text {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-secondary); font-size: 9px; margin-top: 3px;
+}
+.mini-card .mc-count {
+  color: var(--text-tertiary); font-size: 9px; margin-top: 2px;
+  display: block; text-align: right;
+}
 "#;
 
 /// Render a card id wrapped in the hover tooltip widget. If the id is
@@ -282,5 +348,56 @@ fn source_label(s: CostSource) -> &'static str {
         CostSource::Graveyard => "graveyard",
         CostSource::Sacrifice => "sacrifice",
         CostSource::SelfExile => "self-exile",
+    }
+}
+
+/// Render a card as a compact mini-card chip — color stripe + name +
+/// stats + first ability snippet + a per-cluster `[N/M]` count badge.
+/// Uses the first listed color for the stripe; multi-color cards take
+/// their first color. Unknown ids fall back to a plain text chip.
+/// `in_count`/`total` of `(0, 0)` renders no badge — useful when the
+/// caller just wants a card chip without a presence ratio.
+pub(crate) fn mini_card(pool: &[Card], id: &str, in_count: usize, total: usize) -> Markup {
+    let Some(card) = pool.iter().find(|c| c.id == id) else {
+        return html! {
+            span.mini-card.mini-colorless {
+                span.mc-head {
+                    span.mc-name { (id) }
+                }
+            }
+        };
+    };
+    let color_class = match card.colors.first().map(String::as_str) {
+        Some("red") => "mini-red",
+        Some("blue") => "mini-blue",
+        Some("green") => "mini-green",
+        Some("purple") => "mini-purple",
+        Some("black") => "mini-black",
+        Some("white") => "mini-white",
+        _ => "mini-colorless",
+    };
+    let name = if card.name.is_empty() {
+        id.to_string()
+    } else {
+        card.name.clone()
+    };
+    let stats = card.stats.map(|s| format!("{}/{}", s.x, s.y));
+    let cost = format_cost(&card.cost);
+    // Abilities-first-line snippet (handlers often emit one ability per
+    // entry; the first line is the headline effect for most cards).
+    let snippet = card.abilities.first().cloned().unwrap_or_default();
+    let show_badge = total > 0;
+    html! {
+        span class={ "mini-card " (color_class) } title=(id) {
+            span.mc-head {
+                span.mc-name { (name) }
+                @if let Some(s) = stats { span.mc-stats { (s) } }
+            }
+            @if let Some(c) = cost { div.mc-cost { (c) } }
+            @if !snippet.is_empty() { div.mc-text { (snippet) } }
+            @if show_badge {
+                span.mc-count { "[" (in_count) "/" (total) "]" }
+            }
+        }
     }
 }
