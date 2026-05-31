@@ -198,43 +198,132 @@ pub fn sacrifice_keep_value(state: &GameState, iid: &InstanceId) -> i32 {
     x + y + cost_weight * 2 + attached_count * 2
 }
 
-/// Sim heuristic: skip an attack iff the defender has at least one legal
-/// blocker AND no legal blocker dies to this attacker's effective X.
-pub fn is_attack_worth_declaring(
+/// Engine-mirror legality check: can `blocker` block `attacker`?
+/// Mirrors the keyword half of `combat.rs::declare_blocker` (untapped,
+/// not cannot-block, attacker not unblockable, flying needs flying/reach).
+/// Subtype overrides (`can_block_subtypes` — cats-block-birds) and
+/// subtype prohibitions (`cannot_block_subtypes` — rats-can't-block-cats)
+/// are intentionally NOT modelled here. The AI is slightly aggressive
+/// against subtype-override blockers (will swing a flyer into a ground
+/// cat that engine lets block) and slightly conservative against
+/// subtype-prohibited rats (treats them as legal). Both edge cases live
+/// in two cards today.
+fn can_block_attacker(
     state: &GameState,
     attacker: &InstanceId,
-    defender: PlayerId,
+    blocker: &InstanceId,
 ) -> bool {
-    if !state.card_pool.contains_key(attacker) {
+    let Some(blk_inst) = state.card_pool.get(blocker) else {
+        return false;
+    };
+    if blk_inst.tapped {
+        return false;
+    }
+    if state.has_keyword(blocker, "cannot-block") {
         return false;
     }
     if state.has_keyword(attacker, "unblockable") {
-        return true;
+        return false;
     }
-    let atk_x = state.effective_stats(attacker).0;
-    let atk_flying = state.has_keyword(attacker, "flying");
+    if state.has_keyword(attacker, "flying")
+        && !state.has_keyword(blocker, "flying")
+        && !state.has_keyword(blocker, "reach")
+    {
+        return false;
+    }
+    true
+}
 
-    let mut any_legal_blocker = false;
-    let mut any_kill_possible = false;
-    for blk_iid in &state.player(defender).board {
-        let Some(blk_inst) = state.card_pool.get(blk_iid) else {
-            continue;
-        };
-        if blk_inst.tapped {
+/// Picks the subset of eligible attackers to actually declare this turn.
+/// Walks attackers biggest-X first and reserves the defender's clean-kill
+/// blockers for top threats — leaving smaller attackers to face thinner
+/// boards (or none). Per attacker:
+///   - unblockable → swing.
+///   - no legal blockers left → swing (mill pressure).
+///   - clean-kill block exists (attacker dies, blocker survives) → skip;
+///     reserve that blocker so weaker attackers don't see it.
+///   - kill-trade option (mutual death) → mirror `pick_blocks` T2 gate
+///     for what the defender will actually take, then swing iff WE
+///     trade up (defender's blocker is worth ≥5 more than our attacker).
+///   - otherwise (bounce / no-block) → swing.
+pub fn select_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> {
+    use std::collections::BTreeSet;
+
+    let attackers = eligible_attackers(state, player);
+    if attackers.is_empty() {
+        return Vec::new();
+    }
+    let defender = player.opponent();
+
+    let mut sorted: Vec<(InstanceId, i32, i32, i32)> = attackers
+        .iter()
+        .map(|a| {
+            let (x, y) = state.effective_stats(a);
+            let val = sacrifice_keep_value(state, a);
+            (a.clone(), x, y, val)
+        })
+        .collect();
+    sorted.sort_by_key(|(_, x, _, _)| std::cmp::Reverse(*x));
+
+    let mut reserved: BTreeSet<InstanceId> = BTreeSet::new();
+    let mut chosen: Vec<InstanceId> = Vec::new();
+
+    for (atk, ax, ay, atk_val) in &sorted {
+        if state.has_keyword(atk, "unblockable") {
+            chosen.push(atk.clone());
             continue;
         }
-        if atk_flying && !state.has_keyword(blk_iid, "flying") {
+
+        let avail: Vec<(InstanceId, i32, i32, i32)> = state
+            .player(defender)
+            .board
+            .iter()
+            .filter(|b| !reserved.contains(*b))
+            .filter(|b| can_block_attacker(state, atk, b))
+            .map(|b| {
+                let (bx, by) = state.effective_stats(b);
+                let bval = sacrifice_keep_value(state, b);
+                (b.clone(), bx, by, bval)
+            })
+            .collect();
+
+        if avail.is_empty() {
+            chosen.push(atk.clone());
             continue;
         }
-        any_legal_blocker = true;
-        let blk_y = state.effective_stats(blk_iid).1;
-        if atk_x >= blk_y {
-            any_kill_possible = true;
-            break;
+
+        let clean_kill = avail
+            .iter()
+            .filter(|(_, bx, by, _)| *bx >= *ay && *by > *ax)
+            .min_by_key(|(_, _, _, bval)| *bval)
+            .cloned();
+        if let Some((blk, _, _, _)) = clean_kill {
+            reserved.insert(blk);
+            continue;
         }
+
+        let kill_trade = avail
+            .iter()
+            .filter(|(_, bx, _, _)| *bx >= *ay)
+            .min_by_key(|(_, _, _, bval)| *bval)
+            .cloned();
+        if let Some((blk, _, _, bval)) = kill_trade {
+            let defender_takes = *ax >= 2 || *atk_val > bval + 4;
+            if defender_takes {
+                if bval > *atk_val + 4 {
+                    chosen.push(atk.clone());
+                }
+                reserved.insert(blk);
+                continue;
+            }
+            chosen.push(atk.clone());
+            continue;
+        }
+
+        chosen.push(atk.clone());
     }
 
-    !any_legal_blocker || any_kill_possible
+    chosen
 }
 
 pub fn eligible_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> {
@@ -408,4 +497,138 @@ pub fn rig_creature_free_haste(state: &mut GameState, iid: &InstanceId) {
     let inst = state.card_pool.get_mut(iid).unwrap();
     inst.card.cost = vec![];
     inst.card.abilities.push("haste".to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use tsot::card::{Card, CardType, Stats};
+
+    fn card_creature(id: &str, x: i32, y: i32) -> Card {
+        Card {
+            id: id.to_string(),
+            name: String::new(),
+            colors: vec![],
+            kind: CardType::Creature,
+            timing: None,
+            subtypes: vec![],
+            cannot_block_subtypes: vec![],
+            can_block_subtypes: vec![],
+            symbol: String::new(),
+            cost: vec![],
+            abilities: vec![],
+            flavor: String::new(),
+            stats: Some(Stats { x, y }),
+            static_def: None,
+            handlers: BTreeMap::new(),
+        }
+    }
+
+    fn starter_deck(n: usize, prefix: &str) -> Vec<Card> {
+        (0..n)
+            .map(|i| card_creature(&format!("{prefix}-{i}"), 1, 1))
+            .collect()
+    }
+
+    fn fresh() -> GameState {
+        GameState::new(starter_deck(60, "a"), starter_deck(60, "b"))
+    }
+
+    /// Pull a hand card, overwrite its Card payload with our stats,
+    /// move to board, clear summoning sickness.
+    fn make_creature(
+        state: &mut GameState,
+        side: PlayerId,
+        id: &str,
+        x: i32,
+        y: i32,
+    ) -> InstanceId {
+        let iid = state.player(side).hand[0].clone();
+        let inst = state.card_pool.get_mut(&iid).unwrap();
+        inst.card = card_creature(id, x, y);
+        inst.summoning_sick = false;
+        state.player_mut(side).hand.retain(|x| x != &iid);
+        state.player_mut(side).board.push(iid.clone());
+        iid
+    }
+
+    fn add_ability(state: &mut GameState, iid: &InstanceId, ability: &str) {
+        state
+            .card_pool
+            .get_mut(iid)
+            .unwrap()
+            .card
+            .abilities
+            .push(ability.to_string());
+    }
+
+    #[test]
+    fn skips_attacker_facing_clean_kill_blocker() {
+        let mut s = fresh();
+        make_creature(&mut s, PlayerId::A, "a-1-1", 1, 1);
+        make_creature(&mut s, PlayerId::B, "b-5-5", 5, 5);
+        let chosen = select_attackers(&s, PlayerId::A);
+        assert!(chosen.is_empty(), "1/1 should not swing into 5/5");
+    }
+
+    #[test]
+    fn unblockable_attacker_swings_through_clean_kill() {
+        let mut s = fresh();
+        let atk = make_creature(&mut s, PlayerId::A, "a-1-1", 1, 1);
+        make_creature(&mut s, PlayerId::B, "b-5-5", 5, 5);
+        add_ability(&mut s, &atk, "unblockable");
+        let chosen = select_attackers(&s, PlayerId::A);
+        assert_eq!(chosen, vec![atk]);
+    }
+
+    #[test]
+    fn flyer_swings_past_ground_blocker() {
+        let mut s = fresh();
+        let atk = make_creature(&mut s, PlayerId::A, "a-flyer", 2, 2);
+        make_creature(&mut s, PlayerId::B, "b-ground", 5, 5);
+        add_ability(&mut s, &atk, "flying");
+        let chosen = select_attackers(&s, PlayerId::A);
+        assert_eq!(chosen, vec![atk], "flyer should swing past ground 5/5");
+    }
+
+    #[test]
+    fn reach_blocker_grounds_the_flyer() {
+        let mut s = fresh();
+        let atk = make_creature(&mut s, PlayerId::A, "a-flyer", 2, 2);
+        let blk = make_creature(&mut s, PlayerId::B, "b-reach", 5, 5);
+        add_ability(&mut s, &atk, "flying");
+        add_ability(&mut s, &blk, "reach");
+        let chosen = select_attackers(&s, PlayerId::A);
+        assert!(chosen.is_empty(), "reach 5/5 should clean-kill 2/2 flyer");
+    }
+
+    #[test]
+    fn weaker_attacker_swings_when_big_threat_reserves_blocker() {
+        // A's 5/5 faces B's 6/6 clean-kill → 5/5 reserves blocker, 1/1
+        // sees empty board and swings for the mill.
+        let mut s = fresh();
+        let _big = make_creature(&mut s, PlayerId::A, "a-5-5", 5, 5);
+        let small = make_creature(&mut s, PlayerId::A, "a-1-1", 1, 1);
+        make_creature(&mut s, PlayerId::B, "b-6-6", 6, 6);
+        let chosen = select_attackers(&s, PlayerId::A);
+        assert_eq!(chosen, vec![small], "small should slip past reserved blocker");
+    }
+
+    #[test]
+    fn tapped_blocker_is_ignored() {
+        let mut s = fresh();
+        let atk = make_creature(&mut s, PlayerId::A, "a-1-1", 1, 1);
+        let blk = make_creature(&mut s, PlayerId::B, "b-5-5", 5, 5);
+        s.card_pool.get_mut(&blk).unwrap().tapped = true;
+        let chosen = select_attackers(&s, PlayerId::A);
+        assert_eq!(chosen, vec![atk], "tapped blocker should not deter attack");
+    }
+
+    #[test]
+    fn no_swing_when_no_attackers() {
+        let s = fresh();
+        let chosen = select_attackers(&s, PlayerId::A);
+        assert!(chosen.is_empty());
+    }
 }

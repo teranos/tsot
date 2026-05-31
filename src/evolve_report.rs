@@ -8,12 +8,16 @@
 use std::collections::BTreeSet;
 
 use maud::{html, Markup, PreEscaped, DOCTYPE};
+use tsot::card::Card;
 
 use crate::report_style;
 use crate::sim::EvolveConfig;
 
 pub(crate) struct EvolveReportData<'a> {
     pub cfg: &'a EvolveConfig,
+    /// Card pool used by the run. Drives the hover tooltip lookup for
+    /// the heatmap rows.
+    pub pool: &'a [Card],
     /// Indexed by generation: 0 is the initial random pop, then one
     /// entry per generation up to and including the last.
     pub best_fitness: Vec<f64>,
@@ -156,7 +160,7 @@ fn build(data: &EvolveReportData) -> Markup {
                         tbody {
                             @for card_id in &sorted_cards {
                                 tr {
-                                    td.card { (card_id) }
+                                    td.card { (report_style::card_cell(data.pool, card_id)) }
                                     @for gen in &data.freq {
                                         @let count = gen.get(card_id).copied().unwrap_or(0);
                                         @let frac = count as f64 / pop as f64;

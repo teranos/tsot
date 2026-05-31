@@ -421,6 +421,7 @@ pub fn run_matchup_evolved(
         html_path,
         &all_stats,
         &game_keys,
+        registry.cards(),
     ) {
         Ok(()) => println!("HTML grid written to {html_path}"),
         Err(e) => eprintln!("failed to write HTML to {html_path}: {e}"),
@@ -428,6 +429,7 @@ pub fn run_matchup_evolved(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_matchup_evolved_html(
     labels: &[String],
     wins: &[Vec<u32>],
@@ -436,6 +438,7 @@ fn write_matchup_evolved_html(
     path: &str,
     all_stats: &[sim::GameStats],
     game_keys: &[(usize, usize)],
+    pool: &[tsot::card::Card],
 ) -> std::io::Result<()> {
     let n = labels.len();
     fn rate_color(r: f64) -> String {
@@ -792,7 +795,7 @@ fn write_matchup_evolved_html(
                         @for (cid, count, mean_turn) in card_rows.iter().take(30) {
                             @let pct = 100.0 * (*count as f64) / (total_game_count as f64);
                             tr {
-                                td { (cid) }
+                                td { (report_style::card_cell(pool, cid)) }
                                 td.num { (count) }
                                 td.num { (format!("{pct:.0}%")) }
                                 td.num { (format!("{mean_turn:.1}")) }

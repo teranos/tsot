@@ -1,7 +1,14 @@
 //! Shared dark-mono CSS for HTML reports (matchup-evolved,
-//! champions-report). Originally lived in report.rs alongside the
-//! variant matchup HTML; extracted here so the legacy report.rs can be
-//! deleted without losing the styling.
+//! champions-report, evolve-report) and the `card_cell` widget that
+//! every report uses to wrap a card id with a hover tooltip showing
+//! the card's name, type, cost, stats, abilities, and flavor.
+//!
+//! Originally lived in report.rs alongside the legacy variant matchup
+//! HTML; the tooltip widget was lost when that file was deleted and
+//! re-introduced here so the three current reports can share it.
+
+use maud::{html, Markup};
+use tsot::card::{Card, CardType, CostComponent, CostSource};
 
 pub(crate) const CSS: &str = r#"
 :root {
@@ -121,4 +128,159 @@ table tbody tr:hover { background: var(--bg-row-hover); }
 .matchup td.empty { color: var(--text-tertiary); background: var(--bg-panel-alt); }
 .matchup td .rate { font-size: 13px; font-weight: 600; color: #fff; text-shadow: 0 1px 0 rgba(0,0,0,0.4); }
 .matchup td .sub { font-size: 9px; color: rgba(255,255,255,0.7); }
+
+/* Card tooltip — hover the card id to surface name/cost/stats/abilities. */
+.card-cell {
+  position: relative;
+  display: inline-block;
+  cursor: help;
+}
+.card-cell .card-id { display: inline-block; }
+.card-cell .card-tooltip {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  z-index: 50;
+  min-width: 320px;
+  max-width: 480px;
+  margin-left: 8px;
+  padding: 12px 16px;
+  background: #1a1b1a;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  text-align: left;
+  text-transform: none;
+}
+.card-cell:hover .card-tooltip,
+.card-cell:focus-within .card-tooltip { display: block; }
+.card-tooltip .ct-name {
+  color: var(--text-emphasis);
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.card-tooltip .ct-meta {
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+.card-tooltip .ct-cost,
+.card-tooltip .ct-stats {
+  color: var(--accent);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.card-tooltip .ct-abilities {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+}
+.card-tooltip .ct-abilities div { margin-bottom: 4px; }
+.card-tooltip .ct-abilities div:last-child { margin-bottom: 0; }
+.card-tooltip .ct-flavor {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-secondary);
+  font-style: italic;
+  font-size: 11px;
+}
 "#;
+
+/// Render a card id wrapped in the hover tooltip widget. If the id is
+/// not in the pool (e.g., a card removed from the pool but still
+/// present in an old champion JSON), falls back to the bare id with no
+/// tooltip — callers can drop the result straight into a `td`/`li`/etc.
+pub(crate) fn card_cell(pool: &[Card], id: &str) -> Markup {
+    let Some(card) = pool.iter().find(|c| c.id == id) else {
+        return html! { (id) };
+    };
+    let name = if card.name.is_empty() {
+        id.to_string()
+    } else {
+        card.name.clone()
+    };
+    let meta = format_meta(card);
+    let cost = format_cost(&card.cost);
+    let stats = card.stats.map(|s| format!("{}/{}", s.x, s.y));
+    html! {
+        span.card-cell {
+            span.card-id { (id) }
+            span.card-tooltip {
+                div.ct-name { (name) }
+                @if !meta.is_empty() { div.ct-meta { (meta) } }
+                @if let Some(cost) = cost { div.ct-cost { "cost: " (cost) } }
+                @if let Some(s) = stats { div.ct-stats { "stats: " (s) } }
+                @if !card.abilities.is_empty() {
+                    div.ct-abilities {
+                        @for a in &card.abilities { div { (a) } }
+                    }
+                }
+                @if !card.flavor.is_empty() {
+                    div.ct-flavor { (card.flavor) }
+                }
+            }
+        }
+    }
+}
+
+fn format_meta(card: &Card) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !card.colors.is_empty() {
+        parts.push(card.colors.join(" "));
+    }
+    parts.push(kind_label(card.kind).to_string());
+    if !card.subtypes.is_empty() {
+        parts.push(format!("— {}", card.subtypes.join("/")));
+    }
+    parts.join(" ")
+}
+
+fn kind_label(k: CardType) -> &'static str {
+    match k {
+        CardType::Unspecified => "card",
+        CardType::Creature => "creature",
+        CardType::Spell => "spell",
+        CardType::Artifact => "artifact",
+        CardType::Environment => "environment",
+        CardType::Mutation => "mutation",
+    }
+}
+
+fn format_cost(cost: &[CostComponent]) -> Option<String> {
+    if cost.is_empty() {
+        return None;
+    }
+    let s = cost
+        .iter()
+        .map(|c| {
+            let amt = if c.is_x { "X".to_string() } else { c.amount.to_string() };
+            format!("{amt} {}", source_label(c.source))
+        })
+        .collect::<Vec<_>>()
+        .join(" + ");
+    Some(s)
+}
+
+fn source_label(s: CostSource) -> &'static str {
+    match s {
+        CostSource::Hand => "hand",
+        CostSource::Mill => "mill",
+        CostSource::Graveyard => "graveyard",
+        CostSource::Sacrifice => "sacrifice",
+        CostSource::SelfExile => "self-exile",
+    }
+}

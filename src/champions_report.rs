@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use tsot::Card;
 
-use crate::report_style::CSS;
+use crate::report_style::{self, CSS};
 use crate::sim::evolved_deck::EvolvedDeck;
 use crate::cli_champions_report::ChampGameStats;
 
@@ -193,7 +193,7 @@ fn build(
                     tbody {
                         @for (id, count, mean, max) in &rows {
                             tr {
-                                td { (id) }
+                                td { (report_style::card_cell(playable_pool, id)) }
                                 td.num { (format!("{count}/{n}")) }
                                 td.num { (format!("{:.0}%", 100.0 * (*count as f64) / (n as f64))) }
                                 td.num { (format!("{mean:.2}")) }
@@ -214,7 +214,7 @@ fn build(
                         p { strong { "Cards never selected:" } }
                         ul {
                             @for id in &unused {
-                                li { (id) }
+                                li { (report_style::card_cell(playable_pool, id)) }
                             }
                         }
                     }
@@ -246,7 +246,7 @@ fn build(
                             tbody {
                                 @for (id, delta, t, b) in &deltas {
                                     tr {
-                                        td { (id) }
+                                        td { (report_style::card_cell(playable_pool, id)) }
                                         td.num { (if *delta >= 0 { format!("+{delta}") } else { format!("{delta}") }) }
                                         td.num { (format!("{t}/{half}")) }
                                         td.num { (format!("{b}/{half}")) }

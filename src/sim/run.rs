@@ -12,8 +12,8 @@ use tsot::choice::{ChoiceOracle, ChooseIntRequest, RandomOracle, RecordingOracle
 use tsot::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 use super::ai::{
-    eligible_attackers, is_attack_worth_declaring, pick_blocks, pick_random_playable_in_hand,
-    rig_creature_free_haste, sacrifice_keep_value, PickKindFilter,
+    pick_blocks, pick_random_playable_in_hand, rig_creature_free_haste,
+    sacrifice_keep_value, select_attackers, PickKindFilter,
 };
 use super::stats::{
     bump_attacks, bump_milled, bump_played, bump_preview_attempt, bump_preview_rollback, GameStats,
@@ -379,10 +379,7 @@ pub fn run_game(
         }
 
         let defender = active.opponent();
-        let attackers: Vec<InstanceId> = eligible_attackers(&state, active)
-            .into_iter()
-            .filter(|atk| is_attack_worth_declaring(&state, atk, defender))
-            .collect();
+        let attackers: Vec<InstanceId> = select_attackers(&state, active);
         let mut declared_atk_count = 0u32;
         for atk in &attackers {
             if state

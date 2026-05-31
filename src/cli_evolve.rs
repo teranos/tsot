@@ -340,6 +340,7 @@ pub fn run_ea(
             .collect();
         let data = EvolveReportData {
             cfg: &cfg,
+            pool: playable_pool,
             best_fitness,
             mean_fitness: result.per_gen_mean_fitness.clone(),
             freq: result.per_gen_card_freq.clone(),
