@@ -12,8 +12,8 @@ combinations no human (or variant designer) would have written down.
 
 Variant becomes a yardstick, not a constraint. The full `playable_pool`
 (every cast-supported card across all variants) is the gene pool. Within-
-variant evolution is not interesting at the current card count (~25 playable
-ids) — random sampling already covers the search space densely enough.
+variant evolution is not interesting — random sampling already covers the
+search space densely enough.
 
 ## Genome
 
@@ -46,9 +46,9 @@ initial baselines (5 decks) span the diversity discovered in the first
 2 unrelated-seed singletons. The variant decks (`ra`, `rb`, `hu`, `go`,
 `uu`, `pr`, `gg`) that the EA originally used were random samplings
 from color pools — they were dropped because evolved opponents are
-both stronger and more reproducible. Variants still exist in
-`sim::variants` for the matchup-runner mode (`tsot matchup`), but the
-EA no longer touches them. Each evaluation:
+both stronger and more reproducible. `sim::variants` still exists, but
+only for `deck_token` packing and the `fitness` test fixtures; no
+runtime subcommand consumes them. Each evaluation:
 
 ```
 for each opponent in gauntlet:

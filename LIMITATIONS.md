@@ -54,7 +54,7 @@ Not started. `combat.rs:321` has a TODO marker. tsot does combat damage + death 
 These aren't engine bugs but they limit the validity of sim-based playtest signals. The AI:
 
 - **At most one creature per turn** (Pattern B). Multiple non-creatures per turn are allowed as long as the AI can afford their costs. No "play A, evaluate, then play B" planning beyond the priority-score tier ordering.
-- **Attacks with everything eligible, always.** No "hold back this 1/1 to chump-block next turn." No "don't attack into the obvious bitter-dawn." Block policy got smart (tiered survival → kill-trade with trade-up → chump → multi-block); attack policy did not.
+- **Attack policy is per-attacker myopic.** `select_attackers` walks attackers big-first and reserves the defender's clean-kill blockers for top threats, skips swings that die for nothing, and mirrors the defender's T2 gate for trade-up gating; reach-aware. What it still doesn't do: hold back to chump-block next turn, anticipate response-window instants (bitter-dawn, counterspell), or plan multi-turn lines. `cats-block-birds` / `rats-can't-block-cats` subtype rules are not modelled here either — the AI is mildly optimistic vs cats blocking flyers and mildly pessimistic vs rats facing cats.
 - **No mulligan decision.** Engine deals first 5 cards as the hand, period. Real games have S.2/S.3 redraw. The sim never explores "this opening hand is unplayable."
 - **No proactive instant timing in main phase.** Instants only fire from the response policy in R.1.a/R.1.b windows. Pre-emptive "cast surge before combat to enable a vigilance line" never happens.
 
