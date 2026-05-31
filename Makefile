@@ -23,7 +23,7 @@ CHAMPS := champions
 HTML   := champions-report.html
 DIR    ?= baselines
 
-.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions
+.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool
 
 help:
 	@echo ""
@@ -40,6 +40,9 @@ help:
 	@echo "  make evolve-deep         deeper EA run (~2-8h): pop=100 gens=100 n=30 k=5"
 	@echo ""
 	@echo "  make clean-champions     wipe $(CHAMPS)/ and $(HTML)"
+	@echo ""
+	@echo "Card design:"
+	@echo "  make pool                static analytics dashboard → card-pool.html (Lua, no rebuild)"
 
 matchup-decks:
 	cargo run --release -- matchup-evolved --dir $(DIR) --html matchup-$(notdir $(DIR)).html
@@ -84,3 +87,7 @@ curate-baselines:
 
 clean-champions:
 	rm -rf $(CHAMPS) $(HTML) matchup-*.html
+
+pool:
+	lua5.4 tools/cards-report.lua
+	@echo "Open card-pool.html"

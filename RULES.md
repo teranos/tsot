@@ -63,6 +63,7 @@ The following zones are part of the game.
 - **C.11** A card's symbol is a structured property that may be referenced by game effects (e.g., "count cards with symbol ⨳ in your GRAVEYARD").
 - **C.12** A card's effective stats are recomputed continuously from the card's printed X/Y plus all active modifiers. Whenever game state changes, effective stats are re-evaluated.
 - **C.8** A card's X/Y stats may be modified by abilities while the card is on the BOARD.
+- **C.13** A card with the `transparent` color cannot have a symbol — you can see through it, so there is no opaque surface on which to print one. C.1 does not apply to transparent cards.
 
 ## Exclusions (X)
 
@@ -135,6 +136,10 @@ The following are not part of this game.
 - **V.5** Cards in EXILE are fully visible to both players.
 - **V.6** Cards on the BOARD are fully visible to both players.
 - **V.7** Visibility of cards in ATTACHED is defined by P.17 (face-down, symbol visible to both players) and P.18 (controller may look at the face at any time).
+- **V.8** A `transparent` card on top of a DECK reveals the symbol of the card immediately below it. The card below is seen through the transparent card, which means players see its back; per C.1 the back is where the symbol is. If the revealed card is itself `transparent`, V.8 applies recursively to the card below it, continuing until an opaque card is reached.
+- **V.9** A `glow` card's visibility is determined by its **effective slot** in the DECK, computed by counting only non-`transparent` cards above it. Transparent cards in slots above are ignored for this computation.
+- **V.10** A `glow` card at effective slot 0 is fully visible to both players (all properties).
+- **V.11** A `glow` card at effective slot 1 has its color and type visible to both players; other properties remain concealed. Cards at effective slot 2 or deeper are concealed normally.
 
 ## Combat (B)
 
