@@ -55,6 +55,14 @@ pub struct CardInstance {
     pub face_down: bool,           // P.17 (for attached)
     pub damage: i32,               // B.7–B.8 accumulated
     pub summoning_sick: bool,      // B.3 (cleared at start of controller's turn)
+    /// True iff this card was declared as an attacker during the
+    /// current turn. Cleared at the start of each turn. Used by
+    /// activated abilities like vigilant-human's `T: if this creature
+    /// attacked this turn, draw a card`. Distinct from the global
+    /// `creature_attacked_this_turn` (which only tracks whether ANY
+    /// creature attacked, not which one).
+    #[serde(default)]
+    pub attacked_this_turn: bool,
     pub attached: Vec<InstanceId>, // Z.6
     pub modifiers: Vec<Modifier>,  // C.12 continuous effects
     pub status_effects: Vec<StatusEffect>,
@@ -311,6 +319,24 @@ impl GameState {
                 iid: iid.clone(),
                 was,
                 now: face_down,
+            });
+        }
+    }
+
+    pub fn set_attacked_this_turn(&mut self, iid: &InstanceId, attacked: bool) {
+        let Some(inst) = self.card_pool.get_mut(iid) else {
+            return;
+        };
+        let was = inst.attacked_this_turn;
+        if was == attacked {
+            return;
+        }
+        inst.attacked_this_turn = attacked;
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetAttackedThisTurn {
+                iid: iid.clone(),
+                was,
+                now: attacked,
             });
         }
     }
@@ -785,6 +811,7 @@ impl GameState {
                 face_down: false,
                 damage: 0,
                 summoning_sick: false,
+                attacked_this_turn: false,
                 attached: Vec::new(),
                 modifiers: Vec::new(),
                 status_effects: Vec::new(),

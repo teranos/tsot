@@ -36,6 +36,11 @@ pub enum JournalEntry {
         was: bool,
         now: bool,
     },
+    SetAttackedThisTurn {
+        iid: InstanceId,
+        was: bool,
+        now: bool,
+    },
     MoveCard {
         iid: InstanceId,
         owner: PlayerId,
@@ -250,6 +255,11 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
                 inst.summoning_sick = was;
             }
         }
+        JournalEntry::SetAttackedThisTurn { iid, was, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.attacked_this_turn = was;
+            }
+        }
         JournalEntry::MoveCard {
             iid,
             owner,
@@ -382,6 +392,11 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::SetSummoningSick { iid, now, .. } => {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
                 inst.summoning_sick = now;
+            }
+        }
+        JournalEntry::SetAttackedThisTurn { iid, now, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.attacked_this_turn = now;
             }
         }
         JournalEntry::MoveCard {

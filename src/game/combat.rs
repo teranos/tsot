@@ -145,6 +145,10 @@ impl GameState {
         // Record that combat happened this turn (read by cards whose effect
         // scales with whether anyone attacked). Cleared on End → Untap.
         self.set_creature_attacked_this_turn(true);
+        // Per-instance attack tracking for activated abilities that
+        // condition on "if THIS creature attacked this turn" (vigilant-
+        // human's T-ability is the first user). Also cleared at turn start.
+        self.set_attacked_this_turn(attacker, true);
 
         // R.1.b — open a response window with empty chain. Defender gets
         // their chance (after active passes) to cast removal / counters /

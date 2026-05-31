@@ -1453,6 +1453,181 @@ fn hand_payment_no_symbol_discard_cannot_pay_for_symboled_cast() {
 }
 
 #[test]
+fn activate_red_jewel_taps_and_draws_then_discards() {
+    use crate::card::CardRegistry;
+    use crate::game::play::ActivateError;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let jewel = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "red-jewel")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card = jewel;
+    }
+    s.a.hand.retain(|x| x != &iid);
+    s.a.board.push(iid.clone());
+
+    let hand_before = s.a.hand.len();
+    let gy_before = s.a.graveyard.len();
+
+    assert!(s.can_activate(&iid, 0), "fresh untapped jewel on board should be activatable");
+
+    let mut oracle = crate::choice::NoopOracle;
+    let result = s.activate_ability(
+        &iid,
+        0,
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    );
+    assert_eq!(result, Ok(()));
+    assert!(s.card_pool.get(&iid).unwrap().tapped, "tap cost should mark jewel tapped");
+    // T: draw a card, then discard a card. Net hand size unchanged
+    // (+1 drawn, -1 discarded), but graveyard grew by 1.
+    assert_eq!(s.a.hand.len(), hand_before);
+    assert_eq!(s.a.graveyard.len(), gy_before + 1);
+
+    // Second activation must be rejected — jewel is now tapped.
+    assert!(!s.can_activate(&iid, 0));
+    let second = s.activate_ability(&iid, 0, None);
+    assert_eq!(second, Err(ActivateError::AlreadyTapped));
+}
+
+#[test]
+fn activate_creature_with_summoning_sickness_is_rejected() {
+    use crate::card::CardRegistry;
+    use crate::game::play::ActivateError;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let vh = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "vigilant-human")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card = vh;
+        inst.summoning_sick = true; // freshly played, no haste
+    }
+    s.a.hand.retain(|x| x != &iid);
+    s.a.board.push(iid.clone());
+
+    assert!(!s.can_activate(&iid, 0));
+    let result = s.activate_ability(&iid, 0, None);
+    assert_eq!(result, Err(ActivateError::SummoningSick));
+}
+
+#[test]
+fn activate_returns_no_such_ability_for_out_of_range_idx() {
+    use crate::card::CardRegistry;
+    use crate::game::play::ActivateError;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let jewel = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "red-jewel")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    s.card_pool.get_mut(&iid).unwrap().card = jewel;
+    s.a.hand.retain(|x| x != &iid);
+    s.a.board.push(iid.clone());
+
+    // red-jewel has exactly one activated ability.
+    assert!(!s.can_activate(&iid, 1));
+    assert_eq!(s.activate_ability(&iid, 1, None), Err(ActivateError::NoSuchAbility));
+}
+
+#[test]
+fn vigilant_human_t_ability_no_ops_if_did_not_attack() {
+    // Per RULES A.7: vigilant-human's T-ability gates on the
+    // per-instance attacked_this_turn flag. With the flag false, the
+    // handler runs but draws nothing. The cost (tap) still resolves.
+    use crate::card::CardRegistry;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let vh = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "vigilant-human")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card = vh;
+        inst.summoning_sick = false;
+    }
+    s.a.hand.retain(|x| x != &iid);
+    s.a.board.push(iid.clone());
+
+    let hand_before = s.a.hand.len();
+    assert!(!s.card_pool.get(&iid).unwrap().attacked_this_turn);
+
+    let mut oracle = crate::choice::NoopOracle;
+    s.activate_ability(
+        &iid,
+        0,
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    )
+    .unwrap();
+    assert!(s.card_pool.get(&iid).unwrap().tapped);
+    // Effect short-circuits: no draw.
+    assert_eq!(s.a.hand.len(), hand_before);
+}
+
+#[test]
+fn vigilant_human_t_ability_draws_after_attacking() {
+    use crate::card::CardRegistry;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let vh = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "vigilant-human")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card = vh;
+        inst.summoning_sick = false;
+        inst.attacked_this_turn = true; // simulate post-combat
+    }
+    s.a.hand.retain(|x| x != &iid);
+    s.a.board.push(iid.clone());
+
+    let hand_before = s.a.hand.len();
+    let mut oracle = crate::choice::NoopOracle;
+    s.activate_ability(
+        &iid,
+        0,
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    )
+    .unwrap();
+    assert_eq!(s.a.hand.len(), hand_before + 1, "attacked-this-turn → draws a card");
+}
+
+#[test]
 fn card_identity_includes_lowercased_colors_and_symbol() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();

@@ -522,6 +522,7 @@ mod tests {
             stats: Some(Stats { x, y }),
             static_def: None,
             handlers: BTreeMap::new(),
+            activated: vec![],
         }
     }
 

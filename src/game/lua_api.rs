@@ -325,12 +325,21 @@ fn do_set_tapped(s: &mut GameState, iid: &str, tapped: bool) -> Result<()> {
 /// zone, updating controller to `target_player`. Owner stays put per T.2.
 /// Used by theft effects like opponent-draw's literal "take cards from
 /// opponent's deck into your hand."
+///
+/// Returns true iff this move is an "entry" (non-board origin → BOARD
+/// destination): the caller should fire `OnEnterBoard` on `iid`. The
+/// board→board case (e.g., beguile's controller-swap) returns false —
+/// that's a relocation, not an entry, and shouldn't re-trigger ETB.
+/// Attached → board returns true: the attached zone is a non-board
+/// origin, so reanimation-from-attached behaves like reanimation-from-
+/// graveyard. Hand → board likewise returns true (cards that "bypass
+/// the cast" and place a creature directly).
 fn do_move_to(
     s: &mut GameState,
     iid: &str,
     target_player_str: &str,
     dest_str: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let dest = parse_zone(dest_str)?;
     let target = parse_pid(target_player_str)?;
     let iid_owned = iid.to_string();
@@ -340,14 +349,20 @@ fn do_move_to(
         .ok_or_else(|| mlua::Error::runtime(format!("game.move_to: card not in pool: {iid}")))?;
     let owner = inst.owner;
     // Try owner-side zones first, then controller-side, then attached.
+    // Track whether the origin was BOARD so the caller knows whether to
+    // fire ETB after the move.
+    let mut origin_was_board = false;
     if let Some(from) = find_zone_of(s, owner, iid) {
+        origin_was_board = from == Zone::Board;
         s.remove_from_zone(&iid_owned, owner, from);
     } else if let Some(from) = find_zone_of(s, inst.controller, iid) {
+        origin_was_board = from == Zone::Board;
         let ctrl = inst.controller;
         s.remove_from_zone(&iid_owned, ctrl, from);
     } else if let Some(host) = find_host_of_attached(s, iid) {
         s.remove_attached(&host, &iid_owned);
         s.set_face_down(&iid_owned, false);
+        // attached origin is a non-board zone; leave origin_was_board = false.
     } else {
         return Err(mlua::Error::runtime(format!(
             "game.move_to: card not found in any zone or attached list: {iid}"
@@ -356,7 +371,25 @@ fn do_move_to(
     s.add_to_zone(&iid_owned, target, dest);
     s.set_controller(&iid_owned, target);
     s.bump_action("move_to", target);
-    Ok(())
+    // B.3: a creature entering the BOARD from a non-board zone gets
+    // summoning sickness, same as the play_card path sets after a hard
+    // cast. Reanimation, hand→board placements, exile→board returns all
+    // behave consistently. Handlers that want haste-on-entry (e.g., a
+    // Reanimate variant) explicitly clear it via game.set_summoning_sick
+    // after the move_to call. Artifacts skip per the play.rs convention
+    // (B.3 is creature-specific).
+    let etb = dest == Zone::Board && !origin_was_board;
+    if etb {
+        let is_creature = s
+            .card_pool
+            .get(iid)
+            .map(|inst| inst.card.kind == CardType::Creature)
+            .unwrap_or(false);
+        if is_creature {
+            s.set_summoning_sick(&iid_owned, true);
+        }
+    }
+    Ok(etb)
 }
 
 fn do_move(s: &mut GameState, iid: &str, dest_str: &str) -> Result<()> {
@@ -593,16 +626,30 @@ macro_rules! build_game_table {
         )?;
 
         let cell_move_to = &$cell;
+        let cell_move_to_o = &$oracle_cell;
+        let move_to_lua = $lua;
         game.set(
             "move_to",
             $scope.create_function_mut(
                 move |_, (iid, target_player, dest): (String, String, String)| {
-                    do_move_to(
+                    let fire_etb = do_move_to(
                         &mut *cell_move_to.borrow_mut(),
                         &iid,
                         &target_player,
                         &dest,
-                    )
+                    )?;
+                    if fire_etb {
+                        let mut s = cell_move_to.borrow_mut();
+                        let mut o = cell_move_to_o.borrow_mut();
+                        fire_self_only(
+                            move_to_lua,
+                            &mut *s,
+                            &mut **o,
+                            EventName::OnEnterBoard,
+                            &iid,
+                        );
+                    }
+                    Ok(())
                 },
             )?,
         )?;
@@ -723,6 +770,19 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.set_summoning_sick(iid, sick) — used by reanimate-style
+        // handlers that want haste-on-entry (call after move_to with false
+        // to clear the sickness move_to automatically applied). Idempotent
+        // no-op if the iid isn't in the pool.
+        let cell_ss = &$cell;
+        game.set(
+            "set_summoning_sick",
+            $scope.create_function_mut(move |_, (iid, sick): (String, bool)| -> Result<()> {
+                cell_ss.borrow_mut().set_summoning_sick(&iid, sick);
+                Ok(())
+            })?,
+        )?;
+
         let cell_atk = &$cell;
         game.set(
             "attackers",
@@ -829,6 +889,7 @@ macro_rules! build_game_table {
                     t.set("symbol", inst.card.symbol.clone())?;
                     t.set("tapped", inst.tapped)?;
                     t.set("face_down", inst.face_down)?;
+                    t.set("attacked_this_turn", inst.attacked_this_turn)?;
                     t.set("owner", pid_to_str(inst.owner))?;
                     t.set("controller", pid_to_str(inst.controller))?;
                     let (x, y) = s.effective_stats(&iid);
@@ -911,6 +972,41 @@ pub(crate) fn fire_self_only(
     match result {
         Ok(()) => credit_fire(state, event, owner),
         Err(e) => eprintln!("[lua] {} handler for {card_id} failed: {e}", event.lua_key()),
+    }
+}
+
+/// Fire an activated-ability handler. Same shape as fire_self_only
+/// (handler takes `(game, self)`), but the handler is passed in by
+/// reference rather than looked up by event name. Used by
+/// `GameState::activate_ability` after cost has been paid. Per RULES
+/// A.5 the effect resolves immediately and no response window opens.
+pub(crate) fn fire_activated(
+    lua: &Lua,
+    state: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
+    source: &InstanceId,
+    handler: mlua::Function,
+) {
+    let Some(inst) = state.card_pool.get(source) else {
+        return;
+    };
+    let owner = inst.owner;
+    let card_id = inst.card.id.clone();
+
+    let state_cell = RefCell::new(&mut *state);
+    let oracle_cell = RefCell::new(&mut *oracle);
+    let result: Result<()> = lua.scope(|scope| {
+        let game = build_game_table!(lua, scope, state_cell, oracle_cell, owner);
+        let self_table = build_self_table(lua, &state_cell.borrow(), source)?;
+        handler.call::<()>((game, self_table))?;
+        let _ = Value::Nil;
+        Ok(())
+    });
+
+    let _ = state_cell;
+    let _ = oracle_cell;
+    if let Err(e) = result {
+        eprintln!("[lua] activated handler for {card_id} failed: {e}");
     }
 }
 

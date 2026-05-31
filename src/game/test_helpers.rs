@@ -22,6 +22,7 @@ pub(crate) fn card_with_stats(id: &str, x: i32, y: i32) -> Card {
         stats: Some(Stats { x, y }),
         static_def: None,
         handlers: BTreeMap::new(),
+        activated: vec![],
     }
 }
 
@@ -47,6 +48,7 @@ pub(crate) fn card_no_stats(id: &str, kind: CardType) -> Card {
         stats: None,
         static_def: None,
         handlers: BTreeMap::new(),
+        activated: vec![],
     }
 }
 

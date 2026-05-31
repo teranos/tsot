@@ -219,7 +219,7 @@ pub fn run_matchup_evolved(
     for action in [
         "draw", "mill", "damage", "move", "discard", "tap", "untap",
         "add_status", "add_modifier", "choose_card", "choose_player",
-        "choose_int", "confirm",
+        "choose_int", "confirm", "activate",
     ] {
         let a_total: u64 = all_stats
             .iter()
@@ -516,7 +516,7 @@ fn write_matchup_evolved_html(
     let action_rows: Vec<(String, u64, u64)> = [
         "draw", "mill", "damage", "move", "discard", "tap", "untap",
         "add_status", "add_modifier", "choose_card", "choose_player",
-        "choose_int", "confirm",
+        "choose_int", "confirm", "activate",
     ]
     .iter()
     .map(|action| {

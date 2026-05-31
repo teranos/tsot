@@ -5,9 +5,28 @@
 use super::context::EventContext;
 use super::lua_api;
 use super::state::{GameState, InstanceId, PlayerId, StackItem, Zone};
-use crate::card::{CardType, CostSource, EventName};
+use crate::card::{ActivationCost, CardType, CostSource, EventName};
 use crate::choice::{ChoiceOracle, ChooseCardRequest, ResponseAction};
 use std::collections::BTreeSet;
+
+/// Outcomes for `activate_ability`. The sim AI is expected to call only
+/// when validation will pass (cheap pre-checks), but the engine still
+/// enforces each rule so manual call sites and replays stay honest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivateError {
+    /// Source iid not in the card pool.
+    SourceMissing,
+    /// `ability_idx` out of range for this card's `activated` array.
+    NoSuchAbility,
+    /// Source is not in the controller's BOARD zone. Activations from
+    /// other zones (hand, graveyard, attached) are a v2 extension.
+    NotOnBoard,
+    /// Tap cost: source is already tapped.
+    AlreadyTapped,
+    /// Tap cost: source is a creature with B.3 summoning sickness and
+    /// no haste.
+    SummoningSick,
+}
 
 /// Player-supplied choices when playing a card.
 /// In this slice, only HAND payments require choice (which cards to spend).
@@ -758,6 +777,105 @@ impl GameState {
             chosen.push(pick);
         }
         chosen
+    }
+
+    /// Fire the activated ability at index `ability_idx` on `iid`.
+    /// Per RULES A.5: pays the cost, then resolves the effect inline —
+    /// no stack, no response window. Caller validates eligibility via
+    /// `can_activate` before calling; this method re-validates and
+    /// returns an `ActivateError` if the call slipped through stale.
+    pub fn activate_ability(
+        &mut self,
+        iid: &InstanceId,
+        ability_idx: usize,
+        ctx: Option<&mut EventContext>,
+    ) -> Result<(), ActivateError> {
+        // Cheap re-validation. `can_activate` exposes the same gates;
+        // we re-check here so the engine remains the authority.
+        let inst = self
+            .card_pool
+            .get(iid)
+            .ok_or(ActivateError::SourceMissing)?;
+        let ability = inst
+            .card
+            .activated
+            .get(ability_idx)
+            .ok_or(ActivateError::NoSuchAbility)?;
+
+        // Source must be on its controller's BOARD. v1 doesn't model
+        // activations from hand / graveyard / attached.
+        let controller = inst.controller;
+        if !self.player(controller).board.contains(iid) {
+            return Err(ActivateError::NotOnBoard);
+        }
+
+        // Cost gate.
+        match ability.cost {
+            ActivationCost::Tap => {
+                if inst.tapped {
+                    return Err(ActivateError::AlreadyTapped);
+                }
+                let is_creature = inst.card.kind == CardType::Creature;
+                if is_creature && inst.summoning_sick && !self.has_keyword(iid, "haste") {
+                    return Err(ActivateError::SummoningSick);
+                }
+            }
+        }
+
+        // Snapshot the handler before mutating state — `set_tapped`
+        // takes &mut self.
+        let handler = ability.effect.clone();
+
+        // Pay cost.
+        match ability.cost {
+            ActivationCost::Tap => self.set_tapped(iid, true),
+        }
+
+        // Telemetry: bump per-controller action count so HTML reports
+        // can show "X activations per game" alongside plays, attacks,
+        // and engine actions. Keyed plainly as "activate" so it sums
+        // across all activated abilities.
+        let controller = self
+            .card_pool
+            .get(iid)
+            .map(|i| i.controller)
+            .expect("activate_ability: iid validated above");
+        self.bump_action("activate", controller);
+
+        // Fire effect. Per A.5 this is inline / synchronous; the
+        // handler returning is the end of the activation.
+        if let Some(c) = ctx {
+            lua_api::fire_activated(c.lua, self, c.oracle(), iid, handler);
+        }
+        Ok(())
+    }
+
+    /// Read-only eligibility check for the sim AI's activation pass.
+    /// Returns true iff a subsequent `activate_ability(iid, ability_idx)`
+    /// call would succeed. Matches `activate_ability`'s validation
+    /// exactly so the AI never speculatively calls and fails.
+    pub fn can_activate(&self, iid: &InstanceId, ability_idx: usize) -> bool {
+        let Some(inst) = self.card_pool.get(iid) else {
+            return false;
+        };
+        let Some(ability) = inst.card.activated.get(ability_idx) else {
+            return false;
+        };
+        if !self.player(inst.controller).board.contains(iid) {
+            return false;
+        }
+        match ability.cost {
+            ActivationCost::Tap => {
+                if inst.tapped {
+                    return false;
+                }
+                let is_creature = inst.card.kind == CardType::Creature;
+                if is_creature && inst.summoning_sick && !self.has_keyword(iid, "haste") {
+                    return false;
+                }
+                true
+            }
+        }
     }
 }
 

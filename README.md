@@ -22,9 +22,10 @@ Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, suppor
 - **STATIC Phase 1 + 2 + 3 + 3.5** — stat anthems, keyword grants (flying, haste, vigilance), state-reading predicates, source-only / attached-host scopes, kind / has-keyword filters, action restrictions (cannot-attack, cannot-be-cost-paid), cost-reduction modifiers.
 - **Costs** — HAND, MILL, GRAVEYARD, SACRIFICE (with kind filter); P.24a jewel tap and P.24b crystal tap as HAND-payment substitutions.
 - **Card types routed by play_card** — Creature, Spell (Instant + Sorcery via timing), Artifact (with the no-summoning-sickness P.25 rule).
-- **Sim AI heuristics** — Pattern B multi-noncreature per turn, play-priority scoring (cost-reducers + anthems land first), smart-pitch, smart-discard, smart-target, trade-up block policy, trade-up attack policy (big-first blocker reservation, skips clean-kill suicide swings, reach-aware), investment-aware sacrifice picker.
+- **Activated abilities Phase 1** — `T:` activations on BOARD-zone cards. Resolve immediately, no stack, no response window (RULES A.5–A.7). Wired into the jewel cycle (`T: draw a card, then discard a card`) and `vigilant-human` (`T: if this creature attacked this turn, draw a card`).
+- **Sim AI heuristics** — Pattern B multi-noncreature per turn, play-priority scoring (cost-reducers + anthems land first), smart-pitch, smart-discard, smart-target, trade-up block policy, trade-up attack policy (big-first blocker reservation, skips clean-kill suicide swings, reach-aware), investment-aware sacrifice picker, pre-combat + post-combat activation passes.
 
-**Remaining gaps** (see `LIMITATIONS.md`): activated abilities (`T: ...`), targeting layer, phase-entry / delayed triggers, SELF cost source, Environment type, STATIC Phase 4 (replacement effects), OnDealtDamageToPlayer event, static-recompute on attached-set change.
+**Remaining gaps** (see `LIMITATIONS.md`): multi-cost / X-cost / non-board activations, targeting layer, phase-entry / delayed triggers, SELF cost source, Environment type, STATIC Phase 4 (replacement effects), OnDealtDamageToPlayer event, static-recompute on attached-set change.
 
 ## Building & running
 

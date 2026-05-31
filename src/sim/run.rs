@@ -368,6 +368,16 @@ pub fn run_game(
             }
         }
 
+        // Pre-combat activation pass: fire activated abilities on
+        // non-creature board cards (artifacts, mostly jewels). Drawing
+        // before combat lets the AI know its hand for the rest of the
+        // turn. Creatures hold their activations until post-combat so
+        // tapping for an ability doesn't pre-empt an attack.
+        let pre_acts = run_activation_pass(&mut state, active, lua, &mut oracle, true);
+        if pre_acts > 0 {
+            events.push(format!("{pre_acts} pre-combat activation(s)"));
+        }
+
         while state.phase != Phase::Combat && state.winner.is_none() {
             state.next_phase();
         }
@@ -423,6 +433,16 @@ pub fn run_game(
             events.push("no play, no attack".to_string());
         }
 
+        // Post-combat activation pass: anything still untapped that can
+        // activate, fires now. Vigilance creatures that swung this turn
+        // are still untapped here — this is where vigilant-human draws.
+        // Pre-combat non-creature activations already tapped those, so
+        // they're naturally excluded by `can_activate`.
+        let post_acts = run_activation_pass(&mut state, active, lua, &mut oracle, false);
+        if post_acts > 0 {
+            events.push(format!("{post_acts} post-combat activation(s)"));
+        }
+
         log.push(format!("turn {turn} ({active:?}): {}", events.join("; ")));
 
         let starting_turn = state.turn;
@@ -451,6 +471,51 @@ pub fn run_game(
     let replay_journal = state.replay_journal.take().unwrap_or_default();
     stats.replay_journal_entries = replay_journal.len() as u64;
     (stats, replay_journal)
+}
+
+/// Fire activated abilities the player can currently afford. Walks
+/// their board, considers each card's first activatable ability, and
+/// activates it if eligible. `non_creatures_only = true` restricts the
+/// pass to non-creature cards (used pre-combat, so creatures stay free
+/// for attack decisions). Returns the number of activations fired.
+fn run_activation_pass(
+    state: &mut GameState,
+    player: PlayerId,
+    lua: &mlua::Lua,
+    oracle: &mut dyn ChoiceOracle,
+    non_creatures_only: bool,
+) -> u32 {
+    let mut count = 0u32;
+    // Snapshot board ids up front. Activation handlers can mutate the
+    // board (move cards in/out), so we re-validate membership and
+    // re-fetch instance data on each iteration.
+    let ids: Vec<InstanceId> = state.player(player).board.clone();
+    for iid in &ids {
+        let (is_creature, abilities_n) = match state.card_pool.get(iid) {
+            Some(inst) => (inst.card.kind == CardType::Creature, inst.card.activated.len()),
+            None => continue,
+        };
+        if abilities_n == 0 {
+            continue;
+        }
+        if non_creatures_only && is_creature {
+            continue;
+        }
+        // Activate the first eligible ability. Tap is consumed by the
+        // first activation so additional abilities on the same card
+        // won't pass `can_activate` until next untap.
+        for idx in 0..abilities_n {
+            if state.can_activate(iid, idx)
+                && state
+                    .activate_ability(iid, idx, Some(&mut EventContext::new(lua, oracle)))
+                    .is_ok()
+            {
+                count += 1;
+                break;
+            }
+        }
+    }
+    count
 }
 
 pub fn short(iid: &InstanceId) -> String {

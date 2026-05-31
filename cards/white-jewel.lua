@@ -1,5 +1,5 @@
--- White jewel — artifact pitch resource. See red-jewel for the cycle
--- design rationale.
+-- White jewel — artifact pitch resource and on-board T-engine. See
+-- red-jewel for the cycle design rationale.
 return {
   id = "white-jewel",
   name = "White Jewel",
@@ -8,7 +8,8 @@ return {
   subtypes = {"jewel"},
   cost = {},
   abilities = {
-    "when this card is attached as a cost to a white card, that creature gets +1/+1 and gains: T: draw a card, discard a card.",
+    "T: draw a card, then discard a card.",
+    "when this card is attached as a cost to a white card, that creature gets +1/+1.",
   },
   on_attached_as_cost = function(game, self, partner)
     local p = game.card(partner.instance_id)
@@ -20,4 +21,15 @@ return {
       end
     end
   end,
+  activated = {
+    {
+      cost = "tap",
+      text = "T: draw a card, then discard a card.",
+      timing = "instant",
+      effect = function(game, self)
+        game.draw(self.owner, 1)
+        game.discard(self.owner, 1)
+      end,
+    },
+  },
 }

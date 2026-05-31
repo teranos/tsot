@@ -23,6 +23,7 @@ impl GameState {
                 self.clear_all_damage();
                 self.clear_eot_modifiers();
                 self.set_creature_attacked_this_turn(false);
+                self.clear_all_attacked_this_turn();
                 let next_active = self.active_player.opponent();
                 self.set_active_player(next_active);
                 let new_turn = self.turn + 1;
@@ -118,6 +119,16 @@ impl GameState {
         let iids: Vec<InstanceId> = self.card_pool.keys().cloned().collect();
         for iid in &iids {
             self.set_damage(iid, 0);
+        }
+    }
+
+    /// Companion to `set_creature_attacked_this_turn(false)` — clears the
+    /// per-instance flag that drives "did THIS creature attack this turn"
+    /// conditions in activated abilities (vigilant-human, et al.).
+    fn clear_all_attacked_this_turn(&mut self) {
+        let iids: Vec<InstanceId> = self.card_pool.keys().cloned().collect();
+        for iid in &iids {
+            self.set_attacked_this_turn(iid, false);
         }
     }
 }

@@ -368,6 +368,43 @@ pub struct Card {
     /// `CardRegistry` (see `replay::rebind_handlers`).
     #[serde(skip, default)]
     pub handlers: BTreeMap<EventName, Function>,
+    /// Activated abilities the controller may fire on their initiative.
+    /// Resolves immediately (no stack, no response window per the design
+    /// decision recorded in RULES A.5). Each entry has a cost, a text
+    /// snippet for tooltips, a timing class, and the Lua effect handler.
+    /// Like `handlers`, not serialized — the `Function` is bound to the
+    /// owning `CardRegistry` VM and must be re-bound after deserialize.
+    #[serde(skip, default)]
+    pub activated: Vec<ActivatedAbility>,
+}
+
+/// One activated ability declared on a card.
+#[derive(Clone)]
+pub struct ActivatedAbility {
+    pub cost: ActivationCost,
+    pub text: String,
+    pub timing: Timing,
+    pub effect: Function,
+}
+
+impl std::fmt::Debug for ActivatedAbility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActivatedAbility")
+            .field("cost", &self.cost)
+            .field("text", &self.text)
+            .field("timing", &self.timing)
+            .finish()
+    }
+}
+
+/// The cost paid to fire an activated ability. v1 only models `Tap`
+/// (the most common shape — "tap this creature to do X"). Multi-cost
+/// activations (e.g., `T + 1 mill`) are a v2 generalization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivationCost {
+    /// Source card on board must be untapped; becomes tapped. B.3
+    /// summoning sickness applies to creature sources.
+    Tap,
 }
 
 impl std::fmt::Debug for Card {
@@ -387,6 +424,7 @@ impl std::fmt::Debug for Card {
             .field("stats", &self.stats)
             .field("static_def", &self.static_def)
             .field("handlers", &handler_keys)
+            .field("activated", &self.activated)
             .finish()
     }
 }
@@ -465,6 +503,52 @@ fn read_cost(t: &Table) -> mlua::Result<Vec<CostComponent>> {
             source,
             is_x,
             kind,
+        });
+    }
+    Ok(out)
+}
+
+fn read_activated(t: &Table) -> mlua::Result<Vec<ActivatedAbility>> {
+    let raw: Table = match t.get::<Value>("activated")? {
+        Value::Nil => return Ok(Vec::new()),
+        Value::Table(tt) => tt,
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "field `activated` must be a list, got {other:?}"
+            )))
+        }
+    };
+    let mut out = Vec::new();
+    for item in raw.sequence_values::<Table>() {
+        let item = item?;
+        let cost_s: String = item.get("cost")?;
+        let cost = match cost_s.to_ascii_lowercase().as_str() {
+            "tap" | "t" => ActivationCost::Tap,
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "unknown activation cost: {other:?} (v1 supports only \"tap\")"
+                )))
+            }
+        };
+        let text = item.get::<Option<String>>("text")?.unwrap_or_default();
+        let timing_s = item
+            .get::<Option<String>>("timing")?
+            .unwrap_or_else(|| "sorcery".to_string());
+        let timing = match timing_s.to_ascii_lowercase().as_str() {
+            "instant" => Timing::Instant,
+            "sorcery" => Timing::Sorcery,
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "unknown activation timing: {other:?} (must be \"instant\" or \"sorcery\")"
+                )))
+            }
+        };
+        let effect: Function = item.get("effect")?;
+        out.push(ActivatedAbility {
+            cost,
+            text,
+            timing,
+            effect,
         });
     }
     Ok(out)
@@ -763,6 +847,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     let stats = read_stats(&table)?;
     let static_def = read_static(&table)?;
     let handlers = read_handlers(&table)?;
+    let activated = read_activated(&table)?;
 
     Ok(Card {
         id,
@@ -780,6 +865,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         stats,
         static_def,
         handlers,
+        activated,
     })
 }
 

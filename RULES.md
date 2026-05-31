@@ -111,6 +111,9 @@ The following are not part of this game.
 - **A.2** A card may have static abilities. A static ability is a continuous effect that applies while the source card is on the BOARD.
 - **A.3** When an effect specifies a target, the player playing the effect chooses the specific card or player to which the effect applies.
 - **A.4** An effect of `draw N` means: move the top N cards of the controller's DECK to their HAND.
+- **A.5** A card may have **activated abilities**. The controller may fire one in their main phase by paying the listed cost. The effect resolves immediately — activations do not go on the stack and cannot be responded to. This is a deliberate departure from MTG; the trade is simplicity (no nested priority windows around activations) at the cost of "kill the source before the ability fires" plays.
+- **A.6** The notation `T:` ("tap") is an activation cost. The source card must be on its controller's BOARD and untapped; after the cost is paid the source becomes tapped (B.4). For creature sources, B.3 summoning sickness applies — the source must have been on the BOARD since at least the start of its controller's previous turn, unless it has `haste`. Vigilance does not exempt a creature from being tapped by `T:` activation; it only exempts the creature from tapping when attacking (B.4).
+- **A.7** A creature attacking (B.1) sets a per-instance `attacked_this_turn` flag that activations may read. The flag is cleared at the start of each turn. Used by abilities like `T: if this creature attacked this turn, …` to distinguish "attacked + activated" from "just activated."
 
 ## Control (T)
 
