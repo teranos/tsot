@@ -16,16 +16,21 @@ Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, suppor
 - **`make report`** — aggregates all saved champions into `champions-report.html` (card frequency, clustering, fitness correlation, per-champion game-level sampling)
 - **`make matchup-decks`** — round-robin grid over any directory of saved decks (default `baselines/`); HTML with win-rate matrix, turn distributions, event-firing breakdown, top-cards-by-play-frequency
 - **`make curate-baselines`** — live re-evaluation of accumulated champions against the snapshot baselines; promotes winners
+- **`make prune-champions`** — cluster champions by Jaccard, live-rank within each cluster, keep top-K per cluster, delete the rest; bounds gauntlet growth by (archetypes × K)
+- **`make pool`** — static analytics dashboard of the card pool (color × cost × type × subtype × keyword distributions) → `card-pool.html`
+- **`make archetypes`** — Jaccard clustering of saved decks → `archetypes-report.html` (which decks form the same attractor)
 
 **Done in the engine:**
 - **STACK Phase 1 + 2** — response windows, counterspell, threat-aware AI combat tricks.
 - **STATIC Phase 1 + 2 + 3 + 3.5** — stat anthems, keyword grants (flying, haste, vigilance), state-reading predicates, source-only / attached-host scopes, kind / has-keyword filters, action restrictions (cannot-attack, cannot-be-cost-paid), cost-reduction modifiers.
 - **Costs** — HAND, MILL, GRAVEYARD, SACRIFICE (with kind filter); P.24a jewel tap and P.24b crystal tap as HAND-payment substitutions.
 - **Card types routed by play_card** — Creature, Spell (Instant + Sorcery via timing), Artifact (with the no-summoning-sickness P.25 rule).
-- **Activated abilities Phase 1** — `T:` activations on BOARD-zone cards. Resolve immediately, no stack, no response window (RULES A.5–A.7). Wired into the jewel cycle (`T: draw a card, then discard a card`) and `vigilant-human` (`T: if this creature attacked this turn, draw a card`).
-- **Sim AI heuristics** — Pattern B multi-noncreature per turn, play-priority scoring (cost-reducers + anthems land first), smart-pitch, smart-discard, smart-target, trade-up block policy, trade-up attack policy (big-first blocker reservation, skips clean-kill suicide swings, reach-aware), investment-aware sacrifice picker, pre-combat + post-combat activation passes.
+- **Activated abilities** — Phase 1 (`T:` from BOARD), Phase 1.5 (multi-component costs: `T:` + HAND/MILL/GRAVEYARD), Phase 1.75 (X-cost activations, AI picks X, `game.x_value()` exposes it to handlers). RULES A.5–A.9. Resolve immediately, no stack. Wired into the jewel cycle, vigilant-human, the monkey cycle (5 cards), and Dark Salamander's `2Y - X` mill.
+- **Modifier grants** — gains_flying, gains_vigilance, gains_haste, plus EOT variants for each. Used by static abilities (companion-bird) and EOT pumps (white-monkey).
+- **RULES additions** — C.13 (transparent has no symbol), V.8–V.11 (transparent reveals card below; glow's effective-slot visibility), A.5–A.9 (activated-ability semantics).
+- **Sim AI heuristics** — Pattern B multi-noncreature per turn, play-priority scoring (cost-reducers + anthems land first), smart-pitch, smart-discard, smart-target, trade-up block policy, trade-up attack policy (big-first blocker reservation, skips clean-kill suicide swings, reach-aware), investment-aware sacrifice picker, pre-combat + post-combat activation passes (with AI X-pick for X-cost activations).
 
-**Remaining gaps** (see `LIMITATIONS.md`): multi-cost / X-cost / non-board activations, targeting layer, phase-entry / delayed triggers, SELF cost source, Environment type, STATIC Phase 4 (replacement effects), OnDealtDamageToPlayer event, static-recompute on attached-set change.
+**Remaining gaps** (see `LIMITATIONS.md`): non-board activations (Phase 2), spell-to-attached (Phase 2.5), static-granted activated abilities (Phase 3), SACRIFICE/SELF in activations, AI X-rejection at cast for non-creature X-cost cards, GY-as-HAND-substitute (Clear View), color grafting (Purple Suit), targeting layer, glow/transparent visibility computation, phase-entry / delayed triggers, Environment type, STATIC Phase 4 (replacement effects), OnDealtDamageToPlayer event, static-recompute on attached-set change.
 
 ## Building & running
 

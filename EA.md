@@ -151,10 +151,19 @@ The Makefile is the supported entry point. Run `make help`:
 make evolve              one EA round (~7-8min); auto-numbered, unique seed, top-5 → champions/
 make report              HTML champions-report with --sample-games 50
 make curate-baselines    live re-evaluate champions, promote winners into baselines/
+make prune-champions     cluster champions by Jaccard, keep top-K per cluster, delete the rest
 make matchup-decks       round-robin grid; DIR=baselines (default) or DIR=champions
 make evolve-deep         deeper EA run (~2-8h): pop=100 gens=100 n=30 k=5
 make clean-champions     wipe champions/ and report HTMLs
+make pool                static card-pool analytics dashboard → card-pool.html (Lua, no rebuild)
+make archetypes          cluster decks by Jaccard → archetypes-report.html (Lua, no rebuild)
 ```
+
+The `prune-champions` target answers the "gauntlet keeps growing" problem.
+Without it, each round adds 5 champions and the per-individual game count
+grows linearly. Pruning by archetype keeps the gauntlet bounded by
+(distinct archetypes × keep-per-cluster). After a few rounds run
+`make prune-champions` to deduplicate slot variations.
 
 Round counter uses the highest existing `r{N}-rank1.json` in
 `champions/` and increments. Seed = `0xEA00 + N` so successive rounds

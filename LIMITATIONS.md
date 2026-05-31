@@ -14,6 +14,7 @@
 - **SELF / SelfExile** (P.5) — played card itself → EXILE on resolution. Originally on opponent-draw (currently a HAND substitute).
 - **Subtype filter on SACRIFICE** — `CostComponent.kind` filters by CardType today. A `subtypes` filter ("sacrifice a goblin") is the next gap; no current card needs it.
 - **Variable X for spells in playability filter** — `pick_random_playable_in_hand` rejects spells with `is_x` cost. Shift can't be selected by the sim AI as a result. Creatures with X cost bypass this gate (hydra plays normally).
+- **GY → EXILE as HAND-payment substitute** — Clear View's design intent (exile from graveyard to pay 1 HAND cost component, bypass P.7a identity matching) has no engine support. Needs a parallel `gy_payment_ids` field on `PlayChoices`, a per-card flag identifying eligible substitutes, identity-bypass for the substituted slot, and sim AI integration so spells aren't rejected when a Clear View in graveyard could cover the identity gap.
 
 ## types
 
