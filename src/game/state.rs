@@ -81,10 +81,17 @@ impl CardInstance {
             return true;
         }
         for m in &self.modifiers {
-            if let Modifier::GainsFlying = m {
-                if keyword == "flying" {
-                    return true;
+            match m {
+                Modifier::GainsFlying if keyword == "flying" => return true,
+                Modifier::GainsVigilance | Modifier::EotGainsVigilance
+                    if keyword == "vigilance" =>
+                {
+                    return true
                 }
+                Modifier::GainsHaste | Modifier::EotGainsHaste if keyword == "haste" => {
+                    return true
+                }
+                _ => {}
             }
         }
         false
@@ -105,6 +112,20 @@ pub enum Modifier {
     /// trigger and bring-down's `-3/-3 until end of turn` (once that
     /// migrates off the damage-proxy approximation).
     EotStatBoost { x: i32, y: i32 },
+    /// Granted vigilance (e.g., via attached card or activation). Mirrors
+    /// `GainsFlying` for the vigilance keyword.
+    GainsVigilance,
+    /// Granted vigilance until end of turn. Cleared by
+    /// `clear_eot_modifiers` alongside `EotStatBoost`. Used by the white
+    /// monkey's `2 hand: creatures you control get +2/+2 and vigilance
+    /// until end of turn` activation.
+    EotGainsVigilance,
+    /// Granted haste (e.g., via activation rider). Mirrors `GainsFlying`.
+    GainsHaste,
+    /// Granted haste until end of turn. Used by the red monkey's "deal
+    /// 2 damage to target; if it survives, that creature gains haste
+    /// until end of turn" rider.
+    EotGainsHaste,
 }
 
 /// Status effects with bounded duration.
@@ -688,7 +709,9 @@ impl GameState {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, m)| match m {
-                    Modifier::EotStatBoost { .. } => Some((i, m.clone())),
+                    Modifier::EotStatBoost { .. }
+                    | Modifier::EotGainsVigilance
+                    | Modifier::EotGainsHaste => Some((i, m.clone())),
                     _ => None,
                 })
                 .collect();
@@ -696,9 +719,14 @@ impl GameState {
                 continue;
             }
             if let Some(inst_mut) = self.card_pool.get_mut(&iid) {
-                inst_mut
-                    .modifiers
-                    .retain(|m| !matches!(m, Modifier::EotStatBoost { .. }));
+                inst_mut.modifiers.retain(|m| {
+                    !matches!(
+                        m,
+                        Modifier::EotStatBoost { .. }
+                            | Modifier::EotGainsVigilance
+                            | Modifier::EotGainsHaste
+                    )
+                });
             }
             if let Some(j) = self.active_journal() {
                 j.push(super::JournalEntry::ClearEotModifiers {

@@ -43,11 +43,13 @@ STATIC Phase 3 (restriction statics) partially overlaps here; the targeting infr
 
 ## activated abilities
 
-Phase 1 landed: `T:` activations on BOARD-zone cards (RULES A.5, A.6). Lua schema `activated = {{cost, text, timing, effect}}`, engine `activate_ability` + `can_activate`, sim AI fires pre-combat (non-creatures) and post-combat (everything) passes. Wired into 6 jewels + vigilant-human.
+Phase 1 landed: `T:` activations on BOARD-zone cards (RULES A.5–A.7). Lua schema `activated = {{cost, text, timing, effect}}`, engine `activate_ability` + `can_activate`, sim AI fires pre-combat (non-creatures) and post-combat (everything) passes. Wired into 6 jewels + vigilant-human.
+
+Phase 1.5 landed: multi-component activation costs (RULES A.8). Cost can include any combination of `T:` plus HAND, MILL, or GRAVEYARD components in the play-card cost vocabulary. SACRIFICE and SELF reserved. Wired into the monkey cycle (5 cards: red, blue, pink, purple, white), each with a `2 hand:` activation.
 
 Deferred:
-- Multi-cost activations (e.g., `T, 1 mill: ...`) — `dtst-creature2` and several rider-cost designs sit here.
-- X-cost activations (`X hand: draw X`) — `dtst-creature2` again.
+- X-cost activations (`X hand: draw X`) — `dtst-creature2` still needs this.
+- SACRIFICE / SELF cost components in activations — needed by Portable Bolt's "exile this card" rider (SELF).
 - Activations from non-BOARD zones — needed by Portable Bolt's portable rider (activate from ATTACHED) and by cycling-style hand activations.
 - Static-granted activated abilities — needed by the jewel rider "host gains `T: draw, discard`" after attachment.
 

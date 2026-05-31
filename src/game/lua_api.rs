@@ -159,7 +159,16 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
 
 fn do_discard(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     let pid = parse_pid(pid_str)?;
-    let take = (n.max(0) as usize).min(s.player(pid).hand.len());
+    do_smart_discard(s, pid, n.max(0) as usize);
+    Ok(())
+}
+
+/// Same smart-discard loop `game.discard` uses, but takes a typed
+/// `PlayerId` and a clamped count — callable from engine code that's
+/// already parsed the player. Used by activated-ability cost payment
+/// in `play.rs::activate_ability` for HAND-source components.
+pub(crate) fn do_smart_discard(s: &mut GameState, pid: PlayerId, n: usize) {
+    let take = n.min(s.player(pid).hand.len());
     // Smart-discard heuristic: at each slot, score every hand card and
     // pick the highest score (= the most-discardable). See `discard_score`
     // for the signal mix.
@@ -206,7 +215,6 @@ fn do_discard(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
             s.bump_action(&format!("discarded:{cid}"), pid);
         }
     }
-    Ok(())
 }
 
 /// Heuristic: "how much do I want to throw this card away?" Higher score =
@@ -293,10 +301,14 @@ fn do_add_modifier(
         "stat_boost" if eot => Modifier::EotStatBoost { x, y },
         "stat_boost" => Modifier::StatBoost { x, y },
         "gains_flying" => Modifier::GainsFlying,
+        "gains_vigilance" if eot => Modifier::EotGainsVigilance,
+        "gains_vigilance" => Modifier::GainsVigilance,
+        "gains_haste" if eot => Modifier::EotGainsHaste,
+        "gains_haste" => Modifier::GainsHaste,
         "cant_attack" => Modifier::CantAttack,
         other => {
             return Err(mlua::Error::runtime(format!(
-                "game.add_modifier: unknown kind {other:?} (known: \"stat_boost\", \"gains_flying\", \"cant_attack\")"
+                "game.add_modifier: unknown kind {other:?} (known: \"stat_boost\", \"gains_flying\", \"gains_vigilance\", \"gains_haste\", \"cant_attack\")"
             )))
         }
     };
@@ -1008,6 +1020,39 @@ pub(crate) fn fire_activated(
     if let Err(e) = result {
         eprintln!("[lua] activated handler for {card_id} failed: {e}");
     }
+}
+
+/// Run an activated ability's `validate` hook. Same shape as
+/// `fire_activated` — handler takes `(game, self)` — but the return
+/// value is interpreted as a Lua truthy/falsy gate. Returns `false` on
+/// any Lua error or explicit-false return; returns `true` only on an
+/// explicit truthy return. RULES A.9: an activation may only be
+/// initiated if its target requirements are satisfiable; validate is
+/// the gate.
+pub(crate) fn fire_validate(
+    lua: &Lua,
+    state: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
+    source: &InstanceId,
+    handler: mlua::Function,
+) -> bool {
+    if !state.card_pool.contains_key(source) {
+        return false;
+    }
+    let state_cell = RefCell::new(&mut *state);
+    let oracle_cell = RefCell::new(&mut *oracle);
+    let owner = state_cell.borrow().card_pool.get(source).map(|i| i.owner);
+    let Some(owner) = owner else { return false };
+    let result: Result<bool> = lua.scope(|scope| {
+        let game = build_game_table!(lua, scope, state_cell, oracle_cell, owner);
+        let self_table = build_self_table(lua, &state_cell.borrow(), source)?;
+        let v: Value = handler.call((game, self_table))?;
+        // Lua truthiness: nil and false are falsy, everything else truthy.
+        Ok(!matches!(v, Value::Nil | Value::Boolean(false)))
+    });
+    let _ = state_cell;
+    let _ = oracle_cell;
+    result.unwrap_or(false)
 }
 
 /// Fire an event whose handler takes `(game, self, partner)`. Used for

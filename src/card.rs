@@ -378,33 +378,41 @@ pub struct Card {
     pub activated: Vec<ActivatedAbility>,
 }
 
-/// One activated ability declared on a card.
+/// One activated ability declared on a card. Cost has two parts:
+/// `cost_tap` (source must be untapped; B.3 sickness applies to
+/// creature sources; source becomes tapped on activate) and
+/// `cost_components` (a list of `CostComponent`s in the same shape
+/// play-card costs use: HAND, MILL, GRAVEYARD, SACRIFICE, SelfExile).
+/// Either, both, or neither can be present. `cost_tap = false` with
+/// empty components is a free activation; `cost_tap = true` with
+/// `[Hand{amount=1}]` is `T, 1 hand: …`.
 #[derive(Clone)]
 pub struct ActivatedAbility {
-    pub cost: ActivationCost,
+    pub cost_tap: bool,
+    pub cost_components: Vec<CostComponent>,
     pub text: String,
     pub timing: Timing,
+    /// Optional pre-payment gate. Runs in the same Lua context as
+    /// `effect` but is expected to be read-only. Returns truthy if the
+    /// effect would do something useful (e.g., a legal target exists).
+    /// If absent, no pre-check beyond cost affordability runs. When
+    /// present and falsy/errors, the activation aborts with
+    /// `ActivateError::NoLegalTarget` and **no cost is paid** — this
+    /// is the whole point of the hook.
+    pub validate: Option<Function>,
     pub effect: Function,
 }
 
 impl std::fmt::Debug for ActivatedAbility {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ActivatedAbility")
-            .field("cost", &self.cost)
+            .field("cost_tap", &self.cost_tap)
+            .field("cost_components", &self.cost_components)
             .field("text", &self.text)
             .field("timing", &self.timing)
+            .field("has_validate", &self.validate.is_some())
             .finish()
     }
-}
-
-/// The cost paid to fire an activated ability. v1 only models `Tap`
-/// (the most common shape — "tap this creature to do X"). Multi-cost
-/// activations (e.g., `T + 1 mill`) are a v2 generalization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActivationCost {
-    /// Source card on board must be untapped; becomes tapped. B.3
-    /// summoning sickness applies to creature sources.
-    Tap,
 }
 
 impl std::fmt::Debug for Card {
@@ -521,12 +529,53 @@ fn read_activated(t: &Table) -> mlua::Result<Vec<ActivatedAbility>> {
     let mut out = Vec::new();
     for item in raw.sequence_values::<Table>() {
         let item = item?;
-        let cost_s: String = item.get("cost")?;
-        let cost = match cost_s.to_ascii_lowercase().as_str() {
-            "tap" | "t" => ActivationCost::Tap,
+        // Two shapes supported for `cost`:
+        //   1. String shorthand: `cost = "tap"` → tap-only.
+        //   2. List of components: `cost = {{source = "...", amount = N}}` →
+        //      one or more cost components, possibly including a tap
+        //      pseudo-component `{source = "tap"}` (no amount).
+        let cost_value: Value = item.get("cost")?;
+        let (cost_tap, cost_components) = match cost_value {
+            Value::String(s) => {
+                let s = s.to_str()?.to_ascii_lowercase();
+                if s == "tap" || s == "t" {
+                    (true, Vec::new())
+                } else {
+                    return Err(mlua::Error::runtime(format!(
+                        "activation cost string {s:?} not recognized (expected \"tap\")"
+                    )));
+                }
+            }
+            Value::Table(tt) => {
+                let mut tap = false;
+                let mut comps: Vec<CostComponent> = Vec::new();
+                for comp in tt.sequence_values::<Table>() {
+                    let comp = comp?;
+                    let src_s: String = comp.get("source")?;
+                    let lowered = src_s.to_ascii_lowercase();
+                    if lowered == "tap" || lowered == "t" {
+                        tap = true;
+                        continue;
+                    }
+                    let amount = comp.get::<Option<i32>>("amount")?.unwrap_or(0);
+                    let is_x = comp.get::<Option<bool>>("is_x")?.unwrap_or(false);
+                    let source = parse_source(&lowered).map_err(mlua::Error::runtime)?;
+                    let kind = match comp.get::<Option<String>>("kind")? {
+                        None => None,
+                        Some(k) => Some(parse_type(&k).map_err(mlua::Error::runtime)?.0),
+                    };
+                    comps.push(CostComponent {
+                        amount,
+                        source,
+                        is_x,
+                        kind,
+                    });
+                }
+                (tap, comps)
+            }
             other => {
                 return Err(mlua::Error::runtime(format!(
-                    "unknown activation cost: {other:?} (v1 supports only \"tap\")"
+                    "activation cost must be a string or a list, got {other:?}"
                 )))
             }
         };
@@ -543,11 +592,22 @@ fn read_activated(t: &Table) -> mlua::Result<Vec<ActivatedAbility>> {
                 )))
             }
         };
+        let validate: Option<Function> = match item.get::<Value>("validate")? {
+            Value::Nil => None,
+            Value::Function(f) => Some(f),
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "activation `validate` must be a function, got {other:?}"
+                )))
+            }
+        };
         let effect: Function = item.get("effect")?;
         out.push(ActivatedAbility {
-            cost,
+            cost_tap,
+            cost_components,
             text,
             timing,
+            validate,
             effect,
         });
     }

@@ -1628,6 +1628,241 @@ fn vigilant_human_t_ability_draws_after_attacking() {
 }
 
 #[test]
+fn blue_monkey_2_hand_activation_discards_two_and_draws_one() {
+    use crate::card::CardRegistry;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let monkey = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "blue-monkey")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card = monkey;
+        inst.summoning_sick = false;
+    }
+    s.a.hand.retain(|x| x != &iid);
+    s.a.board.push(iid.clone());
+
+    // Snapshot pre-state.
+    let hand_before = s.a.hand.len();
+    let gy_before = s.a.graveyard.len();
+
+    assert!(s.can_activate(&iid, 0));
+    let mut oracle = crate::choice::NoopOracle;
+    s.activate_ability(
+        &iid,
+        0,
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    )
+    .unwrap();
+
+    // 2 hand discarded, then 1 drawn → net hand -1, graveyard +2,
+    // deck -1 (the drawn card came off the top).
+    assert_eq!(s.a.hand.len(), hand_before - 1);
+    assert_eq!(s.a.graveyard.len(), gy_before + 2);
+    // The activation does NOT tap the monkey (its cost has no T:).
+    assert!(!s.card_pool.get(&iid).unwrap().tapped);
+}
+
+#[test]
+fn monkey_cannot_activate_with_insufficient_hand() {
+    use crate::card::CardRegistry;
+    use crate::game::play::ActivateError;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let monkey = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "blue-monkey")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card = monkey;
+        inst.summoning_sick = false;
+    }
+    s.a.hand.retain(|x| x != &iid);
+    s.a.board.push(iid.clone());
+    // Drain hand to 1 card — below the 2-hand cost.
+    while s.a.hand.len() > 1 {
+        let drop = s.a.hand[0].clone();
+        s.a.hand.retain(|x| x != &drop);
+    }
+
+    assert!(!s.can_activate(&iid, 0));
+    let result = s.activate_ability(&iid, 0, None);
+    assert_eq!(result, Err(ActivateError::CannotPayComponents));
+}
+
+#[test]
+fn white_monkey_grants_plus_2_and_vigilance_eot() {
+    use crate::card::CardRegistry;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let monkey = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "white-monkey")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let monkey_iid = s.a.hand[0].clone();
+    let buddy_iid = s.a.hand[1].clone();
+    {
+        let m = s.card_pool.get_mut(&monkey_iid).unwrap();
+        m.card = monkey;
+        m.summoning_sick = false;
+    }
+    {
+        // Give buddy a baseline 1/1 stat line.
+        let b = s.card_pool.get_mut(&buddy_iid).unwrap();
+        b.card.stats = Some(crate::card::Stats { x: 1, y: 1 });
+        b.card.kind = crate::card::CardType::Creature;
+        b.summoning_sick = false;
+    }
+    s.a.hand.retain(|x| x != &monkey_iid && x != &buddy_iid);
+    s.a.board.push(monkey_iid.clone());
+    s.a.board.push(buddy_iid.clone());
+
+    // Pre: buddy is 1/1, no vigilance.
+    let (bx0, by0) = s.effective_stats(&buddy_iid);
+    assert_eq!((bx0, by0), (1, 1));
+    assert!(!s.has_keyword(&buddy_iid, "vigilance"));
+
+    // Activate.
+    let mut oracle = crate::choice::NoopOracle;
+    s.activate_ability(
+        &monkey_iid,
+        0,
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    )
+    .unwrap();
+
+    // Post: buddy got +2/+2 EOT and vigilance EOT.
+    let (bx1, by1) = s.effective_stats(&buddy_iid);
+    assert_eq!((bx1, by1), (3, 3));
+    assert!(s.has_keyword(&buddy_iid, "vigilance"));
+
+    // Self-pump: monkey itself also gained +2/+2 and vigilance.
+    let (mx, my) = s.effective_stats(&monkey_iid);
+    assert_eq!((mx, my), (4, 4));
+    assert!(s.has_keyword(&monkey_iid, "vigilance"));
+}
+
+#[test]
+fn validate_hook_refuses_and_charges_no_cost_when_no_target() {
+    // RULES A.9: pink-monkey's validate returns false when there's no
+    // opposing creature on board. The activation must abort with
+    // NoLegalTarget AND not deduct hand cost.
+    use crate::card::CardRegistry;
+    use crate::game::play::ActivateError;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let pink = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "pink-monkey")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card = pink;
+        inst.summoning_sick = false;
+    }
+    s.a.hand.retain(|x| x != &iid);
+    s.a.board.push(iid.clone());
+    // B has no creatures on board — pink-monkey's validate returns false.
+
+    let hand_before = s.a.hand.len();
+    let gy_before = s.a.graveyard.len();
+
+    // `can_activate` is the cheap pre-check; it doesn't run validate,
+    // so it returns true even though the activation will refuse.
+    assert!(s.can_activate(&iid, 0));
+
+    let mut oracle = crate::choice::NoopOracle;
+    let result = s.activate_ability(
+        &iid,
+        0,
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    );
+    assert_eq!(result, Err(ActivateError::NoLegalTarget));
+
+    // No cost was paid — hand and graveyard unchanged.
+    assert_eq!(s.a.hand.len(), hand_before);
+    assert_eq!(s.a.graveyard.len(), gy_before);
+    // Monkey did not tap (its cost has no T:, but even if it did the
+    // refusal would skip the tap).
+    assert!(!s.card_pool.get(&iid).unwrap().tapped);
+}
+
+#[test]
+fn validate_hook_passes_and_charges_when_target_exists() {
+    // Mirror of the previous test but with a valid target. Confirms
+    // the validate gate passes and cost is paid; the bounce semantics
+    // are not asserted here because NoopOracle returns None for
+    // choose_card, short-circuiting the handler. The validate path is
+    // what's under test.
+    use crate::card::CardRegistry;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let pink = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "pink-monkey")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let iid = s.a.hand[0].clone();
+    let target = s.b.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card = pink;
+        inst.summoning_sick = false;
+    }
+    {
+        // Put an opposing creature on B's board so validate passes.
+        let t = s.card_pool.get_mut(&target).unwrap();
+        t.card.kind = crate::card::CardType::Creature;
+        t.card.stats = Some(crate::card::Stats { x: 1, y: 1 });
+    }
+    s.a.hand.retain(|x| x != &iid);
+    s.a.board.push(iid.clone());
+    s.b.hand.retain(|x| x != &target);
+    s.b.board.push(target.clone());
+
+    let a_hand_before = s.a.hand.len();
+
+    let mut oracle = crate::choice::NoopOracle;
+    let result = s.activate_ability(
+        &iid,
+        0,
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    );
+    assert_eq!(result, Ok(()));
+    // Cost paid: 2 cards from A's hand → graveyard.
+    assert_eq!(s.a.hand.len(), a_hand_before - 2);
+}
+
+#[test]
 fn card_identity_includes_lowercased_colors_and_symbol() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();

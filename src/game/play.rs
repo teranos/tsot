@@ -5,7 +5,7 @@
 use super::context::EventContext;
 use super::lua_api;
 use super::state::{GameState, InstanceId, PlayerId, StackItem, Zone};
-use crate::card::{ActivationCost, CardType, CostSource, EventName};
+use crate::card::{CardType, CostSource, EventName};
 use crate::choice::{ChoiceOracle, ChooseCardRequest, ResponseAction};
 use std::collections::BTreeSet;
 
@@ -26,6 +26,16 @@ pub enum ActivateError {
     /// Tap cost: source is a creature with B.3 summoning sickness and
     /// no haste.
     SummoningSick,
+    /// One of the cost components cannot be paid from controller state
+    /// (insufficient hand size, deck depth, graveyard size, etc.) or
+    /// the cost source isn't supported by this v1 activation path
+    /// (Sacrifice / SelfExile pending).
+    CannotPayComponents,
+    /// The ability's optional `validate` hook returned false (or
+    /// errored). No cost is paid in this case — the hook's purpose is
+    /// to refuse activation when no legal target exists, so the AI
+    /// doesn't burn cards on a no-op.
+    NoLegalTarget,
 }
 
 /// Player-supplied choices when playing a card.
@@ -788,58 +798,145 @@ impl GameState {
         &mut self,
         iid: &InstanceId,
         ability_idx: usize,
-        ctx: Option<&mut EventContext>,
+        mut ctx: Option<&mut EventContext>,
     ) -> Result<(), ActivateError> {
-        // Cheap re-validation. `can_activate` exposes the same gates;
-        // we re-check here so the engine remains the authority.
-        let inst = self
-            .card_pool
-            .get(iid)
-            .ok_or(ActivateError::SourceMissing)?;
-        let ability = inst
-            .card
-            .activated
-            .get(ability_idx)
-            .ok_or(ActivateError::NoSuchAbility)?;
+        // First pass: read everything we need from the card_pool entry,
+        // then release the borrow. All subsequent steps may mutate
+        // self (set_tapped, smart-discard, fire_validate, etc.) — they
+        // can't coexist with the immutable borrow on `inst`/`ability`.
+        let (
+            controller,
+            is_creature,
+            inst_tapped,
+            inst_summoning_sick,
+            cost_tap,
+            components,
+            handler,
+            validate,
+        ) = {
+            let inst = self
+                .card_pool
+                .get(iid)
+                .ok_or(ActivateError::SourceMissing)?;
+            let ability = inst
+                .card
+                .activated
+                .get(ability_idx)
+                .ok_or(ActivateError::NoSuchAbility)?;
+            (
+                inst.controller,
+                inst.card.kind == CardType::Creature,
+                inst.tapped,
+                inst.summoning_sick,
+                ability.cost_tap,
+                ability.cost_components.clone(),
+                ability.effect.clone(),
+                ability.validate.clone(),
+            )
+        };
 
         // Source must be on its controller's BOARD. v1 doesn't model
         // activations from hand / graveyard / attached.
-        let controller = inst.controller;
         if !self.player(controller).board.contains(iid) {
             return Err(ActivateError::NotOnBoard);
         }
 
-        // Cost gate.
-        match ability.cost {
-            ActivationCost::Tap => {
-                if inst.tapped {
-                    return Err(ActivateError::AlreadyTapped);
+        // Tap-cost gate.
+        if cost_tap {
+            if inst_tapped {
+                return Err(ActivateError::AlreadyTapped);
+            }
+            if is_creature && inst_summoning_sick && !self.has_keyword(iid, "haste") {
+                return Err(ActivateError::SummoningSick);
+            }
+        }
+
+        // Component-cost gate: pre-validate every component is payable
+        // from the controller's current zones. Once we pass this, the
+        // payment loop below cannot fail half-way through.
+        let mut hand_need = 0usize;
+        let mut mill_need = 0usize;
+        let mut gy_need = 0usize;
+        for c in &components {
+            let amount = c.amount.max(0) as usize;
+            match c.source {
+                CostSource::Hand => hand_need += amount,
+                CostSource::Mill => mill_need += amount,
+                CostSource::Graveyard => gy_need += amount,
+                CostSource::Sacrifice | CostSource::SelfExile => {
+                    return Err(ActivateError::CannotPayComponents);
                 }
-                let is_creature = inst.card.kind == CardType::Creature;
-                if is_creature && inst.summoning_sick && !self.has_keyword(iid, "haste") {
-                    return Err(ActivateError::SummoningSick);
+            }
+        }
+        let p = self.player(controller);
+        if p.hand.len() < hand_need
+            || p.deck.len() < mill_need
+            || p.graveyard.len() < gy_need
+        {
+            return Err(ActivateError::CannotPayComponents);
+        }
+
+        // RULES A.9: optional `validate` hook. If present, the activation
+        // can only be initiated when validate returns truthy — typically
+        // "a legal target exists." No cost is paid if validate refuses.
+        // Without ctx (engine calls without a Lua VM), validate is
+        // skipped — caller's responsibility, used by some tests.
+        if let Some(v_fn) = validate {
+            if let Some(c) = ctx.as_deref_mut() {
+                if !lua_api::fire_validate(c.lua, self, c.oracle(), iid, v_fn) {
+                    return Err(ActivateError::NoLegalTarget);
                 }
             }
         }
 
-        // Snapshot the handler before mutating state — `set_tapped`
-        // takes &mut self.
-        let handler = ability.effect.clone();
+        // Pay tap cost.
+        if cost_tap {
+            self.set_tapped(iid, true);
+        }
 
-        // Pay cost.
-        match ability.cost {
-            ActivationCost::Tap => self.set_tapped(iid, true),
+        // Pay component costs. HAND uses the same smart-discard ranking
+        // as `game.discard` (least-useful first). MILL takes top of own
+        // deck. GRAVEYARD moves cards from GY to EXILE (matching the
+        // play-card convention — graveyard payments don't recycle).
+        for c in &components {
+            let amount = c.amount.max(0) as usize;
+            match c.source {
+                CostSource::Hand => {
+                    lua_api::do_smart_discard(self, controller, amount);
+                }
+                CostSource::Mill => {
+                    for _ in 0..amount {
+                        if let Some(top) = self.player(controller).deck.first().cloned() {
+                            let _ = self.move_card(
+                                &top,
+                                controller,
+                                super::state::Zone::Deck,
+                                super::state::Zone::Graveyard,
+                            );
+                            self.bump_action("mill", controller);
+                        }
+                    }
+                }
+                CostSource::Graveyard => {
+                    for _ in 0..amount {
+                        if let Some(card) = self.player(controller).graveyard.first().cloned() {
+                            let _ = self.move_card(
+                                &card,
+                                controller,
+                                super::state::Zone::Graveyard,
+                                super::state::Zone::Exile,
+                            );
+                        }
+                    }
+                }
+                _ => unreachable!("sacrifice / self-exile rejected at validation"),
+            }
         }
 
         // Telemetry: bump per-controller action count so HTML reports
         // can show "X activations per game" alongside plays, attacks,
         // and engine actions. Keyed plainly as "activate" so it sums
         // across all activated abilities.
-        let controller = self
-            .card_pool
-            .get(iid)
-            .map(|i| i.controller)
-            .expect("activate_ability: iid validated above");
         self.bump_action("activate", controller);
 
         // Fire effect. Per A.5 this is inline / synchronous; the
@@ -864,18 +961,33 @@ impl GameState {
         if !self.player(inst.controller).board.contains(iid) {
             return false;
         }
-        match ability.cost {
-            ActivationCost::Tap => {
-                if inst.tapped {
-                    return false;
-                }
-                let is_creature = inst.card.kind == CardType::Creature;
-                if is_creature && inst.summoning_sick && !self.has_keyword(iid, "haste") {
-                    return false;
-                }
-                true
+        if ability.cost_tap {
+            if inst.tapped {
+                return false;
+            }
+            let is_creature = inst.card.kind == CardType::Creature;
+            if is_creature && inst.summoning_sick && !self.has_keyword(iid, "haste") {
+                return false;
             }
         }
+        // Component-cost affordability. Matches `activate_ability`'s
+        // pre-payment validation exactly.
+        let mut hand_need = 0usize;
+        let mut mill_need = 0usize;
+        let mut gy_need = 0usize;
+        for c in &ability.cost_components {
+            let amount = c.amount.max(0) as usize;
+            match c.source {
+                CostSource::Hand => hand_need += amount,
+                CostSource::Mill => mill_need += amount,
+                CostSource::Graveyard => gy_need += amount,
+                CostSource::Sacrifice | CostSource::SelfExile => return false,
+            }
+        }
+        let p = self.player(inst.controller);
+        p.hand.len() >= hand_need
+            && p.deck.len() >= mill_need
+            && p.graveyard.len() >= gy_need
     }
 }
 
