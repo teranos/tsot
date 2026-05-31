@@ -110,37 +110,62 @@ losing a strong individual to a bad recombination.
 
 ## What's built
 
-End-to-end EA. CLI subcommands: `tsot evolve`, `tsot champions-report`.
+End-to-end EA. Four CLI subcommands: `tsot evolve`, `tsot matchup-evolved`,
+`tsot champions-report`, `tsot curate-baselines`. No standalone matchup
+mode anymore — random variant decks were dropped as opponents in favor of
+the curated `baselines/` directory (see "Gauntlet" above).
 
-- `sim::genome` — `to_deck`, `random_genome` (`src/sim/genome.rs`)
-- `sim::fitness` — `fitness`, `fitness_breakdown`, `build_gauntlet`, `GAUNTLET_MASTER_SEED=0xEA_C8` (`src/sim/fitness.rs`)
-- `sim::ops` — `tournament_select`, `crossover_uniform`, `mutate`, `repair` (`src/sim/ops.rs`)
-- `sim::evolve` — `evolve`, `EvolveConfig`, `EvolveResult`, `should_stop_at_ceiling` (`src/sim/evolve.rs`)
-- `sim::evolved_deck` — `EvolvedDeck` save/load via JSON (`src/sim/evolved_deck.rs`)
-- `main::run_ea` — CLI wiring, live per-generation progress + per-opponent breakdown + auto-save (`src/main.rs`)
-- `main::run_champions_report` — aggregate card-frequency / pool-coverage / fitness-correlation across saved champions
+Module layout:
+
+- `sim::genome` — `to_deck`, `random_genome`
+- `sim::fitness` — `fitness`, `fitness_breakdown` (gauntlet building used only by tests now)
+- `sim::ops` — `tournament_select`, `crossover_uniform`, `mutate`, `repair`
+- `sim::evolve` — `evolve`, `EvolveConfig`, `EvolveResult`, `should_stop_at_ceiling`; result now carries `per_gen_card_freq` + `per_gen_mean_fitness` for the trajectory report
+- `sim::evolved_deck` — `EvolvedDeck` save/load via JSON
+- `sim::parallel_eval` — rayon thread-pool fitness evaluator with per-worker thread-local `CardRegistry`
+- `cli_evolve` / `cli_matchup_evolved` / `cli_champions_report` / `cli_curate` — one CLI handler per subcommand
+- `evolve_report` — HTML trajectory writer (fitness lines + card-presence heatmap per generation)
+- `champions_report` — HTML aggregator (card frequency, clustering, pool coverage)
+
+## Performance
+
+The fitness evaluation step is the hot loop — every other phase of an
+EA run is cheap by comparison. `sim::parallel_eval::parallel_evaluate_genomes`
+fans evaluations across rayon's global thread pool with thread-local
+`CardRegistry` + materialized gauntlet (mlua's `Lua` is `!Send`, so each
+worker owns its own VM). Measured **3.4× speedup** on a 50-pop × 10-gen
+run (130s → 38s wall) on an 8-core machine. The 25-min default run drops
+to ~7-8 min. Not 8× because each worker pays Lua init cost (~500ms) and
+the inner game loop serializes on internal allocation.
+
+Determinism is preserved by the sequential generation phase that draws
+all RNG decisions for a generation in order, followed by the parallel
+fitness step which is a pure function of `(genome, gauntlet, fit_seed)`.
+Same `cfg` → byte-identical `EvolveResult`.
 
 ## Usage
 
+The Makefile is the supported entry point. Run `make help`:
+
+```
+make evolve              one EA round (~7-8min); auto-numbered, unique seed, top-5 → champions/
+make report              HTML champions-report with --sample-games 50
+make curate-baselines    live re-evaluate champions, promote winners into baselines/
+make matchup-decks       round-robin grid; DIR=baselines (default) or DIR=champions
+make evolve-deep         deeper EA run (~2-8h): pop=100 gens=100 n=30 k=5
+make clean-champions     wipe champions/ and report HTMLs
+```
+
+Round counter uses the highest existing `r{N}-rank1.json` in
+`champions/` and increments. Seed = `0xEA00 + N` so successive rounds
+explore different attractors.
+
+Direct CLI invocation (for ad-hoc runs):
+
 ```bash
-# Help
-tsot --help
-tsot evolve --help
-tsot champions-report --help
-
-# Single EA run, defaults (pop=50, gens=30, n=10, seed=0xEA_C8)
-cargo run --release -- evolve --stop-at-ceiling 3
-
-# Chain workflow (each champion fights the previous)
-cargo run --release -- evolve --no-variants --extra champion.json --save champion.json
-
-# Sample many independent champions at different seeds for aggregation
-for s in 1 2 3 4 5 6 7 8 9 10; do
-  cargo run --release -- evolve --seed $s --save "champions/champion-$s.json" --stop-at-ceiling 3
-done
-
-# Aggregate report across all champions in a directory
-cargo run --release -- champions-report --dir champions/ --top 30
+cargo run --release -- evolve --help
+cargo run --release -- evolve --seed 0xea08 --pop 25 --gens 15 --n 5
+cargo run --release -- evolve --no-variants --extra champions/r7-rank1.json --save champion.json
 ```
 
 ## Open design questions
@@ -162,14 +187,16 @@ cargo run --release -- champions-report --dir champions/ --top 30
 
 ## Non-goals (explicit)
 
-- Replacing the matchup-runner. The runner stays the answer to "which
-  archetype wins on average." EA answers "what's possible outside the
-  archetypes."
 - Self-play co-evolution. Both sides evolving simultaneously is the
   natural extension but doubles the variance and halves the diagnostic
-  value. Fixed gauntlet first.
+  value. Fixed gauntlet first; `curate-baselines` between rounds is the
+  cheap substitute.
 - Tuning for a specific card to win. The whole point is to let the engine
   surface what it rewards, not to confirm a hypothesis.
+
+(The variant matchup runner that this branch replaced is gone entirely;
+it was random samplings of color pools used as opponents, which turned
+out to be a much weaker benchmark than evolved champions.)
 
 ## Known limitations
 

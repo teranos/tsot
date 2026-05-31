@@ -1,7 +1,7 @@
 # tsot — Known Limitations
 
 > What the engine cannot do today. Code TODOs are tagged so they map back
-> to a section here. Last refresh: 2026-05-31 (post-EA landing).
+> to a section here. Last refresh: 2026-05-31 (post-EA + parallelism + report parity).
 
 ## events
 
@@ -73,7 +73,7 @@ Below these, smaller items.
 
 2. **Fitness noise floor hides weak cards.** At `--n 10`, within-genome stddev is ~0.043. A non-functional 1-of card costs ~2% fitness — below the noise floor. Selection cannot tell "deck with shift" from "deck without shift," so junk 1-ofs persist indefinitely. Above the ceiling: any fitness ≥ ~0.957 is statistically indistinguishable from 1.000, so champion ranking near the top is meaningless. `--n 50` drops the floor to ~0.019 (5× longer runs).
 
-3. **Gauntlet overfit.** Champions are strong against the *specific* 7 variant decks built from `GAUNTLET_MASTER_SEED=0xEA_C8`. Change the master seed → 7 different opponents → different "1.000" champion. "Evolved deck wins 100% of games" is a statement about *this* gauntlet, not about deck strength in general.
+3. **Gauntlet drift.** Champions are strong against the gauntlet they were evolved against (current `baselines/` + accumulated `champions/` extras). As baselines get curated and new champions added, prior champions' saved fitness numbers become non-comparable. `curate-baselines` uses live re-evaluation against the snapshot baselines (apples-to-apples), but a champion saved at "fitness 0.95" against a small early gauntlet may live-win 0.4 against the current strong baselines. *Saved fitness is local to its run; trust live re-evaluation.*
 
 ### Smaller
 
@@ -81,6 +81,7 @@ Below these, smaller items.
 - **Champion artifacts age with the card pool.** Saved champions' 50-slot composition is frozen at save time. Adding new cards doesn't invalidate them, but they cannot benefit from new cards either.
 - **No mid-run hall-of-fame.** Gauntlet is fixed at run start. Champions discovered mid-run don't become opponents until you start a new run with them as `--extra`.
 - **`--save PATH` overwrites unconditionally.** A weaker champion silently replaces a stronger file when seeds collide. Backup before risky configs.
+- **Parallel speedup caps at ~3.4× on 8 cores.** Each rayon worker pays Lua VM init cost on first touch (~500ms) and the inner game loop has internal serialization that the embarrassingly-parallel fitness step can't fold out. 25-min runs become ~7-8 min — meaningful but not core-count-linear.
 
 ---
 
