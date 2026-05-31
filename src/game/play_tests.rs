@@ -347,6 +347,11 @@ fn setup_jewel_tap_scenario() -> (GameState, InstanceId, InstanceId, InstanceId)
         let c = s.card_pool.get_mut(&cast).unwrap();
         c.card.colors = vec!["red".to_string()];
     }
+    // P.7a identity match: payment needs a shared color with cast.
+    {
+        let p = s.card_pool.get_mut(&payment).unwrap();
+        p.card.colors = vec!["red".to_string()];
+    }
     set_cost(
         &mut s,
         &cast,
@@ -836,6 +841,8 @@ fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
         .find(|x| *x != &jelly_iid)
         .cloned()
         .unwrap();
+    // P.7a: jellyfish is blue, payment needs blue.
+    set_identity(&mut s, &hand_payment, &["blue"], "");
 
     // Scripted oracle: pick target_iid.
     let mut oracle = ScriptedOracle::new(vec![ScriptedAnswer::Card(Some(target_iid.clone()))]);
@@ -943,6 +950,9 @@ fn surge_instant_untaps_all_your_creatures_on_play() {
         .find(|x| *x != &surge_iid && **x != payment)
         .cloned()
         .unwrap();
+    // P.7a: surge is blue, payments need blue.
+    set_identity(&mut s, &payment, &["blue"], "");
+    set_identity(&mut s, &payment2, &["blue"], "");
     s.play_card(
         PlayerId::A,
         &surge_iid,
@@ -1284,4 +1294,172 @@ fn lua_chain_and_counter_target_apis_remove_specific_item() {
     assert!(s.priority.is_none());
     // counter (target) bumped for B.
     assert_eq!(s.action_counts.get("counter").map(|v| v[1]).unwrap_or(0), 1);
+}
+
+fn one_hand_cost() -> Vec<CostComponent> {
+    vec![CostComponent {
+        amount: 1,
+        source: CostSource::Hand,
+        is_x: false,
+        kind: None,
+    }]
+}
+
+#[test]
+fn hand_payment_color_match_succeeds() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let creature = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    set_cost(&mut s, &creature, one_hand_cost());
+    set_identity(&mut s, &creature, &["green"], "");
+    set_identity(&mut s, &pay, &["green"], "");
+    let result = s.play_card(
+        PlayerId::A,
+        &creature,
+        PlayChoices {
+            hand_payment_ids: vec![pay],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+            mutation_target: None,
+        },
+        None,
+    );
+    assert!(result.is_ok(), "shared color should pay successfully: {result:?}");
+}
+
+#[test]
+fn hand_payment_color_mismatch_rejected() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let creature = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    set_cost(&mut s, &creature, one_hand_cost());
+    set_identity(&mut s, &creature, &["green"], "");
+    set_identity(&mut s, &pay, &["red"], "");
+    let result = s.play_card(
+        PlayerId::A,
+        &creature,
+        PlayChoices {
+            hand_payment_ids: vec![pay.clone()],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+            mutation_target: None,
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::HandPaymentIdentityMismatch(pay)));
+}
+
+#[test]
+fn hand_payment_symbol_match_succeeds_across_colors() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let creature = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    set_cost(&mut s, &creature, one_hand_cost());
+    // Green cast with symbol ⊨; red pay with same symbol — symbol
+    // overrides color mismatch.
+    set_identity(&mut s, &creature, &["green"], "⊨");
+    set_identity(&mut s, &pay, &["red"], "⊨");
+    let result = s.play_card(
+        PlayerId::A,
+        &creature,
+        PlayChoices {
+            hand_payment_ids: vec![pay],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+            mutation_target: None,
+        },
+        None,
+    );
+    assert!(result.is_ok(), "shared symbol should pay across colors: {result:?}");
+}
+
+#[test]
+fn hand_payment_colorless_cast_takes_any_discard() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let creature = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    set_cost(&mut s, &creature, one_hand_cost());
+    // No identity on cast → wildcard, any discard accepted.
+    set_identity(&mut s, &creature, &[], "");
+    set_identity(&mut s, &pay, &["red"], "⊨");
+    let result = s.play_card(
+        PlayerId::A,
+        &creature,
+        PlayChoices {
+            hand_payment_ids: vec![pay],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+            mutation_target: None,
+        },
+        None,
+    );
+    assert!(result.is_ok(), "colorless cast should accept any discard: {result:?}");
+}
+
+#[test]
+fn hand_payment_no_identity_pay_cannot_satisfy_identified_cast() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let creature = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    set_cost(&mut s, &creature, one_hand_cost());
+    // Cast has identity {green}. Discard has empty identity. Under
+    // the strict pay-side rule, empty identity cannot intersect with
+    // {green} → reject.
+    set_identity(&mut s, &creature, &["green"], "");
+    set_identity(&mut s, &pay, &[], "");
+    let result = s.play_card(
+        PlayerId::A,
+        &creature,
+        PlayChoices {
+            hand_payment_ids: vec![pay.clone()],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+            mutation_target: None,
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::HandPaymentIdentityMismatch(pay)));
+}
+
+#[test]
+fn hand_payment_no_symbol_discard_cannot_pay_for_symboled_cast() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let creature = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    set_cost(&mut s, &creature, one_hand_cost());
+    // Cast: green + symbol. Pay: red, no symbol. No color overlap,
+    // no symbol overlap → reject. (The pay would need to either share
+    // a color with cast, or have the same symbol.)
+    set_identity(&mut s, &creature, &["green"], "⊨");
+    set_identity(&mut s, &pay, &["red"], "");
+    let result = s.play_card(
+        PlayerId::A,
+        &creature,
+        PlayChoices {
+            hand_payment_ids: vec![pay.clone()],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+            mutation_target: None,
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::HandPaymentIdentityMismatch(pay)));
+}
+
+#[test]
+fn card_identity_includes_lowercased_colors_and_symbol() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    set_identity(&mut s, &iid, &["Green", "RED"], "⊨");
+    let ident = s.card_identity(&iid);
+    assert!(ident.contains("green"));
+    assert!(ident.contains("red"));
+    assert!(ident.contains("⊨"));
+    assert_eq!(ident.len(), 3);
 }

@@ -70,6 +70,11 @@ pub enum PlayError {
     /// Phase 3: a static restriction (e.g., flesh-eating-plant's
     /// `cannot_be_cost_paid`) forbids using this card as a HAND payment.
     HandPaymentForbidden(InstanceId),
+    /// HAND payment doesn't share an identity element (color or
+    /// symbol) with the casting card. Cards with no colors and no
+    /// symbol act as wildcards on either side — this only fires when
+    /// both have non-empty identity sets that don't intersect.
+    HandPaymentIdentityMismatch(InstanceId),
     /// MUTATION cast missing a target creature.
     MutationTargetMissing,
     /// MUTATION target isn't a creature on either BOARD.
@@ -85,6 +90,23 @@ pub enum PlayError {
 }
 
 impl GameState {
+    /// Card identity for HAND-cost matching: the set of lowercase
+    /// colors plus the `symbol` (if non-empty). A card with no colors
+    /// and no symbol returns an empty set — it acts as a wildcard on
+    /// either side of a HAND-cost match.
+    pub fn card_identity(&self, iid: &InstanceId) -> BTreeSet<String> {
+        let mut ident = BTreeSet::new();
+        if let Some(inst) = self.card_pool.get(iid) {
+            for color in &inst.card.colors {
+                ident.insert(color.to_ascii_lowercase());
+            }
+            if !inst.card.symbol.is_empty() {
+                ident.insert(inst.card.symbol.clone());
+            }
+        }
+        ident
+    }
+
     /// Play `instance` from `player`'s HAND, paying its cost via `choices`.
     ///
     /// Atomic: returns Err and leaves state unchanged if any validation fails.
@@ -231,6 +253,19 @@ impl GameState {
             // as a HAND cost (flesh-eating-plant on opponent insects).
             if self.has_restriction(hid, crate::card::Restriction::CannotBeCostPaid) {
                 return Err(PlayError::HandPaymentForbidden(hid.clone()));
+            }
+            // Identity match: discard must share ≥1 color OR the
+            // (non-empty) symbol with the casting card. Colorless +
+            // no-symbol CASTS are wildcards (take any discard);
+            // colorless + no-symbol discards are NOT — they must
+            // still find identity overlap, which empty sets can't,
+            // so they can't pay for any identified card.
+            let cast_ident = self.card_identity(instance);
+            if !cast_ident.is_empty() {
+                let pay_ident = self.card_identity(hid);
+                if cast_ident.is_disjoint(&pay_ident) {
+                    return Err(PlayError::HandPaymentIdentityMismatch(hid.clone()));
+                }
             }
         }
 
@@ -673,6 +708,15 @@ impl GameState {
         hand_needed: usize,
         oracle: &mut dyn ChoiceOracle,
     ) -> Vec<InstanceId> {
+        let cast_ident = self.card_identity(instance);
+        let identity_matches = |hid: &InstanceId| -> bool {
+            if cast_ident.is_empty() {
+                return true;
+            }
+            let pay_ident = self.card_identity(hid);
+            !cast_ident.is_disjoint(&pay_ident)
+        };
+
         let mut chosen: Vec<InstanceId> = Vec::with_capacity(hand_needed);
         let mut picked_set: BTreeSet<InstanceId> = BTreeSet::new();
         for slot in 0..hand_needed {
@@ -686,6 +730,10 @@ impl GameState {
                 .filter(|iid| {
                     !self.has_restriction(iid, crate::card::Restriction::CannotBeCostPaid)
                 })
+                // Identity-match: discard must share a color or
+                // symbol with the casting card, or be a no-identity
+                // wildcard (no colors and no symbol).
+                .filter(|iid| identity_matches(iid))
                 .cloned()
                 .collect();
             if pool.is_empty() {

@@ -80,6 +80,7 @@ The following are not part of this game.
 - **P.5** If a card's cost is to exile itself, the card is placed in EXILE on play instead of its default destination from P.1 or P.2.
 - **P.6** When cards from the HAND are used to pay the cost of a BOARD-placed card, those cards are attached to the played card.
 - **P.7** A cost component written as `N hand` means: choose N cards from your HAND. By P.6, those cards become attached to the played card.
+- **P.7a** Each HAND-source payment must *match the identity* of the card being cast. A card's identity is its set of printed colors together with its `symbol` (if non-empty). A payment matches if the two identity sets share at least one element (color overlap, or matching symbol). A card with no colors and no symbol has empty identity. *Casting* a card with empty identity is a wildcard — it accepts any HAND payment. *Paying* with a card with empty identity is **not** a wildcard — empty cannot intersect with anything, so a no-color-no-symbol card can only pay for another no-color-no-symbol card. The identity check is independent of jewel/crystal tap substitution (P.24a/b), which has its own color-share rule.
 - **P.11** A cost component written as `N mill` means: place the top N cards of your DECK into your GRAVEYARD.
 - **P.12** A cost component written as `N graveyard` means: exile N cards from your GRAVEYARD.
 - **P.13** A cost component of `N hand` is valid only on cards that are placed on the BOARD when played.

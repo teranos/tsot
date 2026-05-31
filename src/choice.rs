@@ -240,11 +240,22 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
             }
         }
         let hand_payment_ids: Vec<InstanceId> = if hand_need > 0 {
+            // Identity-match filter so the picked payments match what
+            // play_card will validate. Cast-side or pay-side empty
+            // identity is a wildcard.
+            let cast_ident = state.card_identity(&pick);
             state
                 .player(player)
                 .hand
                 .iter()
                 .filter(|iid| **iid != pick)
+                .filter(|iid| {
+                    if cast_ident.is_empty() {
+                        return true;
+                    }
+                    let pay_ident = state.card_identity(iid);
+                    !cast_ident.is_disjoint(&pay_ident)
+                })
                 .take(hand_need)
                 .cloned()
                 .collect()

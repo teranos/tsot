@@ -57,3 +57,16 @@ pub(crate) fn deck_of(n: usize, prefix: &str) -> Vec<Card> {
 pub(crate) fn set_cost(state: &mut GameState, iid: &InstanceId, cost: Vec<CostComponent>) {
     state.card_pool.get_mut(iid).unwrap().card.cost = cost;
 }
+
+/// Mutate a card's identity (colors + symbol) in-place. Used by tests
+/// for HAND-cost identity-match rules.
+pub(crate) fn set_identity(
+    state: &mut GameState,
+    iid: &InstanceId,
+    colors: &[&str],
+    symbol: &str,
+) {
+    let entry = state.card_pool.get_mut(iid).unwrap();
+    entry.card.colors = colors.iter().map(|c| c.to_string()).collect();
+    entry.card.symbol = symbol.to_string();
+}
