@@ -1484,6 +1484,7 @@ fn activate_red_jewel_taps_and_draws_then_discards() {
     let result = s.activate_ability(
         &iid,
         0,
+        None,
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     );
     assert_eq!(result, Ok(()));
@@ -1495,7 +1496,7 @@ fn activate_red_jewel_taps_and_draws_then_discards() {
 
     // Second activation must be rejected — jewel is now tapped.
     assert!(!s.can_activate(&iid, 0));
-    let second = s.activate_ability(&iid, 0, None);
+    let second = s.activate_ability(&iid, 0, None, None);
     assert_eq!(second, Err(ActivateError::AlreadyTapped));
 }
 
@@ -1523,7 +1524,7 @@ fn activate_creature_with_summoning_sickness_is_rejected() {
     s.a.board.push(iid.clone());
 
     assert!(!s.can_activate(&iid, 0));
-    let result = s.activate_ability(&iid, 0, None);
+    let result = s.activate_ability(&iid, 0, None, None);
     assert_eq!(result, Err(ActivateError::SummoningSick));
 }
 
@@ -1548,7 +1549,7 @@ fn activate_returns_no_such_ability_for_out_of_range_idx() {
 
     // red-jewel has exactly one activated ability.
     assert!(!s.can_activate(&iid, 1));
-    assert_eq!(s.activate_ability(&iid, 1, None), Err(ActivateError::NoSuchAbility));
+    assert_eq!(s.activate_ability(&iid, 1, None, None), Err(ActivateError::NoSuchAbility));
 }
 
 #[test]
@@ -1584,6 +1585,7 @@ fn vigilant_human_t_ability_no_ops_if_did_not_attack() {
     s.activate_ability(
         &iid,
         0,
+        None,
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
     .unwrap();
@@ -1621,6 +1623,7 @@ fn vigilant_human_t_ability_draws_after_attacking() {
     s.activate_ability(
         &iid,
         0,
+        None,
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
     .unwrap();
@@ -1659,6 +1662,7 @@ fn blue_monkey_2_hand_activation_discards_two_and_draws_one() {
     s.activate_ability(
         &iid,
         0,
+        None,
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
     .unwrap();
@@ -1700,7 +1704,7 @@ fn monkey_cannot_activate_with_insufficient_hand() {
     }
 
     assert!(!s.can_activate(&iid, 0));
-    let result = s.activate_ability(&iid, 0, None);
+    let result = s.activate_ability(&iid, 0, None, None);
     assert_eq!(result, Err(ActivateError::CannotPayComponents));
 }
 
@@ -1746,6 +1750,7 @@ fn white_monkey_grants_plus_2_and_vigilance_eot() {
     s.activate_ability(
         &monkey_iid,
         0,
+        None,
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
     .unwrap();
@@ -1800,6 +1805,7 @@ fn validate_hook_refuses_and_charges_no_cost_when_no_target() {
     let result = s.activate_ability(
         &iid,
         0,
+        None,
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     );
     assert_eq!(result, Err(ActivateError::NoLegalTarget));
@@ -1855,11 +1861,106 @@ fn validate_hook_passes_and_charges_when_target_exists() {
     let result = s.activate_ability(
         &iid,
         0,
+        None,
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     );
     assert_eq!(result, Ok(()));
     // Cost paid: 2 cards from A's hand → graveyard.
     assert_eq!(s.a.hand.len(), a_hand_before - 2);
+}
+
+#[test]
+fn dark_salamander_x_cost_activation_mills_2y_minus_x() {
+    // RULES A.8 Phase 1.75: X-cost activations. Pay Y hand cards
+    // (variable), mill opponent by 2Y - X (where X is the salamander's
+    // effective X stat). Tests the end-to-end X flow: AI picks X,
+    // engine multiplies cost, handler reads X via game.x_value().
+    use crate::card::CardRegistry;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let sala = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "dark-salamander")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let sala_iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&sala_iid).unwrap();
+        inst.card = sala;
+        inst.summoning_sick = false;
+        // Force salamander's effective X to 2 via a stat boost. The
+        // attached-count static gives 0/0 base; this hop simulates a
+        // cast for X=2 without running play_card.
+        inst.modifiers.push(crate::game::state::Modifier::StatBoost { x: 2, y: 2 });
+    }
+    s.a.hand.retain(|x| x != &sala_iid);
+    s.a.board.push(sala_iid.clone());
+
+    let (sx, _sy) = s.effective_stats(&sala_iid);
+    assert_eq!(sx, 2, "salamander effective X should be 2");
+
+    let a_hand_before = s.a.hand.len();
+    let b_deck_before = s.b.deck.len();
+    let b_gy_before = s.b.graveyard.len();
+
+    // Activate with Y=3 → mill = 2*3 - 2 = 4 cards.
+    let mut oracle = crate::choice::NoopOracle;
+    let result = s.activate_ability(
+        &sala_iid,
+        0,
+        Some(3),
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    );
+    assert_eq!(result, Ok(()));
+    // Cost: 3 hand cards discarded.
+    assert_eq!(s.a.hand.len(), a_hand_before - 3);
+    // Effect: B's deck milled by 4.
+    assert_eq!(s.b.deck.len(), b_deck_before - 4);
+    assert_eq!(s.b.graveyard.len(), b_gy_before + 4);
+}
+
+#[test]
+fn dark_salamander_validate_refuses_when_2y_minus_x_is_zero_or_less() {
+    // Y=1, X=2 → 2Y - X = 0 → validate refuses, no cost paid.
+    use crate::card::CardRegistry;
+    use crate::game::play::ActivateError;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let sala = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "dark-salamander")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let sala_iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&sala_iid).unwrap();
+        inst.card = sala;
+        inst.summoning_sick = false;
+        inst.modifiers.push(crate::game::state::Modifier::StatBoost { x: 2, y: 2 });
+    }
+    s.a.hand.retain(|x| x != &sala_iid);
+    s.a.board.push(sala_iid.clone());
+
+    let a_hand_before = s.a.hand.len();
+
+    let mut oracle = crate::choice::NoopOracle;
+    let result = s.activate_ability(
+        &sala_iid,
+        0,
+        Some(1),
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    );
+    assert_eq!(result, Err(ActivateError::NoLegalTarget));
+    // No cost paid — hand unchanged.
+    assert_eq!(s.a.hand.len(), a_hand_before);
 }
 
 #[test]

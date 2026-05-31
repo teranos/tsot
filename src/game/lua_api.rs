@@ -795,6 +795,18 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.x_value() — read the X value of the activation currently
+        // resolving (RULES A.8 X-cost activations). Returns nil outside
+        // of an X-cost activation. Used by handlers like dark-salamander
+        // that scale their effect with the X paid for the activation.
+        let cell_x = &$cell;
+        game.set(
+            "x_value",
+            $scope.create_function_mut(move |_, _: ()| -> Result<Option<i32>> {
+                Ok(cell_x.borrow().current_activation_x)
+            })?,
+        )?;
+
         let cell_atk = &$cell;
         game.set(
             "attackers",

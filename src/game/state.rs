@@ -239,6 +239,13 @@ pub struct GameState {
     /// only has one attacking side per turn anyway.
     #[serde(default)]
     pub creature_attacked_this_turn: bool,
+    /// Transient X value for the activation currently resolving. Set
+    /// by `activate_ability` before firing the handler; cleared after.
+    /// Exposed to Lua handlers as `game.x_value()`. None outside of an
+    /// active X-cost activation. Not journaled — the value is reset by
+    /// each activate_ability call, not state-evolving on its own.
+    #[serde(skip, default)]
+    pub current_activation_x: Option<i32>,
 }
 
 impl GameState {
@@ -266,6 +273,7 @@ impl GameState {
             replay_journal: None,
             priority: None,
             creature_attacked_this_turn: false,
+            current_activation_x: None,
         }
     }
 

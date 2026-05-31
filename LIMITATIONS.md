@@ -47,8 +47,9 @@ Phase 1 landed: `T:` activations on BOARD-zone cards (RULES A.5–A.7). Lua sche
 
 Phase 1.5 landed: multi-component activation costs (RULES A.8). Cost can include any combination of `T:` plus HAND, MILL, or GRAVEYARD components in the play-card cost vocabulary. SACRIFICE and SELF reserved. Wired into the monkey cycle (5 cards: red, blue, pink, purple, white), each with a `2 hand:` activation.
 
+Phase 1.75 landed: X-cost activations. Cost components can carry `is_x = true`; the sim AI picks an X value via a hand-size heuristic and `activate_ability` multiplies amounts accordingly. Handlers read the chosen X via `game.x_value()`; the validate hook can refuse based on X-dependent math. Wired into Dark Salamander's `Y hand: mill opp by 2Y - X` activation.
+
 Deferred:
-- X-cost activations (`X hand: draw X`) — `dtst-creature2` still needs this.
 - SACRIFICE / SELF cost components in activations — needed by Portable Bolt's "exile this card" rider (SELF).
 - Activations from non-BOARD zones — needed by Portable Bolt's portable rider (activate from ATTACHED) and by cycling-style hand activations.
 - Static-granted activated abilities — needed by the jewel rider "host gains `T: draw, discard`" after attachment.

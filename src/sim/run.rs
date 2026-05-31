@@ -505,10 +505,30 @@ fn run_activation_pass(
         // first activation so additional abilities on the same card
         // won't pass `can_activate` until next untap.
         for idx in 0..abilities_n {
-            if state.can_activate(iid, idx)
-                && state
-                    .activate_ability(iid, idx, Some(&mut EventContext::new(lua, oracle)))
-                    .is_ok()
+            if !state.can_activate(iid, idx) {
+                continue;
+            }
+            // For X-cost activations, the AI commits to a concrete X
+            // before calling. Simple heuristic: spend ~half the hand
+            // (rounded up) so we keep some cards in hand. Bigger X
+            // when hand is large; minimum X=1.
+            let needs_x = state
+                .card_pool
+                .get(iid)
+                .and_then(|inst| inst.card.activated.get(idx))
+                .map(|a| a.cost_components.iter().any(|c| c.is_x))
+                .unwrap_or(false);
+            let x_value = if needs_x {
+                let hand_size = state.player(player).hand.len() as i32;
+                // Heuristic: spend up to half the hand, capped at 5,
+                // minimum 1. Refined later — this is a v1 stake.
+                Some(((hand_size + 1) / 2).clamp(1, 5))
+            } else {
+                None
+            };
+            if state
+                .activate_ability(iid, idx, x_value, Some(&mut EventContext::new(lua, oracle)))
+                .is_ok()
             {
                 count += 1;
                 break;

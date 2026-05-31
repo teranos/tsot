@@ -798,6 +798,7 @@ impl GameState {
         &mut self,
         iid: &InstanceId,
         ability_idx: usize,
+        x_value: Option<i32>,
         mut ctx: Option<&mut EventContext>,
     ) -> Result<(), ActivateError> {
         // First pass: read everything we need from the card_pool entry,
@@ -851,14 +852,21 @@ impl GameState {
             }
         }
 
-        // Component-cost gate: pre-validate every component is payable
-        // from the controller's current zones. Once we pass this, the
-        // payment loop below cannot fail half-way through.
+        // Component-cost gate. Variable-X components (`is_x = true`)
+        // multiply by x_value; the caller is required to provide a
+        // value if any component uses X. Pre-validate every component
+        // is payable from the controller's current zones. Once we
+        // pass this, the payment loop below cannot fail half-way.
+        let has_x = components.iter().any(|c| c.is_x);
+        if has_x && x_value.is_none() {
+            return Err(ActivateError::CannotPayComponents);
+        }
+        let x_val = x_value.unwrap_or(0).max(0);
         let mut hand_need = 0usize;
         let mut mill_need = 0usize;
         let mut gy_need = 0usize;
         for c in &components {
-            let amount = c.amount.max(0) as usize;
+            let amount = effective_cost_amount(c, x_val);
             match c.source {
                 CostSource::Hand => hand_need += amount,
                 CostSource::Mill => mill_need += amount,
@@ -876,6 +884,14 @@ impl GameState {
             return Err(ActivateError::CannotPayComponents);
         }
 
+        // Expose the X value to both validate and effect handlers via
+        // `game.x_value()`. Saved/restored around the entire
+        // validate→pay→effect sequence so a card's validate hook can
+        // refuse based on X-dependent math (e.g., dark-salamander's
+        // "2Y - X must be > 0").
+        let prior_x = self.current_activation_x;
+        self.current_activation_x = x_value;
+
         // RULES A.9: optional `validate` hook. If present, the activation
         // can only be initiated when validate returns truthy — typically
         // "a legal target exists." No cost is paid if validate refuses.
@@ -884,6 +900,7 @@ impl GameState {
         if let Some(v_fn) = validate {
             if let Some(c) = ctx.as_deref_mut() {
                 if !lua_api::fire_validate(c.lua, self, c.oracle(), iid, v_fn) {
+                    self.current_activation_x = prior_x;
                     return Err(ActivateError::NoLegalTarget);
                 }
             }
@@ -899,7 +916,7 @@ impl GameState {
         // deck. GRAVEYARD moves cards from GY to EXILE (matching the
         // play-card convention — graveyard payments don't recycle).
         for c in &components {
-            let amount = c.amount.max(0) as usize;
+            let amount = effective_cost_amount(c, x_val);
             match c.source {
                 CostSource::Hand => {
                     lua_api::do_smart_discard(self, controller, amount);
@@ -940,10 +957,14 @@ impl GameState {
         self.bump_action("activate", controller);
 
         // Fire effect. Per A.5 this is inline / synchronous; the
-        // handler returning is the end of the activation.
+        // handler returning is the end of the activation. The X value
+        // remains visible via `game.x_value()` (set above before the
+        // validate hook).
         if let Some(c) = ctx {
             lua_api::fire_activated(c.lua, self, c.oracle(), iid, handler);
         }
+
+        self.current_activation_x = prior_x;
         Ok(())
     }
 
@@ -952,6 +973,23 @@ impl GameState {
     /// call would succeed. Matches `activate_ability`'s validation
     /// exactly so the AI never speculatively calls and fails.
     pub fn can_activate(&self, iid: &InstanceId, ability_idx: usize) -> bool {
+        // Permissive pre-check: treats is_x components as "affordable
+        // at X=1." The exact X is chosen by the caller (sim AI) and
+        // re-validated inside `activate_ability`. Returns true here
+        // when the AI should consider this activation; the AI is
+        // expected to follow up with a concrete x_value if needed.
+        self.can_activate_with_x(iid, ability_idx, 1)
+    }
+
+    /// Like `can_activate` but checks affordability for a specific
+    /// X value. Useful for the sim AI when it wants to commit to a
+    /// specific X before calling `activate_ability`.
+    pub fn can_activate_with_x(
+        &self,
+        iid: &InstanceId,
+        ability_idx: usize,
+        x_value: i32,
+    ) -> bool {
         let Some(inst) = self.card_pool.get(iid) else {
             return false;
         };
@@ -970,13 +1008,14 @@ impl GameState {
                 return false;
             }
         }
-        // Component-cost affordability. Matches `activate_ability`'s
-        // pre-payment validation exactly.
+        // Component-cost affordability with the supplied X value.
+        // is_x components multiply by x_value.
+        let x = x_value.max(0);
         let mut hand_need = 0usize;
         let mut mill_need = 0usize;
         let mut gy_need = 0usize;
         for c in &ability.cost_components {
-            let amount = c.amount.max(0) as usize;
+            let amount = effective_cost_amount(c, x);
             match c.source {
                 CostSource::Hand => hand_need += amount,
                 CostSource::Mill => mill_need += amount,
@@ -988,6 +1027,16 @@ impl GameState {
         p.hand.len() >= hand_need
             && p.deck.len() >= mill_need
             && p.graveyard.len() >= gy_need
+    }
+}
+
+/// Per-component effective amount: `is_x` components multiply by the
+/// activation's X value; non-X components use the printed `amount`.
+fn effective_cost_amount(c: &crate::card::CostComponent, x_value: i32) -> usize {
+    if c.is_x {
+        x_value.max(0) as usize
+    } else {
+        c.amount.max(0) as usize
     }
 }
 
