@@ -126,10 +126,10 @@ impl GameState {
     /// and a non-match *when being paid* (empty intersects nothing).
     pub fn card_identity(&self, iid: &InstanceId) -> BTreeSet<String> {
         let mut ident = BTreeSet::new();
+        for color in self.effective_colors(iid) {
+            ident.insert(color);
+        }
         if let Some(inst) = self.card_pool.get(iid) {
-            for color in &inst.card.colors {
-                ident.insert(color.to_ascii_lowercase());
-            }
             for sym in &inst.card.symbols {
                 if !sym.is_empty() {
                     ident.insert(sym.clone());
@@ -672,20 +672,16 @@ impl GameState {
             .iter()
             .any(|s| s.eq_ignore_ascii_case("crystal"));
         if is_jewel {
-            return tap_card.card.colors.iter().any(|c| {
-                let lc = c.to_ascii_lowercase();
-                cast_colors.contains(&lc)
-            });
+            return self.effective_colors(tap_iid).iter().any(|c| cast_colors.contains(c));
         }
         if is_crystal {
-            // Match against colors of attached cards.
+            // Match against colors of attached cards (effective, so any
+            // static-granted glow / color from a mutation on an attached
+            // card also counts).
             for att_iid in &tap_card.attached {
-                if let Some(att) = self.card_pool.get(att_iid) {
-                    for col in &att.card.colors {
-                        let lc = col.to_ascii_lowercase();
-                        if cast_colors.contains(&lc) {
-                            return true;
-                        }
+                for col in self.effective_colors(att_iid) {
+                    if cast_colors.contains(&col) {
+                        return true;
                     }
                 }
             }
@@ -704,17 +700,7 @@ impl GameState {
         player: PlayerId,
         cast_iid: &InstanceId,
     ) -> Option<InstanceId> {
-        let cast_colors: Vec<String> = self
-            .card_pool
-            .get(cast_iid)
-            .map(|i| {
-                i.card
-                    .colors
-                    .iter()
-                    .map(|c| c.to_ascii_lowercase())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let cast_colors: Vec<String> = self.effective_colors(cast_iid);
         if cast_colors.is_empty() {
             return None;
         }

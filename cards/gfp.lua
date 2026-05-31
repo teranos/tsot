@@ -6,16 +6,16 @@ return {
   id = "gfp",
   name = "GFP",
   type = "mutation",
-  colors = {"green"},
+  colors = {"green", "glow"},
   cost = {{amount = 1, source = "mill"}},
   abilities = {
-    "the host creature gets +1/+1.",
+    "the host creature gets +1/+1 and becomes green and glow.",
   },
   flavor = "Your creature glows in the dark, whoohoo!",
   static = {
     affects = {
       scope = "attached_host",
     },
-    modifier = {x = 1, y = 1},
+    modifier = {x = 1, y = 1, colors = {"green", "glow"}},
   },
 }

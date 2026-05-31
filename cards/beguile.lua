@@ -23,7 +23,7 @@ return {
   type = "sorcery",
   cost = {
     {amount = 1, source = "hand"},
-    {amount = 2, source = "graveyard"},
+    {amount = 4, source = "graveyard"},
   },
   abilities = {
     "you gain control of target creature.",

@@ -220,6 +220,16 @@ pub struct StaticDef {
     /// the same convention as `Card.handlers` / `Card.activated`.
     #[serde(skip, default)]
     pub granted_activated: Option<ActivatedAbility>,
+    /// Colors granted to matching candidates. Empty Vec = no color
+    /// grant. Used by fluorescent-protein mutations (GFP grants green +
+    /// glow to its host). `GameState::effective_colors(iid)` unions the
+    /// candidate's printed colors with every grant from active statics
+    /// whose `affects` predicate matches. Identity matching (P.7a) and
+    /// jewel pitch validation (P.24) consult effective colors; the
+    /// static-affects matcher itself uses printed colors only, to
+    /// avoid recursion (same pattern as the keyword-grant cycle guard).
+    #[serde(default)]
+    pub granted_colors: Vec<String>,
 }
 
 /// Phase 3.5 cost reduction component on a static ability. Applied during
@@ -753,22 +763,43 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
             )))
         }
     };
-    let (modifier_x, modifier_y, modifier_keyword) = match static_t.get::<Value>("modifier")? {
-        Value::Nil => (ModifierValue::Fixed(0), ModifierValue::Fixed(0), None),
-        Value::Table(m) => {
-            let x = read_modifier_value(m.get::<Value>("x")?)?;
-            let y = read_modifier_value(m.get::<Value>("y")?)?;
-            let keyword = m
-                .get::<Option<String>>("keyword")?
-                .map(|s| s.to_ascii_lowercase());
-            (x, y, keyword)
-        }
-        other => {
-            return Err(mlua::Error::runtime(format!(
-                "static.modifier must be a table, got {other:?}"
-            )))
-        }
-    };
+    let (modifier_x, modifier_y, modifier_keyword, granted_colors) =
+        match static_t.get::<Value>("modifier")? {
+            Value::Nil => (
+                ModifierValue::Fixed(0),
+                ModifierValue::Fixed(0),
+                None,
+                Vec::new(),
+            ),
+            Value::Table(m) => {
+                let x = read_modifier_value(m.get::<Value>("x")?)?;
+                let y = read_modifier_value(m.get::<Value>("y")?)?;
+                let keyword = m
+                    .get::<Option<String>>("keyword")?
+                    .map(|s| s.to_ascii_lowercase());
+                let colors: Vec<String> = match m.get::<Option<Value>>("colors")? {
+                    Some(Value::Table(t)) => {
+                        let mut out = Vec::new();
+                        for s in t.sequence_values::<String>() {
+                            out.push(s?.to_ascii_lowercase());
+                        }
+                        out
+                    }
+                    Some(other) => {
+                        return Err(mlua::Error::runtime(format!(
+                            "static.modifier.colors must be a sequence of strings, got {other:?}"
+                        )))
+                    }
+                    None => Vec::new(),
+                };
+                (x, y, keyword, colors)
+            }
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "static.modifier must be a table, got {other:?}"
+                )))
+            }
+        };
     let condition = match static_t.get::<Value>("condition")? {
         Value::Nil => None,
         Value::Table(c) => Some(read_condition(&c)?),
@@ -844,6 +875,7 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
         restrictions,
         cost_modifiers,
         granted_activated,
+        granted_colors,
     }))
 }
 
@@ -1152,7 +1184,18 @@ mod tests {
     }
 
     fn load_card_from_lua(src: &str) -> Card {
-        let tmp = std::env::temp_dir().join(format!("tsot_card_test_{}", rand::random::<u64>()));
+        // Unique temp-dir name per call without going through rand::random
+        // (which is disallowed project-wide for determinism reasons — see
+        // clippy.toml). A monotonic counter per process is enough for
+        // test uniqueness; tests don't need randomness here.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "tsot_card_test_{}_{}",
+            std::process::id(),
+            id
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("under-test.lua");
         std::fs::write(&path, src).unwrap();

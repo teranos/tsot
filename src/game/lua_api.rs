@@ -908,7 +908,7 @@ macro_rules! build_game_table {
                     )?;
                     t.set(
                         "colors",
-                        lua.create_sequence_from(inst.card.colors.clone())?,
+                        lua.create_sequence_from(s.effective_colors(&iid))?,
                     )?;
                     t.set(
                         "symbols",

@@ -301,6 +301,7 @@ fn make_anthem_source(s: &mut GameState, iid: &InstanceId, subtype: &str, dx: i3
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
         granted_activated: None,
+        granted_colors: Vec::new(),
     });
 }
 
@@ -372,6 +373,7 @@ fn attached_host_scope_grants_keyword_to_host() {
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
         granted_activated: None,
+        granted_colors: Vec::new(),
     });
     // Move host + bystander to board.
     s.a.hand.retain(|i| i != &bird && i != &host && i != &bystander);
@@ -408,6 +410,7 @@ fn attached_host_scope_does_not_grant_when_unattached() {
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
         granted_activated: None,
+        granted_colors: Vec::new(),
     });
     s.a.hand.retain(|i| i != &bird && i != &target);
     s.a.board.push(bird);
@@ -439,6 +442,7 @@ fn condition_gate_blocks_static_until_graveyard_threshold() {
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
         granted_activated: None,
+        granted_colors: Vec::new(),
     });
     s.a.hand.retain(|i| i != &source && i != &target);
     s.a.board.push(source);
@@ -484,6 +488,7 @@ fn condition_non_creatures_counts_only_non_creature_kinds() {
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
         granted_activated: None,
+        granted_colors: Vec::new(),
     });
     s.a.hand.retain(|i| i != &wizard);
     s.a.board.push(wizard.clone());
@@ -531,6 +536,7 @@ fn source_only_scope_targets_only_the_source() {
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
         granted_activated: None,
+        granted_colors: Vec::new(),
     });
     s.a.hand.retain(|i| i != &wizard && i != &other);
     s.a.board.push(wizard.clone());
@@ -568,6 +574,7 @@ fn restriction_cannot_attack_propagates_to_opponent_insects() {
         ],
         cost_modifiers: Vec::new(),
         granted_activated: None,
+        granted_colors: Vec::new(),
     });
     s.b.hand.retain(|i| i != &plant && i != &own_insect);
     s.a.hand.retain(|i| i != &opp_insect);
@@ -611,6 +618,7 @@ fn restriction_cannot_attack_blocks_declare_attacker() {
         restrictions: vec![crate::card::Restriction::CannotAttack],
         cost_modifiers: Vec::new(),
         granted_activated: None,
+        granted_colors: Vec::new(),
     });
     s.b.hand.retain(|i| i != &plant);
     s.a.hand.retain(|i| i != &attacker);
@@ -653,6 +661,7 @@ fn affects_has_keyword_filters_by_intrinsic_or_static_grant() {
         restrictions: vec![crate::card::Restriction::CannotAttack],
         cost_modifiers: Vec::new(),
         granted_activated: None,
+        granted_colors: Vec::new(),
     });
     s.b.hand.retain(|i| i != &source);
     s.a.hand.retain(|i| i != &flyer && i != &grounder);
@@ -700,6 +709,107 @@ fn opponent_controlled_anthem_does_not_affect_owner_filtered() {
     // A's human is on board, B's anthem is on board, but controller
     // filter is "owner" — B's anthem boosts only B's humans.
     assert_eq!(s.effective_stats(&a_human), (1, 1));
+}
+
+// --- effective_colors / granted_colors (Phase: static color grants) ---
+
+fn make_glow_granter(s: &mut GameState, iid: &InstanceId, granted: &[&str]) {
+    let inst = s.card_pool.get_mut(iid).unwrap();
+    inst.card.static_def = Some(crate::card::StaticDef {
+        affects: crate::card::StaticAffects {
+            subtypes: vec![],
+            colors: vec![],
+            controller: None,
+            exclude_self: false,
+            scope: crate::card::StaticScope::AttachedHost,
+            kind: None,
+            has_keyword: None,
+        },
+        modifier_x: crate::card::ModifierValue::Fixed(0),
+        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_keyword: None,
+        condition: None,
+        restrictions: Vec::new(),
+        cost_modifiers: Vec::new(),
+        granted_activated: None,
+        granted_colors: granted.iter().map(|s| s.to_string()).collect(),
+    });
+}
+
+#[test]
+fn effective_colors_returns_printed_when_no_grant() {
+    let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+    let iid = s.a.hand[0].clone();
+    s.card_pool.get_mut(&iid).unwrap().card.colors = vec!["green".into()];
+    assert_eq!(s.effective_colors(&iid), vec!["green".to_string()]);
+}
+
+#[test]
+fn effective_colors_includes_granted_from_attached_source() {
+    // GFP shape: a mutation attached to host with granted_colors = ["glow"].
+    // Host's effective_colors should include "glow" alongside its printed colors.
+    let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+    let host = s.a.hand[0].clone();
+    let mutation = s.a.hand[1].clone();
+    s.card_pool.get_mut(&host).unwrap().card.colors = vec!["red".into()];
+    make_glow_granter(&mut s, &mutation, &["glow"]);
+    s.a.hand.retain(|i| i != &host && i != &mutation);
+    s.a.board.push(host.clone());
+    s.add_attached(&host, &mutation);
+    let mut effective = s.effective_colors(&host);
+    effective.sort();
+    assert_eq!(effective, vec!["glow".to_string(), "red".to_string()]);
+}
+
+#[test]
+fn effective_colors_grants_multiple_colors_via_single_static() {
+    // GFP grants {"green", "glow"} — both colors land on the host.
+    let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+    let host = s.a.hand[0].clone();
+    let mutation = s.a.hand[1].clone();
+    s.card_pool.get_mut(&host).unwrap().card.colors = vec!["red".into()];
+    make_glow_granter(&mut s, &mutation, &["green", "glow"]);
+    s.a.hand.retain(|i| i != &host && i != &mutation);
+    s.a.board.push(host.clone());
+    s.add_attached(&host, &mutation);
+    let mut effective = s.effective_colors(&host);
+    effective.sort();
+    assert_eq!(
+        effective,
+        vec!["glow".to_string(), "green".to_string(), "red".to_string()]
+    );
+}
+
+#[test]
+fn effective_colors_deduplicates_grant_already_in_printed() {
+    // If the printed color is "green" and the mutation also grants "green",
+    // effective_colors should contain "green" once.
+    let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+    let host = s.a.hand[0].clone();
+    let mutation = s.a.hand[1].clone();
+    s.card_pool.get_mut(&host).unwrap().card.colors = vec!["green".into()];
+    make_glow_granter(&mut s, &mutation, &["green", "glow"]);
+    s.a.hand.retain(|i| i != &host && i != &mutation);
+    s.a.board.push(host.clone());
+    s.add_attached(&host, &mutation);
+    let mut effective = s.effective_colors(&host);
+    effective.sort();
+    assert_eq!(effective, vec!["glow".to_string(), "green".to_string()]);
+}
+
+#[test]
+fn effective_colors_drops_grant_when_mutation_unattached() {
+    // Mutation off the board (no host) → no grant, host stays at printed colors.
+    let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+    let host = s.a.hand[0].clone();
+    let mutation = s.a.hand[1].clone();
+    s.card_pool.get_mut(&host).unwrap().card.colors = vec!["red".into()];
+    make_glow_granter(&mut s, &mutation, &["glow"]);
+    // Host on board, mutation NOT attached — mutation just lives in hand or wherever.
+    s.a.hand.retain(|i| i != &host);
+    s.a.board.push(host.clone());
+    // Mutation stays in hand (un-attached).
+    assert_eq!(s.effective_colors(&host), vec!["red".to_string()]);
 }
 
 #[test]
