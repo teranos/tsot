@@ -38,9 +38,17 @@ pressure produce whatever structure emerges.
 fitness(genome) -> f64   // win-rate in [0, 1]
 ```
 
-**Gauntlet:** the 7 current variant decks (`ra`, `rb`, `hu`, `go`, `uu`,
-`pr`, `gg`), built from a fixed master seed so the opponent population
-stays stable across generations. Each evaluation:
+**Gauntlet:** curated EA-evolved decks loaded from `baselines/*.json` at
+EA-mode startup. Each file is an `EvolvedDeck` JSON written by a prior
+`tsot evolve` run that produced a strong, distinct attractor. The
+initial baselines (5 decks) span the diversity discovered in the first
+3 EA rounds: 2 eac8-cluster strategies, 1 ea03 flying-aggro strategy,
+2 unrelated-seed singletons. The variant decks (`ra`, `rb`, `hu`, `go`,
+`uu`, `pr`, `gg`) that the EA originally used were random samplings
+from color pools — they were dropped because evolved opponents are
+both stronger and more reproducible. Variants still exist in
+`sim::variants` for the matchup-runner mode (`tsot matchup`), but the
+EA no longer touches them. Each evaluation:
 
 ```
 for each opponent in gauntlet:
@@ -49,13 +57,16 @@ for each opponent in gauntlet:
     play 1 game (genome as side B, opponent as side A)
 ```
 
-→ `2 × 7 × N` games per individual. At ~2ms/game release:
+→ `2 × G × N` games per individual where G = baseline count + --extra
+count. With the current 5 baselines and no extras: G=5 → 10 games per
+individual at N=1, 50 at N=5, 100 at N=10. Add `--extra` files (e.g.
+prior champions saved by the Makefile) to grow G. At ~2ms/game release:
 
-| N  | games | per-individual | population × generations budget |
-|----|-------|---------------|---------------------------------|
-| 3  | 42    | ~84ms         | 100 × 100 ≈ 14min               |
-| 5  | 70    | ~140ms        | 100 × 100 ≈ 23min                |
-| 10 | 140   | ~280ms        | 100 × 100 ≈ 47min                |
+| G  | N  | games | per-individual | 100×100 budget |
+|----|----|-------|---------------|----------------|
+| 5  | 10 | 100   | ~200ms        | ~33min         |
+| 10 | 10 | 200   | ~400ms        | ~67min         |
+| 20 | 10 | 400   | ~800ms        | ~133min        |
 
 ### Variance measurement (commit `34e1453`)
 

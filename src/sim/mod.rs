@@ -29,7 +29,6 @@ pub mod variants;
 pub use aggregate::print_aggregate;
 pub use deck_token::{DeckToken, Side};
 pub use evolve::{evolve as run_evolve, EvolveConfig};
-pub use fitness::{build_gauntlet, GAUNTLET_MASTER_SEED};
 pub use run::run_game;
 pub use stats::GameStats;
 pub use variants::{

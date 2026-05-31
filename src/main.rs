@@ -11,9 +11,8 @@ use tsot::card::{Card, CardRegistry, CardType, CostSource};
 use tsot::game::GameState;
 
 use sim::{
-    build_gauntlet, build_random_deck, mandatory_for_variant, print_aggregate, run_evolve,
-    run_game, variant_label, variant_pool, DeckToken, DeckVariant, EvolveConfig, GameStats, Side,
-    GAUNTLET_MASTER_SEED, VARIANTS,
+    build_random_deck, mandatory_for_variant, print_aggregate, run_evolve, run_game,
+    variant_label, variant_pool, DeckToken, DeckVariant, EvolveConfig, GameStats, Side, VARIANTS,
 };
 use sim::evolved_deck::EvolvedDeck;
 use sim::fitness::fitness_breakdown;
@@ -50,6 +49,11 @@ struct ChampionsReportArgs {
     /// Also write a full HTML report to this path.
     #[arg(long, value_name = "PATH")]
     html: Option<String>,
+    /// Jaccard-similarity threshold for clustering. Two decks are
+    /// linked if `|A ∩ B| / |A ∪ B|` on card-id sets exceeds this.
+    /// Single-linkage clustering then groups linked decks transitively.
+    #[arg(long = "cluster-threshold", default_value_t = 0.7)]
+    cluster_threshold: f64,
 }
 
 #[derive(Parser)]
@@ -64,8 +68,9 @@ struct EvolveArgs {
     /// 2 × gauntlet_size × n. EA.md's measured recommendation is 10.
     #[arg(long, default_value_t = 10)]
     n: u32,
-    /// Master seed for every random decision in the run.
-    #[arg(long, default_value_t = 0xEA_C8)]
+    /// Master seed for every random decision in the run. Accepts
+    /// decimal (`60104`) or hex (`0xEAC8`).
+    #[arg(long, default_value_t = 0xEA_C8, value_parser = parse_u64_hex_or_dec)]
     seed: u64,
     /// Tournament size for selection.
     #[arg(long = "tournament-k", default_value_t = 3)]
@@ -100,6 +105,15 @@ struct EvolveArgs {
     /// feeding more samples into champions-report at no extra compute.
     #[arg(long = "save-top", default_value_t = 1)]
     save_top: usize,
+}
+
+/// Parse a u64 from `--seed`, accepting hex (`0xEA03`) or decimal.
+fn parse_u64_hex_or_dec(s: &str) -> Result<u64, std::num::ParseIntError> {
+    if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(rest, 16)
+    } else {
+        s.parse::<u64>()
+    }
 }
 
 /// When saving top-K genomes, inject a `-rank{N}` suffix before the
@@ -334,6 +348,88 @@ fn run_champions_report(
         }
     }
 
+    // Clustering: union-find with Jaccard threshold on card-id sets.
+    // Single-linkage — if pair (i, j) has Jaccard > threshold, i and j
+    // share a cluster transitively. Useful for spotting same-attractor
+    // groups (e.g., r3-rank1..5 cluster, eac8 champions cluster).
+    let champ_sets: Vec<std::collections::BTreeSet<&str>> = champions
+        .iter()
+        .map(|c| c.card_ids.iter().map(|s| s.as_str()).collect())
+        .collect();
+    let mut parent: Vec<usize> = (0..champions.len()).collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    let mut total_pairs = 0u32;
+    let mut linked_pairs = 0u32;
+    for i in 0..champions.len() {
+        for j in (i + 1)..champions.len() {
+            total_pairs += 1;
+            let inter = champ_sets[i].intersection(&champ_sets[j]).count() as f64;
+            let union = champ_sets[i].union(&champ_sets[j]).count() as f64;
+            let jacc = if union > 0.0 { inter / union } else { 0.0 };
+            if jacc > args.cluster_threshold {
+                linked_pairs += 1;
+                let ri = find(&mut parent, i);
+                let rj = find(&mut parent, j);
+                if ri != rj {
+                    parent[ri] = rj;
+                }
+            }
+        }
+    }
+    let mut clusters: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..champions.len() {
+        let r = find(&mut parent, i);
+        clusters.entry(r).or_default().push(i);
+    }
+    let mut cluster_list: Vec<Vec<usize>> = clusters.into_values().collect();
+    cluster_list.sort_by_key(|c| std::cmp::Reverse(c.len()));
+
+    println!();
+    println!(
+        "Clusters (Jaccard threshold = {:.2}, {linked_pairs}/{total_pairs} pairs linked):",
+        args.cluster_threshold
+    );
+    println!(
+        "  {} distinct attractors among {} champions",
+        cluster_list.len(),
+        champions.len()
+    );
+    for (idx, members) in cluster_list.iter().enumerate() {
+        let rep_idx = *members
+            .iter()
+            .max_by(|a, b| {
+                champions[**a]
+                    .fitness
+                    .partial_cmp(&champions[**b].fitness)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        let rep = &champions[rep_idx];
+        let unique_count = champ_sets[rep_idx].len();
+        println!();
+        println!(
+            "  Cluster {} ({} members, representative fitness={:.3}, {} unique cards):",
+            idx + 1,
+            members.len(),
+            rep.fitness,
+            unique_count
+        );
+        for &m_idx in members {
+            let c = &champions[m_idx];
+            let marker = if m_idx == rep_idx { "*" } else { " " };
+            println!(
+                "    {marker} {:<35}  fit={:.3}  seed={:#x}",
+                c.label, c.fitness, c.base_seed,
+            );
+        }
+    }
+
     if let Some(html_path) = &args.html {
         match champions_report::write_html_report(&champions, playable_pool, &args.dir, html_path) {
             Ok(()) => {
@@ -378,33 +474,52 @@ fn run_ea(
         cfg.elite_count,
         cfg.stop_at_ceiling,
     );
-    let evals_per_gen = cfg.pop_size - cfg.elite_count.min(cfg.pop_size);
-    let games_per_eval = 2 * VARIANTS.len() as u32 * cfg.n_per_side;
-    let total_games = (cfg.pop_size + evals_per_gen * cfg.generations) as u64
-        * games_per_eval as u64;
-    println!(
-        "  budget: ~{} games total ({} per fitness eval × {} evals)",
-        total_games,
-        games_per_eval,
-        cfg.pop_size + evals_per_gen * cfg.generations,
-    );
     println!();
 
+    // Gauntlet: load curated EA-evolved decks from `baselines/`. These
+    // replaced the older random variant decks (ra/rb/hu/go/uu/pr/gg —
+    // built fresh per run from variant_pool). The baselines are real
+    // evolved attractors picked for diversity, so the EA always fights
+    // strong known-good decks, not random samples. --no-variants skips
+    // baselines too (gauntlet then = only --extra files).
     let no_variants = args.no_variants;
     let (mut gauntlet, mut gauntlet_labels): (Vec<Vec<Card>>, Vec<String>) = if no_variants {
-        println!("Gauntlet: variants skipped (--no-variants)");
+        println!("Gauntlet: baselines skipped (--no-variants)");
         (Vec::new(), Vec::new())
     } else {
-        let g = build_gauntlet(playable_pool, GAUNTLET_MASTER_SEED);
-        let labels: Vec<String> = VARIANTS
-            .iter()
-            .map(|v| variant_label(*v).to_string())
-            .collect();
+        let mut g: Vec<Vec<Card>> = Vec::new();
+        let mut labels: Vec<String> = Vec::new();
+        let baselines_dir = std::path::Path::new("baselines");
+        let mut paths: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(baselines_dir) {
+            for entry in rd.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|s| s.to_str()) == Some("json") {
+                    paths.push(p);
+                }
+            }
+        }
+        paths.sort(); // deterministic load order
+        for path in &paths {
+            match EvolvedDeck::load(path) {
+                Ok(saved) => match saved.to_cards(registry) {
+                    Ok(cards) => {
+                        labels.push(saved.label.clone());
+                        g.push(cards);
+                    }
+                    Err(e) => eprintln!("  ! baseline {} unloadable: {e}", path.display()),
+                },
+                Err(e) => eprintln!("  ! baseline {} unparseable: {e}", path.display()),
+            }
+        }
         println!(
-            "Gauntlet: {} variant decks built from master_seed={:#x}",
+            "Gauntlet: {} baseline decks loaded from {}",
             g.len(),
-            GAUNTLET_MASTER_SEED,
+            baselines_dir.display(),
         );
+        for (label, path) in labels.iter().zip(&paths) {
+            println!("  + {label} ({})", path.display());
+        }
         (g, labels)
     };
     for path in &args.extras {
@@ -424,20 +539,32 @@ fn run_ea(
         }
     }
     if !args.extras.is_empty() {
-        let variant_count = if no_variants { 0 } else { VARIANTS.len() };
+        let baseline_count = if no_variants { 0 } else { gauntlet.len() - args.extras.len() };
         println!(
-            "Gauntlet now {} decks total ({} variants + {} extras)",
+            "Gauntlet now {} decks total ({} baselines + {} extras)",
             gauntlet.len(),
-            variant_count,
-            gauntlet.len() - variant_count,
+            baseline_count,
+            args.extras.len(),
         );
     }
     if gauntlet.is_empty() {
         eprintln!(
-            "error: gauntlet is empty — pass --extra PATH at least once when --no-variants is set, otherwise every fitness eval is 0.0 and the EA has no signal."
+            "error: gauntlet is empty — either populate baselines/ or pass --extra PATH when --no-variants is set."
         );
         std::process::exit(2);
     }
+    // Budget print uses the actual gauntlet size after baselines + extras.
+    let evals_per_gen = cfg.pop_size - cfg.elite_count.min(cfg.pop_size);
+    let games_per_eval = 2 * gauntlet.len() as u32 * cfg.n_per_side;
+    let total_games = (cfg.pop_size + evals_per_gen * cfg.generations) as u64
+        * games_per_eval as u64;
+    println!(
+        "  budget: ~{} games total ({} per fitness eval × {} evals, {}-deck gauntlet)",
+        total_games,
+        games_per_eval,
+        cfg.pop_size + evals_per_gen * cfg.generations,
+        gauntlet.len(),
+    );
     println!();
 
     let t_start = std::time::Instant::now();
