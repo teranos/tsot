@@ -175,6 +175,13 @@ pub fn run_ea(
         }
         (g, labels)
     };
+    // Snapshot baseline count BEFORE adding extras, so the summary
+    // print can show baseline / extras counts independently of how
+    // many extras successfully materialized (some can fail when their
+    // card-id set references cards removed from the pool — see
+    // LIMITATIONS, "Champion artifacts age with the card pool").
+    let baseline_count = if no_variants { 0 } else { gauntlet.len() };
+    let mut extras_loaded = 0usize;
     for path in &args.extras {
         match EvolvedDeck::load(std::path::Path::new(path)) {
             Ok(saved) => match saved.to_cards(registry) {
@@ -185,6 +192,7 @@ pub fn run_ea(
                     );
                     gauntlet_labels.push(saved.label);
                     gauntlet.push(cards);
+                    extras_loaded += 1;
                 }
                 Err(e) => eprintln!("  ! failed to materialize {path}: {e}"),
             },
@@ -192,13 +200,24 @@ pub fn run_ea(
         }
     }
     if !args.extras.is_empty() {
-        let baseline_count = if no_variants { 0 } else { gauntlet.len() - args.extras.len() };
-        println!(
-            "Gauntlet now {} decks total ({} baselines + {} extras)",
-            gauntlet.len(),
-            baseline_count,
-            args.extras.len(),
-        );
+        let extras_requested = args.extras.len();
+        let extras_failed = extras_requested - extras_loaded;
+        if extras_failed > 0 {
+            println!(
+                "Gauntlet now {} decks total ({} baselines + {} extras; {} extra(s) skipped — see warnings above)",
+                gauntlet.len(),
+                baseline_count,
+                extras_loaded,
+                extras_failed,
+            );
+        } else {
+            println!(
+                "Gauntlet now {} decks total ({} baselines + {} extras)",
+                gauntlet.len(),
+                baseline_count,
+                extras_loaded,
+            );
+        }
     }
     if gauntlet.is_empty() {
         eprintln!(

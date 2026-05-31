@@ -119,18 +119,21 @@ pub enum PlayError {
 }
 
 impl GameState {
-    /// Card identity for HAND-cost matching: the set of lowercase
-    /// colors plus the `symbol` (if non-empty). A card with no colors
-    /// and no symbol returns an empty set — it acts as a wildcard on
-    /// either side of a HAND-cost match.
+    /// Card identity for HAND-cost matching per RULES P.7a: the set of
+    /// lowercase colors plus every non-empty `symbol` on the card. A
+    /// card with no colors and no symbols returns an empty set — empty
+    /// identity is a wildcard *when being cast* (any payment matches it)
+    /// and a non-match *when being paid* (empty intersects nothing).
     pub fn card_identity(&self, iid: &InstanceId) -> BTreeSet<String> {
         let mut ident = BTreeSet::new();
         if let Some(inst) = self.card_pool.get(iid) {
             for color in &inst.card.colors {
                 ident.insert(color.to_ascii_lowercase());
             }
-            if !inst.card.symbol.is_empty() {
-                ident.insert(inst.card.symbol.clone());
+            for sym in &inst.card.symbols {
+                if !sym.is_empty() {
+                    ident.insert(sym.clone());
+                }
             }
         }
         ident

@@ -14,7 +14,7 @@ return {
   colors = {"red"},
   type = "creature",
   subtypes = {"monkey"},
-  symbol = "am",
+  symbol = "≡",
   cost = {{amount = 1, source = "hand"}},
   abilities = {
     "2 hand: deal 2 damage to target creature; if it survives, that creature gains haste until end of turn.",

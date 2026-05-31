@@ -515,7 +515,7 @@ mod tests {
             subtypes: vec![],
             cannot_block_subtypes: vec![],
             can_block_subtypes: vec![],
-            symbol: String::new(),
+            symbols: Vec::new(),
             cost: vec![],
             abilities: vec![],
             flavor: String::new(),

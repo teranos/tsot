@@ -14,7 +14,7 @@
 return {
   id = "scavenger-rat",
   name = "Scavenger Rat",
-  symbol = "ax",
+  symbol = "⋈",
   type = "creature",
   colors = {},
   subtypes = {"rat"},

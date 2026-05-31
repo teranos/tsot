@@ -10,13 +10,21 @@
 -- containers receive it.
 --
 -- Pool: opponent's board, all creatures (no flying/keyword restrictions).
--- 3 graveyard cost gates it past turn ~3-4.
+-- Cost: 1 hand + 2 graveyard. Hand component forces real card commitment
+-- (GY-only was splashable into any deck for effectively free past mid-
+-- game; the hand cost is the universal currency that anchors it as a
+-- real tempo trade). Previously 3 GY → 100% / 2.00 copies across every
+-- champion deck in the EA; the cost shift trades raw inclusion rate for
+-- "you're actually a blue-removal deck running this on purpose."
 return {
   id = "beguile",
   name = "Beguile",
   colors = {"blue"},
   type = "sorcery",
-  cost = {{amount = 3, source = "graveyard"}},
+  cost = {
+    {amount = 1, source = "hand"},
+    {amount = 2, source = "graveyard"},
+  },
   abilities = {
     "you gain control of target creature.",
   },

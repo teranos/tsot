@@ -21,7 +21,7 @@
 return {
   id = "dark-salamander",
   name = "Dark Salamander",
-  symbol = "IX",
+  symbol = "⨳",
   colors = {"black"},
   type = "creature",
   subtypes = {"salamander"},

@@ -9,7 +9,7 @@ return {
   colors = {"purple"},
   type = "creature",
   subtypes = {"monkey"},
-  symbol = "am",
+  symbol = "≡",
   cost = {{amount = 1, source = "hand"}},
   abilities = {
     "2 hand: destroy target opposing non-creature on the board.",

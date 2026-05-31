@@ -356,7 +356,13 @@ pub struct Card {
     /// Does NOT bypass `unblockable` or other non-flying restrictions.
     #[serde(default)]
     pub can_block_subtypes: Vec<String>,
-    pub symbol: String,
+    /// Per RULES.md C.1 / C.11 / P.7a: a card's symbols form a set
+    /// participating in identity matching alongside colors. Empty Vec =
+    /// no symbols (legal for any card except `transparent`-colored ones
+    /// per C.13, which the engine doesn't enforce yet). Lua parser
+    /// accepts either `symbol = "X"` (single-shorthand, wrapped into a
+    /// one-element Vec) or `symbols = {"X", "Y"}` (explicit array).
+    pub symbols: Vec<String>,
     pub cost: Vec<CostComponent>,
     pub abilities: Vec<String>,
     /// Flavor text. Non-mechanical. Optional. Displayed under abilities in
@@ -435,7 +441,7 @@ impl std::fmt::Debug for Card {
             .field("kind", &self.kind)
             .field("timing", &self.timing)
             .field("subtypes", &self.subtypes)
-            .field("symbol", &self.symbol)
+            .field("symbols", &self.symbols)
             .field("cost", &self.cost)
             .field("abilities", &self.abilities)
             .field("stats", &self.stats)
@@ -990,7 +996,28 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
 
     let id: String = table.get("id")?;
     let name = table.get::<Option<String>>("name")?.unwrap_or_default();
-    let symbol = table.get::<Option<String>>("symbol")?.unwrap_or_default();
+    // Accept either `symbols = {"X", "Y"}` (explicit array) or the
+    // single-shorthand `symbol = "X"` (wrapped to a one-element Vec).
+    // If both present, `symbols` wins.
+    let symbols: Vec<String> = match table.get::<Option<Value>>("symbols")? {
+        Some(Value::Table(t)) => {
+            let mut out = Vec::new();
+            for pair in t.pairs::<i64, String>() {
+                let (_, s) = pair?;
+                out.push(s);
+            }
+            out
+        }
+        Some(other) => {
+            return Err(mlua::Error::runtime(format!(
+                "card.symbols must be a sequence of strings, got {other:?}"
+            )))
+        }
+        None => match table.get::<Option<String>>("symbol")? {
+            Some(s) if !s.is_empty() => vec![s],
+            _ => Vec::new(),
+        },
+    };
     let kind_s = table.get::<Option<String>>("type")?.unwrap_or_default();
     let (kind, timing) = parse_type(&kind_s).map_err(mlua::Error::runtime)?;
     let subtypes = read_string_vec(&table, "subtypes")?;
@@ -1020,7 +1047,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         subtypes,
         cannot_block_subtypes,
         can_block_subtypes,
-        symbol,
+        symbols,
         cost,
         abilities,
         flavor,
@@ -1122,6 +1149,60 @@ mod tests {
         assert_eq!(result, "fired");
 
         std::fs::remove_file(&card_path).ok();
+    }
+
+    fn load_card_from_lua(src: &str) -> Card {
+        let tmp = std::env::temp_dir().join(format!("tsot_card_test_{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("under-test.lua");
+        std::fs::write(&path, src).unwrap();
+        let registry = CardRegistry::load(&tmp).unwrap();
+        let card = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "under-test")
+            .expect("card loaded")
+            .clone();
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&tmp).ok();
+        card
+    }
+
+    #[test]
+    fn symbol_shorthand_parses_to_one_element_symbols_vec() {
+        let card = load_card_from_lua(r#"return { id = "under-test", symbol = "꩜" }"#);
+        assert_eq!(card.symbols, vec!["꩜".to_string()]);
+    }
+
+    #[test]
+    fn symbols_array_parses_in_order() {
+        let card = load_card_from_lua(
+            r#"return { id = "under-test", symbols = {"꩜", "⨳", "⋈"} }"#,
+        );
+        assert_eq!(
+            card.symbols,
+            vec!["꩜".to_string(), "⨳".to_string(), "⋈".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_symbol_fields_yields_empty_symbols_vec() {
+        let card = load_card_from_lua(r#"return { id = "under-test" }"#);
+        assert!(card.symbols.is_empty());
+    }
+
+    #[test]
+    fn symbols_array_takes_priority_when_both_fields_present() {
+        let card = load_card_from_lua(
+            r#"return { id = "under-test", symbol = "X", symbols = {"꩜", "⨳"} }"#,
+        );
+        assert_eq!(card.symbols, vec!["꩜".to_string(), "⨳".to_string()]);
+    }
+
+    #[test]
+    fn empty_symbol_shorthand_yields_empty_symbols_vec() {
+        let card = load_card_from_lua(r#"return { id = "under-test", symbol = "" }"#);
+        assert!(card.symbols.is_empty());
     }
 
     #[test]

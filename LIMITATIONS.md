@@ -91,7 +91,7 @@ Below these, smaller items.
 ### Smaller
 
 - **Below-noise-floor in champions-report too.** A 5-champion report with `5/5 presence at mean_copies=1.0` is barely above null. Confident "card X is load-bearing" needs 20+ independent champions; the `--save-top K` flag shortcuts collecting these but only within one attractor (see (1)).
-- **Champion artifacts age with the card pool.** Saved champions' 50-slot composition is frozen at save time. Adding new cards doesn't invalidate them, but they cannot benefit from new cards either.
+- **Champion artifacts age with the card pool.** Saved champions' 50-slot composition is frozen at save time. Adding new cards doesn't invalidate them, but they cannot benefit from new cards either. **Removing** a card breaks every champion whose genome references it — those champion files load but fail to materialize, and the EA's gauntlet skips them with a warning. No auto-pruner today; manually `rm` the stale champion files (or run `make prune-champions` which will live-rank them and likely drop the broken ones since they can't be evaluated).
 - **No mid-run hall-of-fame.** Gauntlet is fixed at run start. Champions discovered mid-run don't become opponents until you start a new run with them as `--extra`.
 - **`--save PATH` overwrites unconditionally.** A weaker champion silently replaces a stronger file when seeds collide. Backup before risky configs.
 - **Parallel speedup caps at ~3.4× on 8 cores.** Each rayon worker pays Lua VM init cost on first touch (~500ms) and the inner game loop has internal serialization that the embarrassingly-parallel fitness step can't fold out. 25-min runs become ~7-8 min — meaningful but not core-count-linear.

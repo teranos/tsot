@@ -1377,6 +1377,68 @@ fn hand_payment_symbol_match_succeeds_across_colors() {
 }
 
 #[test]
+fn hand_payment_matches_when_any_of_multiple_symbols_overlap() {
+    // Cast carries two symbols {⊨, ⨳}; payment carries one {⨳}. P.7a
+    // says identity match iff the symbol sets intersect — they do, on ⨳.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let creature = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    set_cost(&mut s, &creature, one_hand_cost());
+    s.card_pool.get_mut(&creature).unwrap().card.colors = vec!["green".into()];
+    s.card_pool.get_mut(&creature).unwrap().card.symbols =
+        vec!["⊨".into(), "⨳".into()];
+    s.card_pool.get_mut(&pay).unwrap().card.colors = vec!["red".into()];
+    s.card_pool.get_mut(&pay).unwrap().card.symbols = vec!["⨳".into()];
+    let result = s.play_card(
+        PlayerId::A,
+        &creature,
+        PlayChoices {
+            hand_payment_ids: vec![pay],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+            mutation_target: None,
+        },
+        None,
+    );
+    assert!(
+        result.is_ok(),
+        "any shared symbol should satisfy the identity match: {result:?}"
+    );
+}
+
+#[test]
+fn hand_payment_rejected_when_multi_symbol_sets_disjoint() {
+    // Cast carries {⊨, ⨳}; payment carries {꩜}. No color or symbol
+    // overlap → reject.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let creature = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    set_cost(&mut s, &creature, one_hand_cost());
+    s.card_pool.get_mut(&creature).unwrap().card.colors = vec!["green".into()];
+    s.card_pool.get_mut(&creature).unwrap().card.symbols =
+        vec!["⊨".into(), "⨳".into()];
+    s.card_pool.get_mut(&pay).unwrap().card.colors = vec!["red".into()];
+    s.card_pool.get_mut(&pay).unwrap().card.symbols = vec!["꩜".into()];
+    let result = s.play_card(
+        PlayerId::A,
+        &creature,
+        PlayChoices {
+            hand_payment_ids: vec![pay],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+            mutation_target: None,
+        },
+        None,
+    );
+    assert!(
+        result.is_err(),
+        "disjoint identity sets should reject the payment: {result:?}"
+    );
+}
+
+#[test]
 fn hand_payment_colorless_cast_takes_any_discard() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let creature = s.a.hand[0].clone();

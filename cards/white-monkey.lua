@@ -15,7 +15,7 @@ return {
   colors = {"white"},
   type = "creature",
   subtypes = {"monkey"},
-  symbol = "am",
+  symbol = "≡",
   cost = {{amount = 1, source = "hand"}},
   abilities = {
     "2 hand: creatures you control get +2/+2 and vigilance until end of turn.",

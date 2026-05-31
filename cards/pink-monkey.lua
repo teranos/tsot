@@ -8,7 +8,7 @@ return {
   colors = {"pink"},
   type = "creature",
   subtypes = {"monkey"},
-  symbol = "am",
+  symbol = "≡",
   cost = {{amount = 1, source = "hand"}},
   abilities = {
     "2 hand: return target opposing creature to its owner's hand.",

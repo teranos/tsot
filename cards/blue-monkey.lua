@@ -11,7 +11,7 @@ return {
   colors = {"blue"},
   type = "creature",
   subtypes = {"monkey"},
-  symbol = "am",
+  symbol = "≡",
   cost = {{amount = 1, source = "hand"}},
   abilities = {
     "2 hand: draw a card.",

@@ -51,7 +51,7 @@ The following zones are part of the game.
 
 ## Cards (C)
 
-- **C.1** A card's symbol is displayed on the back of the card.
+- **C.1** A card's symbols are displayed on the back of the card. A card may have zero, one, or more symbols.
 - **C.2** A card is either single-sided or double-sided.
 - **C.3** A card has two display states: face-up and face-down.
 - **C.4** Sleeves are not part of this game. Sleeves are permanently banned.
@@ -60,10 +60,10 @@ The following zones are part of the game.
 - **C.7** A sorcery is a spell with **sorcery timing**: it can only be played during its controller's turn, and not inside any response window. "Plain spell" (the legacy `type = "spell"` declaration with no further specialization) is treated as sorcery timing.
 - **C.9** A card whose specific type is `SPELL` is non-permanent: when played, it resolves to GRAVEYARD per P.1. Instants and sorceries are spells distinguished by timing (C.6, C.7). Other card types (creature, artifact, environment) are permanents and follow their own play rules. A mutation card is permanent-like in that it remains in the game state after casting, but does not occupy a BOARD slot — it lives in its host's attached zone (P.26).
 - **C.10** A spell that is played resolves to GRAVEYARD. Its `on_play` handler fires after the card has left HAND and arrived in GRAVEYARD.
-- **C.11** A card's symbol is a structured property that may be referenced by game effects (e.g., "count cards with symbol ⨳ in your GRAVEYARD").
+- **C.11** A card's symbols are structured properties that may be referenced by game effects. Each symbol on a card is independently checkable; e.g., "count cards with symbol ⨳ in your GRAVEYARD" counts every card whose symbol set contains ⨳.
 - **C.12** A card's effective stats are recomputed continuously from the card's printed X/Y plus all active modifiers. Whenever game state changes, effective stats are re-evaluated.
 - **C.8** A card's X/Y stats may be modified by abilities while the card is on the BOARD.
-- **C.13** A card with the `transparent` color cannot have a symbol — you can see through it, so there is no opaque surface on which to print one. C.1 does not apply to transparent cards.
+- **C.13** A card with the `transparent` color cannot have any symbols — you can see through it, so there is no opaque surface on which to print them. C.1 does not apply to transparent cards.
 
 ## Exclusions (X)
 
@@ -81,7 +81,7 @@ The following are not part of this game.
 - **P.5** If a card's cost is to exile itself, the card is placed in EXILE on play instead of its default destination from P.1 or P.2.
 - **P.6** When cards from the HAND are used to pay the cost of a BOARD-placed card, those cards are attached to the played card.
 - **P.7** A cost component written as `N hand` means: choose N cards from your HAND. By P.6, those cards become attached to the played card.
-- **P.7a** Each HAND-source payment must *match the identity* of the card being cast. A card's identity is its set of printed colors together with its `symbol` (if non-empty). A payment matches if the two identity sets share at least one element (color overlap, or matching symbol). A card with no colors and no symbol has empty identity. *Casting* a card with empty identity is a wildcard — it accepts any HAND payment. *Paying* with a card with empty identity is **not** a wildcard — empty cannot intersect with anything, so a no-color-no-symbol card can only pay for another no-color-no-symbol card. The identity check is independent of jewel/crystal tap substitution (P.24a/b), which has its own color-share rule.
+- **P.7a** Each HAND-source payment must *match the identity* of the card being cast. A card's identity is its set of printed colors together with its set of printed symbols. A payment matches if the two identity sets share at least one element (color overlap, or symbol overlap). A card with no colors and no symbols has empty identity. *Casting* a card with empty identity is a wildcard — it accepts any HAND payment. *Paying* with a card with empty identity is **not** a wildcard — empty cannot intersect with anything, so a no-color-no-symbol card can only pay for another no-color-no-symbol card. The identity check is independent of jewel/crystal tap substitution (P.24a/b), which has its own color-share rule.
 - **P.11** A cost component written as `N mill` means: place the top N cards of your DECK into your GRAVEYARD.
 - **P.12** A cost component written as `N graveyard` means: exile N cards from your GRAVEYARD.
 - **P.13** A cost component of `N hand` is valid only on cards that are placed on the BOARD when played.
@@ -135,14 +135,14 @@ The following are not part of this game.
 
 ## Visibility (V)
 
-- **V.1** In a DECK, the top card's symbol is visible to both players.
+- **V.1** In a DECK, the top card's symbols are visible to both players.
 - **V.2** In a DECK, all cards except the top are concealed (including the bottom and any cards between).
 - **V.3** Cards in a player's HAND are fully visible to that player and concealed from their opponent.
 - **V.4** Cards in the GRAVEYARD are fully visible to both players.
 - **V.5** Cards in EXILE are fully visible to both players.
 - **V.6** Cards on the BOARD are fully visible to both players.
-- **V.7** Visibility of cards in ATTACHED is defined by P.17 (face-down, symbol visible to both players) and P.18 (controller may look at the face at any time).
-- **V.8** A `transparent` card on top of a DECK reveals the symbol of the card immediately below it. The card below is seen through the transparent card, which means players see its back; per C.1 the back is where the symbol is. If the revealed card is itself `transparent`, V.8 applies recursively to the card below it, continuing until an opaque card is reached.
+- **V.7** Visibility of cards in ATTACHED is defined by P.17 (face-down, symbols visible to both players) and P.18 (controller may look at the face at any time).
+- **V.8** A `transparent` card on top of a DECK reveals the symbols of the card immediately below it. The card below is seen through the transparent card, which means players see its back; per C.1 the back is where the symbols are. If the revealed card is itself `transparent`, V.8 applies recursively to the card below it, continuing until an opaque card is reached.
 - **V.9** A `glow` card's visibility is determined by its **effective slot** in the DECK, computed by counting only non-`transparent` cards above it. Transparent cards in slots above are ignored for this computation.
 - **V.10** A `glow` card at effective slot 0 is fully visible to both players (all properties).
 - **V.11** A `glow` card at effective slot 1 has its color and type visible to both players; other properties remain concealed. Cards at effective slot 2 or deeper are concealed normally.

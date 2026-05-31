@@ -15,7 +15,7 @@ pub(crate) fn card_with_stats(id: &str, x: i32, y: i32) -> Card {
         subtypes: vec![],
         cannot_block_subtypes: vec![],
         can_block_subtypes: vec![],
-        symbol: String::new(),
+        symbols: Vec::new(),
         cost: vec![],
         abilities: vec![],
         flavor: String::new(),
@@ -41,7 +41,7 @@ pub(crate) fn card_no_stats(id: &str, kind: CardType) -> Card {
         subtypes: vec![],
         cannot_block_subtypes: vec![],
         can_block_subtypes: vec![],
-        symbol: String::new(),
+        symbols: Vec::new(),
         cost: vec![],
         abilities: vec![],
         flavor: String::new(),
@@ -62,8 +62,10 @@ pub(crate) fn set_cost(state: &mut GameState, iid: &InstanceId, cost: Vec<CostCo
     state.card_pool.get_mut(iid).unwrap().card.cost = cost;
 }
 
-/// Mutate a card's identity (colors + symbol) in-place. Used by tests
-/// for HAND-cost identity-match rules.
+/// Mutate a card's identity (colors + symbols) in-place. Used by
+/// tests for HAND-cost identity-match rules. The `symbol` parameter
+/// stays single-string for ergonomic test wiring; pass "" for no
+/// symbols, pass "X" for a one-element symbols Vec.
 pub(crate) fn set_identity(
     state: &mut GameState,
     iid: &InstanceId,
@@ -72,5 +74,9 @@ pub(crate) fn set_identity(
 ) {
     let entry = state.card_pool.get_mut(iid).unwrap();
     entry.card.colors = colors.iter().map(|c| c.to_string()).collect();
-    entry.card.symbol = symbol.to_string();
+    entry.card.symbols = if symbol.is_empty() {
+        Vec::new()
+    } else {
+        vec![symbol.to_string()]
+    };
 }
