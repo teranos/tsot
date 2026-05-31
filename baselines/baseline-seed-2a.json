@@ -1,6 +1,6 @@
 {
-  "label": "evo_2a",
-  "fitness": 0.9375,
+  "label": "evo_2a_curated",
+  "fitness": 0.27,
   "base_seed": 42,
   "generations_run": 3,
   "card_ids": [
