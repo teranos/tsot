@@ -541,6 +541,45 @@ for _, c in ipairs(color_rows) do
 end
 w("</tbody></table>")
 
+-- Hybrid cards
+w("<h2>Hybrid color cards</h2>")
+w('<p class="note">Cards listing 2+ colors. Grouped by color pair to surface which combinations exist and which don\'t.</p>')
+local hybrids = {}
+for _, card in ipairs(cards) do
+  local cs = card_colors(card)
+  if #cs >= 2 then
+    local sorted_colors = {}
+    for _, c in ipairs(cs) do table.insert(sorted_colors, c) end
+    table.sort(sorted_colors)
+    local key = table.concat(sorted_colors, " + ")
+    if not hybrids[key] then hybrids[key] = {colors = sorted_colors, cards = {}} end
+    table.insert(hybrids[key].cards, card)
+  end
+end
+local pair_list = {}
+for k, v in pairs(hybrids) do table.insert(pair_list, {key = k, info = v}) end
+table.sort(pair_list, function(a, b)
+  if #a.info.cards == #b.info.cards then return a.key < b.key end
+  return #a.info.cards > #b.info.cards
+end)
+if #pair_list == 0 then
+  w('<p class="note">None.</p>')
+else
+  for _, p in ipairs(pair_list) do
+    w('<div class="subtype-row">')
+    for i, c in ipairs(p.info.colors) do
+      if i > 1 then w(" ") end
+      w(color_swatch(c))
+    end
+    w(string.format(' <span class="cnt">%d card%s</span> &middot; ',
+                    #p.info.cards, #p.info.cards == 1 and "" or "s"))
+    local names = {}
+    for _, c in ipairs(p.info.cards) do table.insert(names, card_tooltip(c)) end
+    w(table.concat(names, ", "))
+    w("</div>")
+  end
+end
+
 -- Keywords
 w("<h2>Keyword distribution</h2>")
 w('<p class="note">Cards mentioning each keyword in their abilities text. ')
