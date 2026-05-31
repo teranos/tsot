@@ -32,10 +32,59 @@ struct Cli {
 enum Command {
     /// Run the variant matchup sweep (the default behavior).
     Matchup,
+    /// Round-robin matchup grid between evolved/baseline decks.
+    MatchupEvolved(MatchupEvolvedArgs),
     /// Evolve a deck via genetic algorithm against a gauntlet.
     Evolve(EvolveArgs),
     /// Aggregate stats across a directory of saved champions.
     ChampionsReport(ChampionsReportArgs),
+    /// For each baseline, evaluate champions in its Jaccard cluster
+    /// against the current baselines, replace the baseline with the
+    /// best live performer.
+    CurateBaselines(CurateBaselinesArgs),
+}
+
+#[derive(Parser)]
+struct CurateBaselinesArgs {
+    /// Directory of champion candidates to consider for promotion.
+    #[arg(long, default_value = "champions")]
+    dir: String,
+    /// Directory of baselines to upgrade in place.
+    #[arg(long, default_value = "baselines")]
+    baselines: String,
+    /// Jaccard threshold for cluster membership (candidate is in
+    /// baseline B's cluster if Jaccard(candidate, B) >= this).
+    #[arg(long, default_value_t = 0.7)]
+    threshold: f64,
+    /// Games per side per (candidate, baseline) pairing during live
+    /// re-evaluation. Total games per candidate = 2 × baselines × games.
+    #[arg(long, default_value_t = 20)]
+    games: u32,
+    /// Master seed for the live evaluation RNG. Same seed → reproducible.
+    #[arg(long, default_value_t = 0xEA_C8, value_parser = parse_u64_hex_or_dec)]
+    seed: u64,
+    /// Don't overwrite baseline files; print what would happen.
+    #[arg(long = "dry-run")]
+    dry_run: bool,
+}
+
+#[derive(Parser)]
+struct MatchupEvolvedArgs {
+    /// Directory containing EvolvedDeck JSON files to use as the
+    /// players in the round-robin grid.
+    #[arg(long, default_value = "baselines")]
+    dir: String,
+    /// Games per ordered (A, B) cell. With N decks, total games =
+    /// N × N × this. Default 50 matches the variant matchup grid.
+    #[arg(long, default_value_t = 50)]
+    games: u32,
+    /// Master seed for per-game RNG seeding. Same seed → byte-
+    /// identical grid.
+    #[arg(long, default_value_t = 0xEA_C8, value_parser = parse_u64_hex_or_dec)]
+    seed: u64,
+    /// Write an HTML grid report to this path.
+    #[arg(long, value_name = "PATH", default_value = "matchup-evolved.html")]
+    html: String,
 }
 
 #[derive(Parser)]
@@ -180,6 +229,456 @@ fn print_deck_listing(header: &str, deck: &[String]) {
 /// the gauntlet (variants and/or loaded evolved decks), runs evolution,
 /// prints live per-generation progress + final top-5 genomes with per-
 /// opponent breakdowns, saves the rank-1 deck to disk.
+/// For each baseline, find champions in its Jaccard cluster, live-
+/// evaluate them against the current baselines, replace the baseline
+/// with the highest-win-rate candidate. Apples-to-apples comparison
+/// (every candidate fights the same opponent set), avoiding the
+/// cross-round fitness bias of the saved-fitness curation path.
+fn run_curate_baselines(
+    registry: &CardRegistry,
+    args: &CurateBaselinesArgs,
+) -> mlua::Result<()> {
+    use rand::Rng;
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
+        if a.is_empty() && b.is_empty() {
+            return 1.0;
+        }
+        let inter = a.intersection(b).count() as f64;
+        let union = a.union(b).count() as f64;
+        if union > 0.0 { inter / union } else { 0.0 }
+    }
+
+    let baselines_dir = std::path::Path::new(&args.baselines);
+    let champions_dir = std::path::Path::new(&args.dir);
+
+    let mut baseline_paths: Vec<PathBuf> = match std::fs::read_dir(baselines_dir) {
+        Ok(rd) => rd
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
+            .map(|e| e.path())
+            .collect(),
+        Err(e) => {
+            eprintln!("error: cannot read {}: {e}", baselines_dir.display());
+            std::process::exit(2);
+        }
+    };
+    baseline_paths.sort();
+    if baseline_paths.is_empty() {
+        eprintln!("error: no baselines in {}", baselines_dir.display());
+        std::process::exit(2);
+    }
+
+    let mut champion_paths: Vec<PathBuf> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(champions_dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("json") {
+                champion_paths.push(p);
+            }
+        }
+    }
+    champion_paths.sort();
+
+    // Materialize: (path, EvolvedDeck, Vec<Card>, id-set)
+    let mut load = |path: &PathBuf| -> Option<(PathBuf, EvolvedDeck, Vec<Card>, BTreeSet<String>)> {
+        let deck = EvolvedDeck::load(path).ok()?;
+        let cards = deck.to_cards(registry).ok()?;
+        let id_set: BTreeSet<String> = deck.card_ids.iter().cloned().collect();
+        Some((path.clone(), deck, cards, id_set))
+    };
+    let baselines: Vec<_> = baseline_paths.iter().filter_map(&mut load).collect();
+    let champions: Vec<_> = champion_paths.iter().filter_map(&mut load).collect();
+
+    println!(
+        "Live-curate: {} baselines × {} champions, threshold {:.2}, {} games/side per pairing",
+        baselines.len(),
+        champions.len(),
+        args.threshold,
+        args.games
+    );
+
+    // Snapshot baseline decks for evaluation — all candidates fight
+    // the same opponent set regardless of in-flight upgrades.
+    let baseline_decks: Vec<Vec<Card>> = baselines.iter().map(|(_, _, c, _)| c.clone()).collect();
+    let baseline_labels: Vec<String> = baselines.iter().map(|(_, d, _, _)| d.label.clone()).collect();
+
+    let mut rng = StdRng::seed_from_u64(args.seed);
+
+    let evaluate = |cand_cards: &[Card], rng: &mut StdRng| -> f64 {
+        let mut wins = 0u32;
+        let mut games = 0u32;
+        for opp in &baseline_decks {
+            for _ in 0..args.games {
+                // candidate as A
+                let state = GameState::new(cand_cards.to_vec(), opp.clone());
+                let mut game_rng = StdRng::seed_from_u64(rng.gen());
+                let mut log: Vec<String> = Vec::new();
+                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry.lua());
+                if stats.winner == tsot::game::PlayerId::A {
+                    wins += 1;
+                }
+                games += 1;
+                // candidate as B
+                let state = GameState::new(opp.clone(), cand_cards.to_vec());
+                let mut game_rng = StdRng::seed_from_u64(rng.gen());
+                let mut log = Vec::new();
+                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry.lua());
+                if stats.winner == tsot::game::PlayerId::B {
+                    wins += 1;
+                }
+                games += 1;
+            }
+        }
+        wins as f64 / games as f64
+    };
+
+    let mut changes = 0u32;
+    let mut all_matched: BTreeSet<PathBuf> = BTreeSet::new();
+    for (bidx, (bpath, bdata, _bcards, bset)) in baselines.iter().enumerate() {
+        // Cluster: this baseline plus any champion >= threshold Jaccard.
+        let mut cluster: Vec<(PathBuf, &EvolvedDeck, &Vec<Card>)> = Vec::new();
+        cluster.push((bpath.clone(), bdata, &baselines[bidx].2));
+        for (cpath, cdata, ccards, cset) in &champions {
+            let jacc = jaccard(bset, cset);
+            if jacc >= args.threshold {
+                cluster.push((cpath.clone(), cdata, ccards));
+                all_matched.insert(cpath.clone());
+            }
+        }
+        println!();
+        println!(
+            "Cluster for {} ({} members):",
+            bpath.file_name().unwrap().to_string_lossy(),
+            cluster.len()
+        );
+        let mut scored: Vec<(PathBuf, f64, f64)> = Vec::new();
+        for (cpath, cdata, ccards) in &cluster {
+            let live = evaluate(ccards, &mut rng);
+            println!(
+                "  {:<40}  prior={:.3}  live={:.3}",
+                cpath.file_name().unwrap().to_string_lossy(),
+                cdata.fitness,
+                live
+            );
+            scored.push((cpath.clone(), live, cdata.fitness));
+        }
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let (winner_path, winner_live, _) = scored[0].clone();
+        if winner_path == *bpath {
+            println!(
+                "  → keep {} (already best in cluster, live={:.3})",
+                bpath.file_name().unwrap().to_string_lossy(),
+                winner_live
+            );
+        } else {
+            // Load winner's saved deck and write it to baseline's path
+            // (preserving the baseline's filename — it's the stable handle).
+            match EvolvedDeck::load(&winner_path) {
+                Ok(mut new_deck) => {
+                    new_deck.fitness = winner_live;
+                    new_deck.label = format!("{}_curated", new_deck.label);
+                    if args.dry_run {
+                        println!(
+                            "  → would upgrade {} ← {} (live={:.3}) [dry-run]",
+                            bpath.file_name().unwrap().to_string_lossy(),
+                            winner_path.file_name().unwrap().to_string_lossy(),
+                            winner_live
+                        );
+                    } else {
+                        match new_deck.save(bpath) {
+                            Ok(()) => {
+                                println!(
+                                    "  → UPGRADED {} ← {} (live={:.3})",
+                                    bpath.file_name().unwrap().to_string_lossy(),
+                                    winner_path.file_name().unwrap().to_string_lossy(),
+                                    winner_live
+                                );
+                                changes += 1;
+                            }
+                            Err(e) => eprintln!("  ! save failed: {e}"),
+                        }
+                    }
+                }
+                Err(e) => eprintln!("  ! reload of {} failed: {e}", winner_path.display()),
+            }
+        }
+    }
+    println!();
+    println!(
+        "Done: {} baseline(s) upgraded, {} champions matched to a cluster, {} unmatched",
+        changes,
+        all_matched.len(),
+        champions.len() - all_matched.len()
+    );
+    let unmatched: Vec<&PathBuf> = champions
+        .iter()
+        .map(|(p, _, _, _)| p)
+        .filter(|p| !all_matched.contains(*p))
+        .collect();
+    if !unmatched.is_empty() {
+        println!("Unmatched champions (potential new attractors):");
+        for p in unmatched {
+            println!("  {}", p.display());
+        }
+    }
+    let _ = baseline_labels;
+    Ok(())
+}
+
+/// Round-robin grid of evolved decks against each other. Loads every
+/// `*.json` file from `args.dir`, plays each ordered (A, B) pair for
+/// `args.games` games, prints the win-rate matrix + per-deck overall
+/// win rate. Deterministic per `args.seed`.
+fn run_matchup_evolved(
+    registry: &CardRegistry,
+    args: &MatchupEvolvedArgs,
+) -> mlua::Result<()> {
+    use rand::Rng;
+    let dir = std::path::Path::new(&args.dir);
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("json") {
+                paths.push(p);
+            }
+        }
+    }
+    paths.sort();
+    if paths.is_empty() {
+        eprintln!("error: no *.json files in {}", dir.display());
+        std::process::exit(2);
+    }
+
+    let mut labels: Vec<String> = Vec::new();
+    let mut decks: Vec<Vec<tsot::card::Card>> = Vec::new();
+    for path in &paths {
+        match EvolvedDeck::load(path) {
+            Ok(saved) => match saved.to_cards(registry) {
+                Ok(cards) => {
+                    labels.push(saved.label.clone());
+                    decks.push(cards);
+                }
+                Err(e) => eprintln!("  ! {} unloadable: {e}", path.display()),
+            },
+            Err(e) => eprintln!("  ! {} unparseable: {e}", path.display()),
+        }
+    }
+    let n = decks.len();
+    println!();
+    println!(
+        "=== Matchup-evolved grid: {n} decks × {n} × {} games = {} total ===",
+        args.games,
+        n * n * args.games as usize
+    );
+    for (i, (label, path)) in labels.iter().zip(&paths).enumerate() {
+        println!("  [{i}] {label:<20} ({})", path.display());
+    }
+    println!();
+
+    let mut wins: Vec<Vec<u32>> = vec![vec![0; n]; n];
+    let t0 = std::time::Instant::now();
+    let mut rng = StdRng::seed_from_u64(args.seed);
+    for i in 0..n {
+        for j in 0..n {
+            for _ in 0..args.games {
+                let state = GameState::new(decks[i].clone(), decks[j].clone());
+                let game_seed: u64 = rng.gen();
+                let mut game_rng = StdRng::seed_from_u64(game_seed);
+                let mut log: Vec<String> = Vec::new();
+                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry.lua());
+                if stats.winner == tsot::game::PlayerId::A {
+                    wins[i][j] += 1;
+                }
+            }
+        }
+    }
+    let elapsed = t0.elapsed();
+
+    // Print the win-rate matrix.
+    println!("Win-rate matrix (rows = side A, cols = side B; cell = A's win-rate):");
+    let label_w = labels.iter().map(|s| s.len()).max().unwrap_or(8).max(8);
+    print!("{:>w$} ", "", w = label_w);
+    for j in 0..n {
+        print!("{:>9}", format!("[{j}]"));
+    }
+    print!("{:>9}", "row avg");
+    println!();
+    for (i, row) in wins.iter().enumerate().take(n) {
+        print!("{:>w$} ", labels[i], w = label_w);
+        let mut row_sum = 0.0;
+        for &cell in row.iter().take(n) {
+            let rate = cell as f64 / args.games as f64;
+            row_sum += rate;
+            print!("{:>9.2}", rate);
+        }
+        let row_avg = row_sum / n as f64;
+        print!("{:>9.2}", row_avg);
+        println!();
+    }
+
+    // Per-deck overall record: wins as A across all opponents + wins
+    // when others played A against this deck (= 1 - their cell rate).
+    println!();
+    println!("Per-deck overall (both seats, all opponents):");
+    println!(
+        "  {:<w$}  {:>10}  {:>10}",
+        "deck", "as A", "as B",
+        w = label_w
+    );
+    for (i, label) in labels.iter().enumerate().take(n) {
+        let mut as_a_wins = 0u32;
+        let mut as_a_games = 0u32;
+        let mut as_b_wins = 0u32;
+        let mut as_b_games = 0u32;
+        #[allow(clippy::needless_range_loop)]
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            as_a_wins += wins[i][j];
+            as_a_games += args.games;
+            as_b_wins += args.games - wins[j][i];
+            as_b_games += args.games;
+        }
+        let r_a = as_a_wins as f64 / as_a_games as f64;
+        let r_b = as_b_wins as f64 / as_b_games as f64;
+        println!(
+            "  {:<w$}  {:>10.2}  {:>10.2}",
+            label, r_a, r_b,
+            w = label_w
+        );
+    }
+
+    println!();
+    println!("Elapsed: {:.2?}", elapsed);
+
+    // HTML grid.
+    let html_path = &args.html;
+    match write_matchup_evolved_html(&labels, &wins, args.games, &args.dir, html_path) {
+        Ok(()) => println!("HTML grid written to {html_path}"),
+        Err(e) => eprintln!("failed to write HTML to {html_path}: {e}"),
+    }
+    Ok(())
+}
+
+fn write_matchup_evolved_html(
+    labels: &[String],
+    wins: &[Vec<u32>],
+    games: u32,
+    dir: &str,
+    path: &str,
+) -> std::io::Result<()> {
+    use maud::{html, PreEscaped, DOCTYPE};
+    let n = labels.len();
+    fn rate_color(r: f64) -> String {
+        let t = r.clamp(0.0, 1.0);
+        let red = ((1.0 - t) * 100.0 + 30.0) as u8;
+        let green = (t * 100.0 + 30.0) as u8;
+        format!("background: rgb({red},{green},40); color: #eee;")
+    }
+
+    // Pre-compute row averages and per-deck both-seat win rates so the
+    // maud template can stay declarative.
+    let row_rates: Vec<Vec<f64>> = wins
+        .iter()
+        .map(|row| row.iter().map(|&c| c as f64 / games as f64).collect())
+        .collect();
+    let row_avgs: Vec<f64> = row_rates
+        .iter()
+        .map(|row| row.iter().sum::<f64>() / n as f64)
+        .collect();
+    let mut deck_overall: Vec<(f64, f64)> = Vec::with_capacity(n);
+    #[allow(clippy::needless_range_loop)]
+    for i in 0..n {
+        let mut a_w = 0u32;
+        let mut a_g = 0u32;
+        let mut b_w = 0u32;
+        let mut b_g = 0u32;
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            a_w += wins[i][j];
+            a_g += games;
+            b_w += games - wins[j][i];
+            b_g += games;
+        }
+        deck_overall.push((a_w as f64 / a_g as f64, b_w as f64 / b_g as f64));
+    }
+
+    let markup = html! {
+        (DOCTYPE)
+        html lang="en" {
+            head {
+                meta charset="utf-8";
+                title { "tsot — matchup-evolved grid" }
+                style { (PreEscaped(report::CSS)) }
+            }
+            body {
+                h1 { "tsot — matchup-evolved grid" }
+                div.meta {
+                    div { span.k { "dir" } b { (dir) } }
+                    div { span.k { "decks" } b { (n) } }
+                    div { span.k { "games/cell" } b { (games) } }
+                    div { span.k { "total games" } b { (n * n * games as usize) } }
+                }
+                h2 { "Win-rate matrix" }
+                p.note {
+                    "Rows = side A, columns = side B. Cell value = A's win-rate over " em { (games) } " games of (row, column). Heat shows wins (green) vs losses (red)."
+                }
+                table.summary.matchup {
+                    thead {
+                        tr {
+                            th { "" }
+                            @for (j, label) in labels.iter().enumerate().take(n) {
+                                th { (format!("[{j}] {label}")) }
+                            }
+                            th { "row avg" }
+                        }
+                    }
+                    tbody {
+                        @for (i, row) in row_rates.iter().enumerate().take(n) {
+                            tr {
+                                th { (format!("[{i}] {}", labels[i])) }
+                                @for &rate in row.iter().take(n) {
+                                    td.num style=(rate_color(rate)) { (format!("{rate:.2}")) }
+                                }
+                                td.num { (format!("{:.2}", row_avgs[i])) }
+                            }
+                        }
+                    }
+                }
+                h2 { "Per-deck overall" }
+                p.note { "Win-rate across all opponents (excluding self-matchup)." }
+                table.summary {
+                    thead {
+                        tr {
+                            th { "deck" }
+                            th.num { "as A" }
+                            th.num { "as B" }
+                        }
+                    }
+                    tbody {
+                        @for (i, label) in labels.iter().enumerate().take(n) {
+                            @let (r_a, r_b) = deck_overall[i];
+                            tr {
+                                td { (label) }
+                                td.num style=(rate_color(r_a)) { (format!("{r_a:.2}")) }
+                                td.num style=(rate_color(r_b)) { (format!("{r_b:.2}")) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    std::fs::write(path, markup.into_string())
+}
+
 /// Aggregate card-level signal across all saved EvolvedDeck files in a
 /// directory. Prints frequency, mean copies, and fitness correlation —
 /// which cards consistently survive selection across many runs.
@@ -741,6 +1240,12 @@ fn main() -> mlua::Result<()> {
     }
     if let Some(Command::ChampionsReport(args)) = &cli.command {
         return run_champions_report(&playable_pool, args);
+    }
+    if let Some(Command::MatchupEvolved(args)) = &cli.command {
+        return run_matchup_evolved(&registry, args);
+    }
+    if let Some(Command::CurateBaselines(args)) = &cli.command {
+        return run_curate_baselines(&registry, args);
     }
 
     let seed = pick_seed();
