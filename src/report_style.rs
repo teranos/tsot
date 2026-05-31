@@ -147,6 +147,40 @@ table tbody tr:hover { background: var(--bg-row-hover); }
   cursor: help;
 }
 .card-cell .card-id { display: inline-block; }
+/* Inline color marker + symbol annotation on the card-cell widget.
+   Lets heatmap rows and tables show identity at a glance without
+   relying on the tooltip. */
+.card-cell .ci-color {
+  display: inline-block;
+  width: 5px; height: 11px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  background: #888;
+}
+.card-cell .ci-color.ci-red { background: #d4604e; }
+.card-cell .ci-color.ci-blue { background: #5d8ec4; }
+.card-cell .ci-color.ci-green { background: #6fa86a; }
+.card-cell .ci-color.ci-purple { background: #9a6bbd; }
+.card-cell .ci-color.ci-black { background: #3a3a3a; outline: 1px solid #5a5a5a; }
+.card-cell .ci-color.ci-white { background: #d6d4c8; }
+.card-cell .ci-color.ci-pink { background: #d97ea8; }
+.card-cell .ci-color.ci-orange { background: #d9885a; }
+.card-cell .ci-color.ci-azure { background: #5ec4d4; }
+.card-cell .ci-color.ci-transparent {
+  background: repeating-conic-gradient(#444 0% 25%, #222 0% 50%) 50% / 3px 3px;
+}
+.card-cell .ci-color.ci-glow {
+  background: #c8e88a; box-shadow: 0 0 3px #c8e88a;
+}
+.card-cell .ci-color.ci-colorless { background: #86878a; }
+.card-cell .ci-symbols {
+  display: inline-block;
+  margin-left: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
 .card-cell .card-tooltip {
   display: none;
   position: absolute;
@@ -254,6 +288,10 @@ table tbody tr:hover { background: var(--bg-row-hover); }
   color: var(--accent); font-size: 10px; font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
+.mini-card .mc-symbols {
+  color: var(--text-secondary); font-size: 12px;
+  letter-spacing: 0.1em; flex-shrink: 0;
+}
 .mini-card .mc-cost { color: var(--text-secondary); font-size: 9px; margin-top: 1px; }
 .mini-card .mc-text {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
@@ -282,9 +320,32 @@ pub(crate) fn card_cell(pool: &[Card], id: &str) -> Markup {
     let meta = format_meta(card);
     let cost = format_cost(&card.cost);
     let stats = card.stats.map(|s| format!("{}/{}", s.x, s.y));
+    let color_class = match card.colors.first().map(String::as_str) {
+        Some("red") => "ci-red",
+        Some("blue") => "ci-blue",
+        Some("green") => "ci-green",
+        Some("purple") => "ci-purple",
+        Some("black") => "ci-black",
+        Some("white") => "ci-white",
+        Some("pink") => "ci-pink",
+        Some("orange") => "ci-orange",
+        Some("azure") => "ci-azure",
+        Some("transparent") => "ci-transparent",
+        Some("glow") => "ci-glow",
+        _ => "ci-colorless",
+    };
+    let symbols_str = if card.symbols.is_empty() {
+        None
+    } else {
+        Some(card.symbols.join(" "))
+    };
     html! {
         span.card-cell {
+            span class={ "ci-color " (color_class) } {}
             span.card-id { (id) }
+            @if let Some(sym) = symbols_str.as_deref() {
+                span.ci-symbols { (sym) }
+            }
             span.card-tooltip {
                 div.ct-name { (name) }
                 @if !meta.is_empty() { div.ct-meta { (meta) } }
@@ -386,11 +447,17 @@ pub(crate) fn mini_card(pool: &[Card], id: &str, in_count: usize, total: usize) 
     // Abilities-first-line snippet (handlers often emit one ability per
     // entry; the first line is the headline effect for most cards).
     let snippet = card.abilities.first().cloned().unwrap_or_default();
+    let symbols = if card.symbols.is_empty() {
+        None
+    } else {
+        Some(card.symbols.join(" "))
+    };
     let show_badge = total > 0;
     html! {
         span class={ "mini-card " (color_class) } title=(id) {
             span.mc-head {
                 span.mc-name { (name) }
+                @if let Some(sym) = &symbols { span.mc-symbols { (sym) } }
                 @if let Some(s) = stats { span.mc-stats { (s) } }
             }
             @if let Some(c) = cost { div.mc-cost { (c) } }
