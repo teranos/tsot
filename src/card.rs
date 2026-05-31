@@ -211,6 +211,15 @@ pub struct StaticDef {
     /// entry each for HAND and GRAVEYARD reductions.
     #[serde(default)]
     pub cost_modifiers: Vec<CostModifier>,
+    /// Static-granted activated ability. Matching cards (per `affects`)
+    /// gain this ability in addition to any printed activations they
+    /// already have. Used by the jewel cycle: the jewel's static
+    /// (scope = attached_host) grants `T: draw a card, then discard a
+    /// card` to its host creature. Not serialized — the Lua handler
+    /// references inside are rebound from the live CardRegistry per
+    /// the same convention as `Card.handlers` / `Card.activated`.
+    #[serde(skip, default)]
+    pub granted_activated: Option<ActivatedAbility>,
 }
 
 /// Phase 3.5 cost reduction component on a static ability. Applied during
@@ -807,6 +816,19 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
             )))
         }
     };
+    // Phase 3: optional `granted_activated` field declares a single
+    // activated ability that matching candidates gain. Same Lua shape
+    // as a card-level `activated[1]` entry: { cost, text, timing,
+    // effect, optional validate }.
+    let granted_activated = match static_t.get::<Value>("granted_activated")? {
+        Value::Nil => None,
+        Value::Table(t) => Some(parse_one_activated_entry(t)?),
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "static.granted_activated must be a table, got {other:?}"
+            )))
+        }
+    };
     Ok(Some(StaticDef {
         affects,
         modifier_x,
@@ -815,7 +837,87 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
         condition,
         restrictions,
         cost_modifiers,
+        granted_activated,
     }))
+}
+
+fn parse_one_activated_entry(item: Table) -> mlua::Result<ActivatedAbility> {
+    let cost_value: Value = item.get("cost")?;
+    let (cost_tap, cost_components) = match cost_value {
+        Value::String(s) => {
+            let s = s.to_str()?.to_ascii_lowercase();
+            if s == "tap" || s == "t" {
+                (true, Vec::new())
+            } else {
+                return Err(mlua::Error::runtime(format!(
+                    "granted_activated cost string {s:?} not recognized (expected \"tap\")"
+                )));
+            }
+        }
+        Value::Table(tt) => {
+            let mut tap = false;
+            let mut comps: Vec<CostComponent> = Vec::new();
+            for comp in tt.sequence_values::<Table>() {
+                let comp = comp?;
+                let src_s: String = comp.get("source")?;
+                let lowered = src_s.to_ascii_lowercase();
+                if lowered == "tap" || lowered == "t" {
+                    tap = true;
+                    continue;
+                }
+                let amount = comp.get::<Option<i32>>("amount")?.unwrap_or(0);
+                let is_x = comp.get::<Option<bool>>("is_x")?.unwrap_or(false);
+                let source = parse_source(&lowered).map_err(mlua::Error::runtime)?;
+                let kind = match comp.get::<Option<String>>("kind")? {
+                    None => None,
+                    Some(k) => Some(parse_type(&k).map_err(mlua::Error::runtime)?.0),
+                };
+                comps.push(CostComponent {
+                    amount,
+                    source,
+                    is_x,
+                    kind,
+                });
+            }
+            (tap, comps)
+        }
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "granted_activated cost must be a string or list, got {other:?}"
+            )))
+        }
+    };
+    let text = item.get::<Option<String>>("text")?.unwrap_or_default();
+    let timing_s = item
+        .get::<Option<String>>("timing")?
+        .unwrap_or_else(|| "sorcery".to_string());
+    let timing = match timing_s.to_ascii_lowercase().as_str() {
+        "instant" => Timing::Instant,
+        "sorcery" => Timing::Sorcery,
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "granted_activated timing {other:?} must be \"instant\" or \"sorcery\""
+            )))
+        }
+    };
+    let validate: Option<Function> = match item.get::<Value>("validate")? {
+        Value::Nil => None,
+        Value::Function(f) => Some(f),
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "granted_activated validate must be a function, got {other:?}"
+            )))
+        }
+    };
+    let effect: Function = item.get("effect")?;
+    Ok(ActivatedAbility {
+        cost_tap,
+        cost_components,
+        text,
+        timing,
+        validate,
+        effect,
+    })
 }
 
 /// Parse a `ModifierValue` from a Lua value. Accepts either:

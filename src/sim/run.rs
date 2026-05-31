@@ -491,10 +491,13 @@ fn run_activation_pass(
     // re-fetch instance data on each iteration.
     let ids: Vec<InstanceId> = state.player(player).board.clone();
     for iid in &ids {
-        let (is_creature, abilities_n) = match state.card_pool.get(iid) {
-            Some(inst) => (inst.card.kind == CardType::Creature, inst.card.activated.len()),
+        let is_creature = match state.card_pool.get(iid) {
+            Some(inst) => inst.card.kind == CardType::Creature,
             None => continue,
         };
+        // RULES A.5+: total activations = printed (`card.activated`)
+        // plus static-granted (`StaticDef.granted_activated`).
+        let abilities_n = state.activation_count(iid);
         if abilities_n == 0 {
             continue;
         }
@@ -513,9 +516,7 @@ fn run_activation_pass(
             // (rounded up) so we keep some cards in hand. Bigger X
             // when hand is large; minimum X=1.
             let needs_x = state
-                .card_pool
-                .get(iid)
-                .and_then(|inst| inst.card.activated.get(idx))
+                .activation_at(iid, idx)
                 .map(|a| a.cost_components.iter().any(|c| c.is_x))
                 .unwrap_or(false);
             let x_value = if needs_x {

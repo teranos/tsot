@@ -300,6 +300,7 @@ fn make_anthem_source(s: &mut GameState, iid: &InstanceId, subtype: &str, dx: i3
         condition: None,
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
+        granted_activated: None,
     });
 }
 
@@ -370,6 +371,7 @@ fn attached_host_scope_grants_keyword_to_host() {
         condition: None,
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
+        granted_activated: None,
     });
     // Move host + bystander to board.
     s.a.hand.retain(|i| i != &bird && i != &host && i != &bystander);
@@ -405,6 +407,7 @@ fn attached_host_scope_does_not_grant_when_unattached() {
         condition: None,
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
+        granted_activated: None,
     });
     s.a.hand.retain(|i| i != &bird && i != &target);
     s.a.board.push(bird);
@@ -435,6 +438,7 @@ fn condition_gate_blocks_static_until_graveyard_threshold() {
         condition: Some(crate::card::StaticCondition::OwnerGraveyardSize { min: 5 }),
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
+        granted_activated: None,
     });
     s.a.hand.retain(|i| i != &source && i != &target);
     s.a.board.push(source);
@@ -479,6 +483,7 @@ fn condition_non_creatures_counts_only_non_creature_kinds() {
         condition: Some(crate::card::StaticCondition::OwnerGraveyardNonCreatures { min: 4 }),
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
+        granted_activated: None,
     });
     s.a.hand.retain(|i| i != &wizard);
     s.a.board.push(wizard.clone());
@@ -525,6 +530,7 @@ fn source_only_scope_targets_only_the_source() {
         condition: None,
         restrictions: Vec::new(),
         cost_modifiers: Vec::new(),
+        granted_activated: None,
     });
     s.a.hand.retain(|i| i != &wizard && i != &other);
     s.a.board.push(wizard.clone());
@@ -561,6 +567,7 @@ fn restriction_cannot_attack_propagates_to_opponent_insects() {
             crate::card::Restriction::CannotBeCostPaid,
         ],
         cost_modifiers: Vec::new(),
+        granted_activated: None,
     });
     s.b.hand.retain(|i| i != &plant && i != &own_insect);
     s.a.hand.retain(|i| i != &opp_insect);
@@ -603,6 +610,7 @@ fn restriction_cannot_attack_blocks_declare_attacker() {
         condition: None,
         restrictions: vec![crate::card::Restriction::CannotAttack],
         cost_modifiers: Vec::new(),
+        granted_activated: None,
     });
     s.b.hand.retain(|i| i != &plant);
     s.a.hand.retain(|i| i != &attacker);
@@ -644,6 +652,7 @@ fn affects_has_keyword_filters_by_intrinsic_or_static_grant() {
         condition: None,
         restrictions: vec![crate::card::Restriction::CannotAttack],
         cost_modifiers: Vec::new(),
+        granted_activated: None,
     });
     s.b.hand.retain(|i| i != &source);
     s.a.hand.retain(|i| i != &flyer && i != &grounder);

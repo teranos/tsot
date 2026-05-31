@@ -1,5 +1,6 @@
 -- Purple jewel — artifact pitch resource and on-board T-engine. See
--- red-jewel for the cycle design rationale.
+-- red-jewel for the cycle design rationale. Phase 3 grants T: draw,
+-- discard to creatures the jewel is pitched onto.
 return {
   id = "purple-jewel",
   name = "Purple Jewel",
@@ -9,7 +10,7 @@ return {
   cost = {},
   abilities = {
     "T: draw a card, then discard a card.",
-    "when this card is attached as a cost to a purple card, that creature gets +1/+1.",
+    "when this card is attached as a cost to a purple card, that creature gets +1/+1 and gains: T: draw a card, then discard a card.",
   },
   on_attached_as_cost = function(game, self, partner)
     local p = game.card(partner.instance_id)
@@ -23,6 +24,20 @@ return {
   end,
   activated = {
     {
+      cost = "tap",
+      text = "T: draw a card, then discard a card.",
+      timing = "instant",
+      effect = function(game, self)
+        game.draw(self.owner, 1)
+        game.discard(self.owner, 1)
+      end,
+    },
+  },
+  static = {
+    affects = {
+      scope = "attached_host",
+    },
+    granted_activated = {
       cost = "tap",
       text = "T: draw a card, then discard a card.",
       timing = "instant",

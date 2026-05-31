@@ -1179,6 +1179,51 @@ impl GameState {
         false
     }
 
+    /// Phase 3 (activated abilities): the total number of activations
+    /// available on `iid` — its printed `card.activated` entries plus
+    /// any granted by matching static abilities. Used by the sim AI's
+    /// activation pass and by `activation_at` for index resolution.
+    pub fn activation_count(&self, iid: &InstanceId) -> usize {
+        let printed = self
+            .card_pool
+            .get(iid)
+            .map(|i| i.card.activated.len())
+            .unwrap_or(0);
+        let granted = self
+            .static_source_iids()
+            .filter(|src| {
+                self.static_def_if_matches(src, iid)
+                    .and_then(|def| def.granted_activated.as_ref())
+                    .is_some()
+            })
+            .count();
+        printed + granted
+    }
+
+    /// Returns the activated ability at `idx` on `iid`. Indices < the
+    /// number of printed activations resolve to `card.activated[idx]`;
+    /// higher indices walk static-granted abilities in
+    /// `static_source_iids()` order. Returns `None` past the total.
+    pub fn activation_at(&self, iid: &InstanceId, idx: usize) -> Option<&crate::card::ActivatedAbility> {
+        let inst = self.card_pool.get(iid)?;
+        let printed_count = inst.card.activated.len();
+        if idx < printed_count {
+            return inst.card.activated.get(idx);
+        }
+        let mut remaining = idx - printed_count;
+        for src in self.static_source_iids() {
+            if let Some(def) = self.static_def_if_matches(src, iid) {
+                if let Some(granted) = def.granted_activated.as_ref() {
+                    if remaining == 0 {
+                        return Some(granted);
+                    }
+                    remaining -= 1;
+                }
+            }
+        }
+        None
+    }
+
     /// Phase 3.5: total cost reduction applied to casting `iid` from
     /// `source`-typed components, summed across all matching on-board
     /// static sources. Used by play_card to reduce per-source cost

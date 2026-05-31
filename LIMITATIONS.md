@@ -50,10 +50,11 @@ Phase 1.5 landed: multi-component activation costs (RULES A.8). Cost can include
 
 Phase 1.75 landed: X-cost activations. Cost components can carry `is_x = true`; the sim AI picks an X value via a hand-size heuristic and `activate_ability` multiplies amounts accordingly. Handlers read the chosen X via `game.x_value()`; the validate hook can refuse based on X-dependent math. Wired into Dark Salamander's `Y hand: mill opp by 2Y - X` activation.
 
+Phase 3 landed: static-granted activated abilities (RULES A.10). `StaticDef.granted_activated` lets a card's static effect grant a full activated ability to matching candidates. The 6 jewels now grant `T: draw, discard` to the creature they're pitched onto (their host). `GameState::activation_count` / `activation_at` resolve indices across printed + granted activations transparently; the sim AI's activation pass picks up granted abilities the same as printed ones.
+
 Deferred:
 - SACRIFICE / SELF cost components in activations — needed by Portable Bolt's "exile this card" rider (SELF).
 - Activations from non-BOARD zones — needed by Portable Bolt's portable rider (activate from ATTACHED) and by cycling-style hand activations.
-- Static-granted activated abilities — needed by the jewel rider "host gains `T: draw, discard`" after attachment.
 
 Per RULES A.5 activations resolve immediately and cannot be responded to. This is a deliberate deviation from MTG and is not on a "to fix" list.
 

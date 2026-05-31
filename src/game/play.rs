@@ -801,10 +801,11 @@ impl GameState {
         x_value: Option<i32>,
         mut ctx: Option<&mut EventContext>,
     ) -> Result<(), ActivateError> {
-        // First pass: read everything we need from the card_pool entry,
-        // then release the borrow. All subsequent steps may mutate
-        // self (set_tapped, smart-discard, fire_validate, etc.) — they
-        // can't coexist with the immutable borrow on `inst`/`ability`.
+        // First pass: read everything we need from the card_pool entry
+        // and from any static-granted activation at this index. Then
+        // release the borrows. All subsequent steps may mutate self
+        // (set_tapped, smart-discard, fire_validate, etc.) — they
+        // can't coexist with immutable borrows on inst/ability.
         let (
             controller,
             is_creature,
@@ -819,10 +820,10 @@ impl GameState {
                 .card_pool
                 .get(iid)
                 .ok_or(ActivateError::SourceMissing)?;
-            let ability = inst
-                .card
-                .activated
-                .get(ability_idx)
+            // Index walks printed activations first, then static-granted
+            // ones via activation_at. Both paths share the same shape.
+            let ability = self
+                .activation_at(iid, ability_idx)
                 .ok_or(ActivateError::NoSuchAbility)?;
             (
                 inst.controller,
@@ -993,7 +994,7 @@ impl GameState {
         let Some(inst) = self.card_pool.get(iid) else {
             return false;
         };
-        let Some(ability) = inst.card.activated.get(ability_idx) else {
+        let Some(ability) = self.activation_at(iid, ability_idx) else {
             return false;
         };
         if !self.player(inst.controller).board.contains(iid) {

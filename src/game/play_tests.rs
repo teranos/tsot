@@ -1964,6 +1964,72 @@ fn dark_salamander_validate_refuses_when_2y_minus_x_is_zero_or_less() {
 }
 
 #[test]
+fn red_jewel_grants_t_draw_discard_to_attached_host() {
+    // Phase 3: when a jewel is in a creature's attached list, the
+    // jewel's static (scope=attached_host) grants the host a T-ability
+    // identical to the jewel's own. Activating the host's granted
+    // ability draws + discards for the host's owner.
+    use crate::card::CardRegistry;
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let jewel = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "red-jewel")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let host_iid = s.a.hand[0].clone();
+    let jewel_iid = s.a.hand[1].clone();
+    {
+        // Host is a generic 2/2 creature.
+        let host_inst = s.card_pool.get_mut(&host_iid).unwrap();
+        host_inst.card.kind = crate::card::CardType::Creature;
+        host_inst.card.stats = Some(crate::card::Stats { x: 2, y: 2 });
+        host_inst.summoning_sick = false;
+    }
+    {
+        let jewel_inst = s.card_pool.get_mut(&jewel_iid).unwrap();
+        jewel_inst.card = jewel;
+    }
+    // Place host on board, attach jewel under it (simulating the
+    // post-on_attached_as_cost state without running play_card).
+    s.a.hand.retain(|x| x != &host_iid && x != &jewel_iid);
+    s.a.board.push(host_iid.clone());
+    s.card_pool
+        .get_mut(&host_iid)
+        .unwrap()
+        .attached
+        .push(jewel_iid.clone());
+
+    // Host has 0 printed activations. With jewel attached, grant adds 1.
+    assert_eq!(s.activation_count(&host_iid), 1);
+    let ability = s.activation_at(&host_iid, 0).expect("granted ability");
+    assert!(ability.cost_tap);
+
+    let hand_before = s.a.hand.len();
+    let gy_before = s.a.graveyard.len();
+
+    assert!(s.can_activate(&host_iid, 0));
+    let mut oracle = crate::choice::NoopOracle;
+    let result = s.activate_ability(
+        &host_iid,
+        0,
+        None,
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    );
+    assert_eq!(result, Ok(()));
+
+    // Host tapped from the T: cost. Net hand size unchanged (draw +
+    // discard cancel), graveyard up by 1.
+    assert!(s.card_pool.get(&host_iid).unwrap().tapped);
+    assert_eq!(s.a.hand.len(), hand_before);
+    assert_eq!(s.a.graveyard.len(), gy_before + 1);
+}
+
+#[test]
 fn card_identity_includes_lowercased_colors_and_symbol() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
