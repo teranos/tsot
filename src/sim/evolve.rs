@@ -97,6 +97,13 @@ pub struct EvolveResult {
     /// Best individual of each generation, indexed by generation
     /// number (0 = initial random pop).
     pub best_per_generation: Vec<(Vec<String>, f64)>,
+    /// Per-generation card presence: for each generation, how many
+    /// population members contain at least one copy of each card id.
+    /// Indexed: `per_gen_card_freq[gen_idx][card_id] = present_count`.
+    /// Used to produce the card-frequency-over-time heatmap.
+    pub per_gen_card_freq: Vec<std::collections::BTreeMap<String, u32>>,
+    /// Mean fitness of each generation (sum of all individuals / pop).
+    pub per_gen_mean_fitness: Vec<f64>,
 }
 
 pub fn evolve(
@@ -119,8 +126,13 @@ pub fn evolve(
     }
 
     let mut best_per_generation = Vec::with_capacity(cfg.generations + 1);
+    let mut per_gen_card_freq: Vec<std::collections::BTreeMap<String, u32>> =
+        Vec::with_capacity(cfg.generations + 1);
+    let mut per_gen_mean_fitness: Vec<f64> = Vec::with_capacity(cfg.generations + 1);
     pop.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     best_per_generation.push(pop[0].clone());
+    per_gen_card_freq.push(card_freq_in_pop(&pop));
+    per_gen_mean_fitness.push(pop.iter().map(|(_, f)| *f).sum::<f64>() / pop.len() as f64);
     on_generation(0, &pop);
 
     for gen_idx in 0..cfg.generations {
@@ -152,6 +164,8 @@ pub fn evolve(
 
         next.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         best_per_generation.push(next[0].clone());
+        per_gen_card_freq.push(card_freq_in_pop(&next));
+        per_gen_mean_fitness.push(next.iter().map(|(_, f)| *f).sum::<f64>() / next.len() as f64);
         on_generation(gen_idx + 1, &next);
         pop = next;
 
@@ -165,7 +179,23 @@ pub fn evolve(
     EvolveResult {
         final_population: pop,
         best_per_generation,
+        per_gen_card_freq,
+        per_gen_mean_fitness,
     }
+}
+
+/// Count, for each card id present in any genome in the population,
+/// how many population members contain at least one copy.
+fn card_freq_in_pop(pop: &[(Vec<String>, f64)]) -> std::collections::BTreeMap<String, u32> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut out: BTreeMap<String, u32> = BTreeMap::new();
+    for (genome, _) in pop {
+        let unique: BTreeSet<&str> = genome.iter().map(|s| s.as_str()).collect();
+        for id in unique {
+            *out.entry(id.to_string()).or_insert(0) += 1;
+        }
+    }
+    out
 }
 
 #[cfg(test)]

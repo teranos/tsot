@@ -46,7 +46,8 @@ matchup-decks:
 
 evolve:
 	@mkdir -p $(CHAMPS)
-	@N=$$(( $$(ls $(CHAMPS)/r*-rank1.json 2>/dev/null | wc -l) + 1 )); \
+	@HIGHEST=0; for f in $(CHAMPS)/r*-rank1.json; do [ -f "$$f" ] || continue; base=$$(basename "$$f" -rank1.json); num=$${base#r}; if [ "$$num" -gt "$$HIGHEST" ]; then HIGHEST=$$num; fi; done; \
+	N=$$((HIGHEST + 1)); \
 	SEED=$$(printf '0x%x' $$((0xEA00 + N))); \
 	EXTRAS=""; \
 	for f in $(CHAMPS)/*.json; do \
@@ -59,7 +60,8 @@ evolve:
 
 evolve-deep:
 	@mkdir -p $(CHAMPS)
-	@N=$$(( $$(ls $(CHAMPS)/r*-rank1.json 2>/dev/null | wc -l) + 1 )); \
+	@HIGHEST=0; for f in $(CHAMPS)/r*-rank1.json; do [ -f "$$f" ] || continue; base=$$(basename "$$f" -rank1.json); num=$${base#r}; if [ "$$num" -gt "$$HIGHEST" ]; then HIGHEST=$$num; fi; done; \
+	N=$$((HIGHEST + 1)); \
 	SEED=$$(printf '0x%x' $$((0xEA00 + N))); \
 	EXTRAS=""; \
 	for f in $(CHAMPS)/*.json; do \

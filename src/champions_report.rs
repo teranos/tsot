@@ -9,7 +9,7 @@ use tsot::Card;
 
 use crate::report_style::CSS;
 use crate::sim::evolved_deck::EvolvedDeck;
-use crate::ChampGameStats;
+use crate::cli_champions_report::ChampGameStats;
 
 pub(crate) fn write_html_report(
     champions: &[EvolvedDeck],
