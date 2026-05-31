@@ -10,7 +10,12 @@ A **1v1 collectible card game**, digital-first, where every card is identified b
 
 ## Status
 
-Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, supports preview/rollback/replay/save-load. The simulator runs **4,900 games per `cargo run`** (7 deck-variants × 7 matchups × 100 games; configurable via `TSOT_GAMES_PER_MATCHUP=<n>`; seeded via `TSOT_SEED=<n>`) and skips suicide plays via journal preview. An HTML report (`tsot-report.html`) writes per run with matchup heatmaps, per-variant breakdowns, per-card win rates with hover tooltips, sacrifice/discard victim tracking, and first/last-turn-played columns.
+Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, supports preview/rollback/replay/save-load. The simulator is driven by a Make-fronted CLI (`make help`):
+
+- **`make evolve`** — one round of evolutionary deck search (~7-8 min wall, parallelized across cores) against a curated baseline gauntlet; saves top-5 evolved decks per round and writes an `evolve-report.html` showing card-presence per generation
+- **`make report`** — aggregates all saved champions into `champions-report.html` (card frequency, clustering, fitness correlation, per-champion game-level sampling)
+- **`make matchup-decks`** — round-robin grid over any directory of saved decks (default `baselines/`); HTML with win-rate matrix, turn distributions, event-firing breakdown, top-cards-by-play-frequency
+- **`make curate-baselines`** — live re-evaluation of accumulated champions against the snapshot baselines; promotes winners
 
 **Done in the engine:**
 - **STACK Phase 1 + 2** — response windows, counterspell, threat-aware AI combat tricks.
@@ -19,19 +24,19 @@ Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, suppor
 - **Card types routed by play_card** — Creature, Spell (Instant + Sorcery via timing), Artifact (with the no-summoning-sickness P.25 rule).
 - **Sim AI heuristics** — Pattern B multi-noncreature per turn, play-priority scoring (cost-reducers + anthems land first), smart-pitch, smart-discard, smart-target, trade-up block policy, investment-aware sacrifice picker.
 
-**Remaining gaps** (see `LIMITATIONS.md`): activated abilities (`T: ...`), targeting layer, phase-entry / delayed triggers, SELF cost source, Environment type, STATIC Phase 4 (replacement effects), temporary stat modifiers, OnDealtDamageToPlayer event, static-recompute on attached-set change.
+**Remaining gaps** (see `LIMITATIONS.md`): activated abilities (`T: ...`), targeting layer, phase-entry / delayed triggers, SELF cost source, Environment type, STATIC Phase 4 (replacement effects), OnDealtDamageToPlayer event, static-recompute on attached-set change.
 
 ## Building & running
 
 ```sh
 cargo build               # native binary
-cargo run                 # 1000-game simulator with stats + last-game log
-cargo run --release       # ~half the runtime
+cargo build --release     # release build (used by the make targets)
 cargo test
 cargo clippy --all-targets
 
-TSOT_SEED=42 cargo run    # reproducible run
-TSOT_REPLAY_OUT=last.json cargo run    # dump last game's replay
+make help                 # list the simulator commands
+make evolve               # one EA round; HTML report writes alongside
+make report               # aggregate champion stats → champions-report.html
 ```
 
 Via Nix:
@@ -52,6 +57,7 @@ mlua bundles Lua 5.4 from source via the `vendored` feature; no system Lua insta
 - **`STACK.md`** — phased plan for response windows. Phase 1 + 2 done.
 - **`STATIC.md`** — phased plan for continuous effects. Phase 1 + 2 + 3 + 3.5 done.
 - **`JOURNAL.md`** — multi-session plan for mutation journaling, rollback, replay, save/load.
+- **`EA.md`** — evolutionary deck search (the current primary simulation mode).
 
 ## The archived v1 garden
 

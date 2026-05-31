@@ -138,7 +138,23 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     mill_need = mill_need.saturating_sub(mill_red);
     gy_need = gy_need.saturating_sub(gy_red);
     let p = state.player(player);
-    let hand_have = p.hand.len().saturating_sub(1);
+    // Identity-match: only hand cards sharing ≥1 element of the casting
+    // card's identity set (colors ∪ symbol) count toward hand_have.
+    // Colorless+no-symbol casts are wildcards; colorless+no-symbol
+    // discards are NOT.
+    let cast_ident = state.card_identity(iid);
+    let hand_have = if hand_need == 0 || cast_ident.is_empty() {
+        p.hand.len().saturating_sub(1)
+    } else {
+        p.hand
+            .iter()
+            .filter(|h| *h != iid)
+            .filter(|h| {
+                let pay_ident = state.card_identity(h);
+                !cast_ident.is_disjoint(&pay_ident)
+            })
+            .count()
+    };
     let mut available: Vec<InstanceId> = p.board.clone();
     let mut sac_ok = true;
     for required_kind in &sac_slots {

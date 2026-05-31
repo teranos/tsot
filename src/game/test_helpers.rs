@@ -13,6 +13,8 @@ pub(crate) fn card_with_stats(id: &str, x: i32, y: i32) -> Card {
         kind: CardType::Creature,
         timing: None,
         subtypes: vec![],
+        cannot_block_subtypes: vec![],
+        can_block_subtypes: vec![],
         symbol: String::new(),
         cost: vec![],
         abilities: vec![],
@@ -36,6 +38,8 @@ pub(crate) fn card_no_stats(id: &str, kind: CardType) -> Card {
         kind,
         timing,
         subtypes: vec![],
+        cannot_block_subtypes: vec![],
+        can_block_subtypes: vec![],
         symbol: String::new(),
         cost: vec![],
         abilities: vec![],
@@ -54,4 +58,17 @@ pub(crate) fn deck_of(n: usize, prefix: &str) -> Vec<Card> {
 
 pub(crate) fn set_cost(state: &mut GameState, iid: &InstanceId, cost: Vec<CostComponent>) {
     state.card_pool.get_mut(iid).unwrap().card.cost = cost;
+}
+
+/// Mutate a card's identity (colors + symbol) in-place. Used by tests
+/// for HAND-cost identity-match rules.
+pub(crate) fn set_identity(
+    state: &mut GameState,
+    iid: &InstanceId,
+    colors: &[&str],
+    symbol: &str,
+) {
+    let entry = state.card_pool.get_mut(iid).unwrap();
+    entry.card.colors = colors.iter().map(|c| c.to_string()).collect();
+    entry.card.symbol = symbol.to_string();
 }

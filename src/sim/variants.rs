@@ -40,6 +40,7 @@ pub const VARIANTS: [DeckVariant; 7] = [
     DeckVariant::Gg,
 ];
 
+#[allow(dead_code)]
 pub fn variant_label(v: DeckVariant) -> &'static str {
     match v {
         DeckVariant::Ra => "ra",

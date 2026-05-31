@@ -41,6 +41,13 @@ impl CardRegistry {
     pub fn lua(&self) -> &Lua {
         &self.lua
     }
+
+    /// Look up a card by its `id` field. Linear scan — the registry holds
+    /// a few dozen cards, and EA-side helpers calling this stay well under
+    /// the per-game budget.
+    pub fn get(&self, id: &str) -> Option<&Card> {
+        self.cards.iter().find(|c| c.id == id)
+    }
 }
 
 // Colors are open-ended strings stored in `Card.colors: Vec<String>`. The
@@ -222,8 +229,8 @@ pub struct CostModifier {
 ///
 /// Lua parser accepts either a bare integer (`x = 2` → `Fixed(2)`) or a
 /// short string descriptor. `"attached"` maps to `AttachedCount`;
-/// `"attached:blue"` maps to `AttachedCountByColor("blue")`. Extensible
-/// to subtype / kind filters when corpus demands.
+/// `"attached:blue"` maps to `AttachedCountByColor("blue")`;
+/// `"attached:type:mutation"` maps to `AttachedCountByKind(Mutation)`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ModifierValue {
     Fixed(i32),
@@ -231,6 +238,8 @@ pub enum ModifierValue {
     AttachedCount,
     /// Count of attached cards whose `colors` contains the given lowercase color.
     AttachedCountByColor(String),
+    /// Count of attached cards whose `kind` matches.
+    AttachedCountByKind(CardType),
 }
 
 impl Default for ModifierValue {
@@ -324,6 +333,20 @@ pub struct Card {
     #[serde(default)]
     pub timing: Option<Timing>,
     pub subtypes: Vec<String>,
+    /// Subtypes this creature cannot block. Combat rejects a declared
+    /// block when `attacker.subtypes ∩ blocker.cannot_block_subtypes`
+    /// is non-empty (case-insensitive). Empty for most cards. Used by
+    /// rats ("can't block cats.") and any future "<X> can't block <Y>"
+    /// flavor pair.
+    #[serde(default)]
+    pub cannot_block_subtypes: Vec<String>,
+    /// Subtypes this creature CAN block as an exception to flying.
+    /// When `attacker.subtypes ∩ blocker.can_block_subtypes` is non-
+    /// empty, the flying-blocker requirement is waived for that pair.
+    /// Used by cats ("can block birds.") — the predator-prey override.
+    /// Does NOT bypass `unblockable` or other non-flying restrictions.
+    #[serde(default)]
+    pub can_block_subtypes: Vec<String>,
     pub symbol: String,
     pub cost: Vec<CostComponent>,
     pub abilities: Vec<String>,
@@ -655,7 +678,8 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
 /// - Nil → `Fixed(0)` (back-compat for omitted entries)
 /// - Integer N → `Fixed(N)`
 /// - String "attached" → `AttachedCount`
-/// - String "attached:<color>" → `AttachedCountByColor(color)`
+/// - String "attached:type:<kind>" → `AttachedCountByKind(kind)`
+/// - String "attached:<color>" → `AttachedCountByColor(color)` (fallback)
 fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
     match v {
         Value::Nil => Ok(ModifierValue::Fixed(0)),
@@ -667,11 +691,19 @@ fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
             if lower == "attached" {
                 return Ok(ModifierValue::AttachedCount);
             }
+            if let Some(kind_str) = lower.strip_prefix("attached:type:") {
+                let (kind, _) = parse_type(kind_str).map_err(|e| {
+                    mlua::Error::runtime(format!(
+                        "modifier value 'attached:type:<kind>' has unknown kind: {e}"
+                    ))
+                })?;
+                return Ok(ModifierValue::AttachedCountByKind(kind));
+            }
             if let Some(rest) = lower.strip_prefix("attached:") {
                 return Ok(ModifierValue::AttachedCountByColor(rest.to_string()));
             }
             Err(mlua::Error::runtime(format!(
-                "modifier value string must be 'attached' or 'attached:<color>', got {s:?}"
+                "modifier value string must be 'attached', 'attached:<color>', or 'attached:type:<kind>', got {s:?}"
             )))
         }
         other => Err(mlua::Error::runtime(format!(
@@ -716,6 +748,14 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     let kind_s = table.get::<Option<String>>("type")?.unwrap_or_default();
     let (kind, timing) = parse_type(&kind_s).map_err(mlua::Error::runtime)?;
     let subtypes = read_string_vec(&table, "subtypes")?;
+    let cannot_block_subtypes = read_string_vec(&table, "cannot_block_subtypes")?
+        .into_iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    let can_block_subtypes = read_string_vec(&table, "can_block_subtypes")?
+        .into_iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
     let abilities = read_string_vec(&table, "abilities")?;
     let flavor = table.get::<Option<String>>("flavor")?.unwrap_or_default();
     let colors = read_color_vec(&table)?;
@@ -731,6 +771,8 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         kind,
         timing,
         subtypes,
+        cannot_block_subtypes,
+        can_block_subtypes,
         symbol,
         cost,
         abilities,
