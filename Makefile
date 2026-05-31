@@ -23,7 +23,7 @@ CHAMPS := champions
 HTML   := champions-report.html
 DIR    ?= baselines
 
-.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool
+.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool archetypes
 
 help:
 	@echo ""
@@ -43,6 +43,7 @@ help:
 	@echo ""
 	@echo "Card design:"
 	@echo "  make pool                static analytics dashboard → card-pool.html (Lua, no rebuild)"
+	@echo "  make archetypes          cluster decks by Jaccard → archetypes-report.html (Lua, no rebuild)"
 
 matchup-decks:
 	cargo run --release -- matchup-evolved --dir $(DIR) --html matchup-$(notdir $(DIR)).html
@@ -91,3 +92,7 @@ clean-champions:
 pool:
 	lua5.4 tools/cards-report.lua
 	@echo "Open card-pool.html"
+
+archetypes:
+	lua5.4 tools/archetypes-report.lua
+	@echo "Open archetypes-report.html"
