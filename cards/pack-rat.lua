@@ -1,12 +1,17 @@
--- Vanilla single-color creature for pool diversity.
--- Hand-only cost; 1 baseline, 2 for top-end bodies (3/4, 4/3).
+-- Single-color vanilla rat. "Can't block cats." Mill cost reflects
+-- the rat-flavor "eats through your stuff" — a small tax on top of
+-- the hand cost, eating the top of your deck.
 return {
   id = "pack-rat",
   name = "Pack Rat",
   type = "creature",
   colors = {"green"},
   subtypes = {"rat"},
-  cost = {{amount = 2, source = "hand"}},
+  cannot_block_subtypes = {"cat"},
+  cost = {
+    {amount = 2, source = "hand"},
+    {amount = 2, source = "mill"},
+  },
   stats = {x = 4, y = 3},
-  abilities = {},
+  abilities = {"can't block cats."},
 }

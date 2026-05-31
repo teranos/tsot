@@ -220,6 +220,41 @@ fn flying_attacker_refuses_ground_blocker() {
 }
 
 #[test]
+fn blocker_with_cannot_block_subtype_is_rejected() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cat = s.a.hand[0].clone();
+    let rat = s.b.hand[0].clone();
+    put_on_board(&mut s, PlayerId::A, &cat);
+    put_on_board(&mut s, PlayerId::B, &rat);
+    add_ability(&mut s, &cat, "haste");
+    s.card_pool.get_mut(&cat).unwrap().card.subtypes = vec!["cat".to_string()];
+    s.card_pool.get_mut(&rat).unwrap().card.cannot_block_subtypes = vec!["cat".to_string()];
+    enter_combat(&mut s);
+    s.declare_attacker(&cat, None).unwrap();
+    s.confirm_attacks().unwrap();
+    assert_eq!(
+        s.declare_blocker(&rat, &cat, None),
+        Err(CombatError::BlockerCannotBlockSubtype)
+    );
+}
+
+#[test]
+fn blocker_without_cannot_block_subtype_can_still_block() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cat = s.a.hand[0].clone();
+    let dog = s.b.hand[0].clone();
+    put_on_board(&mut s, PlayerId::A, &cat);
+    put_on_board(&mut s, PlayerId::B, &dog);
+    add_ability(&mut s, &cat, "haste");
+    s.card_pool.get_mut(&cat).unwrap().card.subtypes = vec!["cat".to_string()];
+    // dog has no cannot_block_subtypes restriction — should block fine.
+    enter_combat(&mut s);
+    s.declare_attacker(&cat, None).unwrap();
+    s.confirm_attacks().unwrap();
+    assert!(s.declare_blocker(&dog, &cat, None).is_ok());
+}
+
+#[test]
 fn tapped_blocker_cannot_block() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let atk = s.a.hand[0].clone();

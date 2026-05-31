@@ -333,6 +333,13 @@ pub struct Card {
     #[serde(default)]
     pub timing: Option<Timing>,
     pub subtypes: Vec<String>,
+    /// Subtypes this creature cannot block. Combat rejects a declared
+    /// block when `attacker.subtypes ∩ blocker.cannot_block_subtypes`
+    /// is non-empty (case-insensitive). Empty for most cards. Used by
+    /// rats ("can't block cats.") and any future "<X> can't block <Y>"
+    /// flavor pair.
+    #[serde(default)]
+    pub cannot_block_subtypes: Vec<String>,
     pub symbol: String,
     pub cost: Vec<CostComponent>,
     pub abilities: Vec<String>,
@@ -734,6 +741,10 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     let kind_s = table.get::<Option<String>>("type")?.unwrap_or_default();
     let (kind, timing) = parse_type(&kind_s).map_err(mlua::Error::runtime)?;
     let subtypes = read_string_vec(&table, "subtypes")?;
+    let cannot_block_subtypes = read_string_vec(&table, "cannot_block_subtypes")?
+        .into_iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
     let abilities = read_string_vec(&table, "abilities")?;
     let flavor = table.get::<Option<String>>("flavor")?.unwrap_or_default();
     let colors = read_color_vec(&table)?;
@@ -749,6 +760,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         kind,
         timing,
         subtypes,
+        cannot_block_subtypes,
         symbol,
         cost,
         abilities,
