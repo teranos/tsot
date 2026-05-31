@@ -15,6 +15,7 @@ return {
     {amount = 2, source = "graveyard"},
   },
   abilities = {
+    "reach.",
     "this creature gets +1/+1 for each mutation attached to it.",
   },
   flavor = "What!?",

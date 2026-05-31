@@ -340,6 +340,13 @@ pub struct Card {
     /// flavor pair.
     #[serde(default)]
     pub cannot_block_subtypes: Vec<String>,
+    /// Subtypes this creature CAN block as an exception to flying.
+    /// When `attacker.subtypes ∩ blocker.can_block_subtypes` is non-
+    /// empty, the flying-blocker requirement is waived for that pair.
+    /// Used by cats ("can block birds.") — the predator-prey override.
+    /// Does NOT bypass `unblockable` or other non-flying restrictions.
+    #[serde(default)]
+    pub can_block_subtypes: Vec<String>,
     pub symbol: String,
     pub cost: Vec<CostComponent>,
     pub abilities: Vec<String>,
@@ -745,6 +752,10 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         .into_iter()
         .map(|s| s.to_ascii_lowercase())
         .collect();
+    let can_block_subtypes = read_string_vec(&table, "can_block_subtypes")?
+        .into_iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
     let abilities = read_string_vec(&table, "abilities")?;
     let flavor = table.get::<Option<String>>("flavor")?.unwrap_or_default();
     let colors = read_color_vec(&table)?;
@@ -761,6 +772,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         timing,
         subtypes,
         cannot_block_subtypes,
+        can_block_subtypes,
         symbol,
         cost,
         abilities,

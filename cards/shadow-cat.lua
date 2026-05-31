@@ -1,12 +1,14 @@
--- Vanilla single-color creature for pool diversity.
--- Hand-only cost; 1 baseline, 2 for top-end bodies (3/4, 4/3).
+-- Single-color vanilla cat. Predator-prey override: can block birds
+-- despite flying (engine field can_block_subtypes); ability text
+-- mirrors the engine rule.
 return {
   id = "shadow-cat",
   name = "Shadow Cat",
   type = "creature",
   colors = {"black"},
   subtypes = {"cat"},
+  can_block_subtypes = {"bird"},
   cost = {{amount = 1, source = "hand"}},
   stats = {x = 3, y = 3},
-  abilities = {},
+  abilities = {"can block birds."},
 }

@@ -226,10 +226,36 @@ impl GameState {
             return Err(CombatError::AttackerUnblockable);
         }
         let attacker_has_flying = self.has_keyword(attacker, "flying");
+        let blocker_has_reach = self.has_keyword(blocker, "reach");
+        // Predator-prey exception: blocker.can_block_subtypes lists
+        // subtypes the blocker can pin down regardless of flying
+        // (e.g., cats can block birds). Empty for most cards.
+        let blocker_can_subtype_override = {
+            let attacker_subs: Vec<String> = self
+                .card_pool
+                .get(attacker)
+                .map(|i| {
+                    i.card
+                        .subtypes
+                        .iter()
+                        .map(|s| s.to_ascii_lowercase())
+                        .collect()
+                })
+                .unwrap_or_default();
+            blocker_inst
+                .card
+                .can_block_subtypes
+                .iter()
+                .any(|s| attacker_subs.iter().any(|a| a == s))
+        };
 
-        // B.11: if attacker has flying, blocker must have flying.
-        // (The "explicit anti-flying" exception has no anchor in the current corpus.)
-        if attacker_has_flying && !blocker_has_flying {
+        // B.11: if attacker has flying, blocker must have flying OR reach
+        // OR a matching subtype override (cats block birds).
+        if attacker_has_flying
+            && !blocker_has_flying
+            && !blocker_has_reach
+            && !blocker_can_subtype_override
+        {
             return Err(CombatError::FlyingMustBeBlockedByFlyer);
         }
 

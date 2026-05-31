@@ -10,3 +10,5 @@ champion.json
 champion-*.json
 evolved-*.json
 champions-report.html
+champions-grid.html
+matchup-evolved.html

@@ -6,6 +6,6 @@ return {
   colors = {"blue"},
   subtypes = {"bat"},
   cost = {{amount = 1, source = "hand"}},
-  stats = {x = 1, y = 3},
+  stats = {x = 1, y = 2},
   abilities = {"flying."},
 }
