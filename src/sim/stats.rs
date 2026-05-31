@@ -8,7 +8,14 @@ use tsot::game::PlayerId;
 
 use super::variants::DeckVariant;
 
+/// Many fields are now `#[allow(dead_code)]` after the variant matchup
+/// runner was removed — they were emitted into the HTML report. They
+/// remain on the struct because the engine's `run_game` writer still
+/// populates them and removing them would touch many call sites for no
+/// near-term benefit. If a future report needs them, no plumbing change
+/// is required.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct GameStats {
     pub turns: u32,
     pub winner: PlayerId,

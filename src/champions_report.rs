@@ -7,20 +7,63 @@ use std::collections::{BTreeMap, BTreeSet};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use tsot::Card;
 
-use crate::report::CSS;
+use crate::report_style::CSS;
 use crate::sim::evolved_deck::EvolvedDeck;
+use crate::ChampGameStats;
 
 pub(crate) fn write_html_report(
     champions: &[EvolvedDeck],
     playable_pool: &[Card],
     dir: &str,
     path: &str,
+    game_stats: &[ChampGameStats],
 ) -> std::io::Result<()> {
-    let markup = build(champions, playable_pool, dir);
+    let markup = build(champions, playable_pool, dir, game_stats);
     std::fs::write(path, markup.into_string())
 }
 
-fn build(champions: &[EvolvedDeck], playable_pool: &[Card], dir: &str) -> Markup {
+struct GameRow {
+    label: String,
+    count: usize,
+    min: u32,
+    median: u32,
+    mean: f64,
+    max: u32,
+    attacks_avg: f64,
+    milled_avg: f64,
+}
+
+fn build(
+    champions: &[EvolvedDeck],
+    playable_pool: &[Card],
+    dir: &str,
+    game_stats: &[ChampGameStats],
+) -> Markup {
+    // Pre-compute per-champion game-row aggregates so the maud template
+    // stays declarative (no statement blocks).
+    let game_rows: Vec<GameRow> = champions
+        .iter()
+        .zip(game_stats.iter())
+        .filter(|(_, gs)| !gs.turns.is_empty())
+        .map(|(c, gs)| {
+            let mut ts = gs.turns.clone();
+            ts.sort_unstable();
+            let count = ts.len();
+            let mean = ts.iter().sum::<u32>() as f64 / count as f64;
+            let attacks_avg = gs.attacks as f64 / count as f64;
+            let milled_avg = gs.milled as f64 / count as f64;
+            GameRow {
+                label: c.label.clone(),
+                count,
+                min: *ts.first().unwrap(),
+                median: ts[ts.len() / 2],
+                mean,
+                max: *ts.last().unwrap(),
+                attacks_avg,
+                milled_avg,
+            }
+        })
+        .collect();
     let n = champions.len();
     let fits: Vec<f64> = champions.iter().map(|c| c.fitness).collect();
     let fit_mean: f64 = if n > 0 {
@@ -236,6 +279,39 @@ fn build(champions: &[EvolvedDeck], playable_pool: &[Card], dir: &str) -> Markup
                                 td.num { (c.generations_run) }
                                 td.num { (unique.len()) }
                                 td.num { (c.card_ids.len()) }
+                            }
+                        }
+                    }
+                }
+
+                @if !game_rows.is_empty() {
+                    h2 { "Game-level sample (per champion vs baselines)" }
+                    p.note { "Sampled via `--sample-games N`. Lower mean turns = faster deck. Attacks/milled are per-game averages from the champion's seat." }
+                    table.summary {
+                        thead {
+                            tr {
+                                th { "champion" }
+                                th.num { "games" }
+                                th.num { "min turns" }
+                                th.num { "median turns" }
+                                th.num { "mean turns" }
+                                th.num { "max turns" }
+                                th.num { "attacks/g" }
+                                th.num { "milled/g" }
+                            }
+                        }
+                        tbody {
+                            @for row in &game_rows {
+                                tr {
+                                    td { (row.label) }
+                                    td.num { (row.count) }
+                                    td.num { (row.min) }
+                                    td.num { (row.median) }
+                                    td.num { (format!("{:.1}", row.mean)) }
+                                    td.num { (row.max) }
+                                    td.num { (format!("{:.1}", row.attacks_avg)) }
+                                    td.num { (format!("{:.1}", row.milled_avg)) }
+                                }
                             }
                         }
                     }

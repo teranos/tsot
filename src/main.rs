@@ -1,19 +1,15 @@
 mod champions_report;
-mod report;
+mod report_style;
 mod sim;
 
 use clap::{Parser, Subcommand};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use std::collections::BTreeSet;
 use std::path::Path;
 use tsot::card::{Card, CardRegistry, CardType, CostSource};
 use tsot::game::GameState;
 
-use sim::{
-    build_random_deck, mandatory_for_variant, print_aggregate, run_evolve, run_game,
-    variant_label, variant_pool, DeckToken, DeckVariant, EvolveConfig, GameStats, Side, VARIANTS,
-};
+use sim::{run_evolve, EvolveConfig};
 use sim::evolved_deck::EvolvedDeck;
 use sim::fitness::fitness_breakdown;
 
@@ -30,8 +26,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run the variant matchup sweep (the default behavior).
-    Matchup,
     /// Round-robin matchup grid between evolved/baseline decks.
     MatchupEvolved(MatchupEvolvedArgs),
     /// Evolve a deck via genetic algorithm against a gauntlet.
@@ -103,6 +97,19 @@ struct ChampionsReportArgs {
     /// Single-linkage clustering then groups linked decks transitively.
     #[arg(long = "cluster-threshold", default_value_t = 0.7)]
     cluster_threshold: f64,
+    /// Sample games per champion-vs-baseline pairing. Default 0 = skip
+    /// game-level stats (fast, card-level only). With N > 0, each
+    /// champion plays N games vs each baseline (both seats) and the
+    /// report includes per-champion turn counts + action totals.
+    #[arg(long = "sample-games", default_value_t = 0)]
+    sample_games: u32,
+    /// Directory of baseline opponents for the sample games. Default
+    /// `baselines/`. Only used when `--sample-games > 0`.
+    #[arg(long = "baselines", default_value = "baselines")]
+    baselines: String,
+    /// Seed for the sample-game RNG (for reproducibility).
+    #[arg(long, default_value_t = 0xEA_C8, value_parser = parse_u64_hex_or_dec)]
+    seed: u64,
 }
 
 #[derive(Parser)]
@@ -179,29 +186,6 @@ fn rank_suffixed_path(base: &str, rank: usize, total: usize) -> String {
         Some(parent) if !parent.is_empty() => format!("{parent}/{stem}-rank{rank}.{ext}"),
         _ => format!("{stem}-rank{rank}.{ext}"),
     }
-}
-
-/// Master seed for the sim's RNG. Default: fresh per run from system
-/// entropy. Override via env var `TSOT_SEED=<integer>`.
-fn pick_seed() -> u64 {
-    std::env::var("TSOT_SEED")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or_else(|| {
-            use rand::RngCore;
-            StdRng::from_entropy().next_u64()
-        })
-}
-
-/// Games per matchup cell. Override with `TSOT_GAMES_PER_MATCHUP=<n>`.
-const DEFAULT_GAMES_PER_MATCHUP: usize = 100;
-
-fn games_per_matchup() -> usize {
-    std::env::var("TSOT_GAMES_PER_MATCHUP")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_GAMES_PER_MATCHUP)
 }
 
 /// Pretty-print a deck's card-id list grouped by count. 50-card deck →
@@ -480,6 +464,10 @@ fn run_matchup_evolved(
     println!();
 
     let mut wins: Vec<Vec<u32>> = vec![vec![0; n]; n];
+    let mut all_stats: Vec<sim::GameStats> = Vec::with_capacity(n * n * args.games as usize);
+    // Parallel index: which (a_idx, b_idx) produced each entry in
+    // all_stats — used for per-deck aggregation later.
+    let mut game_keys: Vec<(usize, usize)> = Vec::with_capacity(n * n * args.games as usize);
     let t0 = std::time::Instant::now();
     let mut rng = StdRng::seed_from_u64(args.seed);
     for i in 0..n {
@@ -493,14 +481,271 @@ fn run_matchup_evolved(
                 if stats.winner == tsot::game::PlayerId::A {
                     wins[i][j] += 1;
                 }
+                all_stats.push(stats);
+                game_keys.push((i, j));
             }
         }
     }
     let elapsed = t0.elapsed();
 
+    // Aggregate game-level metrics across all cells.
+    let label_w = labels.iter().map(|s| s.len()).max().unwrap_or(8).max(8);
+    let total_games = all_stats.len() as f64;
+    let mut turn_values: Vec<u32> = all_stats.iter().map(|s| s.turns).collect();
+    turn_values.sort_unstable();
+    let turn_min = turn_values.first().copied().unwrap_or(0);
+    let turn_max = turn_values.last().copied().unwrap_or(0);
+    let turn_mean: f64 = turn_values.iter().sum::<u32>() as f64 / total_games;
+    let turn_median = if turn_values.is_empty() {
+        0
+    } else {
+        turn_values[turn_values.len() / 2]
+    };
+    fn avg(stats: &[sim::GameStats], f: impl Fn(&sim::GameStats) -> f64) -> f64 {
+        stats.iter().map(f).sum::<f64>() / stats.len() as f64
+    }
+
+    println!();
+    println!(
+        "Turn count:  min {turn_min}   median {turn_median}   mean {turn_mean:.1}   max {turn_max}"
+    );
+    // Per-deck turn count: mean turn count of all games where this deck
+    // participated (either seat, excluding mirror-self matches).
+    let mut per_deck_turns: Vec<(u32, u32, u32, u32)> = vec![(0, 0, u32::MAX, 0); n]; // (sum, count, min, max)
+    for (idx, (i, j)) in game_keys.iter().enumerate() {
+        let t = all_stats[idx].turns;
+        for &k in &[*i, *j] {
+            let entry = &mut per_deck_turns[k];
+            entry.0 += t;
+            entry.1 += 1;
+            entry.2 = entry.2.min(t);
+            entry.3 = entry.3.max(t);
+        }
+    }
+    println!();
+    println!("Per-deck turn count (this deck plays either seat):");
+    println!("  {:<w$}  {:>8}  {:>8}  {:>8}  {:>8}", "deck", "min", "mean", "median", "max", w = label_w);
+    for (k, label) in labels.iter().enumerate().take(n) {
+        let (sum, count, mn, mx) = per_deck_turns[k];
+        let mean = if count > 0 { sum as f64 / count as f64 } else { 0.0 };
+        let mut ts: Vec<u32> = game_keys
+            .iter()
+            .enumerate()
+            .filter(|(_, (i, j))| *i == k || *j == k)
+            .map(|(idx, _)| all_stats[idx].turns)
+            .collect();
+        ts.sort_unstable();
+        let median = if ts.is_empty() { 0 } else { ts[ts.len() / 2] };
+        println!(
+            "  {:<w$}  {:>8}  {:>8.1}  {:>8}  {:>8}",
+            label, mn, mean, median, mx,
+            w = label_w
+        );
+    }
+
+    println!();
+    println!("Per-game averages (across {} games):", all_stats.len());
+    println!("                       A           B");
+    println!(
+        "  cards played        {:>6.1}      {:>6.1}",
+        avg(&all_stats, |s| s.a_played as f64),
+        avg(&all_stats, |s| s.b_played as f64)
+    );
+    println!(
+        "  attacks declared    {:>6.1}      {:>6.1}",
+        avg(&all_stats, |s| s.a_attacks as f64),
+        avg(&all_stats, |s| s.b_attacks as f64)
+    );
+    println!(
+        "  deaths (own creat.) {:>6.1}      {:>6.1}",
+        avg(&all_stats, |s| s.a_deaths as f64),
+        avg(&all_stats, |s| s.b_deaths as f64)
+    );
+    println!(
+        "  milled to exile     {:>6.1}      {:>6.1}",
+        avg(&all_stats, |s| s.a_milled_to_exile as f64),
+        avg(&all_stats, |s| s.b_milled_to_exile as f64)
+    );
+    println!(
+        "  final board size    {:>6.1}      {:>6.1}",
+        avg(&all_stats, |s| s.a_final_board as f64),
+        avg(&all_stats, |s| s.b_final_board as f64)
+    );
+    println!(
+        "  final graveyard     {:>6.1}      {:>6.1}",
+        avg(&all_stats, |s| s.a_final_gy as f64),
+        avg(&all_stats, |s| s.b_final_gy as f64)
+    );
+
+    println!();
+    println!("Event firing breakdown (per-game averages):");
+    println!("                          A         B    wired");
+    for ev in tsot::card::EventName::ALL {
+        let a_avg = avg(&all_stats, |s| {
+            s.event_fires.get(&ev).map(|v| v[0]).unwrap_or(0) as f64
+        });
+        let b_avg = avg(&all_stats, |s| {
+            s.event_fires.get(&ev).map(|v| v[1]).unwrap_or(0) as f64
+        });
+        let any_fired = all_stats
+            .iter()
+            .any(|s| s.event_fires.get(&ev).is_some_and(|v| v[0] + v[1] > 0));
+        let marker = if any_fired { "yes" } else { " no" };
+        println!("  {:20} {:>6.2}    {:>6.2}    {}", ev.lua_key(), a_avg, b_avg, marker);
+    }
+
+    println!();
+    println!("Engine + handler actions (totals across {} games):", all_stats.len());
+    println!("                              A         B");
+    for action in [
+        "draw", "mill", "damage", "move", "discard", "tap", "untap",
+        "add_status", "add_modifier", "choose_card", "choose_player",
+        "choose_int", "confirm",
+    ] {
+        let a_total: u64 = all_stats
+            .iter()
+            .map(|s| s.action_counts.get(action).map(|v| v[0]).unwrap_or(0) as u64)
+            .sum();
+        let b_total: u64 = all_stats
+            .iter()
+            .map(|s| s.action_counts.get(action).map(|v| v[1]).unwrap_or(0) as u64)
+            .sum();
+        println!("  game.{action:24} {a_total:>6}    {b_total:>6}");
+    }
+
+    println!();
+    println!("Future-simulation telemetry (per-game averages):");
+    println!("                          A         B");
+    println!(
+        "  preview attempts      {:>6.2}    {:>6.2}",
+        avg(&all_stats, |s| s.a_preview_attempts as f64),
+        avg(&all_stats, |s| s.b_preview_attempts as f64)
+    );
+    println!(
+        "  rolled back           {:>6.2}    {:>6.2}",
+        avg(&all_stats, |s| s.a_preview_rollbacks as f64),
+        avg(&all_stats, |s| s.b_preview_rollbacks as f64)
+    );
+    println!(
+        "  mutations explored    {:>6.1}    {:>6.1}",
+        avg(&all_stats, |s| s.a_preview_journal_size_total as f64),
+        avg(&all_stats, |s| s.b_preview_journal_size_total as f64)
+    );
+
+    println!();
+    let replay_avg = avg(&all_stats, |s| s.replay_journal_entries as f64);
+    let replay_min = all_stats
+        .iter()
+        .map(|s| s.replay_journal_entries)
+        .min()
+        .unwrap_or(0);
+    let replay_max = all_stats
+        .iter()
+        .map(|s| s.replay_journal_entries)
+        .max()
+        .unwrap_or(0);
+    println!(
+        "Replay journal entries per game:  avg {replay_avg:.1}  min {replay_min}  max {replay_max}"
+    );
+
+    println!();
+    println!("Pending mechanics (zero where the engine piece hasn't landed):");
+    println!("                                  A         B");
+    for (label, action) in [
+        ("sacrifices (cost P.16)", "sacrificed_as_cost"),
+        ("instant responses (R.1)", "instant_response_played"),
+        ("artifacts played (P.19)", "artifact_played"),
+        ("jewel-tap substitutions (P.24)", "jewel_tap_substitution"),
+    ] {
+        let a_avg = avg(&all_stats, |s| {
+            s.action_counts
+                .get(action)
+                .map(|v| v[0] as f64)
+                .unwrap_or(0.0)
+        });
+        let b_avg = avg(&all_stats, |s| {
+            s.action_counts
+                .get(action)
+                .map(|v| v[1] as f64)
+                .unwrap_or(0.0)
+        });
+        println!("  {label:32} {a_avg:>6.2}    {b_avg:>6.2}");
+    }
+
+    // Per-card performance: total plays across all games (both sides
+    // combined), mean turn first played. Helps spot which cards are
+    // load-bearing vs filler in the deck pool.
+    let mut card_play_totals: std::collections::BTreeMap<String, u32> =
+        std::collections::BTreeMap::new();
+    let mut card_first_turn_sum: std::collections::BTreeMap<String, (u32, u32)> =
+        std::collections::BTreeMap::new(); // (turn_sum, count)
+    for s in &all_stats {
+        for (cid, (a_turn, b_turn)) in &s.card_play_turns {
+            *card_play_totals.entry(cid.clone()).or_insert(0) += 1;
+            for turn in [*a_turn, *b_turn] {
+                if turn > 0 {
+                    let entry = card_first_turn_sum.entry(cid.clone()).or_insert((0, 0));
+                    entry.0 += turn;
+                    entry.1 += 1;
+                }
+            }
+        }
+    }
+    let mut card_rows: Vec<(String, u32, f64)> = card_play_totals
+        .iter()
+        .map(|(cid, count)| {
+            let (sum, n) = card_first_turn_sum.get(cid).copied().unwrap_or((0, 0));
+            let mean_turn = if n > 0 { sum as f64 / n as f64 } else { 0.0 };
+            (cid.clone(), *count, mean_turn)
+        })
+        .collect();
+    card_rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    println!();
+    println!("Top cards by play frequency (across {} games):", all_stats.len());
+    println!("  {:<35} {:>10}  {:>10}", "card_id", "games", "mean turn");
+    for (cid, count, mean_turn) in card_rows.iter().take(20) {
+        let pct = 100.0 * (*count as f64) / (all_stats.len() as f64);
+        println!(
+            "  {:<35} {:>5}  ({:>3.0}%)  {:>10.1}",
+            cid, count, pct, mean_turn
+        );
+    }
+
+    // Interesting games — three picks: shortest, longest, biggest mill
+    // imbalance (most one-sided defender-decking).
+    if !all_stats.is_empty() {
+        let mut by_turns: Vec<usize> = (0..all_stats.len()).collect();
+        by_turns.sort_by_key(|i| all_stats[*i].turns);
+        let shortest = by_turns[0];
+        let longest = *by_turns.last().unwrap();
+        let mut by_mill: Vec<usize> = (0..all_stats.len()).collect();
+        by_mill.sort_by_key(|i| {
+            let s = &all_stats[*i];
+            std::cmp::Reverse(
+                (s.a_milled_to_exile as i64 - s.b_milled_to_exile as i64).abs(),
+            )
+        });
+        let rout = by_mill[0];
+        println!();
+        println!("Interesting games:");
+        for (label, idx) in [
+            ("shortest", shortest),
+            ("longest ", longest),
+            ("rout    ", rout),
+        ] {
+            let s = &all_stats[idx];
+            let (i, j) = game_keys[idx];
+            println!(
+                "  {label}  turns={:>2}  winner={:?}  {} (A) vs {} (B)  milled A/B = {}/{}",
+                s.turns, s.winner, labels[i], labels[j],
+                s.a_milled_to_exile, s.b_milled_to_exile
+            );
+        }
+    }
+
+    println!();
     // Print the win-rate matrix.
     println!("Win-rate matrix (rows = side A, cols = side B; cell = A's win-rate):");
-    let label_w = labels.iter().map(|s| s.len()).max().unwrap_or(8).max(8);
     print!("{:>w$} ", "", w = label_w);
     for j in 0..n {
         print!("{:>9}", format!("[{j}]"));
@@ -558,7 +803,15 @@ fn run_matchup_evolved(
 
     // HTML grid.
     let html_path = &args.html;
-    match write_matchup_evolved_html(&labels, &wins, args.games, &args.dir, html_path) {
+    match write_matchup_evolved_html(
+        &labels,
+        &wins,
+        args.games,
+        &args.dir,
+        html_path,
+        &all_stats,
+        &game_keys,
+    ) {
         Ok(()) => println!("HTML grid written to {html_path}"),
         Err(e) => eprintln!("failed to write HTML to {html_path}: {e}"),
     }
@@ -571,6 +824,8 @@ fn write_matchup_evolved_html(
     games: u32,
     dir: &str,
     path: &str,
+    all_stats: &[sim::GameStats],
+    game_keys: &[(usize, usize)],
 ) -> std::io::Result<()> {
     use maud::{html, PreEscaped, DOCTYPE};
     let n = labels.len();
@@ -580,6 +835,193 @@ fn write_matchup_evolved_html(
         let green = (t * 100.0 + 30.0) as u8;
         format!("background: rgb({red},{green},40); color: #eee;")
     }
+
+    // Aggregate metrics across all games.
+    fn avg(stats: &[sim::GameStats], f: impl Fn(&sim::GameStats) -> f64) -> f64 {
+        if stats.is_empty() {
+            0.0
+        } else {
+            stats.iter().map(f).sum::<f64>() / stats.len() as f64
+        }
+    }
+    let mut turn_values: Vec<u32> = all_stats.iter().map(|s| s.turns).collect();
+    turn_values.sort_unstable();
+    let turn_min = turn_values.first().copied().unwrap_or(0);
+    let turn_max = turn_values.last().copied().unwrap_or(0);
+    let turn_mean = if turn_values.is_empty() {
+        0.0
+    } else {
+        turn_values.iter().sum::<u32>() as f64 / turn_values.len() as f64
+    };
+    let turn_median = if turn_values.is_empty() {
+        0
+    } else {
+        turn_values[turn_values.len() / 2]
+    };
+
+    let per_game_rows: Vec<(&str, f64, f64)> = vec![
+        ("cards played", avg(all_stats, |s| s.a_played as f64), avg(all_stats, |s| s.b_played as f64)),
+        ("attacks declared", avg(all_stats, |s| s.a_attacks as f64), avg(all_stats, |s| s.b_attacks as f64)),
+        ("deaths (own)", avg(all_stats, |s| s.a_deaths as f64), avg(all_stats, |s| s.b_deaths as f64)),
+        ("milled to exile", avg(all_stats, |s| s.a_milled_to_exile as f64), avg(all_stats, |s| s.b_milled_to_exile as f64)),
+        ("final board size", avg(all_stats, |s| s.a_final_board as f64), avg(all_stats, |s| s.b_final_board as f64)),
+        ("final graveyard", avg(all_stats, |s| s.a_final_gy as f64), avg(all_stats, |s| s.b_final_gy as f64)),
+    ];
+
+    let event_rows: Vec<(String, f64, f64, bool)> = tsot::card::EventName::ALL
+        .iter()
+        .map(|ev| {
+            let a = avg(all_stats, |s| s.event_fires.get(ev).map(|v| v[0]).unwrap_or(0) as f64);
+            let b = avg(all_stats, |s| s.event_fires.get(ev).map(|v| v[1]).unwrap_or(0) as f64);
+            let any = all_stats
+                .iter()
+                .any(|s| s.event_fires.get(ev).is_some_and(|v| v[0] + v[1] > 0));
+            (ev.lua_key().to_string(), a, b, any)
+        })
+        .collect();
+
+    // Per-deck turn stats (mean, min, median, max) when this deck plays.
+    let per_deck_turns: Vec<(f64, u32, u32, u32, u32)> = (0..labels.len())
+        .map(|k| {
+            let mut ts: Vec<u32> = game_keys
+                .iter()
+                .enumerate()
+                .filter(|(_, (i, j))| *i == k || *j == k)
+                .map(|(idx, _)| all_stats[idx].turns)
+                .collect();
+            if ts.is_empty() {
+                (0.0, 0, 0, 0, 0)
+            } else {
+                ts.sort_unstable();
+                let count = ts.len() as u32;
+                let mean = ts.iter().sum::<u32>() as f64 / ts.len() as f64;
+                let median = ts[ts.len() / 2];
+                let mn = *ts.first().unwrap();
+                let mx = *ts.last().unwrap();
+                (mean, count, mn, median, mx)
+            }
+        })
+        .collect();
+
+    let action_rows: Vec<(String, u64, u64)> = [
+        "draw", "mill", "damage", "move", "discard", "tap", "untap",
+        "add_status", "add_modifier", "choose_card", "choose_player",
+        "choose_int", "confirm",
+    ]
+    .iter()
+    .map(|action| {
+        let a: u64 = all_stats
+            .iter()
+            .map(|s| s.action_counts.get(*action).map(|v| v[0]).unwrap_or(0) as u64)
+            .sum();
+        let b: u64 = all_stats
+            .iter()
+            .map(|s| s.action_counts.get(*action).map(|v| v[1]).unwrap_or(0) as u64)
+            .sum();
+        (action.to_string(), a, b)
+    })
+    .collect();
+
+    let future_sim_rows: Vec<(&str, f64, f64)> = vec![
+        (
+            "preview attempts",
+            avg(all_stats, |s| s.a_preview_attempts as f64),
+            avg(all_stats, |s| s.b_preview_attempts as f64),
+        ),
+        (
+            "rolled back",
+            avg(all_stats, |s| s.a_preview_rollbacks as f64),
+            avg(all_stats, |s| s.b_preview_rollbacks as f64),
+        ),
+        (
+            "mutations explored",
+            avg(all_stats, |s| s.a_preview_journal_size_total as f64),
+            avg(all_stats, |s| s.b_preview_journal_size_total as f64),
+        ),
+    ];
+
+    let replay_avg = avg(all_stats, |s| s.replay_journal_entries as f64);
+    let replay_min = all_stats
+        .iter()
+        .map(|s| s.replay_journal_entries)
+        .min()
+        .unwrap_or(0);
+    let replay_max = all_stats
+        .iter()
+        .map(|s| s.replay_journal_entries)
+        .max()
+        .unwrap_or(0);
+
+    // Top-N played cards across all games.
+    let mut card_play_totals: std::collections::BTreeMap<String, u32> =
+        std::collections::BTreeMap::new();
+    let mut card_first_turn_sum: std::collections::BTreeMap<String, (u32, u32)> =
+        std::collections::BTreeMap::new();
+    for s in all_stats {
+        for (cid, (a_turn, b_turn)) in &s.card_play_turns {
+            *card_play_totals.entry(cid.clone()).or_insert(0) += 1;
+            for turn in [*a_turn, *b_turn] {
+                if turn > 0 {
+                    let entry = card_first_turn_sum.entry(cid.clone()).or_insert((0, 0));
+                    entry.0 += turn;
+                    entry.1 += 1;
+                }
+            }
+        }
+    }
+    let mut card_rows: Vec<(String, u32, f64)> = card_play_totals
+        .iter()
+        .map(|(cid, count)| {
+            let (sum, n) = card_first_turn_sum.get(cid).copied().unwrap_or((0, 0));
+            let mean_turn = if n > 0 { sum as f64 / n as f64 } else { 0.0 };
+            (cid.clone(), *count, mean_turn)
+        })
+        .collect();
+    card_rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let total_game_count = all_stats.len();
+
+    // Interesting games (shortest, longest, rout).
+    let interesting: Vec<(&str, usize)> = if all_stats.is_empty() {
+        Vec::new()
+    } else {
+        let mut by_turns: Vec<usize> = (0..all_stats.len()).collect();
+        by_turns.sort_by_key(|i| all_stats[*i].turns);
+        let shortest = by_turns[0];
+        let longest = *by_turns.last().unwrap();
+        let mut by_mill: Vec<usize> = (0..all_stats.len()).collect();
+        by_mill.sort_by_key(|i| {
+            let s = &all_stats[*i];
+            std::cmp::Reverse(
+                (s.a_milled_to_exile as i64 - s.b_milled_to_exile as i64).abs(),
+            )
+        });
+        let rout = by_mill[0];
+        vec![("shortest", shortest), ("longest", longest), ("rout", rout)]
+    };
+
+    let pending_rows: Vec<(&str, f64, f64)> = vec![
+        ("sacrifices (cost P.16)", "sacrificed_as_cost"),
+        ("instant responses (R.1)", "instant_response_played"),
+        ("artifacts played (P.19)", "artifact_played"),
+        ("jewel-tap substitutions (P.24)", "jewel_tap_substitution"),
+    ]
+    .into_iter()
+    .map(|(label, action)| {
+        let a = avg(all_stats, |s| {
+            s.action_counts
+                .get(action)
+                .map(|v| v[0] as f64)
+                .unwrap_or(0.0)
+        });
+        let b = avg(all_stats, |s| {
+            s.action_counts
+                .get(action)
+                .map(|v| v[1] as f64)
+                .unwrap_or(0.0)
+        });
+        (label, a, b)
+    })
+    .collect();
 
     // Pre-compute row averages and per-deck both-seat win rates so the
     // maud template can stay declarative.
@@ -616,7 +1058,7 @@ fn write_matchup_evolved_html(
             head {
                 meta charset="utf-8";
                 title { "tsot — matchup-evolved grid" }
-                style { (PreEscaped(report::CSS)) }
+                style { (PreEscaped(report_style::CSS)) }
             }
             body {
                 h1 { "tsot — matchup-evolved grid" }
@@ -626,6 +1068,169 @@ fn write_matchup_evolved_html(
                     div { span.k { "games/cell" } b { (games) } }
                     div { span.k { "total games" } b { (n * n * games as usize) } }
                 }
+                h2 { "Turn count" }
+                div.stat-row {
+                    div.stat { div.label { "min" } b { (turn_min) } }
+                    div.stat { div.label { "median" } b { (turn_median) } }
+                    div.stat { div.label { "mean" } b { (format!("{turn_mean:.1}")) } }
+                    div.stat { div.label { "max" } b { (turn_max) } }
+                }
+
+                h2 { "Per-deck turn count" }
+                p.note { "Games where this deck plays either seat. Lower = faster deck." }
+                table.summary {
+                    thead {
+                        tr {
+                            th { "deck" }
+                            th.num { "games" }
+                            th.num { "min" }
+                            th.num { "median" }
+                            th.num { "mean" }
+                            th.num { "max" }
+                        }
+                    }
+                    tbody {
+                        @for (k, label) in labels.iter().enumerate() {
+                            @let (mean, count, mn, median, mx) = per_deck_turns[k];
+                            tr {
+                                td { (label) }
+                                td.num { (count) }
+                                td.num { (mn) }
+                                td.num { (median) }
+                                td.num { (format!("{mean:.1}")) }
+                                td.num { (mx) }
+                            }
+                        }
+                    }
+                }
+
+                h2 { "Per-game averages" }
+                table.summary {
+                    thead { tr { th { "metric" } th.num { "A" } th.num { "B" } } }
+                    tbody {
+                        @for (label, a, b) in &per_game_rows {
+                            tr { td { (label) } td.num { (format!("{a:.1}")) } td.num { (format!("{b:.1}")) } }
+                        }
+                    }
+                }
+
+                h2 { "Event firing breakdown" }
+                p.note { "Per-game averages; " em { "wired" } " = 'yes' if any game fired this event." }
+                table.summary {
+                    thead { tr { th { "event" } th.num { "A" } th.num { "B" } th { "wired" } } }
+                    tbody {
+                        @for (name, a, b, wired) in &event_rows {
+                            tr {
+                                td { (name) }
+                                td.num { (format!("{a:.2}")) }
+                                td.num { (format!("{b:.2}")) }
+                                td { @if *wired { "yes" } @else { span.muted { "no" } } }
+                            }
+                        }
+                    }
+                }
+
+                h2 { "Engine + handler action totals" }
+                p.note { "Totals across all " em { (all_stats.len()) } " games." }
+                table.summary {
+                    thead { tr { th { "action" } th.num { "A" } th.num { "B" } } }
+                    tbody {
+                        @for (name, a, b) in &action_rows {
+                            tr {
+                                td { (format!("game.{name}")) }
+                                td.num { (a) }
+                                td.num { (b) }
+                            }
+                        }
+                    }
+                }
+
+                h2 { "Future-simulation telemetry" }
+                p.note { "Per-game averages — every play opens a journal that the AI may roll back." }
+                table.summary {
+                    thead { tr { th { "metric" } th.num { "A" } th.num { "B" } } }
+                    tbody {
+                        @for (label, a, b) in &future_sim_rows {
+                            tr { td { (label) } td.num { (format!("{a:.2}")) } td.num { (format!("{b:.2}")) } }
+                        }
+                    }
+                }
+
+                h2 { "Replay journal" }
+                div.stat-row {
+                    div.stat { div.label { "avg entries / game" } b { (format!("{replay_avg:.1}")) } }
+                    div.stat { div.label { "min" } b { (replay_min) } }
+                    div.stat { div.label { "max" } b { (replay_max) } }
+                }
+
+                h2 { "Pending mechanics" }
+                p.note { "Per-game averages. Zero indicates the engine piece hasn't landed (or the cards aren't being played)." }
+                table.summary {
+                    thead { tr { th { "mechanic" } th.num { "A" } th.num { "B" } } }
+                    tbody {
+                        @for (label, a, b) in &pending_rows {
+                            tr { td { (label) } td.num { (format!("{a:.2}")) } td.num { (format!("{b:.2}")) } }
+                        }
+                    }
+                }
+
+                h2 { "Top cards by play frequency" }
+                p.note { "Across all " em { (total_game_count) } " games (both sides combined). " em { "mean turn" } " is the average turn this card is first played when it appears." }
+                table.summary {
+                    thead {
+                        tr {
+                            th { "card id" }
+                            th.num { "games" }
+                            th.num { "%" }
+                            th.num { "mean turn" }
+                        }
+                    }
+                    tbody {
+                        @for (cid, count, mean_turn) in card_rows.iter().take(30) {
+                            @let pct = 100.0 * (*count as f64) / (total_game_count as f64);
+                            tr {
+                                td { (cid) }
+                                td.num { (count) }
+                                td.num { (format!("{pct:.0}%")) }
+                                td.num { (format!("{mean_turn:.1}")) }
+                            }
+                        }
+                    }
+                }
+
+                @if !interesting.is_empty() {
+                    h2 { "Interesting games" }
+                    p.note { "Three picks from the run: shortest turn count, longest turn count, biggest mill imbalance." }
+                    table.summary {
+                        thead {
+                            tr {
+                                th { "category" }
+                                th.num { "turns" }
+                                th { "winner" }
+                                th { "deck A" }
+                                th { "deck B" }
+                                th.num { "milled A" }
+                                th.num { "milled B" }
+                            }
+                        }
+                        tbody {
+                            @for (cat, idx) in &interesting {
+                                @let s = &all_stats[*idx];
+                                @let (i, j) = game_keys[*idx];
+                                tr {
+                                    td { (cat) }
+                                    td.num { (s.turns) }
+                                    td { (format!("{:?}", s.winner)) }
+                                    td { (labels[i]) }
+                                    td { (labels[j]) }
+                                    td.num { (s.a_milled_to_exile) }
+                                    td.num { (s.b_milled_to_exile) }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 h2 { "Win-rate matrix" }
                 p.note {
                     "Rows = side A, columns = side B. Cell value = A's win-rate over " em { (games) } " games of (row, column). Heat shows wins (green) vs losses (red)."
@@ -679,10 +1284,22 @@ fn write_matchup_evolved_html(
     std::fs::write(path, markup.into_string())
 }
 
+/// Per-champion game-level aggregate from `--sample-games`. Empty
+/// `turns` means no sample run was done.
+#[derive(Default, Clone)]
+pub(crate) struct ChampGameStats {
+    pub turns: Vec<u32>,
+    pub attacks: u64,
+    pub deaths: u64,
+    pub milled: u64,
+    pub played: u64,
+}
+
 /// Aggregate card-level signal across all saved EvolvedDeck files in a
 /// directory. Prints frequency, mean copies, and fitness correlation —
 /// which cards consistently survive selection across many runs.
 fn run_champions_report(
+    registry: &CardRegistry,
     playable_pool: &[Card],
     args: &ChampionsReportArgs,
 ) -> mlua::Result<()> {
@@ -929,8 +1546,135 @@ fn run_champions_report(
         }
     }
 
+    // Optional game-level sampling: each champion plays N games vs each
+    // baseline (both seats). Aggregated to per-champion turn count +
+    // action totals so champions-report can answer "which champion runs
+    // fast games?" / "which mills the most?" — questions card-frequency
+    // alone can't.
+    let per_champ_game_stats: Vec<ChampGameStats> = if args.sample_games > 0 {
+        use rand::Rng;
+        let baselines_dir = std::path::Path::new(&args.baselines);
+        let mut baseline_decks: Vec<Vec<Card>> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(baselines_dir) {
+            let mut paths: Vec<std::path::PathBuf> = rd
+                .flatten()
+                .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
+                .map(|e| e.path())
+                .collect();
+            paths.sort();
+            for p in &paths {
+                if let Ok(d) = EvolvedDeck::load(p) {
+                    if let Ok(cards) = d.to_cards(registry) {
+                        baseline_decks.push(cards);
+                    }
+                }
+            }
+        }
+        if baseline_decks.is_empty() {
+            eprintln!(
+                "warning: --sample-games {} requested but no baselines in {} — skipping",
+                args.sample_games,
+                baselines_dir.display()
+            );
+            Vec::new()
+        } else {
+            println!();
+            println!(
+                "Sampling {} games × {} baselines × 2 seats = {} games per champion …",
+                args.sample_games,
+                baseline_decks.len(),
+                args.sample_games * baseline_decks.len() as u32 * 2
+            );
+            let t_sample = std::time::Instant::now();
+            let mut rng = StdRng::seed_from_u64(args.seed);
+            let mut out: Vec<ChampGameStats> = Vec::with_capacity(champions.len());
+            for champ in &champions {
+                let cards = match EvolvedDeck::to_cards(champ, registry) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        out.push(ChampGameStats::default());
+                        continue;
+                    }
+                };
+                let mut s = ChampGameStats::default();
+                for opp in &baseline_decks {
+                    for _ in 0..args.sample_games {
+                        for swap in [false, true] {
+                            let (a, b) = if swap {
+                                (opp.clone(), cards.clone())
+                            } else {
+                                (cards.clone(), opp.clone())
+                            };
+                            let state = GameState::new(a, b);
+                            let mut game_rng = StdRng::seed_from_u64(rng.gen());
+                            let mut log: Vec<String> = Vec::new();
+                            let (stats, _) =
+                                sim::run_game(state, &mut game_rng, &mut log, registry.lua());
+                            s.turns.push(stats.turns);
+                            // Champion's "side" depends on swap.
+                            if swap {
+                                s.attacks += stats.b_attacks as u64;
+                                s.deaths += stats.b_deaths as u64;
+                                s.milled += stats.b_milled_to_exile as u64;
+                                s.played += stats.b_played as u64;
+                            } else {
+                                s.attacks += stats.a_attacks as u64;
+                                s.deaths += stats.a_deaths as u64;
+                                s.milled += stats.a_milled_to_exile as u64;
+                                s.played += stats.a_played as u64;
+                            }
+                        }
+                    }
+                }
+                out.push(s);
+            }
+            println!(
+                "Done sampling in {:.2?}",
+                t_sample.elapsed()
+            );
+            out
+        }
+    } else {
+        Vec::new()
+    };
+
+    if !per_champ_game_stats.is_empty() {
+        println!();
+        println!("Per-champion game-level stats (vs baselines):");
+        println!(
+            "  {:<25}  {:>6}  {:>6}  {:>8}  {:>8}  {:>8}",
+            "champion", "min_t", "max_t", "mean_t", "attacks", "milled"
+        );
+        for (champ, gs) in champions.iter().zip(per_champ_game_stats.iter()) {
+            let mut ts = gs.turns.clone();
+            ts.sort_unstable();
+            if ts.is_empty() {
+                continue;
+            }
+            let count = ts.len() as f64;
+            let min_t = *ts.first().unwrap();
+            let max_t = *ts.last().unwrap();
+            let mean_t = ts.iter().sum::<u32>() as f64 / count;
+            println!(
+                "  {:<25}  {:>6}  {:>6}  {:>8.1}  {:>8.1}  {:>8.1}",
+                if champ.label.len() > 25 { &champ.label[..25] } else { &champ.label },
+                min_t,
+                max_t,
+                mean_t,
+                gs.attacks as f64 / count,
+                gs.milled as f64 / count
+            );
+        }
+    }
+
     if let Some(html_path) = &args.html {
-        match champions_report::write_html_report(&champions, playable_pool, &args.dir, html_path) {
+        match champions_report::write_html_report(
+            &champions,
+            playable_pool,
+            &args.dir,
+            html_path,
+            &per_champ_game_stats,
+        ) {
             Ok(()) => {
                 println!();
                 println!("HTML report written to {html_path}");
@@ -1239,7 +1983,7 @@ fn main() -> mlua::Result<()> {
         return run_ea(&registry, &playable_pool, args);
     }
     if let Some(Command::ChampionsReport(args)) = &cli.command {
-        return run_champions_report(&playable_pool, args);
+        return run_champions_report(&registry, &playable_pool, args);
     }
     if let Some(Command::MatchupEvolved(args)) = &cli.command {
         return run_matchup_evolved(&registry, args);
@@ -1248,195 +1992,10 @@ fn main() -> mlua::Result<()> {
         return run_curate_baselines(&registry, args);
     }
 
-    let seed = pick_seed();
-    println!("seed: {seed}");
-    let mut rng = StdRng::seed_from_u64(seed);
-    let mut all: Vec<GameStats> = Vec::new();
-    let mut last_log: Vec<String> = Vec::new();
-
-    let replay_out_path = std::env::var("TSOT_REPLAY_OUT").ok();
-
-    let t0 = std::time::Instant::now();
-    let mut last_deck_a_ids: Vec<String> = Vec::new();
-    let mut last_deck_b_ids: Vec<String> = Vec::new();
-    let mut last_journal: tsot::game::Journal = tsot::game::Journal::new();
-    let pools: Vec<(DeckVariant, Vec<Card>)> = VARIANTS
-        .iter()
-        .map(|v| (*v, variant_pool(&playable_pool, *v)))
-        .collect();
-    let games_per_cell = games_per_matchup();
-    let total_games = games_per_cell * VARIANTS.len() * VARIANTS.len();
-    println!();
-    println!("Variant pools:");
-    for (v, pool) in &pools {
-        println!("  {} — {} cards", variant_label(*v), pool.len());
-    }
-    println!();
-    println!(
-        "Running {} games per matchup × {} matchups = {} total",
-        games_per_cell,
-        VARIANTS.len() * VARIANTS.len(),
-        total_games
-    );
-    println!();
-
-    // Token-replay mode: if either TSOT_DECK_A_TOKEN or TSOT_DECK_B_TOKEN
-    // is set, skip the full matchup sweep and play a single game with the
-    // specified deck(s). When only one side is provided, the other falls
-    // back to game_index=0 in the same matchup.
-    let env_token_a = std::env::var("TSOT_DECK_A_TOKEN").ok();
-    let env_token_b = std::env::var("TSOT_DECK_B_TOKEN").ok();
-    let replay_mode = env_token_a.is_some() || env_token_b.is_some();
-
-    let mut last_token_a = String::new();
-    let mut last_token_b = String::new();
-
-    if replay_mode {
-        let token_a = env_token_a
-            .as_deref()
-            .map(|s| DeckToken::decode(s).expect("invalid TSOT_DECK_A_TOKEN"))
-            .unwrap_or_else(|| DeckToken {
-                master_seed: seed,
-                side: Side::A,
-                variant_a: DeckVariant::Ra,
-                variant_b: DeckVariant::Ra,
-                game_index: 0,
-            });
-        let token_b = env_token_b
-            .as_deref()
-            .map(|s| DeckToken::decode(s).expect("invalid TSOT_DECK_B_TOKEN"))
-            .unwrap_or_else(|| DeckToken {
-                master_seed: seed,
-                side: Side::B,
-                variant_a: token_a.variant_a,
-                variant_b: token_a.variant_b,
-                game_index: 0,
-            });
-        let v_a = token_a.variant_a;
-        let v_b = token_b.variant_b;
-        let pool_a = variant_pool(&playable_pool, v_a);
-        let pool_b = variant_pool(&playable_pool, v_b);
-        let mut rng_a = StdRng::seed_from_u64(token_a.per_deck_seed());
-        let mut rng_b = StdRng::seed_from_u64(token_b.per_deck_seed());
-        let deck_a = build_random_deck(&pool_a, &mut rng_a, 50, mandatory_for_variant(v_a));
-        let deck_b = build_random_deck(&pool_b, &mut rng_b, 50, mandatory_for_variant(v_b));
-        last_deck_a_ids = deck_a.iter().map(|c| c.id.clone()).collect();
-        last_deck_b_ids = deck_b.iter().map(|c| c.id.clone()).collect();
-        last_token_a = token_a.encode();
-        last_token_b = token_b.encode();
-        let deck_a_uniq: BTreeSet<String> = deck_a.iter().map(|c| c.id.clone()).collect();
-        let deck_b_uniq: BTreeSet<String> = deck_b.iter().map(|c| c.id.clone()).collect();
-        let state = GameState::new(deck_a, deck_b);
-        let (mut stats, journal) = run_game(state, &mut rng, &mut last_log, registry.lua());
-        stats.variant_a = v_a;
-        stats.variant_b = v_b;
-        stats.deck_a_ids = deck_a_uniq;
-        stats.deck_b_ids = deck_b_uniq;
-        stats.token_a = last_token_a.clone();
-        stats.token_b = last_token_b.clone();
-        stats.game_index = token_a.game_index;
-        all.push(stats);
-        last_journal = journal;
-        println!("[replay] single-game token mode — A={last_token_a} B={last_token_b}");
-    } else {
-        for &v_a in &VARIANTS {
-        for &v_b in &VARIANTS {
-            let pool_a = &pools.iter().find(|(v, _)| *v == v_a).unwrap().1;
-            let pool_b = &pools.iter().find(|(v, _)| *v == v_b).unwrap().1;
-            for game_index in 0..games_per_cell {
-                // Per-deck seeds derived from the (master_seed, side, v_a, v_b,
-                // game_index) tuple. Each deck reproducible from its token alone.
-                let token_a = DeckToken {
-                    master_seed: seed,
-                    side: Side::A,
-                    variant_a: v_a,
-                    variant_b: v_b,
-                    game_index: game_index as u32,
-                };
-                let token_b = DeckToken {
-                    master_seed: seed,
-                    side: Side::B,
-                    variant_a: v_a,
-                    variant_b: v_b,
-                    game_index: game_index as u32,
-                };
-                let mut rng_a = StdRng::seed_from_u64(token_a.per_deck_seed());
-                let mut rng_b = StdRng::seed_from_u64(token_b.per_deck_seed());
-                let deck_a =
-                    build_random_deck(pool_a, &mut rng_a, 50, mandatory_for_variant(v_a));
-                let deck_b =
-                    build_random_deck(pool_b, &mut rng_b, 50, mandatory_for_variant(v_b));
-                last_deck_a_ids = deck_a.iter().map(|c| c.id.clone()).collect();
-                last_deck_b_ids = deck_b.iter().map(|c| c.id.clone()).collect();
-                last_token_a = token_a.encode();
-                last_token_b = token_b.encode();
-                let deck_a_uniq: BTreeSet<String> =
-                    deck_a.iter().map(|c| c.id.clone()).collect();
-                let deck_b_uniq: BTreeSet<String> =
-                    deck_b.iter().map(|c| c.id.clone()).collect();
-                let state = GameState::new(deck_a, deck_b);
-                last_log.clear();
-                let (mut stats, journal) =
-                    run_game(state, &mut rng, &mut last_log, registry.lua());
-                stats.variant_a = v_a;
-                stats.variant_b = v_b;
-                stats.deck_a_ids = deck_a_uniq;
-                stats.deck_b_ids = deck_b_uniq;
-                stats.token_a = last_token_a.clone();
-                stats.token_b = last_token_b.clone();
-                stats.game_index = game_index as u32;
-                all.push(stats);
-                last_journal = journal;
-            }
-        }
-        }
-    }
-    let elapsed = t0.elapsed();
-
-    if let Some(path) = replay_out_path.as_ref() {
-        let replay = tsot::replay::ReplayFile {
-            seed,
-            deck_a_card_ids: last_deck_a_ids.clone(),
-            deck_b_card_ids: last_deck_b_ids.clone(),
-            journal: last_journal,
-        };
-        match replay.to_json() {
-            Ok(json) => match std::fs::write(path, &json) {
-                Ok(()) => println!("[replay] wrote {} ({} bytes)", path, json.len()),
-                Err(e) => eprintln!("[replay] failed to write {path}: {e}"),
-            },
-            Err(e) => eprintln!("[replay] failed to serialize: {e}"),
-        }
-    }
-
-    println!();
-    println!(
-        "=== Last game: A={} B={} ===",
-        last_token_a, last_token_b
-    );
-    print_deck_listing("Last game: A deck", &last_deck_a_ids);
-    print_deck_listing("Last game: B deck", &last_deck_b_ids);
-    println!("=== Last game: first 4 turns ===");
-    for line in last_log.iter().take(4) {
-        println!("  {line}");
-    }
-    println!();
-    println!("=== Last game: last 4 turns ===");
-    let start = last_log.len().saturating_sub(4);
-    for line in &last_log[start..] {
-        println!("  {line}");
-    }
-
-    print_aggregate(&all, elapsed);
-
-    let report_path = std::env::var("TSOT_REPORT_OUT")
-        .unwrap_or_else(|_| "tsot-report.html".to_string());
-    if report_path != "-" {
-        match report::write_html_report(&all, &pools, seed, elapsed, &report_path) {
-            Ok(()) => println!("\n[report] wrote {report_path}"),
-            Err(e) => eprintln!("[report] failed to write {report_path}: {e}"),
-        }
-    }
-
-    Ok(())
+    // No subcommand: print help-style hint and exit non-zero. The
+    // legacy 7×7 variant matchup mode was removed — every analytic it
+    // produced now lives in `tsot matchup-evolved` / `tsot champions-report`
+    // against curated baselines instead of randomly-sampled variant decks.
+    eprintln!("no subcommand specified. run with --help to see the available commands.");
+    std::process::exit(2);
 }
