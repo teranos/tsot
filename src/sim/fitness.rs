@@ -31,6 +31,17 @@ use super::variants::{build_random_deck, mandatory_for_variant, variant_pool, VA
 /// fitness numbers are comparable across days, branches, and machines.
 pub const GAUNTLET_MASTER_SEED: u64 = 0xEA_C8;
 
+/// Per-opponent breakdown of a genome's fitness. `total` is the aggregate
+/// win-rate over all opponents (what `fitness` returns as a scalar);
+/// `per_opponent[i]` is the win-rate against `gauntlet[i]`, indexed in
+/// the same order [`build_gauntlet`] produces (matches the [`VARIANTS`]
+/// order). Always: `total == mean(per_opponent)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FitnessBreakdown {
+    pub total: f64,
+    pub per_opponent: Vec<f64>,
+}
+
 /// Build the 7 variant-anchored gauntlet decks. Each variant gets one
 /// canonical 50-card deck derived from `master_seed` via [`DeckToken`]'s
 /// per-deck-seed mechanism, so the gauntlet bytes are reproducible.
@@ -66,14 +77,35 @@ pub fn fitness(
     n_per_side: u32,
     base_seed: u64,
 ) -> Result<f64, GenomeError> {
+    fitness_breakdown(registry, genome, gauntlet, n_per_side, base_seed).map(|b| b.total)
+}
+
+/// Diagnostic variant of [`fitness`] that exposes per-opponent win-rates.
+/// Same byte-for-byte reproducibility as `fitness` per
+/// `(genome, gauntlet, n_per_side, base_seed)`. The EA loop calls
+/// `fitness` (scalar); inspection code (top-K reporting, regression
+/// diffs) calls this.
+pub fn fitness_breakdown(
+    registry: &CardRegistry,
+    genome: &[String],
+    gauntlet: &[Vec<Card>],
+    n_per_side: u32,
+    base_seed: u64,
+) -> Result<FitnessBreakdown, GenomeError> {
     let deck_g = to_deck(registry, genome)?;
     if gauntlet.is_empty() || n_per_side == 0 {
-        return Ok(0.0);
+        return Ok(FitnessBreakdown {
+            total: 0.0,
+            per_opponent: vec![0.0; gauntlet.len()],
+        });
     }
     let mut rng = StdRng::seed_from_u64(base_seed);
-    let mut wins = 0u32;
-    let mut games = 0u32;
+    let mut total_wins = 0u32;
+    let mut total_games = 0u32;
+    let mut per_opponent = Vec::with_capacity(gauntlet.len());
     for opp in gauntlet {
+        let mut opp_wins = 0u32;
+        let mut opp_games = 0u32;
         for _ in 0..n_per_side {
             // genome as side A
             let state = GameState::new(deck_g.clone(), opp.clone());
@@ -81,21 +113,27 @@ pub fn fitness(
             let mut log: Vec<String> = Vec::new();
             let (stats, _) = run_game(state, &mut game_rng, &mut log, registry.lua());
             if stats.winner == PlayerId::A {
-                wins += 1;
+                opp_wins += 1;
             }
-            games += 1;
+            opp_games += 1;
             // genome as side B
             let state = GameState::new(opp.clone(), deck_g.clone());
             let mut game_rng = StdRng::seed_from_u64(rng.gen());
             let mut log = Vec::new();
             let (stats, _) = run_game(state, &mut game_rng, &mut log, registry.lua());
             if stats.winner == PlayerId::B {
-                wins += 1;
+                opp_wins += 1;
             }
-            games += 1;
+            opp_games += 1;
         }
+        per_opponent.push(opp_wins as f64 / opp_games as f64);
+        total_wins += opp_wins;
+        total_games += opp_games;
     }
-    Ok(wins as f64 / games as f64)
+    Ok(FitnessBreakdown {
+        total: total_wins as f64 / total_games as f64,
+        per_opponent,
+    })
 }
 
 #[cfg(test)]
@@ -197,6 +235,33 @@ mod tests {
         let bogus = vec!["nonexistent-card-id".to_string()];
         let err = fitness(&reg, &bogus, &gauntlet, 1, 0xC0DE).unwrap_err();
         assert_eq!(err, GenomeError::UnknownCardId("nonexistent-card-id".into()));
+    }
+
+    #[test]
+    fn fitness_breakdown_total_equals_mean_of_per_opponent() {
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+        let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
+        let b = fitness_breakdown(&reg, &genome, &gauntlet, 2, 0xC0DE).unwrap();
+        assert_eq!(b.per_opponent.len(), gauntlet.len());
+        let mean = b.per_opponent.iter().sum::<f64>() / b.per_opponent.len() as f64;
+        assert!(
+            (b.total - mean).abs() < 1e-12,
+            "total {} != mean(per_opponent) {mean}",
+            b.total,
+        );
+    }
+
+    #[test]
+    fn fitness_matches_breakdown_total() {
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+        let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
+        let scalar = fitness(&reg, &genome, &gauntlet, 2, 0xC0DE).unwrap();
+        let breakdown = fitness_breakdown(&reg, &genome, &gauntlet, 2, 0xC0DE).unwrap();
+        assert_eq!(scalar, breakdown.total);
     }
 
     #[test]

@@ -11,6 +11,7 @@ name = "tsot"
 path = "src/main.rs"
 
 [dependencies]
+clap = { version = "=4.5.20", features = ["derive"] }
 maud = "=0.27.0"
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 rand = "0.8"

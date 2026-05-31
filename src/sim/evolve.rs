@@ -45,6 +45,13 @@ pub struct EvolveConfig {
     /// Top-K individuals carry their (genome, cached fitness)
     /// unchanged to the next generation. 1 is the canonical choice.
     pub elite_count: usize,
+    /// If `Some(k)`, terminate the run as soon as the best-of-
+    /// generation has been exactly 1.0 (ceiling) for `k` consecutive
+    /// generations — the fitness metric is bounded at 1.0 and can't
+    /// distinguish further improvement at the current `n_per_side`.
+    /// `k >= 2` recommended because n=10's stddev=0.043 means a single
+    /// 1.000 measurement is a noisy observation, not proof.
+    pub stop_at_ceiling: Option<usize>,
 }
 
 impl Default for EvolveConfig {
@@ -59,9 +66,29 @@ impl Default for EvolveConfig {
             tournament_k: 3,
             mutation_rate: 0.03,
             elite_count: 1,
+            stop_at_ceiling: None,
         }
     }
 }
+
+/// True if the last `k` entries of `best_history` all hit the fitness
+/// ceiling (1.0 within f64 epsilon). Used by [`evolve`] to terminate
+/// runs that have plateaued at the metric's upper bound.
+pub fn should_stop_at_ceiling(best_history: &[(Vec<String>, f64)], k: usize) -> bool {
+    if k == 0 || best_history.len() < k {
+        return false;
+    }
+    best_history
+        .iter()
+        .rev()
+        .take(k)
+        .all(|(_, f)| *f >= 1.0 - f64::EPSILON)
+}
+
+/// Callback fired after each generation is fully scored and sorted.
+/// Receives the generation index (0 = initial random population) and
+/// the current population, sorted by fitness descending.
+pub type GenerationCallback<'a> = dyn FnMut(usize, &[(Vec<String>, f64)]) + 'a;
 
 #[derive(Debug, Clone)]
 pub struct EvolveResult {
@@ -77,6 +104,7 @@ pub fn evolve(
     pool: &[Card],
     gauntlet: &[Vec<Card>],
     cfg: &EvolveConfig,
+    on_generation: &mut GenerationCallback<'_>,
 ) -> EvolveResult {
     let mut rng = StdRng::seed_from_u64(cfg.base_seed);
 
@@ -93,8 +121,9 @@ pub fn evolve(
     let mut best_per_generation = Vec::with_capacity(cfg.generations + 1);
     pop.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     best_per_generation.push(pop[0].clone());
+    on_generation(0, &pop);
 
-    for _gen in 0..cfg.generations {
+    for gen_idx in 0..cfg.generations {
         let mut next: Vec<(Vec<String>, f64)> = Vec::with_capacity(cfg.pop_size);
 
         // Elitism: top-K carry cached fitness.
@@ -123,7 +152,14 @@ pub fn evolve(
 
         next.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         best_per_generation.push(next[0].clone());
+        on_generation(gen_idx + 1, &next);
         pop = next;
+
+        if let Some(k) = cfg.stop_at_ceiling {
+            if should_stop_at_ceiling(&best_per_generation, k) {
+                break;
+            }
+        }
     }
 
     EvolveResult {
@@ -182,6 +218,7 @@ mod tests {
             tournament_k: 2,
             mutation_rate: 0.05,
             elite_count: 1,
+            stop_at_ceiling: None,
         }
     }
 
@@ -191,7 +228,7 @@ mod tests {
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let cfg = tiny_config();
-        let result = evolve(&reg, &pool, &gauntlet, &cfg);
+        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
         assert_eq!(result.final_population.len(), cfg.pop_size);
         // best_per_generation includes generation 0 (initial), so
         // length is generations + 1.
@@ -204,8 +241,8 @@ mod tests {
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let cfg = tiny_config();
-        let r_1 = evolve(&reg, &pool, &gauntlet, &cfg);
-        let r_2 = evolve(&reg, &pool, &gauntlet, &cfg);
+        let r_1 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        let r_2 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
         let f_1: Vec<f64> = r_1.final_population.iter().map(|(_, f)| *f).collect();
         let f_2: Vec<f64> = r_2.final_population.iter().map(|(_, f)| *f).collect();
         assert_eq!(f_1, f_2, "fitness sequences diverged across identical evolve runs");
@@ -223,12 +260,42 @@ mod tests {
     }
 
     #[test]
+    fn should_stop_at_ceiling_requires_k_consecutive_ones() {
+        let g = |f: f64| (vec!["x".to_string()], f);
+        assert!(!should_stop_at_ceiling(&[], 3), "empty history should not stop");
+        assert!(
+            !should_stop_at_ceiling(&[g(1.0), g(1.0)], 3),
+            "too few entries should not stop"
+        );
+        assert!(
+            should_stop_at_ceiling(&[g(1.0), g(1.0), g(1.0)], 3),
+            "exact k consecutive 1.0s should stop"
+        );
+        assert!(
+            should_stop_at_ceiling(&[g(0.5), g(1.0), g(1.0), g(1.0)], 3),
+            "last k consecutive 1.0s should stop"
+        );
+        assert!(
+            !should_stop_at_ceiling(&[g(1.0), g(0.5), g(1.0), g(1.0)], 3),
+            "a non-1.0 in the last k should not stop"
+        );
+        assert!(
+            !should_stop_at_ceiling(&[g(0.999), g(0.999), g(0.999)], 3),
+            "just below 1.0 should not stop"
+        );
+        assert!(
+            !should_stop_at_ceiling(&[g(1.0), g(1.0)], 0),
+            "k=0 should never stop"
+        );
+    }
+
+    #[test]
     fn evolve_with_elitism_is_monotonic_in_best_fitness() {
         let reg = load_registry();
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let cfg = tiny_config();
-        let result = evolve(&reg, &pool, &gauntlet, &cfg);
+        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
         let best_fitness: Vec<f64> = result
             .best_per_generation
             .iter()

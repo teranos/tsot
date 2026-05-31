@@ -906,6 +906,16 @@ impl GameState {
                     })
                     .count() as i32
             }
+            crate::card::ModifierValue::AttachedCountByKind(kind) => source
+                .attached
+                .iter()
+                .filter(|aid| {
+                    self.card_pool
+                        .get(*aid)
+                        .map(|c| c.card.kind == *kind)
+                        .unwrap_or(false)
+                })
+                .count() as i32,
         }
     }
 

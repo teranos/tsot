@@ -1063,7 +1063,7 @@ fn rate_to_color(rate: f64) -> String {
     format!("rgb({cr},{cg},{cb})")
 }
 
-const CSS: &str = r#"
+pub(crate) const CSS: &str = r#"
 :root {
   --bg-page: #1a1b1a;
   --bg-panel: #252625;

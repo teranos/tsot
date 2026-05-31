@@ -229,8 +229,8 @@ pub struct CostModifier {
 ///
 /// Lua parser accepts either a bare integer (`x = 2` → `Fixed(2)`) or a
 /// short string descriptor. `"attached"` maps to `AttachedCount`;
-/// `"attached:blue"` maps to `AttachedCountByColor("blue")`. Extensible
-/// to subtype / kind filters when corpus demands.
+/// `"attached:blue"` maps to `AttachedCountByColor("blue")`;
+/// `"attached:type:mutation"` maps to `AttachedCountByKind(Mutation)`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ModifierValue {
     Fixed(i32),
@@ -238,6 +238,8 @@ pub enum ModifierValue {
     AttachedCount,
     /// Count of attached cards whose `colors` contains the given lowercase color.
     AttachedCountByColor(String),
+    /// Count of attached cards whose `kind` matches.
+    AttachedCountByKind(CardType),
 }
 
 impl Default for ModifierValue {
@@ -662,7 +664,8 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
 /// - Nil → `Fixed(0)` (back-compat for omitted entries)
 /// - Integer N → `Fixed(N)`
 /// - String "attached" → `AttachedCount`
-/// - String "attached:<color>" → `AttachedCountByColor(color)`
+/// - String "attached:type:<kind>" → `AttachedCountByKind(kind)`
+/// - String "attached:<color>" → `AttachedCountByColor(color)` (fallback)
 fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
     match v {
         Value::Nil => Ok(ModifierValue::Fixed(0)),
@@ -674,11 +677,19 @@ fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
             if lower == "attached" {
                 return Ok(ModifierValue::AttachedCount);
             }
+            if let Some(kind_str) = lower.strip_prefix("attached:type:") {
+                let (kind, _) = parse_type(kind_str).map_err(|e| {
+                    mlua::Error::runtime(format!(
+                        "modifier value 'attached:type:<kind>' has unknown kind: {e}"
+                    ))
+                })?;
+                return Ok(ModifierValue::AttachedCountByKind(kind));
+            }
             if let Some(rest) = lower.strip_prefix("attached:") {
                 return Ok(ModifierValue::AttachedCountByColor(rest.to_string()));
             }
             Err(mlua::Error::runtime(format!(
-                "modifier value string must be 'attached' or 'attached:<color>', got {s:?}"
+                "modifier value string must be 'attached', 'attached:<color>', or 'attached:type:<kind>', got {s:?}"
             )))
         }
         other => Err(mlua::Error::runtime(format!(

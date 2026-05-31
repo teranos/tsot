@@ -1,7 +1,7 @@
 # tsot — Known Limitations
 
 > What the engine cannot do today. Code TODOs are tagged so they map back
-> to a section here. Last refresh: 2026-05-30 (post-Pattern-B / Phase 3.5).
+> to a section here. Last refresh: 2026-05-31 (post-EA landing).
 
 ## events
 
@@ -61,6 +61,26 @@ These aren't engine bugs but they limit the validity of sim-based playtest signa
 ## smaller items
 
 - **P.8 attached → EXILE on host's death** — attached cards currently get dropped on the floor or stay attached depending on path. RULES says exile.
+
+## EA / evolutionary deck search
+
+Three biggest limitations on what conclusions the EA can support today.
+Below these, smaller items.
+
+### Biggest
+
+1. **Population collapse → one run finds one attractor.** Within 15-20 generations a 50-pop run converges (observed: `mean=0.435 → 0.953`, `min=0.086 → 0.829`). The top-5 of a single run share 40+ of 50 cards — they are not independent samples, just five slot-variations on the same evolved deck. *Card-design conclusions need many runs at different `--seed` values, not many ranks from one run.* No diversity-preserving selection (Jaccard penalty, fitness sharing) is wired today.
+
+2. **Fitness noise floor hides weak cards.** At `--n 10`, within-genome stddev is ~0.043. A non-functional 1-of card costs ~2% fitness — below the noise floor. Selection cannot tell "deck with shift" from "deck without shift," so junk 1-ofs persist indefinitely. Above the ceiling: any fitness ≥ ~0.957 is statistically indistinguishable from 1.000, so champion ranking near the top is meaningless. `--n 50` drops the floor to ~0.019 (5× longer runs).
+
+3. **Gauntlet overfit.** Champions are strong against the *specific* 7 variant decks built from `GAUNTLET_MASTER_SEED=0xEA_C8`. Change the master seed → 7 different opponents → different "1.000" champion. "Evolved deck wins 100% of games" is a statement about *this* gauntlet, not about deck strength in general.
+
+### Smaller
+
+- **Below-noise-floor in champions-report too.** A 5-champion report with `5/5 presence at mean_copies=1.0` is barely above null. Confident "card X is load-bearing" needs 20+ independent champions; the `--save-top K` flag shortcuts collecting these but only within one attractor (see (1)).
+- **Champion artifacts age with the card pool.** Saved champions' 50-slot composition is frozen at save time. Adding new cards doesn't invalidate them, but they cannot benefit from new cards either.
+- **No mid-run hall-of-fame.** Gauntlet is fixed at run start. Champions discovered mid-run don't become opponents until you start a new run with them as `--extra`.
+- **`--save PATH` overwrites unconditionally.** A weaker champion silently replaces a stronger file when seeds collide. Backup before risky configs.
 
 ---
 

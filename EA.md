@@ -99,25 +99,38 @@ losing a strong individual to a bad recombination.
 
 ## What's built
 
-- `CardRegistry::get(id) -> Option<&Card>` (`src/card.rs`)
-- `sim::genome::to_deck(registry, &[String]) -> Result<Vec<Card>, GenomeError>` (`src/sim/genome.rs`)
+End-to-end EA. CLI subcommands: `tsot evolve`, `tsot champions-report`.
 
-Genome→deck materialization. Tested. Used by nothing yet.
+- `sim::genome` — `to_deck`, `random_genome` (`src/sim/genome.rs`)
+- `sim::fitness` — `fitness`, `fitness_breakdown`, `build_gauntlet`, `GAUNTLET_MASTER_SEED=0xEA_C8` (`src/sim/fitness.rs`)
+- `sim::ops` — `tournament_select`, `crossover_uniform`, `mutate`, `repair` (`src/sim/ops.rs`)
+- `sim::evolve` — `evolve`, `EvolveConfig`, `EvolveResult`, `should_stop_at_ceiling` (`src/sim/evolve.rs`)
+- `sim::evolved_deck` — `EvolvedDeck` save/load via JSON (`src/sim/evolved_deck.rs`)
+- `main::run_ea` — CLI wiring, live per-generation progress + per-opponent breakdown + auto-save (`src/main.rs`)
+- `main::run_champions_report` — aggregate card-frequency / pool-coverage / fitness-correlation across saved champions
 
-## What's next (irreducibly ordered)
+## Usage
 
-1. **`fitness(genome)`** — calls `to_deck`, builds gauntlet, runs `2 × 7 × N`
-   games, returns win-rate. **Decision required:** N (above) and gauntlet
-   seed (suggest: a constant, not `pick_seed()` — stable benchmark).
-2. **Random initial population** — `random_genome(pool, len, cap, rng)`.
-3. **Operators** — `tournament_select`, `crossover_uniform`, `mutate_swap`,
-   `repair`.
-4. **Generation loop** — `evolve(generations, pop_size) -> Vec<(Genome, f64)>`.
-5. **Binary** — `cargo run --bin evolve`, prints best-of-each-generation
-   to stdout + writes final population to `evolved-*.json`.
+```bash
+# Help
+tsot --help
+tsot evolve --help
+tsot champions-report --help
 
-Steps 1–4 are pure functions on `Vec<String>` and a `&CardRegistry`. Step 5
-is the I/O wrapper.
+# Single EA run, defaults (pop=50, gens=30, n=10, seed=0xEA_C8)
+cargo run --release -- evolve --stop-at-ceiling 3
+
+# Chain workflow (each champion fights the previous)
+cargo run --release -- evolve --no-variants --extra champion.json --save champion.json
+
+# Sample many independent champions at different seeds for aggregation
+for s in 1 2 3 4 5 6 7 8 9 10; do
+  cargo run --release -- evolve --seed $s --save "champions/champion-$s.json" --stop-at-ceiling 3
+done
+
+# Aggregate report across all champions in a directory
+cargo run --release -- champions-report --dir champions/ --top 30
+```
 
 ## Open design questions
 
@@ -146,3 +159,12 @@ is the I/O wrapper.
   value. Fixed gauntlet first.
 - Tuning for a specific card to win. The whole point is to let the engine
   surface what it rewards, not to confirm a hypothesis.
+
+## Known limitations
+
+See `LIMITATIONS.md` → "EA / evolutionary deck search" for the full
+list with descriptions. Headline items: within-genome fitness noise
+(±0.043 at n=10), below-noise-floor cards survive selection,
+gauntlet overfit, no co-occurrence in the report, no diversity
+preservation, no mid-run hall-of-fame, aging across card additions,
+save path collisions, single fitness signal, sample-size threshold.
