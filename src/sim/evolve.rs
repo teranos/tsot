@@ -15,7 +15,6 @@ use rand::{Rng, SeedableRng};
 
 use tsot::card::{Card, CardRegistry};
 
-use super::fitness::fitness;
 use super::genome::random_genome;
 use super::ops::{crossover_uniform, mutate, repair, tournament_select};
 
@@ -115,15 +114,37 @@ pub fn evolve(
 ) -> EvolveResult {
     let mut rng = StdRng::seed_from_u64(cfg.base_seed);
 
-    let mut pop: Vec<(Vec<String>, f64)> = Vec::with_capacity(cfg.pop_size);
-    for _ in 0..cfg.pop_size {
-        let genome = random_genome(pool, cfg.deck_len, cfg.per_card_cap, &mut rng)
-            .expect("init random_genome: pool too small for deck_len/cap");
-        let fit_seed: u64 = rng.gen();
-        let fit = fitness(registry, &genome, gauntlet, cfg.n_per_side, fit_seed)
-            .expect("init fitness: genome contains unknown card id");
-        pop.push((genome, fit));
-    }
+    // Wire format for the gauntlet across worker threads: each deck as
+    // a Vec<String> of card ids. Workers materialize their own
+    // `Vec<Card>` from their own thread-local registry.
+    let gauntlet_ids = crate::sim::parallel_eval::gauntlet_to_ids(gauntlet);
+
+    // Phase 1 (sequential, deterministic): generate the initial random
+    // population genomes + their fit_seeds. RNG ordering is preserved.
+    let init_jobs: Vec<(Vec<String>, u64)> = (0..cfg.pop_size)
+        .map(|_| {
+            let genome = random_genome(pool, cfg.deck_len, cfg.per_card_cap, &mut rng)
+                .expect("init random_genome: pool too small for deck_len/cap");
+            let fit_seed: u64 = rng.gen();
+            (genome, fit_seed)
+        })
+        .collect();
+    // Phase 2 (parallel): fan fitness scoring across worker threads.
+    // Pure function of (genome, gauntlet, fit_seed) → deterministic
+    // results regardless of which thread scored each.
+    let init_fits = crate::sim::parallel_eval::parallel_evaluate_genomes(
+        &gauntlet_ids,
+        &init_jobs,
+        cfg.n_per_side,
+    );
+    let mut pop: Vec<(Vec<String>, f64)> = init_jobs
+        .into_iter()
+        .zip(init_fits)
+        .map(|((g, _), f)| (g, f))
+        .collect();
+    // The single-threaded `fitness()` (used during gauntlet sanity
+    // checks below) is kept available via the unused `registry` arg.
+    let _ = registry;
 
     let mut best_per_generation = Vec::with_capacity(cfg.generations + 1);
     let mut per_gen_card_freq: Vec<std::collections::BTreeMap<String, u32>> =
@@ -143,24 +164,33 @@ pub fn evolve(
             next.push(elite.clone());
         }
 
-        // Fill remainder by select → crossover → mutate → repair → eval.
-        while next.len() < cfg.pop_size {
+        // Phase 1 (sequential, deterministic): generate children +
+        // fit_seeds. RNG ordering preserved.
+        let mut child_jobs: Vec<(Vec<String>, u64)> = Vec::with_capacity(cfg.pop_size - next.len());
+        while child_jobs.len() + next.len() < cfg.pop_size {
             let parent_a = tournament_select(&pop, cfg.tournament_k, &mut rng).clone();
             let parent_b = tournament_select(&pop, cfg.tournament_k, &mut rng).clone();
             let crossed = crossover_uniform(&parent_a, &parent_b, &mut rng);
             let mut child = mutate(&crossed, pool, cfg.mutation_rate, &mut rng);
             if !repair(&mut child, pool, cfg.per_card_cap, &mut rng) {
-                // Pool can't satisfy cap+len — extremely rare with the
-                // current card count + cap=3. Replace with a fresh
-                // random genome rather than retry the same crossover.
                 child = random_genome(pool, cfg.deck_len, cfg.per_card_cap, &mut rng)
                     .expect("repair fallback random_genome: pool too small");
             }
             let fit_seed: u64 = rng.gen();
-            let fit = fitness(registry, &child, gauntlet, cfg.n_per_side, fit_seed)
-                .expect("child fitness: repair should have removed unknown ids");
-            next.push((child, fit));
+            child_jobs.push((child, fit_seed));
         }
+        // Phase 2 (parallel): batch-evaluate child fitnesses.
+        let child_fits = crate::sim::parallel_eval::parallel_evaluate_genomes(
+            &gauntlet_ids,
+            &child_jobs,
+            cfg.n_per_side,
+        );
+        next.extend(
+            child_jobs
+                .into_iter()
+                .zip(child_fits)
+                .map(|((g, _), f)| (g, f)),
+        );
 
         next.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         best_per_generation.push(next[0].clone());

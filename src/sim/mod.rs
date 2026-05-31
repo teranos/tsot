@@ -15,6 +15,7 @@ pub mod evolved_deck;
 pub mod fitness;
 pub mod genome;
 pub mod ops;
+pub mod parallel_eval;
 pub mod run;
 pub mod stats;
 pub mod variants;
