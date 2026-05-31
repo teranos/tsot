@@ -48,5 +48,6 @@ return {
   abilities = {
     "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast. clear view does not satisfy P.7a identity for the cast — other hand payments must.",
   },
+  gy_hand_substitute = true,
   flavor = "Read the contract through the contract.",
 }

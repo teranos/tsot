@@ -40,6 +40,7 @@ fn play_subsystem_round_trips_through_journal() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     )
@@ -88,6 +89,7 @@ fn play_creature_with_hand_cost_attaches_payments() {
         jewel_tap: None,
         sacrifice_ids: vec![],
         mutation_target: None,
+        gy_hand_payment_ids: vec![],
     };
     assert!(s
         .play_card(PlayerId::A, &creature, choices, None)
@@ -160,6 +162,7 @@ fn play_combined_hand_and_mill_cost() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -203,6 +206,7 @@ fn play_card_errors_when_hand_payment_count_wrong() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -238,6 +242,7 @@ fn play_card_errors_when_paying_with_self() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -268,6 +273,7 @@ fn play_card_errors_on_duplicate_hand_payment() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -377,6 +383,7 @@ fn jewel_tap_substitutes_for_one_hand_slot() {
             jewel_tap: Some(jewel.clone()),
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -410,6 +417,7 @@ fn jewel_tap_rejected_when_jewel_tapped() {
             jewel_tap: Some(jewel.clone()),
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -430,6 +438,7 @@ fn jewel_tap_rejected_on_color_mismatch() {
             jewel_tap: Some(jewel.clone()),
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -450,6 +459,7 @@ fn jewel_tap_rejected_on_non_jewel_artifact() {
             jewel_tap: Some(jewel.clone()),
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -470,6 +480,7 @@ fn jewel_tap_rejected_when_cast_has_no_hand_cost() {
             jewel_tap: Some(jewel),
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -499,6 +510,7 @@ fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
             jewel_tap: Some(jewel.clone()),
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -557,6 +569,7 @@ fn crystal_tap_matches_by_attached_card_color() {
             jewel_tap: Some(crystal.clone()),
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -602,6 +615,7 @@ fn crystal_tap_rejected_when_no_attached_color_matches() {
             jewel_tap: Some(crystal.clone()),
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -641,6 +655,7 @@ fn sacrifice_cost_moves_victim_to_graveyard() {
             jewel_tap: None,
             sacrifice_ids: vec![victim.clone()],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -668,6 +683,7 @@ fn sacrifice_count_mismatch_errors() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -694,6 +710,7 @@ fn sacrifice_rejected_when_victim_not_on_board() {
             jewel_tap: None,
             sacrifice_ids: vec![phantom.clone()],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -716,6 +733,7 @@ fn sacrifice_rejected_when_opponent_controls_victim() {
             jewel_tap: None,
             sacrifice_ids: vec![opp_card.clone()],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -856,6 +874,7 @@ fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
@@ -962,6 +981,7 @@ fn surge_instant_untaps_all_your_creatures_on_play() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         Some(&mut crate::game::EventContext::lua_only(registry.lua())),
     )
@@ -1150,6 +1170,7 @@ fn counterspell_resolves_and_removes_underlying_cast() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
     };
     s.open_response_window(a_cast).unwrap();
@@ -1322,6 +1343,7 @@ fn hand_payment_color_match_succeeds() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -1345,6 +1367,7 @@ fn hand_payment_color_mismatch_rejected() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -1370,6 +1393,7 @@ fn hand_payment_symbol_match_succeeds_across_colors() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -1398,6 +1422,7 @@ fn hand_payment_matches_when_any_of_multiple_symbols_overlap() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -1429,6 +1454,7 @@ fn hand_payment_rejected_when_multi_symbol_sets_disjoint() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -1456,6 +1482,7 @@ fn hand_payment_colorless_cast_takes_any_discard() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -1482,6 +1509,7 @@ fn hand_payment_no_identity_pay_cannot_satisfy_identified_cast() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -1508,6 +1536,7 @@ fn hand_payment_no_symbol_discard_cannot_pay_for_symboled_cast() {
             jewel_tap: None,
             sacrifice_ids: vec![],
             mutation_target: None,
+            gy_hand_payment_ids: vec![],
         },
         None,
     );
@@ -2089,6 +2118,124 @@ fn red_jewel_grants_t_draw_discard_to_attached_host() {
     assert!(s.card_pool.get(&host_iid).unwrap().tapped);
     assert_eq!(s.a.hand.len(), hand_before);
     assert_eq!(s.a.graveyard.len(), gy_before + 1);
+}
+
+#[test]
+fn clear_view_fills_one_hand_slot_of_a_two_hand_cast() {
+    // Clear View in GY can substitute for one HAND slot of a 2-hand
+    // blue cast, leaving the other slot to be paid by an identity-
+    // matching blue card from hand. Verifies: GY → EXILE move,
+    // identity check ignored on the substitute slot, hand_payment
+    // slot still identity-checked on the remaining slot.
+    use crate::card::CardRegistry;
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let clear_view = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "clear-view")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let cast = s.a.hand[0].clone();
+    let blue_pay = s.a.hand[1].clone();
+    let cv = s.a.hand[2].clone();
+    // Cast = blue, 2-hand cost.
+    set_identity(&mut s, &cast, &["blue"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 2,
+            source: CostSource::Hand,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    set_identity(&mut s, &blue_pay, &["blue"], "");
+    s.card_pool.get_mut(&cv).unwrap().card = clear_view;
+    // Put Clear View in graveyard.
+    s.a.hand.retain(|x| x != &cv);
+    s.a.graveyard.push(cv.clone());
+
+    let exile_before = s.a.exile.len();
+    let gy_before = s.a.graveyard.len();
+
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![blue_pay.clone()],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+            mutation_target: None,
+            gy_hand_payment_ids: vec![cv.clone()],
+        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    // Clear View moved GY → EXILE.
+    assert_eq!(s.a.graveyard.len(), gy_before - 1);
+    assert_eq!(s.a.exile.len(), exile_before + 1);
+    assert!(s.a.exile.contains(&cv));
+}
+
+#[test]
+fn clear_view_cannot_pay_alone_for_one_hand_colored_cast() {
+    // 1-hand blue cast with only Clear View available. P.7a requires
+    // at least one identity match in hand payments. Clear View
+    // doesn't satisfy P.7a — and there's no other slot for an
+    // identity-matching card. The cast must fail (WrongHandPaymentCount,
+    // because gy_hand_payment_ids.len() > hand_needed once accepted, or
+    // identity mismatch on whatever the AI tries to substitute with).
+    use crate::card::CardRegistry;
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let clear_view = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "clear-view")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
+    let cast = s.a.hand[0].clone();
+    let cv = s.a.hand[1].clone();
+    set_identity(&mut s, &cast, &["blue"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Hand,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    s.card_pool.get_mut(&cv).unwrap().card = clear_view;
+    s.a.hand.retain(|x| x != &cv);
+    s.a.graveyard.push(cv.clone());
+
+    // Try to pay using ONLY Clear View. Engine rejects because Clear
+    // View doesn't carry identity, leaving no payment to satisfy the
+    // cast's blue identity requirement.
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: None,
+            sacrifice_ids: vec![],
+            mutation_target: None,
+            gy_hand_payment_ids: vec![cv.clone()],
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::NoHandPaymentForIdentity));
+    // Clear View stays in graveyard — no cost paid since cast rejected.
+    assert!(s.a.graveyard.contains(&cv));
+    assert!(!s.a.exile.contains(&cv));
 }
 
 #[test]

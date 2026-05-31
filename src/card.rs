@@ -393,6 +393,14 @@ pub struct Card {
     /// `CardRegistry` (see `replay::rebind_handlers`).
     #[serde(skip, default)]
     pub handlers: BTreeMap<EventName, Function>,
+    /// When true, this card may be exiled from its controller's
+    /// GRAVEYARD to fill one HAND-source slot of a spell they cast,
+    /// per Clear View. The substituted slot bypasses the P.7a
+    /// identity check on the substitute itself, but the cast's
+    /// other HAND payments must still satisfy P.7a — substitution
+    /// adds slot capacity, not identity coverage.
+    #[serde(default)]
+    pub gy_hand_substitute: bool,
     /// Activated abilities the controller may fire on their initiative.
     /// Resolves immediately (no stack, no response window per the design
     /// decision recorded in RULES A.5). Each entry has a cost, a text
@@ -1069,6 +1077,9 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     let static_def = read_static(&table)?;
     let handlers = read_handlers(&table)?;
     let activated = read_activated(&table)?;
+    let gy_hand_substitute = table
+        .get::<Option<bool>>("gy_hand_substitute")?
+        .unwrap_or(false);
 
     Ok(Card {
         id,
@@ -1086,6 +1097,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         stats,
         static_def,
         handlers,
+        gy_hand_substitute,
         activated,
     })
 }

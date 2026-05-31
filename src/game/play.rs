@@ -63,6 +63,16 @@ pub struct PlayChoices {
     /// Names the on-board creature the mutation will attach to. Any
     /// creature is a legal target (friendly or opposing).
     pub mutation_target: Option<InstanceId>,
+    /// Clear View-style HAND-payment substitutes drawn from the
+    /// controller's GRAVEYARD. Each iid must be in the controller's
+    /// graveyard and have `Card.gy_hand_substitute = true`. Each one
+    /// fills one HAND-source slot of the cast and moves GY → EXILE
+    /// during cost payment. Does NOT satisfy P.7a identity for the
+    /// cast — only the `hand_payment_ids` slots are identity-checked,
+    /// so casts of identity-bearing spells still need at least one
+    /// matching card in hand for each non-substituted slot.
+    #[serde(default)]
+    pub gy_hand_payment_ids: Vec<InstanceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +126,25 @@ pub enum PlayError {
     SacrificePaymentInvalid(InstanceId),
     /// P.16: a sacrifice ID appears more than once in the choices.
     DuplicateSacrifice(InstanceId),
+    /// A GY-hand-substitute payment isn't in the player's graveyard.
+    GyHandSubstituteNotInGraveyard(InstanceId),
+    /// A GY-hand-substitute payment doesn't have
+    /// `Card.gy_hand_substitute = true` — only Clear View-style cards
+    /// qualify today.
+    GyHandSubstituteNotEligible(InstanceId),
+    /// Same iid appears twice in `gy_hand_payment_ids`.
+    DuplicateGyHandSubstitute(InstanceId),
+    /// `gy_hand_payment_ids` declared on a card with no HAND-source
+    /// cost component to substitute (would substitute nothing).
+    GyHandSubstituteWithoutHandCost,
+    /// All HAND slots were filled by GY substitutes on a cast that
+    /// requires identity matching (cast has non-empty colors or
+    /// symbols). Clear View doesn't carry identity, so at least one
+    /// HAND payment from hand is required when the cast has any
+    /// identity at all. A 1-hand blue cast can't be paid solely by
+    /// Clear View — there's no hand-payment slot left to satisfy
+    /// P.7a's identity check.
+    NoHandPaymentForIdentity,
 }
 
 impl GameState {
@@ -263,11 +292,61 @@ impl GameState {
             hand_needed -= 1;
         }
 
+        // Clear View-style GY → EXILE substitutes. Each one fills one
+        // HAND slot without going through the P.7a identity check.
+        // Validate each: must be in controller's GY, must have the
+        // substitute flag, must be unique within the list. Then
+        // subtract them from hand_needed before the hand_payment count
+        // check.
+        if !choices.gy_hand_payment_ids.is_empty() {
+            let total_hand_pre_subst = hand_needed + choices.gy_hand_payment_ids.len();
+            if total_hand_pre_subst == choices.gy_hand_payment_ids.len() && hand_needed == 0 {
+                return Err(PlayError::GyHandSubstituteWithoutHandCost);
+            }
+            let mut gy_seen: BTreeSet<&InstanceId> = BTreeSet::new();
+            for gid in &choices.gy_hand_payment_ids {
+                if !gy_seen.insert(gid) {
+                    return Err(PlayError::DuplicateGyHandSubstitute(gid.clone()));
+                }
+                if !self.player(player).graveyard.contains(gid) {
+                    return Err(PlayError::GyHandSubstituteNotInGraveyard(gid.clone()));
+                }
+                let eligible = self
+                    .card_pool
+                    .get(gid)
+                    .map(|i| i.card.gy_hand_substitute)
+                    .unwrap_or(false);
+                if !eligible {
+                    return Err(PlayError::GyHandSubstituteNotEligible(gid.clone()));
+                }
+            }
+            if choices.gy_hand_payment_ids.len() > hand_needed {
+                return Err(PlayError::WrongHandPaymentCount {
+                    expected: hand_needed,
+                    got: choices.gy_hand_payment_ids.len(),
+                });
+            }
+            hand_needed -= choices.gy_hand_payment_ids.len();
+        }
+
         if choices.hand_payment_ids.len() != hand_needed {
             return Err(PlayError::WrongHandPaymentCount {
                 expected: hand_needed,
                 got: choices.hand_payment_ids.len(),
             });
+        }
+
+        // Identity-coverage gate (per RULES P.7a + Clear View design):
+        // if the cast has any identity (colors or symbols) and any of
+        // the HAND slots were filled by GY substitutes, at least one
+        // HAND-payment must come from hand. Substitutes don't carry
+        // identity, so an all-substitute payment leaves identity
+        // uncovered.
+        if !choices.gy_hand_payment_ids.is_empty() && choices.hand_payment_ids.is_empty() {
+            let cast_ident = self.card_identity(instance);
+            if !cast_ident.is_empty() {
+                return Err(PlayError::NoHandPaymentForIdentity);
+            }
         }
 
         let mut seen: BTreeSet<&InstanceId> = BTreeSet::new();
@@ -402,6 +481,13 @@ impl GameState {
         if let Some(jewel_iid) = &choices.jewel_tap {
             self.set_tapped(jewel_iid, true);
             self.bump_action("jewel_tap_substitution", player);
+        }
+
+        // Clear View-style HAND-substitute payments: each chosen card
+        // in GY moves GY → EXILE. Validation above confirmed eligibility.
+        for gid in choices.gy_hand_payment_ids.clone() {
+            let _ = self.move_card(&gid, player, Zone::Graveyard, Zone::Exile);
+            self.bump_action("gy_hand_substitution", player);
         }
 
         // P.16: SACRIFICE — move chosen BOARD cards to GRAVEYARD and fire
@@ -709,6 +795,56 @@ impl GameState {
             .iter()
             .find(|iid| self.is_valid_jewel_tap(player, iid, &cast_colors))
             .cloned()
+    }
+
+    /// Count cards in `player`'s hand whose identity intersects the
+    /// cast card's identity per P.7a. Used by the sim AI to decide
+    /// whether Clear View substitutes are needed to cover slots the
+    /// hand can't fill with identity-matching cards.
+    pub fn identity_matching_hand_count(
+        &self,
+        player: PlayerId,
+        cast_iid: &InstanceId,
+    ) -> usize {
+        let cast_ident = self.card_identity(cast_iid);
+        if cast_ident.is_empty() {
+            // Wildcard cast — every hand card matches.
+            return self.player(player).hand.iter().filter(|h| *h != cast_iid).count();
+        }
+        self.player(player)
+            .hand
+            .iter()
+            .filter(|h| *h != cast_iid)
+            .filter(|h| {
+                let pay_ident = self.card_identity(h);
+                !cast_ident.is_disjoint(&pay_ident)
+            })
+            .count()
+    }
+
+    /// Pick up to `max_count` Clear View-style GY-substitute cards
+    /// from `player`'s graveyard, in graveyard order. Each returned
+    /// iid is a card with `Card.gy_hand_substitute = true` and lives
+    /// in the controller's GRAVEYARD. The sim AI uses these to fill
+    /// HAND slots that the hand's identity-matching cards can't cover.
+    pub fn find_gy_hand_substitutes(
+        &self,
+        player: PlayerId,
+        _cast_iid: &InstanceId,
+        max_count: usize,
+    ) -> Vec<InstanceId> {
+        self.player(player)
+            .graveyard
+            .iter()
+            .filter(|iid| {
+                self.card_pool
+                    .get(*iid)
+                    .map(|i| i.card.gy_hand_substitute)
+                    .unwrap_or(false)
+            })
+            .take(max_count)
+            .cloned()
+            .collect()
     }
 
     /// payment slot. Pool is `player.hand` minus the card being played and

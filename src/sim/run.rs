@@ -170,6 +170,22 @@ pub fn run_game(
                             hand_needed -= 1;
                         }
                     }
+                    // Clear View-style GY-substitutes: use one per slot
+                    // the hand can't fill with identity-matching cards.
+                    // Greedy fallback — Clear Views are spent only when
+                    // hand identity-count would short the cast.
+                    if hand_needed > 0 {
+                        let identity_match_count =
+                            state.identity_matching_hand_count(active, &picked);
+                        if identity_match_count < hand_needed {
+                            let want_gy = hand_needed - identity_match_count;
+                            let gy_subs =
+                                state.find_gy_hand_substitutes(active, &picked, want_gy);
+                            let used = gy_subs.len();
+                            choices.gy_hand_payment_ids = gy_subs;
+                            hand_needed -= used;
+                        }
+                    }
                     if hand_needed > 0 {
                         choices.hand_payment_ids = state.resolve_hand_payment(
                             active,

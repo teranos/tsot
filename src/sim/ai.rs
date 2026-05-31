@@ -143,7 +143,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     // Colorless+no-symbol casts are wildcards; colorless+no-symbol
     // discards are NOT.
     let cast_ident = state.card_identity(iid);
-    let hand_have = if hand_need == 0 || cast_ident.is_empty() {
+    let hand_have_identity = if hand_need == 0 || cast_ident.is_empty() {
         p.hand.len().saturating_sub(1)
     } else {
         p.hand
@@ -155,6 +155,22 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             })
             .count()
     };
+    // Clear View-style GY-substitutes can fill HAND slots without
+    // identity matching. Count eligible cards in GY and add their
+    // capacity to the affordability calculation. They cover slots the
+    // hand can't satisfy via identity.
+    let gy_subs_available = p
+        .graveyard
+        .iter()
+        .filter(|gid| {
+            state
+                .card_pool
+                .get(*gid)
+                .map(|i| i.card.gy_hand_substitute)
+                .unwrap_or(false)
+        })
+        .count();
+    let hand_have = hand_have_identity + gy_subs_available;
     let mut available: Vec<InstanceId> = p.board.clone();
     let mut sac_ok = true;
     for required_kind in &sac_slots {
@@ -523,6 +539,7 @@ mod tests {
             static_def: None,
             handlers: BTreeMap::new(),
             activated: vec![],
+            gy_hand_substitute: false,
         }
     }
 
