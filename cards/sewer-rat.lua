@@ -12,6 +12,6 @@ return {
     {amount = 1, source = "hand"},
     {amount = 2, source = "mill"},
   },
-  stats = {x = 3, y = 2},
+  stats = {x = 2, y = 2},
   abilities = {"can't block cats."},
 }
