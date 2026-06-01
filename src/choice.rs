@@ -338,6 +338,15 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
         } else {
             Vec::new()
         };
+        // If the hand can't cover the cost (not enough identity-match
+        // candidates), pass instead of submitting a doomed cast. Without
+        // this, play_card refuses with WrongHandPaymentCount, the
+        // priority window doesn't advance, and the oracle re-picks the
+        // same card next iteration → spin until drive_window_to_close's
+        // safety cap trips.
+        if hand_payment_ids.len() < hand_need {
+            return ResponseAction::Pass;
+        }
 
         ResponseAction::Respond {
             card: pick,
