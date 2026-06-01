@@ -18,8 +18,8 @@
 //! ran it. The output `Vec<f64>` preserves the input order.
 
 use std::cell::RefCell;
-use std::path::Path;
 
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
 use tsot::card::{Card, CardRegistry};
@@ -50,36 +50,43 @@ pub fn parallel_evaluate_genomes(
     jobs: &[(Vec<String>, u64)],
     n_per_side: u32,
 ) -> Vec<f64> {
-    jobs.par_iter()
-        .map(|(genome, fit_seed)| {
-            WORKER_CTX.with(|cell| {
-                let mut ctx_ref = cell.borrow_mut();
-                let needs_rebuild = match ctx_ref.as_ref() {
-                    None => true,
-                    Some(ctx) => ctx.gauntlet_signature != gauntlet_ids,
-                };
-                if needs_rebuild {
-                    let registry = CardRegistry::load(Path::new("cards"))
-                        .expect("worker: failed to load cards");
-                    let gauntlet: Vec<Vec<Card>> = gauntlet_ids
-                        .iter()
-                        .map(|ids| {
-                            to_deck(&registry, ids)
-                                .expect("gauntlet contains unknown card id")
-                        })
-                        .collect();
-                    *ctx_ref = Some(WorkerCtx {
-                        registry,
-                        gauntlet,
-                        gauntlet_signature: gauntlet_ids.to_vec(),
-                    });
-                }
-                let ctx = ctx_ref.as_ref().unwrap();
-                fitness(&ctx.registry, genome, &ctx.gauntlet, n_per_side, *fit_seed)
-                    .expect("worker fitness: genome contains unknown card id")
-            })
+    let eval = |(genome, fit_seed): &(Vec<String>, u64)| -> f64 {
+        WORKER_CTX.with(|cell| {
+            let mut ctx_ref = cell.borrow_mut();
+            let needs_rebuild = match ctx_ref.as_ref() {
+                None => true,
+                Some(ctx) => ctx.gauntlet_signature != gauntlet_ids,
+            };
+            if needs_rebuild {
+                let registry = CardRegistry::load_embedded()
+                    .expect("worker: failed to load cards");
+                let gauntlet: Vec<Vec<Card>> = gauntlet_ids
+                    .iter()
+                    .map(|ids| {
+                        to_deck(&registry, ids)
+                            .expect("gauntlet contains unknown card id")
+                    })
+                    .collect();
+                *ctx_ref = Some(WorkerCtx {
+                    registry,
+                    gauntlet,
+                    gauntlet_signature: gauntlet_ids.to_vec(),
+                });
+            }
+            let ctx = ctx_ref.as_ref().unwrap();
+            fitness(&ctx.registry, genome, &ctx.gauntlet, n_per_side, *fit_seed)
+                .expect("worker fitness: genome contains unknown card id")
         })
-        .collect()
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        jobs.par_iter().map(eval).collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        jobs.iter().map(eval).collect()
+    }
 }
 
 /// Extract `Vec<Vec<String>>` of card ids from a gauntlet of
