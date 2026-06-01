@@ -3,6 +3,7 @@
 //! final stats + the game-long replay journal.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -68,11 +69,42 @@ pub fn run_game(
         action_counts: BTreeMap::new(),
     };
 
+    // Per-game wall-clock watchdog. A release game terminates in well
+    // under a second on typical hardware; debug ~5x slower. The budget
+    // is generous (default 30s) so a slow-but-progressing game isn't
+    // killed. When it fires, we dump active player's hand+board+GY card
+    // ids + the most recently picked / activated card so the prune /
+    // EA harness can identify the culprit. The hung game is scored as
+    // a loss for the active player (couldn't make progress on their
+    // turn — conservative). Tunable via `TSOT_GAME_TIMEOUT_SECS`.
+    let timeout = std::env::var("TSOT_GAME_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(30));
+    let game_start = Instant::now();
+    // Reset per turn so the timeout report identifies the actual offending
+    // card, not a stale pick from an earlier successful turn.
+    let mut last_picked: Option<InstanceId> = None;
+    let mut last_activated: Option<(InstanceId, usize)> = None;
+
     let mut safety = 1000;
     while state.winner.is_none() && safety > 0 {
+        if game_start.elapsed() > timeout {
+            report_game_timeout(
+                &state,
+                "outer turn loop",
+                last_picked.as_ref(),
+                last_activated.as_ref(),
+            );
+            state.set_winner(Some(state.active_player.opponent()));
+            break;
+        }
         safety -= 1;
         let active = state.active_player;
         let turn = state.turn;
+        last_picked = None;
+        last_activated = None;
         let mut events: Vec<String> = Vec::new();
 
         while state.phase != Phase::Main1 && state.winner.is_none() {
@@ -84,9 +116,36 @@ pub fn run_game(
         }
 
         // Multi-card-per-turn (Pattern B): at most one creature per turn,
-        // but as many non-creatures as the AI can afford.
+        // but as many non-creatures as the AI can afford. Inner safety
+        // cap (`pattern_b_iter`) catches "picker keeps returning the
+        // same card → `continue` → re-pick" infinite loops (e.g., an
+        // X-cost spell that affords pick + is unaffordable at X-pick
+        // resolution, in lockstep with another bug). 200 iterations is
+        // a generous ceiling — a real turn never plays more than ~10.
         let mut played_creature = false;
+        let mut pattern_b_iter: u32 = 0;
         loop {
+            pattern_b_iter += 1;
+            if pattern_b_iter > 200 {
+                report_game_timeout(
+                    &state,
+                    "Pattern B inner loop",
+                    last_picked.as_ref(),
+                    last_activated.as_ref(),
+                );
+                state.set_winner(Some(state.active_player.opponent()));
+                break;
+            }
+            if game_start.elapsed() > timeout {
+                report_game_timeout(
+                    &state,
+                    "Pattern B inner loop (wall-clock)",
+                    last_picked.as_ref(),
+                    last_activated.as_ref(),
+                );
+                state.set_winner(Some(state.active_player.opponent()));
+                break;
+            }
             if state.winner.is_some() {
                 break;
             }
@@ -99,6 +158,7 @@ pub fn run_game(
             else {
                 break;
             };
+            last_picked = Some(picked.clone());
             let picked_is_creature = state
                 .card_pool
                 .get(&picked)
@@ -122,8 +182,15 @@ pub fn run_game(
                     // Cap X by the tightest binding resource. Each is_x
                     // component scales by X; the AI must pick an X for
                     // which every is_x source can pay X-of-its-resource.
-                    // For HAND components, also respect identity-match
-                    // capacity (need X matching cards, not just X cards).
+                    // For HAND components, the cap is identity-matching
+                    // hand cards PLUS Clear View-style GY substitutes
+                    // (each fills one HAND slot without identity match).
+                    // Without GY-subs in the cap, can_pay_instant_cost
+                    // (which counts gy_subs) and this branch disagree:
+                    // can_pay says "playable", branch says max_x=0,
+                    // `continue` fires, picker re-returns the same card,
+                    // infinite loop. The integration mirrors the non-X
+                    // spell branch below.
                     let p = state.player(active);
                     let hand_size = p.hand.len();
                     let deck_size = p.deck.len();
@@ -141,6 +208,17 @@ pub fn run_game(
                         .count();
                     let identity_count =
                         state.identity_matching_hand_count(active, &picked);
+                    let gy_subs_available = p
+                        .graveyard
+                        .iter()
+                        .filter(|gid| {
+                            state
+                                .card_pool
+                                .get(*gid)
+                                .map(|i| i.card.gy_hand_substitute)
+                                .unwrap_or(false)
+                        })
+                        .count();
                     let mut caps: Vec<usize> = Vec::new();
                     for c in &cost {
                         if !c.is_x {
@@ -148,9 +226,11 @@ pub fn run_game(
                         }
                         match c.source {
                             CostSource::Hand => {
-                                // Limit by identity-matching hand size minus
-                                // the card itself (which isn't a candidate).
-                                caps.push(identity_count.min(hand_size.saturating_sub(1)));
+                                // Identity-matching hand (excluding self)
+                                // plus GY substitutes covers the X-cap.
+                                let hand_avail =
+                                    identity_count.min(hand_size.saturating_sub(1));
+                                caps.push(hand_avail + gy_subs_available);
                             }
                             CostSource::Mill => caps.push(deck_size),
                             CostSource::Graveyard => caps.push(gy_size),
@@ -165,9 +245,16 @@ pub fn run_game(
                     // `allow_x_zero` opt-in flag says otherwise. Skip
                     // entirely if max_x < 1 (resource-starved).
                     if max_x < 1 {
-                        // Can't afford even X=1 — skip this play (the
-                        // outer preview/rollback will catch the failed
-                        // cast).
+                        // Can't afford even X=1. CRITICAL: if this was
+                        // a creature pick, mark `played_creature = true`
+                        // so the picker doesn't re-return the same card
+                        // next iteration — defense in depth against any
+                        // can_pay / X-cap discrepancy that slips through.
+                        if picked_is_creature {
+                            played_creature = true;
+                        } else {
+                            break;
+                        }
                         continue;
                     }
                     let x = oracle.choose_int(
@@ -186,12 +273,27 @@ pub fn run_game(
                         .map(|_| x.max(0) as usize)
                         .sum();
                     if hand_needed > 0 {
-                        choices.hand_payment_ids = state.resolve_hand_payment(
-                            active,
-                            &picked,
-                            hand_needed,
-                            &mut oracle,
-                        );
+                        // Mirror the non-X spell branch: spend Clear
+                        // View-style GY substitutes greedily for slots
+                        // the hand can't satisfy via identity, then
+                        // resolve the remainder from hand.
+                        let mut remaining = hand_needed;
+                        if identity_count < remaining {
+                            let want_gy = remaining - identity_count;
+                            let gy_subs =
+                                state.find_gy_hand_substitutes(active, &picked, want_gy);
+                            let used = gy_subs.len();
+                            choices.gy_hand_payment_ids = gy_subs;
+                            remaining -= used;
+                        }
+                        if remaining > 0 {
+                            choices.hand_payment_ids = state.resolve_hand_payment(
+                                active,
+                                &picked,
+                                remaining,
+                                &mut oracle,
+                            );
+                        }
                     }
                 } else if matches!(kind, CardType::Creature) {
                     let has_setup_cost = cost.iter().any(|c| {
@@ -438,7 +540,8 @@ pub fn run_game(
         // before combat lets the AI know its hand for the rest of the
         // turn. Creatures hold their activations until post-combat so
         // tapping for an ability doesn't pre-empt an attack.
-        let pre_acts = run_activation_pass(&mut state, active, lua, &mut oracle, true);
+        let pre_acts =
+            run_activation_pass(&mut state, active, lua, &mut oracle, true, &mut last_activated);
         if pre_acts > 0 {
             events.push(format!("{pre_acts} pre-combat activation(s)"));
         }
@@ -503,7 +606,8 @@ pub fn run_game(
         // are still untapped here — this is where vigilant-human draws.
         // Pre-combat non-creature activations already tapped those, so
         // they're naturally excluded by `can_activate`.
-        let post_acts = run_activation_pass(&mut state, active, lua, &mut oracle, false);
+        let post_acts =
+            run_activation_pass(&mut state, active, lua, &mut oracle, false, &mut last_activated);
         if post_acts > 0 {
             events.push(format!("{post_acts} post-combat activation(s)"));
         }
@@ -549,6 +653,7 @@ fn run_activation_pass(
     lua: &mlua::Lua,
     oracle: &mut dyn ChoiceOracle,
     non_creatures_only: bool,
+    last_activated: &mut Option<(InstanceId, usize)>,
 ) -> u32 {
     let mut count = 0u32;
     // Snapshot board ids up front. Activation handlers can mutate the
@@ -592,6 +697,7 @@ fn run_activation_pass(
             } else {
                 None
             };
+            *last_activated = Some((iid.clone(), idx));
             if state
                 .activate_ability(iid, idx, x_value, Some(&mut EventContext::new(lua, oracle)))
                 .is_ok()
@@ -602,6 +708,53 @@ fn run_activation_pass(
         }
     }
     count
+}
+
+/// Dump game state to stderr when the wall-clock watchdog or inner-loop
+/// safety cap trips. Reports active player, turn, zone contents (by
+/// `card.id`, not InstanceId — readable correlation to `cards/*.lua`),
+/// most recent card picked, and most recent activation. Operator greps
+/// stderr for `[GAME TIMEOUT]` to identify the suspect card.
+fn report_game_timeout(
+    state: &GameState,
+    site: &str,
+    last_picked: Option<&InstanceId>,
+    last_activated: Option<&(InstanceId, usize)>,
+) {
+    let ids = |iids: &[InstanceId]| -> Vec<String> {
+        iids.iter()
+            .filter_map(|i| state.card_pool.get(i).map(|c| c.card.id.clone()))
+            .collect()
+    };
+    let card_id_of = |iid: &InstanceId| -> String {
+        state
+            .card_pool
+            .get(iid)
+            .map(|c| c.card.id.clone())
+            .unwrap_or_else(|| format!("?{iid}"))
+    };
+    eprintln!(
+        "[GAME TIMEOUT] site={site} turn={} active={:?} winner={:?}",
+        state.turn, state.active_player, state.winner,
+    );
+    if let Some(p) = last_picked {
+        eprintln!("  last_picked: {} ({})", p, card_id_of(p));
+    }
+    if let Some((iid, idx)) = last_activated {
+        eprintln!("  last_activated: {} ({}) ability_idx={idx}", iid, card_id_of(iid));
+    }
+    eprintln!("  A hand: {:?}", ids(&state.a.hand));
+    eprintln!("  A board: {:?}", ids(&state.a.board));
+    eprintln!("  A graveyard: {:?}", ids(&state.a.graveyard));
+    eprintln!("  B hand: {:?}", ids(&state.b.hand));
+    eprintln!("  B board: {:?}", ids(&state.b.board));
+    eprintln!("  B graveyard: {:?}", ids(&state.b.graveyard));
+    eprintln!(
+        "  decks: A={} B={} | priority_chain={}",
+        state.a.deck.len(),
+        state.b.deck.len(),
+        state.priority.as_ref().map(|p| p.chain.len()).unwrap_or(0),
+    );
 }
 
 pub fn short(iid: &InstanceId) -> String {

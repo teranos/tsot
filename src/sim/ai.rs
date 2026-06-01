@@ -41,10 +41,19 @@ pub fn pick_random_playable_in_hand(
             }
             match inst.card.kind {
                 CardType::Creature => {
-                    let has_setup = inst.card.cost.iter().any(|c| {
+                    // Creatures with `is_x` hand-pay (hydra, dark-salamander)
+                    // MUST be affordability-gated — same as instants. Without
+                    // this, the picker accepts an X-cost creature whose
+                    // identity-matching hand is 0, run.rs computes max_x = 0,
+                    // hits `continue`, and the picker re-returns the same
+                    // creature: Pattern B infinite loop. Plain creatures
+                    // (no `is_x`, no setup cost) are always playable for
+                    // free, so they skip the check.
+                    let needs_affordability = inst.card.cost.iter().any(|c| {
                         matches!(c.source, CostSource::Sacrifice | CostSource::Graveyard)
+                            || c.is_x
                     });
-                    !has_setup || can_pay_instant_cost(state, player, iid)
+                    !needs_affordability || can_pay_instant_cost(state, player, iid)
                 }
                 CardType::Spell => can_pay_instant_cost(state, player, iid),
                 CardType::Artifact => can_pay_instant_cost(state, player, iid),

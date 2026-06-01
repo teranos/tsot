@@ -16,7 +16,7 @@ mod state;
 mod turn;
 
 #[cfg(test)]
-mod test_helpers;
+pub(crate) mod test_helpers;
 
 pub use combat::{CombatError, CombatOutcome};
 pub use context::EventContext;

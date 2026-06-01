@@ -8,7 +8,7 @@ use super::state::{
     CombatState, GameState, InstanceId, Modifier, PlayerId, StackItem, StatusEffect, Zone,
 };
 use crate::card::{Card, CardType, EventName, Timing};
-use crate::choice::{ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest};
+use crate::choice::{ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest, TargetIntent};
 use mlua::{Lua, Result, Value};
 use std::cell::RefCell;
 
@@ -837,6 +837,32 @@ macro_rules! build_game_table {
                 cell_ss.borrow_mut().set_summoning_sick(&iid, sick);
                 Ok(())
             })?,
+        )?;
+
+        // game.set_intent("steal"|"donate"|"high_value_attached"|nil) —
+        // side-channel hint declaring what the next choose_card call is
+        // for. Consumed by the very next choose_card on this oracle.
+        // Pass nil (or omit the call entirely) to clear/leave unset.
+        let cell_intent = &$oracle_cell;
+        game.set(
+            "set_intent",
+            $scope.create_function_mut(
+                move |_, intent_str: Option<String>| -> Result<()> {
+                    let intent = match intent_str.as_deref() {
+                        None => None,
+                        Some(s) => match TargetIntent::parse(s) {
+                            Some(i) => Some(i),
+                            None => {
+                                return Err(mlua::Error::runtime(format!(
+                                    "game.set_intent: unknown intent {s:?} (known: steal, donate, high_value_attached)"
+                                )))
+                            }
+                        },
+                    };
+                    cell_intent.borrow_mut().set_next_intent(intent);
+                    Ok(())
+                },
+            )?,
         )?;
 
         // game.x_value() — read the X value of the activation currently

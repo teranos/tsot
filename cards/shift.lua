@@ -3,8 +3,11 @@
 --   - Steal opp's jewels onto your creature (Phase 3 grants follow)
 --   - Consolidate your own attached jewels onto a single host
 --   - Save attached cards from a dying creature by relocating them
--- The sim AI uses random targeting today; smart heuristics (response-
--- time triggering, prefer-steal scoring) are a future refinement.
+-- Each choose_card declares its purpose via game.set_intent so the
+-- sim AI's heuristic oracle picks for the right reason: steal an
+-- opp's loaded host for the source, donate to my biggest creature
+-- for the destination, and prefer high-value attached (jewels) for
+-- the per-attached pick. Random and scripted oracles ignore the hint.
 --
 -- X is read at on_play time via `game.x_value()` (set by play_card
 -- before firing OnPlay). Movement uses `game.move_attached(from_host,
@@ -35,6 +38,7 @@ return {
     end
     if #source_pool == 0 then return end
 
+    game.set_intent("steal")
     local source = game.choose_card(source_pool, {prompt = "shift source"})
     if not source then return end
 
@@ -51,6 +55,7 @@ return {
     end
     if #dest_pool == 0 then return end
 
+    game.set_intent("donate")
     local dest = game.choose_card(dest_pool, {prompt = "shift destination"})
     if not dest then return end
 
@@ -61,6 +66,7 @@ return {
     while moved < x do
       local remaining = game.attached_of(source)
       if #remaining == 0 then break end
+      game.set_intent("high_value_attached")
       local pick = game.choose_card(remaining, {prompt = "shift attached"})
       if not pick then break end
       game.move_attached(source, dest, pick)

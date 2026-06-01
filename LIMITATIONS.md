@@ -1,7 +1,7 @@
 # tsot — Known Limitations
 
 > What the engine cannot do today. Code TODOs are tagged so they map back
-> to a section here. Last refresh: 2026-05-31 (post-EA + parallelism + report parity).
+> to a section here. Last refresh: 2026-06-01 (shift intent-aware targeting).
 
 ## events
 
@@ -29,6 +29,10 @@ No engine concept of "what is legal to target." Every "target X" card today work
 - **Target-validity recomputation** — if a target becomes illegal between cast and resolution (e.g., it left the board), the engine has no "fizzle if target is gone" check.
 
 STATIC Phase 3 (restriction statics) partially overlaps here; the targeting infrastructure is its own slice.
+
+### Smart targeting heuristics (`TargetIntent`)
+
+`RandomOracle::choose_card` now reads an optional side-channel `TargetIntent` (set by handlers via `game.set_intent("steal"|"donate"|"high_value_attached")`) and dispatches to intent-specific scoring. Intent is consumed on the next `choose_card` (cleared after one use), so handlers re-declare per call site. Wired in shift's `on_play` (source = `steal`, destination = `donate`, per-attached pick = `high_value_attached`). Scripted and Noop oracles ignore the hint. Other targeted cards (beguile, silent-murder, mutation cards) still use the default `target_score` and remain candidates for intent-aware scoring; the framework is in place but each card has to declare its intent.
 
 ## stack
 

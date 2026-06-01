@@ -8,6 +8,39 @@ use crate::game::{GameState, InstanceId, PlayChoices, PlayerId, StackItem};
 use rand::Rng;
 use std::collections::VecDeque;
 
+/// Side-channel hint declaring what the NEXT `choose_card` call is for.
+/// Set via `ChoiceOracle::set_next_intent`, consumed (cleared) on the next
+/// `choose_card`. Lets the oracle pick intent-specific scoring without
+/// changing the `ChooseCardRequest` signature (which would touch every
+/// existing handler and ScriptedOracle fixture).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetIntent {
+    /// "Pick a card on the opponent's side I want to take from."
+    /// Bias toward opponent-controlled candidates; bonus per attached
+    /// card and per high-value attached (jewels, statics).
+    Steal,
+    /// "Pick a card on my side I want to enrich."
+    /// Bias toward asker-controlled candidates; bonus for creature kind
+    /// (so granted activations land on a body) and for existing attached
+    /// count (consolidation play for Phase-3 grant-stacks).
+    Donate,
+    /// "Pick the highest-value attached card."
+    /// No controller bias — caller has already gated by host. Prefers
+    /// `OnAttachedAsCost` handlers (jewels), then statics, then cost-heavy.
+    HighValueAttached,
+}
+
+impl TargetIntent {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "steal" => Some(Self::Steal),
+            "donate" => Some(Self::Donate),
+            "high_value_attached" => Some(Self::HighValueAttached),
+            _ => None,
+        }
+    }
+}
+
 /// Decision returned from `ChoiceOracle::respond_or_pass`. Either pass
 /// priority, or play a card from hand as a response (currently zero-cost
 /// instants only — the policy is intentionally narrow).
@@ -98,6 +131,11 @@ pub trait ChoiceOracle {
     fn respond_or_pass(&mut self, _state: &GameState, _player: PlayerId) -> ResponseAction {
         ResponseAction::Pass
     }
+
+    /// Side-channel hint: declare the purpose of the NEXT `choose_card`
+    /// call. Consumed (cleared) by the next `choose_card`. No-op default
+    /// for oracles that don't score (Scripted, Noop).
+    fn set_next_intent(&mut self, _intent: Option<TargetIntent>) {}
 }
 
 /// Random oracle — sim default. Picks uniformly random from the pool,
@@ -106,15 +144,23 @@ pub trait ChoiceOracle {
 /// picks from whatever pool is passed.
 pub struct RandomOracle<R: Rng> {
     rng: R,
+    next_intent: Option<TargetIntent>,
 }
 
 impl<R: Rng> RandomOracle<R> {
     pub fn new(rng: R) -> Self {
-        Self { rng }
+        Self {
+            rng,
+            next_intent: None,
+        }
     }
 }
 
 impl<R: Rng> ChoiceOracle for RandomOracle<R> {
+    fn set_next_intent(&mut self, intent: Option<TargetIntent>) {
+        self.next_intent = intent;
+    }
+
     fn choose_card(
         &mut self,
         state: &GameState,
@@ -127,12 +173,20 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
             return None;
         }
 
+        // Consume any intent set via set_next_intent; cleared even on
+        // skip-by-optional path above so a deferred handler doesn't reuse
+        // someone else's intent. Intent takes precedence over host /
+        // asker-default scoring when present.
+        let intent = self.next_intent.take();
+
         // Score each candidate. Higher = preferred.
         let scores: Vec<i32> = req
             .pool
             .iter()
             .map(|iid| {
-                if let Some(host_iid) = &req.host {
+                if let (Some(intent), Some(asker)) = (intent, req.asker) {
+                    intent_score(state, iid, asker, intent)
+                } else if let Some(host_iid) = &req.host {
                     pitch_score(state, iid, host_iid)
                 } else if let Some(asker) = req.asker {
                     target_score(state, iid, asker)
@@ -387,6 +441,97 @@ fn target_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) 
     score
 }
 
+/// Intent-aware target scoring. Dispatched to per-intent scoring fns
+/// when a handler has set the next-intent side-channel on the oracle.
+/// Replaces the default `target_score` for that single call only.
+fn intent_score(
+    state: &GameState,
+    candidate_iid: &InstanceId,
+    asker: PlayerId,
+    intent: TargetIntent,
+) -> i32 {
+    match intent {
+        TargetIntent::Steal => steal_score(state, candidate_iid, asker),
+        TargetIntent::Donate => donate_score(state, candidate_iid, asker),
+        TargetIntent::HighValueAttached => attached_value_score(state, candidate_iid),
+    }
+}
+
+/// "Pick from opponent's side." Strong opp anchor (+1000) so any
+/// opp-controlled candidate outranks any own-controlled candidate in a
+/// mixed pool. Within opp candidates: bonus per attached card (more to
+/// take), with extra weight for attached cards bearing pitch-payoff
+/// handlers (jewels) or statics (anthems). Plain stat-value doesn't
+/// matter for shift-style steals because the body stays put — only the
+/// attached cards move.
+fn steal_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) -> i32 {
+    let Some(cand) = state.card_pool.get(candidate_iid) else {
+        return 0;
+    };
+    let mut score = if cand.controller != asker { 1000 } else { -100 };
+    for a_iid in &cand.attached {
+        score += 10;
+        let Some(att) = state.card_pool.get(a_iid) else {
+            continue;
+        };
+        if att
+            .card
+            .handlers
+            .contains_key(&crate::card::EventName::OnAttachedAsCost)
+        {
+            score += 30;
+        }
+        if att.card.static_def.is_some() {
+            score += 15;
+        }
+    }
+    score
+}
+
+/// "Pick from my side to enrich." Strong self anchor (+1000) so an own
+/// card outranks an opp card in a mixed pool. Within own candidates:
+/// creatures (+50) beat artifacts because granted activations want a
+/// body that can attack; bigger creature beats smaller (x*4 + y);
+/// already-loaded host beats naked (+10 per attached) because Phase-3
+/// jewel grants stack on a single host.
+fn donate_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) -> i32 {
+    let Some(cand) = state.card_pool.get(candidate_iid) else {
+        return 0;
+    };
+    let mut score = if cand.controller == asker { 1000 } else { -100 };
+    if cand.card.kind == crate::card::CardType::Creature {
+        score += 50;
+    }
+    let (x, y) = state.effective_stats(candidate_iid);
+    score += x * 4 + y;
+    score += (cand.attached.len() as i32) * 10;
+    score
+}
+
+/// "Pick the highest-value attached." Caller has already gated by host,
+/// so no controller bias. Big bonus for pitch-payoff handlers (jewels
+/// grant activations to the new host post-shift), moderate for statics
+/// (anthems re-target), and a cost-weight tiebreaker.
+fn attached_value_score(state: &GameState, candidate_iid: &InstanceId) -> i32 {
+    let Some(cand) = state.card_pool.get(candidate_iid) else {
+        return 0;
+    };
+    let mut score = 0i32;
+    if cand
+        .card
+        .handlers
+        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+    {
+        score += 100;
+    }
+    if cand.card.static_def.is_some() {
+        score += 50;
+    }
+    let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    score += cost_sum * 3;
+    score
+}
+
 /// "Will this player be decked within ~2 turns at the opponent's current
 /// pace?" Sums opponent's on-board creature power (tapped or not — tapped
 /// creatures will untap and attack again, or are CURRENTLY attacking in
@@ -619,5 +764,120 @@ impl<O: ChoiceOracle> ChoiceOracle for RecordingOracle<O> {
     /// same response decisions because RandomOracle's rng is deterministic.
     fn respond_or_pass(&mut self, state: &GameState, player: PlayerId) -> ResponseAction {
         self.inner.respond_or_pass(state, player)
+    }
+
+    /// Forwards to inner. Not added to the recording — intent is a
+    /// side-channel hint, not a recordable answer. Suicide-retry replay
+    /// is consistent because the same handler called the same way will
+    /// re-set the same intent before each choose_card.
+    fn set_next_intent(&mut self, intent: Option<TargetIntent>) {
+        self.inner.set_next_intent(intent);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::card::{ModifierValue, StaticAffects, StaticDef};
+    use crate::game::test_helpers::deck_of;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    fn put_on_board(s: &mut GameState, side: PlayerId, iid: &InstanceId) {
+        s.player_mut(side).hand.retain(|x| x != iid);
+        s.player_mut(side).board.push(iid.clone());
+    }
+
+    fn give_static_def(s: &mut GameState, iid: &InstanceId) {
+        s.card_pool.get_mut(iid).unwrap().card.static_def = Some(StaticDef {
+            affects: StaticAffects::default(),
+            modifier_x: ModifierValue::default(),
+            modifier_y: ModifierValue::default(),
+            modifier_keyword: None,
+            condition: None,
+            restrictions: vec![],
+            cost_modifiers: vec![],
+            granted_activated: None,
+            granted_colors: vec![],
+        });
+    }
+
+    fn force_attach(s: &mut GameState, host: &InstanceId, attached: &InstanceId) {
+        s.card_pool
+            .get_mut(host)
+            .unwrap()
+            .attached
+            .push(attached.clone());
+    }
+
+    fn req(pool: Vec<InstanceId>) -> ChooseCardRequest {
+        ChooseCardRequest {
+            pool,
+            asker: Some(PlayerId::A),
+            host: None,
+            optional: false,
+            prompt: String::new(),
+        }
+    }
+
+    #[test]
+    fn steal_intent_picks_opp_loaded_host_over_own_naked() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let own = s.a.hand[0].clone();
+        let opp = s.b.hand[0].clone();
+        let opp_jewel = s.b.hand[1].clone();
+        put_on_board(&mut s, PlayerId::A, &own);
+        put_on_board(&mut s, PlayerId::B, &opp);
+        give_static_def(&mut s, &opp_jewel);
+        force_attach(&mut s, &opp, &opp_jewel);
+
+        let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
+        oracle.set_next_intent(Some(TargetIntent::Steal));
+        let pick = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()]));
+        assert_eq!(pick, Some(opp));
+    }
+
+    #[test]
+    fn donate_intent_picks_own_creature_over_opp() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let own = s.a.hand[0].clone();
+        let opp = s.b.hand[0].clone();
+        put_on_board(&mut s, PlayerId::A, &own);
+        put_on_board(&mut s, PlayerId::B, &opp);
+
+        let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
+        oracle.set_next_intent(Some(TargetIntent::Donate));
+        let pick = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()]));
+        assert_eq!(pick, Some(own));
+    }
+
+    #[test]
+    fn high_value_attached_prefers_static_bearing_card() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let vanilla = s.a.hand[0].clone();
+        let jewel = s.a.hand[1].clone();
+        give_static_def(&mut s, &jewel);
+
+        let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
+        oracle.set_next_intent(Some(TargetIntent::HighValueAttached));
+        let pick = oracle.choose_card(&s, req(vec![vanilla.clone(), jewel.clone()]));
+        assert_eq!(pick, Some(jewel));
+    }
+
+    #[test]
+    fn intent_is_consumed_after_one_call() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let own = s.a.hand[0].clone();
+        let opp = s.b.hand[0].clone();
+        put_on_board(&mut s, PlayerId::A, &own);
+        put_on_board(&mut s, PlayerId::B, &opp);
+
+        let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
+        oracle.set_next_intent(Some(TargetIntent::Donate));
+        let _ = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()]));
+        // Second call without re-setting: Donate doesn't apply. Default
+        // target_score has a +100 opp bias, so opp wins.
+        let pick = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()]));
+        assert_eq!(pick, Some(opp));
     }
 }
