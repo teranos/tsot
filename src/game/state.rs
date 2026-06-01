@@ -556,6 +556,11 @@ impl GameState {
         p.consecutive_passes = 0;
         p.next_to_act = self.active_player;
         self.set_priority(Some(p));
+        // RULES P.33: a countered cast moves to GRAVEYARD (the cast
+        // card already left HAND at announce-time; we need to put it
+        // somewhere, and the resolution didn't fire).
+        let StackItem::PlayedCard { card, controller, .. } = &removed;
+        self.add_to_zone(card, *controller, Zone::Graveyard);
         Some(removed)
     }
 
@@ -574,6 +579,9 @@ impl GameState {
         p.consecutive_passes = 0;
         p.next_to_act = self.active_player;
         self.set_priority(Some(p));
+        // RULES P.33: countered cast moves to GRAVEYARD.
+        let StackItem::PlayedCard { card, controller, .. } = &removed;
+        self.add_to_zone(card, *controller, Zone::Graveyard);
         Some(removed)
     }
 

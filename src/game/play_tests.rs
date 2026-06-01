@@ -1264,8 +1264,10 @@ fn play_card_during_open_window_pushes_to_chain_instead_of_opening_new() {
             assert_eq!(*controller, PlayerId::B);
         }
     }
-    // B's instant is NOT resolved yet — it's still in B's hand.
-    assert!(s.b.hand.contains(&b_instant));
+    // P.33: cast card leaves HAND at cast announce (not stays-in-hand).
+    // It's not yet in GRAVEYARD either — it's on the chain awaiting
+    // resolution. So neither HAND nor GRAVEYARD contains it now.
+    assert!(!s.b.hand.contains(&b_instant));
     assert!(!s.b.graveyard.contains(&b_instant));
 }
 

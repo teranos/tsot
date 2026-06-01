@@ -611,6 +611,17 @@ impl GameState {
             }
         }
 
+        // RULES P.33: the cast card itself leaves HAND at cast time. It
+        // joins the response chain (transient — no Z-zone backing). On
+        // resolution it moves to its destination zone; if countered it
+        // moves to GRAVEYARD. Without this, the same card sits in hand
+        // through the whole response window and the AI can cast it
+        // again on its own turn-of-priority — which lets two players
+        // alternate identical responses indefinitely (see Bug 3).
+        // HAND payments still stay in hand until resolution (their
+        // refund-on-counter semantic is unchanged).
+        let _ = self.remove_from_zone(instance, player, Zone::Hand);
+
         // Announce the cast. Non-hand cost (mill, graveyard) is already
         // paid; HAND payments stay in hand until resolution (mirrors MTG:
         // if the cast gets countered, HAND payments don't leave hand, but
@@ -673,6 +684,46 @@ impl GameState {
                 self.turn,
                 self.priority.as_ref().map(|p| p.chain.len()).unwrap_or(0),
             ));
+            // Chain-overflow tripwire: dump the chain contents at depth
+            // 40 so we can see what's piling up (e.g., alternating
+            // counterspells, repeated same card) before bounding via a
+            // permanent cap. Halts via the shared timeout counter.
+            let chain_depth = self
+                .priority
+                .as_ref()
+                .map(|p| p.chain.len())
+                .unwrap_or(0);
+            if chain_depth >= 40 {
+                let chain_dump: Vec<String> = self
+                    .priority
+                    .as_ref()
+                    .map(|p| {
+                        p.chain
+                            .iter()
+                            .enumerate()
+                            .map(|(i, StackItem::PlayedCard { card, controller, .. })| {
+                                let card_id = self
+                                    .card_pool
+                                    .get(card)
+                                    .map(|inst| inst.card.id.clone())
+                                    .unwrap_or_else(|| format!("?{card}"));
+                                format!("[{i}] {:?}={}", controller, card_id)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                eprintln!(
+                    "[CHAIN OVERFLOW] turn={} active={:?} chain_len={} contents:\n  {}",
+                    self.turn,
+                    self.active_player,
+                    chain_depth,
+                    chain_dump.join("\n  "),
+                );
+                self.bump_action("chain_overflow", self.active_player);
+                super::bump_timeout_and_maybe_halt("drive_window_to_close (chain overflow)");
+                self.priority = None;
+                break;
+            }
             if consecutive_failed_responds > 50 {
                 let chain_ids: Vec<String> = self
                     .priority
@@ -835,7 +886,9 @@ impl GameState {
                     self.set_face_down(&aid, true);
                     self.bump_action("attached_payment_transfer", player);
                 }
-                let _ = self.move_card(instance, player, Zone::Hand, Zone::Board);
+                // P.33: cast card was removed from HAND at cast time;
+                // resolution places it directly onto BOARD here.
+                self.add_to_zone(instance, player, Zone::Board);
                 self.set_summoning_sick(instance, true); // B.3
 
                 // Fire OnAttachedAsCost on each payment card BEFORE on_play.
@@ -888,7 +941,8 @@ impl GameState {
                     self.set_face_down(&aid, true);
                     self.bump_action("attached_payment_transfer", player);
                 }
-                let _ = self.move_card(instance, player, Zone::Hand, Zone::Board);
+                // P.33: cast card was removed from HAND at cast time.
+                self.add_to_zone(instance, player, Zone::Board);
                 self.bump_action("artifact_played", player);
 
                 for hid in &payments {
@@ -933,7 +987,9 @@ impl GameState {
                     self.add_to_zone(&aid, player, Zone::Exile);
                     self.bump_action("attached_payment_exile", player);
                 }
-                let _ = self.move_card(instance, player, Zone::Hand, Zone::Graveyard);
+                // P.33: cast card was removed from HAND at cast time;
+                // resolution places it directly into GRAVEYARD here (C.10).
+                self.add_to_zone(instance, player, Zone::Graveyard);
 
                 if let Some(c) = ctx.as_mut() {
                     lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
@@ -963,7 +1019,8 @@ impl GameState {
                     .mutation_target
                     .as_ref()
                     .expect("validated by play_card");
-                let _ = self.remove_from_zone(instance, player, Zone::Hand);
+                // P.33: cast card was removed from HAND at cast time;
+                // resolution attaches it directly to the host here.
                 self.add_attached(target, instance);
                 self.set_face_down(instance, true);
 
