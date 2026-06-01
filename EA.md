@@ -119,8 +119,9 @@ Module layout:
 
 - `sim::genome` — `to_deck`, `random_genome`
 - `sim::fitness` — `fitness`, `fitness_breakdown` (gauntlet building used only by tests now)
-- `sim::ops` — `tournament_select`, `crossover_uniform`, `mutate`, `repair`
-- `sim::evolve` — `evolve`, `EvolveConfig`, `EvolveResult`, `should_stop_at_ceiling`; result now carries `per_gen_card_freq` + `per_gen_mean_fitness` for the trajectory report
+- `sim::ops` — `tournament_select` (reads a `scores: &[f64]` vector → index; lets the caller pick raw fitness or a shaped vector for diversity-aware selection), `crossover_uniform`, `mutate`, `repair`
+- `sim::diversity` — `jaccard`, `mean_jaccard_to_others`, `selection_scores`, `mean_pairwise_distance`; the shared Jaccard implementation used by both selection-time shaping and the post-hoc clustering CLIs
+- `sim::evolve` — `evolve`, `EvolveConfig`, `EvolveResult`, `should_stop_at_ceiling`, `should_stop_at_plateau`; result carries `per_gen_card_freq` + `per_gen_mean_fitness` for the trajectory report
 - `sim::evolved_deck` — `EvolvedDeck` save/load via JSON
 - `sim::parallel_eval` — rayon thread-pool fitness evaluator with per-worker thread-local `CardRegistry`
 - `cli_evolve` / `cli_matchup_evolved` / `cli_champions_report` / `cli_curate` — one CLI handler per subcommand
@@ -182,10 +183,10 @@ cargo run --release -- evolve --no-variants --extra champions/r7-rank1.json --sa
 - **Per-card cap.** 3 matches the existing builder. 4 widens the search.
   Card-game intuition says 3 is the sweet spot for diversity; the EA itself
   will tell us if 4-of strategies dominate.
-- **Diversity preservation.** Without it, the population collapses onto one
-  local maximum within ~20 generations. Cheap fix: similarity penalty on
-  selection (Jaccard distance on card-id multisets). Defer until we see it
-  happen.
+- **Diversity preservation.** *Resolved 2026-06-01.* Jaccard fitness penalty
+  on tournament selection (`--diversity-alpha`, `sim::diversity::selection_scores`).
+  Elitism still carries by raw fitness. Fitness sharing (Goldberg) is the
+  next relative if α-tuning plateaus.
 - **Multi-objective.** Win-rate is one signal. Game-length variance, mill
   imbalance, board-state diversity all carry information. Single-objective
   first; revisit if the evolved decks all look the same.
