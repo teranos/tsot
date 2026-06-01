@@ -109,6 +109,13 @@ pub enum JournalEntry {
         owner: PlayerId,
         zone: Zone,
     },
+    /// Inserted an iid at position 0 of a zone (deck-top placement for
+    /// cantrips like Sprout). Inverse: remove from position 0.
+    AddToZoneTop {
+        iid: InstanceId,
+        owner: PlayerId,
+        zone: Zone,
+    },
     RemoveAttached {
         host: InstanceId,
         attached: InstanceId,
@@ -341,6 +348,14 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
                 v.pop();
             }
         }
+        JournalEntry::AddToZoneTop { iid, owner, zone } => {
+            let p = state.player_mut(owner);
+            let v = zone_mut(p, zone);
+            if let Some(first) = v.first() {
+                debug_assert_eq!(*first, iid, "add-to-zone-top inverse: iid mismatch at head");
+                v.remove(0);
+            }
+        }
         JournalEntry::RemoveAttached {
             host,
             attached,
@@ -468,6 +483,10 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::AddToZone { iid, owner, zone } => {
             let p = state.player_mut(owner);
             zone_mut(p, zone).push(iid);
+        }
+        JournalEntry::AddToZoneTop { iid, owner, zone } => {
+            let p = state.player_mut(owner);
+            zone_mut(p, zone).insert(0, iid);
         }
         JournalEntry::RemoveAttached {
             host,

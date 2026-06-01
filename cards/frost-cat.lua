@@ -9,6 +9,6 @@ return {
   subtypes = {"cat"},
   can_block_subtypes = {"bird"},
   cost = {{amount = 1, source = "hand"}},
-  stats = {x = 3, y = 3},
+  stats = {x = 1, y = 1},
   abilities = {"can block birds."},
 }

@@ -20,7 +20,10 @@ return {
   colors = {"blue"},
   type = "artifact",
   subtypes = {"crystal"},
-  cost = {{amount = 5, source = "mill"}},
+  cost = {
+    {amount = 1, source = "hand"},
+    {amount = 5, source = "mill"},
+  },
   abilities = {
     "blue cards you cast cost 1 less hand and 2 less graveyard to play.",
   },

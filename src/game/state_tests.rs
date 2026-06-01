@@ -812,6 +812,53 @@ fn effective_colors_drops_grant_when_mutation_unattached() {
     assert_eq!(s.effective_colors(&host), vec!["red".to_string()]);
 }
 
+// --- add_to_zone_top (deck-manipulation primitive for cantrips like Sprout) ---
+
+#[test]
+fn add_to_zone_top_inserts_at_index_0() {
+    let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+    // Pull a card out of A's deck and put it back on top.
+    let mover = s.a.deck[3].clone();
+    s.a.deck.retain(|i| i != &mover);
+    assert_eq!(s.a.deck.len(), 4);
+    s.add_to_zone_top(&mover, PlayerId::A, Zone::Deck);
+    assert_eq!(s.a.deck[0], mover);
+    assert_eq!(s.a.deck.len(), 5);
+}
+
+#[test]
+fn add_to_zone_top_round_trips_through_journal() {
+    let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+    let snapshot_deck = s.a.deck.clone();
+    let mover = s.a.deck[3].clone();
+    s.a.deck.retain(|i| i != &mover);
+    s.journal = Some(crate::game::Journal::new());
+    s.add_to_zone_top(&mover, PlayerId::A, Zone::Deck);
+    s.journal.take().unwrap().rollback(&mut s);
+    // After rollback, the top-insert is undone; mover is NOT in deck.
+    assert!(!s.a.deck.contains(&mover));
+    assert_eq!(s.a.deck.len(), 4);
+    // Restore for the assert below — sanity check rollback didn't break order.
+    s.a.deck.insert(3, mover.clone());
+    assert_eq!(s.a.deck, snapshot_deck);
+}
+
+#[test]
+fn add_to_zone_top_replay_forward_restores_state() {
+    let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+    let mover = s.a.deck[3].clone();
+    s.a.deck.retain(|i| i != &mover);
+    s.replay_journal = Some(crate::game::Journal::new());
+    s.add_to_zone_top(&mover, PlayerId::A, Zone::Deck);
+    let recorded = s.replay_journal.take().unwrap();
+    // Rebuild from scratch and replay forward.
+    let mut fresh = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+    fresh.a.deck.retain(|i| i != &mover);
+    recorded.replay_forward(&mut fresh);
+    assert_eq!(fresh.a.deck[0], mover);
+    assert_eq!(fresh.a.deck.len(), 5);
+}
+
 #[test]
 fn playable_responses_filters_to_zero_cost_instants() {
     let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));

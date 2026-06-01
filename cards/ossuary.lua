@@ -16,6 +16,7 @@ return {
   cost = {
     {amount = 2, source = "hand"},
     {amount = 2, source = "mill"},
+    {amount = 2, source = "graveyard"},
   },
   abilities = {
     "while your graveyard has 5 or more cards, creatures you control get +1/+1 and have flying.",

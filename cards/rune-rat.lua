@@ -11,6 +11,7 @@ return {
   cost = {
     {amount = 1, source = "hand"},
     {amount = 2, source = "mill"},
+    {amount = 2, source = "graveyard"},
   },
   stats = {x = 3, y = 3},
   abilities = {"can't block cats."},

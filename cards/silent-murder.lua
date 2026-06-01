@@ -11,8 +11,9 @@ return {
   colors = {"black"},
   type = "spell",
   symbol = "⊨",
+  cost = {{amount = 2, source = "graveyard"}},
   abilities = {
-    "kill target creature. if it was a human, draw a card.",
+    "kill target non-black creature. if it was a human, draw a card.",
   },
   on_play = function(game, self)
     local opp = game.opponent(self.owner)
@@ -21,7 +22,18 @@ return {
     for _, iid in ipairs(board) do
       local c = game.card(iid)
       if c and c.type == "creature" then
-        table.insert(pool, iid)
+        local is_black = false
+        if c.colors then
+          for _, col in ipairs(c.colors) do
+            if col == "black" then
+              is_black = true
+              break
+            end
+          end
+        end
+        if not is_black then
+          table.insert(pool, iid)
+        end
       end
     end
     if #pool == 0 then return end

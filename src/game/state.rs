@@ -781,6 +781,28 @@ impl GameState {
         }
     }
 
+    /// Insert an iid at position 0 of a player's zone, journaling the
+    /// insertion. Primary use: putting a card on TOP of the deck (V.1
+    /// considers index 0 the top). Sprout-style cantrips need this.
+    pub fn add_to_zone_top(&mut self, iid: &InstanceId, owner: PlayerId, zone: Zone) {
+        let p = self.player_mut(owner);
+        let zone_vec = match zone {
+            Zone::Board => &mut p.board,
+            Zone::Hand => &mut p.hand,
+            Zone::Deck => &mut p.deck,
+            Zone::Graveyard => &mut p.graveyard,
+            Zone::Exile => &mut p.exile,
+        };
+        zone_vec.insert(0, iid.clone());
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::AddToZoneTop {
+                iid: iid.clone(),
+                owner,
+                zone,
+            });
+        }
+    }
+
     /// Remove an iid from `host`'s attached vec, journaling the removal at
     /// its position. Returns true if the iid was actually attached to host.
     pub fn remove_attached(&mut self, host: &InstanceId, attached: &InstanceId) -> bool {
