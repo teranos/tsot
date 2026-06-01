@@ -127,19 +127,6 @@ pub fn run_game(
         last_picked = None;
         last_activated = None;
         let mut events: Vec<String> = Vec::new();
-        // Per-turn checkpoint: visible to the external [ALIVE] watchdog
-        // even when the main thread is stuck deep in a Lua handler.
-        // Overwrites the parent (prune/champion/...) checkpoint with the
-        // finest-grained "what's happening now" string.
-        tsot::game::set_checkpoint(format!(
-            "turn={} phase={:?} active={:?} A_board={} B_board={} chain={}",
-            state.turn,
-            state.phase,
-            state.active_player,
-            state.a.board.len(),
-            state.b.board.len(),
-            state.priority.as_ref().map(|p| p.chain.len()).unwrap_or(0),
-        ));
 
         while state.phase != Phase::Main1 && state.winner.is_none() {
             state.next_phase();
@@ -486,17 +473,6 @@ pub fn run_game(
                 state.journal = Some(tsot::game::Journal::new());
                 let opponent_of_active = active.opponent();
                 let choices_for_retry = choices.clone();
-                {
-                    let card_id = state
-                        .card_pool
-                        .get(&picked)
-                        .map(|c| c.card.id.clone())
-                        .unwrap_or_else(|| format!("?{picked}"));
-                    tsot::game::set_checkpoint(format!(
-                        "play_card turn={} active={:?} card={}",
-                        state.turn, active, card_id
-                    ));
-                }
                 // Per-cast wall-clock tripwire: a single cast resolving for >1s
                 // suggests a Lua handler in a tight loop (no Rust-side watchdog
                 // covers handler-internal time).
@@ -794,17 +770,6 @@ fn run_activation_pass(
                 None
             };
             *last_activated = Some((iid.clone(), idx));
-            {
-                let card_id = state
-                    .card_pool
-                    .get(iid)
-                    .map(|c| c.card.id.clone())
-                    .unwrap_or_else(|| format!("?{iid}"));
-                tsot::game::set_checkpoint(format!(
-                    "activate_ability turn={} card={} idx={}",
-                    state.turn, card_id, idx
-                ));
-            }
             if state
                 .activate_ability(iid, idx, x_value, Some(&mut EventContext::new(lua, oracle)))
                 .is_ok()

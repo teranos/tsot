@@ -28,27 +28,6 @@ pub use state::{
     PlayerState, PriorityError, PriorityState, StackItem, StatusEffect, Zone,
 };
 
-/// Last-known main-thread location, written by checkpoint sites and read
-/// by the external-observability watchdog thread. Plain `Mutex<String>` —
-/// uncontended (one writer, one reader). When main hangs the watchdog
-/// keeps reading the last value, telling you where main was when it
-/// last cooperated.
-pub static LAST_CHECKPOINT: std::sync::Mutex<String> =
-    std::sync::Mutex::new(String::new());
-
-pub fn set_checkpoint(msg: impl Into<String>) {
-    if let Ok(mut s) = LAST_CHECKPOINT.lock() {
-        *s = msg.into();
-    }
-}
-
-pub fn read_checkpoint() -> String {
-    LAST_CHECKPOINT
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_default()
-}
-
 /// Global timeout/spin counter shared across the sim run. Both the
 /// response-window spin tripwire (play.rs) and the Pattern B / game
 /// watchdog (sim/run.rs) bump it. When the count exceeds

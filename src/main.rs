@@ -70,25 +70,6 @@ pub(crate) fn parse_u64_hex_or_dec(s: &str) -> Result<u64, std::num::ParseIntErr
 }
 
 fn main() -> mlua::Result<()> {
-    // External-observability heartbeat. Independent thread; prints
-    // [ALIVE] every 2s regardless of what the main thread is doing.
-    // If main hangs inside a Lua handler, deep Rust call, or anywhere
-    // else, [ALIVE] keeps printing → distinguishes "alive but stuck"
-    // from "killed by OS" (both stop output simultaneously). Reads the
-    // last-known main-thread checkpoint so the line tells you where
-    // main was when it last cooperated.
-    std::thread::spawn(|| {
-        let start = std::time::Instant::now();
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            let last = tsot::game::read_checkpoint();
-            eprintln!(
-                "[ALIVE] elapsed={:.0}s last={}",
-                start.elapsed().as_secs_f64(),
-                if last.is_empty() { "(none)" } else { &last },
-            );
-        }
-    });
     // Parse args FIRST so `--help` / `--version` short-circuit before the
     // 70+ Lua cards load. Otherwise `tsot evolve --help` takes a second
     // just to print help text.

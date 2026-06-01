@@ -675,15 +675,7 @@ impl GameState {
         let mut consecutive_failed_responds: u32 = 0;
         let mut last_failed_card: Option<InstanceId> = None;
         let mut last_failed_err: Option<PlayError> = None;
-        let mut window_iter: u32 = 0;
-        while self.priority.is_some() {
-            window_iter += 1;
-            super::set_checkpoint(format!(
-                "drive_window_to_close iter={} turn={} chain_len={}",
-                window_iter,
-                self.turn,
-                self.priority.as_ref().map(|p| p.chain.len()).unwrap_or(0),
-            ));
+        while self.priority.is_some() && self.winner.is_none() {
             // Chain-overflow tripwire: dump the chain contents at depth
             // 40 so we can see what's piling up (e.g., alternating
             // counterspells, repeated same card) before bounding via a
@@ -857,17 +849,6 @@ impl GameState {
         card_kind: CardType,
     ) -> Result<(), PlayError> {
         let mut ctx = ctx;
-        {
-            let card_id = self
-                .card_pool
-                .get(instance)
-                .map(|c| c.card.id.clone())
-                .unwrap_or_else(|| format!("?{instance}"));
-            super::set_checkpoint(format!(
-                "resolve_played_card_inner card={} kind={:?}",
-                card_id, card_kind,
-            ));
-        }
         match card_kind {
             CardType::Creature => {
                 let payments = choices.hand_payment_ids.clone();
