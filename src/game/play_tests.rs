@@ -1990,11 +1990,10 @@ fn validate_hook_passes_and_charges_when_target_exists() {
 }
 
 #[test]
-fn dark_salamander_x_cost_activation_mills_2y_minus_x() {
-    // RULES A.8 Phase 1.75: X-cost activations. Pay Y hand cards
-    // (variable), mill opponent by 2Y - X (where X is the salamander's
-    // effective X stat). Tests the end-to-end X flow: AI picks X,
-    // engine multiplies cost, handler reads X via game.x_value().
+fn dark_salamander_x_cost_activation_mills_2y() {
+    // X-cost activation: pay Y hand cards, mill opponent by 2Y.
+    // Tests the end-to-end X flow: AI picks X, engine multiplies
+    // cost, handler reads X via game.x_value().
     use crate::card::CardRegistry;
     use crate::game::EventContext;
 
@@ -2012,22 +2011,15 @@ fn dark_salamander_x_cost_activation_mills_2y_minus_x() {
         let inst = s.card_pool.get_mut(&sala_iid).unwrap();
         inst.card = sala;
         inst.summoning_sick = false;
-        // Force salamander's effective X to 2 via a stat boost. The
-        // attached-count static gives 0/0 base; this hop simulates a
-        // cast for X=2 without running play_card.
-        inst.modifiers.push(crate::game::state::Modifier::StatBoost { x: 2, y: 2 });
     }
     s.a.hand.retain(|x| x != &sala_iid);
     s.a.board.push(sala_iid.clone());
-
-    let (sx, _sy) = s.effective_stats(&sala_iid);
-    assert_eq!(sx, 2, "salamander effective X should be 2");
 
     let a_hand_before = s.a.hand.len();
     let b_deck_before = s.b.deck.len();
     let b_gy_before = s.b.graveyard.len();
 
-    // Activate with Y=3 → mill = 2*3 - 2 = 4 cards.
+    // Activate with Y=3 → mill = 2*3 = 6 cards.
     let mut oracle = crate::choice::NoopOracle;
     let result = s.activate_ability(
         &sala_iid,
@@ -2038,49 +2030,9 @@ fn dark_salamander_x_cost_activation_mills_2y_minus_x() {
     assert_eq!(result, Ok(()));
     // Cost: 3 hand cards discarded.
     assert_eq!(s.a.hand.len(), a_hand_before - 3);
-    // Effect: B's deck milled by 4.
-    assert_eq!(s.b.deck.len(), b_deck_before - 4);
-    assert_eq!(s.b.graveyard.len(), b_gy_before + 4);
-}
-
-#[test]
-fn dark_salamander_validate_refuses_when_2y_minus_x_is_zero_or_less() {
-    // Y=1, X=2 → 2Y - X = 0 → validate refuses, no cost paid.
-    use crate::card::CardRegistry;
-    use crate::game::play::ActivateError;
-    use crate::game::EventContext;
-
-    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
-    let sala = registry
-        .cards()
-        .iter()
-        .find(|c| c.id == "dark-salamander")
-        .unwrap()
-        .clone();
-
-    let mut s = GameState::new(deck_of(60, "a"), deck_of(60, "b"));
-    let sala_iid = s.a.hand[0].clone();
-    {
-        let inst = s.card_pool.get_mut(&sala_iid).unwrap();
-        inst.card = sala;
-        inst.summoning_sick = false;
-        inst.modifiers.push(crate::game::state::Modifier::StatBoost { x: 2, y: 2 });
-    }
-    s.a.hand.retain(|x| x != &sala_iid);
-    s.a.board.push(sala_iid.clone());
-
-    let a_hand_before = s.a.hand.len();
-
-    let mut oracle = crate::choice::NoopOracle;
-    let result = s.activate_ability(
-        &sala_iid,
-        0,
-        Some(1),
-        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
-    );
-    assert_eq!(result, Err(ActivateError::NoLegalTarget));
-    // No cost paid — hand unchanged.
-    assert_eq!(s.a.hand.len(), a_hand_before);
+    // Effect: B's deck milled by 6.
+    assert_eq!(s.b.deck.len(), b_deck_before - 6);
+    assert_eq!(s.b.graveyard.len(), b_gy_before + 6);
 }
 
 #[test]

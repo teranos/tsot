@@ -319,11 +319,19 @@ pub fn run_prune_champions(
     let evaluate = |cards: &[Card], rng: &mut StdRng| -> f64 {
         let mut wins = 0u32;
         let mut games = 0u32;
-        for opp in &baseline_decks {
-            for _ in 0..args.games {
+        for (opp_idx, opp) in baseline_decks.iter().enumerate() {
+            for game_idx in 0..args.games {
                 // candidate as A
+                let seed_a: u64 = rng.gen();
+                tsot::game::set_checkpoint(format!(
+                    "eval vs_baseline={} game={}/{} side=A seed={:#x}",
+                    opp_idx,
+                    game_idx + 1,
+                    args.games,
+                    seed_a,
+                ));
                 let state = GameState::new(cards.to_vec(), opp.clone());
-                let mut game_rng = StdRng::seed_from_u64(rng.gen());
+                let mut game_rng = StdRng::seed_from_u64(seed_a);
                 let mut log: Vec<String> = Vec::new();
                 let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry.lua());
                 if stats.winner == tsot::game::PlayerId::A {
@@ -331,8 +339,16 @@ pub fn run_prune_champions(
                 }
                 games += 1;
                 // candidate as B
+                let seed_b: u64 = rng.gen();
+                tsot::game::set_checkpoint(format!(
+                    "eval vs_baseline={} game={}/{} side=B seed={:#x}",
+                    opp_idx,
+                    game_idx + 1,
+                    args.games,
+                    seed_b,
+                ));
                 let state = GameState::new(opp.clone(), cards.to_vec());
-                let mut game_rng = StdRng::seed_from_u64(rng.gen());
+                let mut game_rng = StdRng::seed_from_u64(seed_b);
                 let mut log = Vec::new();
                 let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry.lua());
                 if stats.winner == tsot::game::PlayerId::B {
@@ -353,7 +369,15 @@ pub fn run_prune_champions(
         println!();
         println!("Cluster {} ({} member{}):", cidx + 1, size, if size == 1 { "" } else { "s" });
         let mut scored: Vec<(usize, f64)> = Vec::with_capacity(size);
-        for &i in indices {
+        for (pos, &i) in indices.iter().enumerate() {
+            tsot::game::set_checkpoint(format!(
+                "cluster {}/{} eval {}/{}: {}",
+                cidx + 1,
+                cluster_list.len(),
+                pos + 1,
+                size,
+                champs[i].path.file_name().unwrap().to_string_lossy(),
+            ));
             let live = evaluate(&champs[i].cards, &mut rng);
             scored.push((i, live));
             println!(

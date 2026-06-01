@@ -12,6 +12,10 @@ impl GameState {
         if self.winner.is_some() {
             return;
         }
+        super::set_checkpoint(format!(
+            "next_phase turn={} from={:?} active={:?}",
+            self.turn, self.phase, self.active_player
+        ));
         let next = match self.phase {
             Phase::Untap => Phase::Draw,
             Phase::Draw => Phase::Main1,
@@ -36,6 +40,10 @@ impl GameState {
     }
 
     fn enter_phase_action(&mut self) {
+        super::set_checkpoint(format!(
+            "enter_phase_action turn={} phase={:?} active={:?}",
+            self.turn, self.phase, self.active_player
+        ));
         match self.phase {
             Phase::Untap => self.do_untap_step(),
             Phase::Draw => self.do_draw_step(),

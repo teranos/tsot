@@ -638,7 +638,63 @@ impl GameState {
         ctx: Option<&mut EventContext>,
     ) -> Result<(), PlayError> {
         let mut ctx = ctx;
+        // Spin-detection: track consecutive Responds that fail
+        // play_card. A bug elsewhere (e.g., a respond_or_pass policy
+        // that picks an illegal-target card the engine refuses) would
+        // otherwise loop here forever — the priority window doesn't
+        // advance on failed casts, the oracle re-picks the same card.
+        // Cap is generous (50): legitimate response chains never
+        // approach it. On trip: dump diagnostics, force-close the
+        // window, bump a stat-counter so EA reports surface the event.
+        let mut consecutive_failed_responds: u32 = 0;
+        let mut last_failed_card: Option<InstanceId> = None;
+        let mut last_failed_err: Option<PlayError> = None;
+        let mut window_iter: u32 = 0;
         while self.priority.is_some() {
+            window_iter += 1;
+            super::set_checkpoint(format!(
+                "drive_window_to_close iter={} turn={} chain_len={}",
+                window_iter,
+                self.turn,
+                self.priority.as_ref().map(|p| p.chain.len()).unwrap_or(0),
+            ));
+            if consecutive_failed_responds > 50 {
+                let chain_ids: Vec<String> = self
+                    .priority
+                    .as_ref()
+                    .map(|p| {
+                        p.chain
+                            .iter()
+                            .map(|StackItem::PlayedCard { card, .. }| {
+                                self.card_pool
+                                    .get(card)
+                                    .map(|i| i.card.id.clone())
+                                    .unwrap_or_else(|| format!("?{card}"))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let failed_card_id = last_failed_card
+                    .as_ref()
+                    .and_then(|iid| self.card_pool.get(iid).map(|i| i.card.id.clone()))
+                    .unwrap_or_else(|| "(unknown)".to_string());
+                eprintln!(
+                    "[RESPONSE SPIN] turn={} active={:?} consecutive_failed_responds={} \
+                     last_failed_card={} err={:?} chain={:?}",
+                    self.turn,
+                    self.active_player,
+                    consecutive_failed_responds,
+                    failed_card_id,
+                    last_failed_err,
+                    chain_ids,
+                );
+                self.bump_action("response_spin_aborted", self.active_player);
+                super::bump_timeout_and_maybe_halt("drive_window_to_close (response spin)");
+                // Force-close the window. The pending chain is dropped —
+                // the game continues but this priority sequence is lost.
+                self.priority = None;
+                break;
+            }
             let next = self.priority.as_ref().expect("checked is_some").next_to_act;
             let action = match ctx.as_mut() {
                 Some(c) => c.oracle().respond_or_pass(self, next),
@@ -647,9 +703,23 @@ impl GameState {
             match action {
                 ResponseAction::Respond { card, choices } => {
                     self.bump_action("instant_response_played", next);
-                    let _ = self.play_card(next, &card, choices, ctx.as_deref_mut());
+                    let result = self.play_card(next, &card, choices, ctx.as_deref_mut());
+                    if let Err(e) = &result {
+                        consecutive_failed_responds += 1;
+                        last_failed_card = Some(card.clone());
+                        last_failed_err = Some(e.clone());
+                    } else {
+                        consecutive_failed_responds = 0;
+                        last_failed_card = None;
+                        last_failed_err = None;
+                    }
                 }
-                ResponseAction::Pass => match self.pass_priority() {
+                ResponseAction::Pass => {
+                    // Forward progress (priority advancing) resets the spin counter.
+                    consecutive_failed_responds = 0;
+                    last_failed_card = None;
+                    last_failed_err = None;
+                    match self.pass_priority() {
                     Ok(Some(item)) => match item {
                         StackItem::PlayedCard {
                             card,
@@ -666,7 +736,8 @@ impl GameState {
                     },
                     Ok(None) => continue,
                     Err(_) => return Ok(()),
-                },
+                    }
+                }
             }
         }
         Ok(())
@@ -720,6 +791,17 @@ impl GameState {
         card_kind: CardType,
     ) -> Result<(), PlayError> {
         let mut ctx = ctx;
+        {
+            let card_id = self
+                .card_pool
+                .get(instance)
+                .map(|c| c.card.id.clone())
+                .unwrap_or_else(|| format!("?{instance}"));
+            super::set_checkpoint(format!(
+                "resolve_played_card_inner card={} kind={:?}",
+                card_id, card_kind,
+            ));
+        }
         match card_kind {
             CardType::Creature => {
                 let payments = choices.hand_payment_ids.clone();

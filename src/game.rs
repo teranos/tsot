@@ -27,3 +27,46 @@ pub use state::{
     AttackDecl, CardInstance, CombatState, GameState, InstanceId, Modifier, Phase, PlayerId,
     PlayerState, PriorityError, PriorityState, StackItem, StatusEffect, Zone,
 };
+
+/// Last-known main-thread location, written by checkpoint sites and read
+/// by the external-observability watchdog thread. Plain `Mutex<String>` —
+/// uncontended (one writer, one reader). When main hangs the watchdog
+/// keeps reading the last value, telling you where main was when it
+/// last cooperated.
+pub static LAST_CHECKPOINT: std::sync::Mutex<String> =
+    std::sync::Mutex::new(String::new());
+
+pub fn set_checkpoint(msg: impl Into<String>) {
+    if let Ok(mut s) = LAST_CHECKPOINT.lock() {
+        *s = msg.into();
+    }
+}
+
+pub fn read_checkpoint() -> String {
+    LAST_CHECKPOINT
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+}
+
+/// Global timeout/spin counter shared across the sim run. Both the
+/// response-window spin tripwire (play.rs) and the Pattern B / game
+/// watchdog (sim/run.rs) bump it. When the count exceeds
+/// `TIMEOUT_HALT_THRESHOLD`, `bump_and_maybe_halt` calls
+/// `std::process::exit(2)` with a loud summary — many timeouts in a
+/// single sim run almost always signal a regression, and we'd rather
+/// halt loudly than drown stderr in dumps and keep going.
+pub static TIMEOUT_COUNTER: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+pub const TIMEOUT_HALT_THRESHOLD: usize = 5;
+
+pub fn bump_timeout_and_maybe_halt(site: &str) {
+    let n = TIMEOUT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    if n > TIMEOUT_HALT_THRESHOLD {
+        eprintln!(
+            "[HALT] {n} game timeouts/spins exceeded threshold ({TIMEOUT_HALT_THRESHOLD}). \
+             Last site={site}. Halting sim — diagnostics in the {n} dumps above."
+        );
+        std::process::exit(2);
+    }
+}

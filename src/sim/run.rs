@@ -88,6 +88,10 @@ pub fn run_game(
     // card, not a stale pick from an earlier successful turn.
     let mut last_picked: Option<InstanceId> = None;
     let mut last_activated: Option<(InstanceId, usize)> = None;
+    // Heartbeat: log progress every 5s for games that don't finish
+    // promptly. Helps identify slow-but-not-hung games before the
+    // wall-clock cap fires.
+    let mut last_heartbeat = game_start;
 
     let mut safety = 1000;
     while state.winner.is_none() && safety > 0 {
@@ -101,12 +105,41 @@ pub fn run_game(
             state.set_winner(Some(state.active_player.opponent()));
             break;
         }
+        if last_heartbeat.elapsed() > Duration::from_secs(5) {
+            eprintln!(
+                "[HEARTBEAT] elapsed={:.1?} turn={} phase={:?} active={:?} \
+                 A_board={} B_board={} A_deck={} B_deck={} chain={}",
+                game_start.elapsed(),
+                state.turn,
+                state.phase,
+                state.active_player,
+                state.a.board.len(),
+                state.b.board.len(),
+                state.a.deck.len(),
+                state.b.deck.len(),
+                state.priority.as_ref().map(|p| p.chain.len()).unwrap_or(0),
+            );
+            last_heartbeat = Instant::now();
+        }
         safety -= 1;
         let active = state.active_player;
         let turn = state.turn;
         last_picked = None;
         last_activated = None;
         let mut events: Vec<String> = Vec::new();
+        // Per-turn checkpoint: visible to the external [ALIVE] watchdog
+        // even when the main thread is stuck deep in a Lua handler.
+        // Overwrites the parent (prune/champion/...) checkpoint with the
+        // finest-grained "what's happening now" string.
+        tsot::game::set_checkpoint(format!(
+            "turn={} phase={:?} active={:?} A_board={} B_board={} chain={}",
+            state.turn,
+            state.phase,
+            state.active_player,
+            state.a.board.len(),
+            state.b.board.len(),
+            state.priority.as_ref().map(|p| p.chain.len()).unwrap_or(0),
+        ));
 
         while state.phase != Phase::Main1 && state.winner.is_none() {
             state.next_phase();
@@ -453,12 +486,40 @@ pub fn run_game(
                 state.journal = Some(tsot::game::Journal::new());
                 let opponent_of_active = active.opponent();
                 let choices_for_retry = choices.clone();
+                {
+                    let card_id = state
+                        .card_pool
+                        .get(&picked)
+                        .map(|c| c.card.id.clone())
+                        .unwrap_or_else(|| format!("?{picked}"));
+                    tsot::game::set_checkpoint(format!(
+                        "play_card turn={} active={:?} card={}",
+                        state.turn, active, card_id
+                    ));
+                }
+                // Per-cast wall-clock tripwire: a single cast resolving for >1s
+                // suggests a Lua handler in a tight loop (no Rust-side watchdog
+                // covers handler-internal time).
+                let cast_start = Instant::now();
                 let result = state.play_card(
                     active,
                     &picked,
                     choices,
                     Some(&mut EventContext::new(lua, &mut oracle)),
                 );
+                let cast_elapsed = cast_start.elapsed();
+                if cast_elapsed > Duration::from_secs(1) {
+                    let card_id = state
+                        .card_pool
+                        .get(&picked)
+                        .map(|c| c.card.id.clone())
+                        .unwrap_or_else(|| format!("?{picked}"));
+                    eprintln!(
+                        "[SLOW CAST] turn={} active={:?} card={} elapsed={:.2?} result={:?}",
+                        state.turn, active, card_id, cast_elapsed, result,
+                    );
+                    state.bump_action("slow_cast", active);
+                }
                 let resp_after_a = state
                     .action_counts
                     .get("instant_response_played")
@@ -733,6 +794,17 @@ fn run_activation_pass(
                 None
             };
             *last_activated = Some((iid.clone(), idx));
+            {
+                let card_id = state
+                    .card_pool
+                    .get(iid)
+                    .map(|c| c.card.id.clone())
+                    .unwrap_or_else(|| format!("?{iid}"));
+                tsot::game::set_checkpoint(format!(
+                    "activate_ability turn={} card={} idx={}",
+                    state.turn, card_id, idx
+                ));
+            }
             if state
                 .activate_ability(iid, idx, x_value, Some(&mut EventContext::new(lua, oracle)))
                 .is_ok()
@@ -756,6 +828,7 @@ fn report_game_timeout(
     last_picked: Option<&InstanceId>,
     last_activated: Option<&(InstanceId, usize)>,
 ) {
+    tsot::game::bump_timeout_and_maybe_halt(site);
     let ids = |iids: &[InstanceId]| -> Vec<String> {
         iids.iter()
             .filter_map(|i| state.card_pool.get(i).map(|c| c.card.id.clone()))
