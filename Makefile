@@ -38,6 +38,7 @@ help:
 	@echo "                           override: make matchup-decks DIR=champions"
 	@echo ""
 	@echo "Power-user:"
+	@echo "  make evolve-shallow      fast EA round (~1-2min): pop=25 gens=10 n=5 — smoke check, noisy fitness"
 	@echo "  make evolve-deep         deeper EA run (~2-8h): pop=100 gens=100 n=30 k=5"
 	@echo ""
 	@echo "  make clean-champions     wipe $(CHAMPS)/ and $(HTML)"
@@ -61,6 +62,23 @@ evolve:
 	NUM=$$(($$(echo $$EXTRAS | wc -w | xargs) / 2)); \
 	echo "=== round $$N (seed=$$SEED, gauntlet: 5 baselines + $$NUM extras) ==="; \
 	cargo run --release -- evolve --seed $$SEED --stop-at-ceiling 3 --save-top 5 \
+		$$EXTRAS --save $(CHAMPS)/r$$N.json
+
+evolve-shallow:
+	@mkdir -p $(CHAMPS)
+	@HIGHEST=0; for f in $(CHAMPS)/r*-rank1.json; do [ -f "$$f" ] || continue; base=$$(basename "$$f" -rank1.json); num=$${base#r}; if [ "$$num" -gt "$$HIGHEST" ]; then HIGHEST=$$num; fi; done; \
+	N=$$((HIGHEST + 1)); \
+	SEED=$$(printf '0x%x' $$((0xEA00 + N))); \
+	EXTRAS=""; \
+	for f in $(CHAMPS)/*.json; do \
+		[ -f "$$f" ] && EXTRAS="$$EXTRAS --extra $$f"; \
+	done; \
+	NUM=$$(($$(echo $$EXTRAS | wc -w | xargs) / 2)); \
+	echo "=== shallow round $$N (seed=$$SEED, gauntlet: 5 baselines + $$NUM extras) ==="; \
+	echo "    pop=25 gens=10 n=5 — fast smoke check, noisy fitness"; \
+	cargo run --release -- evolve --seed $$SEED \
+		--pop 25 --gens 10 --n 5 --stop-at-ceiling 3 \
+		--save-top 5 \
 		$$EXTRAS --save $(CHAMPS)/r$$N.json
 
 evolve-deep:
