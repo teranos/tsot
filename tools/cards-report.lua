@@ -34,6 +34,82 @@ do
 end
 
 -- ---------------------------------------------------------------------
+-- Load optional turn-curve data (`tsot curve-sample` output)
+-- ---------------------------------------------------------------------
+-- If `card-curve.lua` exists in the cwd, the dashboard adds a typical-
+-- turn-played column to the all-cards table and a dedicated section.
+-- Generate it by running `tsot curve-sample` first (or `make pool`,
+-- which chains them). Absence is fine — the rest of the dashboard
+-- renders normally.
+
+local curve_data = nil
+do
+  local ok, data = pcall(dofile, "card-curve.lua")
+  if ok and type(data) == "table" and type(data.card_curves) == "table" then
+    curve_data = data
+  end
+end
+
+local function curve_for(card_id)
+  if not curve_data then return nil end
+  return curve_data.card_curves[card_id]
+end
+
+-- Median turn (scope-2: both players summed). Returns nil if the
+-- card has no recorded plays in this sample.
+local function curve_median_turn(c)
+  if not c or not c.turns then return nil end
+  local list = {}
+  for t, count in pairs(c.turns) do
+    for _ = 1, count do table.insert(list, t) end
+  end
+  if #list == 0 then return nil end
+  table.sort(list)
+  local m = #list // 2
+  if #list % 2 == 0 then
+    return (list[m] + list[m + 1]) / 2
+  else
+    return list[m + 1]
+  end
+end
+
+local function curve_mean_turn(c)
+  if not c or not c.turns then return nil end
+  local sum, n = 0, 0
+  for t, count in pairs(c.turns) do
+    sum = sum + t * count
+    n = n + count
+  end
+  if n == 0 then return nil end
+  return sum / n
+end
+
+-- Render a sparkline like `▁▂▃▄▅▆▇▆▅▃▁` for turns 1..max_turn.
+-- `·` (middle-dot) marks a turn with zero plays so the eye can see
+-- where the gaps are.
+local CURVE_MAX_TURN = 14
+local function curve_histogram(c)
+  if not c or not c.turns then return "" end
+  local blocks = {"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"}
+  local max_count = 0
+  for _, n in pairs(c.turns) do
+    if n > max_count then max_count = n end
+  end
+  if max_count == 0 then return "" end
+  local parts = {}
+  for t = 1, CURVE_MAX_TURN do
+    local n = c.turns[t] or 0
+    if n == 0 then
+      table.insert(parts, "·")
+    else
+      local idx = math.max(1, math.ceil((n / max_count) * #blocks))
+      table.insert(parts, blocks[idx])
+    end
+  end
+  return table.concat(parts)
+end
+
+-- ---------------------------------------------------------------------
 -- Load cards
 -- ---------------------------------------------------------------------
 
@@ -627,10 +703,57 @@ for _, st in ipairs(subtype_list) do
   w("</div>")
 end
 
+-- Typical-turn-played section (only when curve-sample data is loaded).
+if curve_data then
+  w("<h2>Typical turn played</h2>")
+  w(string.format(
+    '<p class="note">Per-card distribution of the turn on which the card got played, aggregated across %d random-deck vs random-deck games (seed %s). Both players\' plays count. Histogram covers turns 1..%d; <span style="font-family:monospace">·</span> marks turns with zero plays. Sorted by median turn (early-curve first).</p>',
+    curve_data.n_games or 0,
+    html_escape(tostring(curve_data.seed or "?")),
+    CURVE_MAX_TURN))
+  -- Build rows: card-id + (curve | nil). Only rows with sampled
+  -- plays appear here; the all-cards table below shows every card
+  -- with curve data interpolated when available.
+  local rows = {}
+  for _, card in ipairs(cards) do
+    local c = curve_for(card.id)
+    if c and c.plays and c.plays > 0 then
+      table.insert(rows, {card = card, curve = c})
+    end
+  end
+  table.sort(rows, function(a, b)
+    local ma = curve_median_turn(a.curve) or 99
+    local mb = curve_median_turn(b.curve) or 99
+    if ma ~= mb then return ma < mb end
+    return (a.card.id or "") < (b.card.id or "")
+  end)
+  w('<table><thead><tr>')
+  w('<th>card</th><th>cost</th><th class="num">plays</th><th class="num">median</th><th class="num">mean</th><th>turn histogram (1..' .. CURVE_MAX_TURN .. ')</th>')
+  w('</tr></thead><tbody>')
+  for _, row in ipairs(rows) do
+    local median = curve_median_turn(row.curve)
+    local mean = curve_mean_turn(row.curve)
+    w(string.format(
+      '<tr><td>%s</td><td>%s</td><td class="num">%d</td><td class="num">%s</td><td class="num">%s</td><td style="font-family:monospace;font-size:14px">%s</td></tr>',
+      card_tooltip(row.card),
+      html_escape(format_cost(row.card)),
+      row.curve.plays,
+      median and string.format("%.1f", median) or "—",
+      mean and string.format("%.2f", mean) or "—",
+      html_escape(curve_histogram(row.curve))
+    ))
+  end
+  w('</tbody></table>')
+end
+
 -- Per-card grid
 w("<h2>All cards</h2>")
 w('<p class="note">Sortable view of every loaded card. Hover any id to see name/type/cost/stats/abilities.</p>')
-w('<table><thead><tr><th>card</th><th>type</th><th>colors</th><th class="num">cost</th><th class="num">x/y</th></tr></thead><tbody>')
+if curve_data then
+  w('<table><thead><tr><th>card</th><th>type</th><th>colors</th><th class="num">cost</th><th class="num">x/y</th><th class="num">median turn</th><th>curve</th></tr></thead><tbody>')
+else
+  w('<table><thead><tr><th>card</th><th>type</th><th>colors</th><th class="num">cost</th><th class="num">x/y</th></tr></thead><tbody>')
+end
 table.sort(cards, function(a, b) return (a.id or "") < (b.id or "") end)
 for _, card in ipairs(cards) do
   local cs = card_colors(card)
@@ -638,14 +761,30 @@ for _, card in ipairs(cards) do
   for _, c in ipairs(cs) do table.insert(color_html_parts, color_swatch(c)) end
   if #cs == 0 then table.insert(color_html_parts, color_swatch("colorless")) end
   local xy = card.stats and string.format("%d/%d", card.stats.x or 0, card.stats.y or 0) or "—"
-  w(string.format(
-    '<tr><td>%s</td><td>%s</td><td>%s</td><td class="num">%s</td><td class="num">%s</td></tr>',
-    card_tooltip(card),
-    html_escape(card_type(card)),
-    table.concat(color_html_parts, " "),
-    html_escape(format_cost(card)),
-    xy
-  ))
+  if curve_data then
+    local c = curve_for(card.id)
+    local median = curve_median_turn(c)
+    local hist = curve_histogram(c)
+    w(string.format(
+      '<tr><td>%s</td><td>%s</td><td>%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td style="font-family:monospace;font-size:14px">%s</td></tr>',
+      card_tooltip(card),
+      html_escape(card_type(card)),
+      table.concat(color_html_parts, " "),
+      html_escape(format_cost(card)),
+      xy,
+      median and string.format("%.1f", median) or "—",
+      html_escape(hist)
+    ))
+  else
+    w(string.format(
+      '<tr><td>%s</td><td>%s</td><td>%s</td><td class="num">%s</td><td class="num">%s</td></tr>',
+      card_tooltip(card),
+      html_escape(card_type(card)),
+      table.concat(color_html_parts, " "),
+      html_escape(format_cost(card)),
+      xy
+    ))
+  end
 end
 w("</tbody></table>")
 
