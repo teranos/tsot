@@ -2633,6 +2633,49 @@ fn card_identity_includes_lowercased_colors_and_symbol() {
 }
 
 #[test]
+fn primal_toad_scales_by_board_count_and_hand_count_per_c16() {
+    // Load the real primal-toad. Put it on A's board. Add other cards
+    // to BOTH boards and HANDS. Verify effective stats = board_count
+    // (both players, BOARD only — attached excluded per C.16) /
+    // hand_count (both players' HAND lengths).
+    use crate::card::CardRegistry;
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let toad = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "primal-toad")
+        .unwrap()
+        .clone();
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let toad_iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&toad_iid).unwrap();
+        inst.card = toad;
+    }
+    // Move toad to A's BOARD plus two more cards to A's board and one to B's.
+    let a_extra1 = s.a.hand[1].clone();
+    let a_extra2 = s.a.hand[2].clone();
+    let b_extra = s.b.hand[0].clone();
+    let attached_to_toad = s.a.hand[3].clone();
+    let _ = s.move_card(&toad_iid, PlayerId::A, Zone::Hand, Zone::Board);
+    let _ = s.move_card(&a_extra1, PlayerId::A, Zone::Hand, Zone::Board);
+    let _ = s.move_card(&a_extra2, PlayerId::A, Zone::Hand, Zone::Board);
+    let _ = s.move_card(&b_extra, PlayerId::B, Zone::Hand, Zone::Board);
+    // Pin an attached card under the toad. C.16: this attached must NOT
+    // add to board count.
+    let _ = s.remove_from_zone(&attached_to_toad, PlayerId::A, Zone::Hand);
+    s.add_attached(&toad_iid, &attached_to_toad);
+
+    // Board count: 3 on A + 1 on B = 4.
+    // Hand count: A and B started with 5 each, A used 4 cards (toad +
+    // 2 board fillers + 1 attached), B used 1 (board filler). So A has
+    // 1 left, B has 4 left → 5.
+    let (x, y) = s.effective_stats(&toad_iid);
+    assert_eq!(x, 4, "X = BOARD count across both players (attached excluded per C.16)");
+    assert_eq!(y, 5, "Y = HAND count across both players");
+}
+
+#[test]
 fn counterspell_cast_validate_refuses_when_chain_is_empty() {
     // RULES P.32: counterspell declares `target = "chain"`; the engine
     // refuses the cast when no chain item exists (nothing to counter).

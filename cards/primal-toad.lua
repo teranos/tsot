@@ -15,4 +15,9 @@ return {
     "this creature gets +X/+Y where X is the number of cards in play and Y is the number of cards in players' hands.",
   },
   stats = {x = 0, y = 0},
+  static = {
+    affects = {scope = "source_only"},
+    modifier = {x = "board", y = "hands"},
+  },
 }
+

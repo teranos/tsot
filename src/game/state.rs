@@ -1049,6 +1049,13 @@ impl GameState {
             crate::card::ModifierValue::AttachedCountScaled(n) => {
                 (source.attached.len() as i32).saturating_mul(*n)
             }
+            crate::card::ModifierValue::BoardCount => {
+                // RULES C.16: count each BOARD card as 1; attached do not contribute.
+                (self.a.board.len() + self.b.board.len()) as i32
+            }
+            crate::card::ModifierValue::HandCount => {
+                (self.a.hand.len() + self.b.hand.len()) as i32
+            }
         }
     }
 

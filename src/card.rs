@@ -294,6 +294,13 @@ pub enum ModifierValue {
     /// Lets a card scale a per-attached bonus without needing a new
     /// hardcoded multiplier per design.
     AttachedCountScaled(i32),
+    /// RULES C.16: count of cards on the BOARD (across both players).
+    /// Each BOARD card counts as 1; attached cards do not contribute.
+    /// Used by Primal Toad's "+X/+Y where X is the number of cards in
+    /// play." Parsed from `"board"` in card .lua files.
+    BoardCount,
+    /// Count of cards in both players' HAND zones. Parsed from `"hands"`.
+    HandCount,
 }
 
 impl Default for ModifierValue {
@@ -1077,6 +1084,12 @@ fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
             let lower = raw.to_ascii_lowercase().replace(' ', "");
             if lower == "attached" {
                 return Ok(ModifierValue::AttachedCount);
+            }
+            if lower == "board" {
+                return Ok(ModifierValue::BoardCount);
+            }
+            if lower == "hands" || lower == "hand" {
+                return Ok(ModifierValue::HandCount);
             }
             // `N*attached` form (e.g., "2*attached", "3*attached").
             if let Some((mul_str, tail)) = lower.split_once('*') {
