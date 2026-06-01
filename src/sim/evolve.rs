@@ -51,6 +51,18 @@ pub struct EvolveConfig {
     /// `k >= 2` recommended because n=10's stddev=0.043 means a single
     /// 1.000 measurement is a noisy observation, not proof.
     pub stop_at_ceiling: Option<usize>,
+    /// `balance-probe` support: force every genome to contain at least
+    /// `pinned_count` copies of `pinned_card_id`. Initial population is
+    /// seeded with the pin, and after mutate+repair the pin is re-
+    /// enforced. Lets the EA optimize the rest of the deck around a
+    /// fixed candidate card so the resulting fitness is a measure of
+    /// "what's the best deck I can build with this card forced in."
+    /// None = no pin (regular evolve).
+    pub pinned_card_id: Option<String>,
+    /// Number of copies of `pinned_card_id` to enforce in every
+    /// genome. Bounded by `per_card_cap`. Ignored when `pinned_card_id`
+    /// is None.
+    pub pinned_count: usize,
 }
 
 impl Default for EvolveConfig {
@@ -66,7 +78,45 @@ impl Default for EvolveConfig {
             mutation_rate: 0.03,
             elite_count: 1,
             stop_at_ceiling: None,
+            pinned_card_id: None,
+            pinned_count: 0,
         }
+    }
+}
+
+/// Re-enforce the pin invariant on `genome`: if `pinned_card_id` is set
+/// and the genome has fewer than `pinned_count` copies, replace random
+/// non-pinned slots with the pinned id until the count is satisfied.
+/// No-op when there's no pin. Caller must ensure `pinned_count` is
+/// within `per_card_cap`.
+fn enforce_pin(
+    genome: &mut [String],
+    pinned_card_id: Option<&str>,
+    pinned_count: usize,
+    rng: &mut StdRng,
+) {
+    let Some(pid) = pinned_card_id else { return };
+    if pinned_count == 0 {
+        return;
+    }
+    let current = genome.iter().filter(|s| s.as_str() == pid).count();
+    if current >= pinned_count {
+        return;
+    }
+    let mut deficit = pinned_count - current;
+    // Indices of slots NOT already holding the pinned card. Shuffled so
+    // we don't always clobber the same positions across generations.
+    let mut candidate_indices: Vec<usize> = (0..genome.len())
+        .filter(|i| genome[*i] != pid)
+        .collect();
+    use rand::seq::SliceRandom;
+    candidate_indices.shuffle(rng);
+    for idx in candidate_indices {
+        if deficit == 0 {
+            break;
+        }
+        genome[idx] = pid.to_string();
+        deficit -= 1;
     }
 }
 
@@ -121,10 +171,15 @@ pub fn evolve(
 
     // Phase 1 (sequential, deterministic): generate the initial random
     // population genomes + their fit_seeds. RNG ordering is preserved.
+    // When a pin is configured, the genome gets `pinned_count` copies
+    // of the pinned id forced in (replacing random slots) before
+    // fitness scoring.
+    let pin_id: Option<&str> = cfg.pinned_card_id.as_deref();
     let init_jobs: Vec<(Vec<String>, u64)> = (0..cfg.pop_size)
         .map(|_| {
-            let genome = random_genome(pool, cfg.deck_len, cfg.per_card_cap, &mut rng)
+            let mut genome = random_genome(pool, cfg.deck_len, cfg.per_card_cap, &mut rng)
                 .expect("init random_genome: pool too small for deck_len/cap");
+            enforce_pin(&mut genome, pin_id, cfg.pinned_count, &mut rng);
             let fit_seed: u64 = rng.gen();
             (genome, fit_seed)
         })
@@ -176,6 +231,11 @@ pub fn evolve(
                 child = random_genome(pool, cfg.deck_len, cfg.per_card_cap, &mut rng)
                     .expect("repair fallback random_genome: pool too small");
             }
+            // Pin re-enforcement after mutate+repair. Mutation may have
+            // replaced pinned slots with random cards; repair doesn't
+            // know about the pin. This step restores the invariant
+            // every child satisfies before fitness scoring.
+            enforce_pin(&mut child, pin_id, cfg.pinned_count, &mut rng);
             let fit_seed: u64 = rng.gen();
             child_jobs.push((child, fit_seed));
         }
@@ -279,6 +339,8 @@ mod tests {
             mutation_rate: 0.05,
             elite_count: 1,
             stop_at_ceiling: None,
+            pinned_card_id: None,
+            pinned_count: 0,
         }
     }
 
@@ -347,6 +409,29 @@ mod tests {
             !should_stop_at_ceiling(&[g(1.0), g(1.0)], 0),
             "k=0 should never stop"
         );
+    }
+
+    #[test]
+    fn pinned_card_is_present_in_every_genome_every_generation() {
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+        // Pick a card guaranteed to be in the pool.
+        let pin_id = pool[0].id.clone();
+        let cfg = EvolveConfig {
+            pinned_card_id: Some(pin_id.clone()),
+            pinned_count: 2,
+            ..tiny_config()
+        };
+        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        // Every member of the final population must contain >= 2 copies.
+        for (genome, _) in &result.final_population {
+            let count = genome.iter().filter(|s| **s == pin_id).count();
+            assert!(
+                count >= 2,
+                "pin invariant broken: genome has {count} copies of {pin_id}, expected >= 2"
+            );
+        }
     }
 
     #[test]

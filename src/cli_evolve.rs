@@ -118,6 +118,8 @@ pub fn run_ea(
         mutation_rate: args.rate,
         elite_count: args.elite,
         stop_at_ceiling: args.stop_at_ceiling,
+        pinned_card_id: None,
+        pinned_count: 0,
     };
 
     println!();

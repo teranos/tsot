@@ -25,6 +25,8 @@ pub(crate) fn card_with_stats(id: &str, x: i32, y: i32) -> Card {
         activated: vec![],
         gy_hand_substitute: false,
         allow_x_zero: false,
+        is_variant: false,
+        variant_of: None,
     }
 }
 
@@ -53,6 +55,8 @@ pub(crate) fn card_no_stats(id: &str, kind: CardType) -> Card {
         activated: vec![],
         gy_hand_substitute: false,
         allow_x_zero: false,
+        is_variant: false,
+        variant_of: None,
     }
 }
 

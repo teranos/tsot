@@ -5,6 +5,9 @@
 -- stats shrink with them. Same shape works for any future "X/Y per
 -- attached <thing>" creature.
 --
+-- The `2pwr` variant scales +2/+2 per attached via the
+-- `ModifierValue::AttachedCountScaled(2)` form (string `"2*attached"`).
+--
 -- Symbol not yet specified.
 return {
   id = "hydra",
@@ -21,5 +24,16 @@ return {
       scope = "source_only",
     },
     modifier = {x = "attached", y = "attached"},
+  },
+  variants = {
+    ["2pwr"] = {
+      abilities = {
+        "this creature gets +2/+2 for each attached card.",
+      },
+      static = {
+        affects = { scope = "source_only" },
+        modifier = {x = "2*attached", y = "2*attached"},
+      },
+    },
   },
 }

@@ -23,7 +23,7 @@ CHAMPS := champions
 HTML   := champions-report.html
 DIR    ?= baselines
 
-.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool archetypes prune-champions
+.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool archetypes prune-champions probe probe-long
 
 help:
 	@echo ""
@@ -44,8 +44,10 @@ help:
 	@echo "  make clean-champions     wipe $(CHAMPS)/ and $(HTML)"
 	@echo ""
 	@echo "Card design:"
-	@echo "  make pool                static analytics dashboard → card-pool.html (Lua, no rebuild)"
+	@echo "  make pool                static analytics dashboard → card-pool.html (chains curve-sample for the turn-played column; POOL_NO_CURVE=1 to skip)"
 	@echo "  make archetypes          cluster decks by Jaccard → archetypes-report.html (Lua, no rebuild)"
+	@echo "  make probe [CARD_ID...]  side-by-side compare a card's declared variants (auto-discover if no id)"
+	@echo "  make probe-long [...]    same as probe but pop=30 gens=15 n=30 (~3min/variant, σ≈0.025)"
 
 matchup-decks:
 	cargo run --release -- matchup-evolved --dir $(DIR) --html matchup-$(notdir $(DIR)).html
@@ -112,9 +114,49 @@ clean-champions:
 	rm -rf $(CHAMPS) $(HTML) matchup-*.html
 
 pool:
+	@# Refresh the turn-curve data unless `POOL_NO_CURVE=1`. The Lua
+	@# dashboard picks up `card-curve.json` if present and skips the
+	@# turn-curve section otherwise.
+	@if [ "$$POOL_NO_CURVE" != "1" ]; then \
+		cargo run --release -- curve-sample $$CURVE_ARGS; \
+	fi
 	lua5.4 tools/cards-report.lua
 	@echo "Open card-pool.html"
 
 archetypes:
 	lua5.4 tools/archetypes-report.lua
 	@echo "Open archetypes-report.html"
+
+# Balance-probe runs the side-by-side EA over cards that declare
+# variants inline in their .lua file (`variants = { [key] = { ... } }`).
+#
+#   make probe                       # auto-discover every card with variants
+#   make probe dark-salamander       # probe just this card's variants
+#   make probe-long                  # same auto-discovery, full-rigor params
+#
+# No paths. The LLM edits cards/*.lua; you type `make probe`. Variants
+# are excluded from `make evolve` automatically (CardRegistry flags
+# them is_variant = true; main.rs's playable_pool filter skips them).
+#
+# Positional card ids are captured from $(MAKECMDGOALS); the bare-word
+# "goals" are swallowed by an empty rule so make doesn't error.
+PROBE_CARD_GOALS := $(filter-out probe probe-long,$(MAKECMDGOALS))
+PROBE_ARGS       ?=
+
+probe:
+	cargo run --release -- balance-probe $(PROBE_CARD_GOALS) $(PROBE_ARGS)
+
+# Long-form probe: pop=30 gens=15 n=30 — about 3 min per variant,
+# σ ≈ 0.025 (vs σ ≈ 0.043 at the default n=10). Use when first-pass
+# `make probe` shows a small gap and you need to know if it's real.
+probe-long:
+	cargo run --release -- balance-probe $(PROBE_CARD_GOALS) --pop 30 --gens 15 --n 30 $(PROBE_ARGS)
+
+# Swallow positional card-id goals so `make probe dark-salamander` doesn't
+# try to build them as targets. ONLY declared when `probe` / `probe-long`
+# is one of the requested goals — otherwise the empty rule would override
+# every other real target (`evolve`, `pool`, ...) you might also be running.
+ifneq (,$(filter probe probe-long,$(MAKECMDGOALS)))
+$(PROBE_CARD_GOALS):
+	@:
+endif
