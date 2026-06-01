@@ -28,7 +28,7 @@ DIR    ?= baselines
 # starting point — bump to 0.2-0.3 if top-5 still cluster heavily, drop
 # to 0 to disable. CLI flag default is 0.0 so bare `tsot evolve` stays
 # byte-identical to pre-diversity runs; the Makefile opts in.
-ALPHA  ?= 0.1
+ALPHA  ?= 0.3
 
 # Number of unmatched-champion representatives to promote to new
 # baselines during `make curate-baselines`. Unmatched champions are
