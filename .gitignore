@@ -19,4 +19,4 @@ archetypes-report.html
 prune-report.html
 balance-probe-*.json
 balance-probe-report.html
-card-curve.lua
+card-curve.json

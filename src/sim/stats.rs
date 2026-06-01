@@ -40,6 +40,15 @@ pub struct GameStats {
     pub b_played_card_ids: BTreeSet<String>,
     /// Per-card (min_turn, max_turn) the card was played by EITHER side.
     pub card_play_turns: BTreeMap<String, (u32, u32)>,
+    /// Every successful `play_card` recorded as `(card_id, turn,
+    /// player)`, preserving the full distribution. The player field is
+    /// kept so a future per-deck / per-side analysis (scope-3 from the
+    /// `tsot curve-sample` design notes) can group by player without
+    /// re-running the sim. Scope-2 consumers (today's `curve-sample`)
+    /// just ignore the third field. Used by `tsot curve-sample` →
+    /// `cards-report.lua` to surface each card's typical-turn
+    /// distribution.
+    pub card_play_turn_events: Vec<(String, u32, PlayerId)>,
     /// Per-card count of "this card_id was sacrificed as a cost."
     pub card_sacrificed_count: BTreeMap<String, u32>,
     /// Per-card count of "this card_id was discarded via game.discard."

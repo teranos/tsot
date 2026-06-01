@@ -36,17 +36,47 @@ end
 -- ---------------------------------------------------------------------
 -- Load optional turn-curve data (`tsot curve-sample` output)
 -- ---------------------------------------------------------------------
--- If `card-curve.lua` exists in the cwd, the dashboard adds a typical-
+-- If `card-curve.json` exists in the cwd, the dashboard adds a typical-
 -- turn-played column to the all-cards table and a dedicated section.
 -- Generate it by running `tsot curve-sample` first (or `make pool`,
 -- which chains them). Absence is fine — the rest of the dashboard
 -- renders normally.
+--
+-- Parsing is regex-line-based, matching the same pattern
+-- `tools/archetypes-report.lua` uses for EvolvedDeck JSONs. The
+-- producer (`cli_curve_sample.rs`) emits one card per line so this
+-- parser stays straightforward — no JSON state machine needed.
+
+local function parse_curve_json(s)
+  local out = {n_games = 0, seed = "?", card_curves = {}}
+  out.n_games = tonumber(s:match('"n_games"%s*:%s*(%d+)')) or 0
+  out.seed = s:match('"seed"%s*:%s*"([^"]+)"') or "?"
+  -- Per-card line shape:
+  --   "hydra": {"plays": 245, "turns": {"3": 12, "4": 18}}
+  for line in s:gmatch("[^\n]+") do
+    local card_id, plays, turns_str = line:match(
+      '^%s*"([^"]+)"%s*:%s*{%s*"plays"%s*:%s*(%d+)%s*,%s*"turns"%s*:%s*{([^}]*)}'
+    )
+    if card_id and plays then
+      local turns = {}
+      for t, c in turns_str:gmatch('"(%d+)"%s*:%s*(%d+)') do
+        turns[tonumber(t)] = tonumber(c)
+      end
+      out.card_curves[card_id] = {plays = tonumber(plays), turns = turns}
+    end
+  end
+  return out
+end
 
 local curve_data = nil
 do
-  local ok, data = pcall(dofile, "card-curve.lua")
-  if ok and type(data) == "table" and type(data.card_curves) == "table" then
-    curve_data = data
+  local fh = io.open("card-curve.json", "r")
+  if fh then
+    local s = fh:read("*a")
+    fh:close()
+    if s and #s > 0 then
+      curve_data = parse_curve_json(s)
+    end
   end
 end
 
