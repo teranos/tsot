@@ -4,6 +4,7 @@
 return {
   id = "stream-of-thought",
   name = "Stream of Thought",
+  colors = {"blue", "transparent"},
   type = "instant",
   cost = {{amount = 2, source = "hand"}},
   abilities = {

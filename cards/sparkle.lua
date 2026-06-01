@@ -1,7 +1,7 @@
 return {
-  id = "spark",
-  name = "Spark",
-  colors = {"red"},
+  id = "sparkle",
+  name = "Sparkle",
+  colors = {"red", "glow"},
   type = "instant",
   cost = {{amount = 1, source = "mill"}},
   abilities = {

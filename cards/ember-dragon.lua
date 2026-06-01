@@ -9,5 +9,5 @@ return {
     {amount = 3, source = "graveyard"},
   },
   stats = {x = 4, y = 4},
-  abilities = {"flying."},
+  abilities = {"flying.", "haste."},
 }
