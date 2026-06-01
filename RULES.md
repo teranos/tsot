@@ -49,6 +49,8 @@ The following zones are part of the game.
 - **Z.5** GRAVEYARD
 - **Z.6** ATTACHED — a card placed under another card.
 
+The STACK (R.8) is shared and global, not per-player, and therefore is not a Z-zone — it lives under R (Responses).
+
 ## Cards (C)
 
 - **C.1** A card's symbols are displayed on the back of the card. A card may have zero, one, or more symbols.
@@ -109,7 +111,7 @@ The following are not part of this game.
 - **P.30** A variable-X cost component (a cost where `is_x = true`) has a minimum X value of 1 — X must be chosen to be at least 1. A card may explicitly opt into allowing X = 0 by declaring `allow_x_zero = true`. The default exists because X = 0 nearly always pays only the non-X cost components for a no-op effect (a strict loss); when X = 0 has a real strategic use (e.g., a stat-scaling creature played for body-less mode), the card must opt in explicitly.
 - **P.31** A cost component written as `N attached` means: choose N cards currently attached to cards you control on the BOARD. If the played card is BOARD-placed, those cards become attached to the played card (face-down per P.17). If the played card is non-BOARD, those cards are placed in EXILE. P.7a does not apply to ATTACHED-source payments.
 - **P.32** A card with a declared target category cannot be cast when no legal target for that category exists. The engine refuses the cast before any cost is paid. Target categories are declarative on the card (e.g., `target = "chain"`), and the engine's legality check is built-in per category — parallel to A.9 for activations.
-- **P.33** When a card is cast, the card itself leaves HAND immediately at cast announcement and joins the response chain (R.1). It does not stay in HAND while the chain resolves. Consequence: the same card cannot be cast twice while it sits on the chain — once cast, it is no longer in HAND to be selected again. On resolution the chain item moves to its destination zone per the card type (creature/artifact → BOARD per P.2/P.19; spell → GRAVEYARD per C.10; mutation → ATTACHED per P.26). If countered, the chain item moves to GRAVEYARD (its cast attempt did not resolve, but the card is no longer in HAND).
+- **P.33** When a card is cast, the card itself leaves HAND immediately at cast announcement and enters the STACK (R.8). The STACK is not a zone; see R.8. It does not stay in HAND while the STACK resolves. Consequence: the same card cannot be cast twice while it sits on the STACK — once cast, it is no longer in HAND to be selected again. On resolution the STACK item moves to its destination zone per the card type (creature/artifact → BOARD per P.2/P.19; spell → GRAVEYARD per C.10; mutation → ATTACHED per P.26). If countered, the STACK item moves to GRAVEYARD (its cast attempt did not resolve, but the card is no longer in HAND).
 
 ## Abilities (A)
 
@@ -126,7 +128,7 @@ The following are not part of this game.
 
 ## Control (T)
 
-- **T.1** Every card on the BOARD is controlled by exactly one player. That player is the card's controller.
+- **T.1** BOARD is a per-player zone: each player has their own BOARD. A card on a player's BOARD is controlled by that player. Cards are added to and removed from a specific player's BOARD; "the BOARD" as a phrase refers to either player's BOARD individually, never a shared container.
 - **T.2** Every card has an owner: the player to whose initial DECK it belonged. Ownership does not change during the game.
 
 ## Responses (R)
@@ -138,6 +140,7 @@ The following are not part of this game.
 - **R.5** When both players consecutively pass, the most recently added unresolved item in the response chain resolves.
 - **R.6** When both players consecutively pass and the response chain is empty, the response window closes.
 - **R.7** When a response window opens, the active player (the one whose turn it is) acts first. They may respond by playing a card, or pass. Their opponent only gets a chance to act after the active player passes or responds.
+- **R.8** The STACK is the shared, global ordered list of cast cards waiting to resolve. It is NOT a zone (Z.1–Z.6 are per-player; the STACK is global and singular). A cast card enters the STACK at announcement per P.33 and leaves it on resolution or counter. Each STACK item carries the controller (who cast it). Resolution is LIFO per R.2.
 
 ## Visibility (V)
 
