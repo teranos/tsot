@@ -21,23 +21,7 @@ Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, suppor
 - **`make archetypes`** — Jaccard clustering of saved decks → `archetypes-report.html` (which decks form the same attractor)
 - **`make probe [CARD_ID...]`** — side-by-side comparison of a card's declared variants via short pinned EAs; auto-discovers every card with a `variants` block if no id given → `balance-probe-report.html`. Long-form: `make probe-long`.
 
-**Done in the engine:**
-- **STACK Phase 1 + 2** — response windows, counterspell, threat-aware AI combat tricks.
-- **STATIC Phase 1 + 2 + 3 + 3.5** — stat anthems, keyword grants (flying, haste, vigilance), state-reading predicates, source-only / attached-host scopes, kind / has-keyword filters, action restrictions (cannot-attack, cannot-be-cost-paid), cost-reduction modifiers.
-- **Costs** — HAND, MILL, GRAVEYARD, SACRIFICE (with kind filter); P.24a jewel tap and P.24b crystal tap as HAND-payment substitutions.
-- **Card types routed by play_card** — Creature, Spell (Instant + Sorcery via timing), Artifact (with the no-summoning-sickness P.25 rule).
-- **Activated abilities** — Phase 1 (`T:` from BOARD), Phase 1.5 (multi-component costs: `T:` + HAND/MILL/GRAVEYARD), Phase 1.75 (X-cost activations, AI picks X, `game.x_value()` exposes it to handlers), Phase 3 (static-granted activated abilities). RULES A.5–A.10. Resolve immediately, no stack. Wired into the jewel cycle (with Phase 3 grants to attached hosts), vigilant-human, the monkey cycle (5 cards), and Dark Salamander's `2Y - X` mill.
-- **X-cost casts** — non-creature X-cost spells are draftable by the sim AI (`pick_random_playable_in_hand` accepts is_x at X≥1 minimum affordability). `run.rs` X-pick caps X by the tightest binding resource. Per RULES P.30 the AI picks `min: 1`, and the engine rejects `x_value = 0` unless the card sets `allow_x_zero = true`. Wired into `shift` (X mill → move X attached cards between hosts).
-- **HAND-payment substitutes from graveyard** — `Card.gy_hand_substitute` + `PlayChoices.gy_hand_payment_ids` move substitute cards GY → EXILE in place of one HAND-source slot. Identity-coverage gate (`NoHandPaymentForIdentity`) requires at least one HAND payment from hand when the cast has any identity. Wired into Clear View.
-- **Card variants schema** — a card .lua may declare a `variants = { [key] = { overrides } }` table; the loader emits one card per variant with id `{base}-{key}` and `is_variant = true`. Variants are excluded from the main pool / EA / gauntlets and only picked up by `tsot balance-probe`. Top-level fields in a variant table replace the base wholesale (no deep merge). See `LUA.md` "Card variants" for the schema.
-- **Balance-probe** — `tsot balance-probe` pins each card variant into every genome of a short EA, then reports the ceiling fitness side-by-side. Used to compare versions of a card (cost / stats / effect magnitude) without polluting the gauntlet. `--pinned-count`, `--pop`, `--gens`, `--n` tunable; auto-discovers all cards with declared variants when called with no positional args.
-- **Curve-sample** — `tsot curve-sample` plays N random-deck vs random-deck games, aggregates per-card turn-of-play distributions, dumps `card-curve.json`. The `make pool` dashboard reads it to render Unicode sparklines showing on-which-turn each card typically gets cast.
-- **Per-game watchdog** — wall-clock and Pattern-B-inner-loop safety caps in `run_game`. When a game hangs (handler infinite loop, X-cost cap mismatch, etc.) it dumps state to stderr — turn, active player, hand/board/GY card ids, last picked, last activated — then scores the active player as the loser and continues. Tunable via `TSOT_GAME_TIMEOUT_SECS`.
-- **Modifier grants** — gains_flying, gains_vigilance, gains_haste, plus EOT variants for each. Used by static abilities (companion-bird) and EOT pumps (white-monkey).
-- **RULES additions** — C.13 (transparent has no symbol), V.8–V.11 (transparent reveals card below; glow's effective-slot visibility), A.5–A.10 (activated-ability semantics), P.30 (X-cost minimum 1).
-- **Sim AI heuristics** — Pattern B multi-noncreature per turn, play-priority scoring (cost-reducers + anthems land first), smart-pitch, smart-discard, smart-target, trade-up block policy, trade-up attack policy (big-first blocker reservation, skips clean-kill suicide swings, reach-aware), investment-aware sacrifice picker, pre-combat + post-combat activation passes (with AI X-pick for X-cost activations), Clear View used to fill identity-mismatched hand slots greedily, intent-aware targeting via `game.set_intent` side-channel (wired across shift, silent-murder, beguile, bring-down, condemn, jellyfish, falter, mesopelagic-fish, this-for-that — covers the corpus's strategic-target cards).
-
-**Remaining gaps** (see `LIMITATIONS.md`): non-board activations (Phase 2), spell-to-attached (Phase 2.5), SACRIFICE/SELF in activations, color grafting (Purple Suit), targeting layer + stack-item retargeting, glow/transparent visibility computation, phase-entry / delayed triggers, Environment type, STATIC Phase 4 (replacement effects), OnDealtDamageToPlayer event, static-recompute on attached-set change, intent-aware targeting beyond shift (other "target X" cards still use default `target_score`).
+**Engine state:** turn loop with combat, response windows + counterspells, statics (anthems / keyword grants / restrictions / cost reductions), full cost vocabulary (HAND / MILL / GRAVEYARD / SACRIFICE / ATTACHED + jewel/crystal/Clear-View substitutions), X-cost casts and activated abilities, card-variants schema with `make probe`, intent-aware AI targeting. Detailed feature inventory and remaining gaps live in `LIMITATIONS.md`.
 
 ## Building & running
 
@@ -71,6 +55,7 @@ mlua bundles Lua 5.4 from source via the `vendored` feature; no system Lua insta
 - **`STATIC.md`** — phased plan for continuous effects. Phase 1 + 2 + 3 + 3.5 done.
 - **`JOURNAL.md`** — multi-session plan for mutation journaling, rollback, replay, save/load.
 - **`EA.md`** — evolutionary deck search (the current primary simulation mode).
+- **`src/sim/README.md`** — sim AI heuristics + game-runner internals.
 
 ## The archived v1 garden
 

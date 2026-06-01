@@ -30,19 +30,7 @@ No engine concept of "what is legal to target." Every "target X" card today work
 
 STATIC Phase 3 (restriction statics) partially overlaps here; the targeting infrastructure is its own slice.
 
-### Smart targeting heuristics (`TargetIntent`)
-
-`RandomOracle::choose_card` reads an optional side-channel `TargetIntent` set by handlers via `game.set_intent(...)` and dispatches to intent-specific scoring. Intent is consumed on the next `choose_card` (cleared after one use), so handlers re-declare per call site. Scripted and Noop oracles ignore the hint.
-
-Intents wired today:
-- `steal` (opp-bias + attached-aware) — `shift` source, `falter`
-- `donate` (own-bias + body-aware + attached-aware) — `shift` destination
-- `high_value_attached` (no controller bias, prefer jewels/statics) — `shift`'s per-attached pick
-- `remove_threat` (opp-bias + body-aware) — `silent-murder`, `beguile`, `bring-down`, `condemn`, `jellyfish`, `this-for-that`'s "take"
-- `recur` (cost-heavy + handler-density, no controller bias) — `mesopelagic-fish`
-- `low_value_own` (own-bias + INVERSE body-aware) — `this-for-that`'s "give"
-
-Targeted cards still on default scoring: `archer`, `cinder-wurm`, `pyre-spirit`, `portable-bolt`, `sabotage`, `forget`, `glaring-sunlight`, `resurrect`, `wake-dead`, `philosopher`, `untap`, `flesh-eating-plant`, `goblin-conspirator`, the monkey cycle's `T:` picks, `ward`, `sparkle`, `scarecrow`, `bci-megafly`, `blue-scientist`, `signal-goblin`. Each one is ~5 lines of Lua to wire; intents may need extending (e.g., `pump` for buff targets, `discard_opp` for hand-attack).
+AI side: `TargetIntent` (side-channel scoring hint per `game.set_intent`) catalog + wired-cards roster lives in `src/sim/README.md`.
 
 ## stack
 

@@ -11,7 +11,8 @@ block to the card's .lua — never duplicate the file. The loader
 emits one card per variant; `make probe` picks them up side-by-side.
 See @LUA.md "Card variants" for the schema.
 
-See @LUA.md and @RULES.md
+See @LUA.md and @RULES.md. Sim AI heuristics + game-runner internals
+in @src/sim/README.md.
 
 Rust side strict TDD preferred.
 
