@@ -194,6 +194,48 @@ Round out the taxonomy, harden the API, integrate with the stack work that lands
 
 ---
 
+## Card variants (balance-probe schema)
+
+A card file may declare alternate versions of itself inline via a
+`variants = { [key] = { overrides } }` table. The loader emits the
+base card plus one card per variant, with id `{base-id}-{key}` and
+`is_variant = true`. Variants are excluded from `main.rs::playable_pool`
+so they never enter `make evolve` / champions / gauntlets; `tsot
+balance-probe` is the only consumer that picks them up.
+
+**Schema example** — author once, compare versions side-by-side:
+
+```lua
+return {
+  id = "dark-salamander",
+  -- ... base definition ...
+  variants = {
+    ["1pwr"] = { activated = {...} },   -- partial override
+    ["2pwr"] = { activated = {...} },
+  },
+}
+```
+
+**Override semantics** — each top-level field in a variant table
+replaces the base wholesale. There is no deep merge. To tweak one
+ability inside `activated`, copy the full `activated` array into the
+variant with the tweak. This keeps the schema predictable at the
+cost of some duplication.
+
+**Workflow** — `make probe` auto-discovers every card with declared
+variants and probes them side-by-side; `make probe <CARD_ID>` probes
+one card's variants. The probe pins each variant into every genome
+of a short EA and reports the ceiling fitness + top co-occurring
+cards. No file paths, no flag juggling — the LLM (or you) edits the
+card's .lua, you type `make probe`.
+
+**When to add variants** — when you want to compare alternative
+versions of the same conceptual card (different cost, different
+stats, different effect magnitude). Don't duplicate .lua files; add
+a variants block instead.
+
+---
+
 ## Cross-cutting design questions to resolve
 
 These come up across phases and are worth pinning down early:
@@ -203,6 +245,7 @@ These come up across phases and are worth pinning down early:
 3. **Error handling.** A Lua error inside a handler should not crash the engine. Catch, log, continue — the rest of the game keeps running. Maybe surface as a game event for testing.
 4. **Hot reload.** Should card edits trigger a re-load mid-session? Convenient for authoring; complicates state. Probably no for v1; yes for dev mode later.
 5. **Coroutine yield semantics.** For Phase 2's choice API, what yields and what blocks? mlua's `Thread` is the mechanism. Spec the exact pattern before writing it.
+6. **Deployment target.** Browser via wasm, wrapped in a native WebView shell (Capacitor or equivalent) for App Store / Play Store distribution. Rust target: `wasm32-unknown-emscripten` (required by mlua's vendored Lua C runtime — pure-Rust wasm targets are not supported). Cards are embedded in the binary via `include_dir!` so the runtime has no filesystem dependency. `rayon` is cfg-gated to native; the EA sim doesn't ship in the app.
 
 ---
 

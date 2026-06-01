@@ -5,6 +5,12 @@ Collectible Card Game
 
 Write cards in lua cards/
 
+When the user wants to compare alternative versions of a card (cost,
+stats, effect magnitude), add a `variants = { [key] = { overrides } }`
+block to the card's .lua — never duplicate the file. The loader
+emits one card per variant; `make probe` picks them up side-by-side.
+See @LUA.md "Card variants" for the schema.
+
 See @LUA.md and @RULES.md
 
 Rust side strict TDD preferred.

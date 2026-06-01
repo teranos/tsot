@@ -32,7 +32,17 @@ STATIC Phase 3 (restriction statics) partially overlaps here; the targeting infr
 
 ### Smart targeting heuristics (`TargetIntent`)
 
-`RandomOracle::choose_card` now reads an optional side-channel `TargetIntent` (set by handlers via `game.set_intent("steal"|"donate"|"high_value_attached")`) and dispatches to intent-specific scoring. Intent is consumed on the next `choose_card` (cleared after one use), so handlers re-declare per call site. Wired in shift's `on_play` (source = `steal`, destination = `donate`, per-attached pick = `high_value_attached`). Scripted and Noop oracles ignore the hint. Other targeted cards (beguile, silent-murder, mutation cards) still use the default `target_score` and remain candidates for intent-aware scoring; the framework is in place but each card has to declare its intent.
+`RandomOracle::choose_card` reads an optional side-channel `TargetIntent` set by handlers via `game.set_intent(...)` and dispatches to intent-specific scoring. Intent is consumed on the next `choose_card` (cleared after one use), so handlers re-declare per call site. Scripted and Noop oracles ignore the hint.
+
+Intents wired today:
+- `steal` (opp-bias + attached-aware) — `shift` source, `falter`
+- `donate` (own-bias + body-aware + attached-aware) — `shift` destination
+- `high_value_attached` (no controller bias, prefer jewels/statics) — `shift`'s per-attached pick
+- `remove_threat` (opp-bias + body-aware) — `silent-murder`, `beguile`, `bring-down`, `condemn`, `jellyfish`, `this-for-that`'s "take"
+- `recur` (cost-heavy + handler-density, no controller bias) — `mesopelagic-fish`
+- `low_value_own` (own-bias + INVERSE body-aware) — `this-for-that`'s "give"
+
+Targeted cards still on default scoring: `archer`, `cinder-wurm`, `pyre-spirit`, `portable-bolt`, `sabotage`, `forget`, `glaring-sunlight`, `resurrect`, `wake-dead`, `philosopher`, `untap`, `flesh-eating-plant`, `goblin-conspirator`, the monkey cycle's `T:` picks, `ward`, `sparkle`, `scarecrow`, `bci-megafly`, `blue-scientist`, `signal-goblin`. Each one is ~5 lines of Lua to wire; intents may need extending (e.g., `pump` for buff targets, `discard_opp` for hand-attack).
 
 ## stack
 
