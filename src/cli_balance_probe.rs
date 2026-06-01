@@ -193,6 +193,7 @@ fn probe_one_card(
         stop_at_ceiling: None,
         pinned_card_id: Some(card.id.clone()),
         pinned_count: args.pinned_count.min(3),
+        diversity_alpha: 0.0,
     };
 
     // For pin to work, the pinned card MUST be available to genomes.

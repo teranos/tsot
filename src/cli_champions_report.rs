@@ -235,9 +235,7 @@ pub fn run_champions_report(
     for i in 0..champions.len() {
         for j in (i + 1)..champions.len() {
             total_pairs += 1;
-            let inter = champ_sets[i].intersection(&champ_sets[j]).count() as f64;
-            let union = champ_sets[i].union(&champ_sets[j]).count() as f64;
-            let jacc = if union > 0.0 { inter / union } else { 0.0 };
+            let jacc = crate::sim::diversity::jaccard(&champ_sets[i], &champ_sets[j]);
             if jacc > args.cluster_threshold {
                 linked_pairs += 1;
                 let ri = find(&mut parent, i);

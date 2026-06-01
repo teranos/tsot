@@ -18,25 +18,34 @@ use rand::Rng;
 
 use tsot::card::Card;
 
-/// Tournament selection. Sample `k` distinct-or-not individuals
-/// (uniform with replacement is fine for small `k`), return a
-/// reference to the fittest of those `k`. Lower `k` → less selection
-/// pressure; `k=3` is the standard starting point.
-pub fn tournament_select<'a>(
-    pop: &'a [(Vec<String>, f64)],
+/// Tournament selection. Sample `k` indices into `scores` uniformly
+/// with replacement and return the index of the highest-scoring one.
+/// Lower `k` → less selection pressure; `k=3` is the standard
+/// starting point.
+///
+/// `scores` is decoupled from any specific population shape: pass raw
+/// fitness for a vanilla EA, or `sim::diversity::selection_scores` for
+/// a Jaccard-penalty-shaped selection. The RNG consumption (`k` calls
+/// to `gen_range`) is independent of the score values, so swapping
+/// score vectors keeps downstream RNG sequences byte-identical.
+pub fn tournament_select(
+    scores: &[f64],
     k: usize,
     rng: &mut StdRng,
-) -> &'a Vec<String> {
-    assert!(!pop.is_empty(), "tournament_select on empty population");
+) -> usize {
+    assert!(!scores.is_empty(), "tournament_select on empty population");
     assert!(k > 0, "tournament k must be > 0");
-    let mut best: &(Vec<String>, f64) = &pop[rng.gen_range(0..pop.len())];
+    let mut best_idx = rng.gen_range(0..scores.len());
+    let mut best_score = scores[best_idx];
     for _ in 1..k {
-        let cand = &pop[rng.gen_range(0..pop.len())];
-        if cand.1 > best.1 {
-            best = cand;
+        let cand_idx = rng.gen_range(0..scores.len());
+        let cand_score = scores[cand_idx];
+        if cand_score > best_score {
+            best_idx = cand_idx;
+            best_score = cand_score;
         }
     }
-    &best.0
+    best_idx
 }
 
 /// Uniform crossover: for each slot, independently pick from parent_a
@@ -160,28 +169,22 @@ mod tests {
 
     #[test]
     fn tournament_select_picks_fittest_at_high_k() {
-        // With k = pop_size, tournament becomes a full max over the population.
-        let pop: Vec<(Vec<String>, f64)> = vec![
-            (vec!["a".into()], 0.1),
-            (vec!["b".into()], 0.9),
-            (vec!["c".into()], 0.5),
-        ];
+        // With k = scores.len(), tournament becomes a full argmax over the scores.
+        let scores = vec![0.1, 0.9, 0.5];
         let mut rng = StdRng::seed_from_u64(0xEA);
         for _ in 0..50 {
-            let winner = tournament_select(&pop, pop.len() * 10, &mut rng);
-            assert_eq!(winner[0], "b", "max-fitness genome should always win at high k");
+            let winner = tournament_select(&scores, scores.len() * 10, &mut rng);
+            assert_eq!(winner, 1, "max-score index should always win at high k");
         }
     }
 
     #[test]
     fn tournament_select_is_deterministic_per_seed() {
-        let pop: Vec<(Vec<String>, f64)> = (0..20)
-            .map(|i| (vec![format!("g{i}")], (i as f64) / 20.0))
-            .collect();
+        let scores: Vec<f64> = (0..20).map(|i| (i as f64) / 20.0).collect();
         let mut rng_1 = StdRng::seed_from_u64(0xEA);
         let mut rng_2 = StdRng::seed_from_u64(0xEA);
-        let w1 = tournament_select(&pop, 3, &mut rng_1).clone();
-        let w2 = tournament_select(&pop, 3, &mut rng_2).clone();
+        let w1 = tournament_select(&scores, 3, &mut rng_1);
+        let w2 = tournament_select(&scores, 3, &mut rng_2);
         assert_eq!(w1, w2);
     }
 

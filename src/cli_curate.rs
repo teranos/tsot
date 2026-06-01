@@ -40,20 +40,18 @@ pub struct CurateBaselinesArgs {
     /// Don't overwrite baseline files; print what would happen.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
+    /// Promote up to K champions that didn't match any existing baseline
+    /// cluster to new baselines. Unmatched champions are first inner-
+    /// clustered among themselves at the same `--threshold` (single-
+    /// linkage Jaccard), one representative per inner-cluster is picked
+    /// by highest live re-eval score, and the top K representatives are
+    /// written as `baseline-promoted-{stem}.json` with a `_promoted`
+    /// label suffix. `0` (default) = no promotion (manual review only).
+    #[arg(long = "promote-unmatched", default_value_t = 0)]
+    pub promote_unmatched: usize,
 }
 
-fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
-    if a.is_empty() && b.is_empty() {
-        return 1.0;
-    }
-    let inter = a.intersection(b).count() as f64;
-    let union = a.union(b).count() as f64;
-    if union > 0.0 {
-        inter / union
-    } else {
-        0.0
-    }
-}
+use crate::sim::diversity::jaccard;
 
 pub fn run_curate_baselines(
     registry: &CardRegistry,
@@ -218,9 +216,139 @@ pub fn run_curate_baselines(
         .collect();
     if !unmatched.is_empty() {
         println!("Unmatched champions (potential new attractors):");
-        for p in unmatched {
+        for p in &unmatched {
             println!("  {}", p.display());
         }
+    }
+
+    // Promotion phase: take up to `--promote-unmatched K` representatives
+    // from inner-clusters of the unmatched champions and write them as
+    // new baselines. The inner-cluster step prevents promoting K slot-
+    // variations of one new attractor (e.g. a single round's rank-1..5
+    // when --save-top 5 saved one cluster's worth of clones).
+    if args.promote_unmatched > 0 && !unmatched.is_empty() {
+        let unmatched_entries: Vec<&(PathBuf, EvolvedDeck, Vec<Card>, BTreeSet<String>)> =
+            champions
+                .iter()
+                .filter(|(p, _, _, _)| !all_matched.contains(p))
+                .collect();
+
+        println!();
+        println!(
+            "Promotion phase: {} unmatched champions, K={}, inner-cluster threshold {:.2}",
+            unmatched_entries.len(),
+            args.promote_unmatched,
+            args.threshold,
+        );
+
+        // Live-score each unmatched champion against the snapshot baselines.
+        // (The main upgrade loop only scored cluster members.)
+        let mut scores: Vec<f64> = Vec::with_capacity(unmatched_entries.len());
+        for (path, _, cards, _) in &unmatched_entries {
+            let s = evaluate(cards, &mut rng);
+            scores.push(s);
+            println!(
+                "  {:<40}  live={:.3}",
+                path.file_name().unwrap().to_string_lossy(),
+                s,
+            );
+        }
+
+        // Single-linkage Jaccard clustering among unmatched champions.
+        let n = unmatched_entries.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(parent: &mut [usize], mut x: usize) -> usize {
+            while parent[x] != x {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            x
+        }
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let si = &unmatched_entries[i].3;
+                let sj = &unmatched_entries[j].3;
+                if jaccard(si, sj) >= args.threshold {
+                    let ri = find(&mut parent, i);
+                    let rj = find(&mut parent, j);
+                    if ri != rj {
+                        parent[ri] = rj;
+                    }
+                }
+            }
+        }
+        let mut clusters: std::collections::BTreeMap<usize, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for i in 0..n {
+            let r = find(&mut parent, i);
+            clusters.entry(r).or_default().push(i);
+        }
+        let cluster_list: Vec<Vec<usize>> = clusters.into_values().collect();
+
+        // Pick the highest-live-score member per inner-cluster.
+        let mut reps: Vec<(usize, f64)> = cluster_list
+            .iter()
+            .map(|members| {
+                let best = *members
+                    .iter()
+                    .max_by(|a, b| {
+                        scores[**a]
+                            .partial_cmp(&scores[**b])
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .unwrap();
+                (best, scores[best])
+            })
+            .collect();
+        reps.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let take = reps.len().min(args.promote_unmatched);
+        println!();
+        println!(
+            "  → {} distinct inner-cluster(s); promoting top {} by live score:",
+            cluster_list.len(),
+            take,
+        );
+        let mut promoted_count = 0u32;
+        for (rank, (idx, score)) in reps.iter().take(take).enumerate() {
+            let (src_path, src_deck, _, _) = unmatched_entries[*idx];
+            let stem = src_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
+            let target = baselines_dir.join(format!("baseline-promoted-{stem}.json"));
+            let mut promoted = src_deck.clone();
+            promoted.fitness = *score;
+            promoted.label = format!("{}_promoted", promoted.label);
+            if args.dry_run {
+                println!(
+                    "  → rank {}: would promote {} → {} (live={:.3}) [dry-run]",
+                    rank + 1,
+                    src_path.file_name().unwrap().to_string_lossy(),
+                    target.file_name().unwrap().to_string_lossy(),
+                    score,
+                );
+            } else {
+                match promoted.save(&target) {
+                    Ok(()) => {
+                        println!(
+                            "  → rank {}: PROMOTED {} → {} (live={:.3})",
+                            rank + 1,
+                            src_path.file_name().unwrap().to_string_lossy(),
+                            target.file_name().unwrap().to_string_lossy(),
+                            score,
+                        );
+                        promoted_count += 1;
+                    }
+                    Err(e) => eprintln!("  ! save failed for {}: {e}", target.display()),
+                }
+            }
+        }
+        println!();
+        println!(
+            "Promotion done: {} new baseline(s) written",
+            promoted_count,
+        );
     }
     Ok(())
 }

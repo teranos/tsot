@@ -10,6 +10,7 @@
 
 pub mod ai;
 pub mod deck_token;
+pub mod diversity;
 pub mod evolve;
 pub mod evolved_deck;
 pub mod fitness;

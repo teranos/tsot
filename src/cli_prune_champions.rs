@@ -196,18 +196,7 @@ fn build_html(
     }
 }
 
-fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
-    if a.is_empty() && b.is_empty() {
-        return 1.0;
-    }
-    let inter = a.intersection(b).count() as f64;
-    let union = a.union(b).count() as f64;
-    if union > 0.0 {
-        inter / union
-    } else {
-        0.0
-    }
-}
+use crate::sim::diversity::jaccard;
 
 pub fn run_prune_champions(
     registry: &CardRegistry,

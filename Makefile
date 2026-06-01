@@ -23,6 +23,22 @@ CHAMPS := champions
 HTML   := champions-report.html
 DIR    ?= baselines
 
+# Jaccard fitness penalty for diversity-preserving selection. Tournament
+# reads `fitness - ALPHA · mean_jaccard_to_others`. Default 0.1 is a
+# starting point — bump to 0.2-0.3 if top-5 still cluster heavily, drop
+# to 0 to disable. CLI flag default is 0.0 so bare `tsot evolve` stays
+# byte-identical to pre-diversity runs; the Makefile opts in.
+ALPHA  ?= 0.1
+
+# Number of unmatched-champion representatives to promote to new
+# baselines during `make curate-baselines`. Unmatched champions are
+# first inner-clustered among themselves at the same threshold (0.7
+# single-linkage Jaccard), one rep per inner-cluster is picked by
+# live-eval score, top-K reps are written as new baselines. Default 1
+# = grow baselines by at most one new attractor per curate run; set to
+# 0 to disable, or bump higher for a one-shot bulk promotion.
+PROMOTE ?= 1
+
 .PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool archetypes prune-champions probe probe-long
 
 help:
@@ -62,8 +78,9 @@ evolve:
 		[ -f "$$f" ] && EXTRAS="$$EXTRAS --extra $$f"; \
 	done; \
 	NUM=$$(($$(echo $$EXTRAS | wc -w | xargs) / 2)); \
-	echo "=== round $$N (seed=$$SEED, gauntlet: 5 baselines + $$NUM extras) ==="; \
+	echo "=== round $$N (seed=$$SEED, gauntlet: 5 baselines + $$NUM extras, alpha=$(ALPHA)) ==="; \
 	cargo run --release -- evolve --seed $$SEED --stop-at-ceiling 3 --save-top 5 \
+		--diversity-alpha $(ALPHA) \
 		$$EXTRAS --save $(CHAMPS)/r$$N.json
 
 evolve-shallow:
@@ -76,10 +93,11 @@ evolve-shallow:
 		[ -f "$$f" ] && EXTRAS="$$EXTRAS --extra $$f"; \
 	done; \
 	NUM=$$(($$(echo $$EXTRAS | wc -w | xargs) / 2)); \
-	echo "=== shallow round $$N (seed=$$SEED, gauntlet: 5 baselines + $$NUM extras) ==="; \
+	echo "=== shallow round $$N (seed=$$SEED, gauntlet: 5 baselines + $$NUM extras, alpha=$(ALPHA)) ==="; \
 	echo "    pop=25 gens=10 n=5 — fast smoke check, noisy fitness"; \
 	cargo run --release -- evolve --seed $$SEED \
 		--pop 25 --gens 10 --n 5 --stop-at-ceiling 3 \
+		--diversity-alpha $(ALPHA) \
 		--save-top 5 \
 		$$EXTRAS --save $(CHAMPS)/r$$N.json
 
@@ -93,10 +111,11 @@ evolve-deep:
 		[ -f "$$f" ] && EXTRAS="$$EXTRAS --extra $$f"; \
 	done; \
 	NUM=$$(($$(echo $$EXTRAS | wc -w | xargs) / 2)); \
-	echo "=== deep round $$N (seed=$$SEED, gauntlet: 5 baselines + $$NUM extras) ==="; \
+	echo "=== deep round $$N (seed=$$SEED, gauntlet: 5 baselines + $$NUM extras, alpha=$(ALPHA)) ==="; \
 	echo "    pop=100 gens=100 n=30 tournament-k=5 elite=3 — expect 2-8 hours wall"; \
 	cargo run --release -- evolve --seed $$SEED \
 		--pop 100 --gens 100 --n 30 --tournament-k 5 --elite 3 --stop-at-ceiling 5 \
+		--diversity-alpha $(ALPHA) \
 		--save-top 5 \
 		$$EXTRAS --save $(CHAMPS)/r$$N.json
 
@@ -105,7 +124,7 @@ report:
 	@echo "Open $(HTML)"
 
 curate-baselines:
-	cargo run --release -- curate-baselines
+	cargo run --release -- curate-baselines --promote-unmatched $(PROMOTE)
 
 prune-champions:
 	cargo run --release -- prune-champions

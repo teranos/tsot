@@ -63,6 +63,14 @@ pub struct EvolveConfig {
     /// genome. Bounded by `per_card_cap`. Ignored when `pinned_card_id`
     /// is None.
     pub pinned_count: usize,
+    /// Diversity-preserving selection coefficient. The score that
+    /// tournament reads is `fitness - alpha · mean_jaccard_to_others`
+    /// (see [`crate::sim::diversity::selection_scores`]). `0.0` is a
+    /// fast path producing byte-identical behavior to pre-diversity
+    /// runs. Useful range is roughly `[0.05, 0.3]`; tune with A/B
+    /// runs at different alphas. Elitism still carries by raw fitness,
+    /// so the monotonic-best-trace contract is preserved.
+    pub diversity_alpha: f64,
 }
 
 impl Default for EvolveConfig {
@@ -80,6 +88,7 @@ impl Default for EvolveConfig {
             stop_at_ceiling: None,
             pinned_card_id: None,
             pinned_count: 0,
+            diversity_alpha: 0.0,
         }
     }
 }
@@ -221,10 +230,20 @@ pub fn evolve(
 
         // Phase 1 (sequential, deterministic): generate children +
         // fit_seeds. RNG ordering preserved.
+        //
+        // Selection-score vector is computed once per generation. At
+        // alpha=0 it's exactly raw fitness (no Jaccard work, no behavior
+        // change). At alpha>0 it's `fitness - alpha · mean_jaccard_to_others`
+        // — tournament reads the shaped scores but still consumes the
+        // same RNG draws, so the seed-determinism contract holds either way.
+        let sel_scores: Vec<f64> =
+            crate::sim::diversity::selection_scores(&pop, cfg.diversity_alpha);
         let mut child_jobs: Vec<(Vec<String>, u64)> = Vec::with_capacity(cfg.pop_size - next.len());
         while child_jobs.len() + next.len() < cfg.pop_size {
-            let parent_a = tournament_select(&pop, cfg.tournament_k, &mut rng).clone();
-            let parent_b = tournament_select(&pop, cfg.tournament_k, &mut rng).clone();
+            let idx_a = tournament_select(&sel_scores, cfg.tournament_k, &mut rng);
+            let idx_b = tournament_select(&sel_scores, cfg.tournament_k, &mut rng);
+            let parent_a = pop[idx_a].0.clone();
+            let parent_b = pop[idx_b].0.clone();
             let crossed = crossover_uniform(&parent_a, &parent_b, &mut rng);
             let mut child = mutate(&crossed, pool, cfg.mutation_rate, &mut rng);
             if !repair(&mut child, pool, cfg.per_card_cap, &mut rng) {
@@ -341,6 +360,7 @@ mod tests {
             stop_at_ceiling: None,
             pinned_card_id: None,
             pinned_count: 0,
+            diversity_alpha: 0.0,
         }
     }
 
@@ -432,6 +452,94 @@ mod tests {
                 "pin invariant broken: genome has {count} copies of {pin_id}, expected >= 2"
             );
         }
+    }
+
+    #[test]
+    fn evolve_is_deterministic_per_seed_with_diversity_alpha() {
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+        let cfg = EvolveConfig {
+            diversity_alpha: 0.2,
+            ..tiny_config()
+        };
+        let r_1 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        let r_2 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        let g_1: Vec<Vec<String>> = r_1
+            .final_population
+            .iter()
+            .map(|(g, _)| g.clone())
+            .collect();
+        let g_2: Vec<Vec<String>> = r_2
+            .final_population
+            .iter()
+            .map(|(g, _)| g.clone())
+            .collect();
+        assert_eq!(g_1, g_2, "diversity-aware evolve must still be deterministic per seed");
+    }
+
+    #[test]
+    fn evolve_with_elitism_is_monotonic_in_best_fitness_under_diversity() {
+        // Elitism uses raw fitness, not the diversity-shaped score, so
+        // the monotonic-best-trace contract must hold at alpha > 0 too.
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+        let cfg = EvolveConfig {
+            diversity_alpha: 0.3,
+            ..tiny_config()
+        };
+        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        let best_fitness: Vec<f64> = result
+            .best_per_generation
+            .iter()
+            .map(|(_, f)| *f)
+            .collect();
+        for w in best_fitness.windows(2) {
+            assert!(
+                w[1] >= w[0],
+                "best fitness regressed under diversity alpha: {} -> {} (elitism should still be raw-fitness)",
+                w[0],
+                w[1],
+            );
+        }
+    }
+
+    #[test]
+    fn diversity_alpha_widens_final_population_diversity() {
+        // Integration test for the headline claim: at alpha > 0 the final
+        // population's mean pairwise Jaccard distance is greater than at
+        // alpha = 0 with every other config identical.
+        //
+        // Needs strong selection (k=5) so alpha=0 actually collapses
+        // within the test budget — at tiny_config's k=2 the selection
+        // pressure is too weak for the effect to dominate mutation noise
+        // in 8 generations.
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+        let cfg_zero = EvolveConfig {
+            pop_size: 20,
+            generations: 15,
+            n_per_side: 1,
+            tournament_k: 5,
+            base_seed: 0xD1_E9,
+            diversity_alpha: 0.0,
+            ..tiny_config()
+        };
+        let cfg_diverse = EvolveConfig {
+            diversity_alpha: 0.5,
+            ..cfg_zero.clone()
+        };
+        let r_zero = evolve(&reg, &pool, &gauntlet, &cfg_zero, &mut |_, _| {});
+        let r_diverse = evolve(&reg, &pool, &gauntlet, &cfg_diverse, &mut |_, _| {});
+        let d_zero = super::super::diversity::mean_pairwise_distance(&r_zero.final_population);
+        let d_diverse =
+            super::super::diversity::mean_pairwise_distance(&r_diverse.final_population);
+        assert!(
+            d_diverse > d_zero,
+            "alpha=0.5 final pop diversity ({d_diverse:.3}) should exceed alpha=0 ({d_zero:.3})",
+        );
     }
 
     #[test]

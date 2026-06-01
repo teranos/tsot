@@ -39,6 +39,13 @@ pub struct EvolveArgs {
     /// Top-K individuals carry their cached fitness unchanged.
     #[arg(long, default_value_t = 1)]
     pub elite: usize,
+    /// Diversity-preserving selection coefficient. Tournament reads
+    /// `fitness - alpha · mean_jaccard_to_others`. `0.0` (default) is
+    /// vanilla selection — byte-identical to pre-diversity-aware runs.
+    /// Useful range roughly `[0.05, 0.3]`. Elitism still carries by
+    /// raw fitness so the best-of-generation trace stays monotonic.
+    #[arg(long = "diversity-alpha", default_value_t = 0.0)]
+    pub diversity_alpha: f64,
     /// Stop after K consecutive generations at fitness 1.0.
     #[arg(long = "stop-at-ceiling")]
     pub stop_at_ceiling: Option<usize>,
@@ -120,12 +127,13 @@ pub fn run_ea(
         stop_at_ceiling: args.stop_at_ceiling,
         pinned_card_id: None,
         pinned_count: 0,
+        diversity_alpha: args.diversity_alpha,
     };
 
     println!();
     println!("=== EA mode ===");
     println!(
-        "  pop={} gens={} n={} seed={:#x} tournament_k={} rate={} elite={} stop_at_ceiling={:?}",
+        "  pop={} gens={} n={} seed={:#x} tournament_k={} rate={} elite={} stop_at_ceiling={:?} diversity_alpha={}",
         cfg.pop_size,
         cfg.generations,
         cfg.n_per_side,
@@ -134,6 +142,7 @@ pub fn run_ea(
         cfg.mutation_rate,
         cfg.elite_count,
         cfg.stop_at_ceiling,
+        cfg.diversity_alpha,
     );
     println!();
 
@@ -289,7 +298,14 @@ pub fn run_ea(
     );
     println!();
     println!("=== Top 5 final-population genomes ===");
-    for (rank, (genome, fit)) in result.final_population.iter().take(5).enumerate() {
+    let top_n = result.final_population.len().min(5);
+    let top_sets: Vec<std::collections::BTreeSet<String>> = result
+        .final_population
+        .iter()
+        .take(top_n)
+        .map(|(g, _)| g.iter().cloned().collect())
+        .collect();
+    for (rank, (genome, fit)) in result.final_population.iter().take(top_n).enumerate() {
         println!();
         print_deck_listing(&format!("rank {} (fitness {:.3})", rank + 1, fit), genome);
         match fitness_breakdown(
@@ -307,6 +323,25 @@ pub fn run_ea(
                 println!("    (re-eval total {:.3})", b.total);
             }
             Err(e) => println!("  per-opponent: <error: {e}>"),
+        }
+        // Pairwise Jaccard against the other top-N — the diversity-
+        // penalty audit. A row of `0.9+` against every other rank means
+        // the top-N are slot-variations of one attractor; a row of
+        // `~0.4` means they're distinct archetypes.
+        if top_n > 1 {
+            print!("  jaccard vs top-{top_n}:");
+            let mut sum = 0.0_f64;
+            let mut paired = 0u32;
+            for j in 0..top_n {
+                if j == rank {
+                    continue;
+                }
+                let jacc = crate::sim::diversity::jaccard(&top_sets[rank], &top_sets[j]);
+                print!("  r{}={:.2}", j + 1, jacc);
+                sum += jacc;
+                paired += 1;
+            }
+            println!("    (mean {:.2})", sum / paired as f64);
         }
     }
 
