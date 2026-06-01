@@ -191,6 +191,8 @@ fn probe_one_card(
         mutation_rate: args.rate,
         elite_count: args.elite,
         stop_at_ceiling: None,
+        stop_at_plateau: None,
+        plateau_epsilon: 0.0,
         pinned_card_id: Some(card.id.clone()),
         pinned_count: args.pinned_count.min(3),
         diversity_alpha: 0.0,

@@ -39,6 +39,13 @@ ALPHA  ?= 0.3
 # 0 to disable, or bump higher for a one-shot bulk promotion.
 PROMOTE ?= 1
 
+# Early stop for `make evolve*`: halt when best-of-generation has
+# improved by `<= PLATEAU_EPS` for `PLATEAU_K` consecutive generations.
+# Elitism guarantees monotonic non-decreasing best, so PLATEAU_K=4 with
+# eps=0.010 means "less than 1% improvement four turns in a row → done."
+PLATEAU_K   ?= 4
+PLATEAU_EPS ?= 0.010
+
 .PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool archetypes prune-champions probe probe-long
 
 help:
@@ -81,6 +88,7 @@ evolve:
 	echo "=== round $$N (seed=$$SEED, gauntlet: 5 baselines + $$NUM extras, alpha=$(ALPHA)) ==="; \
 	cargo run --release -- evolve --seed $$SEED --stop-at-ceiling 3 --save-top 5 \
 		--diversity-alpha $(ALPHA) \
+		--stop-at-plateau $(PLATEAU_K) --plateau-eps $(PLATEAU_EPS) \
 		$$EXTRAS --save $(CHAMPS)/r$$N.json
 
 evolve-shallow:
@@ -98,6 +106,7 @@ evolve-shallow:
 	cargo run --release -- evolve --seed $$SEED \
 		--pop 25 --gens 10 --n 5 --stop-at-ceiling 3 \
 		--diversity-alpha $(ALPHA) \
+		--stop-at-plateau $(PLATEAU_K) --plateau-eps $(PLATEAU_EPS) \
 		--save-top 5 \
 		$$EXTRAS --save $(CHAMPS)/r$$N.json
 
@@ -116,6 +125,7 @@ evolve-deep:
 	cargo run --release -- evolve --seed $$SEED \
 		--pop 100 --gens 100 --n 30 --tournament-k 5 --elite 3 --stop-at-ceiling 5 \
 		--diversity-alpha $(ALPHA) \
+		--stop-at-plateau $(PLATEAU_K) --plateau-eps $(PLATEAU_EPS) \
 		--save-top 5 \
 		$$EXTRAS --save $(CHAMPS)/r$$N.json
 

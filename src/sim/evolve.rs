@@ -51,6 +51,15 @@ pub struct EvolveConfig {
     /// `k >= 2` recommended because n=10's stddev=0.043 means a single
     /// 1.000 measurement is a noisy observation, not proof.
     pub stop_at_ceiling: Option<usize>,
+    /// If `Some(k)`, terminate when the best-of-generation has improved
+    /// by at most `plateau_epsilon` for `k` consecutive generations.
+    /// Together with elitism's monotonic-non-decreasing guarantee, this
+    /// halts runs that have visibly plateaued well below the ceiling.
+    /// `None` = disabled.
+    pub stop_at_plateau: Option<usize>,
+    /// Per-generation best-fitness improvement threshold paired with
+    /// `stop_at_plateau`. Ignored when `stop_at_plateau` is `None`.
+    pub plateau_epsilon: f64,
     /// `balance-probe` support: force every genome to contain at least
     /// `pinned_count` copies of `pinned_card_id`. Initial population is
     /// seeded with the pin, and after mutate+repair the pin is re-
@@ -86,6 +95,8 @@ impl Default for EvolveConfig {
             mutation_rate: 0.03,
             elite_count: 1,
             stop_at_ceiling: None,
+            stop_at_plateau: None,
+            plateau_epsilon: 0.0,
             pinned_card_id: None,
             pinned_count: 0,
             diversity_alpha: 0.0,
@@ -141,6 +152,32 @@ pub fn should_stop_at_ceiling(best_history: &[(Vec<String>, f64)], k: usize) -> 
         .rev()
         .take(k)
         .all(|(_, f)| *f >= 1.0 - f64::EPSILON)
+}
+
+/// True if the last `k` consecutive deltas in `best_history` are each
+/// `<= eps`. Used by [`evolve`] to terminate runs that have plateaued
+/// well below the ceiling — k=3 + eps=0.010 means "best fitness
+/// improved by at most 0.010 over each of the last 3 generations."
+///
+/// Requires `k + 1` entries to evaluate `k` deltas; fewer → no stop.
+/// Elitism guarantees `best_history` is monotonically non-decreasing,
+/// so `delta = next - prev >= 0` always.
+pub fn should_stop_at_plateau(
+    best_history: &[(Vec<String>, f64)],
+    k: usize,
+    eps: f64,
+) -> bool {
+    if k == 0 || best_history.len() < k + 1 {
+        return false;
+    }
+    let n = best_history.len();
+    for i in (n - k)..n {
+        let delta = best_history[i].1 - best_history[i - 1].1;
+        if delta > eps {
+            return false;
+        }
+    }
+    true
 }
 
 /// Callback fired after each generation is fully scored and sorted.
@@ -283,6 +320,11 @@ pub fn evolve(
                 break;
             }
         }
+        if let Some(k) = cfg.stop_at_plateau {
+            if should_stop_at_plateau(&best_per_generation, k, cfg.plateau_epsilon) {
+                break;
+            }
+        }
     }
 
     EvolveResult {
@@ -358,6 +400,8 @@ mod tests {
             mutation_rate: 0.05,
             elite_count: 1,
             stop_at_ceiling: None,
+            stop_at_plateau: None,
+            plateau_epsilon: 0.0,
             pinned_card_id: None,
             pinned_count: 0,
             diversity_alpha: 0.0,
@@ -399,6 +443,55 @@ mod tests {
             .map(|(g, _)| g.clone())
             .collect();
         assert_eq!(g_1, g_2, "final genomes diverged across identical evolve runs");
+    }
+
+    #[test]
+    fn should_stop_at_plateau_replays_user_example() {
+        // The trace from the user's actual evolve run that motivated this
+        // heuristic. With k=3 and eps=0.010 the predicate must turn true
+        // at gen 18 — after the 0.940→0.943→0.943→0.950 plateau.
+        let g = |f: f64| (vec!["x".to_string()], f);
+        let trace = [
+            0.737, 0.737, 0.770, 0.780, 0.783, 0.863, 0.863, 0.880, 0.887, 0.910, 0.927, 0.940,
+            0.943, 0.943, 0.950,
+        ]; // gens 4..=18 from the user's paste, sliced to the relevant tail
+        let history: Vec<(Vec<String>, f64)> = trace.iter().map(|f| g(*f)).collect();
+        // Sanity: predicate not true mid-trace where deltas exceed eps.
+        assert!(!should_stop_at_plateau(&history[..6], 3, 0.010));
+        // Tail [.. 0.940, 0.943, 0.943, 0.950] has three deltas
+        // {0.003, 0.000, 0.007}, all <= 0.010 → halt.
+        assert!(
+            should_stop_at_plateau(&history, 3, 0.010),
+            "expected plateau halt at end of trace ({history:?})"
+        );
+    }
+
+    #[test]
+    fn should_stop_at_plateau_requires_k_plus_one_entries() {
+        let g = |f: f64| (vec!["x".to_string()], f);
+        assert!(!should_stop_at_plateau(&[], 3, 0.010), "empty");
+        assert!(
+            !should_stop_at_plateau(&[g(0.5), g(0.5), g(0.5)], 3, 0.010),
+            "k=3 needs at least 4 entries to evaluate 3 deltas"
+        );
+        assert!(
+            should_stop_at_plateau(&[g(0.5), g(0.5), g(0.5), g(0.5)], 3, 0.010),
+            "k=3 with 4 entries and all-zero deltas should halt"
+        );
+    }
+
+    #[test]
+    fn should_stop_at_plateau_rejects_a_large_delta_in_the_last_k() {
+        let g = |f: f64| (vec!["x".to_string()], f);
+        // Last three deltas: 0.005, 0.020, 0.003 — middle one > 0.010 → no halt.
+        let history = [g(0.5), g(0.505), g(0.525), g(0.528)];
+        assert!(!should_stop_at_plateau(&history, 3, 0.010));
+    }
+
+    #[test]
+    fn should_stop_at_plateau_k_zero_never_halts() {
+        let g = |f: f64| (vec!["x".to_string()], f);
+        assert!(!should_stop_at_plateau(&[g(1.0), g(1.0), g(1.0)], 0, 0.010));
     }
 
     #[test]
@@ -528,7 +621,7 @@ mod tests {
             ..tiny_config()
         };
         let cfg_diverse = EvolveConfig {
-            diversity_alpha: 0.5,
+            diversity_alpha: 1.0,
             ..cfg_zero.clone()
         };
         let r_zero = evolve(&reg, &pool, &gauntlet, &cfg_zero, &mut |_, _| {});

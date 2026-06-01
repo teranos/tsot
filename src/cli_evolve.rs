@@ -49,6 +49,15 @@ pub struct EvolveArgs {
     /// Stop after K consecutive generations at fitness 1.0.
     #[arg(long = "stop-at-ceiling")]
     pub stop_at_ceiling: Option<usize>,
+    /// Stop when best-of-generation has improved by `<= --plateau-eps`
+    /// for K consecutive generations. Off when unset; pairs with
+    /// `--plateau-eps` (default 0.010 if K is set).
+    #[arg(long = "stop-at-plateau")]
+    pub stop_at_plateau: Option<usize>,
+    /// Per-generation best-fitness improvement threshold paired with
+    /// `--stop-at-plateau`. Ignored when `--stop-at-plateau` is unset.
+    #[arg(long = "plateau-eps", default_value_t = 0.010)]
+    pub plateau_eps: f64,
     /// Skip building the variant gauntlet. Requires at least one --extra.
     #[arg(long = "no-variants")]
     pub no_variants: bool,
@@ -125,6 +134,8 @@ pub fn run_ea(
         mutation_rate: args.rate,
         elite_count: args.elite,
         stop_at_ceiling: args.stop_at_ceiling,
+        stop_at_plateau: args.stop_at_plateau,
+        plateau_epsilon: args.plateau_eps,
         pinned_card_id: None,
         pinned_count: 0,
         diversity_alpha: args.diversity_alpha,
@@ -133,7 +144,7 @@ pub fn run_ea(
     println!();
     println!("=== EA mode ===");
     println!(
-        "  pop={} gens={} n={} seed={:#x} tournament_k={} rate={} elite={} stop_at_ceiling={:?} diversity_alpha={}",
+        "  pop={} gens={} n={} seed={:#x} tournament_k={} rate={} elite={} stop_at_ceiling={:?} stop_at_plateau={:?} plateau_eps={} diversity_alpha={}",
         cfg.pop_size,
         cfg.generations,
         cfg.n_per_side,
@@ -142,6 +153,8 @@ pub fn run_ea(
         cfg.mutation_rate,
         cfg.elite_count,
         cfg.stop_at_ceiling,
+        cfg.stop_at_plateau,
+        cfg.plateau_epsilon,
         cfg.diversity_alpha,
     );
     println!();
