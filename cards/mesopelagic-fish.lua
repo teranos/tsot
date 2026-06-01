@@ -43,6 +43,7 @@ return {
     if not game.confirm("return a non-creature card from your graveyard?") then
       return
     end
+    game.set_intent("recur")
     local target = game.choose_card(pool, {prompt = "return from graveyard"})
     if not target then return end
     game.move(target, "hand")

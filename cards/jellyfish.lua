@@ -24,6 +24,7 @@ return {
 		for _, iid in ipairs(game.zones(opp).board) do
 			table.insert(pool, iid)
 		end
+		game.set_intent("remove_threat")
 		local target = game.choose_card(pool, { optional = true, prompt = "bounce a creature" })
 		if target then
 			game.move(target, "hand")

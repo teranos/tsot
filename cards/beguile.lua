@@ -38,6 +38,7 @@ return {
       end
     end
     if #pool == 0 then return end
+    game.set_intent("remove_threat")
     local target = game.choose_card(pool, {prompt = "gain control of"})
     if not target then return end
     game.move_to(target, self.owner, "board")

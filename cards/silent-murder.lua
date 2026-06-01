@@ -37,6 +37,7 @@ return {
       end
     end
     if #pool == 0 then return end
+    game.set_intent("remove_threat")
     local target = game.choose_card(pool, {prompt = "kill target creature"})
     if not target then return end
     local card = game.card(target)

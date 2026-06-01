@@ -29,6 +29,7 @@ return {
       end
     end
     if #pool == 0 then return end
+    game.set_intent("remove_threat")
     local target = game.choose_card(pool, {prompt = "condemn which tapped creature?"})
     if target then
       game.move(target, "graveyard")

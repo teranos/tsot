@@ -32,6 +32,7 @@ return {
       end
     end
     if #pool == 0 then return end
+    game.set_intent("steal")
     local target = game.choose_card(pool, {prompt = "strip attached from"})
     if not target then return end
     local tcard = game.card(target)

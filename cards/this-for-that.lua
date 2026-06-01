@@ -62,8 +62,10 @@ return {
     end
     if #creatures == 0 then return end
 
+    game.set_intent("low_value_own")
     local give = game.choose_card(givables, {prompt = "give which non-creature to opponent?"})
     if not give then return end
+    game.set_intent("remove_threat")
     local take = game.choose_card(creatures, {prompt = "take which creature?"})
     if not take then return end
 
