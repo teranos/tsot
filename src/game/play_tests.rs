@@ -41,6 +41,7 @@ fn play_subsystem_round_trips_through_journal() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     )
@@ -90,6 +91,7 @@ fn play_creature_with_hand_cost_attaches_payments() {
         sacrifice_ids: vec![],
         mutation_target: None,
         gy_hand_payment_ids: vec![],
+        attached_payment_ids: vec![],
     };
     assert!(s
         .play_card(PlayerId::A, &creature, choices, None)
@@ -163,6 +165,7 @@ fn play_combined_hand_and_mill_cost() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -207,6 +210,7 @@ fn play_card_errors_when_hand_payment_count_wrong() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -243,6 +247,7 @@ fn play_card_errors_when_paying_with_self() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -274,6 +279,7 @@ fn play_card_errors_on_duplicate_hand_payment() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -384,6 +390,7 @@ fn jewel_tap_substitutes_for_one_hand_slot() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -418,6 +425,7 @@ fn jewel_tap_rejected_when_jewel_tapped() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -439,6 +447,7 @@ fn jewel_tap_rejected_on_color_mismatch() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -460,6 +469,7 @@ fn jewel_tap_rejected_on_non_jewel_artifact() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -481,6 +491,7 @@ fn jewel_tap_rejected_when_cast_has_no_hand_cost() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -511,6 +522,7 @@ fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -570,6 +582,7 @@ fn crystal_tap_matches_by_attached_card_color() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -616,6 +629,7 @@ fn crystal_tap_rejected_when_no_attached_color_matches() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -656,6 +670,7 @@ fn sacrifice_cost_moves_victim_to_graveyard() {
             sacrifice_ids: vec![victim.clone()],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -684,6 +699,7 @@ fn sacrifice_count_mismatch_errors() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -711,6 +727,7 @@ fn sacrifice_rejected_when_victim_not_on_board() {
             sacrifice_ids: vec![phantom.clone()],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -734,6 +751,7 @@ fn sacrifice_rejected_when_opponent_controls_victim() {
             sacrifice_ids: vec![opp_card.clone()],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -875,6 +893,7 @@ fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
@@ -982,6 +1001,7 @@ fn surge_instant_untaps_all_your_creatures_on_play() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         Some(&mut crate::game::EventContext::lua_only(registry.lua())),
     )
@@ -1171,6 +1191,7 @@ fn counterspell_resolves_and_removes_underlying_cast() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
     };
     s.open_response_window(a_cast).unwrap();
@@ -1344,6 +1365,7 @@ fn hand_payment_color_match_succeeds() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -1368,6 +1390,7 @@ fn hand_payment_color_mismatch_rejected() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -1394,6 +1417,7 @@ fn hand_payment_symbol_match_succeeds_across_colors() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -1423,6 +1447,7 @@ fn hand_payment_matches_when_any_of_multiple_symbols_overlap() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -1455,6 +1480,7 @@ fn hand_payment_rejected_when_multi_symbol_sets_disjoint() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -1483,6 +1509,7 @@ fn hand_payment_colorless_cast_takes_any_discard() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -1510,6 +1537,7 @@ fn hand_payment_no_identity_pay_cannot_satisfy_identified_cast() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -1537,6 +1565,7 @@ fn hand_payment_no_symbol_discard_cannot_pay_for_symboled_cast() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -2171,6 +2200,7 @@ fn clear_view_fills_one_hand_slot_of_a_two_hand_cast() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![cv.clone()],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -2229,6 +2259,7 @@ fn clear_view_cannot_pay_alone_for_one_hand_colored_cast() {
             sacrifice_ids: vec![],
             mutation_target: None,
             gy_hand_payment_ids: vec![cv.clone()],
+            attached_payment_ids: vec![],
         },
         None,
     );
@@ -2236,6 +2267,403 @@ fn clear_view_cannot_pay_alone_for_one_hand_colored_cast() {
     // Clear View stays in graveyard — no cost paid since cast rejected.
     assert!(s.a.graveyard.contains(&cv));
     assert!(!s.a.exile.contains(&cv));
+}
+
+/// Set up: A's hand has a card to cast plus host + attached fodder.
+/// Returns (state, cast_iid, host_iid, attached_iid). The host is moved
+/// to A's BOARD with the attached card in its attached pool.
+fn setup_attached_scenario() -> (GameState, InstanceId, InstanceId, InstanceId) {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    let host = s.a.hand[1].clone();
+    let attached = s.a.hand[2].clone();
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+    let _ = s.remove_from_zone(&attached, PlayerId::A, Zone::Hand);
+    s.add_attached(&host, &attached);
+    (s, cast, host, attached)
+}
+
+#[test]
+fn attached_cost_on_spell_exiles_payment() {
+    let (mut s, cast, host, attached) = setup_attached_scenario();
+    // Turn the cast into a spell (non-BOARD destination → P.31 exile branch).
+    let entry = s.card_pool.get_mut(&cast).unwrap();
+    entry.card.kind = CardType::Spell;
+    entry.card.timing = Some(crate::card::Timing::Instant);
+    entry.card.stats = None;
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Attached,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            attached_payment_ids: vec![attached.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    assert!(s.a.exile.contains(&attached), "attached payment → exile");
+    let host_attached = &s.card_pool.get(&host).unwrap().attached;
+    assert!(!host_attached.contains(&attached), "no longer attached to host");
+}
+
+#[test]
+fn attached_cost_on_creature_transfers_payment_to_new_host() {
+    let (mut s, cast, host, attached) = setup_attached_scenario();
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Attached,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            attached_payment_ids: vec![attached.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    assert!(s.a.board.contains(&cast), "cast on A's board");
+    let new_host_attached = &s.card_pool.get(&cast).unwrap().attached;
+    assert!(new_host_attached.contains(&attached), "attached transferred to new host");
+    let old_host_attached = &s.card_pool.get(&host).unwrap().attached;
+    assert!(!old_host_attached.contains(&attached), "removed from old host");
+    assert!(!s.a.exile.contains(&attached), "not exiled — transferred");
+}
+
+#[test]
+fn attached_cost_wrong_count_errors() {
+    let (mut s, cast, _host, _attached) = setup_attached_scenario();
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Attached,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let result = s.play_card(PlayerId::A, &cast, PlayChoices::default(), None);
+    assert_eq!(
+        result,
+        Err(PlayError::WrongAttachedPaymentCount { expected: 1, got: 0 })
+    );
+}
+
+#[test]
+fn attached_cost_payment_not_on_your_board_errors() {
+    let (mut s, cast, _host, _attached) = setup_attached_scenario();
+    // B has an attached card on B's board.
+    let b_host = s.b.hand[0].clone();
+    let b_attached = s.b.hand[1].clone();
+    let _ = s.move_card(&b_host, PlayerId::B, Zone::Hand, Zone::Board);
+    let _ = s.remove_from_zone(&b_attached, PlayerId::B, Zone::Hand);
+    s.add_attached(&b_host, &b_attached);
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Attached,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    // A tries to pay with B's attached card.
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            attached_payment_ids: vec![b_attached.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(
+        result,
+        Err(PlayError::AttachedPaymentInvalid(b_attached))
+    );
+}
+
+#[test]
+fn attached_cost_duplicate_payment_errors() {
+    let (mut s, cast, _host, attached) = setup_attached_scenario();
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 2,
+            source: CostSource::Attached,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            attached_payment_ids: vec![attached.clone(), attached.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(
+        result,
+        Err(PlayError::DuplicateAttachedPayment(attached))
+    );
+}
+
+#[test]
+fn zero_y_creature_dies_per_c15_after_attached_detached_as_cost() {
+    // C.15: a creature whose effective Y drops to ≤ 0 dies. Set up a
+    // Hollow-shape creature on board: base stats 0/0, static
+    // +attached/+attached. With 1 attached, effective_y = 1. Detach
+    // that attached as cost for a spell. After the cast resolves, the
+    // creature's effective Y is 0 and it must be in GRAVEYARD.
+    use crate::card::{ModifierValue, Restriction, StaticAffects, StaticDef};
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let host_cast = s.a.hand[0].clone();
+    let attached = s.a.hand[1].clone();
+    let spell = s.a.hand[2].clone();
+    let _ = s.move_card(&host_cast, PlayerId::A, Zone::Hand, Zone::Board);
+    // Make host_cast a Hollow-style 0/0 +attached/+attached creature.
+    {
+        let inst = s.card_pool.get_mut(&host_cast).unwrap();
+        inst.card.kind = CardType::Creature;
+        inst.card.stats = Some(crate::card::Stats { x: 0, y: 0 });
+        inst.card.static_def = Some(StaticDef {
+            affects: StaticAffects {
+                subtypes: vec![],
+                colors: vec![],
+                controller: None,
+                exclude_self: false,
+                scope: crate::card::StaticScope::SourceOnly,
+                kind: None,
+                has_keyword: None,
+            },
+            modifier_x: ModifierValue::AttachedCount,
+            modifier_y: ModifierValue::AttachedCount,
+            modifier_keyword: None,
+            condition: None,
+            restrictions: Vec::<Restriction>::new(),
+            cost_modifiers: vec![],
+            granted_activated: None,
+            granted_colors: vec![],
+        });
+    }
+    let _ = s.remove_from_zone(&attached, PlayerId::A, Zone::Hand);
+    s.add_attached(&host_cast, &attached);
+    // Sanity: host_cast has effective Y = 1 right now.
+    let (_, y_before) = s.effective_stats(&host_cast);
+    assert_eq!(y_before, 1, "precondition: hollow's y should be 1");
+    // Set up the spell: 1 attached cost. Spell type so attached → EXILE.
+    {
+        let inst = s.card_pool.get_mut(&spell).unwrap();
+        inst.card.kind = CardType::Spell;
+        inst.card.timing = Some(crate::card::Timing::Instant);
+        inst.card.stats = None;
+    }
+    set_cost(
+        &mut s,
+        &spell,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Attached,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let result = s.play_card(
+        PlayerId::A,
+        &spell,
+        PlayChoices {
+            attached_payment_ids: vec![attached.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    assert!(s.a.exile.contains(&attached), "attached → exile (P.31 + sanity)");
+    assert!(
+        !s.a.board.contains(&host_cast),
+        "C.15: hollow at effective 0/0 must die"
+    );
+    assert!(
+        s.a.graveyard.contains(&host_cast),
+        "C.15: hollow lands in GRAVEYARD"
+    );
+}
+
+#[test]
+fn c15_neg_3_3_on_a_3_3_kills_via_effective_y_drop() {
+    // C.15: applying -3/-3 to a 3/3 leaves it at 0/0 → dies. The kill
+    // should fire from C.15's continuous check, not require the
+    // handler to manually move-to-graveyard.
+    use crate::game::state::Modifier;
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let victim = s.b.hand[0].clone();
+    let _ = s.move_card(&victim, PlayerId::B, Zone::Hand, Zone::Board);
+    {
+        let inst = s.card_pool.get_mut(&victim).unwrap();
+        inst.card.stats = Some(crate::card::Stats { x: 3, y: 3 });
+    }
+    // Apply -3/-3 EOT directly via the engine (skip the spell layer).
+    s.add_modifier(
+        &victim,
+        Modifier::EotStatBoost { x: -3, y: -3 },
+    );
+    // Run the post-mutation cleanup the engine should run on stat changes.
+    s.cleanup_zero_y_deaths(None);
+    assert!(
+        !s.b.board.contains(&victim),
+        "C.15: 3/3 + (-3/-3) = 0/0 must die"
+    );
+    assert!(s.b.graveyard.contains(&victim), "lands in GRAVEYARD");
+}
+
+#[test]
+fn live_bring_down_casts_with_attached_payment_and_exiles_it() {
+    // Smoke test against the real card registry: load bring-down,
+    // satisfy its 1 hand + 1 attached cost using a card actually
+    // attached to a host on A's board. Verify the attached card lands
+    // in EXILE per P.31's non-BOARD branch, and the action counter
+    // bumps. Proves the engine wiring works on live card data, not
+    // just synthetic test fixtures.
+    use crate::card::CardRegistry;
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let bring_down = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "bring-down")
+        .expect("bring-down loaded")
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    let pay_hand = s.a.hand[1].clone();
+    let host = s.a.hand[2].clone();
+    let attached = s.a.hand[3].clone();
+    // Wire the real card definition into the cast instance.
+    {
+        let inst = s.card_pool.get_mut(&cast).unwrap();
+        inst.card = bring_down;
+    }
+    // Ensure pay_hand identity-matches bring-down (purple).
+    set_identity(&mut s, &pay_hand, &["purple"], "");
+    // Host on board with one attached card.
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+    let _ = s.remove_from_zone(&attached, PlayerId::A, Zone::Hand);
+    s.add_attached(&host, &attached);
+    // B needs a creature on board for bring-down's target pool — give
+    // them one (handler picks one to apply -3/-3).
+    let b_creature = s.b.hand[0].clone();
+    let _ = s.move_card(&b_creature, PlayerId::B, Zone::Hand, Zone::Board);
+
+    let lua = registry.lua();
+    use rand::SeedableRng;
+    let rng = rand::rngs::StdRng::seed_from_u64(0xC0FFEE);
+    let mut oracle = crate::choice::RandomOracle::new(rng);
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![pay_hand.clone()],
+            attached_payment_ids: vec![attached.clone()],
+            ..PlayChoices::default()
+        },
+        Some(&mut EventContext::new(lua, &mut oracle)),
+    );
+    assert_eq!(result, Ok(()));
+    assert!(s.a.exile.contains(&attached), "attached → exile per P.31");
+    let host_attached = &s.card_pool.get(&host).unwrap().attached;
+    assert!(!host_attached.contains(&attached), "removed from host");
+    let bumps = s
+        .action_counts
+        .get("attached_payment_exile")
+        .map(|v| v[0])
+        .unwrap_or(0);
+    assert_eq!(bumps, 1);
+}
+
+#[test]
+fn transparent_rejected_as_hand_payment_for_board_placed_cast() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    // Cast: empty-identity creature (so it accepts any payment by P.7a).
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Hand,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    // Payment: transparent. Per C.14, illegal for board-placed cast.
+    set_identity(&mut s, &pay, &["transparent"], "");
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![pay.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::HandPaymentTransparentForBoardPlaced(pay)));
+}
+
+#[test]
+fn transparent_allowed_as_hand_payment_for_spell_cast() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    // Cast: a transparent spell (so P.7a identity matches transparent).
+    let entry = s.card_pool.get_mut(&cast).unwrap();
+    entry.card.kind = CardType::Spell;
+    entry.card.timing = Some(crate::card::Timing::Instant);
+    entry.card.stats = None;
+    set_identity(&mut s, &cast, &["transparent"], "");
+    set_identity(&mut s, &pay, &["transparent"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Hand,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![pay.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
 }
 
 #[test]

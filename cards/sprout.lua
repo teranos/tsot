@@ -3,7 +3,10 @@ return {
   name = "Sprout",
   colors = {"green"},
   type = "instant",
-  cost = {{amount = 1, source = "mill"}},
+  cost = {
+    {amount = 1, source = "mill"},
+    {amount = 1, source = "attached"},
+  },
   abilities = {
     "draw a card. you may put the bottom card of your deck on top.",
   },

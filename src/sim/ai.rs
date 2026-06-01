@@ -122,6 +122,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     let mut hand_need = 0usize;
     let mut mill_need = 0usize;
     let mut gy_need = 0usize;
+    let mut attached_need = 0usize;
     let mut sac_slots: Vec<Option<CardType>> = Vec::new();
     // Variable-X handling: an is_x component contributes X * (component
     // amount, typically 1) to its source's need. The AI doesn't pick X
@@ -144,27 +145,52 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
                     sac_slots.push(c.kind);
                 }
             }
+            CostSource::Attached => attached_need += amount,
             _ => return false,
         }
     }
     let hand_red = state.cost_reduction(iid, CostSource::Hand).max(0) as usize;
     let mill_red = state.cost_reduction(iid, CostSource::Mill).max(0) as usize;
     let gy_red = state.cost_reduction(iid, CostSource::Graveyard).max(0) as usize;
+    let att_red = state.cost_reduction(iid, CostSource::Attached).max(0) as usize;
     hand_need = hand_need.saturating_sub(hand_red);
     mill_need = mill_need.saturating_sub(mill_red);
     gy_need = gy_need.saturating_sub(gy_red);
+    attached_need = attached_need.saturating_sub(att_red);
     let p = state.player(player);
     // Identity-match: only hand cards sharing ≥1 element of the casting
     // card's identity set (colors ∪ symbol) count toward hand_have.
     // Colorless+no-symbol casts are wildcards; colorless+no-symbol
     // discards are NOT.
     let cast_ident = state.card_identity(iid);
+    // C.14: transparent cards can't pay for BOARD-placed casts.
+    let cast_is_board_placed = matches!(
+        inst.card.kind,
+        CardType::Creature | CardType::Artifact | CardType::Environment
+    );
+    let is_transparent = |h: &InstanceId| -> bool {
+        state
+            .card_pool
+            .get(h)
+            .map(|i| {
+                i.card
+                    .colors
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case("transparent"))
+            })
+            .unwrap_or(false)
+    };
     let hand_have_identity = if hand_need == 0 || cast_ident.is_empty() {
-        p.hand.len().saturating_sub(1)
+        p.hand
+            .iter()
+            .filter(|h| *h != iid)
+            .filter(|h| !cast_is_board_placed || !is_transparent(h))
+            .count()
     } else {
         p.hand
             .iter()
             .filter(|h| *h != iid)
+            .filter(|h| !cast_is_board_placed || !is_transparent(h))
             .filter(|h| {
                 let pay_ident = state.card_identity(h);
                 !cast_ident.is_disjoint(&pay_ident)
@@ -211,10 +237,84 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             }
         }
     }
+    let attached_have: usize = p
+        .board
+        .iter()
+        .filter_map(|hid| state.card_pool.get(hid))
+        .map(|inst| inst.attached.len())
+        .sum();
     hand_have >= hand_need
         && p.deck.len() >= mill_need
         && p.graveyard.len() >= gy_need
+        && attached_have >= attached_need
         && sac_ok
+}
+
+/// Sim heuristic: how valuable to KEEP this attached card vs spend
+/// it as P.31 ATTACHED-source payment? Higher = more valuable to keep
+/// = sorted later in the pick order. Weights are placeholders pending
+/// EA tuning — signals are fixed, magnitudes are guesses.
+pub fn attached_keep_value(state: &GameState, attached_iid: &InstanceId) -> i32 {
+    let Some(inst) = state.card_pool.get(attached_iid) else {
+        return 0;
+    };
+    let mut score: i32 = 0;
+    // (1) Spending a mutation loses its P.28 effect on the host.
+    if inst.card.kind == CardType::Mutation || inst.card.static_def.is_some() {
+        score += 20;
+    }
+    // (2) Host crystal tap-substitution (P.24b): an attached card is
+    // "load-bearing" for a crystal if removing it would drop the crystal
+    // to zero shared-color attached for some color. Approximation: penalize
+    // attached cards on crystal hosts where this is the only attached
+    // sharing each of its colors.
+    if let Some(host) = state.host_of(attached_iid).and_then(|h| state.card_pool.get(&h)) {
+        let is_crystal = host
+            .card
+            .subtypes
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("crystal"));
+        if is_crystal {
+            let my_colors: std::collections::BTreeSet<String> = inst
+                .card
+                .colors
+                .iter()
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            for color in &my_colors {
+                let sharers = host
+                    .attached
+                    .iter()
+                    .filter(|x| *x != attached_iid)
+                    .filter_map(|x| state.card_pool.get(x))
+                    .filter(|i| {
+                        i.card
+                            .colors
+                            .iter()
+                            .any(|c| c.eq_ignore_ascii_case(color))
+                    })
+                    .count();
+                if sharers == 0 {
+                    score += 10;
+                }
+            }
+        }
+        // (3) Static-granted activated ability via A.10. Spending the
+        // source card strips the granted ability from the host.
+        if inst
+            .card
+            .static_def
+            .as_ref()
+            .is_some_and(|d| d.granted_activated.is_some())
+        {
+            score += 15;
+        }
+        // (4) Shell redundancy: dilute per attached on the host.
+        // More crowded hosts mean lower marginal shell value per card.
+        let host_attached = host.attached.len().max(1) as i32;
+        score += 5 / host_attached;
+    }
+    score
 }
 
 /// Sim heuristic: how valuable would it be to KEEP this on-board card?
@@ -557,6 +657,8 @@ mod tests {
             activated: vec![],
             gy_hand_substitute: false,
             allow_x_zero: false,
+            is_variant: false,
+            variant_of: None,
         }
     }
 

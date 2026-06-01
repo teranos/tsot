@@ -8,7 +8,10 @@ return {
   name = "Pry",
   colors = {"black"},
   type = "instant",
-  cost = {{amount = 1, source = "mill"}},
+  cost = {
+    {amount = 1, source = "mill"},
+    {amount = 1, source = "attached"},
+  },
   abilities = {
     "draw a card. target opponent reveals 4 cards.",
   },

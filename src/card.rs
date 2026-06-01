@@ -1,7 +1,10 @@
+use include_dir::{include_dir, Dir};
 use mlua::{Function, Lua, LuaOptions, StdLib, Table, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+
+static EMBEDDED_CARDS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/cards");
 
 /// Owns the long-lived Lua VM and the cards loaded into it.
 ///
@@ -31,6 +34,23 @@ impl CardRegistry {
             }
         }
         let cards = load_cards_dir(&lua, dir)?;
+        Ok(Self { lua, cards })
+    }
+
+    /// Load every embedded card (compiled into the binary from
+    /// `$CARGO_MANIFEST_DIR/cards` at build time). Used by production
+    /// entry points so the runtime has no filesystem dependency — works
+    /// identically on native and on `wasm32-unknown-emscripten`.
+    pub fn load_embedded() -> mlua::Result<Self> {
+        let safe_libs = StdLib::MATH | StdLib::STRING | StdLib::TABLE | StdLib::COROUTINE;
+        let lua = Lua::new_with(safe_libs, LuaOptions::default())?;
+        {
+            let globals = lua.globals();
+            for forbidden in ["load", "loadstring", "loadfile", "dofile"] {
+                globals.set(forbidden, Value::Nil)?;
+            }
+        }
+        let cards = load_cards_embedded(&lua)?;
         Ok(Self { lua, cards })
     }
 
@@ -89,6 +109,7 @@ pub enum CostSource {
     Graveyard,
     Sacrifice,
     SelfExile,
+    Attached,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -259,6 +280,11 @@ pub enum ModifierValue {
     AttachedCountByColor(String),
     /// Count of attached cards whose `kind` matches.
     AttachedCountByKind(CardType),
+    /// `multiplier × attached_count`. Parsed from `"N*attached"` strings
+    /// in card .lua files. `"attached"` is equivalent to `"1*attached"`.
+    /// Lets a card scale a per-attached bonus without needing a new
+    /// hardcoded multiplier per design.
+    AttachedCountScaled(i32),
 }
 
 impl Default for ModifierValue {
@@ -417,6 +443,19 @@ pub struct Card {
     /// owning `CardRegistry` VM and must be re-bound after deserialize.
     #[serde(skip, default)]
     pub activated: Vec<ActivatedAbility>,
+    /// Balance-probe variant marker. True for cards loaded from a
+    /// `variants = { [key] = { overrides } }` block in another card's
+    /// .lua file. Variants are excluded from `main.rs::playable_pool`
+    /// so they don't pollute `make evolve` / champions / gauntlets;
+    /// `tsot balance-probe` is the only consumer that picks them up.
+    #[serde(default)]
+    pub is_variant: bool,
+    /// If this card was loaded as a variant, the base card's id (the
+    /// id of the .lua file's outer `id = ...`). Used by `tsot balance-
+    /// probe` to expand `probe BASE_ID` into the base + all its
+    /// variants without forcing the user to list them.
+    #[serde(default)]
+    pub variant_of: Option<String>,
 }
 
 /// One activated ability declared on a card. Cost has two parts:
@@ -505,6 +544,7 @@ fn parse_source(s: &str) -> Result<CostSource, String> {
         "graveyard" => Ok(CostSource::Graveyard),
         "sacrifice" => Ok(CostSource::Sacrifice),
         "self" => Ok(CostSource::SelfExile),
+        "attached" => Ok(CostSource::Attached),
         other => Err(format!("unknown cost source: {other}")),
     }
 }
@@ -978,6 +1018,7 @@ fn parse_one_activated_entry(item: Table) -> mlua::Result<ActivatedAbility> {
 /// - Nil → `Fixed(0)` (back-compat for omitted entries)
 /// - Integer N → `Fixed(N)`
 /// - String "attached" → `AttachedCount`
+/// - String "N*attached" (e.g., "2*attached") → `AttachedCountScaled(N)`
 /// - String "attached:type:<kind>" → `AttachedCountByKind(kind)`
 /// - String "attached:<color>" → `AttachedCountByColor(color)` (fallback)
 fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
@@ -986,10 +1027,21 @@ fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
         Value::Integer(n) => Ok(ModifierValue::Fixed(n as i32)),
         Value::Number(n) => Ok(ModifierValue::Fixed(n as i32)),
         Value::String(s) => {
-            let s = s.to_str()?.to_string();
-            let lower = s.to_ascii_lowercase();
+            let raw = s.to_str()?.to_string();
+            let lower = raw.to_ascii_lowercase().replace(' ', "");
             if lower == "attached" {
                 return Ok(ModifierValue::AttachedCount);
+            }
+            // `N*attached` form (e.g., "2*attached", "3*attached").
+            if let Some((mul_str, tail)) = lower.split_once('*') {
+                if tail == "attached" {
+                    let n: i32 = mul_str.parse().map_err(|_| {
+                        mlua::Error::runtime(format!(
+                            "modifier value 'N*attached' multiplier must be an integer, got {mul_str:?}"
+                        ))
+                    })?;
+                    return Ok(ModifierValue::AttachedCountScaled(n));
+                }
             }
             if let Some(kind_str) = lower.strip_prefix("attached:type:") {
                 let (kind, _) = parse_type(kind_str).map_err(|e| {
@@ -1003,7 +1055,7 @@ fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
                 return Ok(ModifierValue::AttachedCountByColor(rest.to_string()));
             }
             Err(mlua::Error::runtime(format!(
-                "modifier value string must be 'attached', 'attached:<color>', or 'attached:type:<kind>', got {s:?}"
+                "modifier value string must be 'attached', 'N*attached', 'attached:<color>', or 'attached:type:<kind>', got {raw:?}"
             )))
         }
         other => Err(mlua::Error::runtime(format!(
@@ -1029,24 +1081,12 @@ fn read_condition(c: &Table) -> mlua::Result<StaticCondition> {
     }
 }
 
-pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
-    let source = fs::read_to_string(path).map_err(mlua::Error::external)?;
-    let chunk_name = path.display().to_string();
-    let value: Value = lua.load(&source).set_name(chunk_name).eval()?;
-    let table = match value {
-        Value::Table(t) => t,
-        other => {
-            return Err(mlua::Error::runtime(format!(
-                "card file must return a table, got {other:?}"
-            )))
-        }
-    };
-
+/// Parse a single Lua table into a `Card`. Handles every field except
+/// `variants` (which lives at the file level — see `load_card`). Reused
+/// by both the base-card path and the per-variant merged-table path.
+fn parse_card_table(table: &Table) -> mlua::Result<Card> {
     let id: String = table.get("id")?;
     let name = table.get::<Option<String>>("name")?.unwrap_or_default();
-    // Accept either `symbols = {"X", "Y"}` (explicit array) or the
-    // single-shorthand `symbol = "X"` (wrapped to a one-element Vec).
-    // If both present, `symbols` wins.
     let symbols: Vec<String> = match table.get::<Option<Value>>("symbols")? {
         Some(Value::Table(t)) => {
             let mut out = Vec::new();
@@ -1068,30 +1108,29 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     };
     let kind_s = table.get::<Option<String>>("type")?.unwrap_or_default();
     let (kind, timing) = parse_type(&kind_s).map_err(mlua::Error::runtime)?;
-    let subtypes = read_string_vec(&table, "subtypes")?;
-    let cannot_block_subtypes = read_string_vec(&table, "cannot_block_subtypes")?
+    let subtypes = read_string_vec(table, "subtypes")?;
+    let cannot_block_subtypes = read_string_vec(table, "cannot_block_subtypes")?
         .into_iter()
         .map(|s| s.to_ascii_lowercase())
         .collect();
-    let can_block_subtypes = read_string_vec(&table, "can_block_subtypes")?
+    let can_block_subtypes = read_string_vec(table, "can_block_subtypes")?
         .into_iter()
         .map(|s| s.to_ascii_lowercase())
         .collect();
-    let abilities = read_string_vec(&table, "abilities")?;
+    let abilities = read_string_vec(table, "abilities")?;
     let flavor = table.get::<Option<String>>("flavor")?.unwrap_or_default();
-    let colors = read_color_vec(&table)?;
-    let cost = read_cost(&table)?;
-    let stats = read_stats(&table)?;
-    let static_def = read_static(&table)?;
-    let handlers = read_handlers(&table)?;
-    let activated = read_activated(&table)?;
+    let colors = read_color_vec(table)?;
+    let cost = read_cost(table)?;
+    let stats = read_stats(table)?;
+    let static_def = read_static(table)?;
+    let handlers = read_handlers(table)?;
+    let activated = read_activated(table)?;
     let gy_hand_substitute = table
         .get::<Option<bool>>("gy_hand_substitute")?
         .unwrap_or(false);
     let allow_x_zero = table
         .get::<Option<bool>>("allow_x_zero")?
         .unwrap_or(false);
-
     Ok(Card {
         id,
         name,
@@ -1111,7 +1150,79 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         gy_hand_substitute,
         allow_x_zero,
         activated,
+        is_variant: false,
+        variant_of: None,
     })
+}
+
+/// Load a card .lua file. Returns the base card followed by any
+/// variant cards declared in the file's `variants = { [key] = { ... }
+/// }` table. Each variant id is `{base_id}-{key}`. The variant table
+/// REPLACES top-level fields wholesale (no deep merge) — to tweak a
+/// single ability, copy the whole `activated` array into the variant
+/// with the tweak. Variants get `is_variant = true` and
+/// `variant_of = Some(base_id)` so `main.rs::playable_pool` can
+/// exclude them and `tsot balance-probe` can pick them up.
+pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Vec<Card>> {
+    let source = fs::read_to_string(path).map_err(mlua::Error::external)?;
+    let chunk_name = path.display().to_string();
+    load_card_from_source(lua, &source, &chunk_name)
+}
+
+fn load_card_from_source(lua: &Lua, source: &str, chunk_name: &str) -> mlua::Result<Vec<Card>> {
+    let value: Value = lua.load(source).set_name(chunk_name.to_string()).eval()?;
+    let table = match value {
+        Value::Table(t) => t,
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "card file must return a table, got {other:?}"
+            )))
+        }
+    };
+
+    let base = parse_card_table(&table)?;
+    let base_id = base.id.clone();
+
+    let variants_table: Option<Table> = table.get("variants")?;
+    let mut out: Vec<Card> = vec![base];
+    if let Some(vt) = variants_table {
+        // Snapshot the base table's keys ONCE so we can replay them
+        // into a merged table per variant. We skip `variants` itself
+        // to avoid recursion.
+        let mut base_pairs: Vec<(Value, Value)> = Vec::new();
+        for pair in table.pairs::<Value, Value>() {
+            let (k, v) = pair?;
+            if let Value::String(ks) = &k {
+                if ks.to_str()? == "variants" {
+                    continue;
+                }
+            }
+            base_pairs.push((k, v));
+        }
+        for pair in vt.pairs::<String, Table>() {
+            let (key, override_table) = pair?;
+            // Build a merged Lua table: base keys, then variant
+            // overrides on top. Top-level fields are replaced
+            // wholesale; nested fields are not deep-merged.
+            let merged = lua.create_table()?;
+            for (k, v) in &base_pairs {
+                merged.set(k.clone(), v.clone())?;
+            }
+            for p in override_table.pairs::<Value, Value>() {
+                let (k, v) = p?;
+                merged.set(k, v)?;
+            }
+            // Force the variant id; the base's `id` field carried
+            // through the base_pairs copy is the wrong one to keep.
+            let variant_id = format!("{base_id}-{key}");
+            merged.set("id", variant_id.clone())?;
+            let mut variant = parse_card_table(&merged)?;
+            variant.is_variant = true;
+            variant.variant_of = Some(base_id.clone());
+            out.push(variant);
+        }
+    }
+    Ok(out)
 }
 
 pub fn load_cards_dir(lua: &Lua, dir: &Path) -> mlua::Result<Vec<Card>> {
@@ -1122,7 +1233,28 @@ pub fn load_cards_dir(lua: &Lua, dir: &Path) -> mlua::Result<Vec<Card>> {
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("lua"))
         .collect();
     entries.sort();
-    entries.iter().map(|p| load_card(lua, p)).collect()
+    let mut all: Vec<Card> = Vec::new();
+    for p in &entries {
+        all.extend(load_card(lua, p)?);
+    }
+    Ok(all)
+}
+
+pub fn load_cards_embedded(lua: &Lua) -> mlua::Result<Vec<Card>> {
+    let mut files: Vec<_> = EMBEDDED_CARDS
+        .files()
+        .filter(|f| f.path().extension().and_then(|s| s.to_str()) == Some("lua"))
+        .collect();
+    files.sort_by_key(|f| f.path().to_path_buf());
+    let mut all: Vec<Card> = Vec::new();
+    for f in &files {
+        let source = f
+            .contents_utf8()
+            .ok_or_else(|| mlua::Error::runtime(format!("non-utf8 card: {}", f.path().display())))?;
+        let chunk_name = f.path().display().to_string();
+        all.extend(load_card_from_source(lua, source, &chunk_name)?);
+    }
+    Ok(all)
 }
 
 #[cfg(test)]
@@ -1270,6 +1402,131 @@ mod tests {
     fn empty_symbol_shorthand_yields_empty_symbols_vec() {
         let card = load_card_from_lua(r#"return { id = "under-test", symbol = "" }"#);
         assert!(card.symbols.is_empty());
+    }
+
+    /// Load a directory of cards instead of looking one up. Used by
+    /// the `variants` tests below which need to see BOTH the base and
+    /// the synthesized variants in the registry.
+    fn load_dir_cards(src: &str) -> Vec<Card> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "tsot_variants_test_{}_{}",
+            std::process::id(),
+            id
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("under-test.lua");
+        std::fs::write(&path, src).unwrap();
+        let registry = CardRegistry::load(&tmp).unwrap();
+        let cards: Vec<Card> = registry.cards().to_vec();
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&tmp).ok();
+        cards
+    }
+
+    #[test]
+    fn card_without_variants_loads_as_single_card() {
+        let cards = load_dir_cards(
+            r#"return { id = "under-test", type = "creature", stats = {x = 1, y = 1} }"#,
+        );
+        assert_eq!(cards.len(), 1, "base only — no variants table present");
+        assert_eq!(cards[0].id, "under-test");
+        assert!(!cards[0].is_variant);
+        assert!(cards[0].variant_of.is_none());
+    }
+
+    #[test]
+    fn variants_emit_one_card_per_entry_with_suffixed_ids() {
+        let cards = load_dir_cards(
+            r#"return {
+                id = "under-test",
+                type = "creature",
+                stats = {x = 1, y = 1},
+                variants = {
+                    ["small"] = { stats = {x = 1, y = 2} },
+                    ["big"]   = { stats = {x = 4, y = 4} },
+                },
+            }"#,
+        );
+        // Order in `cards` is implementation-defined (Lua pairs() over
+        // string keys). Check by id rather than index.
+        let by_id: std::collections::BTreeMap<&str, &Card> =
+            cards.iter().map(|c| (c.id.as_str(), c)).collect();
+        assert!(by_id.contains_key("under-test"), "base id present");
+        assert!(by_id.contains_key("under-test-small"), "variant id present");
+        assert!(by_id.contains_key("under-test-big"), "variant id present");
+        assert_eq!(cards.len(), 3);
+        let base = by_id["under-test"];
+        assert!(!base.is_variant, "base is_variant = false");
+        let small = by_id["under-test-small"];
+        assert!(small.is_variant, "variant is_variant = true");
+        assert_eq!(small.variant_of.as_deref(), Some("under-test"));
+        assert_eq!(small.stats.unwrap().y, 2, "variant stats override applied");
+        let big = by_id["under-test-big"];
+        assert_eq!(big.stats.unwrap().x, 4);
+        assert_eq!(big.stats.unwrap().y, 4);
+    }
+
+    #[test]
+    fn modifier_value_scaled_attached_parses() {
+        // `"2*attached"` → AttachedCountScaled(2) via the static block.
+        let cards = load_dir_cards(
+            r#"return {
+                id = "under-test",
+                type = "creature",
+                stats = {x = 0, y = 0},
+                static = {
+                    affects = { scope = "source_only" },
+                    modifier = {x = "2*attached", y = "3*attached"},
+                },
+            }"#,
+        );
+        let s = cards[0].static_def.as_ref().expect("static set");
+        assert_eq!(s.modifier_x, super::ModifierValue::AttachedCountScaled(2));
+        assert_eq!(s.modifier_y, super::ModifierValue::AttachedCountScaled(3));
+    }
+
+    #[test]
+    fn variant_keys_not_declared_inherit_from_base() {
+        let cards = load_dir_cards(
+            r#"return {
+                id = "under-test",
+                name = "Base Name",
+                type = "creature",
+                colors = {"green"},
+                stats = {x = 2, y = 2},
+                variants = {
+                    ["v1"] = { stats = {x = 5, y = 5} },  -- only stats overridden
+                },
+            }"#,
+        );
+        let by_id: std::collections::BTreeMap<&str, &Card> =
+            cards.iter().map(|c| (c.id.as_str(), c)).collect();
+        let v1 = by_id["under-test-v1"];
+        // Inherited fields:
+        assert_eq!(v1.name, "Base Name", "name inherited");
+        assert_eq!(v1.colors, vec!["green"], "colors inherited");
+        // Overridden:
+        assert_eq!(v1.stats.unwrap().x, 5);
+        assert_eq!(v1.stats.unwrap().y, 5);
+    }
+
+    #[test]
+    fn cost_source_attached_parses() {
+        let card = load_card_from_lua(
+            r#"return {
+                id = "under-test",
+                type = "creature",
+                colors = {"green"},
+                stats = {x = 1, y = 1},
+                cost = {{amount = 2, source = "attached"}},
+            }"#,
+        );
+        assert_eq!(card.cost.len(), 1);
+        assert_eq!(card.cost[0].amount, 2);
+        assert!(matches!(card.cost[0].source, CostSource::Attached));
     }
 
     #[test]

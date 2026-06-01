@@ -1,6 +1,8 @@
 mod champions_report;
+mod cli_balance_probe;
 mod cli_champions_report;
 mod cli_curate;
+mod cli_curve_sample;
 mod cli_evolve;
 mod cli_matchup_evolved;
 mod cli_prune_champions;
@@ -9,11 +11,12 @@ mod report_style;
 mod sim;
 
 use clap::{Parser, Subcommand};
-use std::path::Path;
 use tsot::card::{Card, CardRegistry, CardType, CostSource};
 
+use cli_balance_probe::BalanceProbeArgs;
 use cli_champions_report::ChampionsReportArgs;
 use cli_curate::CurateBaselinesArgs;
+use cli_curve_sample::CurveSampleArgs;
 use cli_evolve::EvolveArgs;
 use cli_matchup_evolved::MatchupEvolvedArgs;
 use cli_prune_champions::PruneChampionsArgs;
@@ -45,6 +48,15 @@ enum Command {
     /// keep top K per cluster, delete the rest. Bounds gauntlet by
     /// (archetypes × K), not by round count.
     PruneChampions(PruneChampionsArgs),
+    /// Side-by-side comparison of card variants: each variant is
+    /// pinned into every genome of a short EA; the resulting ceiling
+    /// fitness measures how strong the variant is when forced in.
+    BalanceProbe(BalanceProbeArgs),
+    /// Play N random-deck vs random-deck games and dump a per-card
+    /// turn-of-play distribution to `card-curve.json`. Consumed by
+    /// `cards-report.lua` to add a turn-curve column to the pool
+    /// dashboard.
+    CurveSample(CurveSampleArgs),
 }
 
 /// Parse a u64 from `--seed`, accepting hex (`0xEA03`) or decimal.
@@ -62,7 +74,7 @@ fn main() -> mlua::Result<()> {
     // 70+ Lua cards load. Otherwise `tsot evolve --help` takes a second
     // just to print help text.
     let cli = Cli::parse();
-    let registry = CardRegistry::load(Path::new("cards"))?;
+    let registry = CardRegistry::load_embedded()?;
     let playable_pool: Vec<Card> = registry
         .cards()
         .iter()
@@ -75,6 +87,10 @@ fn main() -> mlua::Result<()> {
                     | CardType::Mutation
             )
         })
+        // Balance-probe variants are excluded from the main pool — they
+        // only exist for `tsot balance-probe` and shouldn't pollute
+        // `evolve` / `champions-report` / gauntlet curation.
+        .filter(|c| !c.is_variant)
         .filter(|c| !c.subtypes.iter().any(|s| s.eq_ignore_ascii_case("test")))
         .filter(|c| {
             c.cost.iter().all(|cc| {
@@ -84,6 +100,7 @@ fn main() -> mlua::Result<()> {
                         | CostSource::Mill
                         | CostSource::Graveyard
                         | CostSource::Sacrifice
+                        | CostSource::Attached
                 )
             })
         })
@@ -138,6 +155,12 @@ fn main() -> mlua::Result<()> {
         }
         Some(Command::PruneChampions(args)) => {
             cli_prune_champions::run_prune_champions(&registry, &args)
+        }
+        Some(Command::BalanceProbe(args)) => {
+            cli_balance_probe::run_balance_probe(&registry, &playable_pool, &args)
+        }
+        Some(Command::CurveSample(args)) => {
+            cli_curve_sample::run_curve_sample(&registry, &playable_pool, &args)
         }
         None => {
             eprintln!("no subcommand specified. run with --help to see the available commands.");

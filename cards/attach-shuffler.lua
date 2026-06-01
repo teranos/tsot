@@ -6,7 +6,7 @@ return {
   subtypes = {"human"},
   cost = {
     {amount = 1, source = "hand"},
-    {amount = 2, source = "graveyard"},
+    {amount = 2, source = "attached"},
   },
   abilities = {
     "whenever this creature attacks you may attach a card and return another attached card you own back to your hand.",

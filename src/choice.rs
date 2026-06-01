@@ -15,19 +15,38 @@ use std::collections::VecDeque;
 /// existing handler and ScriptedOracle fixture).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetIntent {
-    /// "Pick a card on the opponent's side I want to take from."
-    /// Bias toward opponent-controlled candidates; bonus per attached
-    /// card and per high-value attached (jewels, statics).
+    /// "Pick an opp's loaded host I want to take attached from."
+    /// Opp-controller bias plus attached-count bias (jewels, statics).
+    /// Used by shift's source pick and falter's target.
     Steal,
     /// "Pick a card on my side I want to enrich."
-    /// Bias toward asker-controlled candidates; bonus for creature kind
-    /// (so granted activations land on a body) and for existing attached
-    /// count (consolidation play for Phase-3 grant-stacks).
+    /// Asker-controlled bias; bonus for creature kind (so granted
+    /// activations land on a body) and for existing attached count
+    /// (consolidation play for Phase-3 grant-stacks). Used by shift's
+    /// destination pick.
     Donate,
     /// "Pick the highest-value attached card."
     /// No controller bias — caller has already gated by host. Prefers
     /// `OnAttachedAsCost` handlers (jewels), then statics, then cost-heavy.
+    /// Used by shift's per-attached pick.
     HighValueAttached,
+    /// "Pick the opponent's biggest threat to remove."
+    /// Opp-controller bias plus body-aware scoring (effective stats,
+    /// cost, handler density, statics). Distinct from `Steal`: body
+    /// matters here, attached count doesn't. Used by silent-murder,
+    /// beguile, condemn, bring-down, jellyfish, this-for-that's "take".
+    RemoveThreat,
+    /// "Pick the most-valuable card in my graveyard to bring back."
+    /// No controller bias (own GY by definition). Prefers cost-heavy
+    /// (recursion saves a re-payment), handler-bearing, and statics.
+    /// Used by mesopelagic-fish, resurrect, wake-dead, philosopher.
+    Recur,
+    /// "Pick a card on my side I'm willing to give away."
+    /// Asker-controlled bias plus INVERTED body-aware scoring — prefer
+    /// LOW stats, LOW cost, NO handlers. Jewels and pitch-payoff cards
+    /// take a big penalty (don't gift them). Used by this-for-that's
+    /// "give" pool.
+    LowValueOwn,
 }
 
 impl TargetIntent {
@@ -36,6 +55,9 @@ impl TargetIntent {
             "steal" => Some(Self::Steal),
             "donate" => Some(Self::Donate),
             "high_value_attached" => Some(Self::HighValueAttached),
+            "remove_threat" => Some(Self::RemoveThreat),
+            "recur" => Some(Self::Recur),
+            "low_value_own" => Some(Self::LowValueOwn),
             _ => None,
         }
     }
@@ -326,6 +348,7 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
                 sacrifice_ids: vec![],
                 mutation_target: None,
                 gy_hand_payment_ids: vec![],
+                attached_payment_ids: vec![],
             },
         }
     }
@@ -454,6 +477,9 @@ fn intent_score(
         TargetIntent::Steal => steal_score(state, candidate_iid, asker),
         TargetIntent::Donate => donate_score(state, candidate_iid, asker),
         TargetIntent::HighValueAttached => attached_value_score(state, candidate_iid),
+        TargetIntent::RemoveThreat => remove_threat_score(state, candidate_iid, asker),
+        TargetIntent::Recur => recur_score(state, candidate_iid),
+        TargetIntent::LowValueOwn => low_value_own_score(state, candidate_iid, asker),
     }
 }
 
@@ -529,6 +555,94 @@ fn attached_value_score(state: &GameState, candidate_iid: &InstanceId) -> i32 {
     }
     let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
     score += cost_sum * 3;
+    score
+}
+
+/// "Pick the biggest threat on opp's side to remove." Opp anchor +1000;
+/// within opp candidates, body weight (X*4 + Y) dominates, with cost
+/// and handler density as secondary signals (cost-heavy = bigger
+/// committed investment; handler density = more payoffs). Used by
+/// removal cards (silent-murder, beguile, condemn, bring-down,
+/// jellyfish, this-for-that's "take"). Distinct from `Steal`: attached
+/// count doesn't matter here — we're removing the body, not stealing
+/// what's on it.
+fn remove_threat_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) -> i32 {
+    let Some(cand) = state.card_pool.get(candidate_iid) else {
+        return 0;
+    };
+    let mut score = if cand.controller != asker { 1000 } else { -100 };
+    let (x, y) = state.effective_stats(candidate_iid);
+    score += x * 4 + y;
+    let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    score += cost_sum * 3;
+    score += (cand.card.handlers.len() as i32) * 5;
+    if cand.card.static_def.is_some() {
+        score += 15;
+    }
+    if cand
+        .card
+        .handlers
+        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+    {
+        score += 10;
+    }
+    score
+}
+
+/// "Pick the most-valuable card in (own) graveyard to bring back."
+/// No controller bias — recursion is from own GY by convention; the
+/// caller already filtered the pool. Prefers high-cost (saves a
+/// re-payment on resolve), handler-bearing (silent-murder, surge,
+/// draw-two), and static-bearing cards. Stat-light because most recur
+/// targets are non-creatures (mesopelagic-fish filters to non-creature)
+/// or creature stats already encoded in cost.
+fn recur_score(state: &GameState, candidate_iid: &InstanceId) -> i32 {
+    let Some(cand) = state.card_pool.get(candidate_iid) else {
+        return 0;
+    };
+    let mut score = 0i32;
+    let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    score += cost_sum * 5;
+    score += (cand.card.handlers.len() as i32) * 10;
+    if cand.card.static_def.is_some() {
+        score += 30;
+    }
+    if cand
+        .card
+        .handlers
+        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+    {
+        score += 20;
+    }
+    score
+}
+
+/// "Pick the least valuable card on my side to give away." Asker
+/// anchor +1000, then INVERSE body-aware scoring. Stats, cost, and
+/// handler density all subtract. Jewels (`OnAttachedAsCost`) and
+/// statics take an extra penalty — don't gift pitch-payoff engines or
+/// anthems. Used by this-for-that's "give" pool (opp gets the worst
+/// non-creature you control in exchange for their best creature).
+fn low_value_own_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) -> i32 {
+    let Some(cand) = state.card_pool.get(candidate_iid) else {
+        return 0;
+    };
+    let mut score = if cand.controller == asker { 1000 } else { -100 };
+    let (x, y) = state.effective_stats(candidate_iid);
+    score -= x * 4 + y;
+    let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    score -= cost_sum * 3;
+    score -= (cand.card.handlers.len() as i32) * 5;
+    if cand.card.static_def.is_some() {
+        score -= 30;
+    }
+    if cand
+        .card
+        .handlers
+        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+    {
+        score -= 50;
+    }
     score
 }
 
@@ -862,6 +976,61 @@ mod tests {
         oracle.set_next_intent(Some(TargetIntent::HighValueAttached));
         let pick = oracle.choose_card(&s, req(vec![vanilla.clone(), jewel.clone()]));
         assert_eq!(pick, Some(jewel));
+    }
+
+    fn boost_stats(s: &mut GameState, iid: &InstanceId, dx: i32, dy: i32) {
+        s.add_modifier(iid, crate::game::Modifier::StatBoost { x: dx, y: dy });
+    }
+
+    #[test]
+    fn remove_threat_prefers_bigger_opp_body() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let small = s.b.hand[0].clone();
+        let big = s.b.hand[1].clone();
+        put_on_board(&mut s, PlayerId::B, &small);
+        put_on_board(&mut s, PlayerId::B, &big);
+        // Stats from deck_of are 1/1; boost `big` to 5/5.
+        boost_stats(&mut s, &big, 4, 4);
+
+        let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
+        oracle.set_next_intent(Some(TargetIntent::RemoveThreat));
+        let pick = oracle.choose_card(&s, req(vec![small.clone(), big.clone()]));
+        assert_eq!(pick, Some(big));
+    }
+
+    #[test]
+    fn recur_prefers_cost_heavy() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let cheap = s.a.hand[0].clone();
+        let expensive = s.a.hand[1].clone();
+        // Mock cost: cheap has nothing, expensive has 5-graveyard component.
+        s.card_pool.get_mut(&expensive).unwrap().card.cost = vec![crate::card::CostComponent {
+            amount: 5,
+            source: crate::card::CostSource::Graveyard,
+            kind: None,
+            is_x: false,
+        }];
+
+        let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
+        oracle.set_next_intent(Some(TargetIntent::Recur));
+        let pick = oracle.choose_card(&s, req(vec![cheap.clone(), expensive.clone()]));
+        assert_eq!(pick, Some(expensive));
+    }
+
+    #[test]
+    fn low_value_own_prefers_smallest_throwaway() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let throwaway = s.a.hand[0].clone();
+        let jewel_like = s.a.hand[1].clone();
+        put_on_board(&mut s, PlayerId::A, &throwaway);
+        put_on_board(&mut s, PlayerId::A, &jewel_like);
+        // Mark jewel_like as static-bearing (-30 penalty for LowValueOwn).
+        give_static_def(&mut s, &jewel_like);
+
+        let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
+        oracle.set_next_intent(Some(TargetIntent::LowValueOwn));
+        let pick = oracle.choose_card(&s, req(vec![throwaway.clone(), jewel_like.clone()]));
+        assert_eq!(pick, Some(throwaway));
     }
 
     #[test]

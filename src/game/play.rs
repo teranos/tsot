@@ -76,6 +76,12 @@ pub struct PlayChoices {
     /// matching card in hand for each non-substituted slot.
     #[serde(default)]
     pub gy_hand_payment_ids: Vec<InstanceId>,
+    /// P.31: one InstanceId per ATTACHED-source cost slot. Each id must
+    /// currently be attached to a card the player controls on the BOARD.
+    /// On resolution the cards detach and either re-attach to the played
+    /// card (if BOARD-placed) or move to EXILE (non-BOARD).
+    #[serde(default)]
+    pub attached_payment_ids: Vec<InstanceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +149,17 @@ pub enum PlayError {
     /// `gy_hand_payment_ids` declared on a card with no HAND-source
     /// cost component to substitute (would substitute nothing).
     GyHandSubstituteWithoutHandCost,
+    /// P.31: ATTACHED payment count doesn't match the card's total
+    /// ATTACHED cost.
+    WrongAttachedPaymentCount { expected: usize, got: usize },
+    /// P.31: a chosen attached id isn't attached to a card the player
+    /// controls on the BOARD.
+    AttachedPaymentInvalid(InstanceId),
+    /// P.31: an attached payment id appears more than once.
+    DuplicateAttachedPayment(InstanceId),
+    /// C.14: a transparent card cannot be a HAND-source payment for a
+    /// card placed on the BOARD when played.
+    HandPaymentTransparentForBoardPlaced(InstanceId),
     /// All HAND slots were filled by GY substitutes on a cast that
     /// requires identity matching (cast has non-empty colors or
     /// symbols). Clear View doesn't carry identity, so at least one
@@ -230,6 +247,7 @@ impl GameState {
         let mut mill_needed: usize = 0;
         let mut graveyard_needed: usize = 0;
         let mut sacrifice_needed: usize = 0;
+        let mut attached_needed: usize = 0;
         // Variable-X: if any cost component has is_x, the player must have
         // pre-chosen X (via oracle.choose_int) and supplied it in choices.
         // The same X applies to every variable component.
@@ -264,6 +282,7 @@ impl GameState {
                 CostSource::Mill => mill_needed += amount,
                 CostSource::Graveyard => graveyard_needed += amount,
                 CostSource::Sacrifice => sacrifice_needed += amount,
+                CostSource::Attached => attached_needed += amount,
                 // TODO(costs): support SELF (P.5).
                 other => return Err(PlayError::UnsupportedCostSource(other)),
             }
@@ -282,6 +301,10 @@ impl GameState {
         mill_needed = mill_needed.saturating_sub(mill_red);
         graveyard_needed = graveyard_needed.saturating_sub(gy_red);
         sacrifice_needed = sacrifice_needed.saturating_sub(sac_red);
+        let att_red = self
+            .cost_reduction(instance, CostSource::Attached)
+            .max(0) as usize;
+        attached_needed = attached_needed.saturating_sub(att_red);
 
         // P.24: validate optional jewel-tap. Pull card colors once for both
         // the jewel-color check (here) and any future uses. After validation,
@@ -394,6 +417,29 @@ impl GameState {
                     return Err(PlayError::HandPaymentIdentityMismatch(hid.clone()));
                 }
             }
+            // C.14: transparent cards can't be HAND payment for BOARD-
+            // placed casts (P.6 attaches HAND payments; transparent can't
+            // be attached).
+            if matches!(
+                card_kind,
+                CardType::Creature | CardType::Artifact | CardType::Environment
+            ) {
+                let is_transparent = self
+                    .card_pool
+                    .get(hid)
+                    .map(|i| {
+                        i.card
+                            .colors
+                            .iter()
+                            .any(|c| c.eq_ignore_ascii_case("transparent"))
+                    })
+                    .unwrap_or(false);
+                if is_transparent {
+                    return Err(PlayError::HandPaymentTransparentForBoardPlaced(
+                        hid.clone(),
+                    ));
+                }
+            }
         }
 
         let deck_have = self.player(player).deck.len();
@@ -471,6 +517,37 @@ impl GameState {
                 if inst.card.kind != required_kind {
                     return Err(PlayError::SacrificePaymentInvalid(sid.clone()));
                 }
+            }
+        }
+
+        // P.31: ATTACHED-source payment validation. Each id must currently
+        // be attached to a card the player controls on the BOARD; no dups;
+        // count must match `attached_needed`.
+        if choices.attached_payment_ids.len() != attached_needed {
+            return Err(PlayError::WrongAttachedPaymentCount {
+                expected: attached_needed,
+                got: choices.attached_payment_ids.len(),
+            });
+        }
+        let mut att_seen: BTreeSet<&InstanceId> = BTreeSet::new();
+        for aid in &choices.attached_payment_ids {
+            if !att_seen.insert(aid) {
+                return Err(PlayError::DuplicateAttachedPayment(aid.clone()));
+            }
+            let host = self.host_of(aid);
+            let valid = match host {
+                Some(h) => {
+                    self.player(player).board.contains(&h)
+                        && self
+                            .card_pool
+                            .get(&h)
+                            .map(|i| i.controller == player)
+                            .unwrap_or(false)
+                }
+                None => false,
+            };
+            if !valid {
+                return Err(PlayError::AttachedPaymentInvalid(aid.clone()));
             }
         }
 
@@ -618,8 +695,16 @@ impl GameState {
         // consistently. None outside an X-cost cast.
         let prior_x = self.current_activation_x;
         self.current_activation_x = choices.x_value;
-        let result = self.resolve_played_card_inner(instance, player, choices, ctx, card_kind);
+        let mut ctx = ctx;
+        let result =
+            self.resolve_played_card_inner(instance, player, choices, ctx.as_deref_mut(), card_kind);
         self.current_activation_x = prior_x;
+        // C.15: after all cast-time handlers have run, scan for any
+        // creature whose effective Y has dropped to ≤ 0 (via detach,
+        // stat-modifier, attached-source payment, etc.) and move it to
+        // GRAVEYARD. Runs even on Err — partial state mutations are
+        // ostensibly rolled back via journal, but defense in depth.
+        self.cleanup_zero_y_deaths(ctx);
         result
     }
 
@@ -642,6 +727,16 @@ impl GameState {
                     let _ = self.remove_from_zone(hid, player, Zone::Hand);
                     self.add_attached(instance, hid);
                     self.set_face_down(hid, true);
+                }
+                // P.31 BOARD-placed branch: detach attached payments from
+                // their current hosts and re-attach to the new instance.
+                for aid in choices.attached_payment_ids.clone() {
+                    if let Some(host) = self.host_of(&aid) {
+                        self.remove_attached(&host, &aid);
+                    }
+                    self.add_attached(instance, &aid);
+                    self.set_face_down(&aid, true);
+                    self.bump_action("attached_payment_transfer", player);
                 }
                 let _ = self.move_card(instance, player, Zone::Hand, Zone::Board);
                 self.set_summoning_sick(instance, true); // B.3
@@ -687,6 +782,15 @@ impl GameState {
                     self.add_attached(instance, hid);
                     self.set_face_down(hid, true);
                 }
+                // P.31 BOARD-placed branch.
+                for aid in choices.attached_payment_ids.clone() {
+                    if let Some(host) = self.host_of(&aid) {
+                        self.remove_attached(&host, &aid);
+                    }
+                    self.add_attached(instance, &aid);
+                    self.set_face_down(&aid, true);
+                    self.bump_action("attached_payment_transfer", player);
+                }
                 let _ = self.move_card(instance, player, Zone::Hand, Zone::Board);
                 self.bump_action("artifact_played", player);
 
@@ -723,6 +827,15 @@ impl GameState {
                 for hid in choices.hand_payment_ids.clone() {
                     let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
                 }
+                // P.31 non-BOARD branch: attached payments → EXILE.
+                for aid in choices.attached_payment_ids.clone() {
+                    if let Some(host) = self.host_of(&aid) {
+                        self.remove_attached(&host, &aid);
+                    }
+                    self.set_face_down(&aid, false);
+                    self.add_to_zone(&aid, player, Zone::Exile);
+                    self.bump_action("attached_payment_exile", player);
+                }
                 let _ = self.move_card(instance, player, Zone::Hand, Zone::Graveyard);
 
                 if let Some(c) = ctx.as_mut() {
@@ -738,6 +851,16 @@ impl GameState {
                 // static system already iterates attached cards as sources).
                 for hid in choices.hand_payment_ids.clone() {
                     let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
+                }
+                // P.31 non-BOARD branch (mutations don't occupy a BOARD
+                // slot per P.26, so attached payments → EXILE).
+                for aid in choices.attached_payment_ids.clone() {
+                    if let Some(host) = self.host_of(&aid) {
+                        self.remove_attached(&host, &aid);
+                    }
+                    self.set_face_down(&aid, false);
+                    self.add_to_zone(&aid, player, Zone::Exile);
+                    self.bump_action("attached_payment_exile", player);
                 }
                 let target = choices
                     .mutation_target
@@ -846,14 +969,46 @@ impl GameState {
         cast_iid: &InstanceId,
     ) -> usize {
         let cast_ident = self.card_identity(cast_iid);
+        // C.14: transparent cards can't pay for BOARD-placed casts.
+        let cast_is_board_placed = self
+            .card_pool
+            .get(cast_iid)
+            .map(|i| {
+                matches!(
+                    i.card.kind,
+                    crate::card::CardType::Creature
+                        | crate::card::CardType::Artifact
+                        | crate::card::CardType::Environment
+                )
+            })
+            .unwrap_or(false);
+        let is_transparent = |h: &InstanceId| -> bool {
+            self.card_pool
+                .get(h)
+                .map(|i| {
+                    i.card
+                        .colors
+                        .iter()
+                        .any(|c| c.eq_ignore_ascii_case("transparent"))
+                })
+                .unwrap_or(false)
+        };
         if cast_ident.is_empty() {
-            // Wildcard cast — every hand card matches.
-            return self.player(player).hand.iter().filter(|h| *h != cast_iid).count();
+            // Wildcard cast — every non-transparent hand card matches
+            // (transparent excluded when cast is board-placed per C.14).
+            return self
+                .player(player)
+                .hand
+                .iter()
+                .filter(|h| *h != cast_iid)
+                .filter(|h| !cast_is_board_placed || !is_transparent(h))
+                .count();
         }
         self.player(player)
             .hand
             .iter()
             .filter(|h| *h != cast_iid)
+            .filter(|h| !cast_is_board_placed || !is_transparent(h))
             .filter(|h| {
                 let pay_ident = self.card_identity(h);
                 !cast_ident.is_disjoint(&pay_ident)
@@ -866,6 +1021,70 @@ impl GameState {
     /// iid is a card with `Card.gy_hand_substitute = true` and lives
     /// in the controller's GRAVEYARD. The sim AI uses these to fill
     /// HAND slots that the hand's identity-matching cards can't cover.
+    /// C.15: any on-board creature with effective Y ≤ 0 dies (Board →
+    /// Graveyard). Fires on_die handlers if `ctx` is provided. Idempotent
+    /// — call after any state change that could lower a creature's
+    /// effective stats (modifier add/remove, attached add/remove, static
+    /// source movement). P.8 attached-cascade is still TODO (matches the
+    /// gap in combat death).
+    pub fn cleanup_zero_y_deaths(&mut self, ctx: Option<&mut EventContext>) {
+        let on_board: Vec<InstanceId> = self
+            .a
+            .board
+            .iter()
+            .chain(self.b.board.iter())
+            .cloned()
+            .collect();
+        let mut to_kill: Vec<InstanceId> = Vec::new();
+        for iid in &on_board {
+            let is_creature = self
+                .card_pool
+                .get(iid)
+                .map(|i| i.card.kind == crate::card::CardType::Creature)
+                .unwrap_or(false);
+            if !is_creature {
+                continue;
+            }
+            let y = self.effective_stats(iid).1;
+            if y <= 0 {
+                to_kill.push(iid.clone());
+            }
+        }
+        let mut ctx = ctx;
+        for iid in &to_kill {
+            let owner = self
+                .card_pool
+                .get(iid)
+                .map(|i| i.owner)
+                .unwrap_or(self.active_player);
+            let _ = self.move_card(iid, owner, Zone::Board, Zone::Graveyard);
+            if let Some(c) = ctx.as_mut() {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid);
+            }
+        }
+    }
+
+    /// P.31: collect up to `max_count` attached iids from cards the player
+    /// controls on the BOARD. Iteration order: board iteration order, then
+    /// per-host attached order. No scoring — sim uses first-N selection.
+    pub fn find_attached_payments(
+        &self,
+        player: PlayerId,
+        max_count: usize,
+    ) -> Vec<InstanceId> {
+        let mut out = Vec::new();
+        for host_iid in &self.player(player).board {
+            let Some(host) = self.card_pool.get(host_iid) else { continue };
+            for aid in &host.attached {
+                if out.len() >= max_count {
+                    return out;
+                }
+                out.push(aid.clone());
+            }
+        }
+        out
+    }
+
     pub fn find_gy_hand_substitutes(
         &self,
         player: PlayerId,
@@ -1046,7 +1265,7 @@ impl GameState {
                 CostSource::Hand => hand_need += amount,
                 CostSource::Mill => mill_need += amount,
                 CostSource::Graveyard => gy_need += amount,
-                CostSource::Sacrifice | CostSource::SelfExile => {
+                CostSource::Sacrifice | CostSource::SelfExile | CostSource::Attached => {
                     return Err(ActivateError::CannotPayComponents);
                 }
             }
@@ -1195,7 +1414,7 @@ impl GameState {
                 CostSource::Hand => hand_need += amount,
                 CostSource::Mill => mill_need += amount,
                 CostSource::Graveyard => gy_need += amount,
-                CostSource::Sacrifice | CostSource::SelfExile => return false,
+                CostSource::Sacrifice | CostSource::SelfExile | CostSource::Attached => return false,
             }
         }
         let p = self.player(inst.controller);

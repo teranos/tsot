@@ -3,7 +3,10 @@ return {
   name = "Submerge",
   colors = {"azure"},
   type = "instant",
-  cost = {{amount = 1, source = "mill"}},
+  cost = {
+    {amount = 1, source = "mill"},
+    {amount = 1, source = "attached"},
+  },
   abilities = {
     "draw a card. you may put the top card of your deck on the bottom.",
   },

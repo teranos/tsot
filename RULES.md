@@ -64,6 +64,8 @@ The following zones are part of the game.
 - **C.12** A card's effective stats are recomputed continuously from the card's printed X/Y plus all active modifiers. Whenever game state changes, effective stats are re-evaluated.
 - **C.8** A card's X/Y stats may be modified by abilities while the card is on the BOARD.
 - **C.13** A card with the `transparent` color cannot have any symbols — you can see through it, so there is no opaque surface on which to print them. C.1 does not apply to transparent cards.
+- **C.14** A `transparent` card cannot be a HAND-source payment for a card placed on the BOARD when played. Per P.6, HAND-source payments to BOARD-placed cards attach to the played card; transparent cards cannot be attached. Transparent cards remain valid HAND-source payments for non-BOARD cards (spells, mutations), subject to P.7a identity matching.
+- **C.15** A creature on the BOARD with effective Y ≤ 0 dies (placed in GRAVEYARD per P.4). This check is continuous: any change to game state that drops a creature's effective Y to 0 or below causes its death, independent of B.8's combat-damage check. P.8 cascades attached cards to EXILE as for any other BOARD → GRAVEYARD move.
 
 ## Exclusions (X)
 

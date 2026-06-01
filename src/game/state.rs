@@ -746,6 +746,17 @@ impl GameState {
     }
 
     /// Append an iid to host's attached vec, journaling the addition.
+    /// Find the host iid that has `attached` in its attached vec.
+    /// Returns None if `attached` isn't attached to anything in the pool.
+    pub fn host_of(&self, attached: &InstanceId) -> Option<InstanceId> {
+        for (host_iid, host) in &self.card_pool {
+            if host.attached.iter().any(|x| x == attached) {
+                return Some(host_iid.clone());
+            }
+        }
+        None
+    }
+
     pub fn add_attached(&mut self, host: &InstanceId, attached: &InstanceId) {
         let Some(inst) = self.card_pool.get_mut(host) else {
             return;
@@ -1001,6 +1012,9 @@ impl GameState {
                         .unwrap_or(false)
                 })
                 .count() as i32,
+            crate::card::ModifierValue::AttachedCountScaled(n) => {
+                (source.attached.len() as i32).saturating_mul(*n)
+            }
         }
     }
 

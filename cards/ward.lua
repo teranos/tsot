@@ -3,7 +3,10 @@ return {
   name = "Ward",
   colors = {"white"},
   type = "instant",
-  cost = {{amount = 1, source = "mill"}},
+  cost = {
+    {amount = 1, source = "mill"},
+    {amount = 1, source = "attached"},
+  },
   abilities = {
     "draw a card. target creature gets +0/+2 until end of turn.",
   },

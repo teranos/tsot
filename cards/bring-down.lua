@@ -17,7 +17,10 @@ return {
   name = "Bring Down",
   colors = {"purple"},
   type = "instant",
-  cost = {{amount = 1, source = "hand"}},
+  cost = {
+    {amount = 1, source = "hand"},
+    {amount = 1, source = "attached"},
+  },
   abilities = {
     "target creature gets -3/-3 until end of turn.",
     "if you control a goblin you may draw a card.",
@@ -32,6 +35,7 @@ return {
       end
     end
     if #pool > 0 then
+      game.set_intent("remove_threat")
       local target = game.choose_card(pool, {prompt = "bring down"})
       if target then
         game.add_modifier(target, "stat_boost", -3, -3, "end_of_turn")

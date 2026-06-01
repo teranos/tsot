@@ -13,7 +13,7 @@ use tsot::choice::{ChoiceOracle, ChooseIntRequest, RandomOracle, RecordingOracle
 use tsot::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 use super::ai::{
-    pick_blocks, pick_random_playable_in_hand, rig_creature_free_haste,
+    attached_keep_value, pick_blocks, pick_random_playable_in_hand, rig_creature_free_haste,
     sacrifice_keep_value, select_attackers, PickKindFilter,
 };
 use super::stats::{
@@ -44,6 +44,7 @@ pub fn run_game(
         a_played_card_ids: BTreeSet::new(),
         b_played_card_ids: BTreeSet::new(),
         card_play_turns: BTreeMap::new(),
+        card_play_turn_events: Vec::new(),
         card_sacrificed_count: BTreeMap::new(),
         card_discarded_count: BTreeMap::new(),
         a_played: 0,
@@ -236,6 +237,7 @@ pub fn run_game(
                             CostSource::Graveyard => caps.push(gy_size),
                             CostSource::Sacrifice => caps.push(board_creatures),
                             CostSource::SelfExile => {}
+                            CostSource::Attached => {}
                         }
                     }
                     let max_x = caps.into_iter().min().unwrap_or(0).min(10) as i32;
@@ -412,6 +414,31 @@ pub fn run_game(
                     }
                 }
 
+                // P.31 ATTACHED-source: pick up to `attached_need` cards
+                // currently attached to the player's BOARD. First-N
+                // selection in iteration order — no value scoring.
+                let raw_attached_need: usize = cost
+                    .iter()
+                    .filter(|c| matches!(c.source, CostSource::Attached))
+                    .map(|c| {
+                        if c.is_x {
+                            choices.x_value.unwrap_or(0).max(0) as usize
+                        } else {
+                            c.amount.max(0) as usize
+                        }
+                    })
+                    .sum();
+                let att_red = state
+                    .cost_reduction(&picked, CostSource::Attached)
+                    .max(0) as usize;
+                let attached_need = raw_attached_need.saturating_sub(att_red);
+                if attached_need > 0 {
+                    let mut pool = state.find_attached_payments(active, usize::MAX);
+                    pool.sort_by_key(|aid| attached_keep_value(&state, aid));
+                    pool.truncate(attached_need);
+                    choices.attached_payment_ids = pool;
+                }
+
                 oracle.clear();
                 let resp_before_a = state
                     .action_counts
@@ -491,7 +518,7 @@ pub fn run_game(
                         let turn_now = state.turn;
                         stats
                             .card_play_turns
-                            .entry(card_id)
+                            .entry(card_id.clone())
                             .and_modify(|(min_t, max_t)| {
                                 if turn_now < *min_t {
                                     *min_t = turn_now;
@@ -501,6 +528,14 @@ pub fn run_game(
                                 }
                             })
                             .or_insert((turn_now, turn_now));
+                        // Full distribution (vs the (min, max) summary
+                        // above) — feeds the turn-curve aggregation in
+                        // `tsot curve-sample` → `cards-report.lua`.
+                        // Player kept so a future per-deck analysis
+                        // can group; today's consumer ignores it.
+                        stats
+                            .card_play_turn_events
+                            .push((card_id, turn_now, active));
                     }
                     let timing = state.card_pool.get(&picked).and_then(|c| c.card.timing);
                     let label = match kind {
@@ -776,6 +811,72 @@ mod tests {
     /// outputs for byte-identical inputs. If this ever fails, the EA's
     /// generation-to-generation signal is noise and everything downstream
     /// is chasing it.
+    #[test]
+    fn sim_pays_attached_cost_with_real_baseline_decks() {
+        // Play N games using the project's curated baseline decks
+        // against themselves. These are EA-evolved/tournament-vetted
+        // 50-card decks with realistic cost variety. Assert at least
+        // one P.31 attached-payment fires across the matchup.
+        use crate::sim::evolved_deck::EvolvedDeck;
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let baseline_dir = std::path::Path::new("baselines");
+        let mut decks: Vec<Vec<tsot::card::Card>> = Vec::new();
+        let mut labels: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(baseline_dir).unwrap().flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            match EvolvedDeck::load(&p) {
+                Ok(saved) => match saved.to_cards(&registry) {
+                    Ok(cards) => {
+                        labels.push(p.file_name().unwrap().to_string_lossy().into_owned());
+                        decks.push(cards);
+                    }
+                    Err(e) => eprintln!("baseline {} to_cards err: {e}", p.display()),
+                },
+                Err(e) => eprintln!("baseline {} load err: {e}", p.display()),
+            }
+        }
+        assert!(!decks.is_empty(), "expected at least one baseline deck");
+        eprintln!("loaded baselines: {:?}", labels);
+        // Play each baseline against each other (including mirror) for
+        // a few seeds. One mirror match per deck minimum.
+        let mut total_transfer: u32 = 0;
+        let mut total_exile: u32 = 0;
+        for (i, deck_a) in decks.iter().enumerate() {
+            for (j, deck_b) in decks.iter().enumerate() {
+                let state = GameState::new(deck_a.clone(), deck_b.clone());
+                let seed = 0xBA5E0000_u64 + (i as u64) * 100 + (j as u64);
+                let mut rng = StdRng::seed_from_u64(seed);
+                let mut log: Vec<String> = Vec::new();
+                let (stats, _journal) =
+                    run_game(state, &mut rng, &mut log, registry.lua());
+                total_transfer += stats
+                    .action_counts
+                    .get("attached_payment_transfer")
+                    .map(|v| v[0] + v[1])
+                    .unwrap_or(0);
+                total_exile += stats
+                    .action_counts
+                    .get("attached_payment_exile")
+                    .map(|v| v[0] + v[1])
+                    .unwrap_or(0);
+            }
+        }
+        eprintln!(
+            "P.31 baseline matchups: {} games, transfer={} exile={}",
+            decks.len() * decks.len(),
+            total_transfer,
+            total_exile,
+        );
+        assert!(
+            total_transfer + total_exile > 0,
+            "expected ≥1 P.31 attached-payment across {} baseline matchups. transfer={total_transfer} exile={total_exile}",
+            decks.len() * decks.len()
+        );
+    }
+
     #[test]
     fn run_game_is_deterministic_per_seed_and_decks() {
         let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
