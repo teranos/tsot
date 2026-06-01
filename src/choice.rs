@@ -333,16 +333,29 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
                 hand_need += c.amount.max(0) as usize;
             }
         }
+        // Apply hand-cost reductions (modern-lcd-clock etc.). Without this,
+        // when an on-board static reduces the cast's effective hand cost,
+        // respond_or_pass keeps computing the unreduced count and submits
+        // the wrong number of payments → play_card returns
+        // WrongHandPaymentCount → spin.
+        let hand_red = state
+            .cost_reduction(&pick, crate::card::CostSource::Hand)
+            .max(0) as usize;
+        hand_need = hand_need.saturating_sub(hand_red);
         let hand_payment_ids: Vec<InstanceId> = if hand_need > 0 {
             // Identity-match filter so the picked payments match what
             // play_card will validate. Cast-side or pay-side empty
-            // identity is a wildcard.
+            // identity is a wildcard. Also exclude cards under a
+            // `cannot_be_cost_paid` restriction (e.g., flesh-eating-plant
+            // targeting insects); otherwise play_card refuses with
+            // HandPaymentForbidden and the priority window spins.
             let cast_ident = state.card_identity(&pick);
             state
                 .player(player)
                 .hand
                 .iter()
                 .filter(|iid| **iid != pick)
+                .filter(|iid| !state.has_restriction(iid, crate::card::Restriction::CannotBeCostPaid))
                 .filter(|iid| {
                     if cast_ident.is_empty() {
                         return true;
