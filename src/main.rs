@@ -87,6 +87,21 @@ fn main() -> mlua::Result<()> {
                 )
             })
         })
+        // X-cost spells without an `on_play` handler are no-ops if
+        // cast — the cost is paid but nothing happens. Filter them
+        // out so the EA doesn't waste budget exploring traps. Hydra
+        // (creature) is unaffected because its effect lives in a
+        // passive static, not on_play. Recast / turn-back-time are
+        // already filtered by the SelfExile rule above.
+        .filter(|c| {
+            let has_x = c.cost.iter().any(|cc| cc.is_x);
+            let is_spell = matches!(c.kind, CardType::Spell);
+            let has_play_handler = c
+                .handlers
+                .keys()
+                .any(|e| matches!(e, tsot::card::EventName::OnPlay));
+            !(has_x && is_spell && !has_play_handler)
+        })
         .cloned()
         .collect();
     let creature_count = playable_pool

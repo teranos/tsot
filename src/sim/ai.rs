@@ -114,11 +114,18 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     let mut mill_need = 0usize;
     let mut gy_need = 0usize;
     let mut sac_slots: Vec<Option<CardType>> = Vec::new();
+    // Variable-X handling: an is_x component contributes X * (component
+    // amount, typically 1) to its source's need. The AI doesn't pick X
+    // here — that happens in the play loop via oracle.choose_int. For
+    // affordability, treat is_x as needing 1 of the resource minimum:
+    // the cast is "useful" iff at least X=1 is payable. X=0 makes the
+    // cast a no-op, so we don't bother accepting cards we'd cast for X=0.
     for c in &inst.card.cost {
-        if c.is_x {
-            return false;
-        }
-        let amount = c.amount.max(0) as usize;
+        let amount = if c.is_x {
+            1
+        } else {
+            c.amount.max(0) as usize
+        };
         match c.source {
             CostSource::Hand => hand_need += amount,
             CostSource::Mill => mill_need += amount,
@@ -540,6 +547,7 @@ mod tests {
             handlers: BTreeMap::new(),
             activated: vec![],
             gy_hand_substitute: false,
+            allow_x_zero: false,
         }
     }
 

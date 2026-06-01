@@ -104,6 +104,7 @@ The following are not part of this game.
 - **P.8** When a card is placed in the GRAVEYARD or EXILE and it has attached cards, those attached cards are placed in EXILE.
 - **P.9** When a card moves from the BOARD to a different position on the BOARD, its attached cards remain attached.
 - **P.10** When a card moves from the BOARD to the HAND or to the DECK, its attached cards are placed in EXILE.
+- **P.30** A variable-X cost component (a cost where `is_x = true`) has a minimum X value of 1 — X must be chosen to be at least 1. A card may explicitly opt into allowing X = 0 by declaring `allow_x_zero = true`. The default exists because X = 0 nearly always pays only the non-X cost components for a no-op effect (a strict loss); when X = 0 has a real strategic use (e.g., a stat-scaling creature played for body-less mode), the card must opt in explicitly.
 
 ## Abilities (A)
 

@@ -36,6 +36,9 @@ pub enum ActivateError {
     /// to refuse activation when no legal target exists, so the AI
     /// doesn't burn cards on a no-op.
     NoLegalTarget,
+    /// RULES P.30: X < 1 on an X-cost activation that doesn't opt
+    /// into X = 0 (`Card.allow_x_zero = false`).
+    XBelowMinimum,
 }
 
 /// Player-supplied choices when playing a card.
@@ -91,6 +94,9 @@ pub enum PlayError {
     InsufficientGraveyardForCost { needed: usize, have: usize },
     /// Card has a variable-X cost component but choices.x_value is None.
     VariableXValueMissing,
+    /// RULES P.30: X < 1 on a card that doesn't opt into X = 0
+    /// (`Card.allow_x_zero = false`).
+    XBelowMinimum,
     /// HAND payment count must equal the card's total HAND cost.
     WrongHandPaymentCount { expected: usize, got: usize },
     /// A chosen HAND payment isn't in the player's hand, or is the card being played itself.
@@ -228,9 +234,19 @@ impl GameState {
         // pre-chosen X (via oracle.choose_int) and supplied it in choices.
         // The same X applies to every variable component.
         let has_variable_x = card_cost.iter().any(|c| c.is_x);
+        let allow_x_zero = self
+            .card_pool
+            .get(instance)
+            .map(|i| i.card.allow_x_zero)
+            .unwrap_or(false);
         let x_value = if has_variable_x {
             match choices.x_value {
-                Some(v) => v.max(0) as usize,
+                Some(v) => {
+                    if v < 1 && !allow_x_zero {
+                        return Err(PlayError::XBelowMinimum);
+                    }
+                    v.max(0) as usize
+                }
                 None => return Err(PlayError::VariableXValueMissing),
             }
         } else {
@@ -595,6 +611,29 @@ impl GameState {
             .get(instance)
             .map(|i| i.card.kind)
             .unwrap_or(CardType::Unspecified);
+        // Expose the cast-time X value to `OnPlay` handlers via
+        // `game.x_value()`. Mirrors the activation path. Saved and
+        // restored around the entire resolution match so handlers
+        // (and nested ETB / on_attached_as_cost fires) see it
+        // consistently. None outside an X-cost cast.
+        let prior_x = self.current_activation_x;
+        self.current_activation_x = choices.x_value;
+        let result = self.resolve_played_card_inner(instance, player, choices, ctx, card_kind);
+        self.current_activation_x = prior_x;
+        result
+    }
+
+    /// Inner body of `resolve_played_card` split out only so the X-value
+    /// guard above can wrap a single expression. The original logic is
+    /// unchanged.
+    fn resolve_played_card_inner(
+        &mut self,
+        instance: &InstanceId,
+        player: PlayerId,
+        choices: PlayChoices,
+        ctx: Option<&mut EventContext>,
+        card_kind: CardType,
+    ) -> Result<(), PlayError> {
         let mut ctx = ctx;
         match card_kind {
             CardType::Creature => {
@@ -940,6 +979,7 @@ impl GameState {
             components,
             handler,
             validate,
+            allow_x_zero,
         ) = {
             let inst = self
                 .card_pool
@@ -959,6 +999,7 @@ impl GameState {
                 ability.cost_components.clone(),
                 ability.effect.clone(),
                 ability.validate.clone(),
+                inst.card.allow_x_zero,
             )
         };
 
@@ -986,6 +1027,14 @@ impl GameState {
         let has_x = components.iter().any(|c| c.is_x);
         if has_x && x_value.is_none() {
             return Err(ActivateError::CannotPayComponents);
+        }
+        // RULES P.30: minimum X = 1 unless the card opts into X = 0.
+        if has_x {
+            if let Some(v) = x_value {
+                if v < 1 && !allow_x_zero {
+                    return Err(ActivateError::XBelowMinimum);
+                }
+            }
         }
         let x_val = x_value.unwrap_or(0).max(0);
         let mut hand_need = 0usize;

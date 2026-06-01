@@ -119,12 +119,61 @@ pub fn run_game(
                 let has_is_x = cost.iter().any(|c| c.is_x);
 
                 if has_is_x {
-                    let hand_size = state.player(active).hand.len();
-                    let max_x = (hand_size.saturating_sub(1)).min(10) as i32;
+                    // Cap X by the tightest binding resource. Each is_x
+                    // component scales by X; the AI must pick an X for
+                    // which every is_x source can pay X-of-its-resource.
+                    // For HAND components, also respect identity-match
+                    // capacity (need X matching cards, not just X cards).
+                    let p = state.player(active);
+                    let hand_size = p.hand.len();
+                    let deck_size = p.deck.len();
+                    let gy_size = p.graveyard.len();
+                    let board_creatures = p
+                        .board
+                        .iter()
+                        .filter(|iid| {
+                            state
+                                .card_pool
+                                .get(*iid)
+                                .map(|i| i.card.kind == CardType::Creature)
+                                .unwrap_or(false)
+                        })
+                        .count();
+                    let identity_count =
+                        state.identity_matching_hand_count(active, &picked);
+                    let mut caps: Vec<usize> = Vec::new();
+                    for c in &cost {
+                        if !c.is_x {
+                            continue;
+                        }
+                        match c.source {
+                            CostSource::Hand => {
+                                // Limit by identity-matching hand size minus
+                                // the card itself (which isn't a candidate).
+                                caps.push(identity_count.min(hand_size.saturating_sub(1)));
+                            }
+                            CostSource::Mill => caps.push(deck_size),
+                            CostSource::Graveyard => caps.push(gy_size),
+                            CostSource::Sacrifice => caps.push(board_creatures),
+                            CostSource::SelfExile => {}
+                        }
+                    }
+                    let max_x = caps.into_iter().min().unwrap_or(0).min(10) as i32;
+                    // X=0 is engine-legal but almost always wasted (no
+                    // X-scaled effect, just pay-non-X-costs-for-nothing).
+                    // Default the AI to min=1 unless a future per-card
+                    // `allow_x_zero` opt-in flag says otherwise. Skip
+                    // entirely if max_x < 1 (resource-starved).
+                    if max_x < 1 {
+                        // Can't afford even X=1 — skip this play (the
+                        // outer preview/rollback will catch the failed
+                        // cast).
+                        continue;
+                    }
                     let x = oracle.choose_int(
                         &state,
                         ChooseIntRequest {
-                            min: 0,
+                            min: 1,
                             max: max_x,
                             prompt: format!("X for {}", short(&picked)),
                         },

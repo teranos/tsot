@@ -766,6 +766,50 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        let cell_bot = &$cell;
+        game.set(
+            "deck_bottom",
+            $scope.create_function_mut(move |_, pid_str: String| -> Result<Option<String>> {
+                let pid = parse_pid(&pid_str)?;
+                let s = cell_bot.borrow();
+                Ok(s.player(pid).deck.last().cloned())
+            })?,
+        )?;
+
+        // Move an iid from wherever it currently is onto the TOP of its
+        // owner's deck (index 0 per V.1). Used by cantrips like Sprout
+        // that pull from the bottom of the deck up to the top.
+        let cell_mtd = &$cell;
+        game.set(
+            "move_to_deck_top",
+            $scope.create_function_mut(move |_, iid: String| -> Result<()> {
+                let mut s = cell_mtd.borrow_mut();
+                let iid_owned = iid.clone();
+                let inst = s.card_pool.get(&iid).ok_or_else(|| {
+                    mlua::Error::runtime(format!(
+                        "game.move_to_deck_top: card not in pool: {iid}"
+                    ))
+                })?;
+                let owner = inst.owner;
+                let controller = inst.controller;
+                if let Some(from) = find_zone_of(&s, owner, &iid) {
+                    s.remove_from_zone(&iid_owned, owner, from);
+                } else if let Some(from) = find_zone_of(&s, controller, &iid) {
+                    s.remove_from_zone(&iid_owned, controller, from);
+                } else if let Some(host) = find_host_of_attached(&s, &iid) {
+                    s.remove_attached(&host, &iid_owned);
+                    s.set_face_down(&iid_owned, false);
+                } else {
+                    return Err(mlua::Error::runtime(format!(
+                        "game.move_to_deck_top: card not in any zone: {iid}"
+                    )));
+                }
+                s.add_to_zone_top(&iid_owned, owner, Zone::Deck);
+                s.bump_action("move_to_deck_top", owner);
+                Ok(())
+            })?,
+        )?;
+
         let cell_tap = &$cell;
         game.set(
             "tap",
@@ -805,6 +849,52 @@ macro_rules! build_game_table {
             $scope.create_function_mut(move |_, _: ()| -> Result<Option<i32>> {
                 Ok(cell_x.borrow().current_activation_x)
             })?,
+        )?;
+
+        // game.attached_of(iid) → list of attached iids. Pure read.
+        let cell_att = &$cell;
+        game.set(
+            "attached_of",
+            $scope.create_function_mut(
+                move |lua, iid: String| -> Result<mlua::Table> {
+                    let s = cell_att.borrow();
+                    let list = s
+                        .card_pool
+                        .get(&iid)
+                        .map(|inst| inst.attached.clone())
+                        .unwrap_or_default();
+                    lua.create_sequence_from(list)
+                },
+            )?,
+        )?;
+
+        // game.move_attached(from_host, to_host, iid) — detach `iid`
+        // from `from_host`, attach to `to_host`. Powers shift-style
+        // attached-card relocation. Both hosts must be in the card
+        // pool; `iid` must currently be in `from_host`'s attached
+        // list. Silent no-op on any precondition fail.
+        let cell_mv = &$cell;
+        game.set(
+            "move_attached",
+            $scope.create_function_mut(
+                move |_, (from_host, to_host, iid): (String, String, String)| -> Result<()> {
+                    let mut s = cell_mv.borrow_mut();
+                    let in_from = s
+                        .card_pool
+                        .get(&from_host)
+                        .map(|h| h.attached.iter().any(|a| a == &iid))
+                        .unwrap_or(false);
+                    let to_exists = s.card_pool.contains_key(&to_host);
+                    if !in_from || !to_exists {
+                        return Ok(());
+                    }
+                    let removed = s.remove_attached(&from_host, &iid);
+                    if removed {
+                        s.add_attached(&to_host, &iid);
+                    }
+                    Ok(())
+                },
+            )?,
         )?;
 
         let cell_atk = &$cell;

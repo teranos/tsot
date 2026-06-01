@@ -401,6 +401,14 @@ pub struct Card {
     /// adds slot capacity, not identity coverage.
     #[serde(default)]
     pub gy_hand_substitute: bool,
+    /// RULES P.30: variable-X cost components default to a minimum
+    /// X of 1. A card may opt into accepting X = 0 by setting this
+    /// to true — used by designs where X = 0 has a real strategic
+    /// purpose (e.g., dark-salamander cast for max mill efficiency
+    /// at the cost of a 0/0 body). Default false: the engine rejects
+    /// `x_value = Some(0)` with `PlayError::XBelowMinimum`.
+    #[serde(default)]
+    pub allow_x_zero: bool,
     /// Activated abilities the controller may fire on their initiative.
     /// Resolves immediately (no stack, no response window per the design
     /// decision recorded in RULES A.5). Each entry has a cost, a text
@@ -1080,6 +1088,9 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
     let gy_hand_substitute = table
         .get::<Option<bool>>("gy_hand_substitute")?
         .unwrap_or(false);
+    let allow_x_zero = table
+        .get::<Option<bool>>("allow_x_zero")?
+        .unwrap_or(false);
 
     Ok(Card {
         id,
@@ -1098,6 +1109,7 @@ pub fn load_card(lua: &Lua, path: &Path) -> mlua::Result<Card> {
         static_def,
         handlers,
         gy_hand_substitute,
+        allow_x_zero,
         activated,
     })
 }
