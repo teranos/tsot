@@ -77,6 +77,10 @@ These aren't engine bugs but they limit the validity of sim-based playtest signa
 
 - **P.8 attached → EXILE on host's death** — attached cards currently get dropped on the floor or stay attached depending on path. RULES says exile.
 
+## design intents not yet encoded by a card
+
+- **"Y - X" / two-variable cost-effect interplay** — the original Dark Salamander used `2Y - X` (Y = activation X-cost, X = source's effective X stat) so paying more on activation outscaled the source's own stats. Pattern got dropped when dark-salamander simplified to `2Y`. A future card should re-encode the two-variable-arithmetic idea: handler reads `game.x_value()` AND `game.card(self).x` (or other stat / state value) and combines them. Self-tension built into the math.
+
 ## EA / evolutionary deck search
 
 Three biggest limitations on what conclusions the EA can support today.
