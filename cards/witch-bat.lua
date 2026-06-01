@@ -5,7 +5,10 @@ return {
   type = "creature",
   colors = {"purple"},
   subtypes = {"bat"},
-  cost = {{amount = 1, source = "hand"}},
+  cost = {
+    {amount = 1, source = "hand"},
+    {amount = 1, source = "graveyard"},
+  },
   stats = {x = 3, y = 1},
   abilities = {
     "flying.",

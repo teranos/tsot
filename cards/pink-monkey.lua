@@ -11,13 +11,13 @@ return {
   symbol = "≡",
   cost = {{amount = 1, source = "hand"}},
   abilities = {
-    "2 hand: return target opposing creature to its owner's hand.",
+    "2 hand: return target opposing creature to its owner's hand. opponent draws a card.",
   },
   stats = {x = 2, y = 2},
   activated = {
     {
       cost = {{amount = 2, source = "hand"}},
-      text = "2 hand: return target creature to its owner's hand.",
+      text = "2 hand: return target creature to its owner's hand. opponent draws a card.",
       timing = "instant",
       validate = function(game, self)
         -- RULES A.9: needs an opposing creature on the board.
@@ -42,6 +42,7 @@ return {
         if info and info.owner then
           game.move_to(target, info.owner, "hand")
         end
+        game.draw(opp, 1)
       end,
     },
   },
