@@ -108,6 +108,7 @@ The following are not part of this game.
 - **P.10** When a card moves from the BOARD to the HAND or to the DECK, its attached cards are placed in EXILE.
 - **P.30** A variable-X cost component (a cost where `is_x = true`) has a minimum X value of 1 — X must be chosen to be at least 1. A card may explicitly opt into allowing X = 0 by declaring `allow_x_zero = true`. The default exists because X = 0 nearly always pays only the non-X cost components for a no-op effect (a strict loss); when X = 0 has a real strategic use (e.g., a stat-scaling creature played for body-less mode), the card must opt in explicitly.
 - **P.31** A cost component written as `N attached` means: choose N cards currently attached to cards you control on the BOARD. If the played card is BOARD-placed, those cards become attached to the played card (face-down per P.17). If the played card is non-BOARD, those cards are placed in EXILE. P.7a does not apply to ATTACHED-source payments.
+- **P.32** A card with a declared target category cannot be cast when no legal target for that category exists. The engine refuses the cast before any cost is paid. Target categories are declarative on the card (e.g., `target = "chain"`), and the engine's legality check is built-in per category — parallel to A.9 for activations.
 
 ## Abilities (A)
 

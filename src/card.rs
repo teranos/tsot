@@ -112,6 +112,15 @@ pub enum CostSource {
     Attached,
 }
 
+/// RULES P.32: declarative target categories for cast-time legality. The
+/// engine has a built-in legality predicate per variant. Add a variant
+/// when a new category of "target X" emerges in the corpus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Target {
+    /// At least one item exists on the stack (counterspells need this).
+    Chain,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CostComponent {
     pub amount: i32,
@@ -443,6 +452,13 @@ pub struct Card {
     /// owning `CardRegistry` VM and must be re-bound after deserialize.
     #[serde(skip, default)]
     pub activated: Vec<ActivatedAbility>,
+    /// RULES P.32: declarative target category. When set, the engine
+    /// refuses the cast if no legal target for the category exists. Pure
+    /// state read — no Lua handler required. Common categories like
+    /// "chain" (counterspells), "creature" (removal), "graveyard_card"
+    /// (recursion) get one definition each; cards just declare which.
+    #[serde(default)]
+    pub target: Option<Target>,
     /// Balance-probe variant marker. True for cards loaded from a
     /// `variants = { [key] = { overrides } }` block in another card's
     /// .lua file. Variants are excluded from `main.rs::playable_pool`
@@ -480,6 +496,12 @@ pub struct ActivatedAbility {
     /// `ActivateError::NoLegalTarget` and **no cost is paid** — this
     /// is the whole point of the hook.
     pub validate: Option<Function>,
+    /// RULES P.32 (extends to activations per A.9): declarative target
+    /// category. When set, the engine refuses activation if no legal
+    /// target exists. Pure state read. Cards can use this instead of (or
+    /// alongside) a `validate` function for the common "needs a target
+    /// of category X" pre-check.
+    pub target: Option<Target>,
     pub effect: Function,
 }
 
@@ -683,12 +705,24 @@ fn read_activated(t: &Table) -> mlua::Result<Vec<ActivatedAbility>> {
             }
         };
         let effect: Function = item.get("effect")?;
+        let target: Option<Target> = match item.get::<Option<String>>("target")? {
+            None => None,
+            Some(s) => match s.to_ascii_lowercase().as_str() {
+                "chain" => Some(Target::Chain),
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "unknown activation target category: {other:?}"
+                    )))
+                }
+            },
+        };
         out.push(ActivatedAbility {
             cost_tap,
             cost_components,
             text,
             timing,
             validate,
+            target,
             effect,
         });
     }
@@ -1004,12 +1038,24 @@ fn parse_one_activated_entry(item: Table) -> mlua::Result<ActivatedAbility> {
         }
     };
     let effect: Function = item.get("effect")?;
+    let target: Option<Target> = match item.get::<Option<String>>("target")? {
+        None => None,
+        Some(s) => match s.to_ascii_lowercase().as_str() {
+            "chain" => Some(Target::Chain),
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "unknown granted_activated target category: {other:?}"
+                )))
+            }
+        },
+    };
     Ok(ActivatedAbility {
         cost_tap,
         cost_components,
         text,
         timing,
         validate,
+        target,
         effect,
     })
 }
@@ -1131,6 +1177,17 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
     let allow_x_zero = table
         .get::<Option<bool>>("allow_x_zero")?
         .unwrap_or(false);
+    let target = match table.get::<Option<String>>("target")? {
+        None => None,
+        Some(s) => match s.to_ascii_lowercase().as_str() {
+            "chain" => Some(Target::Chain),
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "unknown target category: {other:?}"
+                )));
+            }
+        },
+    };
     Ok(Card {
         id,
         name,
@@ -1150,6 +1207,7 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
         gy_hand_substitute,
         allow_x_zero,
         activated,
+        target,
         is_variant: false,
         variant_of: None,
     })

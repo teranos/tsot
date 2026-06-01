@@ -30,8 +30,9 @@ return {
   type = "instant",
   cost = {},
   abilities = {
-    "counter target spell.",
+    "counter target card.",
   },
+  target = "chain",
   on_play = function(game, self)
     game.counter_top()
   end,

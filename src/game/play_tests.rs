@@ -2629,3 +2629,36 @@ fn card_identity_includes_lowercased_colors_and_symbol() {
     assert!(ident.contains("⊨"));
     assert_eq!(ident.len(), 3);
 }
+
+#[test]
+fn counterspell_cast_validate_refuses_when_chain_is_empty() {
+    // RULES P.32: counterspell declares `target = "chain"`; the engine
+    // refuses the cast when no chain item exists (nothing to counter).
+    // play_card refuses with CastValidateFailed; no cost paid.
+    use crate::card::CardRegistry;
+    use crate::game::EventContext;
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let cs = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "counterspell")
+        .unwrap()
+        .clone();
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cs_iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&cs_iid).unwrap();
+        inst.card = cs;
+    }
+    use rand::SeedableRng;
+    let rng = rand::rngs::StdRng::seed_from_u64(0);
+    let mut oracle = crate::choice::RandomOracle::new(rng);
+    let result = s.play_card(
+        PlayerId::A,
+        &cs_iid,
+        PlayChoices::default(),
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    );
+    assert_eq!(result, Err(PlayError::CastValidateFailed));
+    assert!(s.a.hand.contains(&cs_iid));
+}

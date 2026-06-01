@@ -613,7 +613,20 @@ impl GameState {
                         _ => return false,
                     }
                 }
-                hand.len() > hand_need && deck_len >= mill_need && gy_len >= gy_need
+                if hand.len() <= hand_need || deck_len < mill_need || gy_len < gy_need {
+                    return false;
+                }
+                // RULES P.32: refuse if the card declares a target category
+                // and no legal target exists. Without this, counterspell
+                // (target = "chain") is a candidate when the chain is empty;
+                // play_card refuses with CastValidateFailed and the
+                // priority window can't advance.
+                if let Some(target) = inst.card.target {
+                    if !self.is_target_legal(target) {
+                        return false;
+                    }
+                }
+                true
             })
             .cloned()
             .collect()
@@ -746,6 +759,19 @@ impl GameState {
     }
 
     /// Append an iid to host's attached vec, journaling the addition.
+    /// RULES P.32: built-in legality check for a declared cast target
+    /// category. Returns true iff at least one legal target exists in
+    /// the current state. Pure read — no Lua, no mutation.
+    pub fn is_target_legal(&self, target: crate::card::Target) -> bool {
+        match target {
+            crate::card::Target::Chain => self
+                .priority
+                .as_ref()
+                .map(|p| !p.chain.is_empty())
+                .unwrap_or(false),
+        }
+    }
+
     /// Find the host iid that has `attached` in its attached vec.
     /// Returns None if `attached` isn't attached to anything in the pool.
     pub fn host_of(&self, attached: &InstanceId) -> Option<InstanceId> {

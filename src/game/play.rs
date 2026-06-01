@@ -157,6 +157,11 @@ pub enum PlayError {
     AttachedPaymentInvalid(InstanceId),
     /// P.31: an attached payment id appears more than once.
     DuplicateAttachedPayment(InstanceId),
+    /// The card's optional `validate` hook returned false at cast time —
+    /// typically "no legal target exists for this card." No cost is paid
+    /// (the check runs before any state mutation). Parallel to
+    /// `ActivateError::NoLegalTarget` but for cast.
+    CastValidateFailed,
     /// C.14: a transparent card cannot be a HAND-source payment for a
     /// card placed on the BOARD when played.
     HandPaymentTransparentForBoardPlaced(InstanceId),
@@ -240,6 +245,16 @@ impl GameState {
         let card_timing = inst_ref.card.timing;
         if card_timing == Some(crate::card::Timing::Sorcery) && self.priority.is_some() {
             return Err(PlayError::SorceryAtInstantSpeed);
+        }
+
+        // RULES P.32: declarative target category. If the card declares
+        // a target category and no legal target exists, refuse the cast
+        // before any state mutation. Counterspell uses `target = "chain"`
+        // to refuse when the stack is empty.
+        if let Some(target) = inst_ref.card.target {
+            if !self.is_target_legal(target) {
+                return Err(PlayError::CastValidateFailed);
+            }
         }
 
         // Aggregate cost requirements per source.
@@ -1280,6 +1295,7 @@ impl GameState {
             components,
             handler,
             validate,
+            ability_target,
             allow_x_zero,
         ) = {
             let inst = self
@@ -1300,9 +1316,17 @@ impl GameState {
                 ability.cost_components.clone(),
                 ability.effect.clone(),
                 ability.validate.clone(),
+                ability.target,
                 inst.card.allow_x_zero,
             )
         };
+        // RULES A.9 + P.32: declarative target category. If set and no
+        // legal target exists, refuse activation before any cost.
+        if let Some(target) = ability_target {
+            if !self.is_target_legal(target) {
+                return Err(ActivateError::NoLegalTarget);
+            }
+        }
 
         // Source must be on its controller's BOARD. v1 doesn't model
         // activations from hand / graveyard / attached.
@@ -1474,6 +1498,13 @@ impl GameState {
         };
         if !self.player(inst.controller).board.contains(iid) {
             return false;
+        }
+        // RULES P.32: declarative target category — refuse if no legal
+        // target exists. Mirrors the engine's activate_ability gate.
+        if let Some(target) = ability.target {
+            if !self.is_target_legal(target) {
+                return false;
+            }
         }
         if ability.cost_tap {
             if inst.tapped {

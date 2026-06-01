@@ -119,6 +119,14 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     let Some(inst) = state.card_pool.get(iid) else {
         return false;
     };
+    // RULES P.32: refuse if the card declares a target category and no
+    // legal target exists. Mirrors the engine's cast-time gate so the
+    // picker doesn't burn rolls on cards play_card will refuse.
+    if let Some(target) = inst.card.target {
+        if !state.is_target_legal(target) {
+            return false;
+        }
+    }
     let mut hand_need = 0usize;
     let mut mill_need = 0usize;
     let mut gy_need = 0usize;
