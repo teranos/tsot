@@ -294,7 +294,25 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
             return ResponseAction::Pass;
         }
         let prob = if would_die_soon(state, player) {
-            0.95
+            1.0
+        } else if chain_threat {
+            // Cost-scaled response when not in die-soon mode: small spells
+            // aren't worth countering; expensive ones must be.
+            // < 2 cost → 0%, then 20%/step, 6+ → 100%.
+            let target_cost: i32 = p
+                .chain
+                .last()
+                .and_then(|item| {
+                    let StackItem::PlayedCard { card, .. } = item;
+                    state.card_pool.get(card)
+                })
+                .map(|inst| inst.card.cost.iter().map(|c| c.amount.max(0)).sum())
+                .unwrap_or(0);
+            if target_cost < 2 {
+                0.0
+            } else {
+                ((target_cost - 1) as f64 * 0.20).min(1.0)
+            }
         } else {
             0.25
         };
