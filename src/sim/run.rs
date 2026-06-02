@@ -36,7 +36,7 @@ pub fn run_game(
     lua: &mlua::Lua,
 ) -> (GameStats, tsot::game::Journal) {
     state.replay_journal = Some(tsot::game::Journal::new());
-    let mut stats = run_game_continue(&mut state, rng, log, lua);
+    let mut stats = run_game_continue(&mut state, rng, log, lua, &super::AiKind::Heuristic);
     let replay_journal = state.replay_journal.take().unwrap_or_default();
     stats.replay_journal_entries = replay_journal.len() as u64;
     (stats, replay_journal)
@@ -63,6 +63,7 @@ pub fn run_game_continue(
     rng: &mut StdRng,
     log: &mut Vec<String>,
     lua: &mlua::Lua,
+    ai: &super::AiKind,
 ) -> GameStats {
     let oracle_seed: u64 = rng.gen();
     let mut oracle = RecordingOracle::new(RandomOracle::new(StdRng::seed_from_u64(oracle_seed)));
@@ -211,8 +212,15 @@ pub fn run_game_continue(
             } else {
                 PickKindFilter::Any
             };
-            let Some(picked) = pick_random_playable_in_hand(&state, active, rng, kind_filter)
-            else {
+            let pick = match ai {
+                super::AiKind::Heuristic => {
+                    pick_random_playable_in_hand(state, active, rng, kind_filter)
+                }
+                super::AiKind::Mcts(mcts_cfg) => {
+                    super::mcts::pick_play(state, active, kind_filter, mcts_cfg, lua)
+                }
+            };
+            let Some(picked) = pick else {
                 break;
             };
             last_picked = Some(picked.clone());
@@ -1086,7 +1094,7 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(0xC0FFEE);
         let mut log: Vec<String> = Vec::new();
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua());
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &super::super::AiKind::Heuristic);
 
         assert!(state.winner.is_some(), "game should have a winner");
         assert!(stats.turns > 0, "stats should record turns");

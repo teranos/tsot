@@ -18,13 +18,16 @@ pub enum PickKindFilter {
     NonCreatureOnly,
 }
 
-pub fn pick_random_playable_in_hand(
+/// Return every playable card in `player`'s hand that passes the
+/// `kind_filter`. Same filter as `pick_random_playable_in_hand` uses,
+/// just collected instead of randomly chosen. Used by `sim::mcts` for
+/// candidate enumeration.
+pub fn enumerate_playable_in_hand(
     state: &GameState,
     player: PlayerId,
-    rng: &mut impl Rng,
     kind_filter: PickKindFilter,
-) -> Option<InstanceId> {
-    let candidates: Vec<&InstanceId> = state
+) -> Vec<InstanceId> {
+    state
         .player(player)
         .hand
         .iter()
@@ -72,7 +75,17 @@ pub fn pick_random_playable_in_hand(
                 _ => false,
             }
         })
-        .collect();
+        .cloned()
+        .collect()
+}
+
+pub fn pick_random_playable_in_hand(
+    state: &GameState,
+    player: PlayerId,
+    rng: &mut impl Rng,
+    kind_filter: PickKindFilter,
+) -> Option<InstanceId> {
+    let candidates = enumerate_playable_in_hand(state, player, kind_filter);
     if candidates.is_empty() {
         return None;
     }
@@ -81,7 +94,7 @@ pub fn pick_random_playable_in_hand(
     // twice per candidate.)
     let scored: Vec<(&InstanceId, i32)> = candidates
         .iter()
-        .map(|iid| (*iid, play_priority_score(state, iid)))
+        .map(|iid| (iid, play_priority_score(state, iid)))
         .collect();
     let max_priority = scored.iter().map(|(_, s)| *s).max().unwrap_or(0);
     let top: Vec<&InstanceId> = scored

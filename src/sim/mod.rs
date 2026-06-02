@@ -15,6 +15,7 @@ pub mod evolve;
 pub mod evolved_deck;
 pub mod fitness;
 pub mod genome;
+pub mod mcts;
 pub mod ops;
 pub mod parallel_eval;
 pub mod run;
@@ -24,3 +25,20 @@ pub mod variants;
 pub use evolve::{evolve as run_evolve, EvolveConfig};
 pub use run::run_game;
 pub use stats::GameStats;
+
+/// Which AI drives the sim's player-decision points. Default = the
+/// heuristic AI that's been there since session 1 (priority-tier
+/// pick, intent-aware targeting, trade-up combat). `Mcts` swaps the
+/// Pattern B card-pick decision for one-ply rollout MCTS; all other
+/// decisions (targets, combat, X-values) stay heuristic for v1.
+#[derive(Debug, Clone)]
+pub enum AiKind {
+    Heuristic,
+    Mcts(mcts::MctsConfig),
+}
+
+impl Default for AiKind {
+    fn default() -> Self {
+        AiKind::Heuristic
+    }
+}
