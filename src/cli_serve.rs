@@ -80,8 +80,9 @@ pub fn run_serve(
     };
     let seed = args.seed.unwrap_or_else(|| {
         use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+        #[allow(clippy::disallowed_methods)]
+        let now = SystemTime::now();
+        now.duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0xCAFE_F00D)
     });

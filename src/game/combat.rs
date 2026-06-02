@@ -359,6 +359,11 @@ impl GameState {
     ) -> CombatOutcome {
         let mut outcome = CombatOutcome::default();
         let defender = self.active_player.opponent();
+        let mut ctx = ctx;
+        // Track which attackers successfully damaged the defender's deck
+        // so we can fire OnDealtDamageToPlayer on them (and their
+        // attached cards — klotho-style mutations) after the mill loop.
+        let mut damaged_attackers: Vec<InstanceId> = Vec::new();
 
         for atk in &attacks {
             let attacker_x = self.effective_stats(&atk.attacker).0;
@@ -371,6 +376,9 @@ impl GameState {
                         break;
                     };
                     let _ = self.move_card(&top, defender, Zone::Deck, Zone::Exile);
+                }
+                if mill_n > 0 {
+                    damaged_attackers.push(atk.attacker.clone());
                 }
                 if self.player(defender).deck.is_empty() {
                     self.set_winner(Some(defender.opponent()));
@@ -390,6 +398,40 @@ impl GameState {
                     .map(|i| i.damage)
                     .unwrap_or(0);
                 self.set_damage(&atk.attacker, current + attacker_dmg);
+            }
+        }
+
+        // Fire OnDealtDamageToPlayer for each attacker that successfully
+        // damaged the defender. Also fires on every card attached to
+        // that attacker — klotho-style mutations declare the handler
+        // and receive `self` = the mutation, drawing for `self.owner`.
+        for attacker in &damaged_attackers {
+            // Snapshot the attached list before firing so handlers that
+            // mutate state (detach, move) don't desync the iteration.
+            let attached: Vec<InstanceId> = self
+                .card_pool
+                .get(attacker)
+                .map(|i| i.attached.clone())
+                .unwrap_or_default();
+            if let Some(c) = ctx.as_deref_mut() {
+                lua_api::fire_self_only(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    EventName::OnDealtDamageToPlayer,
+                    attacker,
+                );
+            }
+            for aid in &attached {
+                if let Some(c) = ctx.as_deref_mut() {
+                    lua_api::fire_self_only(
+                        c.lua,
+                        self,
+                        c.oracle(),
+                        EventName::OnDealtDamageToPlayer,
+                        aid,
+                    );
+                }
             }
         }
 
@@ -414,7 +456,6 @@ impl GameState {
                 to_kill.push(iid.clone());
             }
         }
-        let mut ctx = ctx;
         for iid in &to_kill {
             let owner = self
                 .card_pool

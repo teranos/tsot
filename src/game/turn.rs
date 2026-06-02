@@ -2,13 +2,19 @@
 //!
 //! Mirrors RULES.md sections U (turns) and B.10 (end-of-turn damage clear).
 
+use super::context::EventContext;
+use super::lua_api;
 use super::state::{GameState, InstanceId, Phase, StatusEffect, Zone};
+use crate::card::EventName;
 
 impl GameState {
     /// Advance to the next phase, firing the entry action for the new phase.
     /// Phase order per U.6: Untap → Draw → Main1 → Combat → Main2 → End → next turn's Untap.
-    /// No-op if a winner has been determined.
-    pub fn next_phase(&mut self) {
+    /// No-op if a winner has been determined. `ctx` is required for any
+    /// phase-entry events that need to fire Lua handlers
+    /// (`OnTurnBegin` at Untap entry currently); pass `None` from sites
+    /// that don't have a Lua VM in scope.
+    pub fn next_phase(&mut self, ctx: Option<&mut EventContext>) {
         if self.winner.is_some() {
             return;
         }
@@ -39,6 +45,37 @@ impl GameState {
             }
         };
         self.set_phase(next);
+        // OnTurnBegin: fires when entering Untap (start of a new turn).
+        // Broadcasts to every BOARD card of the active player plus
+        // every card attached to one of those cards.
+        if matches!(next, Phase::Untap) {
+            if let Some(c) = ctx {
+                let board: Vec<InstanceId> = self.player(self.active_player).board.clone();
+                for iid in &board {
+                    let attached: Vec<InstanceId> = self
+                        .card_pool
+                        .get(iid)
+                        .map(|i| i.attached.clone())
+                        .unwrap_or_default();
+                    lua_api::fire_self_only(
+                        c.lua,
+                        self,
+                        c.oracle(),
+                        EventName::OnTurnBegin,
+                        iid,
+                    );
+                    for aid in &attached {
+                        lua_api::fire_self_only(
+                            c.lua,
+                            self,
+                            c.oracle(),
+                            EventName::OnTurnBegin,
+                            aid,
+                        );
+                    }
+                }
+            }
+        }
         self.enter_phase_action();
     }
 
@@ -150,17 +187,17 @@ mod tests {
     fn phase_cycles_in_order() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         assert_eq!(s.phase, Phase::Untap);
-        s.next_phase();
+        s.next_phase(None);
         assert_eq!(s.phase, Phase::Draw);
-        s.next_phase();
+        s.next_phase(None);
         assert_eq!(s.phase, Phase::Main1);
-        s.next_phase();
+        s.next_phase(None);
         assert_eq!(s.phase, Phase::Combat);
-        s.next_phase();
+        s.next_phase(None);
         assert_eq!(s.phase, Phase::Main2);
-        s.next_phase();
+        s.next_phase(None);
         assert_eq!(s.phase, Phase::End);
-        s.next_phase();
+        s.next_phase(None);
         assert_eq!(s.phase, Phase::Untap);
     }
 
@@ -168,7 +205,7 @@ mod tests {
     fn end_to_untap_swaps_active_and_increments_turn() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         for _ in 0..6 {
-            s.next_phase();
+            s.next_phase(None);
         }
         assert_eq!(s.phase, Phase::Untap);
         assert_eq!(s.turn, 2);
@@ -181,7 +218,7 @@ mod tests {
         let hand_before = s.a.hand.len();
         let deck_before = s.a.deck.len();
         let top = s.a.deck[0].clone();
-        s.next_phase();
+        s.next_phase(None);
         assert_eq!(s.phase, Phase::Draw);
         assert_eq!(s.a.hand.len(), hand_before + 1);
         assert_eq!(s.a.deck.len(), deck_before - 1);
@@ -192,7 +229,7 @@ mod tests {
     fn empty_deck_on_a_draw_makes_b_winner() {
         let mut s = GameState::new(deck_of(5, "a"), deck_of(50, "b"));
         assert_eq!(s.a.deck.len(), 0);
-        s.next_phase();
+        s.next_phase(None);
         assert_eq!(s.winner, Some(PlayerId::B));
     }
 
@@ -200,7 +237,7 @@ mod tests {
     fn empty_deck_on_b_draw_makes_a_winner() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(5, "b"));
         for _ in 0..7 {
-            s.next_phase();
+            s.next_phase(None);
         }
         assert_eq!(s.winner, Some(PlayerId::A));
     }
@@ -208,11 +245,11 @@ mod tests {
     #[test]
     fn winner_set_makes_next_phase_a_noop() {
         let mut s = GameState::new(deck_of(5, "a"), deck_of(50, "b"));
-        s.next_phase();
+        s.next_phase(None);
         assert!(s.winner.is_some());
         let phase_before = s.phase;
         let turn_before = s.turn;
-        s.next_phase();
+        s.next_phase(None);
         assert_eq!(s.phase, phase_before);
         assert_eq!(s.turn, turn_before);
     }
@@ -237,7 +274,7 @@ mod tests {
 
         // Advance through a full cycle: Untap → Draw → ... → End → Untap.
         for _ in 0..6 {
-            s.next_phase();
+            s.next_phase(None);
         }
 
         assert_ne!(snapshot, format!("{:?}", s));
@@ -255,7 +292,7 @@ mod tests {
     fn natural_deckout_takes_91_turns_with_50_card_decks() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         while s.winner.is_none() {
-            s.next_phase();
+            s.next_phase(None);
         }
         assert_eq!(s.winner, Some(PlayerId::B));
         assert_eq!(s.turn, 91);
@@ -270,7 +307,7 @@ mod tests {
         s.card_pool.get_mut(&iid).unwrap().tapped = true;
 
         for _ in 0..12 {
-            s.next_phase();
+            s.next_phase(None);
         }
         assert_eq!(s.phase, Phase::Untap);
         assert_eq!(s.active_player, PlayerId::A);
@@ -286,7 +323,7 @@ mod tests {
         s.card_pool.get_mut(&iid).unwrap().tapped = true;
 
         for _ in 0..6 {
-            s.next_phase();
+            s.next_phase(None);
         }
         assert_eq!(s.phase, Phase::Untap);
         assert_eq!(s.active_player, PlayerId::B);
@@ -306,7 +343,7 @@ mod tests {
         }
 
         for _ in 0..12 {
-            s.next_phase();
+            s.next_phase(None);
         }
         let inst = s.card_pool.get(&iid).unwrap();
         assert!(inst.tapped);
@@ -317,14 +354,14 @@ mod tests {
         ));
 
         for _ in 0..12 {
-            s.next_phase();
+            s.next_phase(None);
         }
         let inst = s.card_pool.get(&iid).unwrap();
         assert!(inst.tapped);
         assert!(inst.status_effects.is_empty());
 
         for _ in 0..12 {
-            s.next_phase();
+            s.next_phase(None);
         }
         assert!(!s.card_pool.get(&iid).unwrap().tapped);
     }
@@ -344,7 +381,7 @@ mod tests {
         // Advance to End: Untap → Draw → Main1 → Combat → Main2 → End.
         // Drawing adds one more card, making the hand 10 before discard.
         for _ in 0..5 {
-            s.next_phase();
+            s.next_phase(None);
         }
         assert_eq!(s.phase, Phase::End);
         assert_eq!(s.a.hand.len(), 6);
@@ -361,7 +398,7 @@ mod tests {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         // Default hand size is 5; advance to End. Draw makes it 6, exactly the cap.
         for _ in 0..5 {
-            s.next_phase();
+            s.next_phase(None);
         }
         assert_eq!(s.phase, Phase::End);
         assert_eq!(s.a.hand.len(), 6);
@@ -378,7 +415,7 @@ mod tests {
         }
         assert_eq!(s.b.hand.len(), 9);
         for _ in 0..5 {
-            s.next_phase();
+            s.next_phase(None);
         }
         assert_eq!(s.phase, Phase::End);
         assert_eq!(s.active_player, PlayerId::A);
@@ -393,7 +430,7 @@ mod tests {
         let iid = s.a.hand[0].clone();
         s.card_pool.get_mut(&iid).unwrap().damage = 5;
         for _ in 0..6 {
-            s.next_phase();
+            s.next_phase(None);
         }
         assert_eq!(s.card_pool.get(&iid).unwrap().damage, 0);
     }

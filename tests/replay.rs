@@ -76,7 +76,7 @@ fn evolve(state: &mut GameState, lua: &mlua::Lua) {
     // Several phases including combat to exercise mutations across subsystems.
     for _ in 0..3 {
         while state.phase != Phase::Combat && state.winner.is_none() {
-            state.next_phase();
+            state.next_phase(None);
         }
         if state.winner.is_some() {
             return;
@@ -91,7 +91,7 @@ fn evolve(state: &mut GameState, lua: &mlua::Lua) {
         let _ = state.confirm_attacks();
         let _ = state.confirm_blocks(Some(&mut EventContext::new(lua, &mut oracle)));
         while state.phase != Phase::Untap && state.winner.is_none() {
-            state.next_phase();
+            state.next_phase(None);
         }
     }
 }

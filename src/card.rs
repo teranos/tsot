@@ -362,6 +362,19 @@ pub enum EventName {
     /// `partner` is the card being paid for. Powers the zebra / mantis-shrimp
     /// "if attached as cost to matching-color, may reveal & draw" cycle.
     OnAttachedAsCost,
+    /// Fires on a creature after it successfully damaged a player via
+    /// an unblocked attack (per B.2). Also fires on each of that
+    /// creature's attached cards — Klotho-style mutations declare the
+    /// handler and receive `self` = the mutation, drawing for
+    /// `self.owner`. Closes the gap LIMITATIONS flagged as
+    /// `OnDealtDamageToPlayer`.
+    OnDealtDamageToPlayer,
+    /// Fires at the start of the active player's Untap step (i.e., at
+    /// the beginning of their turn). Broadcasts to every BOARD card of
+    /// the active player plus every card attached to one of those
+    /// boards' cards — mutations that declare the handler receive
+    /// `self` = the mutation. "At the beginning of your turn..."
+    OnTurnBegin,
 }
 
 impl EventName {
@@ -375,11 +388,13 @@ impl EventName {
             EventName::OnBlockedBy => "on_blocked_by",
             EventName::OnPlay => "on_play",
             EventName::OnAttachedAsCost => "on_attached_as_cost",
+            EventName::OnDealtDamageToPlayer => "on_dealt_damage_to_player",
+            EventName::OnTurnBegin => "on_turn_begin",
         }
     }
 
     /// All known event names, for loader iteration.
-    pub const ALL: [EventName; 7] = [
+    pub const ALL: [EventName; 9] = [
         EventName::OnEnterBoard,
         EventName::OnDie,
         EventName::OnAttack,
@@ -387,6 +402,8 @@ impl EventName {
         EventName::OnBlockedBy,
         EventName::OnPlay,
         EventName::OnAttachedAsCost,
+        EventName::OnDealtDamageToPlayer,
+        EventName::OnTurnBegin,
     ];
 }
 

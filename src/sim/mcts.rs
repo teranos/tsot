@@ -285,7 +285,7 @@ mod tests {
         use tsot::game::Phase;
         for state in [&mut state_1, &mut state_2] {
             while state.phase != Phase::Main1 {
-                state.next_phase();
+                state.next_phase(None);
             }
         }
 

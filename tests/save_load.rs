@@ -14,7 +14,7 @@ use tsot::replay::SaveFile;
 fn evolve_one_combat_cycle(state: &mut GameState, lua: &mlua::Lua) {
     let mut oracle = ScriptedOracle::new(vec![]);
     while state.phase != Phase::Combat && state.winner.is_none() {
-        state.next_phase();
+        state.next_phase(None);
     }
     if state.winner.is_some() {
         return;
@@ -29,7 +29,7 @@ fn evolve_one_combat_cycle(state: &mut GameState, lua: &mlua::Lua) {
     let _ = state.confirm_attacks();
     let _ = state.confirm_blocks(Some(&mut EventContext::new(lua, &mut oracle)));
     while state.phase != Phase::Untap && state.winner.is_none() {
-        state.next_phase();
+        state.next_phase(None);
     }
 }
 
@@ -121,7 +121,7 @@ fn save_load_round_trip_preserves_lua_handler_calls() {
 
     // Bring resumed into combat and try declaring the bee as attacker.
     while resumed.phase != Phase::Combat && resumed.winner.is_none() {
-        resumed.next_phase();
+        resumed.next_phase(None);
     }
     // Mark unsick so it can attack.
     if let Some(inst) = resumed.card_pool.get_mut(&atk) {

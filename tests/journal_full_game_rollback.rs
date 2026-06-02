@@ -70,7 +70,7 @@ fn drive_scripted_game(state: &mut GameState, lua: &mlua::Lua) {
     for _ in 0..3 {
         // Advance to Main1.
         while state.phase != Phase::Main1 && state.winner.is_none() {
-            state.next_phase();
+            state.next_phase(None);
         }
         if state.winner.is_some() {
             return;
@@ -98,7 +98,7 @@ fn drive_scripted_game(state: &mut GameState, lua: &mlua::Lua) {
 
         // Advance to Combat.
         while state.phase != Phase::Combat && state.winner.is_none() {
-            state.next_phase();
+            state.next_phase(None);
         }
         if state.winner.is_some() {
             return;
@@ -119,7 +119,7 @@ fn drive_scripted_game(state: &mut GameState, lua: &mlua::Lua) {
 
         // Wrap to next turn.
         while state.phase != Phase::Untap && state.winner.is_none() {
-            state.next_phase();
+            state.next_phase(None);
         }
     }
 }

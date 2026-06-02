@@ -526,7 +526,8 @@ pub fn run_game_continue(
         let mut events: Vec<String> = Vec::new();
 
         while state.phase != Phase::Main1 && state.winner.is_none() {
-            state.next_phase();
+            let mut oracle = RandomOracle::new(StdRng::seed_from_u64(rng.gen()));
+            state.next_phase(Some(&mut EventContext::new(lua, &mut oracle)));
         }
         if state.winner.is_some() {
             log.push(format!("turn {turn} ({active:?}): deck-out before Main1"));
@@ -843,7 +844,8 @@ pub fn run_game_continue(
         }
 
         while state.phase != Phase::Combat && state.winner.is_none() {
-            state.next_phase();
+            let mut oracle = RandomOracle::new(StdRng::seed_from_u64(rng.gen()));
+            state.next_phase(Some(&mut EventContext::new(lua, &mut oracle)));
         }
         if state.winner.is_some() {
             if !events.is_empty() {
@@ -937,7 +939,8 @@ pub fn run_game_continue(
             // Advance into Main2 explicitly so play_card timing checks
             // (sorcery-speed) accept the cast.
             while state.phase != Phase::Main2 && state.winner.is_none() {
-                state.next_phase();
+                let mut oracle = RandomOracle::new(StdRng::seed_from_u64(rng.gen()));
+                state.next_phase(Some(&mut EventContext::new(lua, &mut oracle)));
                 if matches!(state.phase, Phase::Untap | Phase::Draw) {
                     // We've already wrapped past End — bail.
                     break;
@@ -1021,7 +1024,8 @@ pub fn run_game_continue(
 
         let starting_turn = state.turn;
         while state.turn == starting_turn && state.winner.is_none() {
-            state.next_phase();
+            let mut oracle = RandomOracle::new(StdRng::seed_from_u64(rng.gen()));
+            state.next_phase(Some(&mut EventContext::new(lua, &mut oracle)));
         }
     }
 

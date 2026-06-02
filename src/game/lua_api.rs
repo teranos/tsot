@@ -936,6 +936,57 @@ macro_rules! build_game_table {
             )?,
         )?;
 
+        // game.host_of(iid) → host iid or nil. Walks every card in the
+        // pool and returns the first whose `attached` list contains
+        // `iid`. Used by attached cards (mutations) that need to find
+        // the host they're pinned to — e.g. an on_turn_begin handler
+        // that wants to do something to the host.
+        let cell_ho = &$cell;
+        game.set(
+            "host_of",
+            $scope.create_function_mut(move |_, iid: String| -> Result<Option<String>> {
+                let s = cell_ho.borrow();
+                Ok(find_host_of_attached(&s, &iid))
+            })?,
+        )?;
+
+        // game.attach_from_deck(host, player, n) — take top n cards of
+        // `player`'s DECK and attach each to `host` face-down (P.17).
+        // Respects C.14 — a transparent card is skipped if `host`
+        // isn't transparent. Stops early if the deck runs out. Used by
+        // beginning-of-turn "mill to attached" triggers (MYC, ...).
+        let cell_afd = &$cell;
+        game.set(
+            "attach_from_deck",
+            $scope.create_function_mut(
+                move |_, (host, player, n): (String, String, i32)| -> Result<()> {
+                    let pid = parse_pid(&player)?;
+                    let mut s = cell_afd.borrow_mut();
+                    if !s.card_pool.contains_key(&host) {
+                        return Ok(());
+                    }
+                    let host_transparent = s.is_transparent(&host);
+                    let take = n.max(0) as usize;
+                    for _ in 0..take {
+                        let Some(top) = s.player(pid).deck.first().cloned() else {
+                            break;
+                        };
+                        if s.is_transparent(&top) && !host_transparent {
+                            // C.14 violation — skip this card (it stays
+                            // on top of the deck). Caller is responsible
+                            // for choosing not to call this when a glass
+                            // creature is at the top.
+                            break;
+                        }
+                        let _ = s.remove_from_zone(&top, pid, Zone::Deck);
+                        s.add_attached(&host, &top);
+                        s.set_face_down(&top, true);
+                    }
+                    Ok(())
+                },
+            )?,
+        )?;
+
         // game.attach(host, iid) — take `iid` from whatever zone it's
         // currently in (BOARD search across both players' boards) and
         // attach it to `host`, face-down per P.17. Used by predator

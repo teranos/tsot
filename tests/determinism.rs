@@ -30,7 +30,7 @@ fn evolve_game(state: &mut GameState, lua: &mlua::Lua) {
     ]);
     // Advance to Combat.
     while state.phase != Phase::Combat && state.winner.is_none() {
-        state.next_phase();
+        state.next_phase(None);
     }
     if state.winner.is_some() {
         return;
@@ -47,7 +47,7 @@ fn evolve_game(state: &mut GameState, lua: &mlua::Lua) {
     let _ = state.confirm_blocks(Some(&mut EventContext::new(lua, &mut oracle)));
     // Run to end of turn.
     while state.phase != Phase::Untap && state.winner.is_none() {
-        state.next_phase();
+        state.next_phase(None);
     }
 }
 
