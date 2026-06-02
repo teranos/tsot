@@ -36,6 +36,10 @@ for _, path in ipairs(list_lua_files(cards_dir)) do
       card.on_play or card.on_die or card.on_attack or card.on_block
       or card.on_blocked_by or card.on_enter_board or card.on_attached_as_cost
       or card.static or (card.activated and #card.activated > 0)
+      -- Declarative wiring fields the engine reads directly:
+      or (card.can_block_subtypes and #card.can_block_subtypes > 0)
+      or (card.cannot_block_subtypes and #card.cannot_block_subtypes > 0)
+      or card.gy_hand_substitute
     if not has_impl and type(card.abilities) == "table" and #card.abilities > 0 then
       -- Filter out cards whose abilities are entirely bare keywords.
       local nontrivial = {}
