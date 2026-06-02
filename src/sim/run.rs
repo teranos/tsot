@@ -317,7 +317,79 @@ pub fn run_game(
                             );
                         }
                     }
+                    // P.12a: pick GY ids for the GRAVEYARD cost component,
+                    // prioritizing a color-anchor. X-cost branch: variable
+                    // GY components scale by x; fixed components contribute
+                    // their amount.
+                    let raw_gy_needed: usize = cost
+                        .iter()
+                        .filter(|c| matches!(c.source, CostSource::Graveyard))
+                        .map(|c| if c.is_x { x.max(0) as usize } else { c.amount.max(0) as usize })
+                        .sum();
+                    let gy_red = state
+                        .cost_reduction(&picked, CostSource::Graveyard)
+                        .max(0) as usize;
+                    let gy_needed = raw_gy_needed.saturating_sub(gy_red);
+                    if gy_needed > 0 {
+                        choices.graveyard_payment_ids =
+                            state.resolve_graveyard_payment(active, &picked, gy_needed);
+                    }
                 } else if matches!(kind, CardType::Creature) {
+                    // Pay HAND/GY costs the same way the spell branch
+                    // does. Without this, creatures with non-zero cost
+                    // (jellyfish: 1 hand + 2 mill + 2 graveyard) get
+                    // picked, never paid for, and play_card rejects
+                    // with WrongHandPaymentCount → the creature gets
+                    // marked played without actually entering play.
+                    let raw_hand_needed: usize = cost
+                        .iter()
+                        .filter(|c| matches!(c.source, CostSource::Hand))
+                        .map(|c| c.amount.max(0) as usize)
+                        .sum();
+                    let hand_red = state
+                        .cost_reduction(&picked, CostSource::Hand)
+                        .max(0) as usize;
+                    let mut hand_needed = raw_hand_needed.saturating_sub(hand_red);
+                    if hand_needed > 0 {
+                        if let Some(jewel) = state.find_jewel_tap_candidate(active, &picked) {
+                            choices.jewel_tap = Some(jewel);
+                            hand_needed -= 1;
+                        }
+                    }
+                    if hand_needed > 0 {
+                        let identity_match_count =
+                            state.identity_matching_hand_count(active, &picked);
+                        if identity_match_count < hand_needed {
+                            let want_gy = hand_needed - identity_match_count;
+                            let gy_subs =
+                                state.find_gy_hand_substitutes(active, &picked, want_gy);
+                            let used = gy_subs.len();
+                            choices.gy_hand_payment_ids = gy_subs;
+                            hand_needed -= used;
+                        }
+                    }
+                    if hand_needed > 0 {
+                        choices.hand_payment_ids = state.resolve_hand_payment(
+                            active,
+                            &picked,
+                            hand_needed,
+                            &mut oracle,
+                        );
+                    }
+                    // P.12a: GY payment with color-anchor priority.
+                    let raw_gy_needed: usize = cost
+                        .iter()
+                        .filter(|c| matches!(c.source, CostSource::Graveyard))
+                        .map(|c| c.amount.max(0) as usize)
+                        .sum();
+                    let gy_red = state
+                        .cost_reduction(&picked, CostSource::Graveyard)
+                        .max(0) as usize;
+                    let gy_needed = raw_gy_needed.saturating_sub(gy_red);
+                    if gy_needed > 0 {
+                        choices.graveyard_payment_ids =
+                            state.resolve_graveyard_payment(active, &picked, gy_needed);
+                    }
                     let has_setup_cost = cost.iter().any(|c| {
                         matches!(c.source, CostSource::Sacrifice | CostSource::Graveyard)
                     });
@@ -366,6 +438,21 @@ pub fn run_game(
                             hand_needed,
                             &mut oracle,
                         );
+                    }
+                    // P.12a: pick GY ids for the GRAVEYARD cost component,
+                    // prioritizing a color-anchor.
+                    let raw_gy_needed: usize = cost
+                        .iter()
+                        .filter(|c| matches!(c.source, CostSource::Graveyard))
+                        .map(|c| c.amount.max(0) as usize)
+                        .sum();
+                    let gy_red = state
+                        .cost_reduction(&picked, CostSource::Graveyard)
+                        .max(0) as usize;
+                    let gy_needed = raw_gy_needed.saturating_sub(gy_red);
+                    if gy_needed > 0 {
+                        choices.graveyard_payment_ids =
+                            state.resolve_graveyard_payment(active, &picked, gy_needed);
                     }
                     if matches!(kind, CardType::Mutation) {
                         let mut pool: Vec<InstanceId> = state

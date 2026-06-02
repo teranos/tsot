@@ -251,6 +251,35 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
         .filter_map(|hid| state.card_pool.get(hid))
         .map(|inst| inst.attached.len())
         .sum();
+    // P.12a: a cast with non-empty colors and a GRAVEYARD cost component
+    // requires at least one color-matching card in GY (the anchor). Without
+    // this gate the picker burns rolls on casts play_card refuses with
+    // NoGraveyardPaymentForColor → response-window spin.
+    if gy_need > 0 {
+        let cast_colors: std::collections::BTreeSet<String> = inst
+            .card
+            .colors
+            .iter()
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        if !cast_colors.is_empty() {
+            let has_anchor = p.graveyard.iter().any(|gid| {
+                state
+                    .card_pool
+                    .get(gid)
+                    .map(|i| {
+                        i.card
+                            .colors
+                            .iter()
+                            .any(|c| cast_colors.contains(&c.to_ascii_lowercase()))
+                    })
+                    .unwrap_or(false)
+            });
+            if !has_anchor {
+                return false;
+            }
+        }
+    }
     hand_have >= hand_need
         && p.deck.len() >= mill_need
         && p.graveyard.len() >= gy_need

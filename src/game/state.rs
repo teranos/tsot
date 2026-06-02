@@ -624,6 +624,35 @@ impl GameState {
                 if hand.len() <= hand_need || deck_len < mill_need || gy_len < gy_need {
                     return false;
                 }
+                // RULES P.12a: GY-source cost component with non-empty
+                // cast colors requires at least one color-matching card
+                // in GY. Without this, response-pick burns rolls on
+                // casts play_card refuses with NoGraveyardPaymentForColor
+                // → priority window spin.
+                if gy_need > 0 {
+                    let cast_colors: std::collections::BTreeSet<String> = inst
+                        .card
+                        .colors
+                        .iter()
+                        .map(|c| c.to_ascii_lowercase())
+                        .collect();
+                    if !cast_colors.is_empty() {
+                        let has_anchor = p.graveyard.iter().any(|gid| {
+                            self.card_pool
+                                .get(gid)
+                                .map(|i| {
+                                    i.card
+                                        .colors
+                                        .iter()
+                                        .any(|c| cast_colors.contains(&c.to_ascii_lowercase()))
+                                })
+                                .unwrap_or(false)
+                        });
+                        if !has_anchor {
+                            return false;
+                        }
+                    }
+                }
                 // RULES P.32: refuse if the card declares a target category
                 // and no legal target exists. Without this, counterspell
                 // (target = "chain") is a candidate when the chain is empty;

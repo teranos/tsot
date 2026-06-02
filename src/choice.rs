@@ -379,6 +379,24 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
             return ResponseAction::Pass;
         }
 
+        // P.12a: pick GY ids for the GRAVEYARD cost component, prioritizing
+        // a color-anchor so the cast passes the new gate.
+        let mut raw_gy_needed: usize = 0;
+        for c in &inst.card.cost {
+            if let crate::card::CostSource::Graveyard = c.source {
+                raw_gy_needed += c.amount.max(0) as usize;
+            }
+        }
+        let gy_red = state
+            .cost_reduction(&pick, crate::card::CostSource::Graveyard)
+            .max(0) as usize;
+        let gy_needed = raw_gy_needed.saturating_sub(gy_red);
+        let graveyard_payment_ids = if gy_needed > 0 {
+            state.resolve_graveyard_payment(player, &pick, gy_needed)
+        } else {
+            Vec::new()
+        };
+
         ResponseAction::Respond {
             card: pick,
             choices: PlayChoices {
@@ -389,7 +407,7 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
                 mutation_target: None,
                 gy_hand_payment_ids: vec![],
                 attached_payment_ids: vec![],
-                graveyard_payment_ids: vec![],
+                graveyard_payment_ids,
             },
         }
     }

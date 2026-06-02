@@ -2843,6 +2843,28 @@ fn mixed_hand_and_gy_without_anchor_falls_back_to_p7a_on_hand() {
     assert_eq!(result, Err(PlayError::NoGraveyardPaymentForColor));
 }
 
+/// Step 3 helper: `resolve_graveyard_payment` puts a color-matching GY
+/// card first when one is available, then fills remaining slots from
+/// the front of GY.
+#[test]
+fn resolve_graveyard_payment_prefers_color_matching_anchor() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    set_identity(&mut s, &cast, &["red"], "");
+    // GY: [colorless, colorless, red]. Helper should pick the red one
+    // first (anchor) then fill with one colorless to reach n=2.
+    let gy_seeds: Vec<_> = s.a.deck.drain(0..3).collect();
+    set_identity(&mut s, &gy_seeds[2], &["red"], "");
+    s.a.graveyard.extend(gy_seeds.clone());
+    let picked = s.resolve_graveyard_payment(PlayerId::A, &cast, 2);
+    assert_eq!(picked.len(), 2);
+    assert_eq!(picked[0], gy_seeds[2], "anchor (red) should come first");
+    assert!(
+        picked.contains(&gy_seeds[0]) || picked.contains(&gy_seeds[1]),
+        "second slot should come from the colorless cards"
+    );
+}
+
 /// P.12b: when a color-matching GY pitch is made, the per-HAND P.7a
 /// identity check is suspended — a non-matching HAND card is accepted.
 #[test]

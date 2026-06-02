@@ -1334,6 +1334,70 @@ impl GameState {
         out
     }
 
+    /// Sim AI helper: pick `n` GY cards to pay an `N graveyard` cost on
+    /// a cast, prioritizing P.12a's color-anchor requirement. Returns up
+    /// to `n` ids:
+    ///
+    /// - If the cast has non-empty colors, the first slot (if possible)
+    ///   is filled with a color-matching GY card so P.12a is satisfied.
+    /// - Remaining slots are filled deterministically from the front of
+    ///   the GY, skipping any id already chosen.
+    /// - When no color-matching card exists in GY but the cast has
+    ///   colors, the returned bundle won't anchor — the engine will
+    ///   reject the cast with `NoGraveyardPaymentForColor`. That's the
+    ///   intended signal back to the AI's existing failed-cast retry.
+    pub fn resolve_graveyard_payment(
+        &self,
+        player: PlayerId,
+        cast_iid: &InstanceId,
+        n: usize,
+    ) -> Vec<InstanceId> {
+        if n == 0 {
+            return Vec::new();
+        }
+        let cast_colors: BTreeSet<String> = self
+            .card_pool
+            .get(cast_iid)
+            .map(|i| {
+                i.card
+                    .colors
+                    .iter()
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let gy = &self.player(player).graveyard;
+        let mut picked: Vec<InstanceId> = Vec::with_capacity(n);
+        if !cast_colors.is_empty() {
+            for iid in gy {
+                let pay_colors: BTreeSet<String> = self
+                    .card_pool
+                    .get(iid)
+                    .map(|i| {
+                        i.card
+                            .colors
+                            .iter()
+                            .map(|c| c.to_ascii_lowercase())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if cast_colors.iter().any(|c| pay_colors.contains(c)) {
+                    picked.push(iid.clone());
+                    break;
+                }
+            }
+        }
+        for iid in gy {
+            if picked.len() >= n {
+                break;
+            }
+            if !picked.contains(iid) {
+                picked.push(iid.clone());
+            }
+        }
+        picked
+    }
+
     pub fn find_gy_hand_substitutes(
         &self,
         player: PlayerId,
