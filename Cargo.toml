@@ -4,11 +4,25 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+# `rlib` is used by every consumer of `tsot` as a library (the native
+# bin, tests, etc.). `cdylib` would also generate a .dylib on native
+# and a SIDE_MODULE on wasm32-unknown-emscripten — we don't need
+# either: the WASM build is via the `tsot_wasm` bin (standalone
+# module + JS loader, not a side module).
+crate-type = ["rlib"]
 
 [[bin]]
 name = "tsot"
 path = "src/main.rs"
+
+# WASM-only entry point. Empty `main()` so emscripten produces a
+# standalone module + JS loader pair instead of a SIDE_MODULE (which
+# is what cdylib emits on emscripten target — meant for dlopen, not
+# what we want for the browser). The actual exports live in
+# `src/wasm_ffi.rs` and are reachable through the lib.
+[[bin]]
+name = "tsot_wasm"
+path = "src/bin/tsot_wasm.rs"
 
 [dependencies]
 clap = { version = "=4.5.20", features = ["derive"] }

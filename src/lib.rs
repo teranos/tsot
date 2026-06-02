@@ -5,6 +5,13 @@ pub mod game;
 pub mod replay;
 pub mod sim;
 
+// FFI surface for the WASM frontend. Browser JS calls these via
+// emscripten's `Module.ccall("tsot_*", ...)`. JSON-string payloads
+// over `*const c_char` for arguments and returns — keeps the FFI
+// boundary simple at the cost of (de)serialization on each call.
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_ffi;
+
 pub use cast_routing::CastRouting;
 
 pub use card::{

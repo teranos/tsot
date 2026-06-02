@@ -1,0 +1,17 @@
+# Cargo config — currently only used for the WASM build's emscripten
+# linker flags. Native builds use Cargo's defaults.
+
+[target.wasm32-unknown-emscripten]
+# Retain the FFI symbols + expose emscripten runtime helpers JS needs
+# to call into them. Output is a single combined .wasm + .js loader
+# (Modularize mode lets the embedding HTML name the module factory).
+rustflags = [
+  "-C", "link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string",
+  "-C", "link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8",
+  "-C", "link-args=-sMODULARIZE=1",
+  "-C", "link-args=-sEXPORT_NAME=createTsotModule",
+  "-C", "link-args=-sALLOW_MEMORY_GROWTH=1",
+  # The engine doesn't fork or use threads in the wasm build — keep
+  # the binary lean by disabling pthread/wasm-worker codepaths.
+  "-C", "link-args=-sUSE_PTHREADS=0",
+]
