@@ -1195,6 +1195,9 @@ fn counterspell_resolves_and_removes_underlying_cast() {
     let a_hand_payment = s.a.hand[1].clone();
     let cs_iid = s.b.hand[0].clone();
     s.card_pool.get_mut(&cs_iid).unwrap().card = counterspell;
+    // Counterspell now costs 1 graveyard. Seed B's graveyard.
+    let gy_seed = s.b.hand[1].clone();
+    let _ = s.move_card(&gy_seed, PlayerId::B, Zone::Hand, Zone::Graveyard);
 
     // A's cast announced manually (bypasses play_card so we control the
     // chain). HAND payment recorded in the chain item but NOT yet moved

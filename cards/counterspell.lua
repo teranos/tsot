@@ -28,7 +28,7 @@ return {
   symbol = "꩜",
   colors = {"blue", "purple"},
   type = "instant",
-  cost = {},
+  cost = {{amount = 1, source = "graveyard"}},
   abilities = {
     "counter target card.",
   },
