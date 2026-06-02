@@ -548,6 +548,83 @@ def color_swatch(color: str) -> str:
     )
 
 
+def color_swatch_only(color: str) -> str:
+    """Swatch box without the color name — for compact deck-identity cells."""
+    if color == "transparent":
+        style = "background:repeating-conic-gradient(#444 0% 25%, #222 0% 50%) 50% / 6px 6px;"
+    elif color == "glow":
+        style = f"background:{SWATCHES['glow']};box-shadow:0 0 4px {SWATCHES['glow']};"
+    else:
+        hex_ = SWATCHES.get(color, "#888")
+        style = f"background:{hex_};"
+    return (
+        f'<span title="{esc(color)}" style="display:inline-block;width:9px;height:9px;{style}'
+        f'border-radius:2px;vertical-align:middle;"></span>'
+    )
+
+
+def color_bar(counts: list[tuple[str, int]]) -> str:
+    """Stacked horizontal bar: each color's width is proportional to its count.
+    Hovering a segment shows `color: N`. Empty/zero deck → empty bar div."""
+    total = sum(n for _, n in counts)
+    if total == 0:
+        return '<div class="cbar"></div>'
+    segs = []
+    for color, n in counts:
+        if color == "transparent":
+            bg = "repeating-conic-gradient(#444 0% 25%, #222 0% 50%) 50% / 6px 6px"
+        elif color == "glow":
+            bg = SWATCHES["glow"]
+        else:
+            bg = SWATCHES.get(color, "#888")
+        pct = 100 * n / total
+        segs.append(
+            f'<span class="cbar-seg" data-label="{esc(color)}: {n}" '
+            f'style="width:{pct:.3f}%;background:{bg};"></span>'
+        )
+    return f'<div class="cbar">{"".join(segs)}</div>'
+
+
+def deck_color_counts(deck: dict, card_by_id: dict[str, dict]) -> list[tuple[str, int]]:
+    """Color distribution for a deck. Multi-color cards count for each color;
+    cards with no colors fall into "colorless". Returned in fixed KNOWN_COLORS
+    order (+ colorless last, + any unknown colors trailing alphabetically) so
+    bars line up across rows for visual comparison."""
+    counts: dict[str, int] = {}
+    for cid in deck["ids_list"]:
+        card = card_by_id.get(cid)
+        if not card:
+            continue
+        cs = card.get("colors") or []
+        if not cs:
+            counts["colorless"] = counts.get("colorless", 0) + 1
+        else:
+            for c in cs:
+                counts[c] = counts.get(c, 0) + 1
+    order = [*KNOWN_COLORS, "colorless"]
+    out: list[tuple[str, int]] = []
+    for c in order:
+        if counts.get(c, 0) > 0:
+            out.append((c, counts[c]))
+    for c in sorted(counts):
+        if c not in order:
+            out.append((c, counts[c]))
+    return out
+
+
+def deck_symbol_counts(deck: dict, card_by_id: dict[str, dict]) -> list[tuple[str, int]]:
+    """Symbol distribution. Cards without a symbol are dropped (not "no symbol")."""
+    counts: dict[str, int] = {}
+    for cid in deck["ids_list"]:
+        card = card_by_id.get(cid)
+        if not card:
+            continue
+        sym = card.get("symbol")
+        if sym:
+            counts[sym] = counts.get(sym, 0) + 1
+    return sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+
+
 CSS = (Path(__file__).resolve().parent / "cards-report.css").read_text()
 
 
@@ -592,6 +669,7 @@ def render_archetypes(
     jmat: list[list[float]],
     clusters: list[list[int]],
     threshold: float,
+    card_by_id: dict[str, dict],
 ) -> None:
     w = parts.append
     n = len(decks)
@@ -663,20 +741,30 @@ def render_archetypes(
 
     # Per-deck table
     w("<h3>All decks</h3>")
-    w('<p class="note">Deck-level view. <em>nearest</em> is the closest other deck by Jaccard — '
-      'low values indicate isolated decks worth examining as potential new attractors.</p>')
-    w('<table><thead><tr><th>deck</th><th>source</th><th>label</th><th class="num">fitness</th>'
+    w('<p class="note">Deck-level view. <em>colors</em> / <em>symbols</em> count cards by color identity and symbol — '
+      'multi-color cards count once per color; cards without a symbol are dropped. '
+      '<em>nearest</em> is the closest other deck by Jaccard.</p>')
+    w('<table><thead><tr><th>deck</th><th>source</th><th>label</th>'
+      '<th>colors</th><th>symbols</th>'
+      '<th class="num">fitness</th>'
       '<th>nearest</th><th class="num">jaccard</th><th class="num">cluster</th></tr></thead><tbody>')
     for i in range(n):
         nj, nv = nearest_other(i, jmat)
-        # Cluster size for this deck's row, to mark singletons.
         my_cluster_size = len(clusters[cluster_id_of[i] - 1])
         is_singleton = my_cluster_size == 1
         tr_cls = ' class="singleton"' if is_singleton else ''
+        color_html = color_bar(deck_color_counts(decks[i], card_by_id))
+        symbol_html = "".join(
+            f'<span class="sym-chip"><span class="sym-glyph">{esc(s)}</span>'
+            f'<span class="sym-cnt">{n_}</span></span>'
+            for s, n_ in deck_symbol_counts(decks[i], card_by_id)
+        )
         w(f'<tr{tr_cls}>')
         w(f'<td>{esc(decks[i]["name"])}</td>')
         w(f'<td class="source-{decks[i]["source"]}">{decks[i]["source"]}</td>')
         w(f'<td>{esc(decks[i]["label"])}</td>')
+        w(f'<td class="ident">{color_html}</td>')
+        w(f'<td class="ident">{symbol_html}</td>')
         w(f'<td class="num">{decks[i]["fitness"]:.3f}</td>')
         if nj is not None:
             w(f'<td>{esc(decks[nj]["name"])}</td>')
@@ -976,7 +1064,8 @@ def render_html(
     w("</tbody></table>")
 
     if decks:
-        render_archetypes(parts, decks, jmat or [], clusters or [], args.threshold)
+        card_by_id = {c["id"]: c for c in cards if c.get("id")}
+        render_archetypes(parts, decks, jmat or [], clusters or [], args.threshold, card_by_id)
 
     w("</body></html>")
     return "".join(parts)
@@ -990,7 +1079,8 @@ def main() -> int:
     parser.add_argument("--out", default="card-pool.html", help="output HTML path")
     parser.add_argument("--baselines", default="baselines", help="baselines dir for archetypes section")
     parser.add_argument("--champions", default="champions", help="champions dir for archetypes section")
-    parser.add_argument("--threshold", type=float, default=0.5, help="Jaccard threshold for clustering")
+    parser.add_argument("--threshold", type=float, default=0.4,
+                        help="Jaccard threshold for clustering (matches `tsot prune-champions` default)")
     parser.add_argument("--no-archetypes", action="store_true",
                         help="skip the deck-archetypes section even if deck JSONs are present")
     args = parser.parse_args()

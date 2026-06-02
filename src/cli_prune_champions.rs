@@ -41,7 +41,7 @@ pub struct PruneChampionsArgs {
     pub baselines: String,
     /// Jaccard threshold for cluster membership. Champions with
     /// Jaccard ≥ this share a cluster (single-linkage).
-    #[arg(long, default_value_t = 0.6)]
+    #[arg(long, default_value_t = 0.4)]
     pub threshold: f64,
     /// How many champions to keep per cluster (sorted by live score
     /// descending). Smaller = tighter gauntlet, less compute. Default
