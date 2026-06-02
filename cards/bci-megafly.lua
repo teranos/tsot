@@ -35,6 +35,7 @@ return {
     {amount = 2, source = "mill"},
   },
   abilities = {
+    "flying.",
     "haste.",
     "when this creature deals damage to an opponent, that opponent may sacrifice an artifact and gain control of this creature.",
   },
