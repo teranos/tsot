@@ -1039,6 +1039,112 @@ mod tests {
         );
     }
 
+    /// Strongest journal-rollback invariant: open the replay journal at
+    /// game start, run a FULL random game to completion via
+    /// `run_game_continue`, then rollback — final state must equal
+    /// initial state byte-for-byte.
+    ///
+    /// `tests/journal_full_game_rollback.rs` exercises the scripted
+    /// 3-turn version using only the public engine API. This in-crate
+    /// test uses `run_game_continue` directly to cover the full
+    /// Pattern B / X-cost / response window flow that MCTS rollouts
+    /// actually trip into.
+    ///
+    /// If this test fails, some mutation site is not journaled. MCTS
+    /// rollout safety depends on this rollback being byte-identical;
+    /// the test diff identifies which field (and thus mutation site)
+    /// is the gap.
+    #[test]
+    fn full_random_game_rollback_restores_initial_state() {
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        // Pick a vanilla creature template so the deck contains
+        // handler-free cards — the test exercises journaling for the
+        // hot-path Pattern B / combat / turn machinery, not for one
+        // specific card's Lua side effects.
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| {
+                matches!(c.kind, tsot::card::CardType::Creature)
+                    && c.handlers.is_empty()
+                    && c.cost.len() == 1
+                    && !c.cost[0].is_x
+            })
+            .expect("a vanilla creature should exist in cards/")
+            .clone();
+        let deck_a: Vec<tsot::card::Card> = (0..50).map(|_| template.clone()).collect();
+        let deck_b: Vec<tsot::card::Card> = (0..50).map(|_| template.clone()).collect();
+
+        let mut state = GameState::new(deck_a, deck_b);
+
+        // Clone the initial state for per-field comparison after rollback.
+        // Cloning a 100-card pool is expensive but acceptable for a
+        // one-shot diagnostic test.
+        let initial = state.clone();
+
+        state.replay_journal = Some(tsot::game::Journal::new());
+
+        let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+        let mut log: Vec<String> = Vec::new();
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua());
+
+        assert!(state.winner.is_some(), "game should have a winner");
+        assert!(stats.turns > 0, "stats should record turns");
+
+        let journal = state
+            .replay_journal
+            .take()
+            .expect("replay_journal still open");
+        let entry_count = journal.len();
+        assert!(entry_count > 0, "a full game should produce many journal entries");
+        journal.rollback(&mut state);
+
+        // Compare each top-level field; on a card_pool mismatch, walk
+        // per-instance and emit the first divergent CardInstance field.
+        assert_eq!(format!("{:?}", initial.active_player), format!("{:?}", state.active_player), "active_player not rolled back");
+        assert_eq!(initial.turn, state.turn, "turn not rolled back");
+        assert_eq!(format!("{:?}", initial.phase), format!("{:?}", state.phase), "phase not rolled back");
+        assert_eq!(format!("{:?}", initial.winner), format!("{:?}", state.winner), "winner not rolled back");
+        assert_eq!(format!("{:?}", initial.combat), format!("{:?}", state.combat), "combat not rolled back");
+        assert_eq!(format!("{:?}", initial.event_fires), format!("{:?}", state.event_fires), "event_fires not rolled back");
+        assert_eq!(format!("{:?}", initial.action_counts), format!("{:?}", state.action_counts), "action_counts not rolled back");
+        assert_eq!(format!("{:?}", initial.priority), format!("{:?}", state.priority), "priority not rolled back");
+        assert_eq!(format!("{:?}", initial.a), format!("{:?}", state.a), "player A's zones not rolled back");
+        assert_eq!(format!("{:?}", initial.b), format!("{:?}", state.b), "player B's zones not rolled back");
+
+        // card_pool: narrow to which CardInstance + which field.
+        for (iid, post_inst) in &state.card_pool {
+            let init_inst = initial.card_pool.get(iid)
+                .unwrap_or_else(|| panic!("instance {iid} appeared post-rollback (not in initial pool)"));
+            assert_eq!(init_inst.tapped, post_inst.tapped, "{iid}.tapped not rolled back");
+            assert_eq!(init_inst.damage, post_inst.damage, "{iid}.damage not rolled back");
+            assert_eq!(init_inst.face_down, post_inst.face_down, "{iid}.face_down not rolled back");
+            assert_eq!(init_inst.summoning_sick, post_inst.summoning_sick, "{iid}.summoning_sick not rolled back");
+            assert_eq!(init_inst.attacked_this_turn, post_inst.attacked_this_turn, "{iid}.attacked_this_turn not rolled back");
+            assert_eq!(format!("{:?}", init_inst.controller), format!("{:?}", post_inst.controller), "{iid}.controller not rolled back");
+            assert_eq!(format!("{:?}", init_inst.attached), format!("{:?}", post_inst.attached), "{iid}.attached not rolled back");
+            assert_eq!(format!("{:?}", init_inst.modifiers), format!("{:?}", post_inst.modifiers), "{iid}.modifiers not rolled back");
+            assert_eq!(format!("{:?}", init_inst.status_effects), format!("{:?}", post_inst.status_effects), "{iid}.status_effects not rolled back");
+        }
+        for iid in initial.card_pool.keys() {
+            assert!(state.card_pool.contains_key(iid), "instance {iid} removed but rollback didn't restore it");
+        }
+        // Per-instance whole-Debug compare to surface the divergent one.
+        for (iid, post_inst) in &state.card_pool {
+            let init_inst = initial.card_pool.get(iid).unwrap();
+            let init_dbg = format!("{:?}", init_inst);
+            let post_dbg = format!("{:?}", post_inst);
+            if init_dbg != post_dbg {
+                panic!(
+                    "instance {iid} differs after rollback. \n\
+                     INITIAL: {init_dbg}\n\
+                     POST:    {post_dbg}"
+                );
+            }
+        }
+        assert_eq!(format!("{:?}", initial.card_pool), format!("{:?}", state.card_pool), "card_pool differs in some field not covered by per-field checks ({entry_count} journal entries)");
+    }
+
     #[test]
     fn run_game_is_deterministic_per_seed_and_decks() {
         let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();

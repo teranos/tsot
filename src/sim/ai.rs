@@ -665,10 +665,35 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
 /// Rig a creature to free + haste before the sim plays it. Used for the
 /// vast majority of creatures (those without SETUP costs). Lets the sim
 /// keep throughput high without exhausting hand resources every turn.
+///
+/// The mutation is JOURNALED via
+/// [`tsot::game::JournalEntry::RigCreatureFreeHaste`] so MCTS rollouts
+/// and any other rollback-driven flow restore byte-identical state.
+///
+/// TODO(B — proper-play-cost refactor): replace this hack with a real
+/// `play_card` call that resolves hand-payment via the oracle. Would
+/// eliminate the need for the dedicated journal variant and bring the
+/// sim's creature-play path in line with the spell / artifact path.
+/// Bigger refactor — measurably changes EA games because the sim
+/// would actually pay hand costs for creatures.
 pub fn rig_creature_free_haste(state: &mut GameState, iid: &InstanceId) {
-    let inst = state.card_pool.get_mut(iid).unwrap();
+    use tsot::game::JournalEntry;
+    let Some(inst) = state.card_pool.get_mut(iid) else {
+        return;
+    };
+    let was_cost = inst.card.cost.clone();
+    let was_abilities = inst.card.abilities.clone();
     inst.card.cost = vec![];
-    inst.card.abilities.push("haste".to_string());
+    if !inst.card.abilities.iter().any(|a| a == "haste") {
+        inst.card.abilities.push("haste".to_string());
+    }
+    if let Some(j) = state.active_journal() {
+        j.push(JournalEntry::RigCreatureFreeHaste {
+            iid: iid.clone(),
+            was_cost,
+            was_abilities,
+        });
+    }
 }
 
 #[cfg(test)]

@@ -281,7 +281,7 @@ impl GameState {
     /// Preview journal wins if open (so previews can be cleanly rolled back
     /// without polluting the replay journal). Falls back to replay journal,
     /// which accumulates only committed mutations.
-    pub(crate) fn active_journal(&mut self) -> Option<&mut super::Journal> {
+    pub fn active_journal(&mut self) -> Option<&mut super::Journal> {
         if self.journal.is_some() {
             self.journal.as_mut()
         } else {

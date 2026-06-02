@@ -169,6 +169,12 @@ fn replay_journal_rollback_restores_full_state() {
     );
 }
 
+/// The strongest full-game rollback test (using `run_game_continue`)
+/// lives in `src/sim/run.rs`'s unit-test module because `sim` is a
+/// binary-only module not exposed to integration tests. See
+/// `tests::full_random_game_rollback_restores_initial_state` in
+/// `src/sim/run.rs`.
+
 /// Determinism corollary: the same journal applied twice from the same
 /// initial state should produce identical final states. Catches journal
 /// entries that depend on hidden RNG state or non-deterministic ordering.
