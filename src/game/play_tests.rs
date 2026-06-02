@@ -2865,6 +2865,59 @@ fn resolve_graveyard_payment_prefers_color_matching_anchor() {
     );
 }
 
+/// Activations are carved out of P.12a (mirrors A.8's HAND carve-out
+/// for activations). signal-goblin's `T, 1 hand, 1 graveyard: ...`
+/// activation must fire even when the controller's GY has no card
+/// sharing a color with signal-goblin (blue+red). If P.12a ever leaked
+/// into activate_ability, this test would catch it.
+#[test]
+fn activation_with_gy_cost_is_not_subject_to_p12a() {
+    use crate::card::CardRegistry;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let sig = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "signal-goblin")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let sig_iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&sig_iid).unwrap();
+        inst.card = sig.clone();
+        inst.summoning_sick = false;
+    }
+    s.a.hand.retain(|x| x != &sig_iid);
+    s.a.board.push(sig_iid.clone());
+
+    // A target creature so signal-goblin's validate hook passes.
+    let target_iid = s.b.hand[0].clone();
+    s.b.hand.retain(|x| x != &target_iid);
+    s.b.board.push(target_iid.clone());
+
+    // GY for the activation's `1 graveyard` cost — colorless, so it
+    // would NOT anchor P.12a if P.12a were checked on activation.
+    let gy_card = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &gy_card, &[], "");
+    s.a.graveyard.push(gy_card);
+
+    let mut oracle = crate::choice::ScriptedOracle::new(vec![
+        crate::choice::ScriptedAnswer::Card(Some(target_iid.clone())),
+    ]);
+    let result = s.activate_ability(
+        &sig_iid,
+        0,
+        None,
+        Some(&mut crate::game::EventContext::new(registry.lua(), &mut oracle)),
+    );
+    assert!(
+        result.is_ok(),
+        "GY-cost activation must not trigger P.12a (got {result:?})"
+    );
+}
+
 /// P.12b: when a color-matching GY pitch is made, the per-HAND P.7a
 /// identity check is suspended — a non-matching HAND card is accepted.
 #[test]
