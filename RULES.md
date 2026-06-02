@@ -162,13 +162,13 @@ The following are not part of this game.
 ## Combat (B)
 
 - **B.1** A creature can attack a player.
-- **B.2** When a creature attacks a player successfully, that player exiles X cards from their DECK, where X is the first value in the creature's X/Y stats.
+- **B.2** When a creature attacks a player successfully, that player exiles ⌊X⌋ cards from their DECK, where X is the first value in the creature's X/Y stats. The floor (round-down) is what makes sub-1 power matter: an attacker with X < 1 mills 0 cards on its own — it only contributes to the player if a static or stack effect boosts X to ≥ 1.
 - **B.3** A creature cannot attack during the turn it enters the BOARD, regardless of how it entered.
 - **B.4** When a creature attacks, its card is tapped (turned sideways).
 - **B.5** During combat, the defending player may declare one or more of their creatures as blockers, each assigned to a specific attacking creature.
 - **B.6** An attack on a player is "successful" (per B.2) if and only if it is not blocked.
-- **B.7** When an attacker is blocked, the attacker deals damage equal to its X to each of its blockers, and each blocker deals damage equal to its X to the attacker.
-- **B.8** A creature with accumulated damage equal to or greater than its Y dies (placed in GRAVEYARD per P.4).
+- **B.7** When an attacker is blocked, the attacker deals damage equal to its X to each of its blockers, and each blocker deals damage equal to its X to the attacker. Damage accumulates fractionally — two 0/0.5 blockers (each dealing 0.5) on a 1/1 attacker accumulate 1.0 damage, which equals the attacker's Y and kills it per B.8.
+- **B.8** A creature with accumulated damage equal to or greater than its Y dies (placed in GRAVEYARD per P.4). Both damage and Y are real-valued; the comparison is exact (no rounding).
 - **B.10** At the end of the turn, all accumulated damage on creatures is cleared.
 - **B.11** **Flying** is a keyword ability: a creature with flying can only be blocked by a card with flying, or by a card whose text explicitly grants the ability to block flying.
 - **B.12** A tapped creature cannot block.
