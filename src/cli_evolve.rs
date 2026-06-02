@@ -9,9 +9,9 @@ use tsot::card::{Card, CardRegistry};
 
 use crate::evolve_report::{self, EvolveReportData};
 use crate::parse_u64_hex_or_dec;
-use crate::sim::evolved_deck::EvolvedDeck;
-use crate::sim::fitness::fitness_breakdown;
-use crate::sim::{run_evolve, EvolveConfig};
+use tsot::sim::evolved_deck::EvolvedDeck;
+use tsot::sim::fitness::fitness_breakdown;
+use tsot::sim::{run_evolve, EvolveConfig};
 
 #[derive(Parser)]
 pub struct EvolveArgs {
@@ -155,14 +155,14 @@ pub fn run_ea(
     args: &EvolveArgs,
 ) -> mlua::Result<()> {
     let opponent_ai = match args.opponent_ai.to_ascii_lowercase().as_str() {
-        "heuristic" => crate::sim::AiKind::Heuristic,
-        "mcts" => crate::sim::AiKind::Mcts(crate::sim::mcts::MctsConfig {
+        "heuristic" => tsot::sim::AiKind::Heuristic,
+        "mcts" => tsot::sim::AiKind::Mcts(tsot::sim::mcts::MctsConfig {
             rollouts_per_candidate: args.opponent_mcts_rollouts,
             max_candidates: args.opponent_mcts_max_candidates,
             base_seed: args.seed.wrapping_add(0xCAFE_BABE),
             max_depth: args.opponent_mcts_depth,
         }),
-        "uct" => crate::sim::AiKind::Uct(crate::sim::uct::UctConfig {
+        "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
             exploration_c: args.opponent_uct_c,
             base_seed: args.seed.wrapping_add(0xC0FF_EE_BA),
@@ -401,7 +401,7 @@ pub fn run_ea(
                 if j == rank {
                     continue;
                 }
-                let jacc = crate::sim::diversity::jaccard(&top_sets[rank], &top_sets[j]);
+                let jacc = tsot::sim::diversity::jaccard(&top_sets[rank], &top_sets[j]);
                 print!("  r{}={:.2}", j + 1, jacc);
                 sum += jacc;
                 paired += 1;

@@ -4,7 +4,7 @@
 
 use rand::seq::SliceRandom;
 use rand::Rng;
-use tsot::card::Card;
+use crate::card::Card;
 
 /// Deck-build variants. Ra and Rb are full-pool baselines; the rest are
 /// filtered pools meant to stress-test specific corpus interactions.

@@ -15,8 +15,8 @@ use tsot::game::GameState;
 
 use crate::champions_report;
 use crate::parse_u64_hex_or_dec;
-use crate::sim;
-use crate::sim::evolved_deck::EvolvedDeck;
+use tsot::sim;
+use tsot::sim::evolved_deck::EvolvedDeck;
 
 #[derive(Parser)]
 pub struct ChampionsReportArgs {
@@ -235,7 +235,7 @@ pub fn run_champions_report(
     for i in 0..champions.len() {
         for j in (i + 1)..champions.len() {
             total_pairs += 1;
-            let jacc = crate::sim::diversity::jaccard(&champ_sets[i], &champ_sets[j]);
+            let jacc = tsot::sim::diversity::jaccard(&champ_sets[i], &champ_sets[j]);
             if jacc > args.cluster_threshold {
                 linked_pairs += 1;
                 let ri = find(&mut parent, i);

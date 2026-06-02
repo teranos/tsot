@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 
-use tsot::card::{Card, CardRegistry};
+use crate::card::{Card, CardRegistry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GenomeError {

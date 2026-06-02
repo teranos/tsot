@@ -10,7 +10,9 @@ mod cli_prune_champions;
 mod cli_serve;
 mod evolve_report;
 mod report_style;
-mod sim;
+// sim/ now lives in src/lib.rs (pub mod sim) — reachable as
+// tsot::sim::… from anywhere in the binary. Required for the WASM
+// cdylib build so the browser frontend can drive the engine.
 
 use clap::{Parser, Subcommand};
 use tsot::card::{Card, CardRegistry, CardType, CostSource};

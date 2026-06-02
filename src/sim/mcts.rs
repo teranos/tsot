@@ -24,8 +24,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use tsot::choice::{RandomOracle, RecordingOracle};
-use tsot::game::{EventContext, GameState, InstanceId, Journal, PlayerId};
+use crate::choice::{RandomOracle, RecordingOracle};
+use crate::game::{EventContext, GameState, InstanceId, Journal, PlayerId};
 
 use super::ai::{enumerate_playable_in_hand, pick_random_playable_in_hand, PickKindFilter};
 use super::run::{build_pattern_b_choices, run_game_continue, BuildChoiceResult};
@@ -279,7 +279,7 @@ fn simulate_rollout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tsot::card::{CardRegistry, CardType};
+    use crate::card::{CardRegistry, CardType};
 
     /// Smoke test: MCTS plays a full game vs itself without panicking
     /// and produces a winner. Doesn't measure strength; just confirms
@@ -346,7 +346,7 @@ mod tests {
         let mut state_2 = GameState::new(deck_a, deck_b);
 
         // Advance both to a state where Pattern B would pick.
-        use tsot::game::Phase;
+        use crate::game::Phase;
         for state in [&mut state_1, &mut state_2] {
             while state.phase != Phase::Main1 {
                 state.next_phase(None);

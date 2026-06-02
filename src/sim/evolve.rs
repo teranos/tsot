@@ -13,7 +13,7 @@
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use tsot::card::{Card, CardRegistry};
+use crate::card::{Card, CardRegistry};
 
 use super::genome::random_genome;
 use super::ops::{crossover_uniform, mutate, repair, tournament_select};
@@ -362,7 +362,7 @@ fn card_freq_in_pop(pop: &[(Vec<String>, f64)]) -> std::collections::BTreeMap<St
 mod tests {
     use super::*;
     use std::path::Path;
-    use tsot::card::{CardType, CostSource};
+    use crate::card::{CardType, CostSource};
 
     use super::super::fitness::{build_gauntlet, GAUNTLET_MASTER_SEED};
 

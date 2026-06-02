@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use tsot::card::{CardType, CostSource};
-use tsot::choice::{ChoiceOracle, ChooseIntRequest, RandomOracle, RecordingOracle, ScriptedOracle};
-use tsot::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
+use crate::card::{CardType, CostSource};
+use crate::choice::{ChoiceOracle, ChooseIntRequest, RandomOracle, RecordingOracle, ScriptedOracle};
+use crate::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 use super::ai::{
     attached_keep_value, pick_blocks, pick_random_playable_in_hand, rig_creature_free_haste,
@@ -34,7 +34,7 @@ pub fn run_game(
     rng: &mut StdRng,
     log: &mut Vec<String>,
     lua: &mlua::Lua,
-) -> (GameStats, tsot::game::Journal) {
+) -> (GameStats, crate::game::Journal) {
     let ais = [super::AiKind::Heuristic, super::AiKind::Heuristic];
     run_game_with_ai(state, rng, log, lua, &ais)
 }
@@ -49,8 +49,8 @@ pub fn run_game_with_ai(
     log: &mut Vec<String>,
     lua: &mlua::Lua,
     ais: &[super::AiKind; 2],
-) -> (GameStats, tsot::game::Journal) {
-    state.replay_journal = Some(tsot::game::Journal::new());
+) -> (GameStats, crate::game::Journal) {
+    state.replay_journal = Some(crate::game::Journal::new());
     let mut stats = run_game_continue(&mut state, rng, log, lua, ais);
     let replay_journal = state.replay_journal.take().unwrap_or_default();
     stats.replay_journal_entries = replay_journal.len() as u64;
@@ -685,7 +685,7 @@ pub fn run_game_continue(
                     .get("instant_response_played")
                     .map(|v| v[1])
                     .unwrap_or(0);
-                state.journal = Some(tsot::game::Journal::new());
+                state.journal = Some(crate::game::Journal::new());
                 let opponent_of_active = active.opponent();
                 let choices_for_retry = choices.clone();
                 // Per-cast wall-clock tripwire: a single cast resolving for >1s
@@ -741,7 +741,7 @@ pub fn run_game_continue(
                         if let Some(journal) = state.journal.take() {
                             journal.rollback(state);
                         }
-                        state.journal = Some(tsot::game::Journal::new());
+                        state.journal = Some(crate::game::Journal::new());
                         let mut scripted = ScriptedOracle::new(flipped);
                         result = state.play_card(
                             active,
@@ -799,8 +799,8 @@ pub fn run_game_continue(
                     let timing = state.card_pool.get(&picked).and_then(|c| c.card.timing);
                     let label = match kind {
                         CardType::Spell => match timing {
-                            Some(tsot::Timing::Instant) => format!("instant {}", short(&picked)),
-                            Some(tsot::Timing::Sorcery) => format!("sorcery {}", short(&picked)),
+                            Some(crate::Timing::Instant) => format!("instant {}", short(&picked)),
+                            Some(crate::Timing::Sorcery) => format!("sorcery {}", short(&picked)),
                             None => format!("spell {}", short(&picked)),
                         },
                         _ => {
@@ -902,7 +902,7 @@ pub fn run_game_continue(
                     pick_blocks(state, defender)
                 }
                 super::AiKind::Human(iface) => {
-                    use tsot::game::CombatState;
+                    use crate::game::CombatState;
                     let declared: Vec<InstanceId> = match &state.combat {
                         Some(CombatState::AwaitingBlockers { attacks }) => {
                             attacks.iter().map(|a| a.attacker.clone()).collect()
@@ -1210,7 +1210,7 @@ fn report_game_timeout(
     last_picked: Option<&InstanceId>,
     last_activated: Option<&(InstanceId, usize)>,
 ) {
-    tsot::game::bump_timeout_and_maybe_halt(site);
+    crate::game::bump_timeout_and_maybe_halt(site);
     let ids = |iids: &[InstanceId]| -> Vec<String> {
         iids.iter()
             .filter_map(|i| state.card_pool.get(i).map(|c| c.card.id.clone()))
@@ -1259,7 +1259,7 @@ pub fn short(iid: &InstanceId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tsot::card::CardRegistry;
+    use crate::card::CardRegistry;
 
     /// EA prerequisite: fitness(genome) is meaningful only if
     /// `run_game(state, &mut rng, &mut log, lua)` produces byte-identical
@@ -1275,7 +1275,7 @@ mod tests {
         use crate::sim::evolved_deck::EvolvedDeck;
         let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
         let baseline_dir = std::path::Path::new("baselines");
-        let mut decks: Vec<Vec<tsot::card::Card>> = Vec::new();
+        let mut decks: Vec<Vec<crate::card::Card>> = Vec::new();
         let mut labels: Vec<String> = Vec::new();
         for entry in std::fs::read_dir(baseline_dir).unwrap().flatten() {
             let p = entry.path();
@@ -1358,15 +1358,15 @@ mod tests {
             .cards()
             .iter()
             .find(|c| {
-                matches!(c.kind, tsot::card::CardType::Creature)
+                matches!(c.kind, crate::card::CardType::Creature)
                     && c.handlers.is_empty()
                     && c.cost.len() == 1
                     && !c.cost[0].is_x
             })
             .expect("a vanilla creature should exist in cards/")
             .clone();
-        let deck_a: Vec<tsot::card::Card> = (0..50).map(|_| template.clone()).collect();
-        let deck_b: Vec<tsot::card::Card> = (0..50).map(|_| template.clone()).collect();
+        let deck_a: Vec<crate::card::Card> = (0..50).map(|_| template.clone()).collect();
+        let deck_b: Vec<crate::card::Card> = (0..50).map(|_| template.clone()).collect();
 
         let mut state = GameState::new(deck_a, deck_b);
 
@@ -1375,7 +1375,7 @@ mod tests {
         // one-shot diagnostic test.
         let initial = state.clone();
 
-        state.replay_journal = Some(tsot::game::Journal::new());
+        state.replay_journal = Some(crate::game::Journal::new());
 
         let mut rng = StdRng::seed_from_u64(0xC0FFEE);
         let mut log: Vec<String> = Vec::new();
@@ -1445,10 +1445,10 @@ mod tests {
         let template = registry
             .cards()
             .iter()
-            .find(|c| matches!(c.kind, tsot::card::CardType::Creature))
+            .find(|c| matches!(c.kind, crate::card::CardType::Creature))
             .unwrap()
             .clone();
-        let deck_a: Vec<tsot::card::Card> = (0..50).map(|_| template.clone()).collect();
+        let deck_a: Vec<crate::card::Card> = (0..50).map(|_| template.clone()).collect();
         let deck_b = deck_a.clone();
 
         let state_1 = GameState::new(deck_a.clone(), deck_b.clone());

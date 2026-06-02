@@ -15,8 +15,8 @@ use tsot::card::{Card, CardRegistry};
 use tsot::game::GameState;
 
 use crate::parse_u64_hex_or_dec;
-use crate::sim;
-use crate::sim::evolved_deck::EvolvedDeck;
+use tsot::sim;
+use tsot::sim::evolved_deck::EvolvedDeck;
 
 #[derive(Parser)]
 pub struct CurateBaselinesArgs {
@@ -51,7 +51,7 @@ pub struct CurateBaselinesArgs {
     pub promote_unmatched: usize,
 }
 
-use crate::sim::diversity::jaccard;
+use tsot::sim::diversity::jaccard;
 
 pub fn run_curate_baselines(
     registry: &CardRegistry,

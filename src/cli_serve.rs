@@ -2,12 +2,12 @@
 //! browser. Engine runs on a dedicated thread (mlua's `Lua` is `!Send`,
 //! so the VM has to be built and stay on that thread). The HTTP server
 //! runs on the main thread and bridges between the browser and the
-//! engine via [`crate::sim::human::HumanInterface`].
+//! engine via [`tsot::sim::human::HumanInterface`].
 //!
 //! Endpoints (all localhost-only by default):
 //! - `GET /` — the play page HTML (embedded via `include_str!`)
 //! - `GET /state` — current snapshot + pending prompt as JSON
-//! - `POST /action` — submit a [`crate::sim::human::HumanAction`] as
+//! - `POST /action` — submit a [`tsot::sim::human::HumanAction`] as
 //!   JSON body; returns the next state snapshot
 //!
 //! Single concurrent game per server instance. No login, no rooms.
@@ -26,12 +26,12 @@ use tsot::card::{Card, CardRegistry};
 use tsot::game::{GameState, Journal, PlayerId};
 
 use crate::parse_u64_hex_or_dec;
-use crate::sim::evolved_deck::EvolvedDeck;
-use crate::sim::genome::{random_genome, to_deck};
-use crate::sim::human::{HumanAction, HumanInterface, HumanPrompt};
-use crate::sim::mcts::MctsConfig;
-use crate::sim::run::run_game_continue;
-use crate::sim::AiKind;
+use tsot::sim::evolved_deck::EvolvedDeck;
+use tsot::sim::genome::{random_genome, to_deck};
+use tsot::sim::human::{HumanAction, HumanInterface, HumanPrompt};
+use tsot::sim::mcts::MctsConfig;
+use tsot::sim::run::run_game_continue;
+use tsot::sim::AiKind;
 
 const PLAY_HTML: &str = include_str!("../assets/play.html");
 
@@ -107,7 +107,7 @@ pub fn run_serve(
             base_seed: seed.wrapping_add(0xCAFE_BABE),
             max_depth: args.mcts_depth,
         }),
-        "uct" => AiKind::Uct(crate::sim::uct::UctConfig {
+        "uct" => AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.uct_iterations,
             exploration_c: args.uct_c,
             base_seed: seed.wrapping_add(0xC0FF_EE_BA),

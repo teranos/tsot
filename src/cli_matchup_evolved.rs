@@ -15,8 +15,8 @@ use tsot::game::GameState;
 
 use crate::parse_u64_hex_or_dec;
 use crate::report_style;
-use crate::sim;
-use crate::sim::evolved_deck::EvolvedDeck;
+use tsot::sim;
+use tsot::sim::evolved_deck::EvolvedDeck;
 
 #[derive(Parser)]
 pub struct MatchupEvolvedArgs {

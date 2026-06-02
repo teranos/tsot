@@ -3,6 +3,7 @@ pub mod cast_routing;
 pub mod choice;
 pub mod game;
 pub mod replay;
+pub mod sim;
 
 pub use cast_routing::CastRouting;
 

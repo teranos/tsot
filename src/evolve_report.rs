@@ -11,7 +11,7 @@ use maud::{html, Markup, PreEscaped, DOCTYPE};
 use tsot::card::Card;
 
 use crate::report_style;
-use crate::sim::EvolveConfig;
+use tsot::sim::EvolveConfig;
 
 pub(crate) struct EvolveReportData<'a> {
     pub cfg: &'a EvolveConfig,

@@ -8,7 +8,7 @@ use maud::{html, Markup, PreEscaped, DOCTYPE};
 use tsot::Card;
 
 use crate::report_style::{self, CSS};
-use crate::sim::evolved_deck::EvolvedDeck;
+use tsot::sim::evolved_deck::EvolvedDeck;
 use crate::cli_champions_report::ChampGameStats;
 
 pub(crate) fn write_html_report(

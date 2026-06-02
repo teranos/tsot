@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use tsot::game::{GameState, InstanceId, Journal, PlayerId};
+use crate::game::{GameState, InstanceId, Journal, PlayerId};
 
 use super::ai::{enumerate_playable_in_hand, PickKindFilter};
 use super::run::run_game_continue;
@@ -377,7 +377,7 @@ fn backpropagate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tsot::card::{CardRegistry, CardType};
+    use crate::card::{CardRegistry, CardType};
 
     #[test]
     fn uct_plays_a_full_game() {

@@ -28,8 +28,8 @@ use tsot::game::GameState;
 
 use crate::parse_u64_hex_or_dec;
 use crate::report_style;
-use crate::sim;
-use crate::sim::evolved_deck::EvolvedDeck;
+use tsot::sim;
+use tsot::sim::evolved_deck::EvolvedDeck;
 
 #[derive(Parser)]
 pub struct PruneChampionsArgs {
@@ -196,7 +196,7 @@ fn build_html(
     }
 }
 
-use crate::sim::diversity::jaccard;
+use tsot::sim::diversity::jaccard;
 
 pub fn run_prune_champions(
     registry: &CardRegistry,

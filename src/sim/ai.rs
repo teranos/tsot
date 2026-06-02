@@ -4,8 +4,8 @@
 
 use rand::seq::SliceRandom;
 use rand::Rng;
-use tsot::card::{CardType, CostSource};
-use tsot::game::{GameState, InstanceId, PlayerId};
+use crate::card::{CardType, CostSource};
+use crate::game::{GameState, InstanceId, PlayerId};
 
 /// Filter for which kinds the picker is allowed to return. Used by the
 /// multi-card-per-turn loop in run_game (Pattern B caps at one creature
@@ -121,8 +121,8 @@ pub fn play_priority_score(state: &GameState, iid: &InstanceId) -> i32 {
         if !def.cost_modifiers.is_empty() {
             s += 50;
         }
-        let stat_active = !matches!(def.modifier_x, tsot::ModifierValue::Fixed(0))
-            || !matches!(def.modifier_y, tsot::ModifierValue::Fixed(0));
+        let stat_active = !matches!(def.modifier_x, crate::ModifierValue::Fixed(0))
+            || !matches!(def.modifier_y, crate::ModifierValue::Fixed(0));
         if stat_active || def.modifier_keyword.is_some() {
             s += 20;
         }
@@ -536,7 +536,7 @@ pub fn eligible_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId
             if inst.summoning_sick && !state.has_keyword(iid, "haste") {
                 return false;
             }
-            if state.has_restriction(iid, tsot::card::Restriction::CannotAttack) {
+            if state.has_restriction(iid, crate::card::Restriction::CannotAttack) {
                 return false;
             }
             true
@@ -564,7 +564,7 @@ pub fn eligible_blockers(state: &GameState, player: PlayerId) -> Vec<InstanceId>
 /// trade-up signal, T4 multi-block (dying only), T1 chump (dying only).
 pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, InstanceId)> {
     use std::collections::BTreeSet;
-    use tsot::game::CombatState;
+    use crate::game::CombatState;
 
     let declared: Vec<InstanceId> = match &state.combat {
         Some(CombatState::AwaitingBlockers { attacks }) => {
@@ -693,7 +693,7 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
 /// keep throughput high without exhausting hand resources every turn.
 ///
 /// The mutation is JOURNALED via
-/// [`tsot::game::JournalEntry::RigCreatureFreeHaste`] so MCTS rollouts
+/// [`crate::game::JournalEntry::RigCreatureFreeHaste`] so MCTS rollouts
 /// and any other rollback-driven flow restore byte-identical state.
 ///
 /// TODO(B — proper-play-cost refactor): replace this hack with a real
@@ -703,7 +703,7 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
 /// Bigger refactor — measurably changes EA games because the sim
 /// would actually pay hand costs for creatures.
 pub fn rig_creature_free_haste(state: &mut GameState, iid: &InstanceId) {
-    use tsot::game::JournalEntry;
+    use crate::game::JournalEntry;
     let Some(inst) = state.card_pool.get_mut(iid) else {
         return;
     };
@@ -726,7 +726,7 @@ pub fn rig_creature_free_haste(state: &mut GameState, iid: &InstanceId) {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use tsot::card::{Card, CardType, Stats};
+    use crate::card::{Card, CardType, Stats};
 
     fn card_creature(id: &str, x: f32, y: f32) -> Card {
         Card {
@@ -751,6 +751,7 @@ mod tests {
             target: None,
             is_variant: false,
             variant_of: None,
+            frame: None,
         }
     }
 

@@ -22,13 +22,13 @@ use tsot::card::{Card, CardRegistry};
 use tsot::game::{GameState, PlayerId};
 
 use crate::parse_u64_hex_or_dec;
-use crate::sim::evolved_deck::EvolvedDeck;
-use crate::sim::genome::{random_genome, to_deck};
-use crate::sim::mcts::{
+use tsot::sim::evolved_deck::EvolvedDeck;
+use tsot::sim::genome::{random_genome, to_deck};
+use tsot::sim::mcts::{
     self, MctsConfig, MCTS_PICK_CALLS, MCTS_SEARCHED_PICKS, MCTS_TOTAL_CANDIDATES,
 };
-use crate::sim::run::run_game_continue;
-use crate::sim::AiKind;
+use tsot::sim::run::run_game_continue;
+use tsot::sim::AiKind;
 use std::sync::atomic::Ordering;
 
 #[derive(Parser)]
@@ -159,7 +159,7 @@ pub fn run_matchup_mcts(
         max_depth: args.max_depth,
     };
     let ai_m = if args.use_uct {
-        AiKind::Uct(crate::sim::uct::UctConfig {
+        AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.uct_iterations,
             exploration_c: args.uct_c,
             base_seed: args.mcts_seed,

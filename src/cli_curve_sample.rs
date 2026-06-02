@@ -37,8 +37,8 @@ use tsot::card::{Card, CardRegistry};
 use tsot::game::GameState;
 
 use crate::parse_u64_hex_or_dec;
-use crate::sim;
-use crate::sim::genome::{random_genome, to_deck};
+use tsot::sim;
+use tsot::sim::genome::{random_genome, to_deck};
 
 #[derive(Parser)]
 pub struct CurveSampleArgs {

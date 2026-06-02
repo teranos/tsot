@@ -19,10 +19,10 @@
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use tsot::choice::{
+use crate::choice::{
     ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest, TargetIntent,
 };
-use tsot::game::{GameState, InstanceId, PlayerId};
+use crate::game::{GameState, InstanceId, PlayerId};
 
 use super::ai::PickKindFilter;
 use super::snapshot::{build_state_view, StateView};
@@ -488,8 +488,8 @@ mod tests {
 
     use rand::rngs::StdRng;
     use rand::SeedableRng;
-    use tsot::card::{CardRegistry, CardType};
-    use tsot::game::{GameState, Journal};
+    use crate::card::{CardRegistry, CardType};
+    use crate::game::{GameState, Journal};
 
     /// Run a full game with `AiKind::Human` on side A. The "human" is a
     /// helper thread that runs a passive script: pass on every card

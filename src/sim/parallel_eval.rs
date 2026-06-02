@@ -22,7 +22,7 @@ use std::cell::RefCell;
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
-use tsot::card::{Card, CardRegistry};
+use crate::card::{Card, CardRegistry};
 
 use crate::sim::fitness::fitness;
 use crate::sim::genome::to_deck;

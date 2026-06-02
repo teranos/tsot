@@ -19,8 +19,8 @@
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use tsot::card::{Card, CardRegistry};
-use tsot::game::{GameState, PlayerId};
+use crate::card::{Card, CardRegistry};
+use crate::game::{GameState, PlayerId};
 
 use super::deck_token::{DeckToken, Side};
 use super::genome::{to_deck, GenomeError};
@@ -150,7 +150,7 @@ pub fn fitness_breakdown(
 mod tests {
     use super::*;
     use std::path::Path;
-    use tsot::card::{CardType, CostSource};
+    use crate::card::{CardType, CostSource};
 
     fn load_registry() -> CardRegistry {
         CardRegistry::load(Path::new("cards")).expect("load cards/")

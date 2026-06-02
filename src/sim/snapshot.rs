@@ -16,7 +16,7 @@
 
 use serde::Serialize;
 
-use tsot::game::{GameState, InstanceId, PlayerId};
+use crate::game::{GameState, InstanceId, PlayerId};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StateView {
@@ -168,7 +168,7 @@ fn card_view(state: &GameState, iid: &InstanceId) -> CardView {
 fn format_effective_cost(
     state: &GameState,
     iid: &InstanceId,
-    components: &[tsot::card::CostComponent],
+    components: &[crate::card::CostComponent],
 ) -> String {
     if components.is_empty() {
         return "0".to_string();
@@ -184,12 +184,12 @@ fn format_effective_cost(
                 effective_amount.to_string()
             };
             let source = match c.source {
-                tsot::card::CostSource::Hand => "H",
-                tsot::card::CostSource::Mill => "M",
-                tsot::card::CostSource::Graveyard => "G",
-                tsot::card::CostSource::Sacrifice => "S",
-                tsot::card::CostSource::SelfExile => "X",
-                tsot::card::CostSource::Attached => "A",
+                crate::card::CostSource::Hand => "H",
+                crate::card::CostSource::Mill => "M",
+                crate::card::CostSource::Graveyard => "G",
+                crate::card::CostSource::Sacrifice => "S",
+                crate::card::CostSource::SelfExile => "X",
+                crate::card::CostSource::Attached => "A",
             };
             format!("{amount_str}{source}")
         })
@@ -197,7 +197,7 @@ fn format_effective_cost(
         .join("+")
 }
 
-fn format_cost(components: &[tsot::card::CostComponent]) -> String {
+fn format_cost(components: &[crate::card::CostComponent]) -> String {
     if components.is_empty() {
         return "0".to_string();
     }
@@ -206,12 +206,12 @@ fn format_cost(components: &[tsot::card::CostComponent]) -> String {
         .map(|c| {
             let amount = if c.is_x { "X".to_string() } else { c.amount.to_string() };
             let source = match c.source {
-                tsot::card::CostSource::Hand => "H",
-                tsot::card::CostSource::Mill => "M",
-                tsot::card::CostSource::Graveyard => "G",
-                tsot::card::CostSource::Sacrifice => "S",
-                tsot::card::CostSource::SelfExile => "X",
-                tsot::card::CostSource::Attached => "A",
+                crate::card::CostSource::Hand => "H",
+                crate::card::CostSource::Mill => "M",
+                crate::card::CostSource::Graveyard => "G",
+                crate::card::CostSource::Sacrifice => "S",
+                crate::card::CostSource::SelfExile => "X",
+                crate::card::CostSource::Attached => "A",
             };
             format!("{amount}{source}")
         })

@@ -19,7 +19,7 @@
 use std::fs;
 use std::path::Path;
 
-use tsot::card::{Card, CardRegistry};
+use crate::card::{Card, CardRegistry};
 
 use super::genome::{to_deck, GenomeError};
 

@@ -16,7 +16,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
 
-use tsot::card::Card;
+use crate::card::Card;
 
 /// Tournament selection. Sample `k` indices into `scores` uniformly
 /// with replacement and return the index of the highest-scoring one.
@@ -154,7 +154,7 @@ mod tests {
     use super::*;
     use rand::SeedableRng;
     use std::path::Path;
-    use tsot::card::CardRegistry;
+    use crate::card::CardRegistry;
 
     fn pool() -> Vec<Card> {
         CardRegistry::load(Path::new("cards"))

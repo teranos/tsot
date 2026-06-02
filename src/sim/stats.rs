@@ -3,8 +3,8 @@
 //! from many of them.
 
 use std::collections::{BTreeMap, BTreeSet};
-use tsot::card::EventName;
-use tsot::game::PlayerId;
+use crate::card::EventName;
+use crate::game::PlayerId;
 
 use super::variants::DeckVariant;
 
