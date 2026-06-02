@@ -486,6 +486,26 @@ impl GameState {
             // attached) is still TODO and will run after handlers when wired.
             if let Some(c) = ctx.as_mut() {
                 lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid);
+                // Broadcast OnCreatureDies to every BOARD watcher (both
+                // sides). The dying card already left BOARD above, so
+                // it's naturally excluded from the snapshot.
+                let watchers: Vec<InstanceId> = self
+                    .a
+                    .board
+                    .iter()
+                    .chain(self.b.board.iter())
+                    .cloned()
+                    .collect();
+                for watcher in &watchers {
+                    lua_api::fire_with_partner(
+                        c.lua,
+                        self,
+                        c.oracle(),
+                        EventName::OnCreatureDies,
+                        watcher,
+                        iid,
+                    );
+                }
             }
             // TODO(types): P.8 — when a card with attached cards moves to GRAVEYARD,
             // any attached cards still present must move to EXILE.

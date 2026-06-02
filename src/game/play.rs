@@ -533,6 +533,25 @@ impl GameState {
         if let Some(c) = ctx.as_mut() {
             for sid in &sac_ids {
                 lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, sid);
+                // OnCreatureDies broadcast to BOARD watchers (excludes
+                // the dying card — already moved to GRAVEYARD above).
+                let watchers: Vec<InstanceId> = self
+                    .a
+                    .board
+                    .iter()
+                    .chain(self.b.board.iter())
+                    .cloned()
+                    .collect();
+                for watcher in &watchers {
+                    lua_api::fire_with_partner(
+                        c.lua,
+                        self,
+                        c.oracle(),
+                        EventName::OnCreatureDies,
+                        watcher,
+                        sid,
+                    );
+                }
             }
         }
 
@@ -942,6 +961,25 @@ impl GameState {
             let _ = self.move_card(iid, owner, Zone::Board, Zone::Graveyard);
             if let Some(c) = ctx.as_mut() {
                 lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid);
+                // OnCreatureDies broadcast to BOARD watchers (excludes
+                // the dying card — already moved to GRAVEYARD above).
+                let watchers: Vec<InstanceId> = self
+                    .a
+                    .board
+                    .iter()
+                    .chain(self.b.board.iter())
+                    .cloned()
+                    .collect();
+                for watcher in &watchers {
+                    lua_api::fire_with_partner(
+                        c.lua,
+                        self,
+                        c.oracle(),
+                        EventName::OnCreatureDies,
+                        watcher,
+                        iid,
+                    );
+                }
             }
         }
     }

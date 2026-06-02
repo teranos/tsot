@@ -470,6 +470,15 @@ pub enum EventName {
     /// boards' cards — mutations that declare the handler receive
     /// `self` = the mutation. "At the beginning of your turn..."
     OnTurnBegin,
+    /// Watcher event: fires on every BOARD card whenever any creature
+    /// dies (moved BOARD → GRAVEYARD). Handler signature is
+    /// `(game, self, dying)` where `self` is the watcher and `dying`
+    /// is the creature that just died. Distinct from `OnDie`, which
+    /// fires self-only on the dying card itself. The dying card does
+    /// NOT receive its own `OnCreatureDies` (it's no longer on BOARD
+    /// by the time the broadcast fires). Used by Avatar of Greed and
+    /// any other "whenever a creature dies, ..." trigger.
+    OnCreatureDies,
 }
 
 impl EventName {
@@ -485,11 +494,12 @@ impl EventName {
             EventName::OnAttachedAsCost => "on_attached_as_cost",
             EventName::OnDealtDamageToPlayer => "on_dealt_damage_to_player",
             EventName::OnTurnBegin => "on_turn_begin",
+            EventName::OnCreatureDies => "on_creature_dies",
         }
     }
 
     /// All known event names, for loader iteration.
-    pub const ALL: [EventName; 9] = [
+    pub const ALL: [EventName; 10] = [
         EventName::OnEnterBoard,
         EventName::OnDie,
         EventName::OnAttack,
@@ -499,6 +509,7 @@ impl EventName {
         EventName::OnAttachedAsCost,
         EventName::OnDealtDamageToPlayer,
         EventName::OnTurnBegin,
+        EventName::OnCreatureDies,
     ];
 }
 
