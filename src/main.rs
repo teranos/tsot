@@ -5,6 +5,7 @@ mod cli_curate;
 mod cli_curve_sample;
 mod cli_evolve;
 mod cli_matchup_evolved;
+mod cli_matchup_mcts;
 mod cli_prune_champions;
 mod evolve_report;
 mod report_style;
@@ -20,6 +21,7 @@ use cli_curate::CurateBaselinesArgs;
 use cli_curve_sample::CurveSampleArgs;
 use cli_evolve::EvolveArgs;
 use cli_matchup_evolved::MatchupEvolvedArgs;
+use cli_matchup_mcts::MatchupMctsArgs;
 use cli_prune_champions::PruneChampionsArgs;
 
 #[derive(Parser)]
@@ -58,6 +60,10 @@ enum Command {
     /// `cards-report.lua` to add a turn-curve column to the pool
     /// dashboard.
     CurveSample(CurveSampleArgs),
+    /// Mirror-match MCTS vs Heuristic AI — N games on each side,
+    /// reports MCTS win rate. Measures whether one-ply rollout
+    /// search beats the heuristic picker on the same deck.
+    MatchupMcts(MatchupMctsArgs),
 }
 
 /// Parse a u64 from `--seed`, accepting hex (`0xEA03`) or decimal.
@@ -154,6 +160,9 @@ fn main() -> mlua::Result<()> {
         }
         Some(Command::CurveSample(args)) => {
             cli_curve_sample::run_curve_sample(&registry, &playable_pool, &args)
+        }
+        Some(Command::MatchupMcts(args)) => {
+            cli_matchup_mcts::run_matchup_mcts(&registry, &playable_pool, &args)
         }
         None => {
             eprintln!("no subcommand specified. run with --help to see the available commands.");

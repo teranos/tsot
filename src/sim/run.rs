@@ -36,7 +36,8 @@ pub fn run_game(
     lua: &mlua::Lua,
 ) -> (GameStats, tsot::game::Journal) {
     state.replay_journal = Some(tsot::game::Journal::new());
-    let mut stats = run_game_continue(&mut state, rng, log, lua, &super::AiKind::Heuristic);
+    let ais = [super::AiKind::Heuristic, super::AiKind::Heuristic];
+    let mut stats = run_game_continue(&mut state, rng, log, lua, &ais);
     let replay_journal = state.replay_journal.take().unwrap_or_default();
     stats.replay_journal_entries = replay_journal.len() as u64;
     (stats, replay_journal)
@@ -58,12 +59,334 @@ pub fn run_game(
 /// The returned `GameStats.replay_journal_entries` field is left at
 /// `0` — the wrapper that owns the journal lifecycle sets it. Bare
 /// callers can set it themselves after taking the journal.
+/// Outcome of `build_pattern_b_choices`. Variants beyond `Choices`
+/// signal Pattern B should special-case (skip the play, advance the
+/// loop, etc.).
+pub(crate) enum BuildChoiceResult {
+    /// PlayChoices ready to feed to `state.play_card`.
+    Choices(PlayChoices),
+    /// Picked an X-cost card and the X-pick computed max_x < 1 (no
+    /// affordable X ≥ 1). Caller should advance Pattern B: skip the
+    /// play, and mark `played_creature` to prevent re-picking if
+    /// the candidate was a creature.
+    UnaffordableX { picked_is_creature: bool },
+}
+
+/// Build the same `PlayChoices` Pattern B builds inline today —
+/// extracted so MCTS rollouts construct choices identically to the
+/// heuristic AI (rather than its own simpler version that was
+/// systematically underestimating candidates with non-trivial cost).
+///
+/// Mirrors the inline logic exactly:
+///   - X-cost: cap by tightest resource, oracle picks X, resolve hand
+///     payment (smart-pitch via oracle) + GY substitutes + GY-pay
+///   - Creature: hand payment + GY payment + rig_creature_free_haste
+///     shortcut when no setup cost
+///   - Spell / Artifact / Mutation: hand payment + GY pay + mutation
+///     target selection
+///   - Sacrifice slots (any card kind): low-value picker
+///   - P.31 ATTACHED-source slots
+///
+/// The function mutates `state` for the rig + sacrifice picking +
+/// activations are not journaled directly here; the journaled
+/// helpers (set_*, move_card, etc.) handle that, and rig_creature_
+/// free_haste is journaled via its own variant. So MCTS rollouts can
+/// rollback the entire build_pattern_b_choices + play_card sequence.
+pub(crate) fn build_pattern_b_choices(
+    state: &mut GameState,
+    active: PlayerId,
+    picked: &InstanceId,
+    oracle: &mut dyn ChoiceOracle,
+) -> BuildChoiceResult {
+    let kind = state
+        .card_pool
+        .get(picked)
+        .map(|c| c.card.kind)
+        .unwrap_or(CardType::Unspecified);
+    let picked_is_creature = matches!(kind, CardType::Creature);
+    let mut choices = PlayChoices::default();
+    let cost = state
+        .card_pool
+        .get(picked)
+        .map(|c| c.card.cost.clone())
+        .unwrap_or_default();
+    let has_is_x = cost.iter().any(|c| c.is_x);
+
+    if has_is_x {
+        let p = state.player(active);
+        let hand_size = p.hand.len();
+        let deck_size = p.deck.len();
+        let gy_size = p.graveyard.len();
+        let board_creatures = p
+            .board
+            .iter()
+            .filter(|iid| {
+                state
+                    .card_pool
+                    .get(*iid)
+                    .map(|i| i.card.kind == CardType::Creature)
+                    .unwrap_or(false)
+            })
+            .count();
+        let identity_count = state.identity_matching_hand_count(active, picked);
+        let gy_subs_available = p
+            .graveyard
+            .iter()
+            .filter(|gid| {
+                state
+                    .card_pool
+                    .get(*gid)
+                    .map(|i| i.card.gy_hand_substitute)
+                    .unwrap_or(false)
+            })
+            .count();
+        let mut caps: Vec<usize> = Vec::new();
+        for c in &cost {
+            if !c.is_x {
+                continue;
+            }
+            match c.source {
+                CostSource::Hand => {
+                    let hand_avail = identity_count.min(hand_size.saturating_sub(1));
+                    caps.push(hand_avail + gy_subs_available);
+                }
+                CostSource::Mill => caps.push(deck_size),
+                CostSource::Graveyard => caps.push(gy_size),
+                CostSource::Sacrifice => caps.push(board_creatures),
+                CostSource::SelfExile => {}
+                CostSource::Attached => {}
+            }
+        }
+        let max_x = caps.into_iter().min().unwrap_or(0).min(10) as i32;
+        if max_x < 1 {
+            return BuildChoiceResult::UnaffordableX { picked_is_creature };
+        }
+        let x = oracle.choose_int(
+            state,
+            ChooseIntRequest {
+                min: 1,
+                max: max_x,
+                prompt: format!("X for {}", short(picked)),
+            },
+        );
+        state.bump_action("choose_int", active);
+        choices.x_value = Some(x);
+        let hand_needed: usize = cost
+            .iter()
+            .filter(|c| c.is_x && matches!(c.source, CostSource::Hand))
+            .map(|_| x.max(0) as usize)
+            .sum();
+        if hand_needed > 0 {
+            let mut remaining = hand_needed;
+            if identity_count < remaining {
+                let want_gy = remaining - identity_count;
+                let gy_subs = state.find_gy_hand_substitutes(active, picked, want_gy);
+                let used = gy_subs.len();
+                choices.gy_hand_payment_ids = gy_subs;
+                remaining -= used;
+            }
+            if remaining > 0 {
+                choices.hand_payment_ids =
+                    state.resolve_hand_payment(active, picked, remaining, oracle);
+            }
+        }
+        let raw_gy_needed: usize = cost
+            .iter()
+            .filter(|c| matches!(c.source, CostSource::Graveyard))
+            .map(|c| {
+                if c.is_x {
+                    x.max(0) as usize
+                } else {
+                    c.amount.max(0) as usize
+                }
+            })
+            .sum();
+        let gy_red = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
+        let gy_needed = raw_gy_needed.saturating_sub(gy_red);
+        if gy_needed > 0 {
+            choices.graveyard_payment_ids =
+                state.resolve_graveyard_payment(active, picked, gy_needed);
+        }
+    } else if matches!(kind, CardType::Creature) {
+        let raw_hand_needed: usize = cost
+            .iter()
+            .filter(|c| matches!(c.source, CostSource::Hand))
+            .map(|c| c.amount.max(0) as usize)
+            .sum();
+        let hand_red = state.cost_reduction(picked, CostSource::Hand).max(0) as usize;
+        let mut hand_needed = raw_hand_needed.saturating_sub(hand_red);
+        if hand_needed > 0 {
+            if let Some(jewel) = state.find_jewel_tap_candidate(active, picked) {
+                choices.jewel_tap = Some(jewel);
+                hand_needed -= 1;
+            }
+        }
+        if hand_needed > 0 {
+            let identity_match_count = state.identity_matching_hand_count(active, picked);
+            if identity_match_count < hand_needed {
+                let want_gy = hand_needed - identity_match_count;
+                let gy_subs = state.find_gy_hand_substitutes(active, picked, want_gy);
+                let used = gy_subs.len();
+                choices.gy_hand_payment_ids = gy_subs;
+                hand_needed -= used;
+            }
+        }
+        if hand_needed > 0 {
+            choices.hand_payment_ids =
+                state.resolve_hand_payment(active, picked, hand_needed, oracle);
+        }
+        let raw_gy_needed: usize = cost
+            .iter()
+            .filter(|c| matches!(c.source, CostSource::Graveyard))
+            .map(|c| c.amount.max(0) as usize)
+            .sum();
+        let gy_red = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
+        let gy_needed = raw_gy_needed.saturating_sub(gy_red);
+        if gy_needed > 0 {
+            choices.graveyard_payment_ids =
+                state.resolve_graveyard_payment(active, picked, gy_needed);
+        }
+        let has_setup_cost = cost
+            .iter()
+            .any(|c| matches!(c.source, CostSource::Sacrifice | CostSource::Graveyard));
+        if !has_setup_cost {
+            rig_creature_free_haste(state, picked);
+        }
+    } else if matches!(
+        kind,
+        CardType::Spell | CardType::Artifact | CardType::Mutation
+    ) {
+        let raw_hand_needed: usize = cost
+            .iter()
+            .filter(|c| matches!(c.source, CostSource::Hand))
+            .map(|c| c.amount.max(0) as usize)
+            .sum();
+        let hand_red = state.cost_reduction(picked, CostSource::Hand).max(0) as usize;
+        let mut hand_needed = raw_hand_needed.saturating_sub(hand_red);
+        if hand_needed > 0 {
+            if let Some(jewel) = state.find_jewel_tap_candidate(active, picked) {
+                choices.jewel_tap = Some(jewel);
+                hand_needed -= 1;
+            }
+        }
+        if hand_needed > 0 {
+            let identity_match_count = state.identity_matching_hand_count(active, picked);
+            if identity_match_count < hand_needed {
+                let want_gy = hand_needed - identity_match_count;
+                let gy_subs = state.find_gy_hand_substitutes(active, picked, want_gy);
+                let used = gy_subs.len();
+                choices.gy_hand_payment_ids = gy_subs;
+                hand_needed -= used;
+            }
+        }
+        if hand_needed > 0 {
+            choices.hand_payment_ids =
+                state.resolve_hand_payment(active, picked, hand_needed, oracle);
+        }
+        let raw_gy_needed: usize = cost
+            .iter()
+            .filter(|c| matches!(c.source, CostSource::Graveyard))
+            .map(|c| c.amount.max(0) as usize)
+            .sum();
+        let gy_red = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
+        let gy_needed = raw_gy_needed.saturating_sub(gy_red);
+        if gy_needed > 0 {
+            choices.graveyard_payment_ids =
+                state.resolve_graveyard_payment(active, picked, gy_needed);
+        }
+        if matches!(kind, CardType::Mutation) {
+            let mut pool: Vec<InstanceId> = state
+                .a
+                .board
+                .iter()
+                .chain(state.b.board.iter())
+                .filter(|t| {
+                    state
+                        .card_pool
+                        .get(*t)
+                        .map(|i| i.card.kind == CardType::Creature)
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            pool.sort_by_key(|t| {
+                let inst = state.card_pool.get(t);
+                let own = inst.map(|i| i.controller == active).unwrap_or(false);
+                let x = state.effective_stats(t).0;
+                (if own { 0 } else { 1 }, -x)
+            });
+            choices.mutation_target = pool.first().cloned();
+        }
+    }
+
+    // Sacrifice slots (any kind): pick lowest-value first.
+    let sacrifice_slots: Vec<Option<CardType>> = cost
+        .iter()
+        .filter(|c| matches!(c.source, CostSource::Sacrifice))
+        .flat_map(|c| {
+            let n = c.amount.max(0) as usize;
+            std::iter::repeat_n(c.kind, n)
+        })
+        .collect();
+    if !sacrifice_slots.is_empty() {
+        let mut used: std::collections::BTreeSet<InstanceId> = std::collections::BTreeSet::new();
+        for required_kind in sacrifice_slots {
+            let mut sac_candidates: Vec<InstanceId> = state
+                .player(active)
+                .board
+                .iter()
+                .filter(|iid| !used.contains(*iid))
+                .filter(|iid| {
+                    if let Some(k) = required_kind {
+                        state
+                            .card_pool
+                            .get(*iid)
+                            .map(|i| i.card.kind == k)
+                            .unwrap_or(false)
+                    } else {
+                        true
+                    }
+                })
+                .cloned()
+                .collect();
+            sac_candidates.sort_by_key(|iid| sacrifice_keep_value(state, iid));
+            if let Some(pick) = sac_candidates.into_iter().next() {
+                used.insert(pick.clone());
+                choices.sacrifice_ids.push(pick);
+            }
+        }
+    }
+
+    // P.31 ATTACHED-source.
+    let raw_attached_need: usize = cost
+        .iter()
+        .filter(|c| matches!(c.source, CostSource::Attached))
+        .map(|c| {
+            if c.is_x {
+                choices.x_value.unwrap_or(0).max(0) as usize
+            } else {
+                c.amount.max(0) as usize
+            }
+        })
+        .sum();
+    let att_red = state.cost_reduction(picked, CostSource::Attached).max(0) as usize;
+    let attached_need = raw_attached_need.saturating_sub(att_red);
+    if attached_need > 0 {
+        let mut pool = state.find_attached_payments(active, usize::MAX);
+        pool.sort_by_key(|aid| attached_keep_value(state, aid));
+        pool.truncate(attached_need);
+        choices.attached_payment_ids = pool;
+    }
+
+    BuildChoiceResult::Choices(choices)
+}
+
 pub fn run_game_continue(
     state: &mut GameState,
     rng: &mut StdRng,
     log: &mut Vec<String>,
     lua: &mlua::Lua,
-    ai: &super::AiKind,
+    ais: &[super::AiKind; 2],
 ) -> GameStats {
     let oracle_seed: u64 = rng.gen();
     let mut oracle = RecordingOracle::new(RandomOracle::new(StdRng::seed_from_u64(oracle_seed)));
@@ -212,7 +535,10 @@ pub fn run_game_continue(
             } else {
                 PickKindFilter::Any
             };
-            let pick = match ai {
+            // Per-player AI: each player can run its own decision policy.
+            // Default (Heuristic for both) is byte-identical to pre-MCTS
+            // behavior; mixed Heuristic/Mcts is how matchup-mcts compares.
+            let pick = match &ais[active.index()] {
                 super::AiKind::Heuristic => {
                     pick_random_playable_in_hand(state, active, rng, kind_filter)
                 }
@@ -235,361 +561,27 @@ pub fn run_game_continue(
                     .get(&picked)
                     .map(|c| c.card.kind)
                     .unwrap_or(CardType::Unspecified);
-                let mut choices = PlayChoices::default();
-                let cost = state
-                    .card_pool
-                    .get(&picked)
-                    .map(|c| c.card.cost.clone())
-                    .unwrap_or_default();
-                let has_is_x = cost.iter().any(|c| c.is_x);
-
-                if has_is_x {
-                    // Cap X by the tightest binding resource. Each is_x
-                    // component scales by X; the AI must pick an X for
-                    // which every is_x source can pay X-of-its-resource.
-                    // For HAND components, the cap is identity-matching
-                    // hand cards PLUS Clear View-style GY substitutes
-                    // (each fills one HAND slot without identity match).
-                    // Without GY-subs in the cap, can_pay_instant_cost
-                    // (which counts gy_subs) and this branch disagree:
-                    // can_pay says "playable", branch says max_x=0,
-                    // `continue` fires, picker re-returns the same card,
-                    // infinite loop. The integration mirrors the non-X
-                    // spell branch below.
-                    let p = state.player(active);
-                    let hand_size = p.hand.len();
-                    let deck_size = p.deck.len();
-                    let gy_size = p.graveyard.len();
-                    let board_creatures = p
-                        .board
-                        .iter()
-                        .filter(|iid| {
-                            state
-                                .card_pool
-                                .get(*iid)
-                                .map(|i| i.card.kind == CardType::Creature)
-                                .unwrap_or(false)
-                        })
-                        .count();
-                    let identity_count =
-                        state.identity_matching_hand_count(active, &picked);
-                    let gy_subs_available = p
-                        .graveyard
-                        .iter()
-                        .filter(|gid| {
-                            state
-                                .card_pool
-                                .get(*gid)
-                                .map(|i| i.card.gy_hand_substitute)
-                                .unwrap_or(false)
-                        })
-                        .count();
-                    let mut caps: Vec<usize> = Vec::new();
-                    for c in &cost {
-                        if !c.is_x {
-                            continue;
-                        }
-                        match c.source {
-                            CostSource::Hand => {
-                                // Identity-matching hand (excluding self)
-                                // plus GY substitutes covers the X-cap.
-                                let hand_avail =
-                                    identity_count.min(hand_size.saturating_sub(1));
-                                caps.push(hand_avail + gy_subs_available);
-                            }
-                            CostSource::Mill => caps.push(deck_size),
-                            CostSource::Graveyard => caps.push(gy_size),
-                            CostSource::Sacrifice => caps.push(board_creatures),
-                            CostSource::SelfExile => {}
-                            CostSource::Attached => {}
-                        }
-                    }
-                    let max_x = caps.into_iter().min().unwrap_or(0).min(10) as i32;
-                    // X=0 is engine-legal but almost always wasted (no
-                    // X-scaled effect, just pay-non-X-costs-for-nothing).
-                    // Default the AI to min=1 unless a future per-card
-                    // `allow_x_zero` opt-in flag says otherwise. Skip
-                    // entirely if max_x < 1 (resource-starved).
-                    if max_x < 1 {
-                        // Can't afford even X=1. CRITICAL: if this was
-                        // a creature pick, mark `played_creature = true`
-                        // so the picker doesn't re-return the same card
-                        // next iteration — defense in depth against any
-                        // can_pay / X-cap discrepancy that slips through.
-                        if picked_is_creature {
+                // Build PlayChoices via the shared choice-builder (same
+                // function MCTS rollouts use). Sacrifice-stats bumping
+                // stays here (Pattern B's concern, not the builder's).
+                let build_result = build_pattern_b_choices(state, active, &picked, &mut oracle);
+                let choices = match build_result {
+                    BuildChoiceResult::Choices(c) => c,
+                    BuildChoiceResult::UnaffordableX { picked_is_creature: pic } => {
+                        if pic {
                             played_creature = true;
                         } else {
                             break;
                         }
                         continue;
                     }
-                    let x = oracle.choose_int(
-                        &state,
-                        ChooseIntRequest {
-                            min: 1,
-                            max: max_x,
-                            prompt: format!("X for {}", short(&picked)),
-                        },
-                    );
-                    state.bump_action("choose_int", active);
-                    choices.x_value = Some(x);
-                    let hand_needed: usize = cost
-                        .iter()
-                        .filter(|c| c.is_x && matches!(c.source, CostSource::Hand))
-                        .map(|_| x.max(0) as usize)
-                        .sum();
-                    if hand_needed > 0 {
-                        // Mirror the non-X spell branch: spend Clear
-                        // View-style GY substitutes greedily for slots
-                        // the hand can't satisfy via identity, then
-                        // resolve the remainder from hand.
-                        let mut remaining = hand_needed;
-                        if identity_count < remaining {
-                            let want_gy = remaining - identity_count;
-                            let gy_subs =
-                                state.find_gy_hand_substitutes(active, &picked, want_gy);
-                            let used = gy_subs.len();
-                            choices.gy_hand_payment_ids = gy_subs;
-                            remaining -= used;
-                        }
-                        if remaining > 0 {
-                            choices.hand_payment_ids = state.resolve_hand_payment(
-                                active,
-                                &picked,
-                                remaining,
-                                &mut oracle,
-                            );
-                        }
-                    }
-                    // P.12a: pick GY ids for the GRAVEYARD cost component,
-                    // prioritizing a color-anchor. X-cost branch: variable
-                    // GY components scale by x; fixed components contribute
-                    // their amount.
-                    let raw_gy_needed: usize = cost
-                        .iter()
-                        .filter(|c| matches!(c.source, CostSource::Graveyard))
-                        .map(|c| if c.is_x { x.max(0) as usize } else { c.amount.max(0) as usize })
-                        .sum();
-                    let gy_red = state
-                        .cost_reduction(&picked, CostSource::Graveyard)
-                        .max(0) as usize;
-                    let gy_needed = raw_gy_needed.saturating_sub(gy_red);
-                    if gy_needed > 0 {
-                        choices.graveyard_payment_ids =
-                            state.resolve_graveyard_payment(active, &picked, gy_needed);
-                    }
-                } else if matches!(kind, CardType::Creature) {
-                    // Pay HAND/GY costs the same way the spell branch
-                    // does. Without this, creatures with non-zero cost
-                    // (jellyfish: 1 hand + 2 mill + 2 graveyard) get
-                    // picked, never paid for, and play_card rejects
-                    // with WrongHandPaymentCount → the creature gets
-                    // marked played without actually entering play.
-                    let raw_hand_needed: usize = cost
-                        .iter()
-                        .filter(|c| matches!(c.source, CostSource::Hand))
-                        .map(|c| c.amount.max(0) as usize)
-                        .sum();
-                    let hand_red = state
-                        .cost_reduction(&picked, CostSource::Hand)
-                        .max(0) as usize;
-                    let mut hand_needed = raw_hand_needed.saturating_sub(hand_red);
-                    if hand_needed > 0 {
-                        if let Some(jewel) = state.find_jewel_tap_candidate(active, &picked) {
-                            choices.jewel_tap = Some(jewel);
-                            hand_needed -= 1;
-                        }
-                    }
-                    if hand_needed > 0 {
-                        let identity_match_count =
-                            state.identity_matching_hand_count(active, &picked);
-                        if identity_match_count < hand_needed {
-                            let want_gy = hand_needed - identity_match_count;
-                            let gy_subs =
-                                state.find_gy_hand_substitutes(active, &picked, want_gy);
-                            let used = gy_subs.len();
-                            choices.gy_hand_payment_ids = gy_subs;
-                            hand_needed -= used;
-                        }
-                    }
-                    if hand_needed > 0 {
-                        choices.hand_payment_ids = state.resolve_hand_payment(
-                            active,
-                            &picked,
-                            hand_needed,
-                            &mut oracle,
-                        );
-                    }
-                    // P.12a: GY payment with color-anchor priority.
-                    let raw_gy_needed: usize = cost
-                        .iter()
-                        .filter(|c| matches!(c.source, CostSource::Graveyard))
-                        .map(|c| c.amount.max(0) as usize)
-                        .sum();
-                    let gy_red = state
-                        .cost_reduction(&picked, CostSource::Graveyard)
-                        .max(0) as usize;
-                    let gy_needed = raw_gy_needed.saturating_sub(gy_red);
-                    if gy_needed > 0 {
-                        choices.graveyard_payment_ids =
-                            state.resolve_graveyard_payment(active, &picked, gy_needed);
-                    }
-                    let has_setup_cost = cost.iter().any(|c| {
-                        matches!(c.source, CostSource::Sacrifice | CostSource::Graveyard)
-                    });
-                    if !has_setup_cost {
-                        rig_creature_free_haste(state, &picked);
-                    }
-                } else if matches!(
-                    kind,
-                    CardType::Spell | CardType::Artifact | CardType::Mutation
-                ) {
-                    let raw_hand_needed: usize = cost
-                        .iter()
-                        .filter(|c| matches!(c.source, CostSource::Hand))
-                        .map(|c| c.amount.max(0) as usize)
-                        .sum();
-                    let hand_red = state
-                        .cost_reduction(&picked, CostSource::Hand)
-                        .max(0) as usize;
-                    let mut hand_needed = raw_hand_needed.saturating_sub(hand_red);
-                    if hand_needed > 0 {
-                        if let Some(jewel) = state.find_jewel_tap_candidate(active, &picked) {
-                            choices.jewel_tap = Some(jewel);
-                            hand_needed -= 1;
-                        }
-                    }
-                    // Clear View-style GY-substitutes: use one per slot
-                    // the hand can't fill with identity-matching cards.
-                    // Greedy fallback — Clear Views are spent only when
-                    // hand identity-count would short the cast.
-                    if hand_needed > 0 {
-                        let identity_match_count =
-                            state.identity_matching_hand_count(active, &picked);
-                        if identity_match_count < hand_needed {
-                            let want_gy = hand_needed - identity_match_count;
-                            let gy_subs =
-                                state.find_gy_hand_substitutes(active, &picked, want_gy);
-                            let used = gy_subs.len();
-                            choices.gy_hand_payment_ids = gy_subs;
-                            hand_needed -= used;
-                        }
-                    }
-                    if hand_needed > 0 {
-                        choices.hand_payment_ids = state.resolve_hand_payment(
-                            active,
-                            &picked,
-                            hand_needed,
-                            &mut oracle,
-                        );
-                    }
-                    // P.12a: pick GY ids for the GRAVEYARD cost component,
-                    // prioritizing a color-anchor.
-                    let raw_gy_needed: usize = cost
-                        .iter()
-                        .filter(|c| matches!(c.source, CostSource::Graveyard))
-                        .map(|c| c.amount.max(0) as usize)
-                        .sum();
-                    let gy_red = state
-                        .cost_reduction(&picked, CostSource::Graveyard)
-                        .max(0) as usize;
-                    let gy_needed = raw_gy_needed.saturating_sub(gy_red);
-                    if gy_needed > 0 {
-                        choices.graveyard_payment_ids =
-                            state.resolve_graveyard_payment(active, &picked, gy_needed);
-                    }
-                    if matches!(kind, CardType::Mutation) {
-                        let mut pool: Vec<InstanceId> = state
-                            .a
-                            .board
-                            .iter()
-                            .chain(state.b.board.iter())
-                            .filter(|t| {
-                                state
-                                    .card_pool
-                                    .get(*t)
-                                    .map(|i| i.card.kind == CardType::Creature)
-                                    .unwrap_or(false)
-                            })
-                            .cloned()
-                            .collect();
-                        pool.sort_by_key(|t| {
-                            let inst = state.card_pool.get(t);
-                            let own = inst.map(|i| i.controller == active).unwrap_or(false);
-                            let x = state.effective_stats(t).0;
-                            (if own { 0 } else { 1 }, -x)
-                        });
-                        choices.mutation_target = pool.first().cloned();
+                };
+                // Update sacrifice telemetry from the picked ids.
+                for sac_iid in &choices.sacrifice_ids {
+                    if let Some(card_id) = state.card_pool.get(sac_iid).map(|c| c.card.id.clone()) {
+                        *stats.card_sacrificed_count.entry(card_id).or_insert(0) += 1;
                     }
                 }
-                let sacrifice_slots: Vec<Option<CardType>> = cost
-                    .iter()
-                    .filter(|c| matches!(c.source, CostSource::Sacrifice))
-                    .flat_map(|c| {
-                        let n = c.amount.max(0) as usize;
-                        std::iter::repeat_n(c.kind, n)
-                    })
-                    .collect();
-                if !sacrifice_slots.is_empty() {
-                    let mut used: std::collections::BTreeSet<InstanceId> =
-                        std::collections::BTreeSet::new();
-                    for required_kind in sacrifice_slots {
-                        let mut sac_candidates: Vec<InstanceId> = state
-                            .player(active)
-                            .board
-                            .iter()
-                            .filter(|iid| !used.contains(*iid))
-                            .filter(|iid| {
-                                if let Some(k) = required_kind {
-                                    state
-                                        .card_pool
-                                        .get(*iid)
-                                        .map(|i| i.card.kind == k)
-                                        .unwrap_or(false)
-                                } else {
-                                    true
-                                }
-                            })
-                            .cloned()
-                            .collect();
-                        sac_candidates.sort_by_key(|iid| sacrifice_keep_value(&state, iid));
-                        if let Some(pick) = sac_candidates.into_iter().next() {
-                            if let Some(card_id) =
-                                state.card_pool.get(&pick).map(|c| c.card.id.clone())
-                            {
-                                *stats.card_sacrificed_count.entry(card_id).or_insert(0) += 1;
-                            }
-                            used.insert(pick.clone());
-                            choices.sacrifice_ids.push(pick);
-                        }
-                    }
-                }
-
-                // P.31 ATTACHED-source: pick up to `attached_need` cards
-                // currently attached to the player's BOARD. First-N
-                // selection in iteration order — no value scoring.
-                let raw_attached_need: usize = cost
-                    .iter()
-                    .filter(|c| matches!(c.source, CostSource::Attached))
-                    .map(|c| {
-                        if c.is_x {
-                            choices.x_value.unwrap_or(0).max(0) as usize
-                        } else {
-                            c.amount.max(0) as usize
-                        }
-                    })
-                    .sum();
-                let att_red = state
-                    .cost_reduction(&picked, CostSource::Attached)
-                    .max(0) as usize;
-                let attached_need = raw_attached_need.saturating_sub(att_red);
-                if attached_need > 0 {
-                    let mut pool = state.find_attached_payments(active, usize::MAX);
-                    pool.sort_by_key(|aid| attached_keep_value(&state, aid));
-                    pool.truncate(attached_need);
-                    choices.attached_payment_ids = pool;
-                }
-
                 oracle.clear();
                 let resp_before_a = state
                     .action_counts
@@ -1094,7 +1086,8 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(0xC0FFEE);
         let mut log: Vec<String> = Vec::new();
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &super::super::AiKind::Heuristic);
+        let ais = [super::super::AiKind::Heuristic, super::super::AiKind::Heuristic];
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &ais);
 
         assert!(state.winner.is_some(), "game should have a winner");
         assert!(stats.turns > 0, "stats should record turns");

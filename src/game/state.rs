@@ -19,6 +19,16 @@ impl PlayerId {
             PlayerId::B => PlayerId::A,
         }
     }
+
+    /// Numeric index for array lookups indexed by player. `A → 0`,
+    /// `B → 1`. Used by callers that hold `[T; 2]` keyed by player
+    /// (e.g., per-player AI config in the sim).
+    pub fn index(self) -> usize {
+        match self {
+            PlayerId::A => 0,
+            PlayerId::B => 1,
+        }
+    }
 }
 
 /// U.6: phases in canonical order.

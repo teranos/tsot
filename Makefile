@@ -46,7 +46,7 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool archetypes prune-champions probe probe-long
+.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool archetypes prune-champions probe probe-long matchup-mcts
 
 help:
 	@echo ""
@@ -155,6 +155,16 @@ pool:
 archetypes:
 	lua5.4 tools/archetypes-report.lua
 	@echo "Open archetypes-report.html"
+
+# Mirror-match MCTS vs Heuristic. MCTS-vs-Heuristic + Heuristic-vs-MCTS
+# back-to-back on the SAME random deck (eliminates deck-quality as a
+# confounder). 50% = MCTS adds no signal; 55-65% = working; 70%+ = the
+# heuristic has obvious gaps. Slow (~3-5 min/game at default rollouts);
+# tune via MATCHUP_MCTS_ARGS.
+MATCHUP_MCTS_ARGS ?=
+
+matchup-mcts:
+	cargo run --release -- matchup-mcts $(MATCHUP_MCTS_ARGS)
 
 # Balance-probe runs the side-by-side EA over cards that declare
 # variants inline in their .lua file (`variants = { [key] = { ... } }`).

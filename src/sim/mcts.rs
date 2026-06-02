@@ -19,15 +19,31 @@
 
 #![allow(dead_code)]
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use tsot::card::CostSource;
 use tsot::choice::{RandomOracle, RecordingOracle};
-use tsot::game::{EventContext, GameState, InstanceId, Journal, PlayChoices, PlayerId};
+use tsot::game::{EventContext, GameState, InstanceId, Journal, PlayerId};
 
 use super::ai::{enumerate_playable_in_hand, PickKindFilter};
-use super::run::run_game_continue;
+use super::run::{build_pattern_b_choices, run_game_continue, BuildChoiceResult};
 use super::AiKind;
+
+/// Diagnostic counters bumped by `pick_play`. Allow the matchup
+/// harness to detect "MCTS was called but never searched" (most
+/// often: random-genome decks where Pattern B sees ≤1 candidate
+/// per turn, so MCTS short-circuits). Global / process-wide;
+/// caller is responsible for resetting before a measurement run.
+pub static MCTS_PICK_CALLS: AtomicU64 = AtomicU64::new(0);
+pub static MCTS_SEARCHED_PICKS: AtomicU64 = AtomicU64::new(0);
+pub static MCTS_TOTAL_CANDIDATES: AtomicU64 = AtomicU64::new(0);
+
+pub fn reset_mcts_diagnostics() {
+    MCTS_PICK_CALLS.store(0, Ordering::SeqCst);
+    MCTS_SEARCHED_PICKS.store(0, Ordering::SeqCst);
+    MCTS_TOTAL_CANDIDATES.store(0, Ordering::SeqCst);
+}
 
 #[derive(Debug, Clone)]
 pub struct MctsConfig {
@@ -71,7 +87,9 @@ pub fn pick_play(
     cfg: &MctsConfig,
     lua: &mlua::Lua,
 ) -> Option<InstanceId> {
+    MCTS_PICK_CALLS.fetch_add(1, Ordering::SeqCst);
     let mut candidates = enumerate_playable_in_hand(state, player, kind_filter);
+    MCTS_TOTAL_CANDIDATES.fetch_add(candidates.len() as u64, Ordering::SeqCst);
     if candidates.is_empty() {
         return None;
     }
@@ -82,6 +100,7 @@ pub fn pick_play(
         candidates.sort();
         candidates.truncate(cfg.max_candidates as usize);
     }
+    MCTS_SEARCHED_PICKS.fetch_add(1, Ordering::SeqCst);
 
     // Score each candidate by rollout win-rate.
     let mut scored: Vec<(InstanceId, u32, u32)> = Vec::with_capacity(candidates.len());
@@ -142,11 +161,22 @@ fn simulate_rollout(
         seed.wrapping_add(0xBEEF),
     )));
 
-    // Build default choices for the candidate. Heuristic-ish: pick the
-    // first hand card != candidate as the HAND-payment slot. For X-cost
-    // we don't search over X — pick X=1 (the min legal). v1 limits
-    // search to "which CARD," not "how to play it."
-    let choices = build_default_choices(state, player, candidate);
+    // CRITICAL: use the same choice-builder Pattern B uses. Without
+    // this, MCTS rollouts pay for cards with a stripped-down "first-N
+    // hand cards" heuristic while real Pattern B uses smart-pitch +
+    // jewel-tap + Clear-View. Asymmetric choice quality systematically
+    // makes MCTS underestimate any candidate with non-trivial cost,
+    // and MCTS picks worse than heuristic.
+    let choices = match build_pattern_b_choices(state, player, candidate, &mut oracle) {
+        BuildChoiceResult::Choices(c) => c,
+        BuildChoiceResult::UnaffordableX { .. } => {
+            // Candidate can't be paid for; treat as a loss for `player`.
+            let rollout_journal = state.replay_journal.take().unwrap_or_default();
+            rollout_journal.rollback(state);
+            state.replay_journal = outer_replay;
+            return false;
+        }
+    };
 
     let cast_ok = state
         .play_card(
@@ -158,10 +188,11 @@ fn simulate_rollout(
         .is_ok();
 
     let won = if cast_ok && state.winner.is_none() {
-        // Finish the game with the heuristic AI. CRITICAL: pass
-        // AiKind::Heuristic to prevent recursive MCTS inside rollouts
-        // (which would explode the search tree).
-        let stats = run_game_continue(state, &mut rng, &mut log, lua, &AiKind::Heuristic);
+        // Finish the game with the heuristic AI on BOTH sides. CRITICAL:
+        // pass `[Heuristic, Heuristic]` to prevent recursive MCTS inside
+        // rollouts (which would explode the search tree).
+        let ais = [AiKind::Heuristic, AiKind::Heuristic];
+        let stats = run_game_continue(state, &mut rng, &mut log, lua, &ais);
         stats.winner == player
     } else if cast_ok {
         // Cast succeeded but the game ended during play (handler
@@ -179,53 +210,6 @@ fn simulate_rollout(
     state.replay_journal = outer_replay;
 
     won
-}
-
-/// Build a minimal `PlayChoices` for the candidate. v1 strategy:
-///   - If the card has no HAND cost: empty payment.
-///   - If the card has HAND cost ≥ 1: pick the first hand cards
-///     (excluding the candidate itself) as payment.
-///   - X-cost: pick X = 1. v1 doesn't search over alternative X values.
-///   - Targets / mutations: NOT handled (would need oracle); v1's
-///     rollouts use the random oracle internally.
-fn build_default_choices(
-    state: &GameState,
-    player: PlayerId,
-    candidate: &InstanceId,
-) -> PlayChoices {
-    let Some(inst) = state.card_pool.get(candidate) else {
-        return PlayChoices::default();
-    };
-    let mut hand_needed: usize = 0;
-    let mut x_value: Option<i32> = None;
-    for c in &inst.card.cost {
-        if let CostSource::Hand = c.source {
-            if c.is_x {
-                // Pick X = 1 (the min legal X per RULES P.30 unless the
-                // card opts into X = 0; v1 doesn't search alternatives).
-                x_value = Some(1);
-                hand_needed += 1;
-            } else {
-                hand_needed += c.amount.max(0) as usize;
-            }
-        } else if c.is_x && x_value.is_none() {
-            x_value = Some(1);
-        }
-    }
-    let mut payment: Vec<InstanceId> = Vec::with_capacity(hand_needed);
-    for hid in &state.player(player).hand {
-        if payment.len() >= hand_needed {
-            break;
-        }
-        if hid != candidate {
-            payment.push(hid.clone());
-        }
-    }
-    PlayChoices {
-        hand_payment_ids: payment,
-        x_value,
-        ..PlayChoices::default()
-    }
 }
 
 #[cfg(test)]
@@ -266,12 +250,15 @@ mod tests {
         state.replay_journal = Some(Journal::new());
         let mut rng = StdRng::seed_from_u64(0xC0DE);
         let mut log: Vec<String> = Vec::new();
+        // MCTS on both sides; the smoke test just verifies the rollout
+        // wiring + recursion guard works.
+        let ais = [AiKind::Mcts(mcts_cfg.clone()), AiKind::Mcts(mcts_cfg)];
         let stats = run_game_continue(
             &mut state,
             &mut rng,
             &mut log,
             registry.lua(),
-            &AiKind::Mcts(mcts_cfg),
+            &ais,
         );
         assert!(state.winner.is_some(), "MCTS game produced no winner");
         assert!(stats.turns > 0, "MCTS game recorded zero turns");
