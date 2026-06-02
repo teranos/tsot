@@ -49,6 +49,7 @@ pub fn parallel_evaluate_genomes(
     gauntlet_ids: &[Vec<String>],
     jobs: &[(Vec<String>, u64)],
     n_per_side: u32,
+    opponent_ai: &super::AiKind,
 ) -> Vec<f64> {
     let eval = |(genome, fit_seed): &(Vec<String>, u64)| -> f64 {
         WORKER_CTX.with(|cell| {
@@ -74,7 +75,7 @@ pub fn parallel_evaluate_genomes(
                 });
             }
             let ctx = ctx_ref.as_ref().unwrap();
-            fitness(&ctx.registry, genome, &ctx.gauntlet, n_per_side, *fit_seed)
+            fitness(&ctx.registry, genome, &ctx.gauntlet, n_per_side, *fit_seed, opponent_ai)
                 .expect("worker fitness: genome contains unknown card id")
         })
     };

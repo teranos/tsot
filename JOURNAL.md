@@ -3,7 +3,7 @@
 > Multi-session architectural plan for journal-based mutation tracking.
 > Foundation for preview-for-AI, replay, save/load, undo, multiplayer rollback.
 
-## Status (2026-05-29)
+## Status (2026-06-02)
 
 - **Sessions 1–4: complete.** Mutation logging across every subsystem
   (turn, combat, play, lua_api), in-place preview-and-rollback in the sim,
@@ -13,7 +13,11 @@
   forward-apply, and mid-game save/load with Lua-handler rebinding. Tests
   in `tests/replay.rs` and `tests/save_load.rs` cover both round-trips.
 - **Session 5, step 5 (undo):** deferred — gated on interactive UI.
-- **Session 6+ (AI search, multiplayer rollback):** deferred.
+- **Session 6 (AI search): one-ply MCTS landed.** Journal-based rollback
+  proved out for full-game speculative execution; first AI consumer is
+  `sim::mcts::pick_play` (one-ply rollouts per candidate card-pick). See
+  the section below for what shipped and what's still deferred.
+- **Multiplayer rollback netcode:** still deferred.
 
 ---
 
@@ -248,18 +252,77 @@ What landed:
 - Needs interactive UI / CLI to be useful — not reachable until
   someone's actually playing tsot interactively
 
-## Session 6+ (later)
+## Session 6 — AI search (partial)
 
-**AI search trees:**
-- Branch the journal at decision points
-- Explore down each branch
-- Rollback when returning from a branch
-- Foundation for MCTS / minimax over tsot game states
+**One-ply rollout MCTS shipped.** Lives in `src/sim/mcts.rs`. `pick_play`
+enumerates playable hand candidates, runs N Heuristic-vs-Heuristic
+rollouts per candidate via `run_game_continue`, and picks highest
+win-rate. Each rollout opens a fresh per-rollout journal, runs the
+game to completion, then rolls back — outer `replay_journal` is saved
+and restored so the search is fully transparent to the caller.
 
-**Multiplayer rollback:**
-- Each client runs the journal forward in lockstep
-- Diverged inputs trigger rollback to last common frame, replay forward
-- Foundation for online play with low-latency input
+What this required:
+
+- `run_game_continue(&mut state, rng, log, lua, ais: &[AiKind; 2])` —
+  resumable game runner taking borrowed state and per-player AI. The
+  original `run_game` is now a thin owned-state wrapper.
+- `build_pattern_b_choices(...) -> BuildChoiceResult` extracted from
+  `run_game_continue` so MCTS rollouts and the real game build
+  `PlayChoices` through the same code path. Mismatched choice-building
+  was the difference between 17% and 80% win rate in mirror matches —
+  the rollouts have to play the candidate move under exactly the same
+  payment / target-resolution rules as the real game.
+- `JournalEntry::RigCreatureFreeHaste { iid, was_cost, was_abilities }`
+  — `sim::ai::rig_creature_free_haste` mutates `inst.card.cost` and
+  `inst.card.abilities` outside the normal journaled-helper path, so
+  full-game rollback diverged from the initial state. Variant captures
+  the pre-mutation values; `apply_inverse` restores them. TODO(B):
+  eliminate the rig hack by routing free/haste casts through the proper
+  play-cost API.
+- `PlayerId::index() → usize` (A=0, B=1) and `GameState::active_journal()`
+  promoted to `pub` so MCTS can construct `[AiKind; 2]` arrays and
+  access the journal directly.
+
+**Full-game rollback invariant test.** `src/sim/run.rs::full_random_game_rollback_restores_initial_state`
+runs a full random game with both players on Heuristic, captures the
+journal, rolls back, and asserts per-field equality with the pre-game
+state. This is the strongest journal test in the codebase — it caught
+the rig_creature_free_haste gap by narrowing failures to specific
+`Card` fields. (`tests/journal_full_game_rollback.rs` carries two
+weaker scripted-game variants since `sim` is binary-only and the
+strongest test has to live next to the code.)
+
+**AI-vs-AI head-to-head.** `cli_matchup_mcts` runs Heuristic vs MCTS
+with three modes: mirror (`--deck PATH`), explicit asymmetric
+(`--deck-a` + `--deck-b`), and auto (picks two random `baselines/*.json`
+or a random genome). `--handicap` forces MCTS onto the lower-saved-
+fitness deck. Measurements with current defaults (rollouts=5,
+max_candidates=10): MCTS ~76% in mirror, ~61% with a 0.025-fitness
+handicap.
+
+**EA-vs-MCTS.** `cli_evolve --opponent-ai mcts` threads `AiKind` through
+`EvolveConfig → parallel_evaluate_genomes → fitness/fitness_breakdown
+→ run_game_with_ai`. Candidate side always plays Heuristic; only the
+gauntlet side plays MCTS. ~16× slower per fitness eval; `make
+evolve-mcts` wraps the standard EA shape. See `EA.md` "Evolving against
+MCTS opponents."
+
+### Still deferred
+
+- **Multi-ply lookahead.** Current MCTS branches one card-pick deep then
+  hands off to Heuristic rollouts. The journal supports deeper search;
+  the cost-vs-signal tradeoff and tree-policy choice haven't been
+  measured.
+- **ISMCTS / hidden information.** Opponent hand identities are visible
+  to both players in the current rollouts. Determinization (sample the
+  opponent's hand from cards-not-yet-seen) is the natural fix.
+- **Transposition tables.** Same state reachable via different paths
+  isn't deduplicated. State-hash + journal-aware caching is the right
+  shape; not built.
+- **Multiplayer rollback netcode.**
+  - Each client runs the journal forward in lockstep
+  - Diverged inputs trigger rollback to last common frame, replay forward
+  - Foundation for online play with low-latency input
 
 ---
 

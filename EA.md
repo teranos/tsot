@@ -178,6 +178,42 @@ cargo run --release -- evolve --seed 0xea08 --pop 25 --gens 15 --n 5
 cargo run --release -- evolve --no-variants --extra champions/r7-rank1.json --save champion.json
 ```
 
+## Evolving against MCTS opponents
+
+`--opponent-ai mcts` switches the gauntlet side from Heuristic to the
+one-ply rollout MCTS in `sim::mcts`. The candidate genome's side always
+plays Heuristic — the EA evaluates whether the deck wins under standard
+play against a stronger opponent, not whether MCTS rescues a weak deck.
+
+Flags:
+
+```
+--opponent-ai mcts                           # default heuristic
+--opponent-mcts-rollouts N                   # default 5
+--opponent-mcts-max-candidates M             # default 10
+```
+
+Threaded through `EvolveConfig.opponent_ai → parallel_evaluate_genomes
+→ fitness/fitness_breakdown → run_game_with_ai`. The MCTS base seed is
+derived from `--seed` (`seed.wrapping_add(0xCAFE_BABE)`) so the same
+EA seed reproduces.
+
+Runtime: ~16× slower per fitness eval at rollouts=5 (each pick fans out
+up to 10 candidates × 5 rollouts). `make evolve-mcts` runs the standard
+EA shape (~7-8 min Heuristic → ~2-4 h MCTS). Override per-run:
+
+```
+EVOLVE_MCTS_ROLLOUTS=3 make evolve-mcts
+EVOLVE_MCTS_MAX_CANDIDATES=6 make evolve-mcts
+```
+
+`rollouts=2` is borderline — within-rollout stddev per pick is ~0.35,
+which dilutes the signal back toward Heuristic-quality. Floor is 3-5.
+
+The fitness signal qualitatively differs: cards that score high have
+to beat strong play, not just gauntlet defaults. Surfaces designs that
+the Heuristic gauntlet undervalues (and the reverse).
+
 ## Open design questions
 
 - **Per-card cap.** 3 matches the existing builder. 4 widens the search.

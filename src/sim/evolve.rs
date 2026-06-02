@@ -80,6 +80,12 @@ pub struct EvolveConfig {
     /// runs at different alphas. Elitism still carries by raw fitness,
     /// so the monotonic-best-trace contract is preserved.
     pub diversity_alpha: f64,
+    /// AI driving the GAUNTLET-OPPONENT side during fitness evaluation.
+    /// Candidate-side (the genome being scored) always plays Heuristic
+    /// so the EA's outputs are compatible with the rest of the project's
+    /// Heuristic-by-default tooling. When `Mcts`, evolved decks have to
+    /// beat strong play to score high; expect ~16× slower fitness eval.
+    pub opponent_ai: super::AiKind,
 }
 
 impl Default for EvolveConfig {
@@ -100,6 +106,7 @@ impl Default for EvolveConfig {
             pinned_card_id: None,
             pinned_count: 0,
             diversity_alpha: 0.0,
+            opponent_ai: super::AiKind::Heuristic,
         }
     }
 }
@@ -237,6 +244,7 @@ pub fn evolve(
         &gauntlet_ids,
         &init_jobs,
         cfg.n_per_side,
+        &cfg.opponent_ai,
     );
     let mut pop: Vec<(Vec<String>, f64)> = init_jobs
         .into_iter()
@@ -300,6 +308,7 @@ pub fn evolve(
             &gauntlet_ids,
             &child_jobs,
             cfg.n_per_side,
+            &cfg.opponent_ai,
         );
         next.extend(
             child_jobs
@@ -405,6 +414,7 @@ mod tests {
             pinned_card_id: None,
             pinned_count: 0,
             diversity_alpha: 0.0,
+            opponent_ai: super::super::AiKind::Heuristic,
         }
     }
 

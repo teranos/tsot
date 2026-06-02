@@ -30,14 +30,28 @@ use super::variants::DeckVariant;
 /// scripted multi-game tests, multiplayer rollback) use
 /// `run_game_continue` directly with `&mut GameState`.
 pub fn run_game(
-    mut state: GameState,
+    state: GameState,
     rng: &mut StdRng,
     log: &mut Vec<String>,
     lua: &mlua::Lua,
 ) -> (GameStats, tsot::game::Journal) {
-    state.replay_journal = Some(tsot::game::Journal::new());
     let ais = [super::AiKind::Heuristic, super::AiKind::Heuristic];
-    let mut stats = run_game_continue(&mut state, rng, log, lua, &ais);
+    run_game_with_ai(state, rng, log, lua, &ais)
+}
+
+/// Like [`run_game`] but with per-player AI selection. Used by the
+/// EA when opponents play MCTS (step 8 — `--opponent-ai mcts`) and
+/// anywhere else that wants the wrapper's journal-lifecycle setup
+/// without being locked to Heuristic-on-both-sides.
+pub fn run_game_with_ai(
+    mut state: GameState,
+    rng: &mut StdRng,
+    log: &mut Vec<String>,
+    lua: &mlua::Lua,
+    ais: &[super::AiKind; 2],
+) -> (GameStats, tsot::game::Journal) {
+    state.replay_journal = Some(tsot::game::Journal::new());
+    let mut stats = run_game_continue(&mut state, rng, log, lua, ais);
     let replay_journal = state.replay_journal.take().unwrap_or_default();
     stats.replay_journal_entries = replay_journal.len() as u64;
     (stats, replay_journal)

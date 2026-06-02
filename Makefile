@@ -46,7 +46,7 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep report curate-baselines clean-champions pool archetypes prune-champions probe probe-long matchup-mcts
+.PHONY: help matchup-decks evolve evolve-deep evolve-mcts report curate-baselines clean-champions pool archetypes prune-champions probe probe-long matchup-mcts
 
 help:
 	@echo ""
@@ -127,6 +127,31 @@ evolve-deep:
 		--diversity-alpha $(ALPHA) \
 		--stop-at-plateau $(PLATEAU_K) --plateau-eps $(PLATEAU_EPS) \
 		--save-top 5 \
+		$$EXTRAS --save $(CHAMPS)/r$$N.json
+
+# EA round where the gauntlet OPPONENT plays MCTS. Evolved decks must
+# beat strong play to score high. ~16× slower per fitness eval — expect
+# ~2-4 hours wall vs 7-8 min for `make evolve`. Override MCTS_ROLLOUTS
+# (default 5) to tune; smaller = faster, weaker opponent.
+EVOLVE_MCTS_ROLLOUTS ?= 5
+EVOLVE_MCTS_MAX_CANDIDATES ?= 10
+
+evolve-mcts:
+	@mkdir -p $(CHAMPS)
+	@HIGHEST=0; for f in $(CHAMPS)/r*-rank1.json; do [ -f "$$f" ] || continue; base=$$(basename "$$f" -rank1.json); num=$${base#r}; if [ "$$num" -gt "$$HIGHEST" ]; then HIGHEST=$$num; fi; done; \
+	N=$$((HIGHEST + 1)); \
+	SEED=$$(printf '0x%x' $$((0xEA00 + N))); \
+	EXTRAS=""; \
+	for f in $(CHAMPS)/*.json; do \
+		[ -f "$$f" ] && EXTRAS="$$EXTRAS --extra $$f"; \
+	done; \
+	NUM=$$(($$(echo $$EXTRAS | wc -w | xargs) / 2)); \
+	echo "=== mcts-opponent round $$N (seed=$$SEED, opponent=MCTS rollouts=$(EVOLVE_MCTS_ROLLOUTS) max-cand=$(EVOLVE_MCTS_MAX_CANDIDATES)) ==="; \
+	echo "    candidate side plays Heuristic; opponent side plays MCTS — expect ~2-4h wall"; \
+	cargo run --release -- evolve --seed $$SEED --stop-at-ceiling 3 --save-top 5 \
+		--opponent-ai mcts \
+		--opponent-mcts-rollouts $(EVOLVE_MCTS_ROLLOUTS) \
+		--opponent-mcts-max-candidates $(EVOLVE_MCTS_MAX_CANDIDATES) \
 		$$EXTRAS --save $(CHAMPS)/r$$N.json
 
 report:

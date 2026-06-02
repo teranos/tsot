@@ -20,8 +20,10 @@ Mid-engine. Plays a turn end-to-end including combat, fires Lua handlers, suppor
 - **`make pool`** — static analytics dashboard of the card pool (color × cost × type × subtype × keyword distributions, plus per-card turn-played sparklines from a chained `tsot curve-sample` run) → `card-pool.html`
 - **`make archetypes`** — Jaccard clustering of saved decks → `archetypes-report.html` (which decks form the same attractor)
 - **`make probe [CARD_ID...]`** — side-by-side comparison of a card's declared variants via short pinned EAs; auto-discovers every card with a `variants` block if no id given → `balance-probe-report.html`. Long-form: `make probe-long`.
+- **`make matchup-mcts`** — head-to-head between the existing Heuristic AI and a one-ply rollout MCTS that does journal-rollback search over Pattern B card-pick decisions. Defaults to asymmetric mode (two random baseline decks); `--handicap` forces MCTS onto the lower-fitness deck; `--deck PATH` runs a mirror match. MCTS wins ~76% in mirror, ~61% with a 0.025-fitness handicap.
+- **`make evolve-mcts`** — like `make evolve` but the gauntlet opponent plays MCTS. Evolved decks have to beat strong play to score high. ~16× slower per fitness eval (~2-4h per round at default rollouts=5); tune via `EVOLVE_MCTS_ROLLOUTS=`.
 
-**Engine state:** turn loop with combat, response windows + counterspells, statics (anthems / keyword grants / restrictions / cost reductions), full cost vocabulary (HAND / MILL / GRAVEYARD / SACRIFICE / ATTACHED + jewel/crystal/Clear-View substitutions), X-cost casts and activated abilities, card-variants schema with `make probe`, intent-aware AI targeting. Detailed feature inventory and remaining gaps live in `LIMITATIONS.md`.
+**Engine state:** turn loop with combat, response windows + counterspells, statics (anthems / keyword grants / restrictions / cost reductions), full cost vocabulary (HAND / MILL / GRAVEYARD / SACRIFICE / ATTACHED + jewel/crystal/Clear-View substitutions), X-cost casts and activated abilities, card-variants schema with `make probe`, intent-aware AI targeting, **one-ply rollout MCTS as a second AI** driven by full-game journal rollback (every mutation site is journaled; `RigCreatureFreeHaste` was the last sim shortcut to gain its own journal variant). Detailed feature inventory and remaining gaps live in `LIMITATIONS.md`.
 
 ## Building & running
 

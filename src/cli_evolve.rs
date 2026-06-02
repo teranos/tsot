@@ -58,6 +58,20 @@ pub struct EvolveArgs {
     /// `--stop-at-plateau`. Ignored when `--stop-at-plateau` is unset.
     #[arg(long = "plateau-eps", default_value_t = 0.010)]
     pub plateau_eps: f64,
+    /// AI driving the GAUNTLET-OPPONENT side during fitness eval.
+    /// `heuristic` (default): identical to pre-step-8 EA. `mcts`:
+    /// opponents play MCTS — evolved decks must beat strong play to
+    /// score high. ~16× slower per fitness eval. Candidate side
+    /// always plays Heuristic regardless.
+    #[arg(long = "opponent-ai", default_value = "heuristic")]
+    pub opponent_ai: String,
+    /// MCTS rollouts per candidate when `--opponent-ai mcts`. Higher
+    /// = stronger opponent, linearly slower.
+    #[arg(long = "opponent-mcts-rollouts", default_value_t = 5)]
+    pub opponent_mcts_rollouts: u32,
+    /// MCTS max candidates per pick when `--opponent-ai mcts`.
+    #[arg(long = "opponent-mcts-max-candidates", default_value_t = 10)]
+    pub opponent_mcts_max_candidates: u32,
     /// Skip building the variant gauntlet. Requires at least one --extra.
     #[arg(long = "no-variants")]
     pub no_variants: bool,
@@ -123,6 +137,18 @@ pub fn run_ea(
     playable_pool: &[Card],
     args: &EvolveArgs,
 ) -> mlua::Result<()> {
+    let opponent_ai = match args.opponent_ai.to_ascii_lowercase().as_str() {
+        "heuristic" => crate::sim::AiKind::Heuristic,
+        "mcts" => crate::sim::AiKind::Mcts(crate::sim::mcts::MctsConfig {
+            rollouts_per_candidate: args.opponent_mcts_rollouts,
+            max_candidates: args.opponent_mcts_max_candidates,
+            base_seed: args.seed.wrapping_add(0xCAFE_BABE),
+        }),
+        other => {
+            eprintln!("error: --opponent-ai must be 'heuristic' or 'mcts', got {other:?}");
+            std::process::exit(2);
+        }
+    };
     let cfg = EvolveConfig {
         pop_size: args.pop,
         generations: args.gens,
@@ -139,6 +165,7 @@ pub fn run_ea(
         pinned_card_id: None,
         pinned_count: 0,
         diversity_alpha: args.diversity_alpha,
+        opponent_ai,
     };
 
     println!();
@@ -327,6 +354,7 @@ pub fn run_ea(
             &gauntlet,
             cfg.n_per_side,
             cfg.base_seed.wrapping_add(0xB1EAD_u64.wrapping_mul(rank as u64 + 1)),
+            &cfg.opponent_ai,
         ) {
             Ok(b) => {
                 print!("  per-opponent:");
