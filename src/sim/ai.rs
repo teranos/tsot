@@ -72,6 +72,11 @@ pub fn enumerate_playable_in_hand(
                             .unwrap_or(false)
                     })
                 }
+                // Typeless casts (P.1 default to GRAVEYARD; SelfExile
+                // shortcut to EXILE). Affordability-gated like spells —
+                // SELF is trivially payable per `can_pay_instant_cost`,
+                // so the Clear cycle gets picked here.
+                CardType::Unspecified => can_pay_instant_cost(state, player, iid),
                 _ => false,
             }
         })

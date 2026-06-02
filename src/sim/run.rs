@@ -254,7 +254,7 @@ pub(crate) fn build_pattern_b_choices(
         }
     } else if matches!(
         kind,
-        CardType::Spell | CardType::Artifact | CardType::Mutation
+        CardType::Spell | CardType::Artifact | CardType::Mutation | CardType::Unspecified
     ) {
         let raw_hand_needed: usize = cost
             .iter()
