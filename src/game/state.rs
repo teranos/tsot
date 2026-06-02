@@ -63,7 +63,7 @@ pub struct CardInstance {
     pub controller: PlayerId,      // T.1 — defaults to owner; effects may change it
     pub tapped: bool,              // B.4
     pub face_down: bool,           // P.17 (for attached)
-    pub damage: i32,               // B.7–B.8 accumulated
+    pub damage: f32,               // B.7–B.8 accumulated (fractional since the f32-stats refactor)
     pub summoning_sick: bool,      // B.3 (cleared at start of controller's turn)
     /// True iff this card was declared as an attacker during the
     /// current turn. Cleared at the start of each turn. Used by
@@ -112,7 +112,7 @@ impl CardInstance {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Modifier {
     /// e.g., +1/+1
-    StatBoost { x: i32, y: i32 },
+    StatBoost { x: f32, y: f32 },
     /// e.g., Companion Bird grants flying while attached
     GainsFlying,
     /// e.g., Flesh-eating Plant
@@ -121,7 +121,7 @@ pub enum Modifier {
     /// Used for cards like unblockable-human's `+2/+0 until end of turn`
     /// trigger and bring-down's `-3/-3 until end of turn` (once that
     /// migrates off the damage-proxy approximation).
-    EotStatBoost { x: i32, y: i32 },
+    EotStatBoost { x: f32, y: f32 },
     /// Granted vigilance (e.g., via attached card or activation). Mirrors
     /// `GainsFlying` for the vigilance keyword.
     GainsVigilance,
@@ -341,7 +341,7 @@ impl GameState {
         }
     }
 
-    pub fn set_damage(&mut self, iid: &InstanceId, damage: i32) {
+    pub fn set_damage(&mut self, iid: &InstanceId, damage: f32) {
         let Some(inst) = self.card_pool.get_mut(iid) else {
             return;
         };
@@ -960,7 +960,7 @@ impl GameState {
                 controller: pid,
                 tapped: false,
                 face_down: false,
-                damage: 0,
+                damage: 0.0,
                 summoning_sick: false,
                 attacked_this_turn: false,
                 attached: Vec::new(),
@@ -1009,11 +1009,11 @@ impl GameState {
     /// C.12: effective stats = printed X/Y + stored stat modifiers + static
     /// stat modifiers broadcast by on-board sources. Re-evaluated on every
     /// call (no caching). Returns (0, 0) for cards without printed stats.
-    pub fn effective_stats(&self, iid: &InstanceId) -> (i32, i32) {
+    pub fn effective_stats(&self, iid: &InstanceId) -> (f32, f32) {
         let Some(inst) = self.card_pool.get(iid) else {
-            return (0, 0);
+            return (0.0, 0.0);
         };
-        let (mut x, mut y) = inst.card.stats.map(|s| (s.x, s.y)).unwrap_or((0, 0));
+        let (mut x, mut y) = inst.card.stats.map(|s| (s.x, s.y)).unwrap_or((0.0, 0.0));
         for m in &inst.modifiers {
             match m {
                 Modifier::StatBoost { x: dx, y: dy } => {
@@ -1046,7 +1046,7 @@ impl GameState {
         &self,
         source_iid: &InstanceId,
         target_iid: &InstanceId,
-    ) -> Option<(i32, i32)> {
+    ) -> Option<(f32, f32)> {
         let def = self.static_def_if_matches(source_iid, target_iid)?;
         let source = self.card_pool.get(source_iid)?;
         let dx = self.resolve_modifier_value(source, &def.modifier_x);
@@ -1056,16 +1056,19 @@ impl GameState {
 
     /// Phase 1.5: resolve a `ModifierValue` against the source's current
     /// state. Counts walk the source's attached list every call, so the
-    /// returned i32 tracks attached-set changes automatically — no
-    /// snapshot leak.
+    /// returned value tracks attached-set changes automatically — no
+    /// snapshot leak. Returns f32 because stat modifiers are applied
+    /// to f32 X/Y since the fractional-stats refactor; ModifierValue
+    /// inputs are still integer (whole-card counts), the cast happens
+    /// at this boundary.
     fn resolve_modifier_value(
         &self,
         source: &CardInstance,
         mv: &crate::card::ModifierValue,
-    ) -> i32 {
+    ) -> f32 {
         match mv {
-            crate::card::ModifierValue::Fixed(n) => *n,
-            crate::card::ModifierValue::AttachedCount => source.attached.len() as i32,
+            crate::card::ModifierValue::Fixed(n) => *n as f32,
+            crate::card::ModifierValue::AttachedCount => source.attached.len() as f32,
             crate::card::ModifierValue::AttachedCountByColor(color) => {
                 let needle = color.to_ascii_lowercase();
                 source
@@ -1082,7 +1085,7 @@ impl GameState {
                             })
                             .unwrap_or(false)
                     })
-                    .count() as i32
+                    .count() as f32
             }
             crate::card::ModifierValue::AttachedCountByKind(kind) => source
                 .attached
@@ -1093,16 +1096,16 @@ impl GameState {
                         .map(|c| c.card.kind == *kind)
                         .unwrap_or(false)
                 })
-                .count() as i32,
+                .count() as f32,
             crate::card::ModifierValue::AttachedCountScaled(n) => {
-                (source.attached.len() as i32).saturating_mul(*n)
+                (source.attached.len() as f32) * (*n as f32)
             }
             crate::card::ModifierValue::BoardCount => {
                 // RULES C.16: count each BOARD card as 1; attached do not contribute.
-                (self.a.board.len() + self.b.board.len()) as i32
+                (self.a.board.len() + self.b.board.len()) as f32
             }
             crate::card::ModifierValue::HandCount => {
-                (self.a.hand.len() + self.b.hand.len()) as i32
+                (self.a.hand.len() + self.b.hand.len()) as f32
             }
         }
     }

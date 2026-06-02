@@ -162,7 +162,7 @@ impl GameState {
     fn clear_all_damage(&mut self) {
         let iids: Vec<InstanceId> = self.card_pool.keys().cloned().collect();
         for iid in &iids {
-            self.set_damage(iid, 0);
+            self.set_damage(iid, 0.0);
         }
     }
 
@@ -266,7 +266,7 @@ mod tests {
         s.a.board.push(iid.clone());
         let inst = s.card_pool.get_mut(&iid).unwrap();
         inst.tapped = true;
-        inst.damage = 3;
+        inst.damage = 3.0;
         inst.status_effects.push(StatusEffect::SkipUntap(2));
 
         let snapshot = format!("{:?}", s);
@@ -428,10 +428,10 @@ mod tests {
     fn end_of_turn_clears_damage() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         let iid = s.a.hand[0].clone();
-        s.card_pool.get_mut(&iid).unwrap().damage = 5;
+        s.card_pool.get_mut(&iid).unwrap().damage = 5.0;
         for _ in 0..6 {
             s.next_phase(None);
         }
-        assert_eq!(s.card_pool.get(&iid).unwrap().damage, 0);
+        assert_eq!(s.card_pool.get(&iid).unwrap().damage, 0.0);
     }
 }

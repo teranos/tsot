@@ -82,7 +82,7 @@ mod tests {
         s.move_card(&iid, PlayerId::A, Zone::Hand, Zone::Graveyard)
             .unwrap();
         s.set_tapped(&iid, true);
-        s.set_damage(&iid, 3);
+        s.set_damage(&iid, 3.0);
         s.set_face_down(&iid, true);
         s.set_summoning_sick(&iid, true);
         s.set_winner(Some(PlayerId::A));

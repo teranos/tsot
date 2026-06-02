@@ -928,7 +928,7 @@ impl GameState {
                 continue;
             }
             let y = self.effective_stats(iid).1;
-            if y <= 0 {
+            if y <= 0.0 {
                 to_kill.push(iid.clone());
             }
         }

@@ -835,7 +835,7 @@ fn thorn_beetle_on_block_damages_attacker() {
     s.declare_blocker(&blk, &atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
 
     // Handler pinged the attacker for 1.
-    assert_eq!(s.card_pool.get(&atk).unwrap().damage, 1);
+    assert_eq!(s.card_pool.get(&atk).unwrap().damage, 1.0);
     assert_eq!(s.event_fires[&crate::card::EventName::OnBlock], [0, 1]);
 }
 
@@ -936,7 +936,7 @@ fn tantrum_imp_handler_damages_blocker_and_mills_defender() {
     // blocker took 1 damage; defender's deck top went to exile.
     assert_eq!(
         s.card_pool.get(&blk).unwrap().damage,
-        1,
+        1.0,
         "blocker should have 1 damage from handler"
     );
     assert_eq!(s.b.deck.len(), defender_deck_before - 1);

@@ -54,7 +54,7 @@ fn check_loss_detects_empty_deck() {
 fn effective_stats_returns_printed_without_modifiers() {
     let s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = &s.a.hand[0];
-    assert_eq!(s.effective_stats(iid), (1, 1));
+    assert_eq!(s.effective_stats(iid), (1.0, 1.0));
 }
 
 #[test]
@@ -62,10 +62,10 @@ fn effective_stats_sums_stat_boost_modifiers() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
     let inst = s.card_pool.get_mut(&iid).unwrap();
-    inst.modifiers.push(Modifier::StatBoost { x: 1, y: 0 });
-    inst.modifiers.push(Modifier::StatBoost { x: 2, y: 2 });
-    inst.modifiers.push(Modifier::StatBoost { x: -1, y: 1 });
-    assert_eq!(s.effective_stats(&iid), (3, 4));
+    inst.modifiers.push(Modifier::StatBoost { x: 1.0, y: 0.0 });
+    inst.modifiers.push(Modifier::StatBoost { x: 2.0, y: 2.0 });
+    inst.modifiers.push(Modifier::StatBoost { x: -1.0, y: 1.0 });
+    assert_eq!(s.effective_stats(&iid), (3.0, 4.0));
 }
 
 #[test]
@@ -73,24 +73,24 @@ fn effective_stats_includes_eot_stat_boost() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
     let inst = s.card_pool.get_mut(&iid).unwrap();
-    inst.modifiers.push(Modifier::StatBoost { x: 1, y: 1 });
-    inst.modifiers.push(Modifier::EotStatBoost { x: 2, y: 0 });
+    inst.modifiers.push(Modifier::StatBoost { x: 1.0, y: 1.0 });
+    inst.modifiers.push(Modifier::EotStatBoost { x: 2.0, y: 0.0 });
     // Baseline 1/1 + perm +1/+1 + EOT +2/+0 = (4, 2).
-    assert_eq!(s.effective_stats(&iid), (4, 2));
+    assert_eq!(s.effective_stats(&iid), (4.0, 2.0));
 }
 
 #[test]
 fn clear_eot_modifiers_strips_only_eot_variants() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
-    s.add_modifier(&iid, Modifier::StatBoost { x: 1, y: 1 });
-    s.add_modifier(&iid, Modifier::EotStatBoost { x: 2, y: 0 });
-    s.add_modifier(&iid, Modifier::EotStatBoost { x: 1, y: 1 });
+    s.add_modifier(&iid, Modifier::StatBoost { x: 1.0, y: 1.0 });
+    s.add_modifier(&iid, Modifier::EotStatBoost { x: 2.0, y: 0.0 });
+    s.add_modifier(&iid, Modifier::EotStatBoost { x: 1.0, y: 1.0 });
     // Before clear: (1,1) base + 1/1 perm + 2/0 eot + 1/1 eot = (5, 3).
-    assert_eq!(s.effective_stats(&iid), (5, 3));
+    assert_eq!(s.effective_stats(&iid), (5.0, 3.0));
     s.clear_eot_modifiers();
     // After clear: only the permanent +1/+1 remains. (2, 2).
-    assert_eq!(s.effective_stats(&iid), (2, 2));
+    assert_eq!(s.effective_stats(&iid), (2.0, 2.0));
     let inst = s.card_pool.get(&iid).unwrap();
     assert_eq!(inst.modifiers.len(), 1);
 }
@@ -99,8 +99,8 @@ fn clear_eot_modifiers_strips_only_eot_variants() {
 fn clear_eot_modifiers_rollback_restores_original_state() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
-    s.add_modifier(&iid, Modifier::StatBoost { x: 1, y: 1 });
-    s.add_modifier(&iid, Modifier::EotStatBoost { x: 2, y: 0 });
+    s.add_modifier(&iid, Modifier::StatBoost { x: 1.0, y: 1.0 });
+    s.add_modifier(&iid, Modifier::EotStatBoost { x: 2.0, y: 0.0 });
     let pre = format!("{:?}", s.card_pool.get(&iid).unwrap().modifiers);
     s.journal = Some(crate::game::Journal::new());
     s.clear_eot_modifiers();
@@ -115,7 +115,7 @@ fn effective_stats_returns_zero_for_card_without_printed_stats() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
     s.card_pool.get_mut(&iid).unwrap().card = card_no_stats("instant", CardType::Spell);
-    assert_eq!(s.effective_stats(&iid), (0, 0));
+    assert_eq!(s.effective_stats(&iid), (0.0, 0.0));
 }
 
 #[test]
@@ -324,9 +324,9 @@ fn anthem_applies_to_matching_subtype_on_board() {
 
     // Target (human) gets boosted; unrelated (goblin) does not; source
     // doesn't self-boost.
-    assert_eq!(s.effective_stats(&target), (2, 2));
-    assert_eq!(s.effective_stats(&unrelated), (1, 1));
-    assert_eq!(s.effective_stats(&anthem), (1, 1));
+    assert_eq!(s.effective_stats(&target), (2.0, 2.0));
+    assert_eq!(s.effective_stats(&unrelated), (1.0, 1.0));
+    assert_eq!(s.effective_stats(&anthem), (1.0, 1.0));
 }
 
 #[test]
@@ -339,11 +339,11 @@ fn anthem_removed_when_source_leaves_board() {
     s.a.hand.retain(|i| i != &anthem && i != &target);
     s.a.board.push(anthem.clone());
     s.a.board.push(target.clone());
-    assert_eq!(s.effective_stats(&target), (2, 2));
+    assert_eq!(s.effective_stats(&target), (2.0, 2.0));
     // Move anthem to graveyard — boost evaporates.
     s.a.board.retain(|i| i != &anthem);
     s.a.graveyard.push(anthem);
-    assert_eq!(s.effective_stats(&target), (1, 1));
+    assert_eq!(s.effective_stats(&target), (1.0, 1.0));
 }
 
 #[test]
@@ -449,7 +449,7 @@ fn condition_gate_blocks_static_until_graveyard_threshold() {
     s.a.board.push(target.clone());
 
     // Empty graveyard: condition fails, no boost, no flying.
-    assert_eq!(s.effective_stats(&target), (1, 1));
+    assert_eq!(s.effective_stats(&target), (1.0, 1.0));
     assert!(!s.has_keyword(&target, "flying"));
 
     // Move 5 cards from A's deck to graveyard.
@@ -461,7 +461,7 @@ fn condition_gate_blocks_static_until_graveyard_threshold() {
     assert_eq!(s.a.graveyard.len(), 5);
 
     // Now the condition is met: +1/+1 + flying applies.
-    assert_eq!(s.effective_stats(&target), (2, 2));
+    assert_eq!(s.effective_stats(&target), (2.0, 2.0));
     assert!(s.has_keyword(&target, "flying"));
 }
 
@@ -690,7 +690,7 @@ fn two_anthems_stack() {
     // Both anthems are humans too (via make_anthem_source push), but
     // exclude_self skips self. They DO boost each other though, and the
     // target. Target: 1 + 1 + 2 = 4 / 1 + 1 + 0 = 2.
-    assert_eq!(s.effective_stats(&target), (4, 2));
+    assert_eq!(s.effective_stats(&target), (4.0, 2.0));
 }
 
 #[test]
@@ -708,7 +708,7 @@ fn opponent_controlled_anthem_does_not_affect_owner_filtered() {
     s.a.board.push(a_human.clone());
     // A's human is on board, B's anthem is on board, but controller
     // filter is "owner" — B's anthem boosts only B's humans.
-    assert_eq!(s.effective_stats(&a_human), (1, 1));
+    assert_eq!(s.effective_stats(&a_human), (1.0, 1.0));
 }
 
 // --- effective_colors / granted_colors (Phase: static color grants) ---
@@ -889,7 +889,7 @@ fn deck_top_symbol_matches_attached_condition_grants_modifier() {
     let source = s.a.hand[0].clone();
     let attached = s.a.hand[1].clone();
     s.card_pool.get_mut(&source).unwrap().card.kind = crate::card::CardType::Creature;
-    s.card_pool.get_mut(&source).unwrap().card.stats = Some(crate::card::Stats { x: 1, y: 1 });
+    s.card_pool.get_mut(&source).unwrap().card.stats = Some(crate::card::Stats { x: 1.0, y: 1.0 });
     s.card_pool.get_mut(&source).unwrap().card.static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
@@ -918,11 +918,11 @@ fn deck_top_symbol_matches_attached_condition_grants_modifier() {
     // Deck top has no matching symbol → no boost.
     let top0 = s.a.deck[0].clone();
     s.card_pool.get_mut(&top0).unwrap().card.symbols = vec!["beta".to_string()];
-    assert_eq!(s.effective_stats(&source), (1, 1));
+    assert_eq!(s.effective_stats(&source), (1.0, 1.0));
 
     // Set deck top to share "alpha" with attached → boost fires.
     s.card_pool.get_mut(&top0).unwrap().card.symbols = vec!["alpha".to_string()];
-    assert_eq!(s.effective_stats(&source), (4, 1));
+    assert_eq!(s.effective_stats(&source), (4.0, 1.0));
 
     // V.8: insert a transparent card at the top of the deck. The
     // effective top is still the alpha card below — boost still fires.
@@ -931,13 +931,13 @@ fn deck_top_symbol_matches_attached_condition_grants_modifier() {
     s.card_pool.get_mut(&transparent).unwrap().card.symbols = vec![];
     s.b.hand.retain(|i| i != &transparent);
     s.a.deck.insert(0, transparent);
-    assert_eq!(s.effective_stats(&source), (4, 1));
+    assert_eq!(s.effective_stats(&source), (4.0, 1.0));
 
     // Swap the alpha card under the transparent for a non-matching one;
     // boost goes away despite the transparent still being on top.
     let underneath = s.a.deck[1].clone();
     s.card_pool.get_mut(&underneath).unwrap().card.symbols = vec!["gamma".to_string()];
-    assert_eq!(s.effective_stats(&source), (1, 1));
+    assert_eq!(s.effective_stats(&source), (1.0, 1.0));
 }
 
 #[test]

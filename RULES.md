@@ -162,7 +162,8 @@ The following are not part of this game.
 ## Combat (B)
 
 - **B.1** A creature can attack a player.
-- **B.2** When one or more creatures attack a player successfully in the same combat, that player exiles ⌊ΣX⌋ cards from their DECK, where ΣX is the sum of X across every successful attacker (B.6). The sum-then-floor matters for fractional power: one 0.5/1 unblocked mills 0, but two 0.5/1 unblocked sum to 1.0 and mill 1; a 0.5/1 + a 1/1 unblocked sum to 1.5 and mill 1.
+- **B.2** When a creature attacks a player successfully, that player exiles X cards from their DECK, where X is the first value in the creature's X/Y stats.
+- **B.2b** When X is fractional (allowed since the fractional-stats refactor), B.2 reads as ⌊ΣX⌋ per combat: the mill is the floor of the sum of X across every successful attacker (B.6) in the same combat — not per-attacker. So one 0.5/1 unblocked mills 0, two 0.5/1 unblocked sum to 1.0 and mill 1, a 0.5/1 + a 1/1 unblocked sum to 1.5 and mill 1.
 - **B.3** A creature cannot attack during the turn it enters the BOARD, regardless of how it entered.
 - **B.4** When a creature attacks, its card is tapped (turned sideways).
 - **B.5** During combat, the defending player may declare one or more of their creatures as blockers, each assigned to a specific attacking creature.

@@ -23,8 +23,8 @@ pub enum JournalEntry {
     },
     SetDamage {
         iid: InstanceId,
-        was: i32,
-        now: i32,
+        was: f32,
+        now: f32,
     },
     SetFaceDown {
         iid: InstanceId,

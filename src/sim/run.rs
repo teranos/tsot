@@ -331,11 +331,17 @@ pub(crate) fn build_pattern_b_choices(
                 })
                 .cloned()
                 .collect();
-            pool.sort_by_key(|t| {
-                let inst = state.card_pool.get(t);
-                let own = inst.map(|i| i.controller == active).unwrap_or(false);
-                let x = state.effective_stats(t).0;
-                (if own { 0 } else { 1 }, -x)
+            pool.sort_by(|a, b| {
+                let key = |t: &InstanceId| {
+                    let inst = state.card_pool.get(t);
+                    let own = inst.map(|i| i.controller == active).unwrap_or(false);
+                    let x = state.effective_stats(t).0;
+                    (if own { 0 } else { 1 }, -x)
+                };
+                let (ko_a, kx_a) = key(a);
+                let (ko_b, kx_b) = key(b);
+                ko_a.cmp(&ko_b)
+                    .then_with(|| kx_a.partial_cmp(&kx_b).unwrap_or(std::cmp::Ordering::Equal))
             });
             choices.mutation_target = pool.first().cloned();
         }

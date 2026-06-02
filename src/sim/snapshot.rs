@@ -69,9 +69,9 @@ pub struct CardView {
     pub flavor: String,
     pub tapped: bool,
     pub summoning_sick: bool,
-    pub damage: i32,
-    pub power: i32,
-    pub toughness: i32,
+    pub damage: f32,
+    pub power: f32,
+    pub toughness: f32,
     pub attached: Vec<CardView>,
 }
 
@@ -157,9 +157,9 @@ fn card_view(state: &GameState, iid: &InstanceId) -> CardView {
             flavor: String::new(),
             tapped: false,
             summoning_sick: false,
-            damage: 0,
-            power: 0,
-            toughness: 0,
+            damage: 0.0,
+            power: 0.0,
+            toughness: 0.0,
             attached: Vec::new(),
         },
     }

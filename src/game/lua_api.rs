@@ -106,10 +106,10 @@ fn find_host_of_attached(s: &GameState, iid: &str) -> Option<InstanceId> {
 // --- Pure logic for each API method. All mutations go through journaled
 // helpers on GameState so handler effects are rollback-safe.
 
-fn do_damage(s: &mut GameState, iid: &str, n: i32) -> Result<()> {
+fn do_damage(s: &mut GameState, iid: &str, n: f32) -> Result<()> {
     let (owner, current) = match s.card_pool.get(iid) {
         Some(inst) => (Some(inst.owner), inst.damage),
-        None => (None, 0),
+        None => (None, 0.0),
     };
     if owner.is_some() {
         s.set_damage(&iid.to_string(), current + n);
@@ -233,7 +233,7 @@ fn discard_score(state: &GameState, iid: &InstanceId) -> i32 {
     };
     let mut s = 0i32;
     let (x, y) = state.effective_stats(iid);
-    s -= x + y;
+    s -= (x + y).round() as i32;
     let h = &c.card.handlers;
     if h.contains_key(&crate::card::EventName::OnPlay) {
         s -= 10;
@@ -289,8 +289,8 @@ fn do_add_modifier(
     s: &mut GameState,
     iid: &str,
     kind: &str,
-    x: i32,
-    y: i32,
+    x: f32,
+    y: f32,
     duration: Option<&str>,
 ) -> Result<()> {
     let owner = s.card_pool.get(iid).map(|i| i.owner);
@@ -608,7 +608,7 @@ macro_rules! build_game_table {
         let cell_dmg = &$cell;
         game.set(
             "damage",
-            $scope.create_function_mut(move |_, (iid, n): (String, i32)| {
+            $scope.create_function_mut(move |_, (iid, n): (String, f32)| {
                 do_damage(&mut *cell_dmg.borrow_mut(), &iid, n)
             })?,
         )?;
@@ -1101,8 +1101,8 @@ macro_rules! build_game_table {
                       (iid, kind, x, y, duration): (
                     String,
                     String,
-                    i32,
-                    i32,
+                    f32,
+                    f32,
                     Option<String>,
                 )| {
                     do_add_modifier(

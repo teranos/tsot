@@ -365,40 +365,56 @@ impl GameState {
         // attached cards — klotho-style mutations) after the mill loop.
         let mut damaged_attackers: Vec<InstanceId> = Vec::new();
 
+        // Pass 1: blocked combats resolve per-attacker (B.7 creature-vs-
+        // creature damage is fractional accumulation, B.8 compares exactly
+        // — see RULES.md). Unblocked attackers are bucketed for the
+        // per-combat sum-then-floor mill (B.2b).
+        let mut unblocked_x_sum: f32 = 0.0;
+        let mut unblocked_attackers: Vec<InstanceId> = Vec::new();
         for atk in &attacks {
             let attacker_x = self.effective_stats(&atk.attacker).0;
             if atk.blockers.is_empty() {
-                // B.6 unblocked → B.2 mill defender's DECK to EXILE.
-                let mill_n = (attacker_x.max(0) as usize).min(self.player(defender).deck.len());
-                outcome.defender_milled_to_exile += mill_n as i32;
-                for _ in 0..mill_n {
-                    let Some(top) = self.player(defender).deck.first().cloned() else {
-                        break;
-                    };
-                    let _ = self.move_card(&top, defender, Zone::Deck, Zone::Exile);
-                }
-                if mill_n > 0 {
-                    damaged_attackers.push(atk.attacker.clone());
-                }
-                if self.player(defender).deck.is_empty() {
-                    self.set_winner(Some(defender.opponent()));
-                }
+                // B.2b: defer the mill — sum every successful attacker's X
+                // first, then floor once. A single 0.5/1 unblocked mills 0;
+                // two of them mill 1.
+                unblocked_x_sum += attacker_x.max(0.0);
+                unblocked_attackers.push(atk.attacker.clone());
             } else {
                 // B.7: attacker deals X to each blocker; each blocker deals their X to attacker.
-                let mut attacker_dmg = 0i32;
+                let mut attacker_dmg = 0.0_f32;
                 for bid in &atk.blockers {
                     let blocker_x = self.effective_stats(bid).0;
                     attacker_dmg += blocker_x;
-                    let current = self.card_pool.get(bid).map(|i| i.damage).unwrap_or(0);
+                    let current = self.card_pool.get(bid).map(|i| i.damage).unwrap_or(0.0);
                     self.set_damage(bid, current + attacker_x);
                 }
                 let current = self
                     .card_pool
                     .get(&atk.attacker)
                     .map(|i| i.damage)
-                    .unwrap_or(0);
+                    .unwrap_or(0.0);
                 self.set_damage(&atk.attacker, current + attacker_dmg);
             }
+        }
+
+        // Pass 2: B.2b — single combat-level mill. floor(ΣX) cards move
+        // from defender's DECK to EXILE. OnDealtDamageToPlayer (P.41-ish)
+        // fires for every unblocked attacker iff any card actually moved
+        // — a sub-1 sum mills nothing, so no trigger.
+        let mill_n = (unblocked_x_sum.floor().max(0.0) as usize)
+            .min(self.player(defender).deck.len());
+        outcome.defender_milled_to_exile += mill_n as i32;
+        for _ in 0..mill_n {
+            let Some(top) = self.player(defender).deck.first().cloned() else {
+                break;
+            };
+            let _ = self.move_card(&top, defender, Zone::Deck, Zone::Exile);
+        }
+        if mill_n > 0 {
+            damaged_attackers.extend(unblocked_attackers);
+        }
+        if self.player(defender).deck.is_empty() {
+            self.set_winner(Some(defender.opponent()));
         }
 
         // Fire OnDealtDamageToPlayer for each attacker that successfully
@@ -450,9 +466,9 @@ impl GameState {
             .collect();
         let mut to_kill: Vec<InstanceId> = Vec::new();
         for iid in &on_board {
-            let damage = self.card_pool.get(iid).map(|i| i.damage).unwrap_or(0);
+            let damage = self.card_pool.get(iid).map(|i| i.damage).unwrap_or(0.0);
             let y = self.effective_stats(iid).1;
-            if damage > 0 && damage >= y {
+            if damage > 0.0 && damage >= y {
                 to_kill.push(iid.clone());
             }
         }

@@ -226,8 +226,8 @@ fn read_stats(t: &Table) -> mlua::Result<Option<Stats>> {
     match t.get::<Value>("stats")? {
         Value::Nil => Ok(None),
         Value::Table(s) => {
-            let x = s.get::<Option<i32>>("x")?.unwrap_or(0);
-            let y = s.get::<Option<i32>>("y")?.unwrap_or(0);
+            let x = s.get::<Option<f32>>("x")?.unwrap_or(0.0);
+            let y = s.get::<Option<f32>>("y")?.unwrap_or(0.0);
             Ok(Some(Stats { x, y }))
         }
         other => Err(mlua::Error::runtime(format!(
@@ -801,6 +801,21 @@ pub fn load_cards_embedded(lua: &Lua) -> mlua::Result<Vec<Card>> {
 mod tests {
     use super::*;
 
+    /// Pale Apparition is the spec card for fractional stats — see
+    /// cards/pale-apparition.lua and RULES.md B.2 / B.7 / B.8. The
+    /// loader must preserve `0.5` exactly; truncating to `0` is the
+    /// pre-refactor failure mode that motivated this whole branch.
+    #[test]
+    fn pale_apparition_loads_with_fractional_stats() {
+        let lua = Lua::new();
+        let path = Path::new("cards/pale-apparition.lua");
+        let cards = load_card(&lua, path).expect("load pale-apparition");
+        let card = cards.iter().find(|c| c.id == "pale-apparition").unwrap();
+        let stats = card.stats.expect("pale-apparition has stats");
+        assert_eq!(stats.x, 0.5, "X must round-trip as 0.5, not truncate");
+        assert_eq!(stats.y, 1.0);
+    }
+
     fn handlers_from(lua: &Lua, src: &str) -> BTreeMap<EventName, Function> {
         let value: Value = lua.load(src).eval().unwrap();
         let table = match value {
@@ -1003,10 +1018,10 @@ mod tests {
         let small = by_id["under-test-small"];
         assert!(small.is_variant, "variant is_variant = true");
         assert_eq!(small.variant_of.as_deref(), Some("under-test"));
-        assert_eq!(small.stats.unwrap().y, 2, "variant stats override applied");
+        assert_eq!(small.stats.unwrap().y, 2.0, "variant stats override applied");
         let big = by_id["under-test-big"];
-        assert_eq!(big.stats.unwrap().x, 4);
-        assert_eq!(big.stats.unwrap().y, 4);
+        assert_eq!(big.stats.unwrap().x, 4.0);
+        assert_eq!(big.stats.unwrap().y, 4.0);
     }
 
     #[test]
@@ -1049,8 +1064,8 @@ mod tests {
         assert_eq!(v1.name, "Base Name", "name inherited");
         assert_eq!(v1.colors, vec!["green"], "colors inherited");
         // Overridden:
-        assert_eq!(v1.stats.unwrap().x, 5);
-        assert_eq!(v1.stats.unwrap().y, 5);
+        assert_eq!(v1.stats.unwrap().x, 5.0);
+        assert_eq!(v1.stats.unwrap().y, 5.0);
     }
 
     #[test]

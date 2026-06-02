@@ -473,7 +473,7 @@ fn pitch_score(state: &GameState, candidate_iid: &InstanceId, host_iid: &Instanc
     }
 
     let (x, y) = state.effective_stats(candidate_iid);
-    score -= x + y / 2;
+    score -= (x + y / 2.0).round() as i32;
 
     score
 }
@@ -501,7 +501,7 @@ fn target_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) 
         score += 100;
     }
     let (x, y) = state.effective_stats(candidate_iid);
-    score += x * 4 + y;
+    score += (x * 4.0 + y).round() as i32;
     let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
     score += cost_sum * 3;
     // Each handler is a payoff; flat +5 per kind present so a card with
@@ -588,7 +588,7 @@ fn donate_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) 
         score += 50;
     }
     let (x, y) = state.effective_stats(candidate_iid);
-    score += x * 4 + y;
+    score += (x * 4.0 + y).round() as i32;
     score += (cand.attached.len() as i32) * 10;
     score
 }
@@ -631,7 +631,7 @@ fn remove_threat_score(state: &GameState, candidate_iid: &InstanceId, asker: Pla
     };
     let mut score = if cand.controller != asker { 1000 } else { -100 };
     let (x, y) = state.effective_stats(candidate_iid);
-    score += x * 4 + y;
+    score += (x * 4.0 + y).round() as i32;
     let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
     score += cost_sum * 3;
     score += (cand.card.handlers.len() as i32) * 5;
@@ -688,7 +688,7 @@ fn low_value_own_score(state: &GameState, candidate_iid: &InstanceId, asker: Pla
     };
     let mut score = if cand.controller == asker { 1000 } else { -100 };
     let (x, y) = state.effective_stats(candidate_iid);
-    score -= x * 4 + y;
+    score -= (x * 4.0 + y).round() as i32;
     let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
     score -= cost_sum * 3;
     score -= (cand.card.handlers.len() as i32) * 5;
@@ -717,7 +717,7 @@ fn would_die_soon(state: &GameState, victim: PlayerId) -> bool {
         .player(opponent)
         .board
         .iter()
-        .map(|iid| state.effective_stats(iid).0)
+        .map(|iid| state.effective_stats(iid).0.floor() as i32)
         .sum();
     let chain_power: i32 = state
         .priority
@@ -736,7 +736,7 @@ fn would_die_soon(state: &GameState, victim: PlayerId) -> bool {
                         return 0;
                     };
                     if inst.card.kind == crate::card::CardType::Creature {
-                        state.effective_stats(card).0
+                        state.effective_stats(card).0.floor() as i32
                     } else {
                         0
                     }
@@ -1037,7 +1037,7 @@ mod tests {
         assert_eq!(pick, Some(jewel));
     }
 
-    fn boost_stats(s: &mut GameState, iid: &InstanceId, dx: i32, dy: i32) {
+    fn boost_stats(s: &mut GameState, iid: &InstanceId, dx: f32, dy: f32) {
         s.add_modifier(iid, crate::game::Modifier::StatBoost { x: dx, y: dy });
     }
 
@@ -1049,7 +1049,7 @@ mod tests {
         put_on_board(&mut s, PlayerId::B, &small);
         put_on_board(&mut s, PlayerId::B, &big);
         // Stats from deck_of are 1/1; boost `big` to 5/5.
-        boost_stats(&mut s, &big, 4, 4);
+        boost_stats(&mut s, &big, 4.0, 4.0);
 
         let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
         oracle.set_next_intent(Some(TargetIntent::RemoveThreat));

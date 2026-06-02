@@ -133,10 +133,15 @@ pub struct CostComponent {
     pub kind: Option<CardType>,
 }
 
+/// Power (X) and toughness (Y) — both real-valued to allow sub-1
+/// power (B.2 floors mill across all unblocked attackers per combat)
+/// and fractional damage accumulation (B.7/B.8 compare exactly,
+/// no rounding). See `cards/pale-apparition.lua` for the spec card
+/// that motivated the f32 type.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Stats {
-    pub x: i32,
-    pub y: i32,
+    pub x: f32,
+    pub y: f32,
 }
 
 /// Predicate side of a static ability: which cards on the BOARD receive

@@ -5,7 +5,7 @@ use super::state::{GameState, InstanceId};
 use crate::card::{Card, CardType, CostComponent, Stats};
 use std::collections::BTreeMap;
 
-pub(crate) fn card_with_stats(id: &str, x: i32, y: i32) -> Card {
+pub(crate) fn card_with_stats(id: &str, x: f32, y: f32) -> Card {
     Card {
         id: id.to_string(),
         name: String::new(),
@@ -64,7 +64,7 @@ pub(crate) fn card_no_stats(id: &str, kind: CardType) -> Card {
 
 pub(crate) fn deck_of(n: usize, prefix: &str) -> Vec<Card> {
     (0..n)
-        .map(|i| card_with_stats(&format!("{prefix}-{i}"), 1, 1))
+        .map(|i| card_with_stats(&format!("{prefix}-{i}"), 1.0, 1.0))
         .collect()
 }
 

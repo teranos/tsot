@@ -385,7 +385,7 @@ pub fn sacrifice_keep_value(state: &GameState, iid: &InstanceId) -> i32 {
     let (x, y) = state.effective_stats(iid);
     let cost_weight: i32 = inst.card.cost.iter().map(|c| c.amount.max(0)).sum();
     let attached_count = inst.attached.len() as i32;
-    x + y + cost_weight * 2 + attached_count * 2
+    (x + y).round() as i32 + cost_weight * 2 + attached_count * 2
 }
 
 /// Engine-mirror legality check: can `blocker` block `attacker`?
@@ -445,7 +445,7 @@ pub fn select_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> 
     }
     let defender = player.opponent();
 
-    let mut sorted: Vec<(InstanceId, i32, i32, i32)> = attackers
+    let mut sorted: Vec<(InstanceId, f32, f32, i32)> = attackers
         .iter()
         .map(|a| {
             let (x, y) = state.effective_stats(a);
@@ -453,7 +453,9 @@ pub fn select_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> 
             (a.clone(), x, y, val)
         })
         .collect();
-    sorted.sort_by_key(|(_, x, _, _)| std::cmp::Reverse(*x));
+    // f32 has no Ord (NaN); partial_cmp is fine because the engine
+    // never produces NaN stats.
+    sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut reserved: BTreeSet<InstanceId> = BTreeSet::new();
     let mut chosen: Vec<InstanceId> = Vec::new();
@@ -464,7 +466,7 @@ pub fn select_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> 
             continue;
         }
 
-        let avail: Vec<(InstanceId, i32, i32, i32)> = state
+        let avail: Vec<(InstanceId, f32, f32, i32)> = state
             .player(defender)
             .board
             .iter()
@@ -498,7 +500,7 @@ pub fn select_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> 
             .min_by_key(|(_, _, _, bval)| *bval)
             .cloned();
         if let Some((blk, _, _, bval)) = kill_trade {
-            let defender_takes = *ax >= 2 || *atk_val > bval + 4;
+            let defender_takes = *ax >= 2.0 || *atk_val > bval + 4;
             if defender_takes {
                 if bval > *atk_val + 4 {
                     chosen.push(atk.clone());
@@ -579,28 +581,31 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
         return Vec::new();
     }
 
-    let total_incoming: i32 = declared
+    // B.2b: defender mills floor(ΣX) per combat, so the dying check
+    // applies the floor too.
+    let total_incoming_f: f32 = declared
         .iter()
-        .map(|a| state.effective_stats(a).0.max(0))
+        .map(|a| state.effective_stats(a).0.max(0.0))
         .sum();
+    let total_incoming: i32 = total_incoming_f.floor() as i32;
     let deck = state.player(defender).deck.len() as i32;
     let dying = total_incoming >= deck;
 
-    let mut sorted: Vec<(InstanceId, i32, i32)> = declared
+    let mut sorted: Vec<(InstanceId, f32, f32)> = declared
         .iter()
         .map(|a| {
             let (x, y) = state.effective_stats(a);
             (a.clone(), x, y)
         })
         .collect();
-    sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
+    sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut assignments: Vec<(InstanceId, InstanceId)> = Vec::new();
     let mut used: BTreeSet<InstanceId> = BTreeSet::new();
     let mut remaining_incoming = total_incoming;
 
     for (atk, atk_x, atk_y) in &sorted {
-        let avail: Vec<(InstanceId, i32, i32)> = blockers
+        let avail: Vec<(InstanceId, f32, f32)> = blockers
             .iter()
             .filter(|b| !used.contains(*b))
             .map(|b| {
@@ -616,12 +621,12 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
         let clean_kill = avail
             .iter()
             .filter(|(_, bx, by)| *bx >= *atk_y && *by > *atk_x)
-            .min_by_key(|(_, bx, _)| *bx)
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .cloned();
         if let Some((blk, _, _)) = clean_kill {
             assignments.push((blk.clone(), atk.clone()));
             used.insert(blk);
-            remaining_incoming -= atk_x;
+            remaining_incoming -= atk_x.floor() as i32;
             continue;
         }
 
@@ -629,15 +634,15 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
         let kill_trade = avail
             .iter()
             .filter(|(_, bx, _)| *bx >= *atk_y)
-            .min_by_key(|(_, bx, _)| *bx)
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .cloned();
         if let Some((blk, _, _)) = kill_trade {
             let trade_up =
                 sacrifice_keep_value(state, atk) > sacrifice_keep_value(state, &blk) + 4;
-            if dying || *atk_x >= 2 || trade_up {
+            if dying || *atk_x >= 2.0 || trade_up {
                 assignments.push((blk.clone(), atk.clone()));
                 used.insert(blk);
-                remaining_incoming -= atk_x;
+                remaining_incoming -= atk_x.floor() as i32;
                 continue;
             }
         }
@@ -645,8 +650,8 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
         // T4: multi-block (dying only).
         if dying {
             let mut by_x = avail.clone();
-            by_x.sort_by_key(|(_, bx, _)| std::cmp::Reverse(*bx));
-            let mut combined_x = 0i32;
+            by_x.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let mut combined_x = 0.0_f32;
             let mut picks: Vec<InstanceId> = Vec::new();
             for (b, bx, _) in &by_x {
                 if combined_x >= *atk_y {
@@ -660,18 +665,21 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
                     assignments.push((blk.clone(), atk.clone()));
                     used.insert(blk);
                 }
-                remaining_incoming -= atk_x;
+                remaining_incoming -= atk_x.floor() as i32;
                 continue;
             }
         }
 
         // T1: chump only if still dying.
         if remaining_incoming >= deck {
-            let chump = avail.iter().min_by_key(|(_, bx, _)| *bx).cloned();
+            let chump = avail
+                .iter()
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .cloned();
             if let Some((blk, _, _)) = chump {
                 assignments.push((blk.clone(), atk.clone()));
                 used.insert(blk);
-                remaining_incoming -= atk_x;
+                remaining_incoming -= atk_x.floor() as i32;
                 continue;
             }
         }
@@ -720,7 +728,7 @@ mod tests {
     use std::collections::BTreeMap;
     use tsot::card::{Card, CardType, Stats};
 
-    fn card_creature(id: &str, x: i32, y: i32) -> Card {
+    fn card_creature(id: &str, x: f32, y: f32) -> Card {
         Card {
             id: id.to_string(),
             name: String::new(),
@@ -748,7 +756,7 @@ mod tests {
 
     fn starter_deck(n: usize, prefix: &str) -> Vec<Card> {
         (0..n)
-            .map(|i| card_creature(&format!("{prefix}-{i}"), 1, 1))
+            .map(|i| card_creature(&format!("{prefix}-{i}"), 1.0, 1.0))
             .collect()
     }
 
@@ -762,8 +770,8 @@ mod tests {
         state: &mut GameState,
         side: PlayerId,
         id: &str,
-        x: i32,
-        y: i32,
+        x: f32,
+        y: f32,
     ) -> InstanceId {
         let iid = state.player(side).hand[0].clone();
         let inst = state.card_pool.get_mut(&iid).unwrap();
@@ -787,8 +795,8 @@ mod tests {
     #[test]
     fn skips_attacker_facing_clean_kill_blocker() {
         let mut s = fresh();
-        make_creature(&mut s, PlayerId::A, "a-1-1", 1, 1);
-        make_creature(&mut s, PlayerId::B, "b-5-5", 5, 5);
+        make_creature(&mut s, PlayerId::A, "a-1-1", 1.0, 1.0);
+        make_creature(&mut s, PlayerId::B, "b-5-5", 5.0, 5.0);
         let chosen = select_attackers(&s, PlayerId::A);
         assert!(chosen.is_empty(), "1/1 should not swing into 5/5");
     }
@@ -796,8 +804,8 @@ mod tests {
     #[test]
     fn unblockable_attacker_swings_through_clean_kill() {
         let mut s = fresh();
-        let atk = make_creature(&mut s, PlayerId::A, "a-1-1", 1, 1);
-        make_creature(&mut s, PlayerId::B, "b-5-5", 5, 5);
+        let atk = make_creature(&mut s, PlayerId::A, "a-1-1", 1.0, 1.0);
+        make_creature(&mut s, PlayerId::B, "b-5-5", 5.0, 5.0);
         add_ability(&mut s, &atk, "unblockable");
         let chosen = select_attackers(&s, PlayerId::A);
         assert_eq!(chosen, vec![atk]);
@@ -806,8 +814,8 @@ mod tests {
     #[test]
     fn flyer_swings_past_ground_blocker() {
         let mut s = fresh();
-        let atk = make_creature(&mut s, PlayerId::A, "a-flyer", 2, 2);
-        make_creature(&mut s, PlayerId::B, "b-ground", 5, 5);
+        let atk = make_creature(&mut s, PlayerId::A, "a-flyer", 2.0, 2.0);
+        make_creature(&mut s, PlayerId::B, "b-ground", 5.0, 5.0);
         add_ability(&mut s, &atk, "flying");
         let chosen = select_attackers(&s, PlayerId::A);
         assert_eq!(chosen, vec![atk], "flyer should swing past ground 5/5");
@@ -816,8 +824,8 @@ mod tests {
     #[test]
     fn reach_blocker_grounds_the_flyer() {
         let mut s = fresh();
-        let atk = make_creature(&mut s, PlayerId::A, "a-flyer", 2, 2);
-        let blk = make_creature(&mut s, PlayerId::B, "b-reach", 5, 5);
+        let atk = make_creature(&mut s, PlayerId::A, "a-flyer", 2.0, 2.0);
+        let blk = make_creature(&mut s, PlayerId::B, "b-reach", 5.0, 5.0);
         add_ability(&mut s, &atk, "flying");
         add_ability(&mut s, &blk, "reach");
         let chosen = select_attackers(&s, PlayerId::A);
@@ -829,9 +837,9 @@ mod tests {
         // A's 5/5 faces B's 6/6 clean-kill → 5/5 reserves blocker, 1/1
         // sees empty board and swings for the mill.
         let mut s = fresh();
-        let _big = make_creature(&mut s, PlayerId::A, "a-5-5", 5, 5);
-        let small = make_creature(&mut s, PlayerId::A, "a-1-1", 1, 1);
-        make_creature(&mut s, PlayerId::B, "b-6-6", 6, 6);
+        let _big = make_creature(&mut s, PlayerId::A, "a-5-5", 5.0, 5.0);
+        let small = make_creature(&mut s, PlayerId::A, "a-1-1", 1.0, 1.0);
+        make_creature(&mut s, PlayerId::B, "b-6-6", 6.0, 6.0);
         let chosen = select_attackers(&s, PlayerId::A);
         assert_eq!(chosen, vec![small], "small should slip past reserved blocker");
     }
@@ -839,8 +847,8 @@ mod tests {
     #[test]
     fn tapped_blocker_is_ignored() {
         let mut s = fresh();
-        let atk = make_creature(&mut s, PlayerId::A, "a-1-1", 1, 1);
-        let blk = make_creature(&mut s, PlayerId::B, "b-5-5", 5, 5);
+        let atk = make_creature(&mut s, PlayerId::A, "a-1-1", 1.0, 1.0);
+        let blk = make_creature(&mut s, PlayerId::B, "b-5-5", 5.0, 5.0);
         s.card_pool.get_mut(&blk).unwrap().tapped = true;
         let chosen = select_attackers(&s, PlayerId::A);
         assert_eq!(chosen, vec![atk], "tapped blocker should not deter attack");

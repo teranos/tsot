@@ -1854,7 +1854,7 @@ fn white_monkey_grants_plus_2_and_vigilance_eot() {
     {
         // Give buddy a baseline 1/1 stat line.
         let b = s.card_pool.get_mut(&buddy_iid).unwrap();
-        b.card.stats = Some(crate::card::Stats { x: 1, y: 1 });
+        b.card.stats = Some(crate::card::Stats { x: 1.0, y: 1.0 });
         b.card.kind = crate::card::CardType::Creature;
         b.summoning_sick = false;
     }
@@ -1864,7 +1864,7 @@ fn white_monkey_grants_plus_2_and_vigilance_eot() {
 
     // Pre: buddy is 1/1, no vigilance.
     let (bx0, by0) = s.effective_stats(&buddy_iid);
-    assert_eq!((bx0, by0), (1, 1));
+    assert_eq!((bx0, by0), (1.0, 1.0));
     assert!(!s.has_keyword(&buddy_iid, "vigilance"));
 
     // Activate.
@@ -1879,12 +1879,12 @@ fn white_monkey_grants_plus_2_and_vigilance_eot() {
 
     // Post: buddy got +2/+2 EOT and vigilance EOT.
     let (bx1, by1) = s.effective_stats(&buddy_iid);
-    assert_eq!((bx1, by1), (3, 3));
+    assert_eq!((bx1, by1), (3.0, 3.0));
     assert!(s.has_keyword(&buddy_iid, "vigilance"));
 
     // Self-pump: monkey itself also gained +2/+2 and vigilance.
     let (mx, my) = s.effective_stats(&monkey_iid);
-    assert_eq!((mx, my), (4, 4));
+    assert_eq!((mx, my), (4.0, 4.0));
     assert!(s.has_keyword(&monkey_iid, "vigilance"));
 }
 
@@ -1970,7 +1970,7 @@ fn validate_hook_passes_and_charges_when_target_exists() {
         // Put an opposing creature on B's board so validate passes.
         let t = s.card_pool.get_mut(&target).unwrap();
         t.card.kind = crate::card::CardType::Creature;
-        t.card.stats = Some(crate::card::Stats { x: 1, y: 1 });
+        t.card.stats = Some(crate::card::Stats { x: 1.0, y: 1.0 });
     }
     s.a.hand.retain(|x| x != &iid);
     s.a.board.push(iid.clone());
@@ -2061,7 +2061,7 @@ fn red_jewel_grants_t_draw_discard_to_attached_host() {
         // Host is a generic 2/2 creature.
         let host_inst = s.card_pool.get_mut(&host_iid).unwrap();
         host_inst.card.kind = crate::card::CardType::Creature;
-        host_inst.card.stats = Some(crate::card::Stats { x: 2, y: 2 });
+        host_inst.card.stats = Some(crate::card::Stats { x: 2.0, y: 2.0 });
         host_inst.summoning_sick = false;
     }
     {
@@ -2401,7 +2401,7 @@ fn zero_y_creature_dies_per_c15_after_attached_detached_as_cost() {
     {
         let inst = s.card_pool.get_mut(&host_cast).unwrap();
         inst.card.kind = CardType::Creature;
-        inst.card.stats = Some(crate::card::Stats { x: 0, y: 0 });
+        inst.card.stats = Some(crate::card::Stats { x: 0.0, y: 0.0 });
         inst.card.static_def = Some(StaticDef {
             affects: StaticAffects {
                 subtypes: vec![],
@@ -2426,7 +2426,7 @@ fn zero_y_creature_dies_per_c15_after_attached_detached_as_cost() {
     s.add_attached(&host_cast, &attached);
     // Sanity: host_cast has effective Y = 1 right now.
     let (_, y_before) = s.effective_stats(&host_cast);
-    assert_eq!(y_before, 1, "precondition: hollow's y should be 1");
+    assert_eq!(y_before, 1.0, "precondition: hollow's y should be 1");
     // Set up the spell: 1 attached cost. Spell type so attached → EXILE.
     {
         let inst = s.card_pool.get_mut(&spell).unwrap();
@@ -2476,12 +2476,12 @@ fn c15_neg_3_3_on_a_3_3_kills_via_effective_y_drop() {
     let _ = s.move_card(&victim, PlayerId::B, Zone::Hand, Zone::Board);
     {
         let inst = s.card_pool.get_mut(&victim).unwrap();
-        inst.card.stats = Some(crate::card::Stats { x: 3, y: 3 });
+        inst.card.stats = Some(crate::card::Stats { x: 3.0, y: 3.0 });
     }
     // Apply -3/-3 EOT directly via the engine (skip the spell layer).
     s.add_modifier(
         &victim,
-        Modifier::EotStatBoost { x: -3, y: -3 },
+        Modifier::EotStatBoost { x: -3.0, y: -3.0 },
     );
     // Run the post-mutation cleanup the engine should run on stat changes.
     s.cleanup_zero_y_deaths(None);
@@ -2671,8 +2671,8 @@ fn primal_toad_scales_by_board_count_and_hand_count_per_c16() {
     // 2 board fillers + 1 attached), B used 1 (board filler). So A has
     // 1 left, B has 4 left → 5.
     let (x, y) = s.effective_stats(&toad_iid);
-    assert_eq!(x, 4, "X = BOARD count across both players (attached excluded per C.16)");
-    assert_eq!(y, 5, "Y = HAND count across both players");
+    assert_eq!(x, 4.0, "X = BOARD count across both players (attached excluded per C.16)");
+    assert_eq!(y, 5.0, "Y = HAND count across both players");
 }
 
 #[test]
