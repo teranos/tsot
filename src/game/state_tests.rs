@@ -924,10 +924,10 @@ fn deck_top_symbol_matches_attached_condition_grants_modifier() {
     s.card_pool.get_mut(&top0).unwrap().card.symbols = vec!["alpha".to_string()];
     assert_eq!(s.effective_stats(&source), (4.0, 1.0));
 
-    // V.8: insert a transparent card at the top of the deck. The
+    // V.8: insert a transparent-frame card at the top of the deck. The
     // effective top is still the alpha card below — boost still fires.
     let transparent = s.b.hand[0].clone();
-    s.card_pool.get_mut(&transparent).unwrap().card.colors = vec!["transparent".to_string()];
+    s.card_pool.get_mut(&transparent).unwrap().card.frame = Some("transparent".to_string());
     s.card_pool.get_mut(&transparent).unwrap().card.symbols = vec![];
     s.b.hand.retain(|i| i != &transparent);
     s.a.deck.insert(0, transparent);
@@ -947,8 +947,8 @@ fn effective_top_of_deck_symbols_walks_through_transparent_per_v8() {
     let t0 = s.a.deck[0].clone();
     let t1 = s.a.deck[1].clone();
     let opaque = s.a.deck[2].clone();
-    s.card_pool.get_mut(&t0).unwrap().card.colors = vec!["transparent".to_string()];
-    s.card_pool.get_mut(&t1).unwrap().card.colors = vec!["transparent".to_string()];
+    s.card_pool.get_mut(&t0).unwrap().card.frame = Some("transparent".to_string());
+    s.card_pool.get_mut(&t1).unwrap().card.frame = Some("transparent".to_string());
     s.card_pool.get_mut(&opaque).unwrap().card.symbols = vec!["alpha".to_string()];
     assert_eq!(
         s.effective_top_of_deck_symbols(PlayerId::A),

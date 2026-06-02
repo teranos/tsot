@@ -670,6 +670,14 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
         .collect();
     let abilities = read_string_vec(table, "abilities")?;
     let flavor = table.get::<Option<String>>("flavor")?.unwrap_or_default();
+    let frame = table.get::<Option<String>>("frame")?.filter(|s| !s.is_empty());
+    // C.13: a transparent-frame card has no symbols. The symbol-search
+    // routine looks past it, so it can't carry one itself.
+    if frame.as_deref() == Some("transparent") && !symbols.is_empty() {
+        return Err(mlua::Error::runtime(format!(
+            "card `{id}`: transparent-frame cards cannot declare symbols (got {symbols:?})"
+        )));
+    }
     let colors = read_color_vec(table)?;
     let cost = read_cost(table)?;
     let stats = read_stats(table)?;
@@ -703,6 +711,7 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
         cannot_block_subtypes,
         can_block_subtypes,
         symbols,
+        frame,
         cost,
         abilities,
         flavor,

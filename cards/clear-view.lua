@@ -42,7 +42,8 @@
 return {
   id = "clear-view",
   name = "Clear View",
-  colors = {"transparent"},
+  colors = {},
+  frame = "transparent",
   type = "artifact",
   cost = {{amount = 1, source = "hand"}},
   abilities = {

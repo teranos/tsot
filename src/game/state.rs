@@ -1265,11 +1265,7 @@ impl GameState {
     pub fn effective_top_of_deck_symbols(&self, player: PlayerId) -> Vec<String> {
         for iid in &self.player(player).deck {
             if let Some(inst) = self.card_pool.get(iid) {
-                let is_transparent = inst
-                    .card
-                    .colors
-                    .iter()
-                    .any(|c| c.eq_ignore_ascii_case("transparent"));
+                let is_transparent = inst.card.frame.as_deref() == Some("transparent");
                 if !is_transparent {
                     return inst.card.symbols.clone();
                 }
@@ -1340,12 +1336,7 @@ impl GameState {
     pub fn is_transparent(&self, iid: &InstanceId) -> bool {
         self.card_pool
             .get(iid)
-            .map(|i| {
-                i.card
-                    .colors
-                    .iter()
-                    .any(|c| c.eq_ignore_ascii_case("transparent"))
-            })
+            .map(|i| i.card.frame.as_deref() == Some("transparent"))
             .unwrap_or(false)
     }
 

@@ -3,7 +3,8 @@
 return {
   id = "clear-blue",
   name = "Clear Blue",
-  colors = {"transparent", "blue"},
+  colors = {"blue"},
+  frame = "transparent",
   cost = {{amount = 1, source = "self"}},
   abilities = {
     "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",

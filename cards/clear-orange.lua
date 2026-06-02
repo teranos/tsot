@@ -3,7 +3,8 @@
 return {
   id = "clear-orange",
   name = "Clear Orange",
-  colors = {"transparent", "orange"},
+  colors = {"orange"},
+  frame = "transparent",
   cost = {{amount = 1, source = "self"}},
   abilities = {
     "when you play this card, search your deck for an orange-jewel and move it to your hand. self-exile per P.5 — clear orange goes to EXILE on resolution, not GRAVEYARD.",

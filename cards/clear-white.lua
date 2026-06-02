@@ -3,7 +3,8 @@
 return {
   id = "clear-white",
   name = "Clear White",
-  colors = {"transparent", "white"},
+  colors = {"white"},
+  frame = "transparent",
   cost = {{amount = 1, source = "self"}},
   abilities = {
     "when you play this card, search your deck for a white-jewel and move it to your hand. self-exile per P.5 — clear white goes to EXILE on resolution, not GRAVEYARD.",

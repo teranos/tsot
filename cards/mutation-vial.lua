@@ -13,7 +13,8 @@
 return {
   id = "mutation-vial",
   name = "Mutation Vial",
-  colors = {"transparent"},
+  colors = {},
+  frame = "transparent",
   type = "artifact",
   subtypes = {"vial"},
   cost = {

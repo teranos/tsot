@@ -7,7 +7,8 @@
 return {
   id = "clear-purple",
   name = "Clear Purple",
-  colors = {"transparent", "purple"},
+  colors = {"purple"},
+  frame = "transparent",
   cost = {{amount = 1, source = "self"}},
   abilities = {
     "when you play this card, search your deck for a purple-jewel and move it to your hand. self-exile per P.5 — clear purple goes to EXILE on resolution, not GRAVEYARD.",

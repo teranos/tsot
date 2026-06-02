@@ -442,11 +442,18 @@ pub struct Card {
     pub can_block_subtypes: Vec<String>,
     /// Per RULES.md C.1 / C.11 / P.7a: a card's symbols form a set
     /// participating in identity matching alongside colors. Empty Vec =
-    /// no symbols (legal for any card except `transparent`-colored ones
+    /// no symbols (legal for any card except transparent-frame ones
     /// per C.13, which the engine doesn't enforce yet). Lua parser
     /// accepts either `symbol = "X"` (single-shorthand, wrapped into a
     /// one-element Vec) or `symbols = {"X", "Y"}` (explicit array).
     pub symbols: Vec<String>,
+    /// Visual frame attribute, distinct from color identity. Currently
+    /// only `Some("transparent")` is meaningful — a transparent card is
+    /// see-through (the symbol-search routine looks past it to the next
+    /// opaque card down). Frame is NOT a color: color-matching rules
+    /// (P.12a graveyard payment, static affects.colors) ignore it.
+    #[serde(default)]
+    pub frame: Option<String>,
     pub cost: Vec<CostComponent>,
     pub abilities: Vec<String>,
     /// Flavor text. Non-mechanical. Optional. Displayed under abilities in

@@ -5,7 +5,8 @@
 return {
   id = "clear-azure",
   name = "Clear Azure",
-  colors = {"transparent", "azure"},
+  colors = {"azure"},
+  frame = "transparent",
   cost = {{amount = 1, source = "self"}},
   abilities = {
     "when you play this card, search your deck for an azure-jewel and move it to your hand. self-exile per P.5 — clear azure goes to EXILE on resolution, not GRAVEYARD.",

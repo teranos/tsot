@@ -3,7 +3,8 @@
 return {
   id = "clear-pink",
   name = "Clear Pink",
-  colors = {"transparent", "pink"},
+  colors = {"pink"},
+  frame = "transparent",
   cost = {{amount = 1, source = "self"}},
   abilities = {
     "when you play this card, search your deck for a pink-jewel and move it to your hand. self-exile per P.5 — clear pink goes to EXILE on resolution, not GRAVEYARD.",

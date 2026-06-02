@@ -16,6 +16,7 @@ pub(crate) fn card_with_stats(id: &str, x: f32, y: f32) -> Card {
         cannot_block_subtypes: vec![],
         can_block_subtypes: vec![],
         symbols: Vec::new(),
+        frame: None,
         cost: vec![],
         abilities: vec![],
         flavor: String::new(),
@@ -47,6 +48,7 @@ pub(crate) fn card_no_stats(id: &str, kind: CardType) -> Card {
         cannot_block_subtypes: vec![],
         can_block_subtypes: vec![],
         symbols: Vec::new(),
+        frame: None,
         cost: vec![],
         abilities: vec![],
         flavor: String::new(),
@@ -83,7 +85,25 @@ pub(crate) fn set_identity(
     symbol: &str,
 ) {
     let entry = state.card_pool.get_mut(iid).unwrap();
-    entry.card.colors = colors.iter().map(|c| c.to_string()).collect();
+    // Backward-compat for tests: "transparent" in the colors slice is
+    // routed to the frame attribute now that the schema is split. The
+    // existing test fixtures still pass it as a "color" for ergonomic
+    // brevity, but the engine looks at frame.
+    let mut real_colors = Vec::new();
+    let mut is_transparent = false;
+    for c in colors {
+        if *c == "transparent" {
+            is_transparent = true;
+        } else {
+            real_colors.push(c.to_string());
+        }
+    }
+    entry.card.colors = real_colors;
+    entry.card.frame = if is_transparent {
+        Some("transparent".to_string())
+    } else {
+        None
+    };
     entry.card.symbols = if symbol.is_empty() {
         Vec::new()
     } else {
