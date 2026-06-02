@@ -674,6 +674,19 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.grant_extra_turn(pid) — push `pid` onto the extra-turn
+        // queue. Consumed at end-of-turn instead of the default opponent
+        // swap. Multiple grants stack in FIFO order.
+        let cell_ext = &$cell;
+        game.set(
+            "grant_extra_turn",
+            $scope.create_function_mut(move |_, pid_str: String| -> Result<()> {
+                let pid = parse_pid(&pid_str)?;
+                cell_ext.borrow_mut().extra_turns_pending.push(pid);
+                Ok(())
+            })?,
+        )?;
+
         let cell_atk_q = &$cell;
         game.set(
             "creature_attacked_this_turn",

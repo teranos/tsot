@@ -256,6 +256,14 @@ pub struct GameState {
     /// each activate_ability call, not state-evolving on its own.
     #[serde(skip, default)]
     pub current_activation_x: Option<i32>,
+    /// Queue of pending extra turns. When the End phase advances and
+    /// this queue is non-empty, the front of the queue becomes the next
+    /// active player instead of `active_player.opponent()`. Powers
+    /// "target player takes an extra turn" effects. Multiple entries
+    /// stack: each consumed in FIFO order; opponent only resumes when
+    /// the queue is empty.
+    #[serde(default)]
+    pub extra_turns_pending: Vec<PlayerId>,
 }
 
 impl GameState {
@@ -284,6 +292,7 @@ impl GameState {
             priority: None,
             creature_attacked_this_turn: false,
             current_activation_x: None,
+            extra_turns_pending: Vec::new(),
         }
     }
 

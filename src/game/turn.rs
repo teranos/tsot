@@ -24,7 +24,14 @@ impl GameState {
                 self.clear_eot_modifiers();
                 self.set_creature_attacked_this_turn(false);
                 self.clear_all_attacked_this_turn();
-                let next_active = self.active_player.opponent();
+                // Extra-turn queue (azure-recursion etc.): if non-empty,
+                // the front entry becomes the next active player instead
+                // of the default opponent swap.
+                let next_active = if !self.extra_turns_pending.is_empty() {
+                    self.extra_turns_pending.remove(0)
+                } else {
+                    self.active_player.opponent()
+                };
                 self.set_active_player(next_active);
                 let new_turn = self.turn + 1;
                 self.set_turn(new_turn);
