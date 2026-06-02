@@ -44,6 +44,33 @@ pub struct MatchupMctsArgs {
     /// MCTS max candidates to search. Caps hand size's branching.
     #[arg(long = "max-candidates", default_value_t = 10)]
     pub max_candidates: u32,
+    /// Search depth — `1` = one-ply (current default), `2` = adds
+    /// one deeper MCTS call per rollout, `3+` exponential cost.
+    #[arg(long = "depth", default_value_t = 1)]
+    pub max_depth: u32,
+    /// When set, replaces the Heuristic opponent with MCTS at this
+    /// depth. Useful for direct depth-vs-depth measurements — e.g.,
+    /// `--depth 2 --vs-mcts-depth 1` runs depth-2 vs depth-1 in
+    /// mirror match. `0` keeps Heuristic (default).
+    #[arg(long = "vs-mcts-depth", default_value_t = 0)]
+    pub vs_mcts_depth: u32,
+    /// Switch the "MCTS" side to UCT (UCB1 tree-search MCTS) at the
+    /// configured iteration budget. The opponent side stays whatever
+    /// `--vs-mcts-depth` selected (Heuristic by default). Lets
+    /// `matchup-mcts --use-uct --uct-iterations 50` compare UCT vs
+    /// Heuristic at ~50-finish budget, or `--use-uct --vs-mcts-depth 1`
+    /// to compare UCT against one-ply rollout MCTS.
+    #[arg(long = "use-uct", default_value_t = false)]
+    pub use_uct: bool,
+    /// UCT iteration budget per pick decision (only with --use-uct).
+    /// 50 matches one-ply MCTS at rollouts=5/max-cands=10 in finish
+    /// count — fair compute-budget comparison.
+    #[arg(long = "uct-iterations", default_value_t = 50)]
+    pub uct_iterations: u32,
+    /// UCT exploration constant (only with --use-uct). `sqrt(2)` is
+    /// classical; lower exploits more, higher explores more.
+    #[arg(long = "uct-c", default_value_t = std::f64::consts::SQRT_2)]
+    pub uct_c: f64,
     /// Master seed. Each game derives its own from (master, idx).
     #[arg(long, default_value_t = 0xBEEF_FACE, value_parser = parse_u64_hex_or_dec)]
     pub seed: u64,
@@ -129,9 +156,31 @@ pub fn run_matchup_mcts(
         rollouts_per_candidate: args.rollouts_per_candidate,
         max_candidates: args.max_candidates,
         base_seed: args.mcts_seed,
+        max_depth: args.max_depth,
     };
-    let ai_h = AiKind::Heuristic;
-    let ai_m = AiKind::Mcts(mcts_cfg);
+    let ai_m = if args.use_uct {
+        AiKind::Uct(crate::sim::uct::UctConfig {
+            iterations: args.uct_iterations,
+            exploration_c: args.uct_c,
+            base_seed: args.mcts_seed,
+            max_candidates: args.max_candidates,
+        })
+    } else {
+        AiKind::Mcts(mcts_cfg.clone())
+    };
+    let ai_h = if args.vs_mcts_depth > 0 {
+        // Direct depth-vs-depth comparison: opponent is also MCTS,
+        // just at a different depth. Same rollouts/max_candidates,
+        // different base_seed so the two sides aren't trivially in
+        // lockstep.
+        AiKind::Mcts(MctsConfig {
+            max_depth: args.vs_mcts_depth,
+            base_seed: args.mcts_seed.wrapping_add(0xFACE),
+            ..mcts_cfg.clone()
+        })
+    } else {
+        AiKind::Heuristic
+    };
 
     println!();
     println!("=== matchup-mcts ===");

@@ -22,6 +22,7 @@ pub mod parallel_eval;
 pub mod run;
 pub mod snapshot;
 pub mod stats;
+pub mod uct;
 pub mod variants;
 
 pub use evolve::{evolve as run_evolve, EvolveConfig};
@@ -41,5 +42,10 @@ pub enum AiKind {
     #[default]
     Heuristic,
     Mcts(mcts::MctsConfig),
+    /// UCT (UCB1 tree-search) MCTS — persistent tree, UCB1 selection,
+    /// expansion at the frontier, heuristic-rollout default policy.
+    /// See [`uct::pick_play_uct`]. Cost scales linearly with
+    /// `UctConfig.iterations` rather than with `R^depth`.
+    Uct(uct::UctConfig),
     Human(std::sync::Arc<human::HumanInterface>),
 }

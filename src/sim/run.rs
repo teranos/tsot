@@ -578,10 +578,24 @@ pub fn run_game_continue(
             // behavior; mixed Heuristic/Mcts is how matchup-mcts compares.
             let pick = match &ais[active.index()] {
                 super::AiKind::Heuristic => {
-                    pick_random_playable_in_hand(state, active, rng, kind_filter)
+                    // UCT iteration mode: while a search is running,
+                    // pick_play calls (on either side) consume planned
+                    // actions from the UCT plan first. When the plan
+                    // runs out, fall back to the random-weighted
+                    // heuristic picker. The UCT search ALWAYS uses
+                    // `AiKind::Heuristic` for its rollouts (the
+                    // override is the steering wheel).
+                    if let Some(planned) = super::uct::take_planned_action() {
+                        Some(planned)
+                    } else {
+                        pick_random_playable_in_hand(state, active, rng, kind_filter)
+                    }
                 }
                 super::AiKind::Mcts(mcts_cfg) => {
                     super::mcts::pick_play(state, active, kind_filter, mcts_cfg, lua)
+                }
+                super::AiKind::Uct(uct_cfg) => {
+                    super::uct::pick_play_uct(state, active, kind_filter, uct_cfg, lua)
                 }
                 super::AiKind::Human(iface) => {
                     let candidates =
@@ -768,7 +782,7 @@ pub fn run_game_continue(
                             .or_insert((turn_now, turn_now));
                         // Full distribution (vs the (min, max) summary
                         // above) — feeds the turn-curve aggregation in
-                        // `tsot curve-sample` → `cards-report.lua`.
+                        // `tsot curve-sample` → `cards-report.py`.
                         // Player kept so a future per-deck analysis
                         // can group; today's consumer ignores it.
                         stats
@@ -856,7 +870,9 @@ pub fn run_game_continue(
 
         let defender = active.opponent();
         let attackers: Vec<InstanceId> = match &ais[active.index()] {
-            super::AiKind::Heuristic | super::AiKind::Mcts(_) => select_attackers(state, active),
+            super::AiKind::Heuristic | super::AiKind::Mcts(_) | super::AiKind::Uct(_) => {
+                select_attackers(state, active)
+            }
             super::AiKind::Human(iface) => {
                 let eligible = super::ai::eligible_attackers(state, active);
                 iface.pick_attackers(state, active, eligible)
@@ -875,7 +891,9 @@ pub fn run_game_continue(
         if declared_atk_count > 0 {
             state.confirm_attacks().unwrap();
             let assignments = match &ais[defender.index()] {
-                super::AiKind::Heuristic | super::AiKind::Mcts(_) => pick_blocks(state, defender),
+                super::AiKind::Heuristic | super::AiKind::Mcts(_) | super::AiKind::Uct(_) => {
+                    pick_blocks(state, defender)
+                }
                 super::AiKind::Human(iface) => {
                     use tsot::game::CombatState;
                     let declared: Vec<InstanceId> = match &state.combat {

@@ -46,7 +46,7 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep evolve-mcts report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts
+.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts serve
 
 help:
 	@echo ""
@@ -151,6 +151,31 @@ evolve-mcts:
 		--opponent-ai mcts \
 		--opponent-mcts-rollouts $(EVOLVE_MCTS_ROLLOUTS) \
 		--opponent-mcts-max-candidates $(EVOLVE_MCTS_MAX_CANDIDATES) \
+		$$EXTRAS --save $(CHAMPS)/r$$N.json
+
+# EA against UCT (UCB1 tree-search MCTS). Stronger than `evolve-mcts`
+# — UCT beat one-ply MCTS 100% at matched compute on mirror-match
+# baseline decks. Override EVOLVE_UCT_ITERATIONS to scale strength
+# (50 ≈ one-ply MCTS budget; 100 is meaningfully stronger; 200+ for
+# slow / high-quality runs).
+EVOLVE_UCT_ITERATIONS ?= 50
+EVOLVE_UCT_MAX_CANDIDATES ?= 10
+
+evolve-uct:
+	@mkdir -p $(CHAMPS)
+	@HIGHEST=0; for f in $(CHAMPS)/r*-rank1.json; do [ -f "$$f" ] || continue; base=$$(basename "$$f" -rank1.json); num=$${base#r}; if [ "$$num" -gt "$$HIGHEST" ]; then HIGHEST=$$num; fi; done; \
+	N=$$((HIGHEST + 1)); \
+	SEED=$$(printf '0x%x' $$((0xEA00 + N))); \
+	EXTRAS=""; \
+	for f in $(CHAMPS)/*.json; do \
+		[ -f "$$f" ] && EXTRAS="$$EXTRAS --extra $$f"; \
+	done; \
+	echo "=== uct-opponent round $$N (seed=$$SEED, opponent=UCT iterations=$(EVOLVE_UCT_ITERATIONS) max-cand=$(EVOLVE_UCT_MAX_CANDIDATES)) ==="; \
+	echo "    candidate side plays Heuristic; opponent side plays UCT — expect ~2-6h wall"; \
+	cargo run --release -- evolve --seed $$SEED --stop-at-ceiling 3 --save-top 5 \
+		--opponent-ai uct \
+		--opponent-uct-iterations $(EVOLVE_UCT_ITERATIONS) \
+		--opponent-mcts-max-candidates $(EVOLVE_UCT_MAX_CANDIDATES) \
 		$$EXTRAS --save $(CHAMPS)/r$$N.json
 
 report:

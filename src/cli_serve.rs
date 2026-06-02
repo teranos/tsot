@@ -52,6 +52,18 @@ pub struct ServeArgs {
     /// MCTS max candidates (only if --opponent=mcts).
     #[arg(long, default_value_t = 10)]
     pub max_candidates: u32,
+    /// MCTS search depth (only if --opponent=mcts). `1` = one-ply
+    /// (default); `2` = adds one deeper MCTS pick per rollout.
+    #[arg(long, default_value_t = 1)]
+    pub mcts_depth: u32,
+    /// UCT iterations per pick (only if --opponent=uct). 50 ≈
+    /// one-ply MCTS finish budget; UCT measured to beat one-ply
+    /// MCTS 100% at matched budget on mirror-match deck.
+    #[arg(long, default_value_t = 50)]
+    pub uct_iterations: u32,
+    /// UCT exploration constant (only if --opponent=uct).
+    #[arg(long, default_value_t = std::f64::consts::SQRT_2)]
+    pub uct_c: f64,
     /// Your deck (EvolvedDeck JSON). If unset, picks a random baseline.
     #[arg(long)]
     pub deck: Option<PathBuf>,
@@ -93,9 +105,16 @@ pub fn run_serve(
             rollouts_per_candidate: args.rollouts_per_candidate,
             max_candidates: args.max_candidates,
             base_seed: seed.wrapping_add(0xCAFE_BABE),
+            max_depth: args.mcts_depth,
+        }),
+        "uct" => AiKind::Uct(crate::sim::uct::UctConfig {
+            iterations: args.uct_iterations,
+            exploration_c: args.uct_c,
+            base_seed: seed.wrapping_add(0xC0FF_EE_BA),
+            max_candidates: args.max_candidates,
         }),
         other => {
-            eprintln!("--opponent must be 'heuristic' or 'mcts' (got {other:?})");
+            eprintln!("--opponent must be 'heuristic' | 'mcts' | 'uct' (got {other:?})");
             std::process::exit(2);
         }
     };

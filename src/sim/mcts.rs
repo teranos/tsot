@@ -19,6 +19,7 @@
 
 #![allow(dead_code)]
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rand::rngs::StdRng;
@@ -26,9 +27,28 @@ use rand::SeedableRng;
 use tsot::choice::{RandomOracle, RecordingOracle};
 use tsot::game::{EventContext, GameState, InstanceId, Journal, PlayerId};
 
-use super::ai::{enumerate_playable_in_hand, PickKindFilter};
+use super::ai::{enumerate_playable_in_hand, pick_random_playable_in_hand, PickKindFilter};
 use super::run::{build_pattern_b_choices, run_game_continue, BuildChoiceResult};
 use super::AiKind;
+
+thread_local! {
+    /// Remaining MCTS depth budget for the CURRENT rollout context.
+    /// - `0` outside any MCTS search, or after the budget has been
+    ///   consumed: subsequent `pick_play` calls degrade to heuristic.
+    /// - `>0` while inside a rollout: there are still N more "deeper
+    ///   MCTS picks" authorized within this rollout chain.
+    ///
+    /// Top-level entry to `pick_play` (from `run_game_continue`'s
+    /// AiKind dispatch) sees `0` and initializes the search using
+    /// `cfg.max_depth`. Each rollout sets the budget to
+    /// `depth_for_this_call - 1` before invoking
+    /// `run_game_continue`, restoring on exit. So depth=2 fires
+    /// MCTS at the top + one deeper MCTS call per rollout chain,
+    /// then heuristic for the rest. Cost grows ~R^depth.
+    ///
+    /// Per-thread so rayon workers don't trample each other.
+    static MCTS_BUDGET: Cell<u32> = const { Cell::new(0) };
+}
 
 /// Diagnostic counters bumped by `pick_play`. Allow the matchup
 /// harness to detect "MCTS was called but never searched" (most
@@ -59,6 +79,15 @@ pub struct MctsConfig {
     /// Base seed for rollout RNG. Each rollout derives its own seed
     /// from `(base_seed, candidate_idx, rollout_idx)`.
     pub base_seed: u64,
+    /// Search depth — how many `pick_play` calls (in the same rollout
+    /// chain) may invoke MCTS before falling back to heuristic.
+    /// - `1` = current one-ply behavior (top-level MCTS, rollouts are
+    ///   pure heuristic).
+    /// - `2` = top-level MCTS + one deeper MCTS pick per rollout, then
+    ///   heuristic. Cost ≈ `R^2 + R` finishes per top-level pick.
+    /// - `>=3` = exponential cost. Use sparingly.
+    /// Default `1` to preserve current behavior.
+    pub max_depth: u32,
 }
 
 impl Default for MctsConfig {
@@ -67,6 +96,7 @@ impl Default for MctsConfig {
             rollouts_per_candidate: 5,
             max_candidates: 10,
             base_seed: 0xBEEF_FACE,
+            max_depth: 1,
         }
     }
 }
@@ -87,6 +117,23 @@ pub fn pick_play(
     cfg: &MctsConfig,
     lua: &mlua::Lua,
 ) -> Option<InstanceId> {
+    // Resolve the search depth for THIS call. Top-level entry (no
+    // budget set) uses `cfg.max_depth`; re-entry from inside a rollout
+    // uses whatever budget the outer rollout left for us.
+    let entry_budget = MCTS_BUDGET.with(|b| b.get());
+    let depth_for_this_call = if entry_budget == 0 {
+        cfg.max_depth
+    } else {
+        entry_budget
+    };
+
+    // Out of budget — fall back to the heuristic picker so the rollout
+    // (or top-level caller with max_depth=0) keeps making progress.
+    if depth_for_this_call == 0 {
+        let mut rng = StdRng::seed_from_u64(cfg.base_seed.wrapping_add(0xDEAD_BEEF));
+        return pick_random_playable_in_hand(state, player, &mut rng, kind_filter);
+    }
+
     MCTS_PICK_CALLS.fetch_add(1, Ordering::SeqCst);
     let mut candidates = enumerate_playable_in_hand(state, player, kind_filter);
     MCTS_TOTAL_CANDIDATES.fetch_add(candidates.len() as u64, Ordering::SeqCst);
@@ -102,13 +149,20 @@ pub fn pick_play(
     }
     MCTS_SEARCHED_PICKS.fetch_add(1, Ordering::SeqCst);
 
-    // Score each candidate by rollout win-rate.
+    // Score each candidate by rollout win-rate. Each rollout runs with
+    // the budget set to `depth_for_this_call - 1`, so the rollout's
+    // first recursive `pick_play` (if depth > 1) does deeper MCTS and
+    // subsequent picks degrade to heuristic.
+    let rollout_budget = depth_for_this_call.saturating_sub(1);
     let mut scored: Vec<(InstanceId, u32, u32)> = Vec::with_capacity(candidates.len());
     for (i, candidate) in candidates.iter().enumerate() {
         let mut wins = 0u32;
         for r in 0..cfg.rollouts_per_candidate {
             let seed = derive_rollout_seed(cfg.base_seed, i as u64, r as u64);
-            if simulate_rollout(state, player, candidate, seed, lua) {
+            MCTS_BUDGET.with(|b| b.set(rollout_budget));
+            let won = simulate_rollout(state, player, candidate, seed, lua, cfg);
+            MCTS_BUDGET.with(|b| b.set(entry_budget));
+            if won {
                 wins += 1;
             }
         }
@@ -138,15 +192,17 @@ fn derive_rollout_seed(base: u64, candidate_idx: u64, rollout_idx: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// Run one rollout: apply candidate play, finish the game with the
-/// heuristic AI, return true iff `player` won. The state is restored
-/// byte-identically before return (journal-based rollback).
+/// Run one rollout: apply candidate play, finish the game with either
+/// pure heuristic (when no MCTS budget remains) or with MCTS dispatched
+/// at the next `pick_play` boundary (when there's depth budget). The
+/// state is restored byte-identically before return.
 fn simulate_rollout(
     state: &mut GameState,
     player: PlayerId,
     candidate: &InstanceId,
     seed: u64,
     lua: &mlua::Lua,
+    cfg: &MctsConfig,
 ) -> bool {
     // Save the caller's replay_journal aside (typical case: outer
     // game's whole-run capture). We install a fresh journal for the
@@ -189,10 +245,17 @@ fn simulate_rollout(
         .is_ok();
 
     let won = if cast_ok && state.winner.is_none() {
-        // Finish the game with the heuristic AI on BOTH sides. CRITICAL:
-        // pass `[Heuristic, Heuristic]` to prevent recursive MCTS inside
-        // rollouts (which would explode the search tree).
-        let ais = [AiKind::Heuristic, AiKind::Heuristic];
+        // Finish the game. If MCTS_BUDGET > 0 (multi-ply with depth
+        // remaining), use [Mcts, Mcts] so the next `pick_play` does
+        // deeper search. The thread-local budget decrements per
+        // recursive call and bottoms out at heuristic — so this
+        // doesn't explode the search tree.
+        let budget = MCTS_BUDGET.with(|b| b.get());
+        let ais = if budget > 0 {
+            [AiKind::Mcts(cfg.clone()), AiKind::Mcts(cfg.clone())]
+        } else {
+            [AiKind::Heuristic, AiKind::Heuristic]
+        };
         let stats = run_game_continue(state, &mut rng, &mut log, lua, &ais);
         stats.winner == player
     } else if cast_ok {
@@ -241,6 +304,7 @@ mod tests {
             rollouts_per_candidate: 2,
             max_candidates: 4,
             base_seed: 0xC0DE,
+            max_depth: 1,
         };
 
         // Tweak: run_game itself uses Heuristic (the wrapper hard-codes
@@ -293,6 +357,7 @@ mod tests {
             rollouts_per_candidate: 2,
             max_candidates: 5,
             base_seed: 0xC0DE,
+            max_depth: 1,
         };
         let p1 = pick_play(
             &mut state_1,

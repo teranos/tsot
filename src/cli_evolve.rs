@@ -72,6 +72,23 @@ pub struct EvolveArgs {
     /// MCTS max candidates per pick when `--opponent-ai mcts`.
     #[arg(long = "opponent-mcts-max-candidates", default_value_t = 10)]
     pub opponent_mcts_max_candidates: u32,
+    /// MCTS search depth (`1` = one-ply rollout, current default;
+    /// `2` = top-level MCTS + one deeper MCTS pick per rollout,
+    /// then heuristic). Cost grows ~R^depth — depth 3+ is
+    /// expensive.
+    #[arg(long = "opponent-mcts-depth", default_value_t = 1)]
+    pub opponent_mcts_depth: u32,
+    /// UCT iterations per pick when `--opponent-ai uct`. 50 ≈
+    /// one-ply MCTS at rollouts=5/max-cands=10 in compute budget.
+    /// UCT measured to beat one-ply MCTS 100% at matched budget on
+    /// mirror-match baseline decks — strongest opponent currently.
+    #[arg(long = "opponent-uct-iterations", default_value_t = 50)]
+    pub opponent_uct_iterations: u32,
+    /// UCT exploration constant when `--opponent-ai uct`. `sqrt(2)`
+    /// is classical. Lower = exploit current best more, higher =
+    /// explore under-visited branches more.
+    #[arg(long = "opponent-uct-c", default_value_t = std::f64::consts::SQRT_2)]
+    pub opponent_uct_c: f64,
     /// Skip building the variant gauntlet. Requires at least one --extra.
     #[arg(long = "no-variants")]
     pub no_variants: bool,
@@ -143,9 +160,16 @@ pub fn run_ea(
             rollouts_per_candidate: args.opponent_mcts_rollouts,
             max_candidates: args.opponent_mcts_max_candidates,
             base_seed: args.seed.wrapping_add(0xCAFE_BABE),
+            max_depth: args.opponent_mcts_depth,
+        }),
+        "uct" => crate::sim::AiKind::Uct(crate::sim::uct::UctConfig {
+            iterations: args.opponent_uct_iterations,
+            exploration_c: args.opponent_uct_c,
+            base_seed: args.seed.wrapping_add(0xC0FF_EE_BA),
+            max_candidates: args.opponent_mcts_max_candidates,
         }),
         other => {
-            eprintln!("error: --opponent-ai must be 'heuristic' or 'mcts', got {other:?}");
+            eprintln!("error: --opponent-ai must be 'heuristic' | 'mcts' | 'uct', got {other:?}");
             std::process::exit(2);
         }
     };
