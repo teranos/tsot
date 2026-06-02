@@ -21,16 +21,52 @@ use super::stats::{
 };
 use super::variants::DeckVariant;
 
+/// Original entry point — takes ownership of state, manages its own
+/// `replay_journal`, returns both stats and the captured journal. The
+/// `--replay` workflow and existing callers depend on this shape.
+///
+/// Internally delegates to [`run_game_continue`]. New callers that
+/// want to drive multiple games on the same state (MCTS rollouts,
+/// scripted multi-game tests, multiplayer rollback) use
+/// `run_game_continue` directly with `&mut GameState`.
 pub fn run_game(
     mut state: GameState,
     rng: &mut StdRng,
     log: &mut Vec<String>,
     lua: &mlua::Lua,
 ) -> (GameStats, tsot::game::Journal) {
+    state.replay_journal = Some(tsot::game::Journal::new());
+    let mut stats = run_game_continue(&mut state, rng, log, lua);
+    let replay_journal = state.replay_journal.take().unwrap_or_default();
+    stats.replay_journal_entries = replay_journal.len() as u64;
+    (stats, replay_journal)
+}
+
+/// Resumable game loop. Operates on `&mut GameState` without touching
+/// the caller's `replay_journal` lifecycle — caller decides whether to
+/// open one, whether to take/rollback at the end. Required entry point
+/// for journal-based AI search (MCTS) and any scenario where the game
+/// loop is one step inside a larger rollback-able operation.
+///
+/// Preconditions:
+///   - `state` is in a runnable position (winner = None, phase + active
+///     player consistent). New games via `GameState::new(...)` qualify;
+///     mid-game states from a save also qualify.
+///   - Caller has set `state.replay_journal` if they want a recording.
+///     The function does NOT reset it.
+///
+/// The returned `GameStats.replay_journal_entries` field is left at
+/// `0` — the wrapper that owns the journal lifecycle sets it. Bare
+/// callers can set it themselves after taking the journal.
+pub fn run_game_continue(
+    state: &mut GameState,
+    rng: &mut StdRng,
+    log: &mut Vec<String>,
+    lua: &mlua::Lua,
+) -> GameStats {
     let oracle_seed: u64 = rng.gen();
     let mut oracle = RecordingOracle::new(RandomOracle::new(StdRng::seed_from_u64(oracle_seed)));
 
-    state.replay_journal = Some(tsot::game::Journal::new());
     let mut stats = GameStats {
         turns: 0,
         winner: PlayerId::A,
@@ -394,7 +430,7 @@ pub fn run_game(
                         matches!(c.source, CostSource::Sacrifice | CostSource::Graveyard)
                     });
                     if !has_setup_cost {
-                        rig_creature_free_haste(&mut state, &picked);
+                        rig_creature_free_haste(state, &picked);
                     }
                 } else if matches!(
                     kind,
@@ -604,7 +640,7 @@ pub fn run_game(
                 if suicide && !response_fired {
                     if let Some(flipped) = ScriptedOracle::flip_first_player(oracle.recording()) {
                         if let Some(journal) = state.journal.take() {
-                            journal.rollback(&mut state);
+                            journal.rollback(state);
                         }
                         state.journal = Some(tsot::game::Journal::new());
                         let mut scripted = ScriptedOracle::new(flipped);
@@ -679,7 +715,7 @@ pub fn run_game(
                     }
                 } else {
                     if let Some(journal) = state.journal.take() {
-                        journal.rollback(&mut state);
+                        journal.rollback(state);
                     }
                     bump_preview_rollback(&mut stats, active);
                     if suicide {
@@ -700,7 +736,7 @@ pub fn run_game(
         // turn. Creatures hold their activations until post-combat so
         // tapping for an ability doesn't pre-empt an attack.
         let pre_acts =
-            run_activation_pass(&mut state, active, lua, &mut oracle, true, &mut last_activated);
+            run_activation_pass(state, active, lua, &mut oracle, true, &mut last_activated);
         if pre_acts > 0 {
             events.push(format!("{pre_acts} pre-combat activation(s)"));
         }
@@ -766,7 +802,7 @@ pub fn run_game(
         // Pre-combat non-creature activations already tapped those, so
         // they're naturally excluded by `can_activate`.
         let post_acts =
-            run_activation_pass(&mut state, active, lua, &mut oracle, false, &mut last_activated);
+            run_activation_pass(state, active, lua, &mut oracle, false, &mut last_activated);
         if post_acts > 0 {
             events.push(format!("{post_acts} post-combat activation(s)"));
         }
@@ -796,9 +832,10 @@ pub fn run_game(
                 .or_insert(0) += total;
         }
     }
-    let replay_journal = state.replay_journal.take().unwrap_or_default();
-    stats.replay_journal_entries = replay_journal.len() as u64;
-    (stats, replay_journal)
+    // `replay_journal` lifecycle is the caller's responsibility — the
+    // wrapper [`run_game`] takes + sets `stats.replay_journal_entries`;
+    // MCTS rollouts take and rollback instead. We just return stats.
+    stats
 }
 
 /// Fire activated abilities the player can currently afford. Walks
