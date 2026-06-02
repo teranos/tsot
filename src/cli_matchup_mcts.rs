@@ -161,11 +161,11 @@ pub fn run_matchup_mcts(
     // Asymmetric is the default because it surfaces "AI × deck"
     // interactions instead of pure AI strength. Override with `--deck`
     // to force a mirror.
-    let (mcts_deck, heuristic_deck, deck_label) = if args.deck_a.is_some()
-        && args.deck_b.is_some()
+    let (mcts_deck, heuristic_deck, deck_label) = if let (Some(da), Some(db)) =
+        (args.deck_a.as_ref(), args.deck_b.as_ref())
     {
-        let (a, la, _) = load_deck(registry, args.deck_a.as_ref().unwrap())?;
-        let (b, lb, _) = load_deck(registry, args.deck_b.as_ref().unwrap())?;
+        let (a, la, _) = load_deck(registry, da)?;
+        let (b, lb, _) = load_deck(registry, db)?;
         (a, b, format!("asymmetric — MCTS plays {la}; Heuristic plays {lb}"))
     } else if let Some(path) = &args.deck {
         let (deck, label, _) = load_deck(registry, path)?;

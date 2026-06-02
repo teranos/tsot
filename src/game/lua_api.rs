@@ -923,6 +923,40 @@ macro_rules! build_game_table {
             )?,
         )?;
 
+        // game.attach(host, iid) — take `iid` from whatever zone it's
+        // currently in (BOARD search across both players' boards) and
+        // attach it to `host`, face-down per P.17. Used by predator
+        // cards that destroy a creature "instead of it going to the
+        // graveyard" and reroute it to attached. on_die does NOT fire
+        // (this isn't a death, it's a redirected move). Silent no-op
+        // when either id is missing from the card pool.
+        let cell_at = &$cell;
+        game.set(
+            "attach",
+            $scope.create_function_mut(
+                move |_, (host, iid): (String, String)| -> Result<()> {
+                    let mut s = cell_at.borrow_mut();
+                    if !s.card_pool.contains_key(&host)
+                        || !s.card_pool.contains_key(&iid)
+                    {
+                        return Ok(());
+                    }
+                    // C.14: transparent attachees can only attach to
+                    // transparent hosts. Silent no-op when the rule
+                    // would be violated (matches the existing
+                    // silent-fail convention of this API).
+                    if s.is_transparent(&iid) && !s.is_transparent(&host) {
+                        return Ok(());
+                    }
+                    s.a.board.retain(|x| x != &iid);
+                    s.b.board.retain(|x| x != &iid);
+                    s.add_attached(&host, &iid);
+                    s.set_face_down(&iid, true);
+                    Ok(())
+                },
+            )?,
+        )?;
+
         let cell_atk = &$cell;
         game.set(
             "attackers",

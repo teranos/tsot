@@ -1319,6 +1319,24 @@ impl GameState {
     /// matching, jewel pitch (P.24), and the Lua `game.card(iid).colors`
     /// surface. The static-affects matcher itself uses printed colors
     /// only (intrinsic-only check) to avoid recursion.
+    /// C.14: does `iid`'s printed color set include `transparent`?
+    /// Single source of truth for transparency checks — payment
+    /// validation, attach validation, and the `game.attach` Lua API all
+    /// consult this. Uses *printed* colors only (not effective), to
+    /// match how C.14 reads: transparency is a physical property of
+    /// the card, not something a static effect can grant or remove.
+    pub fn is_transparent(&self, iid: &InstanceId) -> bool {
+        self.card_pool
+            .get(iid)
+            .map(|i| {
+                i.card
+                    .colors
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case("transparent"))
+            })
+            .unwrap_or(false)
+    }
+
     pub fn effective_colors(&self, iid: &InstanceId) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         if let Some(inst) = self.card_pool.get(iid) {

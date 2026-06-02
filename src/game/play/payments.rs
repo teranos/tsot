@@ -129,7 +129,11 @@ impl GameState {
         cast_iid: &InstanceId,
     ) -> usize {
         let cast_ident = self.card_identity(cast_iid);
-        // C.14: transparent cards can't pay for BOARD-placed casts.
+        // C.14: transparent payments can only attach to transparent
+        // hosts. For BOARD-placed casts the cast IS the host; exclude
+        // transparent payments unless the cast is also transparent.
+        // For non-BOARD casts no attachment happens; no transparency
+        // gate.
         let cast_is_board_placed = self
             .card_pool
             .get(cast_iid)
@@ -142,33 +146,22 @@ impl GameState {
                 )
             })
             .unwrap_or(false);
-        let is_transparent = |h: &InstanceId| -> bool {
-            self.card_pool
-                .get(h)
-                .map(|i| {
-                    i.card
-                        .colors
-                        .iter()
-                        .any(|c| c.eq_ignore_ascii_case("transparent"))
-                })
-                .unwrap_or(false)
-        };
+        let cast_transparent = self.is_transparent(cast_iid);
+        let transparent_payment_excluded = cast_is_board_placed && !cast_transparent;
         if cast_ident.is_empty() {
-            // Wildcard cast — every non-transparent hand card matches
-            // (transparent excluded when cast is board-placed per C.14).
             return self
                 .player(player)
                 .hand
                 .iter()
                 .filter(|h| *h != cast_iid)
-                .filter(|h| !cast_is_board_placed || !is_transparent(h))
+                .filter(|h| !transparent_payment_excluded || !self.is_transparent(h))
                 .count();
         }
         self.player(player)
             .hand
             .iter()
             .filter(|h| *h != cast_iid)
-            .filter(|h| !cast_is_board_placed || !is_transparent(h))
+            .filter(|h| !transparent_payment_excluded || !self.is_transparent(h))
             .filter(|h| {
                 let pay_ident = self.card_identity(h);
                 !cast_ident.is_disjoint(&pay_ident)

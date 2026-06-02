@@ -457,7 +457,7 @@ pub fn run_game_continue(
     while state.winner.is_none() && safety > 0 {
         if game_start.elapsed() > timeout {
             report_game_timeout(
-                &state,
+                state,
                 "outer turn loop",
                 last_picked.as_ref(),
                 last_activated.as_ref(),
@@ -509,7 +509,7 @@ pub fn run_game_continue(
             pattern_b_iter += 1;
             if pattern_b_iter > 200 {
                 report_game_timeout(
-                    &state,
+                    state,
                     "Pattern B inner loop",
                     last_picked.as_ref(),
                     last_activated.as_ref(),
@@ -519,7 +519,7 @@ pub fn run_game_continue(
             }
             if game_start.elapsed() > timeout {
                 report_game_timeout(
-                    &state,
+                    state,
                     "Pattern B inner loop (wall-clock)",
                     last_picked.as_ref(),
                     last_activated.as_ref(),
@@ -752,7 +752,7 @@ pub fn run_game_continue(
         }
 
         let defender = active.opponent();
-        let attackers: Vec<InstanceId> = select_attackers(&state, active);
+        let attackers: Vec<InstanceId> = select_attackers(state, active);
         let mut declared_atk_count = 0u32;
         for atk in &attackers {
             if state
@@ -765,7 +765,7 @@ pub fn run_game_continue(
 
         if declared_atk_count > 0 {
             state.confirm_attacks().unwrap();
-            let assignments = pick_blocks(&state, defender);
+            let assignments = pick_blocks(state, defender);
             let mut block_count = 0u32;
             for (blk, atk) in &assignments {
                 if state

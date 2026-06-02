@@ -32,13 +32,9 @@ pub use stats::GameStats;
 /// Pattern B card-pick decision for one-ply rollout MCTS; all other
 /// decisions (targets, combat, X-values) stay heuristic for v1.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub enum AiKind {
+    #[default]
     Heuristic,
     Mcts(mcts::MctsConfig),
-}
-
-impl Default for AiKind {
-    fn default() -> Self {
-        AiKind::Heuristic
-    }
 }

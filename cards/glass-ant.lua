@@ -5,10 +5,12 @@ return {
   colors = {"black"},
   type = "creature",
   subtypes = {"insect"},
-  cost = {{amount = 3, source = "graveyard"}},
+  cost = {
+    {amount = 1, source = "hand"},
+    {amount = 1, source = "graveyard"},
+  },
   abilities = {
     "cards can't be attached to this creature.",
-    "transparent cards cannot be attached to anything (C.13/C.14 rationale).",
   },
   stats = {x = 1, y = 1},
   static = {

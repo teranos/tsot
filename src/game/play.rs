@@ -315,28 +315,19 @@ impl GameState {
                     return Err(PlayError::HandPaymentIdentityMismatch(hid.clone()));
                 }
             }
-            // C.14: transparent cards can't be HAND payment for BOARD-
-            // placed casts (P.6 attaches HAND payments; transparent can't
-            // be attached).
+            // C.14: a transparent card can only be attached to another
+            // transparent card. For HAND payments to BOARD-placed casts
+            // (P.6 attaches them), refuse when the payment is transparent
+            // and the cast itself isn't. Transparent ↔ transparent is OK.
             if matches!(
                 card_kind,
                 CardType::Creature | CardType::Artifact | CardType::Environment
-            ) {
-                let is_transparent = self
-                    .card_pool
-                    .get(hid)
-                    .map(|i| {
-                        i.card
-                            .colors
-                            .iter()
-                            .any(|c| c.eq_ignore_ascii_case("transparent"))
-                    })
-                    .unwrap_or(false);
-                if is_transparent {
-                    return Err(PlayError::HandPaymentTransparentForBoardPlaced(
-                        hid.clone(),
-                    ));
-                }
+            ) && self.is_transparent(hid)
+                && !self.is_transparent(instance)
+            {
+                return Err(PlayError::HandPaymentTransparentForBoardPlaced(
+                    hid.clone(),
+                ));
             }
         }
 
@@ -395,6 +386,12 @@ impl GameState {
                 return Err(PlayError::MutationTargetInvalid(target.clone()));
             }
             if self.has_restriction(target, crate::card::Restriction::CannotBeAttachedTo) {
+                return Err(PlayError::MutationTargetInvalid(target.clone()));
+            }
+            // C.14: a transparent mutation can only attach to a
+            // transparent target. Non-transparent mutations attach to
+            // anything.
+            if self.is_transparent(instance) && !self.is_transparent(target) {
                 return Err(PlayError::MutationTargetInvalid(target.clone()));
             }
         }
@@ -470,6 +467,17 @@ impl GameState {
                 None => false,
             };
             if !valid {
+                return Err(PlayError::AttachedPaymentInvalid(aid.clone()));
+            }
+            // C.14: ATTACHED-source payments re-attach to BOARD-placed
+            // casts (P.31). A transparent attached card can only land
+            // on a transparent host.
+            if matches!(
+                card_kind,
+                CardType::Creature | CardType::Artifact | CardType::Environment
+            ) && self.is_transparent(aid)
+                && !self.is_transparent(instance)
+            {
                 return Err(PlayError::AttachedPaymentInvalid(aid.clone()));
             }
         }
