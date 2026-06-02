@@ -10,7 +10,7 @@ use tsot::game::{GameState, InstanceId, PlayerId};
 /// Filter for which kinds the picker is allowed to return. Used by the
 /// multi-card-per-turn loop in run_game (Pattern B caps at one creature
 /// per turn but allows multiple non-creatures).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)] // CreatureOnly currently unused under Pattern B but kept for future per-kind filtering.
 pub enum PickKindFilter {
     Any,

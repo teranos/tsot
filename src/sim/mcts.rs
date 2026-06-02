@@ -167,7 +167,8 @@ fn simulate_rollout(
     // jewel-tap + Clear-View. Asymmetric choice quality systematically
     // makes MCTS underestimate any candidate with non-trivial cost,
     // and MCTS picks worse than heuristic.
-    let choices = match build_pattern_b_choices(state, player, candidate, &mut oracle) {
+    // MCTS rollouts always behave as AI — rig_creature_free_haste stays on.
+    let choices = match build_pattern_b_choices(state, player, candidate, &mut oracle, false) {
         BuildChoiceResult::Choices(c) => c,
         BuildChoiceResult::UnaffordableX { .. } => {
             // Candidate can't be paid for; treat as a loss for `player`.

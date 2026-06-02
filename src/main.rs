@@ -7,6 +7,7 @@ mod cli_evolve;
 mod cli_matchup_evolved;
 mod cli_matchup_mcts;
 mod cli_prune_champions;
+mod cli_serve;
 mod evolve_report;
 mod report_style;
 mod sim;
@@ -23,6 +24,7 @@ use cli_evolve::EvolveArgs;
 use cli_matchup_evolved::MatchupEvolvedArgs;
 use cli_matchup_mcts::MatchupMctsArgs;
 use cli_prune_champions::PruneChampionsArgs;
+use cli_serve::ServeArgs;
 
 #[derive(Parser)]
 #[command(
@@ -64,6 +66,11 @@ enum Command {
     /// reports MCTS win rate. Measures whether one-ply rollout
     /// search beats the heuristic picker on the same deck.
     MatchupMcts(MatchupMctsArgs),
+    /// Serve a single-game playable interface on localhost. Browser
+    /// frontend talks to a tiny HTTP server which bridges to the
+    /// engine running on a thread. You play one side; an AI plays
+    /// the other.
+    Serve(ServeArgs),
 }
 
 /// Parse a u64 from `--seed`, accepting hex (`0xEA03`) or decimal.
@@ -164,6 +171,7 @@ fn main() -> mlua::Result<()> {
         Some(Command::MatchupMcts(args)) => {
             cli_matchup_mcts::run_matchup_mcts(&registry, &playable_pool, &args)
         }
+        Some(Command::Serve(args)) => cli_serve::run_serve(&registry, &playable_pool, &args),
         None => {
             eprintln!("no subcommand specified. run with --help to see the available commands.");
             std::process::exit(2);

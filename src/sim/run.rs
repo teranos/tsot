@@ -106,11 +106,19 @@ pub(crate) enum BuildChoiceResult {
 /// helpers (set_*, move_card, etc.) handle that, and rig_creature_
 /// free_haste is journaled via its own variant. So MCTS rollouts can
 /// rollback the entire build_pattern_b_choices + play_card sequence.
+///
+/// `active_is_human` controls whether the AI-side `rig_creature_free_haste`
+/// shortcut applies. That shortcut clears the cast cost and grants haste
+/// to non-setup-cost creatures so the AI can swing same-turn — desirable
+/// for fitness sims, but it permanently mutates the card and breaks the
+/// rules for a human player. Pass `false` for AI sides (default behavior),
+/// `true` to skip the rig (human play).
 pub(crate) fn build_pattern_b_choices(
     state: &mut GameState,
     active: PlayerId,
     picked: &InstanceId,
     oracle: &mut dyn ChoiceOracle,
+    active_is_human: bool,
 ) -> BuildChoiceResult {
     let kind = state
         .card_pool
@@ -263,7 +271,7 @@ pub(crate) fn build_pattern_b_choices(
         let has_setup_cost = cost
             .iter()
             .any(|c| matches!(c.source, CostSource::Sacrifice | CostSource::Graveyard));
-        if !has_setup_cost {
+        if !has_setup_cost && !active_is_human {
             rig_creature_free_haste(state, picked);
         }
     } else if matches!(
@@ -403,7 +411,22 @@ pub fn run_game_continue(
     ais: &[super::AiKind; 2],
 ) -> GameStats {
     let oracle_seed: u64 = rng.gen();
-    let mut oracle = RecordingOracle::new(RandomOracle::new(StdRng::seed_from_u64(oracle_seed)));
+    // If either side is Human, wrap the random oracle so its choose_*
+    // calls route to the human when the asker matches.
+    let human_pair: Option<(PlayerId, std::sync::Arc<super::human::HumanInterface>)> = ais
+        .iter()
+        .enumerate()
+        .find_map(|(idx, ai)| match ai {
+            super::AiKind::Human(iface) => Some((
+                if idx == 0 { PlayerId::A } else { PlayerId::B },
+                iface.clone(),
+            )),
+            _ => None,
+        });
+    let mut oracle = RecordingOracle::new(super::human::HumanAwareOracle::new(
+        RandomOracle::new(StdRng::seed_from_u64(oracle_seed)),
+        human_pair,
+    ));
 
     let mut stats = GameStats {
         turns: 0,
@@ -559,6 +582,33 @@ pub fn run_game_continue(
                 super::AiKind::Mcts(mcts_cfg) => {
                     super::mcts::pick_play(state, active, kind_filter, mcts_cfg, lua)
                 }
+                super::AiKind::Human(iface) => {
+                    let candidates =
+                        super::ai::enumerate_playable_in_hand(state, active, kind_filter);
+                    let activations = enumerate_human_activations(state, active);
+                    let iface = iface.clone();
+                    match iface.main_phase_choice(state, active, candidates, kind_filter, activations) {
+                        super::human::MainPhaseChoice::Pass => None,
+                        super::human::MainPhaseChoice::Play(iid) => Some(iid),
+                        super::human::MainPhaseChoice::Activate { iid, ability_index, x } => {
+                            last_activated = Some((iid.clone(), ability_index));
+                            // Fire the activation. Failures are logged
+                            // and the loop continues — the user might
+                            // pick another action.
+                            if let Err(e) = state.activate_ability(
+                                &iid,
+                                ability_index,
+                                x,
+                                Some(&mut EventContext::new(lua, &mut oracle)),
+                            ) {
+                                log.push(format!(
+                                    "turn {turn} ({active:?}): human activation {iid}[{ability_index}] failed: {e:?}"
+                                ));
+                            }
+                            continue;
+                        }
+                    }
+                }
             };
             let Some(picked) = pick else {
                 break;
@@ -578,7 +628,13 @@ pub fn run_game_continue(
                 // Build PlayChoices via the shared choice-builder (same
                 // function MCTS rollouts use). Sacrifice-stats bumping
                 // stays here (Pattern B's concern, not the builder's).
-                let build_result = build_pattern_b_choices(state, active, &picked, &mut oracle);
+                let build_result = build_pattern_b_choices(
+                    state,
+                    active,
+                    &picked,
+                    &mut oracle,
+                    matches!(ais[active.index()], super::AiKind::Human(_)),
+                );
                 let choices = match build_result {
                     BuildChoiceResult::Choices(c) => c,
                     BuildChoiceResult::UnaffordableX { picked_is_creature: pic } => {
@@ -645,7 +701,14 @@ pub fn run_game_continue(
                     .unwrap_or(0);
                 let response_fired =
                     resp_after_a > resp_before_a || resp_after_b > resp_before_b;
-                let mut suicide = state.winner == Some(opponent_of_active);
+                // "Suicide skip": if the engine landed in a state where
+                // the active player has already lost (e.g., a Lua handler
+                // killed them mid-cast), the AI rolls back so its
+                // preview doesn't commit a fatal play. For HUMAN sides
+                // we never auto-skip — the player chose this card and
+                // is allowed to make any legal play, even a bad one.
+                let active_is_human = matches!(ais[active.index()], super::AiKind::Human(_));
+                let mut suicide = !active_is_human && state.winner == Some(opponent_of_active);
                 let preview_size = state.journal.as_ref().map(|j| j.len()).unwrap_or(0) as u64;
 
                 bump_preview_attempt(&mut stats, active, preview_size);
@@ -735,6 +798,30 @@ pub fn run_game_continue(
                     if suicide {
                         state.bump_action("preview_skip_suicide", active);
                     }
+                    // Surface the failure reason so the UI / log isn't
+                    // blind to silent rollbacks. AI rollbacks happen
+                    // often (preview-and-skip is the design); human-side
+                    // rollbacks should be rare and worth flagging.
+                    if let Err(err) = result {
+                        let card_id = state
+                            .card_pool
+                            .get(&picked)
+                            .map(|c| c.card.id.clone())
+                            .unwrap_or_else(|| picked.clone());
+                        log.push(format!(
+                            "turn {turn} ({active:?}): play_card({card_id}) failed: {err:?}{}",
+                            if active_is_human { " [HUMAN — visible failure]" } else { "" }
+                        ));
+                    } else if suicide {
+                        let card_id = state
+                            .card_pool
+                            .get(&picked)
+                            .map(|c| c.card.id.clone())
+                            .unwrap_or_else(|| picked.clone());
+                        log.push(format!(
+                            "turn {turn} ({active:?}): {card_id} rolled back (would have lost the game)"
+                        ));
+                    }
                     if picked_is_creature {
                         played_creature = true;
                     } else {
@@ -750,7 +837,7 @@ pub fn run_game_continue(
         // turn. Creatures hold their activations until post-combat so
         // tapping for an ability doesn't pre-empt an attack.
         let pre_acts =
-            run_activation_pass(state, active, lua, &mut oracle, true, &mut last_activated);
+            run_activation_pass(state, active, lua, &mut oracle, true, &mut last_activated, ais);
         if pre_acts > 0 {
             events.push(format!("{pre_acts} pre-combat activation(s)"));
         }
@@ -766,7 +853,13 @@ pub fn run_game_continue(
         }
 
         let defender = active.opponent();
-        let attackers: Vec<InstanceId> = select_attackers(state, active);
+        let attackers: Vec<InstanceId> = match &ais[active.index()] {
+            super::AiKind::Heuristic | super::AiKind::Mcts(_) => select_attackers(state, active),
+            super::AiKind::Human(iface) => {
+                let eligible = super::ai::eligible_attackers(state, active);
+                iface.pick_attackers(state, active, eligible)
+            }
+        };
         let mut declared_atk_count = 0u32;
         for atk in &attackers {
             if state
@@ -779,7 +872,20 @@ pub fn run_game_continue(
 
         if declared_atk_count > 0 {
             state.confirm_attacks().unwrap();
-            let assignments = pick_blocks(state, defender);
+            let assignments = match &ais[defender.index()] {
+                super::AiKind::Heuristic | super::AiKind::Mcts(_) => pick_blocks(state, defender),
+                super::AiKind::Human(iface) => {
+                    use tsot::game::CombatState;
+                    let declared: Vec<InstanceId> = match &state.combat {
+                        Some(CombatState::AwaitingBlockers { attacks }) => {
+                            attacks.iter().map(|a| a.attacker.clone()).collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    let eligible = super::ai::eligible_blockers(state, defender);
+                    iface.pick_blocks(state, defender, declared, eligible)
+                }
+            };
             let mut block_count = 0u32;
             for (blk, atk) in &assignments {
                 if state
@@ -816,9 +922,99 @@ pub fn run_game_continue(
         // Pre-combat non-creature activations already tapped those, so
         // they're naturally excluded by `can_activate`.
         let post_acts =
-            run_activation_pass(state, active, lua, &mut oracle, false, &mut last_activated);
+            run_activation_pass(state, active, lua, &mut oracle, false, &mut last_activated, ais);
         if post_acts > 0 {
             events.push(format!("{post_acts} post-combat activation(s)"));
+        }
+
+        // Human-side Main2 prompt loop. Engine has a Main2 phase but
+        // the turn-progression code skips through it without a prompt
+        // — fine for AI (which auto-activated post-combat), wrong for
+        // human. Run a Pattern-B-style loop here: plays + activations
+        // until the human passes.
+        if let super::AiKind::Human(iface) = &ais[active.index()] {
+            let iface = iface.clone();
+            // Advance into Main2 explicitly so play_card timing checks
+            // (sorcery-speed) accept the cast.
+            while state.phase != Phase::Main2 && state.winner.is_none() {
+                state.next_phase();
+                if matches!(state.phase, Phase::Untap | Phase::Draw) {
+                    // We've already wrapped past End — bail.
+                    break;
+                }
+            }
+            let mut m2_played_creature = false;
+            loop {
+                if state.winner.is_some() {
+                    break;
+                }
+                let kind_filter = if m2_played_creature {
+                    PickKindFilter::NonCreatureOnly
+                } else {
+                    PickKindFilter::Any
+                };
+                let candidates =
+                    super::ai::enumerate_playable_in_hand(state, active, kind_filter);
+                let activations = enumerate_human_activations(state, active);
+                if candidates.is_empty() && activations.is_empty() {
+                    break;
+                }
+                match iface.main_phase_choice(
+                    state,
+                    active,
+                    candidates,
+                    kind_filter,
+                    activations,
+                ) {
+                    super::human::MainPhaseChoice::Pass => break,
+                    super::human::MainPhaseChoice::Activate { iid, ability_index, x } => {
+                        last_activated = Some((iid.clone(), ability_index));
+                        if let Err(e) = state.activate_ability(
+                            &iid,
+                            ability_index,
+                            x,
+                            Some(&mut EventContext::new(lua, &mut oracle)),
+                        ) {
+                            log.push(format!(
+                                "turn {turn} ({active:?}): main2 activation {iid}[{ability_index}] failed: {e:?}"
+                            ));
+                        }
+                    }
+                    super::human::MainPhaseChoice::Play(picked) => {
+                        let picked_is_creature = state
+                            .card_pool
+                            .get(&picked)
+                            .map(|c| c.card.kind == CardType::Creature)
+                            .unwrap_or(false);
+                        let build_result = build_pattern_b_choices(
+                            state, active, &picked, &mut oracle, true,
+                        );
+                        let choices = match build_result {
+                            BuildChoiceResult::Choices(c) => c,
+                            BuildChoiceResult::UnaffordableX { .. } => continue,
+                        };
+                        oracle.clear();
+                        let result = state.play_card(
+                            active,
+                            &picked,
+                            choices,
+                            Some(&mut EventContext::new(lua, &mut oracle)),
+                        );
+                        if let Err(err) = result {
+                            let card_id = state
+                                .card_pool
+                                .get(&picked)
+                                .map(|c| c.card.id.clone())
+                                .unwrap_or_else(|| picked.clone());
+                            log.push(format!(
+                                "turn {turn} ({active:?}): main2 play_card({card_id}) failed: {err:?}"
+                            ));
+                        } else if picked_is_creature {
+                            m2_played_creature = true;
+                        }
+                    }
+                }
+            }
         }
 
         log.push(format!("turn {turn} ({active:?}): {}", events.join("; ")));
@@ -852,6 +1048,46 @@ pub fn run_game_continue(
     stats
 }
 
+/// Build the activatable-abilities list a human main-phase prompt
+/// surfaces. Walks the player's board, expands each card's
+/// activations, and includes any whose `can_activate` check passes
+/// right now (the same predicate the heuristic activation pass uses).
+fn enumerate_human_activations(
+    state: &GameState,
+    player: PlayerId,
+) -> Vec<super::human::ActivationOption> {
+    let mut out = Vec::new();
+    let ids: Vec<InstanceId> = state.player(player).board.clone();
+    for iid in &ids {
+        let n = state.activation_count(iid);
+        if n == 0 {
+            continue;
+        }
+        let card_name = state
+            .card_pool
+            .get(iid)
+            .map(|i| i.card.name.clone())
+            .unwrap_or_else(|| iid.clone());
+        for idx in 0..n {
+            if !state.can_activate(iid, idx) {
+                continue;
+            }
+            let (text, needs_x) = state
+                .activation_at(iid, idx)
+                .map(|a| (a.text.clone(), a.cost_components.iter().any(|c| c.is_x)))
+                .unwrap_or_else(|| (format!("ability {idx}"), false));
+            out.push(super::human::ActivationOption {
+                iid: iid.clone(),
+                card_name: card_name.clone(),
+                ability_index: idx,
+                text,
+                needs_x,
+            });
+        }
+    }
+    out
+}
+
 /// Fire activated abilities the player can currently afford. Walks
 /// their board, considers each card's first activatable ability, and
 /// activates it if eligible. `non_creatures_only = true` restricts the
@@ -864,7 +1100,16 @@ fn run_activation_pass(
     oracle: &mut dyn ChoiceOracle,
     non_creatures_only: bool,
     last_activated: &mut Option<(InstanceId, usize)>,
+    ais: &[super::AiKind; 2],
 ) -> u32 {
+    // Activated abilities require the controller's opt-in. AI sides
+    // keep auto-firing (preserves heuristic behavior + test
+    // determinism). Human side never enters this pass — `Activate`
+    // is a main-phase action the player drives explicitly.
+    let active_is_human = matches!(ais[player.index()], super::AiKind::Human(_));
+    if active_is_human {
+        return 0;
+    }
     let mut count = 0u32;
     // Snapshot board ids up front. Activation handlers can mutate the
     // board (move cards in/out), so we re-validate membership and
@@ -891,6 +1136,11 @@ fn run_activation_pass(
             if !state.can_activate(iid, idx) {
                 continue;
             }
+            // AI sides keep the auto-fire behavior. Human side never
+            // auto-fires — the human drives activations explicitly via
+            // the main-phase `Activate` action. Skip the entire loop
+            // for human (we exit via `return 0` below).
+            let _ = active_is_human;
             // For X-cost activations, the AI commits to a concrete X
             // before calling. Simple heuristic: spend ~half the hand
             // (rounded up) so we keep some cards in hand. Bigger X

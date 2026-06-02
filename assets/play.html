@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>tsot — play</title>
+<style>
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #111; color: #ddd; margin: 0; padding: 1rem; font-size: 0.8rem; }
+  h1 { font-size: 0.9rem; margin: 0 0 0.5rem 0; color: #888; font-weight: normal; }
+  .row { display: flex; gap: 1rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  .zone { border: 1px solid #333; padding: 0.5rem; min-width: 8rem; flex: 1; }
+  .zone h2 { font-size: 0.7rem; margin: 0 0 0.4rem 0; color: #888; font-weight: normal; text-transform: uppercase; letter-spacing: 0.05em; }
+  .cards { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+  .card {
+    display: flex; flex-direction: column;
+    padding: 0.35rem 0.5rem;
+    background: #1c1c20; border: 1px solid #444;
+    border-radius: 4px;
+    min-width: 8.5rem; max-width: 11rem;
+    font-size: 0.7rem;
+    position: relative;
+  }
+  .card.clickable { cursor: pointer; border-color: #4af; }
+  .card.clickable:hover { background: #234; }
+  .card.selected { background: #2a3a4f; border-color: #6cf; }
+  .card.tapped { opacity: 0.5; transform: rotate(6deg); }
+  .card.sick { border-style: dashed; }
+  .opponent .card { background: #221818; border-color: #533; }
+  .opponent .card.clickable { border-color: #f88; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.4rem; }
+  .name { font-weight: bold; color: #eee; }
+  .cost { color: #fc6; font-size: 0.65rem; }
+  .meta-line { color: #888; font-size: 0.65rem; display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.1rem; }
+  .symbol { color: #6cf; }
+  .color-w { color: #ddd; }
+  .color-u { color: #4af; }
+  .color-b { color: #b6f; }
+  .color-r { color: #f66; }
+  .color-g { color: #6f6; }
+  .color-c { color: #aaa; }
+  .stats { color: #fc6; font-weight: bold; }
+  .abilities { color: #bbb; font-size: 0.65rem; margin-top: 0.2rem; line-height: 1.25; max-height: 4rem; overflow: hidden; }
+  .abilities li { margin-left: 0.7rem; }
+  .counts { color: #888; font-size: 0.7rem; margin-left: 0.5rem; }
+  #prompt { padding: 0.5rem; background: #1a2030; border: 1px solid #335; margin-bottom: 0.75rem; }
+  #buttons { margin-top: 0.5rem; }
+  button { background: #234; color: #ddd; border: 1px solid #4af; padding: 0.35rem 0.8rem; cursor: pointer; font-family: inherit; font-size: 0.75rem; margin-right: 0.5rem; }
+  button:hover { background: #345; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.danger { border-color: #f66; }
+  .game-over { color: #ff4; font-weight: bold; }
+  .empty-note { color: #666; font-style: italic; font-size: 0.7rem; }
+  .meta { color: #888; font-size: 0.75rem; margin-bottom: 0.5rem; }
+  .deck-top { color: #6cf; }
+</style>
+</head>
+<body>
+<h1>tsot — play</h1>
+
+<div id="prompt">Loading...</div>
+
+<div class="meta" id="meta"></div>
+
+<div class="row">
+  <div class="zone opponent" style="flex: 2;">
+    <h2>Opponent <span class="counts" id="opp-counts"></span></h2>
+    <div class="cards" id="opp-board-cards"></div>
+  </div>
+  <div class="zone" style="flex: 1;">
+    <h2>Opp graveyard <span class="counts" id="opp-gy-count"></span></h2>
+    <div class="cards" id="opp-graveyard-cards"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="zone" style="flex: 2;">
+    <h2>You</h2>
+    <div class="cards" id="your-board-cards"></div>
+  </div>
+  <div class="zone" style="flex: 1;">
+    <h2>Your graveyard <span class="counts" id="your-gy-count"></span></h2>
+    <div class="cards" id="your-graveyard-cards"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="zone">
+    <h2>Your hand <span class="counts" id="your-hand-counts"></span></h2>
+    <div class="cards" id="your-hand-cards"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="zone" style="flex: 0 0 14rem;">
+    <h2>Opp deck top</h2>
+    <div class="cards" id="opp-deck-top"></div>
+  </div>
+  <div class="zone" style="flex: 0 0 14rem;">
+    <h2>Your deck top</h2>
+    <div class="cards" id="your-deck-top"></div>
+  </div>
+</div>
+
+<div id="buttons"></div>
+
+<div class="zone">
+  <h2>Log</h2>
+  <div id="log" style="max-height: 6rem; overflow-y: auto; font-size: 0.7rem; color: #777;"></div>
+</div>
+
+<script>
+const state = { current: null, selectedAttackers: new Set(), selectedBlocks: {}, blockerPickFor: null };
+
+async function fetchState() {
+  const r = await fetch('/state');
+  return r.json();
+}
+
+const _send = async (action) => {
+  const r = await fetch('/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
+  return r.json();
+};
+const sendAction = async (action) => {
+  const next = await _send(action);
+  // Server gave us a new prompt — reset all transient selection state
+  // before rendering. Local click-only re-renders don't go through here,
+  // so they keep the user's accumulating selection intact.
+  state.selectedAttackers.clear();
+  state.selectedBlocks = {};
+  state.blockerPickFor = null;
+  return { state: next.state, prompt: next };
+};
+
+function colorTag(c) {
+  const code = (c || '').toLowerCase();
+  return `<span class="color-${code}">${code}</span>`;
+}
+
+function symbolTag(s) {
+  return `<span class="symbol">${s}</span>`;
+}
+
+function cardEl(card, opts = {}) {
+  const { clickable = false, selected = false, onClick = null, dim = false } = opts;
+  const div = document.createElement('div');
+  let cls = 'card';
+  if (clickable) cls += ' clickable';
+  if (selected) cls += ' selected';
+  if (card.tapped) cls += ' tapped';
+  if (card.summoning_sick) cls += ' sick';
+  div.className = cls;
+  if (dim) div.style.opacity = '0.6';
+
+  const head = document.createElement('div');
+  head.className = 'head';
+  // Show effective cost (post-reduction). When it differs from the
+  // printed cost, show both: `1G ⟵ 2G` (effective ⟵ printed).
+  const printed = card.cost || '';
+  const effective = card.effective_cost || printed;
+  const costHtml = (printed === effective)
+    ? `<span class="cost">${printed}</span>`
+    : `<span class="cost">${effective}</span><span class="cost" style="color:#666; text-decoration:line-through; margin-left:0.3rem;">${printed}</span>`;
+  head.innerHTML = `<span class="name">${card.name}</span>${costHtml}`;
+  div.appendChild(head);
+
+  const metaParts = [];
+  if (card.kind === 'Creature') metaParts.push(`<span class="stats">${card.power}/${card.toughness - (card.damage || 0)}${card.damage ? ` (-${card.damage})` : ''}</span>`);
+  if (card.colors && card.colors.length) metaParts.push(card.colors.map(colorTag).join(''));
+  if (card.symbols && card.symbols.length) metaParts.push(card.symbols.map(symbolTag).join(''));
+  if (card.subtypes && card.subtypes.length) metaParts.push(`<span style="color:#888;">${card.subtypes.join('·')}</span>`);
+  if (metaParts.length) {
+    const m = document.createElement('div');
+    m.className = 'meta-line';
+    m.innerHTML = metaParts.join(' ');
+    div.appendChild(m);
+  }
+
+  if (card.abilities && card.abilities.length) {
+    const a = document.createElement('div');
+    a.className = 'abilities';
+    a.innerHTML = card.abilities.map(s => `<div>${s}</div>`).join('');
+    div.appendChild(a);
+  }
+
+  div.title = card.iid + (card.summoning_sick ? '  (summoning sick)' : '');
+  if (clickable && onClick) div.onclick = () => onClick(card.iid);
+  return div;
+}
+
+function render(s) {
+  state.current = s;
+  const prompt = s.prompt || { kind: 'Loading' };
+  const view = s.state;
+  if (!view || !view.players) {
+    document.getElementById('prompt').textContent = JSON.stringify(s);
+    return;
+  }
+  // Remove any prior casting-banner before re-rendering.
+  const oldBanner = document.getElementById('casting-banner');
+  if (oldBanner) oldBanner.remove();
+
+  const you = view.players.find(p => p.side === view.viewer);
+  const opp = view.players.find(p => p.side !== view.viewer);
+
+  document.getElementById('meta').textContent = `turn ${view.turn} · phase ${view.phase} · active ${view.active_player.toUpperCase()} · you are ${view.viewer.toUpperCase()}`;
+  document.getElementById('opp-counts').textContent = `deck:${opp.deck_count} hand:${opp.hand_count} ex:${opp.exile_count}`;
+  document.getElementById('opp-gy-count').textContent = opp.graveyard_count;
+  document.getElementById('your-gy-count').textContent = you.graveyard_count;
+  document.getElementById('your-hand-counts').textContent = `deck:${you.deck_count} ex:${you.exile_count}`;
+
+  // Opponent board (rendered fresh each call so prompt-specific click handlers work).
+  const oppBoard = document.getElementById('opp-board-cards');
+  oppBoard.innerHTML = '';
+  if (opp.board.length === 0) oppBoard.innerHTML = '<span class="empty-note">empty</span>';
+  else opp.board.forEach(c => oppBoard.appendChild(cardEl(c)));
+
+  // Opponent graveyard (always visible).
+  const oppGy = document.getElementById('opp-graveyard-cards');
+  oppGy.innerHTML = '';
+  if (opp.graveyard.length === 0) oppGy.innerHTML = '<span class="empty-note">empty</span>';
+  else opp.graveyard.forEach(c => oppGy.appendChild(cardEl(c, { dim: true })));
+
+  // Your graveyard.
+  const yourGy = document.getElementById('your-graveyard-cards');
+  yourGy.innerHTML = '';
+  if (you.graveyard.length === 0) yourGy.innerHTML = '<span class="empty-note">empty</span>';
+  else you.graveyard.forEach(c => yourGy.appendChild(cardEl(c, { dim: true })));
+
+  // Deck tops — public to both sides.
+  renderDeckTop('your-deck-top', you.deck_top);
+  renderDeckTop('opp-deck-top', opp.deck_top);
+
+  const yourBoard = document.getElementById('your-board-cards');
+  yourBoard.innerHTML = '';
+  const yourHand = document.getElementById('your-hand-cards');
+  yourHand.innerHTML = '';
+  const buttons = document.getElementById('buttons');
+  buttons.innerHTML = '';
+  const promptEl = document.getElementById('prompt');
+
+  if (prompt.kind === 'GameOver') {
+    const w = prompt.winner ? prompt.winner.toLowerCase() : null;
+    const youWon = w === view.viewer;
+    promptEl.innerHTML = `<span class="game-over">Game over. Winner: ${w ? w.toUpperCase() : 'draw'} ${youWon ? '(you win)' : (w ? '(you lose)' : '')}</span>`;
+    you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
+    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
+    return;
+  }
+
+  if (prompt.kind === 'PickCard') {
+    const acts = prompt.activations || [];
+    const parts = [];
+    parts.push(`${prompt.candidates.length} card(s) in hand affordable`);
+    if (acts.length > 0) parts.push(`${acts.length} ability/abilities ready to activate`);
+    promptEl.innerHTML = `Your main phase — ${parts.join(' · ')}. Click a hand card to play, click a board ability to activate, or pass.`;
+    const candidateSet = new Set(prompt.candidates);
+    you.hand.forEach(c => {
+      yourHand.appendChild(cardEl(c, {
+        clickable: candidateSet.has(c.iid),
+        onClick: iid => sendAction({ kind: 'PlayCard', iid }).then(render),
+      }));
+    });
+    // Board cards: group activations by iid. Each card with one or
+    // more activatable abilities becomes a clickable group; clicking
+    // shows the ability list (or fires directly if there's exactly
+    // one).
+    const actsByIid = {};
+    acts.forEach(a => { (actsByIid[a.iid] = actsByIid[a.iid] || []).push(a); });
+    you.board.forEach(c => {
+      const cardActs = actsByIid[c.iid] || [];
+      if (cardActs.length === 0) {
+        yourBoard.appendChild(cardEl(c));
+        return;
+      }
+      const el = cardEl(c, {
+        clickable: true,
+        onClick: () => activateAbility(c, cardActs),
+      });
+      // Inline ability list shown under the card.
+      cardActs.forEach(a => {
+        const row = document.createElement('div');
+        row.style.cssText = 'color:#6cf; font-size:0.65rem; margin-top:0.2rem; padding:0.15rem 0.3rem; background:#1a2030; border:1px solid #234; cursor:pointer;';
+        row.textContent = `▶ [${a.ability_index}] ${a.text.length > 60 ? a.text.slice(0, 57) + '…' : a.text}${a.needs_x ? ' (X)' : ''}`;
+        row.onclick = (ev) => { ev.stopPropagation(); fireActivation(a); };
+        el.appendChild(row);
+      });
+      yourBoard.appendChild(el);
+    });
+    const pass = document.createElement('button');
+    pass.textContent = 'Pass';
+    pass.onclick = () => sendAction({ kind: 'Pass' }).then(render);
+    buttons.appendChild(pass);
+  } else if (prompt.kind === 'PickAttackers') {
+    const eligible = new Set(prompt.eligible);
+    if (eligible.size === 0) {
+      promptEl.innerHTML = `Combat — <span style="color:#888;">no creatures can attack this turn</span>.`;
+    } else {
+      promptEl.textContent = `Combat — click creatures to attack with (${eligible.size} eligible), then confirm.`;
+    }
+    you.board.forEach(c => {
+      yourBoard.appendChild(cardEl(c, {
+        clickable: eligible.has(c.iid),
+        selected: state.selectedAttackers.has(c.iid),
+        onClick: iid => {
+          if (state.selectedAttackers.has(iid)) state.selectedAttackers.delete(iid);
+          else state.selectedAttackers.add(iid);
+          render(state.current);
+        },
+      }));
+    });
+    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
+    if (eligible.size > 0) {
+      const confirm = document.createElement('button');
+      confirm.textContent = `Attack (${state.selectedAttackers.size})`;
+      confirm.onclick = () => sendAction({ kind: 'Attackers', iids: [...state.selectedAttackers] }).then(render);
+      buttons.appendChild(confirm);
+    }
+    const skip = document.createElement('button');
+    skip.textContent = eligible.size === 0 ? 'End combat' : 'No attack';
+    skip.className = 'danger';
+    skip.onclick = () => sendAction({ kind: 'Attackers', iids: [] }).then(render);
+    buttons.appendChild(skip);
+  } else if (prompt.kind === 'PickBlocks') {
+    const eligibleBlockers = new Set(prompt.eligible_blockers);
+    if (eligibleBlockers.size === 0) {
+      promptEl.innerHTML = `Combat — incoming: <b>${prompt.attackers.map(a => labelFor(view, a)).join(', ')}</b>. <span style="color:#f88;">No eligible blockers (your creatures are all tapped, sick-from-attack, or restricted).</span>`;
+    } else if (state.blockerPickFor !== null) {
+      const stagedName = labelFor(view, state.blockerPickFor);
+      promptEl.innerHTML = `Combat — <b style="color:#6cf;">${stagedName}</b> staged as blocker. <span style="color:#fa4;">Now click an attacker (orange border) to assign.</span> Click the staged blocker again to cancel. Click an assigned blocker to unassign.`;
+    } else {
+      promptEl.innerHTML = `Combat — incoming: <b>${prompt.attackers.map(a => labelFor(view, a)).join(', ')}</b>. Click one of your highlighted creatures to stage as blocker; then click the attacker. Multiple blockers may share one attacker.`;
+    }
+
+    // Index assignments by attacker for the per-attacker labels.
+    const blockersByAttacker = {};
+    for (const [blkIid, atkIid] of Object.entries(state.selectedBlocks)) {
+      if (!blockersByAttacker[atkIid]) blockersByAttacker[atkIid] = [];
+      blockersByAttacker[atkIid].push(blkIid);
+    }
+
+    you.board.forEach(c => {
+      const isBlocker = eligibleBlockers.has(c.iid);
+      const assignedTo = state.selectedBlocks[c.iid];
+      const isStaged = state.blockerPickFor === c.iid;
+      const el = cardEl(c, {
+        clickable: isBlocker,
+        selected: !!assignedTo || isStaged,
+        onClick: iid => {
+          // Three click semantics:
+          //   staged + click same  → unstage
+          //   assigned + click     → unassign
+          //   anything else        → stage this blocker
+          if (state.blockerPickFor === iid) { state.blockerPickFor = null; render(state.current); return; }
+          if (state.selectedBlocks[iid]) { delete state.selectedBlocks[iid]; render(state.current); return; }
+          state.blockerPickFor = iid;
+          render(state.current);
+        },
+      });
+      if (assignedTo) {
+        const label = document.createElement('div');
+        label.style.cssText = 'color:#6cf; font-size:0.6rem; margin-top:0.2rem;';
+        label.textContent = `→ blocks ${labelFor(view, assignedTo)}`;
+        el.appendChild(label);
+      } else if (isStaged) {
+        const label = document.createElement('div');
+        label.style.cssText = 'color:#fa4; font-size:0.6rem; margin-top:0.2rem;';
+        label.textContent = '… click an attacker';
+        el.appendChild(label);
+      }
+      yourBoard.appendChild(el);
+    });
+    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
+
+    // Re-render opp board with click handlers on attackers + per-attacker block list.
+    oppBoard.innerHTML = '';
+    opp.board.forEach(c => {
+      const isAtk = prompt.attackers.includes(c.iid);
+      const isTarget = isAtk && state.blockerPickFor !== null;
+      const el = cardEl(c, {
+        clickable: isTarget,
+        onClick: iid => {
+          if (state.blockerPickFor) {
+            state.selectedBlocks[state.blockerPickFor] = iid;
+            state.blockerPickFor = null;
+            render(state.current);
+          }
+        },
+      });
+      if (isAtk) el.style.borderColor = '#fa4';
+      const blockers = blockersByAttacker[c.iid] || [];
+      if (blockers.length > 0) {
+        const label = document.createElement('div');
+        label.style.cssText = 'color:#6cf; font-size:0.6rem; margin-top:0.2rem;';
+        label.textContent = `← blocked by ${blockers.map(b => labelFor(view, b)).join(', ')}`;
+        el.appendChild(label);
+      }
+      oppBoard.appendChild(el);
+    });
+
+    const pairs = Object.entries(state.selectedBlocks);
+    const confirm = document.createElement('button');
+    confirm.textContent = `Confirm blocks (${pairs.length})`;
+    confirm.onclick = () => {
+      sendAction({ kind: 'Blocks', pairs }).then(r => {
+        state.selectedBlocks = {};
+        state.blockerPickFor = null;
+        render(r);
+      });
+    };
+    buttons.appendChild(confirm);
+    const skip = document.createElement('button');
+    skip.textContent = 'No blocks';
+    skip.className = 'danger';
+    skip.onclick = () => {
+      state.selectedBlocks = {};
+      state.blockerPickFor = null;
+      sendAction({ kind: 'Blocks', pairs: [] }).then(render);
+    };
+    buttons.appendChild(skip);
+  } else if (prompt.kind === 'ChooseCard') {
+    // Pool iids live in whatever zone the engine drew them from —
+    // opp board for "kill target opposing creature", your hand for
+    // hand-payment, your graveyard for recur, etc. Find each iid in
+    // its actual zone and mark it clickable there; don't relocate
+    // cards into yourHand.
+    const poolSet = new Set(prompt.pool);
+    const host = prompt.host;
+    const hostCard = host ? findCardsByIids(view, [host])[0] : null;
+    const isPayment = !!host;
+    const rawText = prompt.prompt || '';
+    let banner;
+    if (isPayment) {
+      const slot = (rawText.match(/slot (\d+)/i) || [])[1];
+      banner = `<b style="color:#fa4;">CASTING ${hostCard ? hostCard.name : 'a card'}</b> — pick a hand card to pay${slot ? ` (slot ${slot})` : ''}.`;
+    } else {
+      banner = `<b style="color:#6cf;">Choose a target</b> — ${rawText}.`;
+    }
+    promptEl.innerHTML = banner + (prompt.optional ? ' <span style="color:#888;">— may skip</span>' : '');
+
+    // Helper: render a card list into a zone container, marking
+    // pool members clickable and dimming non-pool entries. The
+    // currently-casting host card (if any) keeps its in-hand slot
+    // with a "CASTING" marker badge — no duplicate banner.
+    const onPick = iid => sendAction({ kind: 'ChoiceCard', iid }).then(render);
+    const renderZoneWithPool = (containerEl, cards) => {
+      containerEl.innerHTML = '';
+      if (cards.length === 0) { containerEl.innerHTML = '<span class="empty-note">empty</span>'; return; }
+      cards.forEach(c => {
+        const isHost = host && c.iid === host;
+        const inPool = poolSet.has(c.iid);
+        const el = cardEl(c, {
+          clickable: inPool,
+          onClick: inPool ? onPick : null,
+          dim: !inPool && !isHost,
+        });
+        if (isHost) {
+          el.style.borderColor = '#fa4';
+          el.style.borderStyle = 'dashed';
+          const badge = document.createElement('div');
+          badge.style.cssText = 'color:#fa4; font-size:0.6rem; text-transform:uppercase; letter-spacing:0.06em; margin-top:0.25rem;';
+          badge.textContent = '◆ casting';
+          el.appendChild(badge);
+        }
+        containerEl.appendChild(el);
+      });
+    };
+
+    renderZoneWithPool(yourHand, you.hand);
+    renderZoneWithPool(yourBoard, you.board);
+    renderZoneWithPool(oppBoard, opp.board);
+    renderZoneWithPool(document.getElementById('your-graveyard-cards'), you.graveyard);
+    renderZoneWithPool(document.getElementById('opp-graveyard-cards'), opp.graveyard);
+
+    if (prompt.optional) {
+      const skip = document.createElement('button');
+      skip.textContent = 'Skip';
+      skip.onclick = () => sendAction({ kind: 'ChoiceCard', iid: null }).then(render);
+      buttons.appendChild(skip);
+    }
+  } else if (prompt.kind === 'Confirm') {
+    promptEl.innerHTML = `<b>${prompt.prompt || 'Confirm?'}</b>`;
+    you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
+    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
+    const yes = document.createElement('button');
+    yes.textContent = 'Yes';
+    yes.onclick = () => sendAction({ kind: 'ChoiceConfirm', yes: true }).then(render);
+    buttons.appendChild(yes);
+    const no = document.createElement('button');
+    no.textContent = 'No';
+    no.className = 'danger';
+    no.onclick = () => sendAction({ kind: 'ChoiceConfirm', yes: false }).then(render);
+    buttons.appendChild(no);
+  } else if (prompt.kind === 'ChoosePlayer') {
+    promptEl.innerHTML = `<b>${prompt.prompt || 'Choose a player.'}</b>`;
+    you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
+    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
+    prompt.candidates.forEach(pid => {
+      const b = document.createElement('button');
+      b.textContent = pid;
+      b.onclick = () => sendAction({ kind: 'ChoicePlayer', player: pid }).then(render);
+      buttons.appendChild(b);
+    });
+    if (prompt.optional) {
+      const skip = document.createElement('button');
+      skip.textContent = 'Skip';
+      skip.onclick = () => sendAction({ kind: 'ChoicePlayer', player: null }).then(render);
+      buttons.appendChild(skip);
+    }
+  } else if (prompt.kind === 'ChooseInt') {
+    promptEl.innerHTML = `<b>${prompt.prompt || 'Choose a number.'}</b> (${prompt.min}–${prompt.max})`;
+    you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
+    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = prompt.min;
+    input.max = prompt.max;
+    input.value = prompt.min;
+    input.style.cssText = 'background:#234; color:#ddd; border:1px solid #4af; padding:0.3rem; font-family:inherit; width:5rem; margin-right:0.5rem;';
+    buttons.appendChild(input);
+    const confirm = document.createElement('button');
+    confirm.textContent = 'Confirm';
+    confirm.onclick = () => sendAction({ kind: 'ChoiceInt', value: parseInt(input.value, 10) || prompt.min }).then(render);
+    buttons.appendChild(confirm);
+  } else {
+    promptEl.textContent = 'Unknown prompt: ' + JSON.stringify(prompt);
+  }
+}
+
+function activateAbility(card, cardActs) {
+  if (cardActs.length === 1) { fireActivation(cardActs[0]); return; }
+  // Multiple activations on one card — for now, fire the first.
+  // TODO: pop a chooser when more than one is ready.
+  fireActivation(cardActs[0]);
+}
+
+function fireActivation(a) {
+  let x = null;
+  if (a.needs_x) {
+    const v = parseInt(prompt(`Choose X for "${a.text}" (>=1):`, '1'), 10);
+    if (!Number.isFinite(v) || v < 1) return;
+    x = v;
+  }
+  sendAction({ kind: 'Activate', iid: a.iid, ability_index: a.ability_index, x }).then(render);
+}
+
+function findCardsByIids(view, iids) {
+  const out = [];
+  for (const iid of iids) {
+    for (const p of view.players) {
+      const candidates = [...p.board, ...(p.hand || []), ...(p.graveyard || []), ...(p.exile || [])];
+      const found = candidates.find(c => c.iid === iid);
+      if (found) { out.push(found); break; }
+    }
+  }
+  return out;
+}
+
+function renderDeckTop(elementId, deckTop) {
+  const el = document.getElementById(elementId);
+  el.innerHTML = '';
+  if (!deckTop) { el.innerHTML = '<span class="empty-note">empty</span>'; return; }
+  // Per RULES: deck top is publicly visible but only as the BACK of the
+  // card — color + symbol only, no name / cost / abilities / stats. The
+  // identity stays unknown until drawn.
+  const back = document.createElement('div');
+  back.className = 'card';
+  back.style.cssText = 'background:#0d0d12; border-color:#333; opacity:0.85;';
+  const colorRow = (deckTop.colors || []).map(colorTag).join('');
+  const symRow = (deckTop.symbols || []).map(symbolTag).join('');
+  back.innerHTML = `<div style="color:#888; font-size:0.65rem;">(back)</div><div class="meta-line">${colorRow} ${symRow}</div>`;
+  el.appendChild(back);
+}
+
+function labelFor(view, iid) {
+  for (const p of view.players) {
+    for (const c of p.board) if (c.iid === iid) return c.name;
+    for (const c of (p.hand || [])) if (c.iid === iid) return c.name;
+    for (const c of (p.graveyard || [])) if (c.iid === iid) return c.name;
+  }
+  return iid;
+}
+
+(async () => {
+  const initial = await fetchState();
+  render({ state: initial.state, prompt: initial });
+})();
+</script>
+</body>
+</html>

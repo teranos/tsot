@@ -191,6 +191,11 @@ MATCHUP_MCTS_ARGS ?=
 matchup-mcts:
 	cargo run --release -- matchup-mcts $(MATCHUP_MCTS_ARGS)
 
+# Launch the playable HTTP frontend. Defaults: side A, MCTS opponent at
+# rollouts=5/max-candidates=10, port 8080. Override via SERVE_ARGS.
+serve:
+	cargo run --release -- serve $(SERVE_ARGS)
+
 # Balance-probe runs the side-by-side EA over cards that declare
 # variants inline in their .lua file (`variants = { [key] = { ... } }`).
 #

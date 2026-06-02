@@ -15,10 +15,12 @@ pub mod evolve;
 pub mod evolved_deck;
 pub mod fitness;
 pub mod genome;
+pub mod human;
 pub mod mcts;
 pub mod ops;
 pub mod parallel_eval;
 pub mod run;
+pub mod snapshot;
 pub mod stats;
 pub mod variants;
 
@@ -31,10 +33,13 @@ pub use stats::GameStats;
 /// pick, intent-aware targeting, trade-up combat). `Mcts` swaps the
 /// Pattern B card-pick decision for one-ply rollout MCTS; all other
 /// decisions (targets, combat, X-values) stay heuristic for v1.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+/// `Human` blocks the engine on a channel — the `tsot serve` frontend
+/// answers prompts via [`human::HumanInterface`]. Phase A1: only the
+/// card-pick site dispatches to `Human`; combat is still heuristic.
+#[derive(Debug, Clone, Default)]
 pub enum AiKind {
     #[default]
     Heuristic,
     Mcts(mcts::MctsConfig),
+    Human(std::sync::Arc<human::HumanInterface>),
 }
