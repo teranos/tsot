@@ -364,6 +364,7 @@ pub(crate) fn build_pattern_b_choices(
                 .board
                 .iter()
                 .filter(|iid| !used.contains(*iid))
+                .filter(|iid| !state.has_keyword(iid, "can't be sacrificed"))
                 .filter(|iid| {
                     if let Some(k) = required_kind {
                         state

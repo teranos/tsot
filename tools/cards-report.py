@@ -984,58 +984,42 @@ def render_html(
         w(", ".join(card_tooltip(c) for c in st["cards"]))
         w("</div>")
 
-    # Typical-turn-played section
+    # All cards (+ folded-in typical-turn-played columns when curve is loaded)
+    w("<h2>All cards</h2>")
     if curve:
-        w("<h2>Typical turn played</h2>")
         w(
-            f'<p class="note">Per-card distribution of the turn on which the card got played, '
-            f'aggregated across {curve.get("n_games", 0)} random-deck vs random-deck games '
-            f'(seed {esc(curve.get("seed", "?"))}). Both players\' plays count. '
+            f'<p class="note">Every loaded card. Hover an id for name/type/cost/stats/abilities. '
+            f'Plays / median / mean / histogram come from {curve.get("n_games", 0)} random-deck '
+            f'vs random-deck games (seed {esc(curve.get("seed", "?"))}); both players\' plays count. '
             f'Histogram covers turns 1..{CURVE_MAX_TURN}; '
             f'<span style="font-family:monospace">·</span> marks turns with zero plays. '
-            f'Sorted by median turn (early-curve first).</p>'
+            f'Sorted by median turn ascending — never-played cards last.</p>'
         )
-        rows = []
-        for card in cards:
-            c = curve_for(curve, card.get("id", ""))
-            if c and c.get("plays", 0) > 0:
-                rows.append((card, c))
-        rows.sort(key=lambda r: (curve_median_turn(r[1]) or 99, r[0].get("id") or ""))
-        w('<table><thead><tr>')
-        w(
-            f'<th>card</th><th>cost</th><th class="num">plays</th>'
-            f'<th class="num">median</th><th class="num">mean</th>'
-            f'<th>turn histogram (1..{CURVE_MAX_TURN})</th>'
-        )
-        w('</tr></thead><tbody>')
-        for card, c in rows:
-            median = curve_median_turn(c)
-            mean = curve_mean_turn(c)
-            w(
-                f'<tr><td>{card_tooltip(card)}</td>'
-                f'<td>{esc(format_cost(card))}</td>'
-                f'<td class="num">{c["plays"]}</td>'
-                f'<td class="num">{f"{median:.1f}" if median is not None else "—"}</td>'
-                f'<td class="num">{f"{mean:.2f}" if mean is not None else "—"}</td>'
-                f'<td style="font-family:monospace;font-size:14px">{esc(curve_histogram(c))}</td></tr>'
-            )
-        w('</tbody></table>')
-
-    # All cards
-    w("<h2>All cards</h2>")
-    w('<p class="note">Sortable view of every loaded card. Hover any id to see name/type/cost/stats/abilities.</p>')
-    if curve:
         w(
             '<table><thead><tr><th>card</th><th>type</th><th>colors</th>'
             '<th class="num">cost</th><th class="num">x/y</th>'
-            '<th class="num">median turn</th><th>curve</th></tr></thead><tbody>'
+            '<th class="num">plays</th><th class="num">median</th><th class="num">mean</th>'
+            f'<th>turn histogram (1..{CURVE_MAX_TURN})</th></tr></thead><tbody>'
         )
     else:
+        w('<p class="note">Every loaded card. Hover an id for name/type/cost/stats/abilities.</p>')
         w(
             '<table><thead><tr><th>card</th><th>type</th><th>colors</th>'
             '<th class="num">cost</th><th class="num">x/y</th></tr></thead><tbody>'
         )
-    for card in sorted(cards, key=lambda c: c.get("id") or ""):
+    # Sort: median asc with never-played cards (None) pushed to the
+    # bottom, then by id for stable ordering. No curve data → alphabetical.
+    if curve:
+        sorted_cards = sorted(
+            cards,
+            key=lambda c: (
+                curve_median_turn(curve_for(curve, c.get("id", ""))) or float("inf"),
+                c.get("id") or "",
+            ),
+        )
+    else:
+        sorted_cards = sorted(cards, key=lambda c: c.get("id") or "")
+    for card in sorted_cards:
         cs = card_colors(card)
         color_html = " ".join(color_swatch(c) for c in cs) if cs else color_swatch("colorless")
         s = card.get("stats")
@@ -1043,6 +1027,8 @@ def render_html(
         if curve:
             c = curve_for(curve, card.get("id", ""))
             median = curve_median_turn(c)
+            mean = curve_mean_turn(c)
+            plays = (c or {}).get("plays", 0)
             hist = curve_histogram(c)
             w(
                 f'<tr><td>{card_tooltip(card)}</td>'
@@ -1050,7 +1036,9 @@ def render_html(
                 f'<td>{color_html}</td>'
                 f'<td class="num">{esc(format_cost(card))}</td>'
                 f'<td class="num">{xy}</td>'
+                f'<td class="num">{plays if plays else "—"}</td>'
                 f'<td class="num">{f"{median:.1f}" if median is not None else "—"}</td>'
+                f'<td class="num">{f"{mean:.2f}" if mean is not None else "—"}</td>'
                 f'<td style="font-family:monospace;font-size:14px">{esc(hist)}</td></tr>'
             )
         else:

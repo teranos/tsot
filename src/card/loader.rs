@@ -634,6 +634,29 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
             _ => Vec::new(),
         },
     };
+    // Symbols must be unicode glyphs (single non-ASCII codepoint each),
+    // never ASCII shorthand codes like "ax". The engine matches symbols
+    // by string equality, so allowing ASCII would silently fork the
+    // vocabulary — Amsterdam-City's `⨳` count would miss any card
+    // declaring `"ix"`. See CLAUDE.md.
+    for s in &symbols {
+        let mut chars = s.chars();
+        let first = chars.next();
+        let extra = chars.next();
+        match (first, extra) {
+            (Some(c), None) if !c.is_ascii() => {}
+            (Some(_), Some(_)) => {
+                return Err(mlua::Error::runtime(format!(
+                    "card `{id}`: symbol {s:?} must be exactly one unicode codepoint, not a multi-char code"
+                )))
+            }
+            _ => {
+                return Err(mlua::Error::runtime(format!(
+                    "card `{id}`: symbol {s:?} must be a non-ASCII unicode glyph (e.g. ꩜ ⨳ ⋈ ⊨ ≡), not ASCII shorthand"
+                )))
+            }
+        }
+    }
     let kind_s = table.get::<Option<String>>("type")?.unwrap_or_default();
     let (kind, timing) = parse_type(&kind_s).map_err(mlua::Error::runtime)?;
     let subtypes = read_string_vec(table, "subtypes")?;

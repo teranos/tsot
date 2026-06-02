@@ -191,6 +191,32 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
         if req.pool.is_empty() {
             return None;
         }
+
+        // Invulnerability gate: an opponent-controlled candidate with
+        // the `invulnerability` keyword can't be targeted. Filtered
+        // pre-scoring so the option doesn't even reach the picker.
+        // Own-controlled invulnerable cards remain pickable (a card
+        // can target itself or its ally regardless of the keyword).
+        // Mirrors how MtG-style hexproof gates the choose step.
+        let pool: Vec<InstanceId> = if let Some(asker) = req.asker {
+            req.pool
+                .iter()
+                .filter(|iid| {
+                    state
+                        .card_pool
+                        .get(*iid)
+                        .map(|c| c.controller == asker || !state.has_keyword(iid, "invulnerability"))
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .collect()
+        } else {
+            req.pool.clone()
+        };
+        if pool.is_empty() {
+            return None;
+        }
+
         if req.optional && self.rng.gen_bool(0.3) {
             return None;
         }
@@ -202,8 +228,7 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
         let intent = self.next_intent.take();
 
         // Score each candidate. Higher = preferred.
-        let scores: Vec<i32> = req
-            .pool
+        let scores: Vec<i32> = pool
             .iter()
             .map(|iid| {
                 if let (Some(intent), Some(asker)) = (intent, req.asker) {

@@ -1,5 +1,5 @@
 
-The Symbols of Teranos
+The Symbols of Teranos: ax = ⋈, ix = ⨳, am = ≡, pulse = ꩜, sem = ⊨
 
 Collectible Card Game
 
