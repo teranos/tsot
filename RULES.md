@@ -3,6 +3,9 @@
 > Working draft. Each rule has a stable identifier for review and reference.
 > The document states only what has been confirmed. Inferences and CCG conventions are not assumed unless explicitly ratified.
 > Rule IDs are **never renumbered**. When a rule is removed, its ID becomes a permanent gap.
+>
+> Canonical companion docs:
+> - **`SLOTS.md`** — symbol and hole geometry (15-slot grid). When it ships in the engine, C.13 / C.14 / V.8 / V.9 are superseded by the per-slot model declared there.
 
 ## Format (F)
 
