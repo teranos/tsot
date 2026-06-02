@@ -102,6 +102,90 @@ pub enum Timing {
     Sorcery,
 }
 
+/// Slot geometry for symbol and hole placement. 15 positions arranged
+/// 5 rows × 3 columns; center `C` is the default and only required
+/// slot. Diagram (canonical — does not change):
+///
+/// ```text
+/// TL  T  TR
+/// UL  U  UR
+/// L   C   R
+/// DL  D  DR
+/// BL  B  BR
+/// ```
+///
+/// See `SLOTS.md` for the full design (per-slot symbols, holes, and
+/// the see-through reveal rule). This enum is infrastructure for the
+/// per-slot symbol / hole system; no `Card` field uses it yet.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
+    serde::Serialize, serde::Deserialize,
+)]
+pub enum Slot {
+    TL, T, TR,
+    UL, U, UR,
+    L, C, R,
+    DL, D, DR,
+    BL, B, BR,
+}
+
+impl Slot {
+    /// Canonical iteration order — top-to-bottom, left-to-right. Used
+    /// wherever the slot loop needs to be deterministic (rendering,
+    /// per-slot reveal walks, dashboard grids).
+    pub const ALL: [Slot; 15] = [
+        Slot::TL, Slot::T, Slot::TR,
+        Slot::UL, Slot::U, Slot::UR,
+        Slot::L, Slot::C, Slot::R,
+        Slot::DL, Slot::D, Slot::DR,
+        Slot::BL, Slot::B, Slot::BR,
+    ];
+
+    /// Short label (1-2 chars) for printing. Matches the labels in
+    /// SLOTS.md's diagram and the `FromStr` accepted forms.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Slot::TL => "TL", Slot::T => "T", Slot::TR => "TR",
+            Slot::UL => "UL", Slot::U => "U", Slot::UR => "UR",
+            Slot::L => "L", Slot::C => "C", Slot::R => "R",
+            Slot::DL => "DL", Slot::D => "D", Slot::DR => "DR",
+            Slot::BL => "BL", Slot::B => "B", Slot::BR => "BR",
+        }
+    }
+}
+
+impl std::fmt::Display for Slot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Slot {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_uppercase().as_str() {
+            "TL" => Ok(Slot::TL),
+            "T" => Ok(Slot::T),
+            "TR" => Ok(Slot::TR),
+            "UL" => Ok(Slot::UL),
+            "U" => Ok(Slot::U),
+            "UR" => Ok(Slot::UR),
+            "L" => Ok(Slot::L),
+            "C" => Ok(Slot::C),
+            "R" => Ok(Slot::R),
+            "DL" => Ok(Slot::DL),
+            "D" => Ok(Slot::D),
+            "DR" => Ok(Slot::DR),
+            "BL" => Ok(Slot::BL),
+            "B" => Ok(Slot::B),
+            "BR" => Ok(Slot::BR),
+            other => Err(format!(
+                "unknown slot {other:?}; expected one of TL T TR UL U UR L C R DL D DR BL B BR"
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CostSource {
     Hand,
