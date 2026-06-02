@@ -1,7 +1,9 @@
 -- Black salamander. Cast: X hand cards attach to the salamander
--- (hydra pattern). Effective stats are X/X via the source-only static
--- reading the attached count — so the salamander you cast for X = 3
--- arrives as a 3/3.
+-- (hydra pattern) + X graveyard cards exile per P.12 — both is_x
+-- components share the same X. Effective stats are X/X via the
+-- source-only static reading the attached count, so a salamander
+-- cast for X = 3 arrives as a 3/3 after committing 3 GY cards.
+-- Per P.12a at least one of those GY pitches must be black.
 --
 -- Activated ability:
 --   "Y hand: mill your opponent by 2Y"
@@ -13,8 +15,12 @@ return {
   colors = {"black"},
   type = "creature",
   subtypes = {"salamander"},
-  cost = {{is_x = true, source = "hand"}},
+  cost = {
+    {is_x = true, source = "hand"},
+    {is_x = true, source = "graveyard"},
+  },
   abilities = {
+    "X hand, X graveyard: enters as X/X salamander.",
     "Y hand: mill your opponent by Y + Y.",
   },
   stats = {x = 0, y = 0},
