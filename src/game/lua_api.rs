@@ -1038,6 +1038,18 @@ macro_rules! build_game_table {
                     let (x, y) = s.effective_stats(&iid);
                     t.set("x", x)?;
                     t.set("y", y)?;
+                    // Sum of printed cost-component amounts (ignores
+                    // is_x components — they contribute 0 to the sum
+                    // since their amount field is not the chosen X).
+                    // Used by handlers like "kill creature with combined
+                    // cost ≥ N."
+                    let combined_cost: i32 = inst
+                        .card
+                        .cost
+                        .iter()
+                        .map(|c| c.amount.max(0))
+                        .sum();
+                    t.set("combined_cost", combined_cost)?;
                     t.set(
                         "attached",
                         lua.create_sequence_from(inst.attached.clone())?,
