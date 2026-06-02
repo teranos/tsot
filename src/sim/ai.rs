@@ -665,6 +665,7 @@ mod tests {
             activated: vec![],
             gy_hand_substitute: false,
             allow_x_zero: false,
+            target: None,
             is_variant: false,
             variant_of: None,
         }

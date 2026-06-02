@@ -42,7 +42,7 @@ fn play_subsystem_round_trips_through_journal() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     )
     .unwrap();
@@ -92,7 +92,7 @@ fn play_creature_with_hand_cost_attaches_payments() {
         mutation_target: None,
         gy_hand_payment_ids: vec![],
         attached_payment_ids: vec![],
-    };
+        graveyard_payment_ids: vec![],    };
     assert!(s
         .play_card(PlayerId::A, &creature, choices, None)
         .is_ok());
@@ -166,7 +166,7 @@ fn play_combined_hand_and_mill_cost() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert!(result.is_ok());
@@ -211,7 +211,7 @@ fn play_card_errors_when_hand_payment_count_wrong() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(
@@ -248,7 +248,7 @@ fn play_card_errors_when_paying_with_self() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::HandPaymentInvalid(creature)));
@@ -280,7 +280,7 @@ fn play_card_errors_on_duplicate_hand_payment() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::DuplicateHandPayment(pay)));
@@ -391,7 +391,7 @@ fn jewel_tap_substitutes_for_one_hand_slot() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -426,7 +426,7 @@ fn jewel_tap_rejected_when_jewel_tapped() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::InvalidJewelTap(jewel)));
@@ -448,7 +448,7 @@ fn jewel_tap_rejected_on_color_mismatch() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::InvalidJewelTap(jewel)));
@@ -470,7 +470,7 @@ fn jewel_tap_rejected_on_non_jewel_artifact() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::InvalidJewelTap(jewel)));
@@ -492,7 +492,7 @@ fn jewel_tap_rejected_when_cast_has_no_hand_cost() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::JewelTapWithoutHandCost));
@@ -523,7 +523,7 @@ fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -583,7 +583,7 @@ fn crystal_tap_matches_by_attached_card_color() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -630,7 +630,7 @@ fn crystal_tap_rejected_when_no_attached_color_matches() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::InvalidJewelTap(crystal)));
@@ -671,7 +671,7 @@ fn sacrifice_cost_moves_victim_to_graveyard() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -700,7 +700,7 @@ fn sacrifice_count_mismatch_errors() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(
@@ -728,7 +728,7 @@ fn sacrifice_rejected_when_victim_not_on_board() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::SacrificePaymentInvalid(phantom)));
@@ -752,7 +752,7 @@ fn sacrifice_rejected_when_opponent_controls_victim() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::SacrificePaymentInvalid(opp_card)));
@@ -862,8 +862,11 @@ fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
     s.b.hand.retain(|x| x != &target_iid);
     s.b.board.push(target_iid.clone());
 
-    // Seed graveyard for the 3-graveyard cost.
+    // Seed graveyard for the 2-graveyard cost. Per P.12a (lenient),
+    // at least one GY pitch must color-match the blue jellyfish cast;
+    // paint the last seed blue so it lands in the back-of-GY window.
     let gy_seeds: Vec<_> = s.a.deck.drain(0..3).collect();
+    set_identity(&mut s, &gy_seeds[2], &["blue"], "");
     s.a.graveyard.extend(gy_seeds.clone());
 
     let b_hand_before = s.b.hand.len();
@@ -894,7 +897,7 @@ fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
     .unwrap();
@@ -1002,7 +1005,7 @@ fn surge_instant_untaps_all_your_creatures_on_play() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         Some(&mut crate::game::EventContext::lua_only(registry.lua())),
     )
     .unwrap();
@@ -1207,7 +1210,7 @@ fn counterspell_resolves_and_removes_underlying_cast() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
     };
     s.open_response_window(a_cast).unwrap();
     s.pass_priority().unwrap(); // A → B
@@ -1383,7 +1386,7 @@ fn hand_payment_color_match_succeeds() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert!(result.is_ok(), "shared color should pay successfully: {result:?}");
@@ -1408,7 +1411,7 @@ fn hand_payment_color_mismatch_rejected() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::HandPaymentIdentityMismatch(pay)));
@@ -1435,7 +1438,7 @@ fn hand_payment_symbol_match_succeeds_across_colors() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert!(result.is_ok(), "shared symbol should pay across colors: {result:?}");
@@ -1465,7 +1468,7 @@ fn hand_payment_matches_when_any_of_multiple_symbols_overlap() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert!(
@@ -1498,7 +1501,7 @@ fn hand_payment_rejected_when_multi_symbol_sets_disjoint() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert!(
@@ -1527,7 +1530,7 @@ fn hand_payment_colorless_cast_takes_any_discard() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert!(result.is_ok(), "colorless cast should accept any discard: {result:?}");
@@ -1555,7 +1558,7 @@ fn hand_payment_no_identity_pay_cannot_satisfy_identified_cast() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::HandPaymentIdentityMismatch(pay)));
@@ -1583,7 +1586,7 @@ fn hand_payment_no_symbol_discard_cannot_pay_for_symboled_cast() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::HandPaymentIdentityMismatch(pay)));
@@ -2170,7 +2173,7 @@ fn clear_view_fills_one_hand_slot_of_a_two_hand_cast() {
             mutation_target: None,
             gy_hand_payment_ids: vec![cv.clone()],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -2229,7 +2232,7 @@ fn clear_view_cannot_pay_alone_for_one_hand_colored_cast() {
             mutation_target: None,
             gy_hand_payment_ids: vec![cv.clone()],
             attached_payment_ids: vec![],
-        },
+            graveyard_payment_ids: vec![],        },
         None,
     );
     assert_eq!(result, Err(PlayError::NoHandPaymentForIdentity));
@@ -2275,7 +2278,7 @@ fn attached_cost_on_spell_exiles_payment() {
         &cast,
         PlayChoices {
             attached_payment_ids: vec![attached.clone()],
-            ..PlayChoices::default()
+            graveyard_payment_ids: vec![],            ..PlayChoices::default()
         },
         None,
     );
@@ -2303,7 +2306,7 @@ fn attached_cost_on_creature_transfers_payment_to_new_host() {
         &cast,
         PlayChoices {
             attached_payment_ids: vec![attached.clone()],
-            ..PlayChoices::default()
+            graveyard_payment_ids: vec![],            ..PlayChoices::default()
         },
         None,
     );
@@ -2361,7 +2364,7 @@ fn attached_cost_payment_not_on_your_board_errors() {
         &cast,
         PlayChoices {
             attached_payment_ids: vec![b_attached.clone()],
-            ..PlayChoices::default()
+            graveyard_payment_ids: vec![],            ..PlayChoices::default()
         },
         None,
     );
@@ -2389,7 +2392,7 @@ fn attached_cost_duplicate_payment_errors() {
         &cast,
         PlayChoices {
             attached_payment_ids: vec![attached.clone(), attached.clone()],
-            ..PlayChoices::default()
+            graveyard_payment_ids: vec![],            ..PlayChoices::default()
         },
         None,
     );
@@ -2464,7 +2467,7 @@ fn zero_y_creature_dies_per_c15_after_attached_detached_as_cost() {
         &spell,
         PlayChoices {
             attached_payment_ids: vec![attached.clone()],
-            ..PlayChoices::default()
+            graveyard_payment_ids: vec![],            ..PlayChoices::default()
         },
         None,
     );
@@ -2555,7 +2558,7 @@ fn live_bring_down_casts_with_attached_payment_and_exiles_it() {
         PlayChoices {
             hand_payment_ids: vec![pay_hand.clone()],
             attached_payment_ids: vec![attached.clone()],
-            ..PlayChoices::default()
+            graveyard_payment_ids: vec![],            ..PlayChoices::default()
         },
         Some(&mut EventContext::new(lua, &mut oracle)),
     );
@@ -2721,4 +2724,167 @@ fn counterspell_cast_validate_refuses_when_chain_is_empty() {
     );
     assert_eq!(result, Err(PlayError::CastValidateFailed));
     assert!(s.a.hand.contains(&cs_iid));
+}
+
+// ---- P.12a / P.12b tests ----------------------------------------------------
+
+/// P.12a: a GY-only-cost cast against a non-matching GY blocks with
+/// `NoGraveyardPaymentForColor`. The cast has color {red} but the only
+/// card in GY is colorless.
+#[test]
+fn gy_only_cast_blocks_when_no_color_match_in_graveyard() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    set_identity(&mut s, &cast, &["red"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Graveyard,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let gy_seed = s.a.deck.drain(0..1).next().unwrap();
+    s.a.graveyard.push(gy_seed.clone());
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices::default(),
+        None,
+    );
+    assert_eq!(result, Err(PlayError::NoGraveyardPaymentForColor));
+}
+
+/// P.12a: a GY-only-cost cast with at least one color-matching GY card
+/// succeeds — the color anchor is satisfied.
+#[test]
+fn gy_only_cast_succeeds_when_at_least_one_gy_card_color_matches() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    set_identity(&mut s, &cast, &["red"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Graveyard,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let gy_seed = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &gy_seed, &["red"], "");
+    s.a.graveyard.push(gy_seed.clone());
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices::default(),
+        None,
+    );
+    assert!(result.is_ok(), "expected ok, got {result:?}");
+    assert!(s.a.exile.contains(&gy_seed), "GY pitch should exile");
+}
+
+/// P.12b: when the cast has both HAND and GY components, a non-color-
+/// matching GY pitch *does not* trigger the bypass. The HAND payment
+/// then needs to satisfy P.7a per-card — a non-matching HAND card
+/// rejects with `HandPaymentIdentityMismatch`. (And P.12a's own check
+/// triggers first if no GY pitch matches; this test isolates the HAND
+/// failure by giving an empty-color cast so P.12a is a no-op anchor.)
+#[test]
+fn mixed_hand_and_gy_without_anchor_falls_back_to_p7a_on_hand() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    let hand_pay = s.a.hand[1].clone();
+    set_identity(&mut s, &cast, &["blue"], "");
+    set_identity(&mut s, &hand_pay, &["red"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![
+            CostComponent {
+                amount: 1,
+                source: CostSource::Hand,
+                is_x: false,
+                kind: None,
+            },
+            CostComponent {
+                amount: 1,
+                source: CostSource::Graveyard,
+                is_x: false,
+                kind: None,
+            },
+        ],
+    );
+    let gy_seed = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &gy_seed, &["blue"], "");
+    s.a.graveyard.push(gy_seed.clone());
+    // The GY pitch DOES color-match (blue), so P.12a is satisfied and
+    // P.12b bypass *would* be in effect. To isolate the per-HAND fallback,
+    // we have to break the anchor — swap the GY card to colorless.
+    set_identity(&mut s, &gy_seed, &[], "");
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![hand_pay],
+            graveyard_payment_ids: vec![gy_seed.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    // P.12a fires first because graveyard_needed > 0 and cast has colors
+    // but no color-matching pitch.
+    assert_eq!(result, Err(PlayError::NoGraveyardPaymentForColor));
+}
+
+/// P.12b: when a color-matching GY pitch is made, the per-HAND P.7a
+/// identity check is suspended — a non-matching HAND card is accepted.
+#[test]
+fn mixed_hand_and_gy_with_color_anchor_bypasses_p7a_on_hand() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    let hand_pay = s.a.hand[1].clone();
+    set_identity(&mut s, &cast, &["blue"], "");
+    // HAND payment is RED — would fail P.7a normally. With a blue
+    // anchor in GY, P.12b suspends P.7a for this cast.
+    set_identity(&mut s, &hand_pay, &["red"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![
+            CostComponent {
+                amount: 1,
+                source: CostSource::Hand,
+                is_x: false,
+                kind: None,
+            },
+            CostComponent {
+                amount: 1,
+                source: CostSource::Graveyard,
+                is_x: false,
+                kind: None,
+            },
+        ],
+    );
+    let gy_seed = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &gy_seed, &["blue"], "");
+    s.a.graveyard.push(gy_seed.clone());
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![hand_pay.clone()],
+            graveyard_payment_ids: vec![gy_seed.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert!(result.is_ok(), "P.12b should allow non-matching HAND when GY anchor present; got {result:?}");
+    // GY anchor exiled; HAND payment attached to the cast (it's a
+    // BOARD-placed creature by default in deck_of).
+    assert!(s.a.exile.contains(&gy_seed));
+    assert!(s.card_pool.get(&cast).unwrap().attached.contains(&hand_pay));
 }

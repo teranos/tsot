@@ -389,6 +389,7 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
                 mutation_target: None,
                 gy_hand_payment_ids: vec![],
                 attached_payment_ids: vec![],
+                graveyard_payment_ids: vec![],
             },
         }
     }

@@ -82,6 +82,17 @@ pub struct PlayChoices {
     /// card (if BOARD-placed) or move to EXILE (non-BOARD).
     #[serde(default)]
     pub attached_payment_ids: Vec<InstanceId>,
+    /// P.12 + P.12a: explicit choice of which GY cards to exile to pay
+    /// `N graveyard` cost components. When non-empty, must contain
+    /// exactly `graveyard_needed` ids and each must be in the player's
+    /// GRAVEYARD; the engine exiles them in the provided order. When
+    /// empty (the legacy path), the engine falls back to exiling the
+    /// most-recent N cards from the back of the GY. The empty fallback
+    /// keeps the slice's existing behavior byte-identical for callers
+    /// that haven't migrated yet; P.12a's color-anchor rule (added in a
+    /// follow-up slice) needs explicit ids to enforce.
+    #[serde(default)]
+    pub graveyard_payment_ids: Vec<InstanceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +109,23 @@ pub enum PlayError {
     UnsupportedCostSource(CostSource),
     /// GRAVEYARD doesn't have enough cards to pay the GRAVEYARD cost.
     InsufficientGraveyardForCost { needed: usize, have: usize },
+    /// P.12: explicit `graveyard_payment_ids` was non-empty but its
+    /// length doesn't match the card's total GRAVEYARD cost. The empty
+    /// case falls back to the legacy "back of GY" behavior and is not
+    /// a count error.
+    WrongGraveyardPaymentCount { expected: usize, got: usize },
+    /// P.12: a chosen GRAVEYARD-payment id isn't in the player's
+    /// GRAVEYARD (or doesn't exist in the card pool).
+    GraveyardPaymentInvalid(InstanceId),
+    /// P.12: a GRAVEYARD-payment id appears more than once.
+    DuplicateGraveyardPayment(InstanceId),
+    /// P.12a: cast has non-empty colors and a GRAVEYARD-source cost
+    /// component, but none of the cards being exiled (either the
+    /// explicit `graveyard_payment_ids` or the legacy back-of-GY) share
+    /// a printed color with the cast. The color-anchor requirement is
+    /// lenient: a single color-matching pitch anywhere in the bundle
+    /// satisfies it.
+    NoGraveyardPaymentForColor,
     /// Card has a variable-X cost component but choices.x_value is None.
     VariableXValueMissing,
     /// RULES P.30: X < 1 on a card that doesn't opt into X = 0
@@ -346,6 +374,55 @@ impl GameState {
             hand_needed -= 1;
         }
 
+        // P.12a + P.12b color-anchor on GRAVEYARD-source payments.
+        // When the cast has a GRAVEYARD cost component and non-empty
+        // colors, at least one card being exiled to pay it must share
+        // a printed color with the cast (lenient — one anchor for the
+        // whole bundle suffices). When the anchor is supplied, P.12b
+        // suspends P.7a's identity check on HAND payments for this cast.
+        //
+        // Determines `gy_supplies_color_anchor`, used below to bypass
+        // the HAND-identity checks (P.12b).
+        let gy_supplies_color_anchor = if graveyard_needed > 0 {
+            let cast_colors_set: BTreeSet<String> = cast_card_colors.iter().cloned().collect();
+            if cast_colors_set.is_empty() {
+                // Empty-color cast is a wildcard already; anchor moot.
+                true
+            } else {
+                let pitch_ids: Vec<InstanceId> = if !choices.graveyard_payment_ids.is_empty() {
+                    choices.graveyard_payment_ids.clone()
+                } else {
+                    let gy = &self.player(player).graveyard;
+                    let start = gy.len().saturating_sub(graveyard_needed);
+                    gy[start..].to_vec()
+                };
+                let mut found = false;
+                for gid in &pitch_ids {
+                    let pay_colors: BTreeSet<String> = self
+                        .card_pool
+                        .get(gid)
+                        .map(|i| {
+                            i.card
+                                .colors
+                                .iter()
+                                .map(|c| c.to_ascii_lowercase())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if cast_colors_set.iter().any(|c| pay_colors.contains(c)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(PlayError::NoGraveyardPaymentForColor);
+                }
+                true
+            }
+        } else {
+            false
+        };
+
         // Clear View-style GY → EXILE substitutes. Each one fills one
         // HAND slot without going through the P.7a identity check.
         // Validate each: must be in controller's GY, must have the
@@ -396,7 +473,10 @@ impl GameState {
         // HAND-payment must come from hand. Substitutes don't carry
         // identity, so an all-substitute payment leaves identity
         // uncovered.
-        if !choices.gy_hand_payment_ids.is_empty() && choices.hand_payment_ids.is_empty() {
+        if !choices.gy_hand_payment_ids.is_empty()
+            && choices.hand_payment_ids.is_empty()
+            && !gy_supplies_color_anchor
+        {
             let cast_ident = self.card_identity(instance);
             if !cast_ident.is_empty() {
                 return Err(PlayError::NoHandPaymentForIdentity);
@@ -425,8 +505,12 @@ impl GameState {
             // colorless + no-symbol discards are NOT — they must
             // still find identity overlap, which empty sets can't,
             // so they can't pay for any identified card.
+            //
+            // P.12b: when a color-matching GRAVEYARD pitch was supplied
+            // for the same cast, P.7a is suspended — the anchor pitch
+            // supplies the thematic alignment for the whole bundle.
             let cast_ident = self.card_identity(instance);
-            if !cast_ident.is_empty() {
+            if !cast_ident.is_empty() && !gy_supplies_color_anchor {
                 let pay_ident = self.card_identity(hid);
                 if cast_ident.is_disjoint(&pay_ident) {
                     return Err(PlayError::HandPaymentIdentityMismatch(hid.clone()));
@@ -471,6 +555,27 @@ impl GameState {
                 needed: graveyard_needed,
                 have: gy_have,
             });
+        }
+
+        // P.12 explicit-id path: when the caller supplies
+        // `graveyard_payment_ids`, validate count/membership/uniqueness.
+        // Empty is the legacy fallback (back-of-GY) and is not an error.
+        if !choices.graveyard_payment_ids.is_empty() {
+            if choices.graveyard_payment_ids.len() != graveyard_needed {
+                return Err(PlayError::WrongGraveyardPaymentCount {
+                    expected: graveyard_needed,
+                    got: choices.graveyard_payment_ids.len(),
+                });
+            }
+            let mut gy_seen: BTreeSet<&InstanceId> = BTreeSet::new();
+            for gid in &choices.graveyard_payment_ids {
+                if !gy_seen.insert(gid) {
+                    return Err(PlayError::DuplicateGraveyardPayment(gid.clone()));
+                }
+                if !self.player(player).graveyard.contains(gid) {
+                    return Err(PlayError::GraveyardPaymentInvalid(gid.clone()));
+                }
+            }
         }
 
         // Mutation target validation: a Mutation cast must name a creature
@@ -576,13 +681,22 @@ impl GameState {
             let _ = self.move_card(&top, player, Zone::Deck, Zone::Graveyard);
         }
 
-        // GRAVEYARD cost (P.12): most-recent N → EXILE. Deterministic
-        // interpretation pending choice API; uses the back of the graveyard.
-        for _ in 0..graveyard_needed {
-            let Some(back) = self.player(player).graveyard.last().cloned() else {
-                break;
-            };
-            let _ = self.move_card(&back, player, Zone::Graveyard, Zone::Exile);
+        // GRAVEYARD cost (P.12): if the caller supplied explicit
+        // `graveyard_payment_ids`, exile those in order. Otherwise fall
+        // back to the legacy "most-recent N" behavior (back of GY) —
+        // preserves byte-identical semantics for callers that haven't
+        // migrated to id-explicit GY payment yet.
+        if choices.graveyard_payment_ids.is_empty() {
+            for _ in 0..graveyard_needed {
+                let Some(back) = self.player(player).graveyard.last().cloned() else {
+                    break;
+                };
+                let _ = self.move_card(&back, player, Zone::Graveyard, Zone::Exile);
+            }
+        } else {
+            for gid in choices.graveyard_payment_ids.clone() {
+                let _ = self.move_card(&gid, player, Zone::Graveyard, Zone::Exile);
+            }
         }
 
         // P.24: tap the substituting jewel as part of cost payment.
