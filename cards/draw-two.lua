@@ -5,7 +5,10 @@ return {
   id = "draw-two",
   symbol = "⨳",
   type = "instant",
-  cost = {{amount = 3, source = "graveyard"}},
+  cost = {
+    {amount = 3, source = "graveyard"},
+    {amount = 3, source = "attached"},
+  },
   abilities = {
     "draw two cards.",
     "the next card you play, you may cast it as if it was an instant.",

@@ -1034,6 +1034,16 @@ fn draw_two_instant_plays_from_graveyard_cost_and_draws() {
     // Seed the graveyard so the cost can be paid.
     let gy_seeds: Vec<_> = s.a.deck.drain(0..3).collect();
     s.a.graveyard.extend(gy_seeds.clone());
+    // Seed a host with 3 attached cards (draw-two also costs 3 attached).
+    let host = s.a.hand[1].clone();
+    let att1 = s.a.hand[2].clone();
+    let att2 = s.a.hand[3].clone();
+    let att3 = s.a.hand[4].clone();
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+    for a in [&att1, &att2, &att3] {
+        let _ = s.remove_from_zone(a, PlayerId::A, Zone::Hand);
+        s.add_attached(&host, a);
+    }
 
     let hand_before = s.a.hand.len();
     let deck_before = s.a.deck.len();
@@ -1043,19 +1053,24 @@ fn draw_two_instant_plays_from_graveyard_cost_and_draws() {
     s.play_card(
         PlayerId::A,
         &instant_iid,
-        PlayChoices::default(),
+        PlayChoices {
+            attached_payment_ids: vec![att1.clone(), att2.clone(), att3.clone()],
+            ..PlayChoices::default()
+        },
         Some(&mut crate::game::EventContext::lua_only(registry.lua())),
     )
     .unwrap();
 
-    // - Played card removed from hand.
-    // - 3 graveyard cards exiled (cost).
+    // - Played card removed from hand (1 leaves).
+    // - 3 graveyard cards exiled (graveyard cost).
+    // - 3 attached cards exiled per P.31 (non-board cast → exile).
     // - 2 cards drawn from deck into hand.
     // - Played card lands in graveyard.
     assert_eq!(s.a.hand.len(), hand_before - 1 + 2);
     assert_eq!(s.a.deck.len(), deck_before - 2);
     assert_eq!(s.a.graveyard.len(), gy_before - 3 + 1);
-    assert_eq!(s.a.exile.len(), exile_before + 3);
+    // exile gains 3 (graveyard cost) + 3 (attached cost) = 6.
+    assert_eq!(s.a.exile.len(), exile_before + 6);
     assert!(s.a.graveyard.contains(&instant_iid));
     assert!(!s.a.board.contains(&instant_iid));
     assert_eq!(s.event_fires[&crate::card::EventName::OnPlay], [1, 0]);
