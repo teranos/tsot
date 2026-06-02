@@ -12,6 +12,7 @@ mod sim;
 
 use clap::{Parser, Subcommand};
 use tsot::card::{Card, CardRegistry, CardType, CostSource};
+use tsot::CastRouting;
 
 use cli_balance_probe::BalanceProbeArgs;
 use cli_champions_report::ChampionsReportArgs;
@@ -78,15 +79,7 @@ fn main() -> mlua::Result<()> {
     let playable_pool: Vec<Card> = registry
         .cards()
         .iter()
-        .filter(|c| {
-            matches!(
-                c.kind,
-                CardType::Creature
-                    | CardType::Spell
-                    | CardType::Artifact
-                    | CardType::Mutation
-            )
-        })
+        .filter(|c| c.kind.is_castable())
         // Balance-probe variants are excluded from the main pool — they
         // only exist for `tsot balance-probe` and shouldn't pollute
         // `evolve` / `champions-report` / gauntlet curation.

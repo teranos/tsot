@@ -1,7 +1,10 @@
 pub mod card;
+pub mod cast_routing;
 pub mod choice;
 pub mod game;
 pub mod replay;
+
+pub use cast_routing::CastRouting;
 
 pub use card::{
     Card, CardRegistry, CardType, CostComponent, CostSource, EventName, ModifierValue, Stats,

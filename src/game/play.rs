@@ -6,6 +6,7 @@ use super::context::EventContext;
 use super::lua_api;
 use super::state::{GameState, InstanceId, PlayerId, StackItem, Zone};
 use crate::card::{CardType, CostSource, EventName};
+use crate::cast_routing::CastRouting;
 use crate::choice::{ChoiceOracle, ChooseCardRequest, ResponseAction};
 use std::collections::BTreeSet;
 
@@ -261,14 +262,7 @@ impl GameState {
         let card_kind = inst_ref.card.kind;
         let card_cost = inst_ref.card.cost.clone();
 
-        if !matches!(
-            card_kind,
-            CardType::Creature
-                | CardType::Spell
-                | CardType::Artifact
-                | CardType::Mutation
-                | CardType::Unspecified
-        ) {
+        if !card_kind.is_castable() {
             // TODO(types): Environment (→ BOARD per P.21 + P.22 slot management).
             return Err(PlayError::UnsupportedType(card_kind));
         }
@@ -1004,191 +998,99 @@ impl GameState {
             }
             return Ok(());
         }
-        match card_kind {
-            CardType::Creature => {
-                let payments = choices.hand_payment_ids.clone();
-                for hid in &payments {
-                    let _ = self.remove_from_zone(hid, player, Zone::Hand);
-                    self.add_attached(instance, hid);
-                    self.set_face_down(hid, true);
-                }
-                // P.31 BOARD-placed branch: detach attached payments from
-                // their current hosts and re-attach to the new instance.
-                for aid in choices.attached_payment_ids.clone() {
-                    if let Some(host) = self.host_of(&aid) {
-                        self.remove_attached(&host, &aid);
-                    }
-                    self.add_attached(instance, &aid);
-                    self.set_face_down(&aid, true);
-                    self.bump_action("attached_payment_transfer", player);
-                }
-                // P.33: cast card was removed from HAND at cast time;
-                // resolution places it directly onto BOARD here.
-                self.add_to_zone(instance, player, Zone::Board);
-                self.set_summoning_sick(instance, true); // B.3
+        // Unified resolution path driven by `CastRouting`. Per-kind
+        // behavior comes from the trait booleans; this body only knows
+        // "board-placed vs non-board" and "attaches-to-target vs not."
+        // Adding a new card kind = implement its `CastRouting` booleans
+        // and (if needed) special-case any kind-specific bump or status.
+        let is_board_placed = card_kind.is_board_placed();
+        let attaches_to_target = card_kind.attaches_to_target();
+        let payments = choices.hand_payment_ids.clone();
 
-                // Fire OnAttachedAsCost on each payment card BEFORE on_play.
-                // The handler sees the attached card as `self` and the host
-                // (the played card) as `partner`. Powers mantis-shrimp /
-                // zebra / future pitch-synergy cantrips.
-                for hid in &payments {
-                    if let Some(c) = ctx.as_mut() {
-                        lua_api::fire_with_partner(
-                            c.lua,
-                            self,
-                            c.oracle(),
-                            EventName::OnAttachedAsCost,
-                            hid,
-                            instance,
-                        );
-                    }
-                }
-                if let Some(c) = ctx.as_mut() {
-                    lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
-                }
-                if let Some(c) = ctx.as_mut() {
-                    lua_api::fire_self_only(
-                        c.lua,
-                        self,
-                        c.oracle(),
-                        EventName::OnEnterBoard,
-                        instance,
-                    );
-                }
+        // HAND payments (P.6 / C.10): attach to instance when BOARD-
+        // placed, otherwise follow the spell-payment convention to
+        // GRAVEYARD (no host to attach to).
+        for hid in &payments {
+            if is_board_placed {
+                let _ = self.remove_from_zone(hid, player, Zone::Hand);
+                self.add_attached(instance, hid);
+                self.set_face_down(hid, true);
+            } else {
+                let _ = self.move_card(hid, player, Zone::Hand, Zone::Graveyard);
             }
-            CardType::Artifact => {
-                // P.19: artifact → BOARD. HAND payments attach (P.6), same
-                // pattern as creature except: artifacts don't get summoning
-                // sickness (B.3 is creature-specific; artifacts don't attack).
-                // on_play + on_enter_board fire so artifact statics participate
-                // in the standard ETB flow.
-                let payments = choices.hand_payment_ids.clone();
-                for hid in &payments {
-                    let _ = self.remove_from_zone(hid, player, Zone::Hand);
-                    self.add_attached(instance, hid);
-                    self.set_face_down(hid, true);
-                }
-                // P.31 BOARD-placed branch.
-                for aid in choices.attached_payment_ids.clone() {
-                    if let Some(host) = self.host_of(&aid) {
-                        self.remove_attached(&host, &aid);
-                    }
-                    self.add_attached(instance, &aid);
-                    self.set_face_down(&aid, true);
-                    self.bump_action("attached_payment_transfer", player);
-                }
-                // P.33: cast card was removed from HAND at cast time.
-                self.add_to_zone(instance, player, Zone::Board);
-                self.bump_action("artifact_played", player);
-
-                for hid in &payments {
-                    if let Some(c) = ctx.as_mut() {
-                        lua_api::fire_with_partner(
-                            c.lua,
-                            self,
-                            c.oracle(),
-                            EventName::OnAttachedAsCost,
-                            hid,
-                            instance,
-                        );
-                    }
-                }
-                if let Some(c) = ctx.as_mut() {
-                    lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
-                }
-                if let Some(c) = ctx.as_mut() {
-                    lua_api::fire_self_only(
-                        c.lua,
-                        self,
-                        c.oracle(),
-                        EventName::OnEnterBoard,
-                        instance,
-                    );
-                }
-            }
-            CardType::Spell => {
-                // P.1 + C.10: spells resolve to GRAVEYARD. HAND payments
-                // follow (no host to attach to). Instant vs sorcery only
-                // affects cast timing (enforced in `play_card` validation);
-                // resolution is the same either way.
-                for hid in choices.hand_payment_ids.clone() {
-                    let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
-                }
-                // P.31 non-BOARD branch: attached payments → EXILE.
-                for aid in choices.attached_payment_ids.clone() {
-                    if let Some(host) = self.host_of(&aid) {
-                        self.remove_attached(&host, &aid);
-                    }
-                    self.set_face_down(&aid, false);
-                    self.add_to_zone(&aid, player, Zone::Exile);
-                    self.bump_action("attached_payment_exile", player);
-                }
-                // P.33: cast card was removed from HAND at cast time;
-                // resolution places it directly into GRAVEYARD here (C.10).
-                self.add_to_zone(instance, player, Zone::Graveyard);
-
-                if let Some(c) = ctx.as_mut() {
-                    lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
-                }
-            }
-            CardType::Mutation => {
-                // Mutation: HAND payments → GRAVEYARD (like spells, no
-                // host accrual on the mutation itself). The mutation card
-                // leaves HAND and ATTACHES to the chosen target creature
-                // via add_attached + face-down per P.17. Its on-board
-                // static effects fire from the attached position (the
-                // static system already iterates attached cards as sources).
-                for hid in choices.hand_payment_ids.clone() {
-                    let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
-                }
-                // P.31 non-BOARD branch (mutations don't occupy a BOARD
-                // slot per P.26, so attached payments → EXILE).
-                for aid in choices.attached_payment_ids.clone() {
-                    if let Some(host) = self.host_of(&aid) {
-                        self.remove_attached(&host, &aid);
-                    }
-                    self.set_face_down(&aid, false);
-                    self.add_to_zone(&aid, player, Zone::Exile);
-                    self.bump_action("attached_payment_exile", player);
-                }
-                let target = choices
-                    .mutation_target
-                    .as_ref()
-                    .expect("validated by play_card");
-                // P.33: cast card was removed from HAND at cast time;
-                // resolution attaches it directly to the host here.
-                self.add_attached(target, instance);
-                self.set_face_down(instance, true);
-
-                if let Some(c) = ctx.as_mut() {
-                    lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
-                }
-            }
-            CardType::Unspecified => {
-                // P.1: a card with no declared type resolves to GRAVEYARD
-                // (the default destination). HAND payments follow the
-                // spell-payment convention; there's no host to attach to.
-                // ATTACHED payments take the non-BOARD branch (EXILE).
-                // SelfExile-cost typeless cards are handled by the earlier
-                // shortcut and never reach this arm.
-                for hid in choices.hand_payment_ids.clone() {
-                    let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
-                }
-                for aid in choices.attached_payment_ids.clone() {
-                    if let Some(host) = self.host_of(&aid) {
-                        self.remove_attached(&host, &aid);
-                    }
-                    self.set_face_down(&aid, false);
-                    self.add_to_zone(&aid, player, Zone::Exile);
-                    self.bump_action("attached_payment_exile", player);
-                }
-                self.add_to_zone(instance, player, Zone::Graveyard);
-                if let Some(c) = ctx.as_mut() {
-                    lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
-                }
-            }
-            _ => unreachable!("validated by play_card"),
         }
+
+        // ATTACHED-source payments (P.31): re-attach to instance when
+        // BOARD-placed (face-down per P.17), else move to EXILE.
+        for aid in choices.attached_payment_ids.clone() {
+            if let Some(host) = self.host_of(&aid) {
+                self.remove_attached(&host, &aid);
+            }
+            if is_board_placed {
+                self.add_attached(instance, &aid);
+                self.set_face_down(&aid, true);
+                self.bump_action("attached_payment_transfer", player);
+            } else {
+                self.set_face_down(&aid, false);
+                self.add_to_zone(&aid, player, Zone::Exile);
+                self.bump_action("attached_payment_exile", player);
+            }
+        }
+
+        // Place the cast card. P.33: it was removed from HAND at cast
+        // time; resolution puts it in its destination here.
+        if attaches_to_target {
+            let target = choices
+                .mutation_target
+                .as_ref()
+                .expect("validated by play_card");
+            self.add_attached(target, instance);
+            self.set_face_down(instance, true);
+        } else if is_board_placed {
+            self.add_to_zone(instance, player, Zone::Board);
+            if card_kind.applies_summoning_sickness() {
+                self.set_summoning_sick(instance, true); // B.3
+            }
+            if matches!(card_kind, CardType::Artifact) {
+                self.bump_action("artifact_played", player);
+            }
+        } else {
+            // P.1 default destination: GRAVEYARD (spell convention,
+            // typeless P.1, etc.). SelfExile rerouting is handled by
+            // the early shortcut above and never reaches here.
+            self.add_to_zone(instance, player, Zone::Graveyard);
+        }
+
+        // OnAttachedAsCost: BOARD-placed casts only. Fires per HAND
+        // payment with the payment card as `self` and the host as
+        // `partner`. Powers mantis-shrimp / zebra / pitch-synergy.
+        if is_board_placed {
+            for hid in &payments {
+                if let Some(c) = ctx.as_mut() {
+                    lua_api::fire_with_partner(
+                        c.lua,
+                        self,
+                        c.oracle(),
+                        EventName::OnAttachedAsCost,
+                        hid,
+                        instance,
+                    );
+                }
+            }
+        }
+
+        // OnPlay: fires for every castable kind.
+        if let Some(c) = ctx.as_mut() {
+            lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
+        }
+
+        // OnEnterBoard: BOARD-placed casts only.
+        if is_board_placed {
+            if let Some(c) = ctx.as_mut() {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnEnterBoard, instance);
+            }
+        }
+
         Ok(())
     }
 
