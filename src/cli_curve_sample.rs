@@ -1,6 +1,6 @@
 //! `tsot curve-sample` subcommand: plays N games of random-deck vs
 //! random-deck, aggregates per-card play-turn distributions, dumps
-//! `card-curve.json` for the `cards-report.lua` dashboard. Both
+//! `card-curve.json` for the `cards-report.py` dashboard. Both
 //! players' plays are counted (the scope-2 choice — see the design
 //! notes in cli_balance_probe).
 //!
@@ -24,10 +24,8 @@
 //! }
 //! ```
 //!
-//! Consumed by `tools/cards-report.lua` via a small hand-rolled parser,
-//! same pattern as `tools/archetypes-report.lua` uses for EvolvedDeck
-//! JSONs. The file is formatted with one card per line so the parser
-//! can stay regex-line-based without a real JSON state machine.
+//! Consumed by `tools/cards-report.py` via the stdlib `json` module.
+//! The file is formatted with one card per line for human diffability.
 
 use std::collections::BTreeMap;
 
@@ -52,7 +50,7 @@ pub struct CurveSampleArgs {
     #[arg(long, default_value_t = 0xC0_7E, value_parser = parse_u64_hex_or_dec)]
     pub seed: u64,
     /// Output path. Default `card-curve.json` — consumed by
-    /// `tools/cards-report.lua` via its hand-rolled JSON parser.
+    /// `tools/cards-report.py` via the stdlib `json` module.
     #[arg(long = "out", default_value = "card-curve.json")]
     pub out: String,
 }
@@ -112,9 +110,7 @@ pub fn run_curve_sample(
     println!();
 
     // JSON output, hand-formatted so each card lives on its own line.
-    // The line-per-card shape lets the consumer (`cards-report.lua`)
-    // use a regex parser instead of a full JSON state machine — same
-    // pattern as `archetypes-report.lua` uses for EvolvedDeck JSONs.
+    // Line-per-card shape kept for human diffability.
     let mut buf = String::new();
     buf.push_str("{\n");
     buf.push_str(&format!("  \"n_games\": {},\n", args.games));

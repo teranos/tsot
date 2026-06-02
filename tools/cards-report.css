@@ -1,0 +1,87 @@
+:root {
+  --bg-page: #1a1b1a;
+  --bg-panel: #252625;
+  --bg-panel-alt: #2e2f2e;
+  --bg-row-hover: #2a2b2a;
+  --border: #3f4140;
+  --text: #dfe1e0;
+  --text-secondary: #a9abaa;
+  --text-tertiary: #868787;
+  --text-emphasis: #fefffe;
+  --accent: #7dba8a;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: 'JetBrains Mono', 'SF Mono', Monaco, 'Fira Code', Consolas, monospace;
+  background: var(--bg-page); color: var(--text); max-width: 1300px;
+  margin: 2em auto; padding: 0 1.5em 4em; font-size: 13px; line-height: 1.5;
+}
+h1 { font-size: 24px; margin: 0 0 0.5em; color: var(--text-emphasis); }
+h2 { font-size: 16px; margin: 2em 0 0.5em; padding-bottom: 4px;
+     border-bottom: 1px solid var(--border); color: var(--accent); }
+h3 { font-size: 14px; margin: 1em 0 0.3em; color: var(--text-emphasis); }
+p.note { color: var(--text-secondary); font-size: 12px; margin: 0 0 1em; }
+.meta { display: flex; gap: 1.5em; margin-bottom: 1em; }
+.meta div { color: var(--text-secondary); }
+.meta b { color: var(--text-emphasis); margin-left: 6px; }
+table { border-collapse: collapse; margin: 0.5em 0; font-size: 12px; }
+th, td { padding: 4px 10px; border: 1px solid var(--border); text-align: left; }
+th { background: var(--bg-panel-alt); color: var(--text-secondary);
+     text-transform: uppercase; font-size: 10px; letter-spacing: 1px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: var(--bg-row-hover); }
+.heat td.num { font-weight: 500; }
+.chip {
+  display: inline-block; padding: 2px 8px; margin: 0 4px 4px 0;
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 12px; font-size: 11px;
+}
+.chip b { color: var(--accent); margin-left: 4px; }
+.card-cell { position: relative; display: inline-block; cursor: help; }
+.card-cell .card-tooltip {
+  display: none; position: absolute; left: 100%; top: 0; z-index: 50;
+  min-width: 320px; max-width: 480px; margin-left: 8px; padding: 12px 16px;
+  background: #1a1b1a; color: var(--text); border: 1px solid var(--border);
+  border-radius: 7px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  font-family: inherit; font-size: 12px; line-height: 1.5; white-space: normal;
+  word-break: break-word; overflow-wrap: break-word; pointer-events: none;
+  text-align: left; text-transform: none;
+}
+.card-cell:hover .card-tooltip, .card-cell:focus-within .card-tooltip { display: block; }
+.ct-name { color: var(--text-emphasis); font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+.ct-meta { color: var(--text-secondary); font-size: 10px;
+           text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+.ct-cost, .ct-stats { color: var(--accent); font-size: 11px; margin-bottom: 4px; }
+.ct-abilities { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.ct-abilities div { margin-bottom: 4px; }
+.ct-flavor { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+             color: var(--text-secondary); font-style: italic; font-size: 11px; }
+.subtype-row { padding: 4px 0; border-bottom: 1px dotted var(--border); }
+.subtype-row b { color: var(--text-emphasis); }
+.subtype-row span.cnt { color: var(--text-tertiary); margin-left: 6px; font-size: 11px; }
+.errors { background: #3a2222; border: 1px solid #6a3a3a; padding: 8px 12px;
+          border-radius: 4px; margin-bottom: 1em; }
+.errors b { color: #d4604e; }
+
+/* Deck-archetype sections (Clusters / All decks / Jaccard heatmap). */
+tr.singleton td { color: var(--text-tertiary); }
+.cluster {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  padding: 8px 12px;
+  margin: 0 0 1em;
+  background: var(--bg-panel);
+}
+.cluster.singleton { border-left-color: var(--text-tertiary); }
+.cluster .centroid { color: var(--accent); font-weight: 600; }
+.cluster .sigcards { color: var(--text-secondary); font-size: 11px;
+                     margin-top: 4px; }
+.cluster .sigcards b { color: var(--text); }
+.cluster .members { font-size: 11px; color: var(--text-secondary);
+                    margin-top: 4px; }
+.cluster .members b { color: var(--text); }
+.heatmap { font-size: 9px; }
+.heatmap th { padding: 2px 6px; }
+.heatmap td { padding: 2px 4px; text-align: center; min-width: 32px; }
+.source-baseline { color: var(--accent); }
+.source-champion { color: var(--text); }

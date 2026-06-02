@@ -13,7 +13,7 @@ use tsot::card::{Card, CardType, CostComponent, CostSource};
 // TODO(report-css-extraction): the CSS lives inline as a Rust string
 // constant, which forces a recompile for any tweak and duplicates the
 // styling between this file and the Lua dashboards
-// (tools/cards-report.lua, tools/archetypes-report.lua). The mini-card
+// (tools/cards-report.py). The mini-card
 // widget added 2026-05-31 made the awkwardness obvious. Move to a
 // shared `tools/report.css` that both Rust and Lua read at report-write
 // time — single source of truth, no rebuild needed for visual tweaks.

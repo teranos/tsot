@@ -59,7 +59,7 @@ enum Command {
     BalanceProbe(BalanceProbeArgs),
     /// Play N random-deck vs random-deck games and dump a per-card
     /// turn-of-play distribution to `card-curve.json`. Consumed by
-    /// `cards-report.lua` to add a turn-curve column to the pool
+    /// `cards-report.py` to add a turn-curve column to the pool
     /// dashboard.
     CurveSample(CurveSampleArgs),
     /// Mirror-match MCTS vs Heuristic AI — N games on each side,

@@ -46,7 +46,7 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep evolve-mcts report curate-baselines clean-champions pool archetypes prune-champions probe probe-long matchup-mcts
+.PHONY: help matchup-decks evolve evolve-deep evolve-mcts report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts
 
 help:
 	@echo ""
@@ -67,8 +67,7 @@ help:
 	@echo "  make clean-champions     wipe $(CHAMPS)/ and $(HTML)"
 	@echo ""
 	@echo "Card design:"
-	@echo "  make pool                static analytics dashboard → card-pool.html (chains curve-sample for the turn-played column; POOL_NO_CURVE=1 to skip)"
-	@echo "  make archetypes          cluster decks by Jaccard → archetypes-report.html (Lua, no rebuild)"
+	@echo "  make pool                pool + archetypes dashboard → card-pool.html (chains curve-sample; POOL_NO_CURVE=1 to skip, POOL_NO_ARCHETYPES=1 to skip cluster section)"
 	@echo "  make probe [CARD_ID...]  side-by-side compare a card's declared variants (auto-discover if no id)"
 	@echo "  make probe-long [...]    same as probe but pop=30 gens=15 n=30 (~3min/variant, σ≈0.025)"
 
@@ -168,18 +167,16 @@ clean-champions:
 	rm -rf $(CHAMPS) $(HTML) matchup-*.html
 
 pool:
-	@# Refresh the turn-curve data unless `POOL_NO_CURVE=1`. The Lua
-	@# dashboard picks up `card-curve.json` if present and skips the
-	@# turn-curve section otherwise.
+	@# Pool + archetypes dashboard. Refresh turn-curve data unless
+	@# `POOL_NO_CURVE=1`; skip the deck-archetypes section with
+	@# `POOL_NO_ARCHETYPES=1`. The Python renderer shells out to lua5.4
+	@# internally to evaluate cards/*.lua (handlers are Lua function
+	@# bodies) and reads baselines/champions JSON for clustering.
 	@if [ "$$POOL_NO_CURVE" != "1" ]; then \
 		cargo run --release -- curve-sample $$CURVE_ARGS; \
 	fi
-	lua5.4 tools/cards-report.lua
+	python3 tools/cards-report.py $${POOL_NO_ARCHETYPES:+--no-archetypes}
 	@echo "Open card-pool.html"
-
-archetypes:
-	lua5.4 tools/archetypes-report.lua
-	@echo "Open archetypes-report.html"
 
 # Mirror-match MCTS vs Heuristic. MCTS-vs-Heuristic + Heuristic-vs-MCTS
 # back-to-back on the SAME random deck (eliminates deck-quality as a

@@ -46,7 +46,7 @@ pub struct GameStats {
     /// `tsot curve-sample` design notes) can group by player without
     /// re-running the sim. Scope-2 consumers (today's `curve-sample`)
     /// just ignore the third field. Used by `tsot curve-sample` →
-    /// `cards-report.lua` to surface each card's typical-turn
+    /// `cards-report.py` to surface each card's typical-turn
     /// distribution.
     pub card_play_turn_events: Vec<(String, u32, PlayerId)>,
     /// Per-card count of "this card_id was sacrificed as a cost."
