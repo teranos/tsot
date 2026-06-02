@@ -948,8 +948,22 @@ macro_rules! build_game_table {
                     if s.is_transparent(&iid) && !s.is_transparent(&host) {
                         return Ok(());
                     }
-                    s.a.board.retain(|x| x != &iid);
-                    s.b.board.retain(|x| x != &iid);
+                    // Use the journaled `remove_from_zone` (instead of
+                    // raw `board.retain`) so MCTS rollouts and the full-
+                    // game rollback invariant test can reverse this
+                    // mutation. The previous raw-retain implementation
+                    // left the journal missing a `RemoveFromZone` entry
+                    // for the card, which caused subsequent rollbacks
+                    // to shrink the zone permanently and panic on later
+                    // `insert(was_pos, …)` calls.
+                    let owner_a = s.a.board.contains(&iid);
+                    let owner_b = s.b.board.contains(&iid);
+                    if owner_a {
+                        s.remove_from_zone(&iid, PlayerId::A, Zone::Board);
+                    }
+                    if owner_b {
+                        s.remove_from_zone(&iid, PlayerId::B, Zone::Board);
+                    }
                     s.add_attached(&host, &iid);
                     s.set_face_down(&iid, true);
                     Ok(())
