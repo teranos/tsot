@@ -326,8 +326,12 @@ impl GameState {
                 CostSource::Graveyard => graveyard_needed += amount,
                 CostSource::Sacrifice => sacrifice_needed += amount,
                 CostSource::Attached => attached_needed += amount,
-                // TODO(costs): support SELF (P.5).
-                other => return Err(PlayError::UnsupportedCostSource(other)),
+                CostSource::SelfExile => {
+                    // P.5: routing handled in resolve_played_card_inner;
+                    // here the component is trivially satisfied (the
+                    // cast card itself is the resource).
+                    let _ = amount;
+                }
             }
         }
 
@@ -963,6 +967,39 @@ impl GameState {
         card_kind: CardType,
     ) -> Result<(), PlayError> {
         let mut ctx = ctx;
+        // P.5: if any cost component is SelfExile (amount > 0), the cast
+        // card routes to EXILE on resolution regardless of declared kind.
+        // HAND payments fall back to the spell-payment convention
+        // (GRAVEYARD) since there's no host on BOARD to attach them to.
+        // ATTACHED payments follow the non-BOARD branch (EXILE per P.31).
+        // on_play still fires; on_enter_board / OnAttachedAsCost do not.
+        let self_exiles = self
+            .card_pool
+            .get(instance)
+            .map(|i| {
+                i.card.cost.iter().any(|c| {
+                    matches!(c.source, CostSource::SelfExile) && c.amount.max(0) > 0
+                })
+            })
+            .unwrap_or(false);
+        if self_exiles {
+            for hid in choices.hand_payment_ids.clone() {
+                let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
+            }
+            for aid in choices.attached_payment_ids.clone() {
+                if let Some(host) = self.host_of(&aid) {
+                    self.remove_attached(&host, &aid);
+                }
+                self.set_face_down(&aid, false);
+                self.add_to_zone(&aid, player, Zone::Exile);
+                self.bump_action("attached_payment_exile", player);
+            }
+            self.add_to_zone(instance, player, Zone::Exile);
+            if let Some(c) = ctx.as_mut() {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
+            }
+            return Ok(());
+        }
         match card_kind {
             CardType::Creature => {
                 let payments = choices.hand_payment_ids.clone();

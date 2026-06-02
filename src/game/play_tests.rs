@@ -777,29 +777,6 @@ fn play_card_errors_on_variable_x_cost() {
 }
 
 #[test]
-fn play_card_errors_on_unsupported_cost_source() {
-    // SelfExile (P.5) is the last unsupported source; Hand / Mill /
-    // Graveyard / Sacrifice are all routable.
-    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
-    let creature = s.a.hand[0].clone();
-    set_cost(
-        &mut s,
-        &creature,
-        vec![CostComponent {
-            amount: 1,
-            source: CostSource::SelfExile,
-            is_x: false,
-            kind: None,
-        }],
-    );
-    let result = s.play_card(PlayerId::A, &creature, PlayChoices::default(), None);
-    assert_eq!(
-        result,
-        Err(PlayError::UnsupportedCostSource(CostSource::SelfExile))
-    );
-}
-
-#[test]
 fn play_card_leaves_state_unchanged_on_error() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let creature = s.a.hand[0].clone();
@@ -1195,8 +1172,10 @@ fn counterspell_resolves_and_removes_underlying_cast() {
     let a_hand_payment = s.a.hand[1].clone();
     let cs_iid = s.b.hand[0].clone();
     s.card_pool.get_mut(&cs_iid).unwrap().card = counterspell;
-    // Counterspell now costs 1 graveyard. Seed B's graveyard.
+    // Counterspell (blue+purple) costs 1 graveyard. Per P.12a the GY
+    // pitch must color-match — paint the seed blue.
     let gy_seed = s.b.hand[1].clone();
+    set_identity(&mut s, &gy_seed, &["blue"], "");
     let _ = s.move_card(&gy_seed, PlayerId::B, Zone::Hand, Zone::Graveyard);
 
     // A's cast announced manually (bypasses play_card so we control the
@@ -2863,6 +2842,57 @@ fn resolve_graveyard_payment_prefers_color_matching_anchor() {
         picked.contains(&gy_seeds[0]) || picked.contains(&gy_seeds[1]),
         "second slot should come from the colorless cards"
     );
+}
+
+/// P.5: a card whose cost is to exile itself goes to EXILE on play,
+/// not GRAVEYARD or BOARD. on_play still fires (it's the whole point).
+/// This is the regression guard for the SelfExile cast-path wiring.
+#[test]
+fn self_exile_spell_routes_to_exile_on_play() {
+    let registry = registry_with_fixture(
+        "self_exile",
+        r#"return {
+            id = "self-exile-fixture",
+            type = "spell",
+            cost = {{amount = 1, source = "self"}},
+            on_play = function(game, self)
+                _G.self_exile_fired = (_G.self_exile_fired or 0) + 1
+            end,
+        }"#,
+    );
+    let fixture = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "self-exile-fixture")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card = fixture;
+    }
+
+    registry
+        .lua()
+        .globals()
+        .set("self_exile_fired", 0_i32)
+        .unwrap();
+
+    let result = s.play_card(
+        PlayerId::A,
+        &iid,
+        PlayChoices::default(),
+        Some(&mut crate::game::EventContext::lua_only(registry.lua())),
+    );
+    assert!(result.is_ok(), "self-exile spell should cast cleanly, got {result:?}");
+    assert!(s.a.exile.contains(&iid), "P.5: cast card should be in EXILE");
+    assert!(!s.a.graveyard.contains(&iid), "self-exile bypasses GRAVEYARD");
+    assert!(!s.a.board.contains(&iid), "self-exile bypasses BOARD");
+    assert!(!s.a.hand.contains(&iid), "cast card leaves HAND");
+    let fired: i32 = registry.lua().globals().get("self_exile_fired").unwrap();
+    assert_eq!(fired, 1, "on_play must fire on a self-exile cast");
 }
 
 /// Activations are carved out of P.12a (mirrors A.8's HAND carve-out

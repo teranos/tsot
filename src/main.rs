@@ -101,6 +101,7 @@ fn main() -> mlua::Result<()> {
                         | CostSource::Graveyard
                         | CostSource::Sacrifice
                         | CostSource::Attached
+                        | CostSource::SelfExile
                 )
             })
         })
@@ -108,8 +109,7 @@ fn main() -> mlua::Result<()> {
         // cast — the cost is paid but nothing happens. Filter them
         // out so the EA doesn't waste budget exploring traps. Hydra
         // (creature) is unaffected because its effect lives in a
-        // passive static, not on_play. Recast / turn-back-time are
-        // already filtered by the SelfExile rule above.
+        // passive static, not on_play.
         .filter(|c| {
             let has_x = c.cost.iter().any(|cc| cc.is_x);
             let is_spell = matches!(c.kind, CardType::Spell);

@@ -154,7 +154,10 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
                 }
             }
             CostSource::Attached => attached_need += amount,
-            _ => return false,
+            // P.5: SELF is trivially affordable — you're the resource.
+            // No need to count or cap; resolution routes the cast to
+            // EXILE instead of its kind's default destination.
+            CostSource::SelfExile => {}
         }
     }
     let hand_red = state.cost_reduction(iid, CostSource::Hand).max(0) as usize;
