@@ -62,6 +62,7 @@ fn pick_vanilla_template(registry: &CardRegistry) -> Card {
 ///   - play_card (hand → board with attached payment)
 ///   - declare_attacker / confirm_attacks / confirm_blocks (combat
 ///     mutations including damage, deaths, mill-to-exile)
+///
 /// 3 turns total; enough to land mutations across turn.rs, play.rs,
 /// combat.rs, lua_api.rs (the four subsystems Sessions 1-3 journaled).
 fn drive_scripted_game(state: &mut GameState, lua: &mlua::Lua) {

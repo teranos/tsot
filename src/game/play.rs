@@ -378,7 +378,8 @@ impl GameState {
         }
 
         // Mutation target validation: a Mutation cast must name a creature
-        // on either BOARD to attach to. Any creature qualifies.
+        // on either BOARD to attach to. Any creature qualifies — except
+        // ones with a `CannotBeAttachedTo` restriction (glass-insect cycle).
         if matches!(card_kind, CardType::Mutation) {
             let Some(target) = &choices.mutation_target else {
                 return Err(PlayError::MutationTargetMissing);
@@ -391,6 +392,9 @@ impl GameState {
                 .map(|i| i.card.kind == CardType::Creature)
                 .unwrap_or(false);
             if !(on_a || on_b) || !is_creature {
+                return Err(PlayError::MutationTargetInvalid(target.clone()));
+            }
+            if self.has_restriction(target, crate::card::Restriction::CannotBeAttachedTo) {
                 return Err(PlayError::MutationTargetInvalid(target.clone()));
             }
         }

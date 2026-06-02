@@ -319,6 +319,10 @@ pub enum Restriction {
     /// Checked by `resolve_hand_payment` (filtered out of the pool) and
     /// by `play_card`'s payment validation.
     CannotBeCostPaid,
+    /// Candidate cannot host attached cards. Refuses Mutation casts
+    /// (P.26) that try to attach to this creature. The glass-insect
+    /// cycle uses this to be unattachable.
+    CannotBeAttachedTo,
 }
 
 /// Declarative state-reading predicate for STATIC Phase 2. Each variant
@@ -332,6 +336,12 @@ pub enum StaticCondition {
     /// Owner's GRAVEYARD contains at least `min` cards whose kind is not
     /// `CardType::Creature`. Wandering Wizard uses this with `min = 4`.
     OwnerGraveyardNonCreatures { min: usize },
+    /// True iff the symbols on the effective top card of the owner's
+    /// DECK (per V.8 — walk down through any transparent cards to the
+    /// first opaque card) share at least one element with the symbols
+    /// of any card currently attached to the source. flyer-match uses
+    /// this to trigger its conditional +3/+0.
+    DeckTopSymbolMatchesAttached,
 }
 
 /// Event handler keys recognised on card files. Matches LUA.md Phase 1 taxonomy
@@ -915,9 +925,10 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
                 let restriction = match s.to_ascii_lowercase().as_str() {
                     "cannot_attack" => Restriction::CannotAttack,
                     "cannot_be_cost_paid" => Restriction::CannotBeCostPaid,
+                    "cannot_be_attached_to" => Restriction::CannotBeAttachedTo,
                     other => {
                         return Err(mlua::Error::runtime(format!(
-                            "static.restrictions entry must be 'cannot_attack' or 'cannot_be_cost_paid', got '{other}'"
+                            "static.restrictions entry must be 'cannot_attack', 'cannot_be_cost_paid', or 'cannot_be_attached_to', got '{other}'"
                         )))
                     }
                 };
@@ -1134,8 +1145,9 @@ fn read_condition(c: &Table) -> mlua::Result<StaticCondition> {
             let min = c.get::<i64>("min")?.max(0) as usize;
             Ok(StaticCondition::OwnerGraveyardNonCreatures { min })
         }
+        "deck_top_symbol_matches_attached" => Ok(StaticCondition::DeckTopSymbolMatchesAttached),
         other => Err(mlua::Error::runtime(format!(
-            "static.condition.kind must be 'owner_graveyard_size' or 'owner_graveyard_non_creatures', got '{other}'"
+            "static.condition.kind must be one of 'owner_graveyard_size', 'owner_graveyard_non_creatures', 'deck_top_symbol_matches_attached'; got '{other}'"
         ))),
     }
 }

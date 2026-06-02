@@ -1114,7 +1114,7 @@ impl GameState {
 
         // Phase 2 condition gate: short-circuit before any affects logic.
         if let Some(cond) = &def.condition {
-            if !self.evaluate_static_condition(source.controller, cond) {
+            if !self.evaluate_static_condition(source.controller, source_iid, cond) {
                 return None;
             }
         }
@@ -1189,11 +1189,14 @@ impl GameState {
     }
 
     /// Phase 2: evaluate a state-reading static condition against game
-    /// state. `owner` is the source's controller — all `Owner*` variants
-    /// look up against that player's zones.
+    /// state. `owner` is the source's controller — `Owner*` variants
+    /// look up against that player's zones. `source_iid` is the static
+    /// source itself — variants that read its attached / position
+    /// (e.g., `DeckTopSymbolMatchesAttached`) consult it.
     fn evaluate_static_condition(
         &self,
         owner: PlayerId,
+        source_iid: &InstanceId,
         cond: &crate::card::StaticCondition,
     ) -> bool {
         match cond {
@@ -1210,7 +1213,47 @@ impl GameState {
                     .count();
                 non_creatures >= *min
             }
+            crate::card::StaticCondition::DeckTopSymbolMatchesAttached => {
+                let top_symbols = self.effective_top_of_deck_symbols(owner);
+                if top_symbols.is_empty() {
+                    return false;
+                }
+                let Some(source) = self.card_pool.get(source_iid) else {
+                    return false;
+                };
+                for att_iid in &source.attached {
+                    if let Some(att) = self.card_pool.get(att_iid) {
+                        for sym in &att.card.symbols {
+                            if top_symbols.iter().any(|t| t == sym) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
         }
+    }
+
+    /// V.8: a transparent card on top of a DECK reveals the symbols of
+    /// the card immediately below it. Recursively skips transparent
+    /// cards from the top until an opaque card is found and returns
+    /// that card's symbols. Returns empty if the deck is empty or
+    /// every card in it is transparent.
+    pub fn effective_top_of_deck_symbols(&self, player: PlayerId) -> Vec<String> {
+        for iid in &self.player(player).deck {
+            if let Some(inst) = self.card_pool.get(iid) {
+                let is_transparent = inst
+                    .card
+                    .colors
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case("transparent"));
+                if !is_transparent {
+                    return inst.card.symbols.clone();
+                }
+            }
+        }
+        Vec::new()
     }
 
     /// Iterator yielding every potential static source: every on-board card,

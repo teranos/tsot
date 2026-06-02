@@ -879,3 +879,79 @@ fn playable_responses_filters_to_zero_cost_instants() {
     assert!(candidates.contains(&inst));
     assert!(!candidates.contains(&sorc));
 }
+
+#[test]
+fn deck_top_symbol_matches_attached_condition_grants_modifier() {
+    // flyer-match shape: creature with a static that grants +3/+0 iff the
+    // effective top of deck (V.8 walk) shares a symbol with any of its
+    // attached cards.
+    let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+    let source = s.a.hand[0].clone();
+    let attached = s.a.hand[1].clone();
+    s.card_pool.get_mut(&source).unwrap().card.kind = crate::card::CardType::Creature;
+    s.card_pool.get_mut(&source).unwrap().card.stats = Some(crate::card::Stats { x: 1, y: 1 });
+    s.card_pool.get_mut(&source).unwrap().card.static_def = Some(crate::card::StaticDef {
+        affects: crate::card::StaticAffects {
+            subtypes: vec![],
+            colors: vec![],
+            controller: None,
+            exclude_self: false,
+            scope: crate::card::StaticScope::SourceOnly,
+            kind: None,
+            has_keyword: None,
+        },
+        modifier_x: crate::card::ModifierValue::Fixed(3),
+        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_keyword: None,
+        condition: Some(crate::card::StaticCondition::DeckTopSymbolMatchesAttached),
+        restrictions: Vec::new(),
+        cost_modifiers: Vec::new(),
+        granted_activated: None,
+        granted_colors: Vec::new(),
+    });
+    // Attach a card with symbol "alpha".
+    s.card_pool.get_mut(&attached).unwrap().card.symbols = vec!["alpha".to_string()];
+    s.a.hand.retain(|i| i != &source && i != &attached);
+    s.a.board.push(source.clone());
+    s.card_pool.get_mut(&source).unwrap().attached.push(attached);
+
+    // Deck top has no matching symbol → no boost.
+    let top0 = s.a.deck[0].clone();
+    s.card_pool.get_mut(&top0).unwrap().card.symbols = vec!["beta".to_string()];
+    assert_eq!(s.effective_stats(&source), (1, 1));
+
+    // Set deck top to share "alpha" with attached → boost fires.
+    s.card_pool.get_mut(&top0).unwrap().card.symbols = vec!["alpha".to_string()];
+    assert_eq!(s.effective_stats(&source), (4, 1));
+
+    // V.8: insert a transparent card at the top of the deck. The
+    // effective top is still the alpha card below — boost still fires.
+    let transparent = s.b.hand[0].clone();
+    s.card_pool.get_mut(&transparent).unwrap().card.colors = vec!["transparent".to_string()];
+    s.card_pool.get_mut(&transparent).unwrap().card.symbols = vec![];
+    s.b.hand.retain(|i| i != &transparent);
+    s.a.deck.insert(0, transparent);
+    assert_eq!(s.effective_stats(&source), (4, 1));
+
+    // Swap the alpha card under the transparent for a non-matching one;
+    // boost goes away despite the transparent still being on top.
+    let underneath = s.a.deck[1].clone();
+    s.card_pool.get_mut(&underneath).unwrap().card.symbols = vec!["gamma".to_string()];
+    assert_eq!(s.effective_stats(&source), (1, 1));
+}
+
+#[test]
+fn effective_top_of_deck_symbols_walks_through_transparent_per_v8() {
+    let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+    // deck[0] transparent, deck[1] also transparent, deck[2] opaque with "alpha".
+    let t0 = s.a.deck[0].clone();
+    let t1 = s.a.deck[1].clone();
+    let opaque = s.a.deck[2].clone();
+    s.card_pool.get_mut(&t0).unwrap().card.colors = vec!["transparent".to_string()];
+    s.card_pool.get_mut(&t1).unwrap().card.colors = vec!["transparent".to_string()];
+    s.card_pool.get_mut(&opaque).unwrap().card.symbols = vec!["alpha".to_string()];
+    assert_eq!(
+        s.effective_top_of_deck_symbols(PlayerId::A),
+        vec!["alpha".to_string()],
+    );
+}
