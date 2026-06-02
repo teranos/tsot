@@ -320,19 +320,22 @@ pub(crate) fn card_cell(pool: &[Card], id: &str) -> Markup {
     let meta = format_meta(card);
     let cost = format_cost(&card.cost);
     let stats = card.stats.map(|s| format!("{}/{}", s.x, s.y));
-    let color_class = match card.colors.first().map(String::as_str) {
-        Some("red") => "ci-red",
-        Some("blue") => "ci-blue",
-        Some("green") => "ci-green",
-        Some("purple") => "ci-purple",
-        Some("black") => "ci-black",
-        Some("white") => "ci-white",
-        Some("pink") => "ci-pink",
-        Some("orange") => "ci-orange",
-        Some("azure") => "ci-azure",
-        Some("transparent") => "ci-transparent",
-        Some("glow") => "ci-glow",
-        _ => "ci-colorless",
+    let color_class = if card.frame.as_deref() == Some("transparent") {
+        "ci-transparent"
+    } else {
+        match card.colors.first().map(String::as_str) {
+            Some("red") => "ci-red",
+            Some("blue") => "ci-blue",
+            Some("green") => "ci-green",
+            Some("purple") => "ci-purple",
+            Some("black") => "ci-black",
+            Some("white") => "ci-white",
+            Some("pink") => "ci-pink",
+            Some("orange") => "ci-orange",
+            Some("azure") => "ci-azure",
+            Some("glow") => "ci-glow",
+            _ => "ci-colorless",
+        }
     };
     let symbols_str = if card.symbols.is_empty() {
         None

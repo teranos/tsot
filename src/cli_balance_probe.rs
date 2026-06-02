@@ -281,19 +281,22 @@ fn probe_one_card(
 /// can see the card without opening the .lua.
 fn variant_hero(card: &Card) -> Markup {
     use tsot::card::CostSource;
-    let color_class = match card.colors.first().map(String::as_str) {
-        Some("red") => "ci-red",
-        Some("blue") => "ci-blue",
-        Some("green") => "ci-green",
-        Some("purple") => "ci-purple",
-        Some("black") => "ci-black",
-        Some("white") => "ci-white",
-        Some("pink") => "ci-pink",
-        Some("orange") => "ci-orange",
-        Some("azure") => "ci-azure",
-        Some("transparent") => "ci-transparent",
-        Some("glow") => "ci-glow",
-        _ => "ci-colorless",
+    let color_class = if card.frame.as_deref() == Some("transparent") {
+        "ci-transparent"
+    } else {
+        match card.colors.first().map(String::as_str) {
+            Some("red") => "ci-red",
+            Some("blue") => "ci-blue",
+            Some("green") => "ci-green",
+            Some("purple") => "ci-purple",
+            Some("black") => "ci-black",
+            Some("white") => "ci-white",
+            Some("pink") => "ci-pink",
+            Some("orange") => "ci-orange",
+            Some("azure") => "ci-azure",
+            Some("glow") => "ci-glow",
+            _ => "ci-colorless",
+        }
     };
     let display_name = if card.name.is_empty() {
         card.id.clone()

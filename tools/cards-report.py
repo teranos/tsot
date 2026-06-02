@@ -419,8 +419,13 @@ KNOWN_KEYWORDS = [
 # which is the point — surfaces the design TODO).
 KNOWN_COLORS = [
     "red", "blue", "green", "purple", "black", "white",
-    "pink", "orange", "azure", "transparent", "glow",
+    "pink", "orange", "azure", "glow",
 ]
+# `transparent` is a frame attribute, not a color (see RULES C.13). Cards
+# declare it via `frame = "transparent"`. Rendered as a chip in Pool
+# summary and as a swatch in the All-cards table, parallel to colors but
+# separate from color-identity aggregates.
+KNOWN_FRAMES = ["transparent"]
 KNOWN_TYPES = ["creature", "instant", "sorcery", "artifact", "mutation"]
 KNOWN_SOURCES = ["hand", "mill", "graveyard", "sacrifice", "self"]
 COST_BUCKETS: list = [0, 1, 2, 3, 4, 5, "6+", "X"]
@@ -446,6 +451,7 @@ def build_aggregates(cards: list[dict]) -> dict:
     agg = {
         "total": len(cards),
         "by_color": {c: 0 for c in all_colors},
+        "by_frame": {f: 0 for f in KNOWN_FRAMES},
         "by_type": {},
         "by_subtype": {},
         "by_keyword": {kw: 0 for kw in KNOWN_KEYWORDS},
@@ -458,6 +464,10 @@ def build_aggregates(cards: list[dict]) -> dict:
     for card in cards:
         t = card_type(card)
         agg["by_type"][t] = agg["by_type"].get(t, 0) + 1
+
+        f = card.get("frame")
+        if f:
+            agg["by_frame"][f] = agg["by_frame"].get(f, 0) + 1
 
         cs = card_colors(card)
         if len(cs) == 0:
@@ -535,9 +545,7 @@ SWATCHES = {
 
 
 def color_swatch(color: str) -> str:
-    if color == "transparent":
-        style = "background:repeating-conic-gradient(#444 0% 25%, #222 0% 50%) 50% / 6px 6px;"
-    elif color == "glow":
+    if color == "glow":
         style = f"background:{SWATCHES['glow']};box-shadow:0 0 4px {SWATCHES['glow']};"
     else:
         hex_ = SWATCHES.get(color, "#888")
@@ -545,6 +553,18 @@ def color_swatch(color: str) -> str:
     return (
         f'<span style="display:inline-block;width:10px;height:10px;{style}'
         f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>{esc(color)}'
+    )
+
+
+def frame_swatch(frame: str) -> str:
+    """Visual badge for a frame attribute (transparent: checkerboard)."""
+    if frame == "transparent":
+        style = "background:repeating-conic-gradient(#444 0% 25%, #222 0% 50%) 50% / 6px 6px;"
+    else:
+        style = "background:#888;"
+    return (
+        f'<span style="display:inline-block;width:10px;height:10px;{style}'
+        f'border-radius:2px;margin-right:4px;vertical-align:middle;"></span>{esc(frame)}'
     )
 
 
@@ -842,6 +862,10 @@ def render_html(
     w(f'<span class="chip">single-color<b>{agg["multicolor"]["single"]}</b></span>')
     w(f'<span class="chip">hybrid<b>{agg["multicolor"]["hybrid"]}</b></span>')
     w(f'<span class="chip">colorless<b>{agg["multicolor"]["colorless"]}</b></span>')
+    for f in KNOWN_FRAMES:
+        n = agg["by_frame"].get(f, 0)
+        if n > 0:
+            w(f'<span class="chip">{frame_swatch(f)}<b>{n}</b></span>')
     w("</div>")
 
     color_rows = list(KNOWN_COLORS)
@@ -1022,6 +1046,8 @@ def render_html(
     for card in sorted_cards:
         cs = card_colors(card)
         color_html = " ".join(color_swatch(c) for c in cs) if cs else color_swatch("colorless")
+        if card.get("frame"):
+            color_html = f'{color_html} {frame_swatch(card["frame"])}'
         s = card.get("stats")
         xy = f'{s.get("x", 0)}/{s.get("y", 0)}' if s else "—"
         if curve:
