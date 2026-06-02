@@ -4,6 +4,7 @@ return {
   colors = {"purple"},
   type = "creature",
   subtypes = {"dragon"},
+  face = {"shiny"},
   cost = {
     {amount = 3, source = "hand"},
     {amount = 4, source = "graveyard"},

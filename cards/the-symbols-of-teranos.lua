@@ -7,4 +7,5 @@ return {
   name = "The Symbols of Teranos",
   colors = {},
   symbols = {"꩜", "⨳", "⋈", "⊨", "≡"},
+  face = {"shiny"},
 }

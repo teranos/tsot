@@ -739,6 +739,8 @@ mod tests {
             cannot_block_subtypes: vec![],
             can_block_subtypes: vec![],
             symbols: Vec::new(),
+            frame: None,
+            face: Vec::new(),
             cost: vec![],
             abilities: vec![],
             flavor: String::new(),
@@ -751,7 +753,6 @@ mod tests {
             target: None,
             is_variant: false,
             variant_of: None,
-            frame: None,
         }
     }
 

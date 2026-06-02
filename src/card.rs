@@ -538,6 +538,12 @@ pub struct Card {
     /// (P.12a graveyard payment, static affects.colors) ignore it.
     #[serde(default)]
     pub frame: Option<String>,
+    /// Cosmetic surface treatments (e.g. `"shiny"`, `"holo"`). Pure
+    /// metadata — no engine rule reads this. Stacks, so a card can be
+    /// both shiny and holo. Distinct from `frame` (geometry / hole) and
+    /// from `colors` (identity for matching rules).
+    #[serde(default)]
+    pub face: Vec<String>,
     pub cost: Vec<CostComponent>,
     pub abilities: Vec<String>,
     /// Flavor text. Non-mechanical. Optional. Displayed under abilities in

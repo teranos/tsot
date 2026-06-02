@@ -671,6 +671,7 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
     let abilities = read_string_vec(table, "abilities")?;
     let flavor = table.get::<Option<String>>("flavor")?.unwrap_or_default();
     let frame = table.get::<Option<String>>("frame")?.filter(|s| !s.is_empty());
+    let face = read_string_vec(table, "face")?;
     // C.13: a transparent-frame card has no symbols. The symbol-search
     // routine looks past it, so it can't carry one itself.
     if frame.as_deref() == Some("transparent") && !symbols.is_empty() {
@@ -712,6 +713,7 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
         can_block_subtypes,
         symbols,
         frame,
+        face,
         cost,
         abilities,
         flavor,

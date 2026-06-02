@@ -24,7 +24,19 @@ Naming: top / upper / center / lower / bottom for rows; left / (none) / right fo
 
 A card's symbols live at specific slots. The data shape: `symbols = { [slot] = "glyph" }`, e.g. `symbols = { C = "꩜" }` for a standard one-symbol card; `symbols = { C = "꩜", T = "≡", B = "⨳" }` for a three-symbol card.
 
-**Default**: any card without an explicit `symbols` block has its declared symbol(s) at `C` (back-compat for the existing single-`symbol = "X"` shorthand and `symbols = {"X", "Y"}` array, which becomes `symbols = { C = "X" }` and an arbitrary distribution for the second form — engine assigns to fill C first, then the inner ring in canonical order).
+**Default**: any card without an explicit per-slot `symbols` block fills slots by spiraling out from `C` in this canonical order:
+
+```
+C, U, UR, R, DR, D, DL, L, UL, TL, T, TR, BR, B, BL
+```
+
+Clockwise from center through the inner 8, then clockwise through the outer 6. So:
+- `symbols = {"X"}` → `X` at `C`
+- `symbols = {"X", "Y"}` → `X` at `C`, `Y` at `U`
+- `symbols = {"X", "Y", "Z"}` → `X` at `C`, `Y` at `U`, `Z` at `UR`
+- etc.
+
+Cards that want specific placement use the long form `symbols = { C = "X", T = "Y" }`.
 
 **Rule (replaces C.1)**: a card's symbol set is the union of glyphs across every occupied slot.
 
