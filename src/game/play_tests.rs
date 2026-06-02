@@ -2420,6 +2420,7 @@ fn zero_y_creature_dies_per_c15_after_attached_detached_as_cost() {
             cost_modifiers: vec![],
             granted_activated: None,
             granted_colors: vec![],
+granted_face: Vec::new(),
         });
     }
     let _ = s.remove_from_zone(&attached, PlayerId::A, Zone::Hand);

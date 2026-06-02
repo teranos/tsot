@@ -327,12 +327,13 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
             )))
         }
     };
-    let (modifier_x, modifier_y, modifier_keyword, granted_colors) =
+    let (modifier_x, modifier_y, modifier_keyword, granted_colors, granted_face) =
         match static_t.get::<Value>("modifier")? {
             Value::Nil => (
                 ModifierValue::Fixed(0),
                 ModifierValue::Fixed(0),
                 None,
+                Vec::new(),
                 Vec::new(),
             ),
             Value::Table(m) => {
@@ -356,7 +357,22 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
                     }
                     None => Vec::new(),
                 };
-                (x, y, keyword, colors)
+                let face: Vec<String> = match m.get::<Option<Value>>("face")? {
+                    Some(Value::Table(t)) => {
+                        let mut out = Vec::new();
+                        for s in t.sequence_values::<String>() {
+                            out.push(s?.to_ascii_lowercase());
+                        }
+                        out
+                    }
+                    Some(other) => {
+                        return Err(mlua::Error::runtime(format!(
+                            "static.modifier.face must be a sequence of strings, got {other:?}"
+                        )))
+                    }
+                    None => Vec::new(),
+                };
+                (x, y, keyword, colors, face)
             }
             other => {
                 return Err(mlua::Error::runtime(format!(
@@ -441,6 +457,7 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
         cost_modifiers,
         granted_activated,
         granted_colors,
+        granted_face,
     }))
 }
 

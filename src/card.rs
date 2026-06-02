@@ -349,6 +349,12 @@ pub struct StaticDef {
     /// avoid recursion (same pattern as the keyword-grant cycle guard).
     #[serde(default)]
     pub granted_colors: Vec<String>,
+    /// Face (cosmetic surface) attributes granted to matching candidates.
+    /// Parallel to `granted_colors` but lives on the face axis — used by
+    /// gfp / mcherry / sparkle to grant `glow` to their host. Empty Vec =
+    /// no face grant.
+    #[serde(default)]
+    pub granted_face: Vec<String>,
 }
 
 /// Phase 3.5 cost reduction component on a static ability. Applied during

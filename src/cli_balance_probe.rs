@@ -283,6 +283,8 @@ fn variant_hero(card: &Card) -> Markup {
     use tsot::card::CostSource;
     let color_class = if card.frame.as_deref() == Some("transparent") {
         "ci-transparent"
+    } else if card.face.iter().any(|f| f == "glow") {
+        "ci-glow"
     } else {
         match card.colors.first().map(String::as_str) {
             Some("red") => "ci-red",
@@ -294,7 +296,6 @@ fn variant_hero(card: &Card) -> Markup {
             Some("pink") => "ci-pink",
             Some("orange") => "ci-orange",
             Some("azure") => "ci-azure",
-            Some("glow") => "ci-glow",
             _ => "ci-colorless",
         }
     };

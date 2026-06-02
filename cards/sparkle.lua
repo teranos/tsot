@@ -1,7 +1,8 @@
 return {
   id = "sparkle",
   name = "Sparkle",
-  colors = {"red", "glow"},
+  colors = {"red"},
+  face = {"glow"},
   type = "instant",
   cost = {
     {amount = 1, source = "mill"},

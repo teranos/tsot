@@ -1,7 +1,8 @@
 return {
   id = "templeos",
   name = "TempleOS",
-  colors = {"glow"},
+  colors = {},
+  face = {"glow"},
   frame = "transparent",
   type = "artifact",
   subtypes = {"temple"},

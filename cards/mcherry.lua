@@ -7,7 +7,8 @@ return {
   id = "mcherry",
   name = "mCherry",
   type = "mutation",
-  colors = {"pink", "glow"},
+  colors = {"pink"},
+  face = {"glow"},
   cost = {{amount = 1, source = "mill"}},
   abilities = {
     "the host creature gets +1/+1 and becomes pink and glow.",
@@ -17,6 +18,6 @@ return {
     affects = {
       scope = "attached_host",
     },
-    modifier = {x = 1, y = 1, colors = {"pink", "glow"}},
+    modifier = {x = 1, y = 1, colors = {"pink"}, face = {"glow"}},
   },
 }

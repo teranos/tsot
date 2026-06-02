@@ -997,6 +997,7 @@ mod tests {
             cost_modifiers: vec![],
             granted_activated: None,
             granted_colors: vec![],
+granted_face: Vec::new(),
         });
     }
 

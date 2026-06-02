@@ -1363,6 +1363,35 @@ impl GameState {
         out
     }
 
+    /// Effective face per the card-surface system. Union of the card's
+    /// printed face attributes with every `granted_face` entry from
+    /// active statics whose `affects` predicate matches. Parallel shape
+    /// to `effective_colors`. Used by the Lua `game.card(iid).face`
+    /// surface so handlers can read host-granted face (e.g., a creature
+    /// with a GFP attached has `face` including `"glow"`).
+    pub fn effective_face(&self, iid: &InstanceId) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        if let Some(inst) = self.card_pool.get(iid) {
+            for f in &inst.card.face {
+                let lc = f.to_ascii_lowercase();
+                if !out.iter().any(|x| x == &lc) {
+                    out.push(lc);
+                }
+            }
+        }
+        for source_iid in self.static_source_iids() {
+            if let Some(def) = self.static_def_if_matches(source_iid, iid) {
+                for f in &def.granted_face {
+                    let lc = f.to_ascii_lowercase();
+                    if !out.iter().any(|x| x == &lc) {
+                        out.push(lc);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Phase 2: full keyword check. Combines `CardInstance::has_keyword`
     /// (printed + intrinsic modifiers) with `has_static_keyword` (on-board
     /// static grants). Prefer this over the bare `CardInstance::has_keyword`

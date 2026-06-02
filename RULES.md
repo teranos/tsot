@@ -158,7 +158,7 @@ The following are not part of this game.
 - **V.6** Cards on the BOARD are fully visible to both players.
 - **V.7** Visibility of cards in ATTACHED is defined by P.17 (face-down, symbols visible to both players) and P.18 (controller may look at the face at any time).
 - **V.8** A `transparent`-frame card on top of a DECK reveals the symbols of the card immediately below it. The card below is seen through the transparent-frame card, which means players see its back; per C.1 the back is where the symbols are. If the revealed card is itself transparent-frame, V.8 applies recursively to the card below it, continuing until an opaque card is reached.
-- **V.9** A `glow`-colored card's visibility is determined by its **effective slot** in the DECK, computed by counting only non-transparent-frame cards above it. Transparent-frame cards in slots above are ignored for this computation.
+- **V.9** A card with the `glow` face attribute has visibility determined by its **effective slot** in the DECK, computed by counting only non-transparent-frame cards above it. Transparent-frame cards in slots above are ignored for this computation. Glow is a cosmetic surface treatment (see `Card.face`), not a color — granted via `static.modifier.face = {"glow"}` and read via `effective_face(iid)`.
 - **V.10** A `glow` card at effective slot 0 is fully visible to both players (all properties).
 - **V.11** A `glow` card at effective slot 1 has its color and type visible to both players; other properties remain concealed. Cards at effective slot 2 or deeper are concealed normally.
 

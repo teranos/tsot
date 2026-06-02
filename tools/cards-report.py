@@ -419,7 +419,7 @@ KNOWN_KEYWORDS = [
 # which is the point — surfaces the design TODO).
 KNOWN_COLORS = [
     "red", "blue", "green", "purple", "black", "white",
-    "pink", "orange", "azure", "glow",
+    "pink", "orange", "azure",
 ]
 # `transparent` is a frame attribute, not a color (see RULES C.13). Cards
 # declare it via `frame = "transparent"`. Rendered as a chip in Pool

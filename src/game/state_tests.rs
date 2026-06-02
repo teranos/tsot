@@ -302,6 +302,7 @@ fn make_anthem_source(s: &mut GameState, iid: &InstanceId, subtype: &str, dx: i3
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: Vec::new(),
+granted_face: Vec::new(),
     });
 }
 
@@ -374,6 +375,7 @@ fn attached_host_scope_grants_keyword_to_host() {
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: Vec::new(),
+granted_face: Vec::new(),
     });
     // Move host + bystander to board.
     s.a.hand.retain(|i| i != &bird && i != &host && i != &bystander);
@@ -411,6 +413,7 @@ fn attached_host_scope_does_not_grant_when_unattached() {
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: Vec::new(),
+granted_face: Vec::new(),
     });
     s.a.hand.retain(|i| i != &bird && i != &target);
     s.a.board.push(bird);
@@ -443,6 +446,7 @@ fn condition_gate_blocks_static_until_graveyard_threshold() {
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: Vec::new(),
+granted_face: Vec::new(),
     });
     s.a.hand.retain(|i| i != &source && i != &target);
     s.a.board.push(source);
@@ -489,6 +493,7 @@ fn condition_non_creatures_counts_only_non_creature_kinds() {
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: Vec::new(),
+granted_face: Vec::new(),
     });
     s.a.hand.retain(|i| i != &wizard);
     s.a.board.push(wizard.clone());
@@ -537,6 +542,7 @@ fn source_only_scope_targets_only_the_source() {
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: Vec::new(),
+granted_face: Vec::new(),
     });
     s.a.hand.retain(|i| i != &wizard && i != &other);
     s.a.board.push(wizard.clone());
@@ -575,6 +581,7 @@ fn restriction_cannot_attack_propagates_to_opponent_insects() {
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: Vec::new(),
+granted_face: Vec::new(),
     });
     s.b.hand.retain(|i| i != &plant && i != &own_insect);
     s.a.hand.retain(|i| i != &opp_insect);
@@ -619,6 +626,7 @@ fn restriction_cannot_attack_blocks_declare_attacker() {
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: Vec::new(),
+granted_face: Vec::new(),
     });
     s.b.hand.retain(|i| i != &plant);
     s.a.hand.retain(|i| i != &attacker);
@@ -662,6 +670,7 @@ fn affects_has_keyword_filters_by_intrinsic_or_static_grant() {
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: Vec::new(),
+granted_face: Vec::new(),
     });
     s.b.hand.retain(|i| i != &source);
     s.a.hand.retain(|i| i != &flyer && i != &grounder);
@@ -733,6 +742,7 @@ fn make_glow_granter(s: &mut GameState, iid: &InstanceId, granted: &[&str]) {
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: granted.iter().map(|s| s.to_string()).collect(),
+granted_face: Vec::new(),
     });
 }
 
@@ -908,6 +918,7 @@ fn deck_top_symbol_matches_attached_condition_grants_modifier() {
         cost_modifiers: Vec::new(),
         granted_activated: None,
         granted_colors: Vec::new(),
+granted_face: Vec::new(),
     });
     // Attach a card with symbol "alpha".
     s.card_pool.get_mut(&attached).unwrap().card.symbols = vec!["alpha".to_string()];

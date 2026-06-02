@@ -1144,7 +1144,7 @@ macro_rules! build_game_table {
                     )?;
                     t.set(
                         "face",
-                        lua.create_sequence_from(inst.card.face.clone())?,
+                        lua.create_sequence_from(s.effective_face(&iid))?,
                     )?;
                     t.set("tapped", inst.tapped)?;
                     t.set("face_down", inst.face_down)?;
