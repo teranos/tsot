@@ -263,7 +263,11 @@ impl GameState {
 
         if !matches!(
             card_kind,
-            CardType::Creature | CardType::Spell | CardType::Artifact | CardType::Mutation
+            CardType::Creature
+                | CardType::Spell
+                | CardType::Artifact
+                | CardType::Mutation
+                | CardType::Unspecified
         ) {
             // TODO(types): Environment (→ BOARD per P.21 + P.22 slot management).
             return Err(PlayError::UnsupportedType(card_kind));
@@ -1156,6 +1160,29 @@ impl GameState {
                 self.add_attached(target, instance);
                 self.set_face_down(instance, true);
 
+                if let Some(c) = ctx.as_mut() {
+                    lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
+                }
+            }
+            CardType::Unspecified => {
+                // P.1: a card with no declared type resolves to GRAVEYARD
+                // (the default destination). HAND payments follow the
+                // spell-payment convention; there's no host to attach to.
+                // ATTACHED payments take the non-BOARD branch (EXILE).
+                // SelfExile-cost typeless cards are handled by the earlier
+                // shortcut and never reach this arm.
+                for hid in choices.hand_payment_ids.clone() {
+                    let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
+                }
+                for aid in choices.attached_payment_ids.clone() {
+                    if let Some(host) = self.host_of(&aid) {
+                        self.remove_attached(&host, &aid);
+                    }
+                    self.set_face_down(&aid, false);
+                    self.add_to_zone(&aid, player, Zone::Exile);
+                    self.bump_action("attached_payment_exile", player);
+                }
+                self.add_to_zone(instance, player, Zone::Graveyard);
                 if let Some(c) = ctx.as_mut() {
                     lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
                 }

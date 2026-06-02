@@ -1,17 +1,25 @@
--- Transparent artifact with an azure color tag. Same engine role as
--- clear-view (gy_hand_substitute), with the added azure color so that
--- once P.12a lands, exiling this from the graveyard to pay a GRAVEYARD
--- cost component of an azure cast satisfies the color-anchor rule.
+-- Typeless transparent SELF-cost tutor. Cast it, exile it (per P.5),
+-- and on resolution it pulls the matching azure-jewel from your deck
+-- to your hand. The tutor-as-tax design means you can't double-dip
+-- gy_hand_substitute on the same instance — exiling consumes the card.
 return {
   id = "clear-azure",
   name = "Clear Azure",
   colors = {"transparent", "azure"},
-  type = "artifact",
-  cost = {{amount = 1, source = "hand"}},
+  cost = {{amount = 1, source = "self"}},
   abilities = {
-    "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast. clear azure does not satisfy P.7a identity for the cast — other hand payments must.",
-    "may anchor P.12a as an azure GRAVEYARD pitch for an azure cast.",
+    "when you play this card, search your deck for an azure-jewel and move it to your hand. self-exile per P.5 — clear azure goes to EXILE on resolution, not GRAVEYARD.",
+    "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast.",
   },
+  on_play = function(game, self)
+    for _, iid in ipairs(game.zones(self.owner).deck) do
+      local c = game.card(iid)
+      if c and c.id == "azure-jewel" then
+        game.move(iid, "hand")
+        return
+      end
+    end
+  end,
   gy_hand_substitute = true,
   flavor = "Azure light, no surface.",
 }
