@@ -52,6 +52,34 @@ impl GameState {
         }
         Ok(())
     }
+
+    /// RULES P.8: move any cards still attached to `host` into their
+    /// own owner's EXILE. Called AFTER `OnDie` (or any equivalent
+    /// last-words handler) has run so handlers like trustworthy-lender
+    /// can still read `self.attached` and intercept individual cards
+    /// (e.g. `game.move(aid, "hand")`) — anything they didn't move
+    /// gets exiled here. Idempotent: if the attached list is already
+    /// empty, no-op.
+    ///
+    /// Per-attached owner lookup: a stolen attachment still returns to
+    /// its real owner's exile, not the host's owner's exile.
+    pub fn exile_remaining_attached(&mut self, host: &InstanceId) {
+        let attached_snapshot: Vec<InstanceId> = self
+            .card_pool
+            .get(host)
+            .map(|i| i.attached.clone())
+            .unwrap_or_default();
+        for aid in &attached_snapshot {
+            self.remove_attached(host, aid);
+            self.set_face_down(aid, false);
+            let owner = self
+                .card_pool
+                .get(aid)
+                .map(|i| i.owner)
+                .unwrap_or_else(|| self.active_player);
+            self.add_to_zone(aid, owner, Zone::Exile);
+        }
+    }
 }
 
 #[cfg(test)]

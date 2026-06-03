@@ -507,8 +507,11 @@ impl GameState {
                     );
                 }
             }
-            // TODO(types): P.8 — when a card with attached cards moves to GRAVEYARD,
-            // any attached cards still present must move to EXILE.
+            // P.8: cascade any cards still attached to the dead host
+            // into EXILE. Runs AFTER on_die so handlers like
+            // trustworthy-lender that want to return attached cards to
+            // hand still get the first read.
+            self.exile_remaining_attached(iid);
         }
         outcome
     }

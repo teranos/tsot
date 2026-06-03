@@ -554,6 +554,11 @@ impl GameState {
                 }
             }
         }
+        // P.8: cascade attached → EXILE for each sacrificed card, after
+        // on_die handlers had their chance to read self.attached.
+        for sid in &sac_ids {
+            self.exile_remaining_attached(sid);
+        }
 
         // RULES P.33: the cast card itself leaves HAND at cast time. It
         // joins the response chain (transient — no Z-zone backing). On
@@ -981,6 +986,8 @@ impl GameState {
                     );
                 }
             }
+            // P.8: cascade attached → EXILE after on_die fires.
+            self.exile_remaining_attached(iid);
         }
     }
 

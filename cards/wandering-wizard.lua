@@ -25,10 +25,10 @@
 -- Symbol not yet specified.
 return {
   id = "wandering-wizard",
-  name = "Wandering Wizard",
+  name = "Three Wandering Wise Men",
   colors = {"blue"},
   type = "creature",
-  subtypes = {"human", "wizard"},
+  subtypes = {"human"},
   cost = {{amount = 1, source = "hand"}},
   abilities = {
     "this creature has flying when more than 3 non-creature cards are in your graveyard.",
