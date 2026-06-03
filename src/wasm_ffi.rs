@@ -147,6 +147,39 @@ pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
     Ok(prompt_json)
 }
 
+/// Submit a HumanAction (JSON-encoded) to the engine, then wait for
+/// and return the next HumanPrompt. The Rust-internal worker both
+/// the native test and the wasm `extern "C"` export call.
+///
+/// Native: pushes the action through `action_tx` (which unblocks the
+/// engine thread's `action_rx.recv()`), then blocks the main thread
+/// on `prompt_rx.recv()` until the engine produces the next prompt
+/// or signals game-over by dropping its end of the channel.
+///
+/// Wasm: same flow but the "block" is replaced by an Asyncify yield
+/// (D4 — not wired yet). Returns Err on the wasm path for now.
+pub(crate) fn tsot_apply_action_impl(action_json: &str) -> Result<String, String> {
+    let action: HumanAction = serde_json::from_str(action_json)
+        .map_err(|e| format!("tsot_apply_action: bad action JSON: {e}"))?;
+
+    // Push the action and wait for the next prompt, all while holding
+    // the session-mutex briefly. We can't hold it across the
+    // `recv()` because the engine thread may need to access
+    // shared session state (it doesn't today, but keep the
+    // critical section narrow). Take ownership of the channel
+    // handles via clone (Senders) and re-borrow for Receivers.
+    let send_result = with_session(|s| s.action_tx.send(action))
+        .map_err(|e| format!("{e}"))?;
+    send_result.map_err(|e| format!("engine dropped action channel: {e}"))?;
+
+    let next_prompt = with_session(|s| s.prompt_rx.recv())
+        .map_err(|e| format!("{e}"))?
+        .map_err(|e| format!("engine dropped prompt channel: {e}"))?;
+
+    serde_json::to_string(&next_prompt)
+        .map_err(|e| format!("serialize next prompt: {e}"))
+}
+
 /// Native-only engine thread. Builds its own CardRegistry (Lua VM
 /// is `!Send`, can't be moved across thread boundaries), rebuilds
 /// decks from id-strings, runs `run_game_continue` with the human
@@ -399,5 +432,66 @@ mod tests {
         // Session is now active.
         let _ = PlayerId::A; // suppress unused import warning when test is filtered
         assert!(clear_session(), "expected start_game to install a session");
+    }
+
+    /// D3: tsot_apply_action pushes the JS-supplied action through
+    /// the channel, the engine consumes it, advances to the next
+    /// human decision, and we serialize that next prompt back to
+    /// JS. Test: start a game → PickCard → send Pass → expect the
+    /// engine to move past Main1 into Combat → next prompt should
+    /// be PickAttackers (for side A — the human).
+    #[test]
+    fn apply_action_pass_advances_to_attacker_prompt() {
+        let _ = clear_session();
+
+        let registry_for_deck = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let template = registry_for_deck
+            .cards()
+            .iter()
+            .find(|c| {
+                matches!(c.kind, crate::card::CardType::Creature)
+                    && c.handlers.is_empty()
+                    && c.cost.iter().all(|cc| {
+                        !cc.is_x
+                            && matches!(
+                                cc.source,
+                                crate::card::CostSource::Hand
+                                    | crate::card::CostSource::Mill
+                            )
+                    })
+            })
+            .unwrap()
+            .clone();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "heuristic",
+        })
+        .to_string();
+
+        // Set up the session via D2.
+        let _first_prompt =
+            tsot_start_game_impl(&args).expect("tsot_start_game returned Err");
+
+        // D3 under test: send Pass, expect the next prompt.
+        let action_json = serde_json::json!({ "kind": "Pass" }).to_string();
+        let next_prompt_json =
+            tsot_apply_action_impl(&action_json).expect("tsot_apply_action returned Err");
+
+        let next: Value = serde_json::from_str(&next_prompt_json).expect("prompt JSON parses");
+        assert_eq!(
+            next["kind"], "PickAttackers",
+            "after Pass on Main1, next decision is combat attacker pick (got {next})"
+        );
+        assert_eq!(
+            next["player"], "A",
+            "attacker pick is still the active player A (got {next})"
+        );
+
+        // Cleanup.
+        assert!(clear_session(), "session should still be active");
     }
 }

@@ -14,9 +14,10 @@
   ~~decks + GameState + HumanInterface, return serialized first HumanPrompt.~~
   (Native verified via thread + recv. Wasm stub returns Err until D4.)
 
-- [ ] **D3: tsot_apply_action FFI.**
-  Parse JSON HumanAction, push via action_tx, resume engine via Asyncify yield,
-  return next HumanPrompt as JSON. JS calls with `{async: true}`.
+- [x] ~~**D3: tsot_apply_action FFI.**~~
+  ~~Parse JSON HumanAction, push via action_tx, resume engine via Asyncify yield,~~
+  ~~return next HumanPrompt as JSON. JS calls with `{async: true}`.~~
+  (Native verified; wasm path returns Err until D4.)
 
 - [ ] **D4: Asyncify-yielding HumanInterface bridge.**
   Make `action_rx.recv()` yield to JS through Asyncify (single thread). Either
