@@ -17,7 +17,10 @@ return {
   colors = {"red", "white"},
   type = "creature",
   subtypes = {"spirit"},
-  cost = {{amount = 1, source = "hand"}},
+  cost = {
+    {amount = 1, source = "hand"},
+    {amount = 1, source = "graveyard"},
+  },
   abilities = {
     "when this creature dies, if the attached card was red, deal 4 damage to any target.",
   },

@@ -10,6 +10,7 @@ return {
   subtypes = {"jewel"},
   cost = {},
   abilities = {
+    "T: pay for one hand-source component of a card you cast that shares a color with this jewel.",
     "T: draw a card, then discard a card.",
     "when this card is attached as a cost to a blue card, that creature gets +1/+1 and gains: T: draw a card, then discard a card.",
   },
@@ -22,6 +23,9 @@ return {
         return
       end
     end
+  end,
+  on_enter_board = function(game, self)
+    game.tap(self.instance_id)
   end,
   activated = {
     {

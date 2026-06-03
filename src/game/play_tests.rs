@@ -2667,12 +2667,14 @@ fn primal_toad_scales_by_board_count_and_hand_count_per_c16() {
     let _ = s.remove_from_zone(&attached_to_toad, PlayerId::A, Zone::Hand);
     s.add_attached(&toad_iid, &attached_to_toad);
 
-    // Board count: 3 on A + 1 on B = 4.
-    // Hand count: A and B started with 5 each, A used 4 cards (toad +
+    // X = distinct CardType across BOARD cards on both sides (attached
+    // excluded). All four board cards here are creatures (default from
+    // deck_of/test_helpers), so distinct-type count is 1.
+    // Y = hand count: A and B started with 5 each, A used 4 cards (toad +
     // 2 board fillers + 1 attached), B used 1 (board filler). So A has
     // 1 left, B has 4 left → 5.
     let (x, y) = s.effective_stats(&toad_iid);
-    assert_eq!(x, 4.0, "X = BOARD count across both players (attached excluded per C.16)");
+    assert_eq!(x, 1.0, "X = distinct CardType count across BOARD cards (all creatures here → 1)");
     assert_eq!(y, 5.0, "Y = HAND count across both players");
 }
 

@@ -407,6 +407,11 @@ pub enum ModifierValue {
     BoardCount,
     /// Count of cards in both players' HAND zones. Parsed from `"hands"`.
     HandCount,
+    /// Count of distinct card *types* (CardType, subtypes excluded) across
+    /// every card on the BOARD on both players' sides. Parsed from
+    /// `"board_types"` in card .lua files. Used by Primal Toad's
+    /// "+X where X is the number of types in play" variant.
+    BoardTypeCount,
 }
 
 impl Default for ModifierValue {

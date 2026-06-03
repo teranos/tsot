@@ -573,6 +573,9 @@ fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
             if lower == "board" {
                 return Ok(ModifierValue::BoardCount);
             }
+            if lower == "board_types" {
+                return Ok(ModifierValue::BoardTypeCount);
+            }
             if lower == "hands" || lower == "hand" {
                 return Ok(ModifierValue::HandCount);
             }

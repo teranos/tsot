@@ -1107,6 +1107,26 @@ impl GameState {
             crate::card::ModifierValue::HandCount => {
                 (self.a.hand.len() + self.b.hand.len()) as f32
             }
+            crate::card::ModifierValue::BoardTypeCount => {
+                // Distinct CardType across every BOARD card on both sides.
+                // Subtypes are NOT considered — only the top-level kind
+                // (Creature / Spell / Artifact / Mutation / Environment).
+                // `Unspecified` is excluded — a typeless card on the
+                // BOARD doesn't contribute a "type" to the count.
+                // Used by Primal Toad.
+                let mut seen: Vec<crate::card::CardType> = Vec::new();
+                for iid in self.a.board.iter().chain(self.b.board.iter()) {
+                    if let Some(inst) = self.card_pool.get(iid) {
+                        if inst.card.kind == crate::card::CardType::Unspecified {
+                            continue;
+                        }
+                        if !seen.contains(&inst.card.kind) {
+                            seen.push(inst.card.kind);
+                        }
+                    }
+                }
+                seen.len() as f32
+            }
         }
     }
 

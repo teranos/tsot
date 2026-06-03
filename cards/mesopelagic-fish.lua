@@ -22,7 +22,7 @@ return {
   subtypes = {"fish"},
   symbol = "⋈",
   cost = {
-    {amount = 1, source = "hand"},
+    {amount = 1, source = "graveyard"},
     {amount = 10, source = "mill"},
   },
   abilities = {

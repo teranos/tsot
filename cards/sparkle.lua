@@ -2,7 +2,7 @@ return {
   id = "sparkle",
   name = "Sparkle",
   colors = {"red"},
-  face = {"glow"},
+  face = {"glow", "shiny"},
   type = "instant",
   cost = {
     {amount = 1, source = "mill"},

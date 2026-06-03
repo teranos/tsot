@@ -419,7 +419,7 @@ KNOWN_KEYWORDS = [
 # which is the point — surfaces the design TODO).
 KNOWN_COLORS = [
     "red", "blue", "green", "purple", "black", "white",
-    "pink", "orange", "azure",
+    "pink", "orange", "azure", "yellow",
 ]
 # `transparent` is a frame attribute, not a color (see RULES C.13). Cards
 # declare it via `frame = "transparent"`. Rendered as a chip in Pool
@@ -550,6 +550,7 @@ SWATCHES = {
     "purple": "#9a6bbd", "black": "#3a3a3a", "white": "#d6d4c8",
     "colorless": "#86878a",
     "pink": "#d97ea8", "orange": "#d9885a", "azure": "#5ec4d4",
+    "yellow": "#e8d35a",
     "glow": "#c8e88a",
 }
 
