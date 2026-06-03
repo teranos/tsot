@@ -21,7 +21,10 @@ return {
   type = "creature",
   subtypes = {"fish"},
   symbol = "⋈",
-  cost = {{amount = 10, source = "mill"}},
+  cost = {
+    {amount = 1, source = "hand"},
+    {amount = 10, source = "mill"},
+  },
   abilities = {
     "when this creature dies, you may return a non-creature card from your graveyard to your hand",
   },

@@ -632,24 +632,90 @@ fn read_condition(c: &Table) -> mlua::Result<StaticCondition> {
 fn parse_card_table(table: &Table) -> mlua::Result<Card> {
     let id: String = table.get("id")?;
     let name = table.get::<Option<String>>("name")?.unwrap_or_default();
-    let symbols: Vec<String> = match table.get::<Option<Value>>("symbols")? {
-        Some(Value::Table(t)) => {
-            let mut out = Vec::new();
-            for pair in t.pairs::<i64, String>() {
-                let (_, s) = pair?;
-                out.push(s);
+    // `symbols` accepts both forms:
+    //   - Array: `symbols = {"꩜", "≡"}`  → unpositioned, spirals from C.
+    //   - Map:   `symbols = { C = "꩜", TR = "≡" }`  → per-slot placement.
+    // We disambiguate by peeking at the first key: integer = array,
+    // string = map. The two forms are mutually exclusive.
+    let (symbols, symbol_slots): (Vec<String>, std::collections::BTreeMap<crate::card::Slot, String>) =
+        match table.get::<Option<Value>>("symbols")? {
+            Some(Value::Table(t)) => {
+                let mut arr = Vec::new();
+                let mut map = std::collections::BTreeMap::<crate::card::Slot, String>::new();
+                let mut form: Option<&'static str> = None;
+                for pair in t.clone().pairs::<Value, String>() {
+                    let (k, v) = pair?;
+                    match k {
+                        Value::Integer(_) => {
+                            if form == Some("map") {
+                                return Err(mlua::Error::runtime(
+                                    "card.symbols cannot mix array entries with slot-keyed entries".to_string()
+                                ));
+                            }
+                            form = Some("array");
+                            arr.push(v);
+                        }
+                        Value::String(ks) => {
+                            if form == Some("array") {
+                                return Err(mlua::Error::runtime(
+                                    "card.symbols cannot mix array entries with slot-keyed entries".to_string()
+                                ));
+                            }
+                            form = Some("map");
+                            let name = ks.to_str()?.to_string();
+                            let slot = name.parse::<crate::card::Slot>()
+                                .map_err(mlua::Error::runtime)?;
+                            map.insert(slot, v);
+                        }
+                        other => {
+                            return Err(mlua::Error::runtime(format!(
+                                "card.symbols keys must be integers or slot names; got {other:?}"
+                            )))
+                        }
+                    }
+                }
+                // If we got map entries, derive the symbols Vec in
+                // canonical Slot::ALL order so anything reading the
+                // array sees a stable glyph list.
+                if !map.is_empty() {
+                    let derived: Vec<String> = crate::card::Slot::ALL
+                        .iter()
+                        .filter_map(|s| map.get(s).cloned())
+                        .collect();
+                    (derived, map)
+                } else {
+                    (arr, map)
+                }
             }
-            out
+            Some(other) => {
+                return Err(mlua::Error::runtime(format!(
+                    "card.symbols must be a sequence or slot-keyed table, got {other:?}"
+                )))
+            }
+            None => match table.get::<Option<String>>("symbol")? {
+                Some(s) if !s.is_empty() => (vec![s], std::collections::BTreeMap::new()),
+                _ => (Vec::new(), std::collections::BTreeMap::new()),
+            },
+    };
+    // Array-form fallback: if symbol_slots is empty but symbols are
+    // declared, assign each glyph to a slot per the SLOTS.md canonical
+    // spiral (C, U, UR, R, DR, D, DL, L, UL, TL, T, TR, BR, B, BL).
+    // This makes every loaded card carry positional symbol data — the
+    // map form is just explicit-placement opt-in.
+    let symbol_slots = if symbol_slots.is_empty() && !symbols.is_empty() {
+        let mut filled = std::collections::BTreeMap::<crate::card::Slot, String>::new();
+        for (glyph, slot) in symbols.iter().zip(crate::card::Slot::SPIRAL.iter()) {
+            filled.insert(*slot, glyph.clone());
         }
-        Some(other) => {
+        if symbols.len() > crate::card::Slot::SPIRAL.len() {
             return Err(mlua::Error::runtime(format!(
-                "card.symbols must be a sequence of strings, got {other:?}"
-            )))
+                "card `{id}`: declares {} symbols, exceeds the 15-slot grid",
+                symbols.len()
+            )));
         }
-        None => match table.get::<Option<String>>("symbol")? {
-            Some(s) if !s.is_empty() => vec![s],
-            _ => Vec::new(),
-        },
+        filled
+    } else {
+        symbol_slots
     };
     // Symbols must be unicode glyphs (single non-ASCII codepoint each),
     // never ASCII shorthand codes like "ax". The engine matches symbols
@@ -689,6 +755,27 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
     let flavor = table.get::<Option<String>>("flavor")?.unwrap_or_default();
     let frame = table.get::<Option<String>>("frame")?.filter(|s| !s.is_empty());
     let face = read_string_vec(table, "face")?;
+    // Positional holes — `holes = {"TL", "C", ...}` parsed into Vec<Slot>.
+    let holes: Vec<crate::card::Slot> = match table.get::<Option<Value>>("holes")? {
+        Some(Value::Table(t)) => {
+            let mut out = Vec::new();
+            for s in t.sequence_values::<String>() {
+                let name = s?;
+                let slot = name.parse::<crate::card::Slot>()
+                    .map_err(mlua::Error::runtime)?;
+                if !out.contains(&slot) {
+                    out.push(slot);
+                }
+            }
+            out
+        }
+        Some(other) => {
+            return Err(mlua::Error::runtime(format!(
+                "card.holes must be a sequence of slot names (e.g. {{\"TL\", \"C\"}}), got {other:?}"
+            )))
+        }
+        None => Vec::new(),
+    };
     // C.13: a transparent-frame card has no symbols. The symbol-search
     // routine looks past it, so it can't carry one itself.
     if frame.as_deref() == Some("transparent") && !symbols.is_empty() {
@@ -730,6 +817,8 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
         can_block_subtypes,
         symbols,
         frame,
+        holes,
+        symbol_slots,
         face,
         cost,
         abilities,

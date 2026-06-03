@@ -740,6 +740,8 @@ mod tests {
             can_block_subtypes: vec![],
             symbols: Vec::new(),
             frame: None,
+            holes: Vec::new(),
+            symbol_slots: std::collections::BTreeMap::new(),
             face: Vec::new(),
             cost: vec![],
             abilities: vec![],

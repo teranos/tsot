@@ -141,6 +141,17 @@ impl Slot {
         Slot::BL, Slot::B, Slot::BR,
     ];
 
+    /// Canonical fill order for array-form symbols — spirals out from
+    /// `C` clockwise through the inner ring (U → UR → R → DR → D → DL
+    /// → L → UL), then clockwise through the outer ring (TL → T → TR →
+    /// BR → B → BL). Per SLOTS.md. The loader uses this when a card
+    /// declares `symbols = {"X", "Y", "Z"}` without explicit slot keys.
+    pub const SPIRAL: [Slot; 15] = [
+        Slot::C,
+        Slot::U, Slot::UR, Slot::R, Slot::DR, Slot::D, Slot::DL, Slot::L, Slot::UL,
+        Slot::TL, Slot::T, Slot::TR, Slot::BR, Slot::B, Slot::BL,
+    ];
+
     /// Short label (1-2 chars) for printing. Matches the labels in
     /// SLOTS.md's diagram and the `FromStr` accepted forms.
     pub fn as_str(self) -> &'static str {
@@ -553,8 +564,30 @@ pub struct Card {
     /// see-through (the symbol-search routine looks past it to the next
     /// opaque card down). Frame is NOT a color: color-matching rules
     /// (P.12a graveyard payment, static affects.colors) ignore it.
+    ///
+    /// Whole-card legacy hack predating the per-slot `holes` field. New
+    /// cards declare positional holes via `holes`; cards still using
+    /// `frame = "transparent"` are treated as having a single hole at
+    /// slot `C` until migrated.
     #[serde(default)]
     pub frame: Option<String>,
+    /// Positional hole geometry — slots on the card that are see-through.
+    /// See `SLOTS.md`. Empty = no holes (fully opaque card). A hole at
+    /// slot S aligns with a symbol slot S on the card beneath when this
+    /// card sits above it (the see-through reveal). Cards can declare
+    /// any subset of the 15 slots. No engine site reads this yet — the
+    /// per-slot reveal walk is the next slice; for now `holes` is data
+    /// captured for forward compatibility.
+    #[serde(default)]
+    pub holes: Vec<Slot>,
+    /// Positional symbol placement — `Slot → glyph`. Opt-in. When set,
+    /// the card's symbols live at the named slots; when empty, the
+    /// engine falls back to the `symbols` array, spiraling out from C
+    /// per the SLOTS.md canonical fill order. A card may not declare
+    /// a symbol at a slot that also appears in `holes` (loader-enforced
+    /// once V.8 ships per-slot).
+    #[serde(default)]
+    pub symbol_slots: std::collections::BTreeMap<Slot, String>,
     /// Cosmetic surface treatments (e.g. `"shiny"`, `"holo"`). Pure
     /// metadata — no engine rule reads this. Stacks, so a card can be
     /// both shiny and holo. Distinct from `frame` (geometry / hole) and
