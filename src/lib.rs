@@ -9,7 +9,12 @@ pub mod sim;
 // emscripten's `Module.ccall("tsot_*", ...)`. JSON-string payloads
 // over `*const c_char` for arguments and returns — keeps the FFI
 // boundary simple at the cost of (de)serialization on each call.
-#[cfg(target_arch = "wasm32")]
+//
+// The module itself compiles on every target so the session-management
+// plumbing (GameSession, install/with/clear) is exercisable by `cargo
+// test`. Only the `#[no_mangle] extern "C"` exports + the
+// `emscripten_sleep` extern declaration are gated to wasm32, since
+// emscripten owns those symbols.
 pub mod wasm_ffi;
 
 pub use cast_routing::CastRouting;
