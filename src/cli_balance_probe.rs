@@ -56,14 +56,18 @@ pub struct BalanceProbeArgs {
     /// Copies of the variant card to pin into every genome.
     #[arg(long = "pinned-count", default_value_t = 2)]
     pub pinned_count: usize,
-    /// Population size.
-    #[arg(long, default_value_t = 12)]
-    pub pop: usize,
-    /// Generations.
+    /// Population size. Default 8 — daily-fast budget. Bump for
+    /// tighter ceiling search.
     #[arg(long, default_value_t = 8)]
+    pub pop: usize,
+    /// Generations. Default 4 — daily-fast budget. Bump for deeper
+    /// search.
+    #[arg(long, default_value_t = 4)]
     pub gens: usize,
-    /// Games per side per fitness eval.
-    #[arg(long, default_value_t = 10)]
+    /// Games per side per fitness eval. Default 3 — paired with UCT
+    /// opponent for higher per-game signal; heuristic-vs-heuristic
+    /// needed 10+ for the same separation.
+    #[arg(long, default_value_t = 3)]
     pub n: u32,
     /// Master seed.
     #[arg(long, default_value_t = 0xBA_1A, value_parser = parse_u64_hex_or_dec)]
@@ -87,6 +91,23 @@ pub struct BalanceProbeArgs {
     /// `{prefix}-{variant_id}.json`. Use `-` to skip JSON output.
     #[arg(long = "json-prefix", default_value = "balance-probe")]
     pub json_prefix: String,
+    /// Opponent AI for fitness evaluation. Default `uct` (UCB1
+    /// tree-search MCTS — stronger play, the variant deltas mean
+    /// more). `heuristic` is the legacy fast option. Candidate side
+    /// stays Heuristic regardless. Mirrors `tsot evolve`'s flag.
+    #[arg(long = "opponent-ai", default_value = "uct")]
+    pub opponent_ai: String,
+    /// UCT iterations per pick when `--opponent-ai uct`. Default 10
+    /// is the fast probe setting (~3× heuristic cost per game, still
+    /// strong-enough lookahead for the per-card signal to read).
+    /// Bump to 50 for the matched-compute-to-one-ply-MCTS sweet spot
+    /// when you want tighter σ.
+    #[arg(long = "opponent-uct-iterations", default_value_t = 10)]
+    pub opponent_uct_iterations: u32,
+    /// UCT exploration constant when `--opponent-ai uct`. `sqrt(2)` is
+    /// classical.
+    #[arg(long = "opponent-uct-c", default_value_t = std::f64::consts::SQRT_2)]
+    pub opponent_uct_c: f64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -180,6 +201,18 @@ fn probe_one_card(
     args: &BalanceProbeArgs,
     card: &Card,
 ) -> ProbeResult {
+    let opponent_ai = match args.opponent_ai.to_ascii_lowercase().as_str() {
+        "heuristic" => tsot::sim::AiKind::Heuristic,
+        "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
+            iterations: args.opponent_uct_iterations,
+            exploration_c: args.opponent_uct_c,
+            ..Default::default()
+        }),
+        other => {
+            eprintln!("error: --opponent-ai must be 'heuristic' | 'uct', got {other:?}");
+            std::process::exit(2);
+        }
+    };
     let cfg = EvolveConfig {
         pop_size: args.pop,
         generations: args.gens,
@@ -196,7 +229,7 @@ fn probe_one_card(
         pinned_card_id: Some(card.id.clone()),
         pinned_count: args.pinned_count.min(3),
         diversity_alpha: 0.0,
-        opponent_ai: tsot::sim::AiKind::Heuristic,
+        opponent_ai,
     };
 
     // For pin to work, the pinned card MUST be available to genomes.

@@ -1,5 +1,12 @@
 # tsot — EA workflow shortcuts.
 #
+# This file is a THIN WRAPPER over the `tsot` CLI. Targets exist
+# only as muscle-memory aliases for `cargo run -- <subcommand>`.
+# DO NOT add flags, defaults, env vars, log redirection, or `probe-deep`/
+# `evolve-deep` style alternates that bake configuration into the
+# Makefile. Defaults live in the CLI (clap `default_value_t`). If a
+# setting needs to change, change it in the CLI, not here.
+#
 # Daily-use commands:
 #   make evolve              one EA round (~25min, auto-numbered, saves top-5 to champions/)
 #   make report              HTML report aggregating champions/ with game samples
