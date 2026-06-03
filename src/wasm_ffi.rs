@@ -58,3 +58,33 @@ pub unsafe extern "C" fn tsot_echo(input: *const c_char) -> *mut c_char {
         .unwrap_or("<invalid utf-8>");
     export(format!("echo: {s}"))
 }
+
+// Asyncify proof-of-concept. `emscripten_sleep` yields to the JS
+// event loop for the given number of milliseconds, then resumes the
+// Rust call as if it had blocked. With `-sASYNCIFY=1` enabled and
+// the JS caller using `{async: true}` on `ccall`, this returns a
+// Promise that resolves once the resume completes.
+//
+// If this round-trips correctly, the same mechanism extends to
+// `prompt_rx.recv()` — the engine "blocks" on a channel, Asyncify
+// yields back to JS, JS pushes the next action via another FFI
+// call which causes the channel to wake the resumed engine
+// frame. Result: synchronous-looking engine code, async-looking JS
+// API. No restructuring of `run_game_continue` needed.
+extern "C" {
+    fn emscripten_sleep(ms: u32);
+}
+
+/// Async smoke-test export. Sleeps 100ms (yielding to JS), then
+/// returns a string. JS calls as:
+/// ```js
+/// const ptr = await Module.ccall("tsot_async_sleep", "number",
+///                                [], [], {async: true});
+/// console.log(Module.UTF8ToString(ptr));
+/// ```
+/// Free with [`tsot_free_string`].
+#[no_mangle]
+pub extern "C" fn tsot_async_sleep() -> *mut c_char {
+    unsafe { emscripten_sleep(100); }
+    export("yielded and resumed")
+}

@@ -2,6 +2,11 @@
 name = "tsot"
 version = "0.1.0"
 edition = "2021"
+# Two bins now (tsot, tsot_wasm) — `cargo run` without --bin would
+# otherwise refuse to pick. `tsot` is the native CLI, the one make
+# targets and humans actually run; `tsot_wasm` only ever builds
+# under --target wasm32-unknown-emscripten.
+default-run = "tsot"
 
 [lib]
 # `rlib` is used by every consumer of `tsot` as a library (the native

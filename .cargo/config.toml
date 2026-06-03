@@ -6,7 +6,7 @@
 # to call into them. Output is a single combined .wasm + .js loader
 # (Modularize mode lets the embedding HTML name the module factory).
 rustflags = [
-  "-C", "link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string",
+  "-C", "link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_async_sleep",
   "-C", "link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8",
   "-C", "link-args=-sMODULARIZE=1",
   "-C", "link-args=-sEXPORT_NAME=createTsotModule",
@@ -14,4 +14,9 @@ rustflags = [
   # The engine doesn't fork or use threads in the wasm build — keep
   # the binary lean by disabling pthread/wasm-worker codepaths.
   "-C", "link-args=-sUSE_PTHREADS=0",
+  # Asyncify: transform specified functions so they can yield to JS
+  # mid-execution and be resumed later. The engine's blocking calls
+  # (`prompt_rx.recv()` etc.) ride this — JS sees promises, Rust sees
+  # synchronous code. Adds ~30-50% binary bloat and some runtime cost.
+  "-C", "link-args=-sASYNCIFY=1",
 ]
