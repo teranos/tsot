@@ -1,5 +1,5 @@
--- Transparent artifact (Vial subtype). Tap + self-sacrifice tutors a
--- mutation card from your deck to your hand.
+-- Transparent-frame artifact (Vial subtype). Tap + self-sacrifice
+-- tutors a mutation card from your deck to your hand.
 --
 -- A.8 reserves SACRIFICE / SELF as activation cost components, so the
 -- "sacrifice" half lives inside the effect handler: the activation
@@ -7,9 +7,11 @@
 -- GRAVEYARD and tutors. Functionally identical, just doesn't lean on
 -- an unwired cost component.
 --
--- Reading "1yg" as 1 graveyard + 1 mill. The graveyard pitch must
--- color-match (P.12a) — a transparent-color-only vial requires a
--- transparent pitch in GY (clear-* in graveyard satisfies this).
+-- Cost: 1 mill only. The original spec was "1 graveyard + 1 mill",
+-- but per C.13 transparent is a frame attribute and not a color, and
+-- per P.12a a card with empty colors cannot anchor a GY pitch (empty
+-- set cannot intersect). So a GY-cost component on a color-less card
+-- is unpayable by construction. Dropping it.
 return {
   id = "mutation-vial",
   name = "Mutation Vial",
@@ -18,7 +20,6 @@ return {
   type = "artifact",
   subtypes = {"vial"},
   cost = {
-    {amount = 1, source = "graveyard"},
     {amount = 1, source = "mill"},
   },
   abilities = {
