@@ -46,25 +46,3 @@ nix build                 # build the package
 ```
 
 mlua bundles Lua 5.4 from source via the `vendored` feature; no system Lua install needed.
-
-## Documents
-
-- **`RULES.md`** — the rules of the game. Each rule has a stable ID (e.g., `U.6`, `B.7`).
-- **`UX.md`** — baseline UX requirements and the engine API surface those imply.
-- **`LIMITATIONS.md`** — what the engine can't do today.
-- **`LUA.md`** — phased plan for card-ability execution.
-- **`STACK.md`** — phased plan for response windows. Phase 1 + 2 done.
-- **`STATIC.md`** — phased plan for continuous effects. Phase 1 + 2 + 3 + 3.5 done.
-- **`JOURNAL.md`** — multi-session plan for mutation journaling, rollback, replay, save/load.
-- **`EA.md`** — evolutionary deck search (the current primary simulation mode).
-- **`src/sim/README.md`** — sim AI heuristics + game-runner internals.
-
-## The archived v1 garden
-
-`frontend-garden/` contains the original single-player QNTX symbol tutorial — a browser-based collection garden built with Bun, TypeScript, and `@qntx/glyphs`. The CCG direction superseded it; the garden is kept as an archive.
-
-```sh
-cd frontend-garden
-bun install
-bun run dev               # http://localhost:5180
-```

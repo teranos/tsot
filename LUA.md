@@ -60,13 +60,6 @@ Phase 1 spec is structurally complete. All six events are wired and firing in th
 - `flesh-eating-plant` — `on_die`: may return an insect from your graveyard (uses `confirm` + filtered `choose_card`; static "insects can't attack" still deferred)
 - `goblin-conspirator` — `on_play`: may reveal a goblin from your hand for a draw (uses `confirm` + filtered `choose_card`)
 
-**Cards in corpus awaiting further infra** (data + abilities text only, no handler):
-- `goblin-berserker` — needs choice for "which card to discard"
-- `goblin-warlord` — needs `static` for the lord effect; the on_block discard also needs choice
-- `eager-goblin` — needs a counter/modifier-add API (e.g. `game.add_modifier(iid, "+1/+1")`); `Modifier::StatBoost` exists in state.rs but isn't exposed
-- `slow-recall` — needs spell type in `play_card`, deck→exile cost source, `on_turn_end` event, delayed-trigger registry
-- `bitter-dawn` — needs stack/response window (for the response-instant timing) + delayed triggers + sacrifice mechanic
-
 **Other Phase 1 spec items:**
 - [x] mlua sandbox: VM constructed via `Lua::new_with(MATH | STRING | TABLE | COROUTINE)`; base-lib loader functions (`load`, `loadstring`, `loadfile`, `dofile`) nil'd in globals. Test in `card::tests::sandbox_denies_dangerous_stdlib`.
 - [x] `CardRegistry` owns long-lived Lua VM; handlers stored as `mlua::Function` on `Card`

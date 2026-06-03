@@ -3,10 +3,6 @@
 > Four-phase plan for continuous effects: anthems, keyword grants, restrictions, and replacements.
 > Companion to STACK.md (which handles cast-and-response timing — orthogonal to statics).
 
-## Status (2026-05-30)
-
-Nothing wired yet. The existing `Modifier` system (`StatBoost`, `GainsFlying`) is point-in-time applied and persists on the modified card — it's what `add_modifier` and `effective_stats` already use today. That's the substrate Phase 1 builds on, but it isn't itself "static" in the continuous sense.
-
 What this doc plans: a continuous-effect engine where a source card on the BOARD broadcasts effects to qualifying targets, and the effects evaporate the moment the source leaves the board.
 
 ## Fundamentals
