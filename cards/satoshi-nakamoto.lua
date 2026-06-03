@@ -6,7 +6,7 @@ return {
   subtypes = {"human", "legend"},
   symbols = {"₿"},
   cost = {
-    {amount = 5, source = "graveyard"},
+    {amount = 6, source = "graveyard"},
   },
   abilities = {
     "invulnerability.",
