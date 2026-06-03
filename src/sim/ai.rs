@@ -52,9 +52,19 @@ pub fn enumerate_playable_in_hand(
                     // creature: Pattern B infinite loop. Plain creatures
                     // (no `is_x`, no setup cost) are always playable for
                     // free, so they skip the check.
+                    //
+                    // `Attached` belongs in the gate too — attach-shuffler
+                    // (1h + 2att) needs ≥2 attached cards on the player's
+                    // BOARD to actually pay. Without this, build_pattern_b
+                    // truncates an empty pool, attached_payment_ids stays
+                    // empty, P.31 transfer/exile bumps never fire, and the
+                    // sim silently casts the creature without paying its
+                    // attached cost (caught by sim_pays_attached_cost_*).
                     let needs_affordability = inst.card.cost.iter().any(|c| {
-                        matches!(c.source, CostSource::Sacrifice | CostSource::Graveyard)
-                            || c.is_x
+                        matches!(
+                            c.source,
+                            CostSource::Sacrifice | CostSource::Graveyard | CostSource::Attached
+                        ) || c.is_x
                     });
                     !needs_affordability || can_pay_instant_cost(state, player, iid)
                 }
