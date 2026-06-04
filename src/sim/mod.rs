@@ -22,11 +22,12 @@ pub mod parallel_eval;
 pub mod run;
 pub mod snapshot;
 pub mod stats;
+pub mod step;
 pub mod uct;
 pub mod variants;
 
 pub use evolve::{evolve as run_evolve, EvolveConfig};
-pub use run::run_game;
+pub use run::{run_game, run_game_with_ai};
 pub use stats::GameStats;
 
 /// Which AI drives the sim's player-decision points. Default = the

@@ -49,6 +49,22 @@ pub struct CurateBaselinesArgs {
     /// label suffix. `0` (default) = no promotion (manual review only).
     #[arg(long = "promote-unmatched", default_value_t = 0)]
     pub promote_unmatched: usize,
+    /// AI used to play the live re-evaluation games (both seats).
+    /// `uct` (default) gives high-signal play so promote/upgrade
+    /// decisions reflect real card-driven outcomes. `heuristic` is the
+    /// legacy fast option — its play is low-signal, so promotions made
+    /// under it carry noise. Both sides use the same AI to keep the
+    /// comparison fair.
+    #[arg(long = "opponent-ai", default_value = "uct")]
+    pub opponent_ai: String,
+    /// UCT iterations per pick when `--opponent-ai uct`. 10 ≈ daily
+    /// budget; raise for tighter signal at proportionally higher cost.
+    #[arg(long = "opponent-uct-iterations", default_value_t = 10)]
+    pub opponent_uct_iterations: u32,
+    /// UCT exploration constant when `--opponent-ai uct`. `sqrt(2)` is
+    /// classical.
+    #[arg(long = "opponent-uct-c", default_value_t = std::f64::consts::SQRT_2)]
+    pub opponent_uct_c: f64,
 }
 
 use tsot::sim::diversity::jaccard;
@@ -108,6 +124,21 @@ pub fn run_curate_baselines(
     let baseline_decks: Vec<Vec<Card>> = baselines.iter().map(|(_, _, c, _)| c.clone()).collect();
     let mut rng = StdRng::seed_from_u64(args.seed);
 
+    let ai_kind = match args.opponent_ai.to_ascii_lowercase().as_str() {
+        "heuristic" => tsot::sim::AiKind::Heuristic,
+        "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
+            iterations: args.opponent_uct_iterations,
+            exploration_c: args.opponent_uct_c,
+            ..Default::default()
+        }),
+        other => {
+            eprintln!("error: --opponent-ai must be 'heuristic' | 'uct', got {other:?}");
+            std::process::exit(2);
+        }
+    };
+    let ais = [ai_kind.clone(), ai_kind.clone()];
+    println!("Live AI: {:?} (both seats)", ai_kind);
+
     let evaluate = |cand_cards: &[Card], rng: &mut StdRng| -> f64 {
         let mut wins = 0u32;
         let mut games = 0u32;
@@ -116,7 +147,7 @@ pub fn run_curate_baselines(
                 let state = GameState::new(cand_cards.to_vec(), opp.clone());
                 let mut game_rng = StdRng::seed_from_u64(rng.gen());
                 let mut log: Vec<String> = Vec::new();
-                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry.lua());
+                let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry.lua(), &ais);
                 if stats.winner == tsot::game::PlayerId::A {
                     wins += 1;
                 }
@@ -124,7 +155,7 @@ pub fn run_curate_baselines(
                 let state = GameState::new(opp.clone(), cand_cards.to_vec());
                 let mut game_rng = StdRng::seed_from_u64(rng.gen());
                 let mut log = Vec::new();
-                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry.lua());
+                let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry.lua(), &ais);
                 if stats.winner == tsot::game::PlayerId::B {
                     wins += 1;
                 }
