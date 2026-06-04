@@ -192,6 +192,109 @@ impl StepEngine {
     }
 }
 
+/// Resolve-side context for the shared `step_resolve` body — encodes
+/// the differences between Pattern B's main-1 resolve and Main2's
+/// post-combat resolve. Each variant carries the in-flight
+/// `played_creature` flag and computes the four cursor transitions
+/// the resolve flow needs: `on_unaffordable`, `on_pending`,
+/// `on_success`, `on_failure`.
+#[derive(Debug, Clone, Copy)]
+enum ResolveContext {
+    PatternB { played_creature_before: bool },
+    Main2 { played_creature: bool },
+}
+
+impl ResolveContext {
+    fn panic_label(&self) -> &'static str {
+        match self {
+            ResolveContext::PatternB { .. } => "PatternBResolving",
+            ResolveContext::Main2 { .. } => "Main2Resolving",
+        }
+    }
+
+    /// Where to land when `build_pattern_b_choices` returns
+    /// `UnaffordableX`. Pattern B mirrors `step_pattern_b_pick` —
+    /// creature flips the cap and stays in PatternB; non-creature
+    /// bails into combat. Main2 always returns to `Main2Pick` with
+    /// the merged cap.
+    fn on_unaffordable(&self, picked_is_creature: bool) -> EngineCursor {
+        match *self {
+            ResolveContext::PatternB { .. } => {
+                if picked_is_creature {
+                    EngineCursor::PatternBPick {
+                        played_creature: true,
+                    }
+                } else {
+                    EngineCursor::DeclareAttackers
+                }
+            }
+            ResolveContext::Main2 { played_creature } => EngineCursor::Main2Pick {
+                played_creature: played_creature || picked_is_creature,
+            },
+        }
+    }
+
+    /// Where to re-enter the resolve loop when the oracle captures a
+    /// `ChoicePending`. Same `*Resolving` variant we came from, with
+    /// the accumulated history carried forward.
+    fn on_pending(
+        &self,
+        picked: InstanceId,
+        history: Vec<crate::choice::ScriptedAnswer>,
+    ) -> EngineCursor {
+        match *self {
+            ResolveContext::PatternB {
+                played_creature_before,
+            } => EngineCursor::PatternBResolving {
+                picked,
+                history,
+                played_creature_before,
+            },
+            ResolveContext::Main2 { played_creature } => EngineCursor::Main2Resolving {
+                picked,
+                history,
+                played_creature,
+            },
+        }
+    }
+
+    /// Where to land after a successful `play_card`. The corresponding
+    /// `*Pick` cursor with the cap flag merged in.
+    fn on_success(&self, picked_is_creature: bool) -> EngineCursor {
+        match *self {
+            ResolveContext::PatternB {
+                played_creature_before,
+            } => EngineCursor::PatternBPick {
+                played_creature: played_creature_before || picked_is_creature,
+            },
+            ResolveContext::Main2 { played_creature } => EngineCursor::Main2Pick {
+                played_creature: played_creature || picked_is_creature,
+            },
+        }
+    }
+
+    /// Where to land when `play_card` returned an error (or a future
+    /// suicide-detect, currently dormant on the human side). Pattern B
+    /// mirrors its pick-fail heuristic; Main2 returns to its pick
+    /// cursor so the player can pick again or pass.
+    fn on_failure(&self, picked_is_creature: bool) -> EngineCursor {
+        match *self {
+            ResolveContext::PatternB { .. } => {
+                if picked_is_creature {
+                    EngineCursor::PatternBPick {
+                        played_creature: true,
+                    }
+                } else {
+                    EngineCursor::PreCombatActivations
+                }
+            }
+            ResolveContext::Main2 { played_creature } => EngineCursor::Main2Pick {
+                played_creature: played_creature || picked_is_creature,
+            },
+        }
+    }
+}
+
 /// Lift a `ChoicePending` from the oracle into a `HumanPrompt` the
 /// engine can yield. The viewer is the asker for `Card` requests
 /// (which carry their own `asker`); for `Confirm` it's the named
@@ -856,189 +959,18 @@ impl StepEngine {
     fn step_pattern_b_resolve(
         &mut self,
         picked: InstanceId,
-        mut history: Vec<crate::choice::ScriptedAnswer>,
+        history: Vec<crate::choice::ScriptedAnswer>,
         played_creature_before: bool,
         pending: Option<HumanAction>,
     ) -> StepResult {
-        let active = self.state.active_player;
-        // Push the human's response (if any) onto the replay history.
-        // None = the resume tick before we've received an action; that
-        // shouldn't happen but tolerate it gracefully.
-        if let Some(act) = pending {
-            let ans = match act {
-                HumanAction::ChoiceCard { iid } => crate::choice::ScriptedAnswer::Card(iid),
-                HumanAction::ChoiceConfirm { yes } => crate::choice::ScriptedAnswer::Confirm(yes),
-                HumanAction::ChoicePlayer { player } => {
-                    crate::choice::ScriptedAnswer::Player(player)
-                }
-                HumanAction::ChoiceInt { value } => crate::choice::ScriptedAnswer::Int(value),
-                other => panic!(
-                    "PatternBResolving: expected Choice* response, got {other:?}"
-                ),
-            };
-            history.push(ans);
-        }
-
-        // Pre-load the replay queue and clear the recorder (which
-        // already captured the failed attempt's mock answers).
-        self.oracle.clear();
-        self.oracle.inner_mut().reset_replay(history.clone());
-
-        let picked_is_creature = self
-            .state
-            .card_pool
-            .get(&picked)
-            .map(|c| c.card.kind == CardType::Creature)
-            .unwrap_or(false);
-
-        let build_result = build_pattern_b_choices(
-            &mut self.state,
-            active,
-            &picked,
-            &mut self.oracle,
-            true, // active_is_human (this cursor only fires for human side)
-        );
-        let choices = match build_result {
-            BuildChoiceResult::Choices(c) => c,
-            BuildChoiceResult::UnaffordableX { .. } => {
-                // Same fall-through as step_pattern_b_pick: creature
-                // that turned unaffordable means we mark the cap and
-                // re-enter PatternBPick; non-creature bails to combat.
-                self.cursor = if picked_is_creature {
-                    EngineCursor::PatternBPick {
-                        played_creature: true,
-                    }
-                } else {
-                    EngineCursor::DeclareAttackers
-                };
-                return StepResult::Continue;
-            }
-            BuildChoiceResult::Pending(p) => {
-                self.cursor = EngineCursor::PatternBResolving {
-                    picked,
-                    history,
-                    played_creature_before,
-                };
-                let prompt = pending_to_prompt(&self.state, p);
-                return StepResult::NeedHuman(Box::new(prompt));
-            }
-        };
-
-        // Sacrifice telemetry (matches step_pattern_b_pick).
-        for sac_iid in &choices.sacrifice_ids {
-            if let Some(card_id) = self
-                .state
-                .card_pool
-                .get(sac_iid)
-                .map(|c| c.card.id.clone())
-            {
-                *self
-                    .stats
-                    .card_sacrificed_count
-                    .entry(card_id)
-                    .or_insert(0) += 1;
-            }
-        }
-        self.oracle.clear();
-
-        // Open the per-cast preview journal so play_card mutations
-        // can be rolled back (parity with step_pattern_b_pick).
-        self.state.journal = Some(crate::game::Journal::new());
-
-        let preview_size_before = self
-            .state
-            .journal
-            .as_ref()
-            .map(|j| j.len())
-            .unwrap_or(0) as u64;
-
-        let result = self.state.play_card(
-            active,
-            &picked,
-            choices,
-            Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
-        );
-
-        // S11: human-side resolve. Per run_game_continue, human casts
-        // are NEVER auto-suicide-rolled-back — the human owns the
-        // decision and may legitimately play a card that loses the
-        // game. No flip-retry either (the human's recording is the
-        // human's choice).
-        let suicide = false;
-        let preview_size = self
-            .state
-            .journal
-            .as_ref()
-            .map(|j| j.len())
-            .unwrap_or(0) as u64;
-        bump_preview_attempt(
-            &mut self.stats,
-            active,
-            preview_size.max(preview_size_before),
-        );
-
-        if result.is_ok() && !suicide {
-            if let Some(mut preview) = self.state.journal.take() {
-                if let Some(replay) = self.state.replay_journal.as_mut() {
-                    replay.extend_from(&mut preview);
-                }
-            }
-            bump_played(&mut self.stats, active);
-            if let Some(card_id) = self
-                .state
-                .card_pool
-                .get(&picked)
-                .map(|c| c.card.id.clone())
-            {
-                match active {
-                    PlayerId::A => {
-                        self.stats.a_played_card_ids.insert(card_id.clone());
-                    }
-                    PlayerId::B => {
-                        self.stats.b_played_card_ids.insert(card_id.clone());
-                    }
-                }
-                let turn_now = self.state.turn;
-                self.stats
-                    .card_play_turns
-                    .entry(card_id.clone())
-                    .and_modify(|(min_t, max_t)| {
-                        if turn_now < *min_t {
-                            *min_t = turn_now;
-                        }
-                        if turn_now > *max_t {
-                            *max_t = turn_now;
-                        }
-                    })
-                    .or_insert((turn_now, turn_now));
-                self.stats
-                    .card_play_turn_events
-                    .push((card_id, turn_now, active));
-            }
-            let new_played_creature = played_creature_before || picked_is_creature;
-            self.cursor = EngineCursor::PatternBPick {
-                played_creature: new_played_creature,
-            };
-        } else {
-            if let Some(journal) = self.state.journal.take() {
-                journal.rollback(&mut self.state);
-            }
-            bump_preview_rollback(&mut self.stats, active);
-            if suicide {
-                self.state.bump_action("preview_skip_suicide", active);
-            }
-            // Human-side suicide / failure: don't auto-loop on the
-            // same iid (mirror run.rs's `else` branch heuristic).
-            if picked_is_creature {
-                self.cursor = EngineCursor::PatternBPick {
-                    played_creature: true,
-                };
-            } else {
-                self.cursor = EngineCursor::PreCombatActivations;
-            }
-        }
-
-        StepResult::Continue
+        self.step_resolve(
+            picked,
+            history,
+            pending,
+            ResolveContext::PatternB {
+                played_creature_before,
+            },
+        )
     }
 
     /// S9: AI-side activation pass. `non_creatures_only=true` runs
@@ -1145,11 +1077,35 @@ impl StepEngine {
     fn step_main2_resolve(
         &mut self,
         picked: InstanceId,
-        mut history: Vec<crate::choice::ScriptedAnswer>,
+        history: Vec<crate::choice::ScriptedAnswer>,
         played_creature: bool,
         pending: Option<HumanAction>,
     ) -> StepResult {
+        self.step_resolve(
+            picked,
+            history,
+            pending,
+            ResolveContext::Main2 { played_creature },
+        )
+    }
+
+    /// Shared human-side resolve body for `PatternBResolving` and
+    /// `Main2Resolving`. The two cursors do the same work — push the
+    /// human's response onto the replay history, reset the oracle's
+    /// replay, retry `build_pattern_b_choices + play_card`, yield on
+    /// captured choices, advance the cursor on success / failure.
+    /// `ResolveContext` carries the cursor-target differences (which
+    /// `*Pick` to return to, which `*Resolving` to re-enter on yield)
+    /// so this single function covers both phases.
+    fn step_resolve(
+        &mut self,
+        picked: InstanceId,
+        mut history: Vec<crate::choice::ScriptedAnswer>,
+        pending: Option<HumanAction>,
+        ctx: ResolveContext,
+    ) -> StepResult {
         let active = self.state.active_player;
+        let panic_label = ctx.panic_label();
         if let Some(act) = pending {
             let ans = match act {
                 HumanAction::ChoiceCard { iid } => crate::choice::ScriptedAnswer::Card(iid),
@@ -1160,7 +1116,9 @@ impl StepEngine {
                     crate::choice::ScriptedAnswer::Player(player)
                 }
                 HumanAction::ChoiceInt { value } => crate::choice::ScriptedAnswer::Int(value),
-                other => panic!("Main2Resolving: expected Choice* response, got {other:?}"),
+                other => panic!(
+                    "{panic_label}: expected Choice* response, got {other:?}"
+                ),
             };
             history.push(ans);
         }
@@ -1179,30 +1137,22 @@ impl StepEngine {
             active,
             &picked,
             &mut self.oracle,
-            true,
+            true, // active_is_human (this helper only fires for human side)
         );
         let choices = match build_result {
             BuildChoiceResult::Choices(c) => c,
             BuildChoiceResult::UnaffordableX { .. } => {
-                // Main2: failed build = drop into Main2Pick (allow
-                // the player to pick again or Pass). Mirrors
-                // PatternBResolving's heuristic but stays in Main2.
-                self.cursor = EngineCursor::Main2Pick {
-                    played_creature: played_creature || picked_is_creature,
-                };
+                self.cursor = ctx.on_unaffordable(picked_is_creature);
                 return StepResult::Continue;
             }
             BuildChoiceResult::Pending(p) => {
-                self.cursor = EngineCursor::Main2Resolving {
-                    picked,
-                    history,
-                    played_creature,
-                };
+                self.cursor = ctx.on_pending(picked.clone(), history);
                 let prompt = pending_to_prompt(&self.state, p);
                 return StepResult::NeedHuman(Box::new(prompt));
             }
         };
 
+        // Sacrifice telemetry.
         for sac_iid in &choices.sacrifice_ids {
             if let Some(card_id) = self
                 .state
@@ -1234,8 +1184,10 @@ impl StepEngine {
             Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
         );
 
-        // S11: human Main2 cast — no auto suicide-rollback (the human
-        // owns the decision), no flip-retry.
+        // S11: human-side resolve. Per run_game_continue, human casts
+        // are NEVER auto-suicide-rolled-back — the human owns the
+        // decision and may legitimately play a card that loses the
+        // game. No flip-retry either.
         let suicide = false;
         let preview_size = self
             .state
@@ -1287,9 +1239,7 @@ impl StepEngine {
                     .card_play_turn_events
                     .push((card_id, turn_now, active));
             }
-            self.cursor = EngineCursor::Main2Pick {
-                played_creature: played_creature || picked_is_creature,
-            };
+            self.cursor = ctx.on_success(picked_is_creature);
         } else {
             if let Some(journal) = self.state.journal.take() {
                 journal.rollback(&mut self.state);
@@ -1298,9 +1248,7 @@ impl StepEngine {
             if suicide {
                 self.state.bump_action("preview_skip_suicide", active);
             }
-            self.cursor = EngineCursor::Main2Pick {
-                played_creature: played_creature || picked_is_creature,
-            };
+            self.cursor = ctx.on_failure(picked_is_creature);
         }
 
         StepResult::Continue
