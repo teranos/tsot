@@ -1155,7 +1155,7 @@ pub(crate) fn enumerate_human_activations(
 /// activates it if eligible. `non_creatures_only = true` restricts the
 /// pass to non-creature cards (used pre-combat, so creatures stay free
 /// for attack decisions). Returns the number of activations fired.
-fn run_activation_pass(
+pub(crate) fn run_activation_pass(
     state: &mut GameState,
     player: PlayerId,
     lua: &mlua::Lua,

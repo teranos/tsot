@@ -146,9 +146,18 @@ chains (hand-payment slots, target picks, X-pick).
 
 ## Phase 4 — activations + Main2
 
-- [ ] **S9: Activation pass cursors.**
-  `run_activation_pass` rewritten as cursor states. Human-side activation
-  decisions yield `PickCard` with `activations` field populated.
+- [x] ~~**S9: Activation pass cursors.**~~
+  ~~`run_activation_pass` rewritten as cursor states. Human-side activation~~
+  ~~decisions yield `PickCard` with `activations` field populated.~~
+  (`EngineCursor::{PreCombatActivations, PostCombatActivations}` wrap
+  the existing `run_activation_pass` (now `pub(crate)`); Pattern B
+  exit → PreCombat, DeclareBlockers / no-attackers exit → PostCombat,
+  both fall through to the next phase cursor. AI auto-fires; human
+  active-turn is a no-op (human activations come via the `Activate`
+  response inside `PatternBPick`, which currently re-prompts and is
+  the remaining S9-extended work). Test:
+  `step_engine_runs_ai_activation_pass` (blue-monkey 2H-pay → draw 1
+  fires at least once across a vanilla-mirror game).)
 
 - [ ] **S10: Main2 prompt loop.**
   Post-combat human main phase folds in as a cursor variant. Same Play /

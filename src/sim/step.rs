@@ -321,17 +321,10 @@ impl StepEngine {
                 history,
                 played_creature_before,
             } => self.step_pattern_b_resolve(picked, history, played_creature_before, pending),
-            EngineCursor::PreCombatActivations => {
-                // S9 stub: real implementation follows. Until then,
-                // this cursor is unreachable — nothing in `step()`
-                // transitions into it yet, so this arm is dead code.
-                unreachable!("PreCombatActivations: wired up in S9 implementation")
-            }
+            EngineCursor::PreCombatActivations => self.step_activation_pass(true),
             EngineCursor::DeclareAttackers => self.step_declare_attackers(pending),
             EngineCursor::DeclareBlockers => self.step_declare_blockers(pending),
-            EngineCursor::PostCombatActivations => {
-                unreachable!("PostCombatActivations: wired up in S9 implementation")
-            }
+            EngineCursor::PostCombatActivations => self.step_activation_pass(false),
             EngineCursor::EndTurn => {
                 // Advance phases until the turn ticks (End → next
                 // Untap on the other side). `state.winner` may be set
@@ -444,8 +437,9 @@ impl StepEngine {
         };
 
         let Some(picked) = pick else {
-            // No more plays this turn; advance into combat.
-            self.cursor = EngineCursor::DeclareAttackers;
+            // No more plays this turn; advance into the pre-combat
+            // activation pass (S9), then combat.
+            self.cursor = EngineCursor::PreCombatActivations;
             return StepResult::Continue;
         };
 
@@ -489,7 +483,7 @@ impl StepEngine {
                         played_creature: true,
                     }
                 } else {
-                    EngineCursor::DeclareAttackers
+                    EngineCursor::PreCombatActivations
                 };
                 return StepResult::Continue;
             }
@@ -614,7 +608,7 @@ impl StepEngine {
                     played_creature: true,
                 };
             } else {
-                self.cursor = EngineCursor::DeclareAttackers;
+                self.cursor = EngineCursor::PreCombatActivations;
             }
         }
 
@@ -675,7 +669,10 @@ impl StepEngine {
             self.state.confirm_attacks().unwrap();
             self.cursor = EngineCursor::DeclareBlockers;
         } else {
-            self.cursor = EngineCursor::EndTurn;
+            // No attackers declared → skip blockers, still run the
+            // post-combat activation pass (run_game_continue runs it
+            // unconditionally).
+            self.cursor = EngineCursor::PostCombatActivations;
         }
         // Eligibility list is consumed; let the compiler know.
         let _ = eligible_attackers(&self.state, active);
@@ -865,10 +862,37 @@ impl StepEngine {
                     played_creature: true,
                 };
             } else {
-                self.cursor = EngineCursor::DeclareAttackers;
+                self.cursor = EngineCursor::PreCombatActivations;
             }
         }
 
+        StepResult::Continue
+    }
+
+    /// S9: AI-side activation pass. `non_creatures_only=true` runs
+    /// pre-combat (skips creatures so attack decisions still see them
+    /// untapped); `false` runs post-combat (everything still
+    /// activatable fires, including vigilant attackers). For the
+    /// human-active turn this is a no-op — the human drives
+    /// activations explicitly via `HumanAction::Activate` in
+    /// Pattern B (S9-extended).
+    fn step_activation_pass(&mut self, non_creatures_only: bool) -> StepResult {
+        let active = self.state.active_player;
+        let mut last_activated: Option<(InstanceId, usize)> = None;
+        let _fired = crate::sim::run::run_activation_pass(
+            &mut self.state,
+            active,
+            self.registry.lua(),
+            &mut self.oracle,
+            non_creatures_only,
+            &mut last_activated,
+            &self.ais,
+        );
+        self.cursor = if non_creatures_only {
+            EngineCursor::DeclareAttackers
+        } else {
+            EngineCursor::EndTurn
+        };
         StepResult::Continue
     }
 
@@ -929,7 +953,8 @@ impl StepEngine {
         }
         // Eligibility list for the engine's own bookkeeping.
         let _ = eligible_blockers(&self.state, defender);
-        self.cursor = EngineCursor::EndTurn;
+        // Post-combat activation pass (S9) runs before EndTurn.
+        self.cursor = EngineCursor::PostCombatActivations;
         StepResult::Continue
     }
 
@@ -1601,14 +1626,25 @@ mod tests {
                 StepResult::Done(_) => panic!("game ended before PickAttackers"),
             }
         }
-        // Empty attackers list → engine advances into EndTurn.
+        // Empty attackers list → engine advances through the
+        // post-combat activation pass (S9), then EndTurn. Step once
+        // to skip past the activation cursor.
         match engine.step(Some(HumanAction::Attackers { iids: vec![] })) {
             StepResult::Continue => {}
             other => panic!("expected Continue after Attackers, got {other:?}"),
         }
         assert!(
+            matches!(engine.cursor, EngineCursor::PostCombatActivations),
+            "post-Attackers cursor should be PostCombatActivations, got {:?}",
+            engine.cursor
+        );
+        match engine.step(None) {
+            StepResult::Continue => {}
+            other => panic!("expected Continue from PostCombatActivations, got {other:?}"),
+        }
+        assert!(
             matches!(engine.cursor, EngineCursor::EndTurn),
-            "empty attackers should advance into EndTurn, got {:?}",
+            "PostCombatActivations should advance into EndTurn, got {:?}",
             engine.cursor
         );
         assert_eq!(engine.stats.a_attacks, 0, "no attacks bumped");
@@ -1721,13 +1757,62 @@ mod tests {
             other => panic!("expected Continue after Blocks, got {other:?}"),
         }
         assert!(
+            matches!(engine.cursor, EngineCursor::PostCombatActivations),
+            "post-Blocks cursor should be PostCombatActivations, got {:?}",
+            engine.cursor
+        );
+        match engine.step(None) {
+            StepResult::Continue => {}
+            other => panic!("expected Continue from PostCombatActivations, got {other:?}"),
+        }
+        assert!(
             matches!(engine.cursor, EngineCursor::EndTurn),
-            "empty blocks should advance into EndTurn, got {:?}",
+            "PostCombatActivations should advance into EndTurn, got {:?}",
             engine.cursor
         );
         assert!(
             engine.state.b.deck.len() < deck_b_before,
             "unblocked attack should have milled B's deck"
+        );
+    }
+
+    /// S9: AI-side activation pass fires for cards with activated
+    /// abilities on the board. Uses blue-monkey (1H cost, 2H-pay →
+    /// draw 1 ability). After a few turns the rig+haste path puts
+    /// at least one blue-monkey on each side's board; with hand sizes
+    /// at 6+ the AI auto-fires its activation, which calls
+    /// `state.bump_action("activate", …)` (the key set by
+    /// `state.activate_ability` on successful resolution).
+    #[test]
+    fn step_engine_runs_ai_activation_pass() {
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| c.id == "blue-monkey")
+            .expect("blue-monkey present in corpus")
+            .clone();
+        let deck_a: Vec<_> = (0..50).map(|_| template.clone()).collect();
+        let deck_b = deck_a.clone();
+        let state = GameState::new(deck_a, deck_b);
+
+        let mut engine = StepEngine::new(
+            state,
+            [AiKind::Heuristic, AiKind::Heuristic],
+            registry,
+            0xCAFE,
+        );
+        let _ = engine.run_to_end();
+
+        let total: u32 = engine
+            .state
+            .action_counts
+            .get("activate")
+            .map(|v| v[0] + v[1])
+            .unwrap_or(0);
+        assert!(
+            total > 0,
+            "AI activation pass should have fired at least once across the game (blue-monkey 2H-pay → draw 1); got total={total}"
         );
     }
 
