@@ -85,6 +85,24 @@ pub enum EngineCursor {
     /// after swinging draws / pumps here). Mirrors
     /// `run_activation_pass(non_creatures_only = false)`.
     PostCombatActivations,
+    /// S10: human-active player's Main2 prompt loop. AI-active turns
+    /// skip straight from `PostCombatActivations` to `EndTurn`; human
+    /// turns route through here so the player can cast / activate /
+    /// pass during their second main phase. Mirrors the Pattern B
+    /// shape but inside `Phase::Main2` so sorcery-speed timing is
+    /// correct.
+    Main2Pick,
+    /// S10: human committed to a Main2 play but the resolve needs
+    /// more `ChoiceCard / Confirm / Player / Int` answers. Same
+    /// replay-history protocol as `PatternBResolving`; on completion
+    /// the cursor advances back to `Main2Pick` so the human can
+    /// chain more plays (Pattern B's one-creature-per-turn cap still
+    /// applies — tracked via `played_creature`).
+    Main2Resolving {
+        picked: InstanceId,
+        history: Vec<crate::choice::ScriptedAnswer>,
+        played_creature: bool,
+    },
     /// All combat resolved; advance phases past End so the next turn
     /// can start. On wrap, transitions to StartTurn.
     EndTurn,
@@ -325,6 +343,12 @@ impl StepEngine {
             EngineCursor::DeclareAttackers => self.step_declare_attackers(pending),
             EngineCursor::DeclareBlockers => self.step_declare_blockers(pending),
             EngineCursor::PostCombatActivations => self.step_activation_pass(false),
+            EngineCursor::Main2Pick => {
+                unreachable!("Main2Pick: wired up in S10 implementation")
+            }
+            EngineCursor::Main2Resolving { .. } => {
+                unreachable!("Main2Resolving: wired up in S10 implementation")
+            }
             EngineCursor::EndTurn => {
                 // Advance phases until the turn ticks (End → next
                 // Untap on the other side). `state.winner` may be set
