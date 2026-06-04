@@ -484,11 +484,22 @@ impl GameState {
 
         // All checks pass — apply mutations through journaled helpers.
 
+        // Capture payment-id snapshot for `game.payment_ids()`. Hand and
+        // attached are caller-supplied via `choices`; gy and mill we
+        // collect during this resolution. Cleared after OnPlay fires.
+        let mut payments_snapshot = super::state::CastPayments {
+            hand: choices.hand_payment_ids.clone(),
+            attached: choices.attached_payment_ids.clone(),
+            graveyard: Vec::new(),
+            mill: Vec::new(),
+        };
+
         // MILL cost: top N of DECK → GRAVEYARD (P.11).
         for _ in 0..mill_needed {
             let Some(top) = self.player(player).deck.first().cloned() else {
                 break;
             };
+            payments_snapshot.mill.push(top.clone());
             let _ = self.move_card(&top, player, Zone::Deck, Zone::Graveyard);
         }
 
@@ -502,13 +513,21 @@ impl GameState {
                 let Some(back) = self.player(player).graveyard.last().cloned() else {
                     break;
                 };
+                payments_snapshot.graveyard.push(back.clone());
                 let _ = self.move_card(&back, player, Zone::Graveyard, Zone::Exile);
             }
         } else {
+            payments_snapshot.graveyard = choices.graveyard_payment_ids.clone();
             for gid in choices.graveyard_payment_ids.clone() {
                 let _ = self.move_card(&gid, player, Zone::Graveyard, Zone::Exile);
             }
         }
+
+        // Stash the payment snapshot on state so OnPlay handlers can read
+        // it via `game.payment_ids()`. resolve_played_card_inner clears
+        // it after OnPlay fires. Survives the stack-resolve hop between
+        // play_card (here) and resolve_played_card_inner.
+        self.current_cast_payments = Some(payments_snapshot);
 
         // P.24: tap the substituting jewel as part of cost payment.
         if let Some(jewel_iid) = &choices.jewel_tap {
@@ -829,6 +848,7 @@ impl GameState {
             if let Some(c) = ctx.as_mut() {
                 lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
             }
+            self.current_cast_payments = None;
             return Ok(());
         }
         // Unified resolution path driven by `CastRouting`. Per-kind
@@ -912,10 +932,13 @@ impl GameState {
             }
         }
 
-        // OnPlay: fires for every castable kind.
+        // OnPlay: fires for every castable kind. The payment snapshot
+        // was stashed on GameState by `play_card` before this resolver
+        // ran, so handlers can read `game.payment_ids()` here.
         if let Some(c) = ctx.as_mut() {
             lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
         }
+        self.current_cast_payments = None;
 
         // OnEnterBoard: BOARD-placed casts only.
         if is_board_placed {

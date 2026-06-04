@@ -211,6 +211,26 @@ pub enum PriorityError {
     WindowAlreadyOpen,
 }
 
+/// Snapshot of payment iids for a cast currently resolving. Stashed
+/// on `GameState.current_cast_payments` by `play_card` between cost
+/// resolution and OnPlay firing. The Lua surface returns each list
+/// via `game.payment_ids()` so handlers can ask "what paid for me?".
+///
+/// `hand` = cards moved from HAND as P.6 payment (now in graveyard for
+/// spells, attached to the cast for board-placed kinds).
+/// `attached` = P.31 ATTACHED-source cards (re-attached to the new
+/// cast, or exiled for non-board-placed kinds).
+/// `graveyard` = P.12 GRAVEYARD-source cards (now in exile).
+/// `mill` = top-of-deck cards moved during MILL payment (now in
+/// graveyard).
+#[derive(Debug, Clone, Default)]
+pub struct CastPayments {
+    pub hand: Vec<InstanceId>,
+    pub attached: Vec<InstanceId>,
+    pub graveyard: Vec<InstanceId>,
+    pub mill: Vec<InstanceId>,
+}
+
 /// The full game state.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GameState {
@@ -256,6 +276,15 @@ pub struct GameState {
     /// each activate_ability call, not state-evolving on its own.
     #[serde(skip, default)]
     pub current_activation_x: Option<i32>,
+    /// Transient payment-ids snapshot for the cast currently resolving.
+    /// Populated by `play_card` after payment is applied, before the
+    /// `OnPlay` handler fires; cleared after. Exposed to Lua handlers
+    /// as `game.payment_ids()` so on_play can branch on which cards
+    /// paid (e.g. "for every red card used to pay, ..."). None outside
+    /// of an active cast resolution. Not journaled — overwritten by
+    /// every cast.
+    #[serde(skip, default)]
+    pub current_cast_payments: Option<CastPayments>,
     /// Queue of pending extra turns. When the End phase advances and
     /// this queue is non-empty, the front of the queue becomes the next
     /// active player instead of `active_player.opponent()`. Powers
@@ -292,6 +321,7 @@ impl GameState {
             priority: None,
             creature_attacked_this_turn: false,
             current_activation_x: None,
+            current_cast_payments: None,
             extra_turns_pending: Vec::new(),
         }
     }

@@ -909,6 +909,36 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.payment_ids() — read the iids that paid for the cast
+        // currently resolving. Returns a table { hand=[...], attached=[...],
+        // graveyard=[...], mill=[...] } when called from OnPlay, empty
+        // lists otherwise. Used by handlers like read-the-embers that
+        // count "red cards used to pay for this spell" — caller iterates
+        // the lists and inspects `game.card(iid).colors`.
+        let cell_pay = &$cell;
+        game.set(
+            "payment_ids",
+            $scope.create_function_mut(move |lua, _: ()| -> Result<mlua::Table> {
+                let s = cell_pay.borrow();
+                let t = lua.create_table()?;
+                match &s.current_cast_payments {
+                    Some(p) => {
+                        t.set("hand", lua.create_sequence_from(p.hand.clone())?)?;
+                        t.set("attached", lua.create_sequence_from(p.attached.clone())?)?;
+                        t.set("graveyard", lua.create_sequence_from(p.graveyard.clone())?)?;
+                        t.set("mill", lua.create_sequence_from(p.mill.clone())?)?;
+                    }
+                    None => {
+                        t.set("hand", lua.create_sequence_from(Vec::<String>::new())?)?;
+                        t.set("attached", lua.create_sequence_from(Vec::<String>::new())?)?;
+                        t.set("graveyard", lua.create_sequence_from(Vec::<String>::new())?)?;
+                        t.set("mill", lua.create_sequence_from(Vec::<String>::new())?)?;
+                    }
+                }
+                Ok(t)
+            })?,
+        )?;
+
         // game.attached_of(iid) → list of attached iids. Pure read.
         let cell_att = &$cell;
         game.set(
