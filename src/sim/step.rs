@@ -90,8 +90,10 @@ pub enum EngineCursor {
     /// turns route through here so the player can cast / activate /
     /// pass during their second main phase. Mirrors the Pattern B
     /// shape but inside `Phase::Main2` so sorcery-speed timing is
-    /// correct.
-    Main2Pick,
+    /// correct. `played_creature` tracks Main2's own one-creature cap
+    /// (per `run_game_continue`'s `m2_played_creature` — fresh from
+    /// Main1's cap).
+    Main2Pick { played_creature: bool },
     /// S10: human committed to a Main2 play but the resolve needs
     /// more `ChoiceCard / Confirm / Player / Int` answers. Same
     /// replay-history protocol as `PatternBResolving`; on completion
@@ -343,12 +345,14 @@ impl StepEngine {
             EngineCursor::DeclareAttackers => self.step_declare_attackers(pending),
             EngineCursor::DeclareBlockers => self.step_declare_blockers(pending),
             EngineCursor::PostCombatActivations => self.step_activation_pass(false),
-            EngineCursor::Main2Pick => {
-                unreachable!("Main2Pick: wired up in S10 implementation")
+            EngineCursor::Main2Pick { played_creature } => {
+                self.step_main2_pick(played_creature, pending)
             }
-            EngineCursor::Main2Resolving { .. } => {
-                unreachable!("Main2Resolving: wired up in S10 implementation")
-            }
+            EngineCursor::Main2Resolving {
+                picked,
+                history,
+                played_creature,
+            } => self.step_main2_resolve(picked, history, played_creature, pending),
             EngineCursor::EndTurn => {
                 // Advance phases until the turn ticks (End → next
                 // Untap on the other side). `state.winner` may be set
@@ -900,6 +904,263 @@ impl StepEngine {
     /// human-active turn this is a no-op — the human drives
     /// activations explicitly via `HumanAction::Activate` in
     /// Pattern B (S9-extended).
+    /// S10: human-active Main2 prompt loop. Yields a `PickCard` with
+    /// `state.phase == Main2`; consumes `Pass` / `PlayCard` / `Activate`
+    /// (Activate currently re-prompts pending S9-extended). Pass
+    /// advances into EndTurn. PlayCard transitions into
+    /// `Main2Resolving` and re-dispatches.
+    fn step_main2_pick(
+        &mut self,
+        played_creature: bool,
+        pending: Option<HumanAction>,
+    ) -> StepResult {
+        // Advance Combat → Main2 (idempotent on resume). Fresh oracle
+        // per advance matches run_game_continue's RNG order.
+        while self.state.phase != Phase::Main2 && self.state.winner.is_none() {
+            // We've already passed End somehow → bail to EndTurn.
+            if matches!(self.state.phase, Phase::Untap | Phase::Draw) {
+                self.cursor = EngineCursor::EndTurn;
+                return StepResult::Continue;
+            }
+            let mut oracle = RandomOracle::new(StdRng::seed_from_u64(self.rng.gen()));
+            self.state.next_phase(Some(&mut EventContext::new(
+                self.registry.lua(),
+                &mut oracle,
+            )));
+        }
+        if self.state.winner.is_some() {
+            return StepResult::Continue;
+        }
+        let active = self.state.active_player;
+        let kind_filter = if played_creature {
+            PickKindFilter::NonCreatureOnly
+        } else {
+            PickKindFilter::Any
+        };
+
+        // Human dispatch only — AI side never lands in Main2Pick
+        // (step_activation_pass routes AI directly to EndTurn).
+        match pending {
+            None => {
+                let candidates = crate::sim::ai::enumerate_playable_in_hand(
+                    &self.state,
+                    active,
+                    kind_filter,
+                );
+                let activations =
+                    crate::sim::run::enumerate_human_activations(&self.state, active);
+                let prompt = HumanPrompt::PickCard {
+                    state: crate::sim::snapshot::build_state_view(&self.state, active),
+                    player: active,
+                    candidates,
+                    kind_filter,
+                    activations,
+                };
+                StepResult::NeedHuman(Box::new(prompt))
+            }
+            Some(HumanAction::Pass) => {
+                self.cursor = EngineCursor::EndTurn;
+                StepResult::Continue
+            }
+            Some(HumanAction::PlayCard { iid }) => {
+                self.cursor = EngineCursor::Main2Resolving {
+                    picked: iid,
+                    history: Vec::new(),
+                    played_creature,
+                };
+                StepResult::Continue
+            }
+            Some(HumanAction::Activate { .. }) => {
+                // S9-extended (human-side activations); re-prompt for
+                // now so the frontend can resend Pass / PlayCard.
+                let candidates = crate::sim::ai::enumerate_playable_in_hand(
+                    &self.state,
+                    active,
+                    kind_filter,
+                );
+                let activations =
+                    crate::sim::run::enumerate_human_activations(&self.state, active);
+                let prompt = HumanPrompt::PickCard {
+                    state: crate::sim::snapshot::build_state_view(&self.state, active),
+                    player: active,
+                    candidates,
+                    kind_filter,
+                    activations,
+                };
+                StepResult::NeedHuman(Box::new(prompt))
+            }
+            Some(other) => panic!(
+                "Main2Pick: expected Pass / PlayCard / Activate response, got {other:?}"
+            ),
+        }
+    }
+
+    /// S10: Main2 resolve sub-state. Identical replay-history protocol
+    /// to `step_pattern_b_resolve`; on success the cursor returns to
+    /// `Main2Pick` so the human can chain more plays.
+    fn step_main2_resolve(
+        &mut self,
+        picked: InstanceId,
+        mut history: Vec<crate::choice::ScriptedAnswer>,
+        played_creature: bool,
+        pending: Option<HumanAction>,
+    ) -> StepResult {
+        let active = self.state.active_player;
+        if let Some(act) = pending {
+            let ans = match act {
+                HumanAction::ChoiceCard { iid } => crate::choice::ScriptedAnswer::Card(iid),
+                HumanAction::ChoiceConfirm { yes } => {
+                    crate::choice::ScriptedAnswer::Confirm(yes)
+                }
+                HumanAction::ChoicePlayer { player } => {
+                    crate::choice::ScriptedAnswer::Player(player)
+                }
+                HumanAction::ChoiceInt { value } => crate::choice::ScriptedAnswer::Int(value),
+                other => panic!("Main2Resolving: expected Choice* response, got {other:?}"),
+            };
+            history.push(ans);
+        }
+        self.oracle.clear();
+        self.oracle.inner_mut().reset_replay(history.clone());
+
+        let picked_is_creature = self
+            .state
+            .card_pool
+            .get(&picked)
+            .map(|c| c.card.kind == CardType::Creature)
+            .unwrap_or(false);
+
+        let build_result = build_pattern_b_choices(
+            &mut self.state,
+            active,
+            &picked,
+            &mut self.oracle,
+            true,
+        );
+        let choices = match build_result {
+            BuildChoiceResult::Choices(c) => c,
+            BuildChoiceResult::UnaffordableX { .. } => {
+                // Main2: failed build = drop into Main2Pick (allow
+                // the player to pick again or Pass). Mirrors
+                // PatternBResolving's heuristic but stays in Main2.
+                self.cursor = EngineCursor::Main2Pick {
+                    played_creature: played_creature || picked_is_creature,
+                };
+                return StepResult::Continue;
+            }
+            BuildChoiceResult::Pending(p) => {
+                self.cursor = EngineCursor::Main2Resolving {
+                    picked,
+                    history,
+                    played_creature,
+                };
+                let prompt = pending_to_prompt(&self.state, p);
+                return StepResult::NeedHuman(Box::new(prompt));
+            }
+        };
+
+        for sac_iid in &choices.sacrifice_ids {
+            if let Some(card_id) = self
+                .state
+                .card_pool
+                .get(sac_iid)
+                .map(|c| c.card.id.clone())
+            {
+                *self
+                    .stats
+                    .card_sacrificed_count
+                    .entry(card_id)
+                    .or_insert(0) += 1;
+            }
+        }
+        self.oracle.clear();
+        self.state.journal = Some(crate::game::Journal::new());
+
+        let opponent_of_active = active.opponent();
+        let preview_size_before = self
+            .state
+            .journal
+            .as_ref()
+            .map(|j| j.len())
+            .unwrap_or(0) as u64;
+
+        let result = self.state.play_card(
+            active,
+            &picked,
+            choices,
+            Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
+        );
+
+        let suicide = self.state.winner == Some(opponent_of_active);
+        let preview_size = self
+            .state
+            .journal
+            .as_ref()
+            .map(|j| j.len())
+            .unwrap_or(0) as u64;
+        bump_preview_attempt(
+            &mut self.stats,
+            active,
+            preview_size.max(preview_size_before),
+        );
+
+        if result.is_ok() && !suicide {
+            if let Some(mut preview) = self.state.journal.take() {
+                if let Some(replay) = self.state.replay_journal.as_mut() {
+                    replay.extend_from(&mut preview);
+                }
+            }
+            bump_played(&mut self.stats, active);
+            if let Some(card_id) = self
+                .state
+                .card_pool
+                .get(&picked)
+                .map(|c| c.card.id.clone())
+            {
+                match active {
+                    PlayerId::A => {
+                        self.stats.a_played_card_ids.insert(card_id.clone());
+                    }
+                    PlayerId::B => {
+                        self.stats.b_played_card_ids.insert(card_id.clone());
+                    }
+                }
+                let turn_now = self.state.turn;
+                self.stats
+                    .card_play_turns
+                    .entry(card_id.clone())
+                    .and_modify(|(min_t, max_t)| {
+                        if turn_now < *min_t {
+                            *min_t = turn_now;
+                        }
+                        if turn_now > *max_t {
+                            *max_t = turn_now;
+                        }
+                    })
+                    .or_insert((turn_now, turn_now));
+                self.stats
+                    .card_play_turn_events
+                    .push((card_id, turn_now, active));
+            }
+            self.cursor = EngineCursor::Main2Pick {
+                played_creature: played_creature || picked_is_creature,
+            };
+        } else {
+            if let Some(journal) = self.state.journal.take() {
+                journal.rollback(&mut self.state);
+            }
+            bump_preview_rollback(&mut self.stats, active);
+            if suicide {
+                self.state.bump_action("preview_skip_suicide", active);
+            }
+            self.cursor = EngineCursor::Main2Pick {
+                played_creature: played_creature || picked_is_creature,
+            };
+        }
+
+        StepResult::Continue
+    }
+
     fn step_activation_pass(&mut self, non_creatures_only: bool) -> StepResult {
         let active = self.state.active_player;
         let mut last_activated: Option<(InstanceId, usize)> = None;
@@ -914,6 +1175,14 @@ impl StepEngine {
         );
         self.cursor = if non_creatures_only {
             EngineCursor::DeclareAttackers
+        } else if matches!(self.ais[active.index()], AiKind::Human(_)) {
+            // S10: human-active turn routes through Main2 between
+            // post-combat activation pass and EndTurn. Main2's own
+            // one-creature-per-main-phase counter starts fresh
+            // (matches run_game_continue's `m2_played_creature`).
+            EngineCursor::Main2Pick {
+                played_creature: false,
+            }
         } else {
             EngineCursor::EndTurn
         };
@@ -1650,9 +1919,9 @@ mod tests {
                 StepResult::Done(_) => panic!("game ended before PickAttackers"),
             }
         }
-        // Empty attackers list → engine advances through the
-        // post-combat activation pass (S9), then EndTurn. Step once
-        // to skip past the activation cursor.
+        // Empty attackers list → PostCombatActivations → (since the
+        // active player is the human A) Main2Pick (S10). No EndTurn
+        // until the human passes Main2.
         match engine.step(Some(HumanAction::Attackers { iids: vec![] })) {
             StepResult::Continue => {}
             other => panic!("expected Continue after Attackers, got {other:?}"),
@@ -1667,8 +1936,8 @@ mod tests {
             other => panic!("expected Continue from PostCombatActivations, got {other:?}"),
         }
         assert!(
-            matches!(engine.cursor, EngineCursor::EndTurn),
-            "PostCombatActivations should advance into EndTurn, got {:?}",
+            matches!(engine.cursor, EngineCursor::Main2Pick { .. }),
+            "PostCombatActivations should advance into Main2Pick for human-active turn, got {:?}",
             engine.cursor
         );
         assert_eq!(engine.stats.a_attacks, 0, "no attacks bumped");
@@ -1798,6 +2067,84 @@ mod tests {
             engine.state.b.deck.len() < deck_b_before,
             "unblocked attack should have milled B's deck"
         );
+    }
+
+    /// S10: a human-active turn yields a second `PickCard` prompt
+    /// after combat — the Main2 main phase. Phase distinguishes it
+    /// from the opening Pattern B PickCard: the `state.phase` field
+    /// in the prompt is `"Main2"` for this one, `"Main1"` for the
+    /// first one of the turn. Frontend uses the same Pass / PlayCard
+    /// / Activate action set.
+    #[test]
+    fn step_engine_yields_main2_pickcard_for_human() {
+        use crate::sim::human::{HumanAction, HumanInterface, HumanPrompt};
+        use std::sync::Arc;
+
+        let (registry, template) = human_test_setup();
+        let deck_a: Vec<_> = (0..50).map(|_| template.clone()).collect();
+        let deck_b = deck_a.clone();
+        let state = GameState::new(deck_a, deck_b);
+        let (iface, _prompt_rx, _action_tx) = HumanInterface::new();
+
+        let mut engine = StepEngine::new(
+            state,
+            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            registry,
+            0xCAFE,
+        );
+
+        // First yield: Pattern B PickCard (Main1). Pass to enter combat.
+        let first = loop {
+            match engine.step(None) {
+                StepResult::Continue => continue,
+                StepResult::NeedHuman(p) => break p,
+                StepResult::Done(_) => panic!("game ended before Main1 PickCard"),
+            }
+        };
+        match *first {
+            HumanPrompt::PickCard { ref state, .. } => {
+                assert_eq!(
+                    state.phase, "Main1",
+                    "first PickCard should be in Main1, got phase {:?}",
+                    state.phase
+                );
+            }
+            ref other => panic!("expected PickCard, got {other:?}"),
+        }
+        engine.step(Some(HumanAction::Pass));
+
+        // Next yield: PickAttackers. Empty.
+        let attackers = loop {
+            match engine.step(None) {
+                StepResult::Continue => continue,
+                StepResult::NeedHuman(p) => break p,
+                StepResult::Done(_) => panic!("game ended before PickAttackers"),
+            }
+        };
+        assert!(
+            matches!(*attackers, HumanPrompt::PickAttackers { .. }),
+            "expected PickAttackers, got {attackers:?}"
+        );
+        engine.step(Some(HumanAction::Attackers { iids: vec![] }));
+
+        // S10: next yield is Main2 PickCard.
+        let second = loop {
+            match engine.step(None) {
+                StepResult::Continue => continue,
+                StepResult::NeedHuman(p) => break p,
+                StepResult::Done(_) => panic!("game ended before Main2 PickCard"),
+            }
+        };
+        match *second {
+            HumanPrompt::PickCard { ref state, .. } => {
+                assert_eq!(
+                    state.phase, "Main2",
+                    "second PickCard should be in Main2, got phase {:?}",
+                    state.phase
+                );
+            }
+            ref other => panic!("expected PickCard, got {other:?}"),
+        }
     }
 
     /// S9: AI-side activation pass fires for cards with activated

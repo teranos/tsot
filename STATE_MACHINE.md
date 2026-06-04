@@ -159,9 +159,18 @@ chains (hand-payment slots, target picks, X-pick).
   `step_engine_runs_ai_activation_pass` (blue-monkey 2H-pay → draw 1
   fires at least once across a vanilla-mirror game).)
 
-- [ ] **S10: Main2 prompt loop.**
-  Post-combat human main phase folds in as a cursor variant. Same Play /
-  Activate / Pass action set as Pattern B.
+- [x] ~~**S10: Main2 prompt loop.**~~
+  ~~Post-combat human main phase folds in as a cursor variant. Same Play /~~
+  ~~Activate / Pass action set as Pattern B.~~
+  (Cursors `Main2Pick { played_creature }` + `Main2Resolving { picked,
+  history, played_creature }`. Post-combat activation pass routes
+  human-active turns into `Main2Pick`, AI turns straight to `EndTurn`.
+  `Pass` advances to `EndTurn`; `PlayCard{iid}` enters the same
+  replay-history resolve protocol S7 set up; `Activate` re-prompts
+  pending S9-extended. Test:
+  `step_engine_yields_main2_pickcard_for_human` (Main1 PickCard →
+  Pass → PickAttackers → empty → Main2 PickCard fires, `state.phase
+  == "Main2"`).)
 
 - [ ] **S11: Edge cases (rig + suicide rollback + response windows).**
   `rig_creature_free_haste`, suicide-rollback gating, instant response
