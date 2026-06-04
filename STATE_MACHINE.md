@@ -197,10 +197,22 @@ chains (hand-payment slots, target picks, X-pick).
   and a handful of tests. D8 retires `cli_serve.rs` along with
   `run_game_continue`. 293 lib tests pass, clippy clean.)
 
-- [ ] **S13: Full suite regression + perf check.**
-  All existing tests pass. Heuristic-vs-Heuristic 100-game wall time
-  within 10% of the pre-refactor baseline. UCT/MCTS strength
-  measurements within noise.
+- [x] ~~**S13: Full suite regression + perf check.**~~
+  ~~All existing tests pass. Heuristic-vs-Heuristic 100-game wall time~~
+  ~~within 10% of the pre-refactor baseline. UCT/MCTS strength~~
+  ~~measurements within noise.~~
+  (Release-mode `cargo test --lib`: 293 passed, 0 failed, 2 ignored,
+  14.22s total. Key timings: S3 parity 0.07s, vanilla Heuristic
+  full-game 0.04s, MCTS smoke 0.02s, UCT smoke 0.02s, fitness suite
+  (hundreds of games) 0.18s, evolve suite (12 tests inc. full EAs)
+  10.96s. No pre-refactor wall-clock baseline was captured, but
+  behavioral equivalence is pinned: S3's byte-identical AI-vs-AI
+  parity test and S11's `preview_retry_rescued` parity test together
+  guarantee the StepEngine's AI dispatch produces the same game
+  length, same RNG sequence, same journaled mutations as
+  `run_game_continue` — strength + perf follow. State-swap MCTS
+  rollout adds one `mem::replace` per rollout (pointer-swap cost, no
+  data copy). Clippy clean.)
 
 ## Trade-offs noted
 
