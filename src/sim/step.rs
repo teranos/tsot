@@ -65,11 +65,26 @@ pub enum EngineCursor {
         history: Vec<crate::choice::ScriptedAnswer>,
         played_creature_before: bool,
     },
+    /// S9: pre-combat activation pass. Runs after Pattern B exits,
+    /// before `DeclareAttackers`. AI-active player auto-fires each
+    /// eligible activated ability on non-creature board cards
+    /// (matching `run_activation_pass(non_creatures_only = true)`'s
+    /// behavior in `run_game_continue`). Human-active player skips
+    /// this cursor — human activations happen inline in `PatternBPick`
+    /// via the `HumanAction::Activate { … }` response variant.
+    PreCombatActivations,
     /// Combat: choose attackers. AI dispatch uses `select_attackers`.
     DeclareAttackers,
     /// Attackers declared via `state.declare_attacker`; now ask the
     /// defender for blockers (or skip to EndTurn if none attacked).
     DeclareBlockers,
+    /// S9: post-combat activation pass. Runs after `DeclareBlockers`
+    /// (combat damage resolved) and before `EndTurn`. AI-active
+    /// player auto-fires each eligible activated ability on every
+    /// board card — including creatures (vigilance still-untapped
+    /// after swinging draws / pumps here). Mirrors
+    /// `run_activation_pass(non_creatures_only = false)`.
+    PostCombatActivations,
     /// All combat resolved; advance phases past End so the next turn
     /// can start. On wrap, transitions to StartTurn.
     EndTurn,
@@ -306,8 +321,17 @@ impl StepEngine {
                 history,
                 played_creature_before,
             } => self.step_pattern_b_resolve(picked, history, played_creature_before, pending),
+            EngineCursor::PreCombatActivations => {
+                // S9 stub: real implementation follows. Until then,
+                // this cursor is unreachable — nothing in `step()`
+                // transitions into it yet, so this arm is dead code.
+                unreachable!("PreCombatActivations: wired up in S9 implementation")
+            }
             EngineCursor::DeclareAttackers => self.step_declare_attackers(pending),
             EngineCursor::DeclareBlockers => self.step_declare_blockers(pending),
+            EngineCursor::PostCombatActivations => {
+                unreachable!("PostCombatActivations: wired up in S9 implementation")
+            }
             EngineCursor::EndTurn => {
                 // Advance phases until the turn ticks (End → next
                 // Untap on the other side). `state.winner` may be set
