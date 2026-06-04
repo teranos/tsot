@@ -1,3 +1,10 @@
+// S12: `run_game_continue` is deprecated. This module's wrappers
+// (`run_game`, `run_game_with_ai`) + its tests legitimately still call
+// it until D8 retires the cli_serve legacy path. Suppress the
+// deprecation warning at the file level rather than peppering every
+// call site.
+#![allow(deprecated)]
+
 //! Per-game turn loop. Calls into [`super::ai`] for AI decisions, writes
 //! into [`super::stats::GameStats`] as the game progresses, returns the
 //! final stats + the game-long replay journal.
@@ -430,6 +437,21 @@ pub(crate) fn build_pattern_b_choices(
     BuildChoiceResult::Choices(choices)
 }
 
+/// S12: scheduled for deletion. `StepEngine::run_to_end` is the
+/// canonical drive loop (`run_game` / `run_game_with_ai` are still
+/// here as thin wrappers that pre-open the replay journal). The
+/// remaining caller is the `cli_serve` legacy HTTP path — when D8
+/// deletes that, `run_game_continue` follows. Internally still owns
+/// the channel-blocking Human path; the StepEngine drives human
+/// games via the FFI yield protocol instead, so any new caller
+/// should use `StepEngine::run_to_end` (AI-only) or
+/// `wasm_ffi`'s session driver (human-mixed).
+#[deprecated(
+    since = "0.1.0",
+    note = "use `StepEngine::run_to_end` for AI-only games; the wasm_ffi session driver for \
+            human-mixed games. `run_game_continue` survives only because cli_serve.rs's \
+            HTTP-shim thread+channel architecture depends on it; D8 retires both together."
+)]
 pub fn run_game_continue(
     state: &mut GameState,
     rng: &mut StdRng,

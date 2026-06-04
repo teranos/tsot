@@ -1,3 +1,9 @@
+// S12: this file is the legacy HTTP shim. It owns the channel-blocking
+// thread+`run_game_continue` model; D8 retires the whole thing in
+// favor of the wasm session driver. Suppress deprecation warnings at
+// the file level until then.
+#![allow(deprecated)]
+
 //! `tsot serve` subcommand: HTTP shim for playing against the AI in a
 //! browser. Engine runs on a dedicated thread (mlua's `Lua` is `!Send`,
 //! so the VM has to be built and stay on that thread). The HTTP server

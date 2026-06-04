@@ -1,3 +1,8 @@
+// S12: the legacy `scripted_empty_…` test calls `run_game_continue`
+// directly to probe the human-channel path that cli_serve still uses.
+// Suppress deprecation at the file level for the test.
+#![allow(deprecated)]
+
 //! Human-driven oracle for `tsot serve`. The engine runs synchronously on
 //! one thread; this module is the bridge a frontend (HTTP server, future
 //! wasm host) uses to drive decisions through a channel pair.

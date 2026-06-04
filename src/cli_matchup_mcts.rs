@@ -1,3 +1,9 @@
+// S12: this subcommand directly invokes `run_game_continue` to drive
+// AI-vs-AI matchups. The state-swap StepEngine path is the eventual
+// replacement; for now suppress the deprecation warning so the build
+// stays clean.
+#![allow(deprecated)]
+
 //! `tsot matchup-mcts` subcommand: pit MCTS-driven Pattern B picks
 //! against the existing heuristic AI in a head-to-head matchup.
 //! Measures whether one-ply rollout search beats the random-weighted

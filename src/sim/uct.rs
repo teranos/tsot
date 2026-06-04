@@ -1,3 +1,9 @@
+// S12: tests in this module still call `run_game_continue` for the
+// full-game smoke. Production UCT rollouts now state-swap into a
+// `StepEngine`. Suppress deprecation at the file level for the
+// test path.
+#![allow(deprecated)]
+
 //! UCT (UCB1 Tree-Search) MCTS for tsot's card-pick decision.
 //!
 //! Distinct from [`super::mcts`]'s one-ply rollout: UCT maintains a
@@ -33,13 +39,9 @@ use std::collections::BTreeMap;
 use std::f64::consts::SQRT_2;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rand::rngs::StdRng;
-use rand::SeedableRng;
-
 use crate::game::{GameState, InstanceId, Journal, PlayerId};
 
 use super::ai::{enumerate_playable_in_hand, PickKindFilter};
-use super::run::run_game_continue;
 use super::AiKind;
 
 /// Diagnostic counters. Reset via `reset_uct_diagnostics()`.
@@ -211,10 +213,21 @@ pub fn pick_play_uct(
         //    back to heuristic for the rest of the game.
         UCT_PLAN.with(|p| *p.borrow_mut() = path.clone());
         UCT_PLAN_IDX.with(|i| *i.borrow_mut() = 0);
-        let mut rng = StdRng::seed_from_u64(cfg.base_seed.wrapping_add(it as u64));
-        let mut log: Vec<String> = Vec::new();
         let ais = [AiKind::Heuristic, AiKind::Heuristic];
-        let stats = run_game_continue(state, &mut rng, &mut log, registry, &ais);
+        // S12: state-swap UCT rollout finish into a StepEngine. Same
+        // pattern as the MCTS rollout — swap, run, swap back. The
+        // per-iteration journal travels with the state.
+        let placeholder = crate::game::GameState::new(Vec::new(), Vec::new());
+        let taken = std::mem::replace(state, placeholder);
+        let rollout_seed = cfg.base_seed.wrapping_add(it as u64);
+        let mut engine = crate::sim::step::StepEngine::new(
+            taken,
+            ais,
+            registry.clone(),
+            rollout_seed,
+        );
+        let stats = engine.run_to_end();
+        *state = engine.state;
         let winner = stats.winner;
         clear_planned_actions();
 
@@ -378,6 +391,8 @@ fn backpropagate(
 mod tests {
     use super::*;
     use crate::card::{CardRegistry, CardType};
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
 
     #[test]
     fn uct_plays_a_full_game() {

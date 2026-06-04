@@ -1,3 +1,9 @@
+// S12: tests in this module still construct `run_game_continue` calls
+// for parity checks. Production rollouts now state-swap into a
+// `StepEngine` instead. Suppress deprecation warnings at the file
+// level for the test path.
+#![allow(deprecated)]
+
 //! One-ply rollout MCTS for the Pattern B card-pick decision.
 //!
 //! Wraps `pick_random_playable_in_hand`: enumerate candidates, for each
@@ -28,7 +34,7 @@ use crate::choice::{RandomOracle, RecordingOracle};
 use crate::game::{EventContext, GameState, InstanceId, Journal, PlayerId};
 
 use super::ai::{enumerate_playable_in_hand, pick_random_playable_in_hand, PickKindFilter};
-use super::run::{build_pattern_b_choices, run_game_continue, BuildChoiceResult};
+use super::run::{build_pattern_b_choices, BuildChoiceResult};
 use super::AiKind;
 
 thread_local! {
@@ -213,8 +219,6 @@ fn simulate_rollout(
     let outer_replay = state.replay_journal.take();
     state.replay_journal = Some(Journal::new());
 
-    let mut rng = StdRng::seed_from_u64(seed);
-    let mut log: Vec<String> = Vec::new();
     let mut oracle = RecordingOracle::new(RandomOracle::new(StdRng::seed_from_u64(
         seed.wrapping_add(0xBEEF),
     )));
@@ -268,7 +272,18 @@ fn simulate_rollout(
         } else {
             [AiKind::Heuristic, AiKind::Heuristic]
         };
-        let stats = run_game_continue(state, &mut rng, &mut log, registry, &ais);
+        // S12: state-swap MCTS rollout finish into a StepEngine.
+        // Swap state out of the caller's `&mut`, hand it to the
+        // engine by value, let the engine drive to Done, then swap
+        // the mutated final state back. The journal we opened above
+        // travels with the state, so rollback still works.
+        let placeholder = crate::game::GameState::new(Vec::new(), Vec::new());
+        let taken = std::mem::replace(state, placeholder);
+        let rollout_seed = seed.wrapping_add(0xF1F1_F1F1);
+        let mut engine =
+            crate::sim::step::StepEngine::new(taken, ais, registry.clone(), rollout_seed);
+        let stats = engine.run_to_end();
+        *state = engine.state;
         stats.winner == player
     } else if cast_ok {
         // Cast succeeded but the game ended during play (handler

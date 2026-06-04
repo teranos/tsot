@@ -179,10 +179,23 @@ chains (hand-payment slots, target picks, X-pick).
 
 ## Phase 5 — migration + cleanup
 
-- [ ] **S12: Delete run_game_continue, migrate callers.**
-  `sim::mcts::pick_play`, `sim::uct::pick_play_uct`, `sim::fitness`
-  all switch to `StepEngine::run_to_end`. Same journal behavior, same
-  stats output, same determinism.
+- [x] ~~**S12: Delete run_game_continue, migrate callers.**~~
+  ~~`sim::mcts::pick_play`, `sim::uct::pick_play_uct`, `sim::fitness`~~
+  ~~all switch to `StepEngine::run_to_end`. Same journal behavior, same~~
+  ~~stats output, same determinism.~~
+  (Done as a partial migration — full deletion deferred to D8.
+  Plumbed `&Arc<CardRegistry>` through the engine API (`pick_play`,
+  `pick_play_uct`, `run_game`, `run_game_with_ai`, `run_game_continue`,
+  `fitness`, `fitness_breakdown`); every CLI handler now takes the
+  Arc. MCTS + UCT rollouts state-swap the caller's `&mut GameState`
+  into a `StepEngine`, drive `run_to_end`, swap the mutated final
+  state back — the per-rollout journal travels with the state so
+  rollback still works. `run_game_continue` is marked
+  `#[deprecated]`; its remaining callers are
+  `sim::run::run_game_with_ai` (the replay-journal wrapper),
+  `cli_serve.rs` (legacy HTTP shim with channel-blocking humans),
+  and a handful of tests. D8 retires `cli_serve.rs` along with
+  `run_game_continue`. 293 lib tests pass, clippy clean.)
 
 - [ ] **S13: Full suite regression + perf check.**
   All existing tests pass. Heuristic-vs-Heuristic 100-game wall time

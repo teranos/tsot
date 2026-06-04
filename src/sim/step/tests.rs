@@ -1,3 +1,4 @@
+    #![allow(deprecated)]
     use super::*;
     use crate::card::CardType;
     use crate::cast_routing::CastRouting;
