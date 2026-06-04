@@ -38,6 +38,16 @@ make evolve               # one EA round; HTML report writes alongside
 make report               # aggregate champion stats → champions-report.html
 ```
 
+Browser play:
+
+```sh
+# Needs emscripten on PATH (https://emscripten.org/docs/getting_started/downloads.html).
+make wasm                 # build the wasm bundle, stage into dist/
+make wasm-serve           # build + serve dist/ on http://localhost:8080
+```
+
+The wasm path uses `StepEngine::step` via the `wasm_ffi` shim (`tsot_start_game` / `tsot_apply_action`) — no threads, no `catch_unwind`. The page in `assets/play.html` calls `Module.ccall(...)` directly against the bundle. The legacy `make serve` (HTTP shim) is retired once D8 of `WASM_PLAN.md` lands.
+
 Via Nix:
 
 ```sh

@@ -53,7 +53,7 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts serve
+.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts serve wasm wasm-serve clean-wasm
 
 help:
 	@echo ""
@@ -77,6 +77,11 @@ help:
 	@echo "  make pool                pool + archetypes dashboard → card-pool.html (chains curve-sample; POOL_NO_CURVE=1 to skip, POOL_NO_ARCHETYPES=1 to skip cluster section)"
 	@echo "  make probe [CARD_ID...]  side-by-side compare a card's declared variants (auto-discover if no id)"
 	@echo "  make probe-long [...]    same as probe but pop=30 gens=15 n=30 (~3min/variant, σ≈0.025)"
+	@echo ""
+	@echo "WASM browser play:"
+	@echo "  make wasm                build the wasm bundle + stage dist/ (needs emcc on PATH)"
+	@echo "  make wasm-serve          \`make wasm\` then python3 -m http.server on dist/ (PORT=8080 default)"
+	@echo "  make clean-wasm          rm -rf dist/"
 
 matchup-decks:
 	cargo run --release -- matchup-evolved --dir $(DIR) --html matchup-$(notdir $(DIR)).html
@@ -222,8 +227,57 @@ matchup-mcts:
 
 # Launch the playable HTTP frontend. Defaults: side A, MCTS opponent at
 # rollouts=5/max-candidates=10, port 8080. Override via SERVE_ARGS.
+#
+# Note: D5 ported assets/play.html to call the wasm module via
+# Module.ccall. The HTTP shim only serves the HTML — it does NOT
+# serve the wasm bundle next to it — so opening the page through
+# `make serve` fails to bootstrap. Use `make wasm-serve` instead until
+# D8 retires this whole subcommand.
 serve:
 	cargo run --release -- serve $(SERVE_ARGS)
+
+# Build the wasm bundle and stage everything the browser needs
+# (`tsot_wasm.js`, `tsot_wasm.wasm`, `index.html`) into `dist/`.
+# Requires emscripten on PATH — `emcc --version` should work before
+# you run this. Install via emsdk:
+#   git clone https://github.com/emscripten-core/emsdk; cd emsdk
+#   ./emsdk install latest && ./emsdk activate latest
+#   source ./emsdk_env.sh
+WASM_TARGET := wasm32-unknown-emscripten
+WASM_OUT    := target/$(WASM_TARGET)/release
+WASM_DIST   := dist
+
+wasm:
+	@command -v emcc >/dev/null 2>&1 || { \
+		echo "error: emcc not on PATH. Install emscripten via emsdk and"; \
+		echo "       \`source ./emsdk_env.sh\` before \`make wasm\`."; \
+		exit 1; \
+	}
+	cargo build --target $(WASM_TARGET) --release --bin tsot_wasm
+	@mkdir -p $(WASM_DIST)
+	cp $(WASM_OUT)/tsot_wasm.js $(WASM_DIST)/tsot_wasm.js
+	cp $(WASM_OUT)/tsot_wasm.wasm $(WASM_DIST)/tsot_wasm.wasm
+	cp assets/play.html $(WASM_DIST)/index.html
+	@echo ""
+	@echo "wasm bundle staged in $(WASM_DIST)/"
+	@ls -lah $(WASM_DIST)/
+
+# Serve the dist directory on localhost. Defaults to port 8080 to
+# match the legacy `make serve`; override via `PORT=...`. No COOP/COEP
+# headers — those are only needed if we later enable SharedArrayBuffer
+# (pthreads / wasm-workers), which we don't for v1.
+WASM_SERVE_PORT ?= 8080
+
+wasm-serve: wasm
+	@command -v python3 >/dev/null 2>&1 || { \
+		echo "error: python3 not on PATH"; exit 1; \
+	}
+	@echo ""
+	@echo "Serving $(WASM_DIST)/ at http://localhost:$(WASM_SERVE_PORT)/"
+	@cd $(WASM_DIST) && python3 -m http.server $(WASM_SERVE_PORT)
+
+clean-wasm:
+	rm -rf $(WASM_DIST)
 
 # Balance-probe runs the side-by-side EA over cards that declare
 # variants inline in their .lua file (`variants = { [key] = { ... } }`).

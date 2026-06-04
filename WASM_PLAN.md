@@ -49,9 +49,19 @@
   the page now expects `tsot_wasm.js` alongside the HTML which the
   shim doesn't serve. D6 ships the static dev server that does.)
 
-- [ ] **D6: Static dev-server scaffold.**
-  `make wasm-serve` target running `python3 -m http.server` from the dist dir.
-  COOP/COEP headers if SharedArrayBuffer later; not needed for v1 Asyncify.
+- [x] ~~**D6: Static dev-server scaffold.**~~
+  ~~`make wasm-serve` target running `python3 -m http.server` from the dist dir.~~
+  ~~COOP/COEP headers if SharedArrayBuffer later; not needed for v1 Asyncify.~~
+  (Three Makefile targets: `make wasm` runs `cargo build --target
+  wasm32-unknown-emscripten --release --bin tsot_wasm`, then stages
+  `tsot_wasm.{js,wasm}` and `assets/play.html` → `index.html` into
+  `dist/`. `make wasm-serve` depends on `make wasm` and then runs
+  `python3 -m http.server $(WASM_SERVE_PORT)` (defaults to 8080) out
+  of `dist/`. `make clean-wasm` removes `dist/`. Both gate on
+  prerequisites: `emcc` for the build, `python3` for the serve. No
+  COOP/COEP headers — SharedArrayBuffer / pthreads / wasm-workers
+  remain disabled for v1 per `.cargo/config.toml`. `dist/` was already
+  in `.gitignore`.)
 
 - [ ] **D7: Smoke test in Chrome + Safari.**
   Play a full game vs UCT in both browsers. Verify payment / target picks /
