@@ -150,7 +150,7 @@ fn rank_suffixed_path(base: &str, rank: usize, total: usize) -> String {
 }
 
 pub fn run_ea(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     playable_pool: &[Card],
     args: &EvolveArgs,
 ) -> mlua::Result<()> {

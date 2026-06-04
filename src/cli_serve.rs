@@ -159,20 +159,20 @@ pub fn run_serve(
     // Engine thread. Owns Lua VM + CardRegistry + GameState.
     let engine_handle = thread::spawn(move || {
         let registry = match CardRegistry::load_embedded() {
-            Ok(r) => r,
+            Ok(r) => std::sync::Arc::new(r),
             Err(e) => {
                 eprintln!("[engine] failed to load card registry: {e}");
                 return;
             }
         };
-        let your_deck = match to_deck(&registry, &your_ids) {
+        let your_deck = match to_deck(registry.as_ref(), &your_ids) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("[engine] your deck rebuild failed: {e:?}");
                 return;
             }
         };
-        let opp_deck = match to_deck(&registry, &opp_ids) {
+        let opp_deck = match to_deck(registry.as_ref(), &opp_ids) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("[engine] opp deck rebuild failed: {e:?}");
@@ -197,7 +197,7 @@ pub fn run_serve(
 
         let mut rng = StdRng::seed_from_u64(game_seed);
         let mut log: Vec<String> = Vec::new();
-        let _stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &ais);
+        let _stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
         // Game ended. Send a GameOver prompt so the frontend can render
         // the result.
         iface_engine.notify_game_over(&state, your_side);

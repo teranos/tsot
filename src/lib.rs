@@ -1,3 +1,10 @@
+// S12: `Arc<CardRegistry>` is shared cheaply across the engine + AI
+// rollouts even though `CardRegistry` owns a `!Send + !Sync` `mlua::Lua`
+// VM. We never cross threads with it (each thread / rollout owns its
+// own); the Arc is only used to avoid cloning the (uncloneable) Lua
+// VM between owners. Suppress clippy's correctness warning everywhere.
+#![allow(clippy::arc_with_non_send_sync)]
+
 pub mod card;
 pub mod cast_routing;
 pub mod choice;

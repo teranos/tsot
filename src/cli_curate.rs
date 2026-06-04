@@ -70,7 +70,7 @@ pub struct CurateBaselinesArgs {
 use tsot::sim::diversity::jaccard;
 
 pub fn run_curate_baselines(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     args: &CurateBaselinesArgs,
 ) -> mlua::Result<()> {
     let baselines_dir = std::path::Path::new(&args.baselines);
@@ -147,7 +147,7 @@ pub fn run_curate_baselines(
                 let state = GameState::new(cand_cards.to_vec(), opp.clone());
                 let mut game_rng = StdRng::seed_from_u64(rng.gen());
                 let mut log: Vec<String> = Vec::new();
-                let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry.lua(), &ais);
+                let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais);
                 if stats.winner == tsot::game::PlayerId::A {
                     wins += 1;
                 }
@@ -155,7 +155,7 @@ pub fn run_curate_baselines(
                 let state = GameState::new(opp.clone(), cand_cards.to_vec());
                 let mut game_rng = StdRng::seed_from_u64(rng.gen());
                 let mut log = Vec::new();
-                let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry.lua(), &ais);
+                let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais);
                 if stats.winner == tsot::game::PlayerId::B {
                     wins += 1;
                 }

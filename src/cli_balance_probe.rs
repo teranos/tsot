@@ -195,7 +195,7 @@ fn discover_base_ids_with_variants(registry: &CardRegistry) -> Vec<String> {
 }
 
 fn probe_one_card(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     pool: &[Card],
     gauntlet: &[Vec<Card>],
     args: &BalanceProbeArgs,
@@ -516,7 +516,7 @@ fn build_comparison_html(
 }
 
 pub fn run_balance_probe(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     playable_pool: &[Card],
     args: &BalanceProbeArgs,
 ) -> mlua::Result<()> {

@@ -137,7 +137,13 @@ pub struct StepEngine {
     pub state: GameState,
     pub cursor: EngineCursor,
     pub ais: [AiKind; 2],
-    pub registry: CardRegistry,
+    /// S12: registry is shared via `Arc` so callers that already own
+    /// (or only borrow) a `CardRegistry` — MCTS / UCT rollouts hand-roll
+    /// a per-rollout engine, the wasm session shares with the JS-facing
+    /// FFI layer, the EA loop reuses one registry across many games —
+    /// can hand a reference into the engine without giving up ownership
+    /// or reloading from disk.
+    pub registry: std::sync::Arc<CardRegistry>,
     pub rng: StdRng,
     pub stats: GameStats,
     pub log: Vec<String>,
@@ -157,9 +163,10 @@ impl StepEngine {
     pub fn new(
         state: GameState,
         ais: [AiKind; 2],
-        registry: CardRegistry,
+        registry: impl Into<std::sync::Arc<CardRegistry>>,
         seed: u64,
     ) -> Self {
+        let registry = registry.into();
         let mut rng = StdRng::seed_from_u64(seed);
         // Burn one rng tick on the oracle seed to match
         // `run_game_continue`'s rng-consumption order (so a same-seed

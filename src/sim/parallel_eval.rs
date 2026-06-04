@@ -32,7 +32,7 @@ thread_local! {
 }
 
 struct WorkerCtx {
-    registry: CardRegistry,
+    registry: std::sync::Arc<CardRegistry>,
     gauntlet: Vec<Vec<Card>>,
     /// Identity of the gauntlet this WorkerCtx cached. If a later
     /// call uses a different gauntlet, we rebuild — supports running
@@ -59,12 +59,13 @@ pub fn parallel_evaluate_genomes(
                 Some(ctx) => ctx.gauntlet_signature != gauntlet_ids,
             };
             if needs_rebuild {
-                let registry = CardRegistry::load_embedded()
-                    .expect("worker: failed to load cards");
+                let registry = std::sync::Arc::new(
+                    CardRegistry::load_embedded().expect("worker: failed to load cards"),
+                );
                 let gauntlet: Vec<Vec<Card>> = gauntlet_ids
                     .iter()
                     .map(|ids| {
-                        to_deck(&registry, ids)
+                        to_deck(registry.as_ref(), ids)
                             .expect("gauntlet contains unknown card id")
                     })
                     .collect();

@@ -122,7 +122,7 @@
         use rand::SeedableRng;
 
         let seed: u64 = 0xBEEF;
-        let registry_a = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let registry_a = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         let template = registry_a
             .cards()
             .iter()
@@ -154,7 +154,7 @@
             &mut state1,
             &mut rng1,
             &mut log1,
-            registry_a.lua(),
+            &registry_a,
             &ais1,
         );
 
@@ -877,7 +877,7 @@
         use crate::sim::run::run_game_continue;
         use rand::SeedableRng;
 
-        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let registry = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         let pool_ids: Vec<String> = registry
             .cards()
             .iter()
@@ -890,14 +890,14 @@
             (0..50).map(|i| pool_ids[i % pool_ids.len()].clone()).collect();
 
         for seed in 0u64..64 {
-            let deck_a = to_deck(&registry, &deck_ids).unwrap();
-            let deck_b = to_deck(&registry, &deck_ids).unwrap();
+            let deck_a = to_deck(registry.as_ref(), &deck_ids).unwrap();
+            let deck_b = to_deck(registry.as_ref(), &deck_ids).unwrap();
             let mut state = GameState::new(deck_a, deck_b);
             state.replay_journal = Some(Journal::new());
             let mut rng = StdRng::seed_from_u64(seed);
             let mut log: Vec<String> = Vec::new();
             let ais = [AiKind::Heuristic, AiKind::Heuristic];
-            let _stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &ais);
+            let _stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
             let rescued = state
                 .action_counts
                 .get("preview_retry_rescued")
@@ -924,7 +924,7 @@
         use rand::SeedableRng;
 
         let seed: u64 = 0xD15EA5E;
-        let registry_a = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let registry_a = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         // Full-corpus random mix — 50 distinct ids that include the
         // choose_player carriers (field-notes, azure-recursion,
         // bci-megafly) so the recording can actually have a Player
@@ -940,14 +940,14 @@
 
         // Path 1: legacy run_game_continue. Decks loaded from
         // registry_a's Lua VM.
-        let deck_a_1 = to_deck(&registry_a, &deck_ids).expect("deck A build");
-        let deck_b_1 = to_deck(&registry_a, &deck_ids).expect("deck B build");
+        let deck_a_1 = to_deck(registry_a.as_ref(), &deck_ids).expect("deck A build");
+        let deck_b_1 = to_deck(registry_a.as_ref(), &deck_ids).expect("deck B build");
         let mut state1 = GameState::new(deck_a_1, deck_b_1);
         state1.replay_journal = Some(Journal::new());
         let mut rng1 = StdRng::seed_from_u64(seed);
         let mut log1: Vec<String> = Vec::new();
         let ais1 = [AiKind::Heuristic, AiKind::Heuristic];
-        let _stats1 = run_game_continue(&mut state1, &mut rng1, &mut log1, registry_a.lua(), &ais1);
+        let _stats1 = run_game_continue(&mut state1, &mut rng1, &mut log1, &registry_a, &ais1);
 
         // Path 2: StepEngine. Fresh registry so the StepEngine owns
         // its own Lua VM; rebuild the deck against THIS registry to

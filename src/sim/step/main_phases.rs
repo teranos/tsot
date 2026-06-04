@@ -154,7 +154,7 @@ impl StepEngine {
                     active,
                     kind_filter,
                     &cfg,
-                    self.registry.lua(),
+                    &self.registry,
                 )
             }
             AiKind::Uct(cfg) => {
@@ -164,7 +164,7 @@ impl StepEngine {
                     active,
                     kind_filter,
                     &cfg,
-                    self.registry.lua(),
+                    &self.registry,
                 )
             }
             AiKind::Human(_) => match pending {

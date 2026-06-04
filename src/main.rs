@@ -1,3 +1,6 @@
+// S12: see lib.rs for the rationale.
+#![allow(clippy::arc_with_non_send_sync)]
+
 mod champions_report;
 mod cli_balance_probe;
 mod cli_champions_report;
@@ -90,7 +93,7 @@ fn main() -> mlua::Result<()> {
     // 70+ Lua cards load. Otherwise `tsot evolve --help` takes a second
     // just to print help text.
     let cli = Cli::parse();
-    let registry = CardRegistry::load_embedded()?;
+    let registry = std::sync::Arc::new(CardRegistry::load_embedded()?);
     let playable_pool: Vec<Card> = registry
         .cards()
         .iter()

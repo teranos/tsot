@@ -659,7 +659,7 @@ mod tests {
         use crate::sim::run::run_game_continue;
         use crate::sim::AiKind;
 
-        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let registry = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         let template = registry
             .cards()
             .iter()
@@ -703,7 +703,7 @@ mod tests {
         let ais = [AiKind::Human(iface.clone()), AiKind::Heuristic];
         let mut rng = StdRng::seed_from_u64(0xCAFE);
         let mut log: Vec<String> = Vec::new();
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &ais);
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
 
         // Engine returned. Drop everything that holds prompt_tx (ais
         // owns an Arc<HumanInterface> which holds prompt_tx) so the

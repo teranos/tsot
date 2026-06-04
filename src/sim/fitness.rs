@@ -72,7 +72,7 @@ pub fn build_gauntlet(playable_pool: &[Card], master_seed: u64) -> Vec<Vec<Card>
 /// n_per_side, base_seed)`. The internal RNG is seeded from `base_seed`
 /// only; no shared external state.
 pub fn fitness(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     genome: &[String],
     gauntlet: &[Vec<Card>],
     n_per_side: u32,
@@ -89,14 +89,14 @@ pub fn fitness(
 /// `fitness` (scalar); inspection code (top-K reporting, regression
 /// diffs) calls this.
 pub fn fitness_breakdown(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     genome: &[String],
     gauntlet: &[Vec<Card>],
     n_per_side: u32,
     base_seed: u64,
     opponent_ai: &AiKind,
 ) -> Result<FitnessBreakdown, GenomeError> {
-    let deck_g = to_deck(registry, genome)?;
+    let deck_g = to_deck(registry.as_ref(), genome)?;
     if gauntlet.is_empty() || n_per_side == 0 {
         return Ok(FitnessBreakdown {
             total: 0.0,
@@ -121,7 +121,7 @@ pub fn fitness_breakdown(
             let state = GameState::new(deck_g.clone(), opp.clone());
             let mut game_rng = StdRng::seed_from_u64(rng.gen());
             let mut log: Vec<String> = Vec::new();
-            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry.lua(), &ais_candidate_a);
+            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_candidate_a);
             if stats.winner == PlayerId::A {
                 opp_wins += 1;
             }
@@ -130,7 +130,7 @@ pub fn fitness_breakdown(
             let state = GameState::new(opp.clone(), deck_g.clone());
             let mut game_rng = StdRng::seed_from_u64(rng.gen());
             let mut log = Vec::new();
-            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry.lua(), &ais_candidate_b);
+            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_candidate_b);
             if stats.winner == PlayerId::B {
                 opp_wins += 1;
             }
@@ -152,8 +152,8 @@ mod tests {
     use std::path::Path;
     use crate::card::{CardType, CostSource};
 
-    fn load_registry() -> CardRegistry {
-        CardRegistry::load(Path::new("cards")).expect("load cards/")
+    fn load_registry() -> std::sync::Arc<CardRegistry> {
+        std::sync::Arc::new(CardRegistry::load(Path::new("cards")).expect("load cards/"))
     }
 
     // Duplicates main.rs's playable-pool filter. Pulled out only here

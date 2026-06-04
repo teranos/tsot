@@ -61,7 +61,7 @@ pub struct ChampGameStats {
 }
 
 pub fn run_champions_report(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     playable_pool: &[Card],
     args: &ChampionsReportArgs,
 ) -> mlua::Result<()> {
@@ -352,7 +352,7 @@ pub fn run_champions_report(
                             let mut game_rng = StdRng::seed_from_u64(rng.gen());
                             let mut log: Vec<String> = Vec::new();
                             let (stats, _) =
-                                sim::run_game(state, &mut game_rng, &mut log, registry.lua());
+                                sim::run_game(state, &mut game_rng, &mut log, registry);
                             s.turns.push(stats.turns);
                             if swap {
                                 s.attacks += stats.b_attacks as u64;

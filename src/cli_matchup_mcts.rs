@@ -112,7 +112,7 @@ pub struct MatchupMctsArgs {
 /// Run a single game with `ai_a` driving player A on `deck_a` and
 /// `ai_b` driving player B on `deck_b`. Returns the winning PlayerId.
 fn play_one(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     deck_a: &[Card],
     deck_b: &[Card],
     game_seed: u64,
@@ -122,7 +122,7 @@ fn play_one(
     state.replay_journal = Some(tsot::game::Journal::new());
     let mut rng = StdRng::seed_from_u64(game_seed);
     let mut log: Vec<String> = Vec::new();
-    let stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), ais);
+    let stats = run_game_continue(&mut state, &mut rng, &mut log, registry, ais);
     stats.winner
 }
 
@@ -131,7 +131,7 @@ fn play_one(
 /// rough deck-strength proxy for the handicap flag, not as an absolute
 /// ranking across runs.
 fn load_deck(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     path: &str,
 ) -> mlua::Result<(Vec<Card>, String, f64)> {
     let saved = EvolvedDeck::load(std::path::Path::new(path))
@@ -147,7 +147,7 @@ fn load_deck(
 }
 
 pub fn run_matchup_mcts(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     playable_pool: &[Card],
     args: &MatchupMctsArgs,
 ) -> mlua::Result<()> {

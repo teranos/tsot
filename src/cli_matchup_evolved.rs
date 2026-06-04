@@ -38,7 +38,7 @@ pub struct MatchupEvolvedArgs {
 }
 
 pub fn run_matchup_evolved(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     args: &MatchupEvolvedArgs,
 ) -> mlua::Result<()> {
     let dir = std::path::Path::new(&args.dir);
@@ -95,7 +95,7 @@ pub fn run_matchup_evolved(
                 let game_seed: u64 = rng.gen();
                 let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log: Vec<String> = Vec::new();
-                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry.lua());
+                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry);
                 if stats.winner == tsot::game::PlayerId::A {
                     wins[i][j] += 1;
                 }

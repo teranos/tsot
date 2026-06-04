@@ -175,7 +175,7 @@ pub fn pick_play_uct(
     player: PlayerId,
     kind_filter: PickKindFilter,
     cfg: &UctConfig,
-    lua: &mlua::Lua,
+    registry: &std::sync::Arc<crate::card::CardRegistry>,
 ) -> Option<InstanceId> {
     UCT_PICK_CALLS.fetch_add(1, Ordering::SeqCst);
 
@@ -214,7 +214,7 @@ pub fn pick_play_uct(
         let mut rng = StdRng::seed_from_u64(cfg.base_seed.wrapping_add(it as u64));
         let mut log: Vec<String> = Vec::new();
         let ais = [AiKind::Heuristic, AiKind::Heuristic];
-        let stats = run_game_continue(state, &mut rng, &mut log, lua, &ais);
+        let stats = run_game_continue(state, &mut rng, &mut log, registry, &ais);
         let winner = stats.winner;
         clear_planned_actions();
 
@@ -383,7 +383,7 @@ mod tests {
     fn uct_plays_a_full_game() {
         use crate::sim::run::run_game_continue;
 
-        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let registry = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         let template = registry
             .cards()
             .iter()
@@ -406,7 +406,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0xC0DE);
         let mut log: Vec<String> = Vec::new();
         let ais = [AiKind::Uct(cfg.clone()), AiKind::Uct(cfg)];
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &ais);
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
 
         assert!(state.winner.is_some(), "UCT game produced no winner");
         assert!(stats.turns > 0, "UCT game recorded zero turns");

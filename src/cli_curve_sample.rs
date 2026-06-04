@@ -68,7 +68,7 @@ pub struct CurveSampleArgs {
 }
 
 pub fn run_curve_sample(
-    registry: &CardRegistry,
+    registry: &std::sync::Arc<CardRegistry>,
     playable_pool: &[Card],
     args: &CurveSampleArgs,
 ) -> mlua::Result<()> {
@@ -116,7 +116,7 @@ pub fn run_curve_sample(
         let state = GameState::new(deck_a, deck_b);
         let mut game_rng = StdRng::seed_from_u64(rng.gen());
         let mut log: Vec<String> = Vec::new();
-        let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry.lua(), &ais);
+        let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais);
         // Scope-2: sum across both players. The player field on each
         // event is preserved upstream for a future scope-3 consumer.
         for (card_id, turn, _player) in &stats.card_play_turn_events {

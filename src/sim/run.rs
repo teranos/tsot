@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use crate::card::{CardType, CostSource};
+use crate::card::{CardRegistry, CardType, CostSource};
 use crate::choice::{ChoiceOracle, ChooseIntRequest, RandomOracle, RecordingOracle, ScriptedOracle};
 use crate::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
@@ -33,10 +33,10 @@ pub fn run_game(
     state: GameState,
     rng: &mut StdRng,
     log: &mut Vec<String>,
-    lua: &mlua::Lua,
+    registry: &std::sync::Arc<CardRegistry>,
 ) -> (GameStats, crate::game::Journal) {
     let ais = [super::AiKind::Heuristic, super::AiKind::Heuristic];
-    run_game_with_ai(state, rng, log, lua, &ais)
+    run_game_with_ai(state, rng, log, registry, &ais)
 }
 
 /// Like [`run_game`] but with per-player AI selection. Used by the
@@ -47,11 +47,11 @@ pub fn run_game_with_ai(
     mut state: GameState,
     rng: &mut StdRng,
     log: &mut Vec<String>,
-    lua: &mlua::Lua,
+    registry: &std::sync::Arc<CardRegistry>,
     ais: &[super::AiKind; 2],
 ) -> (GameStats, crate::game::Journal) {
     state.replay_journal = Some(crate::game::Journal::new());
-    let mut stats = run_game_continue(&mut state, rng, log, lua, ais);
+    let mut stats = run_game_continue(&mut state, rng, log, registry, ais);
     let replay_journal = state.replay_journal.take().unwrap_or_default();
     stats.replay_journal_entries = replay_journal.len() as u64;
     (stats, replay_journal)
@@ -434,9 +434,10 @@ pub fn run_game_continue(
     state: &mut GameState,
     rng: &mut StdRng,
     log: &mut Vec<String>,
-    lua: &mlua::Lua,
+    registry: &std::sync::Arc<CardRegistry>,
     ais: &[super::AiKind; 2],
 ) -> GameStats {
+    let lua = registry.lua();
     let oracle_seed: u64 = rng.gen();
     // If either side is Human, wrap the random oracle so its choose_*
     // calls route to the human when the asker matches.
@@ -619,10 +620,10 @@ pub fn run_game_continue(
                     }
                 }
                 super::AiKind::Mcts(mcts_cfg) => {
-                    super::mcts::pick_play(state, active, kind_filter, mcts_cfg, lua)
+                    super::mcts::pick_play(state, active, kind_filter, mcts_cfg, registry)
                 }
                 super::AiKind::Uct(uct_cfg) => {
-                    super::uct::pick_play_uct(state, active, kind_filter, uct_cfg, lua)
+                    super::uct::pick_play_uct(state, active, kind_filter, uct_cfg, registry)
                 }
                 super::AiKind::Human(iface) => {
                     let candidates =
@@ -1306,7 +1307,7 @@ mod tests {
         // 50-card decks with realistic cost variety. Assert at least
         // one P.31 attached-payment fires across the matchup.
         use crate::sim::evolved_deck::EvolvedDeck;
-        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let registry = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         let baseline_dir = std::path::Path::new("baselines");
         let mut decks: Vec<Vec<crate::card::Card>> = Vec::new();
         let mut labels: Vec<String> = Vec::new();
@@ -1339,7 +1340,7 @@ mod tests {
                 let mut rng = StdRng::seed_from_u64(seed);
                 let mut log: Vec<String> = Vec::new();
                 let (stats, _journal) =
-                    run_game(state, &mut rng, &mut log, registry.lua());
+                    run_game(state, &mut rng, &mut log, &registry);
                 total_transfer += stats
                     .action_counts
                     .get("attached_payment_transfer")
@@ -1382,7 +1383,7 @@ mod tests {
     /// is the gap.
     #[test]
     fn full_random_game_rollback_restores_initial_state() {
-        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let registry = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         // Pick a vanilla creature template so the deck contains
         // handler-free cards — the test exercises journaling for the
         // hot-path Pattern B / combat / turn machinery, not for one
@@ -1413,7 +1414,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0xC0FFEE);
         let mut log: Vec<String> = Vec::new();
         let ais = [super::super::AiKind::Heuristic, super::super::AiKind::Heuristic];
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &ais);
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
 
         assert!(state.winner.is_some(), "game should have a winner");
         assert!(stats.turns > 0, "stats should record turns");
@@ -1474,7 +1475,7 @@ mod tests {
 
     #[test]
     fn run_game_is_deterministic_per_seed_and_decks() {
-        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let registry = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         let template = registry
             .cards()
             .iter()
@@ -1491,8 +1492,8 @@ mod tests {
         let mut log_1: Vec<String> = Vec::new();
         let mut log_2: Vec<String> = Vec::new();
 
-        let (stats_1, journal_1) = run_game(state_1, &mut rng_1, &mut log_1, registry.lua());
-        let (stats_2, journal_2) = run_game(state_2, &mut rng_2, &mut log_2, registry.lua());
+        let (stats_1, journal_1) = run_game(state_1, &mut rng_1, &mut log_1, &registry);
+        let (stats_2, journal_2) = run_game(state_2, &mut rng_2, &mut log_2, &registry);
 
         assert_eq!(log_1, log_2, "logs diverged across identical runs");
         assert_eq!(

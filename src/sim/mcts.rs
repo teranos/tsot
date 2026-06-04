@@ -116,7 +116,7 @@ pub fn pick_play(
     player: PlayerId,
     kind_filter: PickKindFilter,
     cfg: &MctsConfig,
-    lua: &mlua::Lua,
+    registry: &std::sync::Arc<crate::card::CardRegistry>,
 ) -> Option<InstanceId> {
     // Resolve the search depth for THIS call. Top-level entry (no
     // budget set) uses `cfg.max_depth`; re-entry from inside a rollout
@@ -161,7 +161,7 @@ pub fn pick_play(
         for r in 0..cfg.rollouts_per_candidate {
             let seed = derive_rollout_seed(cfg.base_seed, i as u64, r as u64);
             MCTS_BUDGET.with(|b| b.set(rollout_budget));
-            let won = simulate_rollout(state, player, candidate, seed, lua, cfg);
+            let won = simulate_rollout(state, player, candidate, seed, registry, cfg);
             MCTS_BUDGET.with(|b| b.set(entry_budget));
             if won {
                 wins += 1;
@@ -202,9 +202,10 @@ fn simulate_rollout(
     player: PlayerId,
     candidate: &InstanceId,
     seed: u64,
-    lua: &mlua::Lua,
+    registry: &std::sync::Arc<crate::card::CardRegistry>,
     cfg: &MctsConfig,
 ) -> bool {
+    let lua = registry.lua();
     // Save the caller's replay_journal aside (typical case: outer
     // game's whole-run capture). We install a fresh journal for the
     // rollout; mutations land in it; we roll it back at the end and
@@ -267,7 +268,7 @@ fn simulate_rollout(
         } else {
             [AiKind::Heuristic, AiKind::Heuristic]
         };
-        let stats = run_game_continue(state, &mut rng, &mut log, lua, &ais);
+        let stats = run_game_continue(state, &mut rng, &mut log, registry, &ais);
         stats.winner == player
     } else if cast_ok {
         // Cast succeeded but the game ended during play (handler
@@ -299,7 +300,7 @@ mod tests {
     #[test]
     fn mcts_plays_a_full_game() {
         use crate::sim::{run_game, AiKind};
-        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let registry = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         let template = registry
             .cards()
             .iter()
@@ -333,7 +334,7 @@ mod tests {
             &mut state,
             &mut rng,
             &mut log,
-            registry.lua(),
+            &registry,
             &ais,
         );
         assert!(state.winner.is_some(), "MCTS game produced no winner");
@@ -343,7 +344,7 @@ mod tests {
 
     #[test]
     fn pick_play_is_deterministic_per_config() {
-        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let registry = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         let template = registry
             .cards()
             .iter()
@@ -375,14 +376,14 @@ mod tests {
             PlayerId::A,
             PickKindFilter::Any,
             &cfg,
-            registry.lua(),
+            &registry,
         );
         let p2 = pick_play(
             &mut state_2,
             PlayerId::A,
             PickKindFilter::Any,
             &cfg,
-            registry.lua(),
+            &registry,
         );
         assert_eq!(p1, p2, "MCTS pick must be deterministic per (config, state)");
     }
