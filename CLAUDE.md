@@ -16,6 +16,11 @@ in @src/sim/README.md.
 
 Rust side strict TDD preferred.
 
+When running long jobs (probes, EA, builds, `cargo test`): write to a
+file the user can tail, never `| tail -N` or `| head -N` the live
+stream. Truncating the output is optimizing your own legibility at the
+cost of the user's visibility into the run.
+
 Python is the analytics language of choice — dashboards, reports, and
 sim-output analysis all live in `tools/*.py` (see `tools/cards-report.py`).
 
