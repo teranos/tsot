@@ -1,0 +1,101 @@
+/* tsot-card — primitive card manifestation.
+ *
+ * 3:5 portrait, 5 rows × 3 cols slot grid on the back (SLOTS.md),
+ * color-tinted placeholder front. Dual-face with CSS 3D flip driven
+ * by the `data-face` attribute on `.tsot-card`. */
+
+:root {
+  --tsot-card-w: 220px;
+  --tsot-cardstock: #1a1c1f;
+  --tsot-card-grid: #2a2c2f;
+  --tsot-card-border: #45494e;
+  --tsot-card-glyph: #e8e4d8;
+  --tsot-card-table: #07050a;
+}
+
+.tsot-card-window {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tsot-card-table);
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.tsot-card {
+  display: inline-block;
+  width: var(--tsot-card-w);
+  aspect-ratio: 3 / 5;
+  perspective: 1200px;
+  cursor: pointer;
+}
+
+.tsot-card-flipper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 420ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.tsot-card[data-face='back']  .tsot-card-flipper { transform: rotateY(0); }
+.tsot-card[data-face='front'] .tsot-card-flipper { transform: rotateY(180deg); }
+
+.tsot-card-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  border: 1.5px solid var(--tsot-card-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.tsot-card-back {
+  background: var(--tsot-card-grid);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(5, 1fr);
+  gap: 1px;
+}
+
+.tsot-card-cell {
+  background: var(--tsot-cardstock);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--tsot-card-w) * 0.18);
+  line-height: 1;
+  color: var(--tsot-card-glyph);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  position: relative;
+}
+
+.tsot-card-cell.is-transparent::after {
+  content: '';
+  position: absolute;
+  width: 40%;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  background: var(--tsot-card-table);
+}
+
+.tsot-card-front {
+  transform: rotateY(180deg);
+  background: #3a3936;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  color: var(--tsot-card-glyph);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: center;
+}
+
+.tsot-card-front-name {
+  font-size: calc(var(--tsot-card-w) * 0.085);
+  line-height: 1.2;
+}

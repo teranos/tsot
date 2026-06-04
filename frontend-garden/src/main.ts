@@ -14,6 +14,8 @@ import {
 } from './persist';
 import { createSegGlyph } from './glyphs';
 import type { SegDef } from './symbols';
+import { createCardGlyph } from './tsot-card';
+import type { CardView } from './tsot-card-types';
 
 const TRAY_ORDER: ReadonlyArray<SegDef> = [AM, IX, AX];
 
@@ -67,6 +69,31 @@ for (const def of TRAY_ORDER) {
     addToTray(def);
   }
 }
+
+// Sample tsot_card glyph — proves the card primitive renders inside
+// the garden's window manifestation. Shape mirrors CardView (engine
+// JSON); abilities/cost/etc. are minimal stand-ins until wired to the
+// live engine.
+const sampleCard: CardView = {
+  iid: 'sample-1',
+  id: 'midnight-raven',
+  name: 'Midnight Raven',
+  kind: 'Creature',
+  colors: ['blue'],
+  symbols: ['⊨', '≡', '⨳'],
+  subtypes: ['bird'],
+  cost: '2 hand',
+  effective_cost: '2 hand',
+  abilities: ['on attack: put top of deck on the bottom'],
+  flavor: '',
+  tapped: false,
+  summoning_sick: false,
+  damage: 0,
+  power: 1,
+  toughness: 1,
+  attached: [],
+};
+glyphRun.add(createCardGlyph(sampleCard));
 
 console.info(
   `[TSOT] ready — palette: ${PALETTE_ORDER.map((d) => d.symbol).join(' ')}`,

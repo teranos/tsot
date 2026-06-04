@@ -30,6 +30,7 @@ if (!result.success) {
 }
 
 await copyFile(join(srcDir, 'styles.css'), join(outDir, 'styles.css'));
+await copyFile(join(srcDir, 'tsot-card.css'), join(outDir, 'tsot-card.css'));
 
 const html = await Bun.file(join(root, 'index.html')).text();
 await Bun.write(
