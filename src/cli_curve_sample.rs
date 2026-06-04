@@ -53,6 +53,18 @@ pub struct CurveSampleArgs {
     /// `tools/cards-report.py` via the stdlib `json` module.
     #[arg(long = "out", default_value = "card-curve.json")]
     pub out: String,
+    /// AI for both seats. `uct` (default) gives high-signal play so
+    /// the turn-played histograms reflect real card-driven timing.
+    /// `heuristic` is the legacy fast option.
+    #[arg(long = "opponent-ai", default_value = "uct")]
+    pub opponent_ai: String,
+    /// UCT iterations per pick when `--opponent-ai uct`.
+    #[arg(long = "opponent-uct-iterations", default_value_t = 10)]
+    pub opponent_uct_iterations: u32,
+    /// UCT exploration constant when `--opponent-ai uct`. `sqrt(2)`
+    /// is classical.
+    #[arg(long = "opponent-uct-c", default_value_t = std::f64::consts::SQRT_2)]
+    pub opponent_uct_c: f64,
 }
 
 pub fn run_curve_sample(
@@ -70,10 +82,25 @@ pub fn run_curve_sample(
     let mut acc: BTreeMap<String, BTreeMap<u32, u32>> = BTreeMap::new();
     let mut total_plays: u64 = 0;
 
+    let ai_kind = match args.opponent_ai.to_ascii_lowercase().as_str() {
+        "heuristic" => tsot::sim::AiKind::Heuristic,
+        "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
+            iterations: args.opponent_uct_iterations,
+            exploration_c: args.opponent_uct_c,
+            ..Default::default()
+        }),
+        other => {
+            eprintln!("error: --opponent-ai must be 'heuristic' | 'uct', got {other:?}");
+            std::process::exit(2);
+        }
+    };
+    let ais = [ai_kind.clone(), ai_kind.clone()];
+
     println!();
     println!("=== curve-sample ===");
     println!("  games={} seed={:#x}", args.games, args.seed);
     println!("  pool size: {} cards", playable_pool.len());
+    println!("  ai: {:?} (both seats)", ai_kind);
     println!();
 
     let t_start = std::time::Instant::now();
@@ -89,7 +116,7 @@ pub fn run_curve_sample(
         let state = GameState::new(deck_a, deck_b);
         let mut game_rng = StdRng::seed_from_u64(rng.gen());
         let mut log: Vec<String> = Vec::new();
-        let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry.lua());
+        let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry.lua(), &ais);
         // Scope-2: sum across both players. The player field on each
         // event is preserved upstream for a future scope-3 consumer.
         for (card_id, turn, _player) in &stats.card_play_turn_events {
