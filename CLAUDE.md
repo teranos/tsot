@@ -24,7 +24,7 @@ See @LUA.md "Card variants" for the schema.
 See @LUA.md and @RULES.md. Sim AI heuristics + game-runner internals
 in @src/sim/README.md.
 
-Rust side strict TDD preferred.
+Rust side strict TDD required.
 
 When running long jobs (probes, EA, builds, `cargo test`): write to a
 file the user can tail, never `| tail -N` or `| head -N` the live
