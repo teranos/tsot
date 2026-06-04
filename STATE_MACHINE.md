@@ -38,19 +38,30 @@ chains (hand-payment slots, target picks, X-pick).
 
 ## Phase 1 — scaffold + vanilla AI parity
 
-- [ ] **S1: StepEngine + EngineCursor scaffold.**
-  Define struct, enum, StepResult. No phase logic yet — `step` just
-  panics. Builds + lib tests pass.
+- [x] ~~**S1: StepEngine + EngineCursor scaffold.**~~
+  ~~Define struct, enum, StepResult. No phase logic yet — `step` just~~
+  ~~panics. Builds + lib tests pass.~~
 
-- [ ] **S2: AI-only cursor flow.**
-  Implement StartTurn → TurnSetup → AdvanceToMain1 → PatternBPick →
-  PreCombatActs → DeclareAttackers → ConfirmAttackers → PostCombatActs
-  → EndTurn → loop. No human, no Lua, no activations. Vanilla decks only.
+- [x] ~~**S2: AI-only cursor flow.**~~
+  ~~Implement StartTurn → TurnSetup → AdvanceToMain1 → PatternBPick →~~
+  ~~PreCombatActs → DeclareAttackers → ConfirmAttackers → PostCombatActs~~
+  ~~→ EndTurn → loop. No human, no Lua, no activations. Vanilla decks only.~~
+  (Activation passes folded into S9; Pattern B handles suicide rollback +
+  sacrifice telemetry now. Test: `step_engine_completes_vanilla_heuristic_game`.)
 
 - [ ] **S3: Parity test vs run_game_continue.**
   Heuristic-vs-Heuristic game on a fixed seed runs to the same winner /
   turn count / stats via `StepEngine::run_to_end()` and via the existing
   `run_game_continue`. Byte-identical or flagged divergence.
+  (Test green: `step_engine_parity_vs_run_game_continue` byte-identical
+  on seed `0xBEEF`. Two ordering subtleties surfaced: (1) journal must
+  open AFTER `build_pattern_b_choices` so
+  `rig_creature_free_haste`'s cost-clear stays outside the preview-
+  rollback envelope; (2) each phase advance constructs a fresh
+  `RandomOracle` from `rng.gen()` rather than reusing the persistent
+  oracle. Template filter excludes cards with `activated` abilities —
+  activation passes are S9 scope. Awaiting confirmation before marking
+  complete.)
 
 ## Phase 2 — human decision points (unblocks D4)
 
