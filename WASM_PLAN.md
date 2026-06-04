@@ -31,9 +31,23 @@
   scaffolding deleted along with `ScriptedSource` / `YieldSignal`.
   D4-era D2/D3 tests rewired and still green.)
 
-- [ ] **D5: Port assets/play.html to WASM.**
-  Replace `fetch('/state'|'/action')` with `Module.ccall('tsot_*', ..., {async:true})`.
-  Load tsot_wasm.js via `<script>`. UI code (cards, click handlers) unchanged.
+- [x] ~~**D5: Port assets/play.html to WASM.**~~
+  ~~Replace `fetch('/state'|'/action')` with `Module.ccall('tsot_*', ..., {async:true})`.~~
+  ~~Load tsot_wasm.js via `<script>`. UI code (cards, click handlers) unchanged.~~
+  (`<script src="tsot_wasm.js">` loads the emscripten loader; bootstrap
+  awaits `createTsotModule()`. `wasmCallString` wraps `ccall` with a
+  follow-up `tsot_free_string` so every `CString::into_raw` from the
+  Rust side gets freed. `fetchState()` is now one-shot — runs
+  `tsot_start_game` on first call with default args (random seed,
+  50×blue-monkey mirror, heuristic opponent); subsequent calls return
+  the stashed prompt since the engine only advances via
+  `tsot_apply_action`. `sendAction` JSON-stringifies the
+  `HumanAction`, parses the returned prompt JSON, stashes it on
+  `state.current`. Asyncify is OFF (`.cargo/config.toml`) so the
+  ccalls are synchronous — no `{async:true}` needed. UI / render code
+  unchanged. `make serve` (HTTP shim) is broken until D8 retires it —
+  the page now expects `tsot_wasm.js` alongside the HTML which the
+  shim doesn't serve. D6 ships the static dev server that does.)
 
 - [ ] **D6: Static dev-server scaffold.**
   `make wasm-serve` target running `python3 -m http.server` from the dist dir.

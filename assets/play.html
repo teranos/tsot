@@ -107,17 +107,69 @@
   <div id="log" style="max-height: 6rem; overflow-y: auto; font-size: 0.7rem; color: #777;"></div>
 </div>
 
+<script src="tsot_wasm.js"></script>
 <script>
 const state = { current: null, selectedAttackers: new Set(), selectedBlocks: {}, blockerPickFor: null };
 
+// D5: wasm runtime handle. Populated by the bootstrap at the bottom of
+// this file before any UI code runs. All engine calls go through
+// `wasmCallString` which manually frees the returned `CString` to
+// avoid leaking heap memory per call.
+let wasmModule = null;
+
+function wasmCallString(name, argJson) {
+  const ptr = wasmModule.ccall(name, 'number', ['string'], [argJson]);
+  if (ptr === 0) return '';
+  const s = wasmModule.UTF8ToString(ptr);
+  // FFI contract: every char* returned by `tsot_*` was allocated via
+  // `CString::into_raw` on the Rust side and MUST be freed via
+  // `tsot_free_string`. Skipping this leaks one allocation per call.
+  wasmModule.ccall('tsot_free_string', null, ['number'], [ptr]);
+  return s;
+}
+
+// Defaults for the first `tsot_start_game` call on page load. v1: a
+// vanilla 50-card mirror of `blue-monkey` against a heuristic AI. Deck
+// selection UI is a follow-up (D-extended).
+function defaultStartArgs() {
+  const deck = [];
+  for (let i = 0; i < 50; i++) deck.push('blue-monkey');
+  return {
+    seed: Math.floor(Math.random() * 0xFFFFFFFF),
+    deck_a_ids: deck,
+    deck_b_ids: deck,
+    opp_ai: 'heuristic',
+  };
+}
+
+// First call drives the engine through to its first NeedHuman /
+// GameOver. Subsequent calls would re-run `tsot_start_game` and
+// reset the game — so this is one-shot, guarded by `wasmStarted`.
+let wasmStarted = false;
 async function fetchState() {
-  const r = await fetch('/state');
-  return r.json();
+  if (!wasmStarted) {
+    wasmStarted = true;
+    const args = defaultStartArgs();
+    const out = wasmCallString('tsot_start_game', JSON.stringify(args));
+    if (out.startsWith('error:')) {
+      throw new Error(out);
+    }
+    const prompt = JSON.parse(out);
+    return { ...prompt, state: prompt.state };
+  }
+  // The HTTP shim used to support arbitrary GET /state polls; in the
+  // wasm model the engine only advances via tsot_apply_action, so a
+  // bare re-fetch isn't meaningful. Return the last known prompt the
+  // caller has — render code stashes it in `state.current`.
+  return state.current;
 }
 
 const _send = async (action) => {
-  const r = await fetch('/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
-  return r.json();
+  const out = wasmCallString('tsot_apply_action', JSON.stringify(action));
+  if (out.startsWith('error:')) {
+    throw new Error(out);
+  }
+  return JSON.parse(out);
 };
 const sendAction = async (action) => {
   const next = await _send(action);
@@ -127,7 +179,12 @@ const sendAction = async (action) => {
   state.selectedAttackers.clear();
   state.selectedBlocks = {};
   state.blockerPickFor = null;
-  return { state: next.state, prompt: next };
+  const view = { state: next.state, prompt: next };
+  // Stash so a downstream `fetchState()` poll (no-op in the wasm
+  // path, but the render code may surface state.current elsewhere)
+  // reads the freshest prompt.
+  state.current = view;
+  return view;
 };
 
 function colorTag(c) {
@@ -580,8 +637,26 @@ function labelFor(view, iid) {
 }
 
 (async () => {
-  const initial = await fetchState();
-  render({ state: initial.state, prompt: initial });
+  // Bootstrap: load + instantiate the wasm module first. `createTsotModule`
+  // is the factory exposed by tsot_wasm.js (MODULARIZE=1 +
+  // EXPORT_NAME=createTsotModule per .cargo/config.toml). Returns a
+  // promise that resolves once the wasm is compiled, instantiated,
+  // and the JS glue is ready for ccall.
+  try {
+    wasmModule = await createTsotModule();
+  } catch (e) {
+    document.getElementById('prompt').textContent =
+      'Failed to load wasm module: ' + (e && e.message ? e.message : e);
+    return;
+  }
+  try {
+    const initial = await fetchState();
+    state.current = { state: initial.state, prompt: initial };
+    render(state.current);
+  } catch (e) {
+    document.getElementById('prompt').textContent =
+      'Engine error: ' + (e && e.message ? e.message : e);
+  }
 })();
 </script>
 </body>
