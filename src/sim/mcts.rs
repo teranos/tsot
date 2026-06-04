@@ -86,6 +86,7 @@ pub struct MctsConfig {
     /// - `2` = top-level MCTS + one deeper MCTS pick per rollout, then
     ///   heuristic. Cost ≈ `R^2 + R` finishes per top-level pick.
     /// - `>=3` = exponential cost. Use sparingly.
+    ///
     /// Default `1` to preserve current behavior.
     pub max_depth: u32,
 }
@@ -228,6 +229,16 @@ fn simulate_rollout(
         BuildChoiceResult::Choices(c) => c,
         BuildChoiceResult::UnaffordableX { .. } => {
             // Candidate can't be paid for; treat as a loss for `player`.
+            let rollout_journal = state.replay_journal.take().unwrap_or_default();
+            rollout_journal.rollback(state);
+            state.replay_journal = outer_replay;
+            return false;
+        }
+        BuildChoiceResult::Pending(p) => {
+            // MCTS rollouts use RandomOracle which never returns
+            // ChoicePending. Treat as a loss for `player` to bail out
+            // cleanly if a future oracle wraps this path.
+            eprintln!("MCTS rollout: unexpected ChoicePending: {p:?}");
             let rollout_journal = state.replay_journal.take().unwrap_or_default();
             rollout_journal.rollback(state);
             state.replay_journal = outer_replay;

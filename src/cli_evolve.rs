@@ -165,7 +165,7 @@ pub fn run_ea(
         "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
             exploration_c: args.opponent_uct_c,
-            base_seed: args.seed.wrapping_add(0xC0FF_EE_BA),
+            base_seed: args.seed.wrapping_add(0xC0FF_EEBA),
             max_candidates: args.opponent_mcts_max_candidates,
         }),
         other => {

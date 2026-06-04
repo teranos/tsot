@@ -123,19 +123,44 @@ pub struct ChooseIntRequest {
     pub prompt: String,
 }
 
+/// What an oracle returns when it can't answer locally — STAGE_MACHINE
+/// S7. Carries the full request payload back up the call stack so the
+/// `StepEngine` can lift it into a `HumanPrompt::Choose*` yield. Most
+/// oracles never produce this (they answer locally); only
+/// `HumanReplayOracle` does, and only when its pre-loaded answer queue
+/// is exhausted while the asker is the human side.
+#[derive(Debug, Clone)]
+pub enum ChoicePending {
+    Card(ChooseCardRequest),
+    Confirm { asker: PlayerId, prompt: String },
+    Player(ChoosePlayerRequest),
+    Int(ChooseIntRequest),
+}
+
 /// Oracle trait — implementors answer choice questions on behalf of a
 /// player. All choice methods receive `&GameState` so the oracle can
 /// introspect: controllers, stats, handlers, zones, etc.
+///
+/// Methods return `Result<_, ChoicePending>` so a human-driving oracle
+/// (e.g. `HumanReplayOracle` under `StepEngine`) can surface "needs the
+/// human's answer" up through `?`-propagation rather than blocking on a
+/// channel or panicking. Oracles that always answer locally
+/// (`RandomOracle`, `NoopOracle`, `ScriptedOracle`) always return `Ok`.
 pub trait ChoiceOracle {
     /// Pick one card from a pool, or None if optional and skipped.
     fn choose_card(
         &mut self,
         state: &GameState,
         req: ChooseCardRequest,
-    ) -> Option<InstanceId>;
+    ) -> Result<Option<InstanceId>, ChoicePending>;
 
     /// Yes/no decision. Used by `game.confirm`.
-    fn confirm(&mut self, state: &GameState, asker: PlayerId, prompt: &str) -> bool;
+    fn confirm(
+        &mut self,
+        state: &GameState,
+        asker: PlayerId,
+        prompt: &str,
+    ) -> Result<bool, ChoicePending>;
 
     /// Pick a player from `{A, B} - exclude`. Returns None if the candidate
     /// pool is empty, or if optional and the oracle declines.
@@ -143,10 +168,14 @@ pub trait ChoiceOracle {
         &mut self,
         state: &GameState,
         req: ChoosePlayerRequest,
-    ) -> Option<PlayerId>;
+    ) -> Result<Option<PlayerId>, ChoicePending>;
 
     /// Pick an integer in `[min, max]`. Mandatory — no opt-out.
-    fn choose_int(&mut self, state: &GameState, req: ChooseIntRequest) -> i32;
+    fn choose_int(
+        &mut self,
+        state: &GameState,
+        req: ChooseIntRequest,
+    ) -> Result<i32, ChoicePending>;
 
     /// Inside an open response window, `player` has priority — should they
     /// cast something from hand as a response, or pass? Default impl: Pass.
@@ -187,9 +216,9 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
         &mut self,
         state: &GameState,
         req: ChooseCardRequest,
-    ) -> Option<InstanceId> {
+    ) -> Result<Option<InstanceId>, ChoicePending> {
         if req.pool.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         // Invulnerability gate: an opponent-controlled candidate with
@@ -214,11 +243,11 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
             req.pool.clone()
         };
         if pool.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         if req.optional && self.rng.gen_bool(0.3) {
-            return None;
+            return Ok(None);
         }
 
         // Consume any intent set via set_next_intent; cleared even on
@@ -251,36 +280,45 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
             .map(|(i, _)| i)
             .collect();
         let pick = top[self.rng.gen_range(0..top.len())];
-        Some(req.pool[pick].clone())
+        Ok(Some(req.pool[pick].clone()))
     }
 
-    fn confirm(&mut self, _state: &GameState, _asker: PlayerId, _prompt: &str) -> bool {
-        self.rng.gen_bool(0.7)
+    fn confirm(
+        &mut self,
+        _state: &GameState,
+        _asker: PlayerId,
+        _prompt: &str,
+    ) -> Result<bool, ChoicePending> {
+        Ok(self.rng.gen_bool(0.7))
     }
 
     fn choose_player(
         &mut self,
         _state: &GameState,
         req: ChoosePlayerRequest,
-    ) -> Option<PlayerId> {
+    ) -> Result<Option<PlayerId>, ChoicePending> {
         let candidates: Vec<PlayerId> = [PlayerId::A, PlayerId::B]
             .into_iter()
             .filter(|p| !req.exclude.contains(p))
             .collect();
         if candidates.is_empty() {
-            return None;
+            return Ok(None);
         }
         if req.optional && self.rng.gen_bool(0.3) {
-            return None;
+            return Ok(None);
         }
         let idx = self.rng.gen_range(0..candidates.len());
-        Some(candidates[idx])
+        Ok(Some(candidates[idx]))
     }
 
-    fn choose_int(&mut self, _state: &GameState, req: ChooseIntRequest) -> i32 {
+    fn choose_int(
+        &mut self,
+        _state: &GameState,
+        req: ChooseIntRequest,
+    ) -> Result<i32, ChoicePending> {
         let lo = req.min.min(req.max);
         let hi = req.min.max(req.max);
-        self.rng.gen_range(lo..=hi)
+        Ok(self.rng.gen_range(lo..=hi))
     }
 
     /// Phase 2 response policy: respond when an opposing threat is present —
@@ -783,21 +821,30 @@ impl ChoiceOracle for NoopOracle {
         &mut self,
         _state: &GameState,
         _req: ChooseCardRequest,
-    ) -> Option<InstanceId> {
-        None
+    ) -> Result<Option<InstanceId>, ChoicePending> {
+        Ok(None)
     }
-    fn confirm(&mut self, _state: &GameState, _asker: PlayerId, _prompt: &str) -> bool {
-        false
+    fn confirm(
+        &mut self,
+        _state: &GameState,
+        _asker: PlayerId,
+        _prompt: &str,
+    ) -> Result<bool, ChoicePending> {
+        Ok(false)
     }
     fn choose_player(
         &mut self,
         _state: &GameState,
         _req: ChoosePlayerRequest,
-    ) -> Option<PlayerId> {
-        None
+    ) -> Result<Option<PlayerId>, ChoicePending> {
+        Ok(None)
     }
-    fn choose_int(&mut self, _state: &GameState, req: ChooseIntRequest) -> i32 {
-        req.min
+    fn choose_int(
+        &mut self,
+        _state: &GameState,
+        req: ChooseIntRequest,
+    ) -> Result<i32, ChoicePending> {
+        Ok(req.min)
     }
 }
 
@@ -855,17 +902,22 @@ impl ChoiceOracle for ScriptedOracle {
         &mut self,
         _state: &GameState,
         _req: ChooseCardRequest,
-    ) -> Option<InstanceId> {
+    ) -> Result<Option<InstanceId>, ChoicePending> {
         match self.answers.pop_front() {
-            Some(ScriptedAnswer::Card(c)) => c,
+            Some(ScriptedAnswer::Card(c)) => Ok(c),
             Some(other) => panic!("ScriptedOracle: expected Card answer, got {other:?}"),
             None => panic!("ScriptedOracle: out of answers"),
         }
     }
 
-    fn confirm(&mut self, _state: &GameState, _asker: PlayerId, _prompt: &str) -> bool {
+    fn confirm(
+        &mut self,
+        _state: &GameState,
+        _asker: PlayerId,
+        _prompt: &str,
+    ) -> Result<bool, ChoicePending> {
         match self.answers.pop_front() {
-            Some(ScriptedAnswer::Confirm(b)) => b,
+            Some(ScriptedAnswer::Confirm(b)) => Ok(b),
             Some(other) => panic!("ScriptedOracle: expected Confirm answer, got {other:?}"),
             None => panic!("ScriptedOracle: out of answers"),
         }
@@ -875,17 +927,21 @@ impl ChoiceOracle for ScriptedOracle {
         &mut self,
         _state: &GameState,
         _req: ChoosePlayerRequest,
-    ) -> Option<PlayerId> {
+    ) -> Result<Option<PlayerId>, ChoicePending> {
         match self.answers.pop_front() {
-            Some(ScriptedAnswer::Player(p)) => p,
+            Some(ScriptedAnswer::Player(p)) => Ok(p),
             Some(other) => panic!("ScriptedOracle: expected Player answer, got {other:?}"),
             None => panic!("ScriptedOracle: out of answers"),
         }
     }
 
-    fn choose_int(&mut self, _state: &GameState, _req: ChooseIntRequest) -> i32 {
+    fn choose_int(
+        &mut self,
+        _state: &GameState,
+        _req: ChooseIntRequest,
+    ) -> Result<i32, ChoicePending> {
         match self.answers.pop_front() {
-            Some(ScriptedAnswer::Int(n)) => n,
+            Some(ScriptedAnswer::Int(n)) => Ok(n),
             Some(other) => panic!("ScriptedOracle: expected Int answer, got {other:?}"),
             None => panic!("ScriptedOracle: out of answers"),
         }
@@ -927,32 +983,41 @@ impl<O: ChoiceOracle> ChoiceOracle for RecordingOracle<O> {
         &mut self,
         state: &GameState,
         req: ChooseCardRequest,
-    ) -> Option<InstanceId> {
-        let ans = self.inner.choose_card(state, req);
+    ) -> Result<Option<InstanceId>, ChoicePending> {
+        let ans = self.inner.choose_card(state, req)?;
         self.recording.push(ScriptedAnswer::Card(ans.clone()));
-        ans
+        Ok(ans)
     }
 
-    fn confirm(&mut self, state: &GameState, asker: PlayerId, prompt: &str) -> bool {
-        let ans = self.inner.confirm(state, asker, prompt);
+    fn confirm(
+        &mut self,
+        state: &GameState,
+        asker: PlayerId,
+        prompt: &str,
+    ) -> Result<bool, ChoicePending> {
+        let ans = self.inner.confirm(state, asker, prompt)?;
         self.recording.push(ScriptedAnswer::Confirm(ans));
-        ans
+        Ok(ans)
     }
 
     fn choose_player(
         &mut self,
         state: &GameState,
         req: ChoosePlayerRequest,
-    ) -> Option<PlayerId> {
-        let ans = self.inner.choose_player(state, req);
+    ) -> Result<Option<PlayerId>, ChoicePending> {
+        let ans = self.inner.choose_player(state, req)?;
         self.recording.push(ScriptedAnswer::Player(ans));
-        ans
+        Ok(ans)
     }
 
-    fn choose_int(&mut self, state: &GameState, req: ChooseIntRequest) -> i32 {
-        let ans = self.inner.choose_int(state, req);
+    fn choose_int(
+        &mut self,
+        state: &GameState,
+        req: ChooseIntRequest,
+    ) -> Result<i32, ChoicePending> {
+        let ans = self.inner.choose_int(state, req)?;
         self.recording.push(ScriptedAnswer::Int(ans));
-        ans
+        Ok(ans)
     }
 
     /// Forwards to inner. Not added to the recording — `ResponseAction`
@@ -1032,7 +1097,7 @@ granted_face: Vec::new(),
 
         let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
         oracle.set_next_intent(Some(TargetIntent::Steal));
-        let pick = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()]));
+        let pick = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()])).unwrap();
         assert_eq!(pick, Some(opp));
     }
 
@@ -1046,7 +1111,7 @@ granted_face: Vec::new(),
 
         let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
         oracle.set_next_intent(Some(TargetIntent::Donate));
-        let pick = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()]));
+        let pick = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()])).unwrap();
         assert_eq!(pick, Some(own));
     }
 
@@ -1059,7 +1124,7 @@ granted_face: Vec::new(),
 
         let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
         oracle.set_next_intent(Some(TargetIntent::HighValueAttached));
-        let pick = oracle.choose_card(&s, req(vec![vanilla.clone(), jewel.clone()]));
+        let pick = oracle.choose_card(&s, req(vec![vanilla.clone(), jewel.clone()])).unwrap();
         assert_eq!(pick, Some(jewel));
     }
 
@@ -1079,7 +1144,7 @@ granted_face: Vec::new(),
 
         let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
         oracle.set_next_intent(Some(TargetIntent::RemoveThreat));
-        let pick = oracle.choose_card(&s, req(vec![small.clone(), big.clone()]));
+        let pick = oracle.choose_card(&s, req(vec![small.clone(), big.clone()])).unwrap();
         assert_eq!(pick, Some(big));
     }
 
@@ -1098,7 +1163,7 @@ granted_face: Vec::new(),
 
         let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
         oracle.set_next_intent(Some(TargetIntent::Recur));
-        let pick = oracle.choose_card(&s, req(vec![cheap.clone(), expensive.clone()]));
+        let pick = oracle.choose_card(&s, req(vec![cheap.clone(), expensive.clone()])).unwrap();
         assert_eq!(pick, Some(expensive));
     }
 
@@ -1114,7 +1179,7 @@ granted_face: Vec::new(),
 
         let mut oracle = RandomOracle::new(StdRng::seed_from_u64(0));
         oracle.set_next_intent(Some(TargetIntent::LowValueOwn));
-        let pick = oracle.choose_card(&s, req(vec![throwaway.clone(), jewel_like.clone()]));
+        let pick = oracle.choose_card(&s, req(vec![throwaway.clone(), jewel_like.clone()])).unwrap();
         assert_eq!(pick, Some(throwaway));
     }
 
@@ -1131,7 +1196,7 @@ granted_face: Vec::new(),
         let _ = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()]));
         // Second call without re-setting: Donate doesn't apply. Default
         // target_score has a +100 opp bias, so opp wins.
-        let pick = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()]));
+        let pick = oracle.choose_card(&s, req(vec![own.clone(), opp.clone()])).unwrap();
         assert_eq!(pick, Some(opp));
     }
 }

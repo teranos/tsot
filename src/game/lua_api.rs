@@ -465,6 +465,10 @@ macro_rules! build_game_table {
                         let s = cell_choose_s.borrow();
                         let mut o = cell_choose_o.borrow_mut();
                         o.choose_card(&s, req)
+                            .map_err(|p| mlua::Error::external(format!(
+                                "lua game.choose_card: oracle returned ChoicePending ({p:?}); \
+                                 yielding from inside a Lua handler isn't supported yet (S7-extended)"
+                            )))?
                     };
                     cell_choose_s.borrow_mut().bump_action("choose_card", choose_owner);
                     Ok(answer)
@@ -482,6 +486,9 @@ macro_rules! build_game_table {
                     let s = cell_confirm_s.borrow();
                     let mut o = cell_confirm_o.borrow_mut();
                     o.confirm(&s, confirm_owner, &prompt)
+                        .map_err(|p| mlua::Error::external(format!(
+                            "lua game.confirm: oracle returned ChoicePending ({p:?})"
+                        )))?
                 };
                 cell_confirm_s.borrow_mut().bump_action("confirm", confirm_owner);
                 Ok(answer)
@@ -503,6 +510,9 @@ macro_rules! build_game_table {
                         let s = cell_confirm_for_s.borrow();
                         let mut o = cell_confirm_for_o.borrow_mut();
                         o.confirm(&s, pid, &prompt)
+                            .map_err(|p| mlua::Error::external(format!(
+                                "lua game.confirm_for: oracle returned ChoicePending ({p:?})"
+                            )))?
                     };
                     cell_confirm_for_s.borrow_mut().bump_action("confirm", pid);
                     Ok(answer)
@@ -538,6 +548,9 @@ macro_rules! build_game_table {
                         let s = cell_cc_for_s.borrow();
                         let mut o = cell_cc_for_o.borrow_mut();
                         o.choose_card(&s, req)
+                            .map_err(|p| mlua::Error::external(format!(
+                                "lua game.choose_card_for: oracle returned ChoicePending ({p:?})"
+                            )))?
                     };
                     cell_cc_for_s.borrow_mut().bump_action("choose_card", pid);
                     Ok(answer)
@@ -573,6 +586,9 @@ macro_rules! build_game_table {
                         let s = cell_player_s.borrow();
                         let mut o = cell_player_o.borrow_mut();
                         o.choose_player(&s, req)
+                            .map_err(|p| mlua::Error::external(format!(
+                                "lua game.choose_player: oracle returned ChoicePending ({p:?})"
+                            )))?
                     };
                     cell_player_s
                         .borrow_mut()
@@ -598,6 +614,9 @@ macro_rules! build_game_table {
                         let s = cell_int_s.borrow();
                         let mut o = cell_int_o.borrow_mut();
                         o.choose_int(&s, req)
+                            .map_err(|p| mlua::Error::external(format!(
+                                "lua game.choose_int: oracle returned ChoicePending ({p:?})"
+                            )))?
                     };
                     cell_int_s.borrow_mut().bump_action("choose_int", int_owner);
                     Ok(answer)

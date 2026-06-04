@@ -19,43 +19,6 @@
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-/// Scripted action source: a pre-loaded sequence of `HumanAction`s
-/// that `HumanInterface::round_trip` consumes BEFORE falling back to
-/// the channel API. When the cursor exhausts the queue,
-/// `round_trip` panics with a [`YieldSignal`] payload carrying the
-/// prompt that would have been waited on. The wasm save-and-replay
-/// FFI shim catches the panic to surface the prompt back to JS
-/// without ever blocking the single-threaded wasm runtime.
-///
-/// Native code paths don't use this — leaves `scripted` set to `None`
-/// and the channel API behaves identically to the pre-D4 shape.
-#[derive(Debug)]
-pub struct ScriptedSource {
-    pub actions: Vec<HumanAction>,
-    pub cursor: usize,
-}
-
-impl ScriptedSource {
-    /// Pop the next action if any; `None` when exhausted.
-    pub fn next(&mut self) -> Option<HumanAction> {
-        if self.cursor >= self.actions.len() {
-            return None;
-        }
-        let a = self.actions[self.cursor].clone();
-        self.cursor += 1;
-        Some(a)
-    }
-}
-
-/// Payload of the panic that `round_trip` raises when its scripted
-/// source is exhausted. Caught by `std::panic::catch_unwind` at the
-/// wasm FFI shim; downcast to `YieldSignal` recovers the prompt
-/// without re-panicking. Implements `Send` so `panic_any` accepts it.
-#[derive(Debug)]
-pub struct YieldSignal {
-    pub prompt: HumanPrompt,
-}
-
 use crate::choice::{
     ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest, TargetIntent,
 };
@@ -230,13 +193,6 @@ pub enum HumanAction {
 pub struct HumanInterface {
     prompt_tx: Sender<HumanPrompt>,
     action_rx: Mutex<Receiver<HumanAction>>,
-    /// Save-and-replay mode (D4 wasm shim). When `Some`, every
-    /// `round_trip` consumes from `actions` instead of blocking on
-    /// `action_rx`. Exhausted scripted source → panic with a
-    /// [`YieldSignal`] carrying the prompt. `None` (the default)
-    /// falls through to the channel API and behaves identically
-    /// to pre-D4.
-    pub scripted: Mutex<Option<ScriptedSource>>,
 }
 
 impl HumanInterface {
@@ -250,7 +206,6 @@ impl HumanInterface {
         let interface = Self {
             prompt_tx,
             action_rx: Mutex::new(action_rx),
-            scripted: Mutex::new(None),
         };
         (interface, prompt_rx, action_tx)
     }
@@ -259,30 +214,14 @@ impl HumanInterface {
     /// Caller is responsible for matching prompt variant to action
     /// variant. Panics if either channel is closed (the frontend died
     /// mid-game) — recovery is the caller's problem, not the engine's.
+    ///
+    /// Used by the legacy `run_game_continue` Human path and by
+    /// `HumanAwareOracle` for choose-card / choose-player / choose-int
+    /// round-trips. Under the `StepEngine` (S6+), main-phase /
+    /// attacker / blocker decisions yield through `NeedHuman` and
+    /// never reach this function; the oracle round-trips will move to
+    /// yields when S7/S8 land.
     fn round_trip(&self, prompt: HumanPrompt) -> HumanAction {
-        // Scripted-first path (D4 wasm shim). When `scripted` is `Some`
-        // and not yet exhausted, pop the next action and return it
-        // without touching the channel. When exhausted, panic with
-        // a `YieldSignal` so the wasm FFI driver can `catch_unwind`
-        // and surface the prompt back to JS.
-        {
-            let mut scripted_guard = self
-                .scripted
-                .lock()
-                .expect("HumanInterface: scripted mutex poisoned");
-            if let Some(source) = scripted_guard.as_mut() {
-                if let Some(action) = source.next() {
-                    return action;
-                }
-                // Exhausted. Drop the lock before panicking so the
-                // mutex doesn't end up poisoned for nothing.
-                drop(scripted_guard);
-                std::panic::panic_any(YieldSignal { prompt });
-            }
-        }
-
-        // Channel-based path (native: cli_serve, scripted tests, anywhere
-        // an engine thread + JS-thread pair drives the interaction).
         self.prompt_tx
             .send(prompt)
             .expect("HumanInterface: frontend dropped prompt channel mid-game");
@@ -471,6 +410,146 @@ pub struct HumanAwareOracle<O: ChoiceOracle> {
     human: Option<(PlayerId, Arc<HumanInterface>)>,
 }
 
+/// `StepEngine`-side replacement for `HumanAwareOracle`: when the
+/// asker matches the configured human side, instead of blocking on a
+/// channel, the oracle serves answers from `replay` (set by the
+/// engine before each `build_pattern_b_choices + play_card` attempt).
+/// When `replay` is exhausted, the oracle returns
+/// `Err(ChoicePending)` so the engine can yield the request as a
+/// `NeedHuman` and resume after the human supplies an answer.
+///
+/// Non-human askers always go through `inner` — typically a
+/// `RandomOracle`, preserving the existing AI choice behavior.
+pub struct HumanReplayOracle<O: ChoiceOracle> {
+    inner: O,
+    human: Option<PlayerId>,
+    pub replay: Vec<crate::choice::ScriptedAnswer>,
+    pub cursor: usize,
+}
+
+impl<O: ChoiceOracle> HumanReplayOracle<O> {
+    pub fn new(inner: O, human: Option<PlayerId>) -> Self {
+        Self {
+            inner,
+            human,
+            replay: Vec::new(),
+            cursor: 0,
+        }
+    }
+
+    pub fn reset_replay(&mut self, replay: Vec<crate::choice::ScriptedAnswer>) {
+        self.replay = replay;
+        self.cursor = 0;
+    }
+
+    fn is_human(&self, asker: Option<PlayerId>) -> bool {
+        match (self.human, asker) {
+            (Some(h), Some(a)) => h == a,
+            _ => false,
+        }
+    }
+}
+
+impl<O: ChoiceOracle> ChoiceOracle for HumanReplayOracle<O> {
+    fn choose_card(
+        &mut self,
+        state: &GameState,
+        req: crate::choice::ChooseCardRequest,
+    ) -> Result<Option<InstanceId>, crate::choice::ChoicePending> {
+        if !self.is_human(req.asker) {
+            return self.inner.choose_card(state, req);
+        }
+        if let Some(ans) = self.replay.get(self.cursor).cloned() {
+            self.cursor += 1;
+            match ans {
+                crate::choice::ScriptedAnswer::Card(c) => Ok(c),
+                other => panic!(
+                    "HumanReplayOracle: replay[{cur}] was {other:?}, expected ScriptedAnswer::Card",
+                    cur = self.cursor - 1
+                ),
+            }
+        } else {
+            Err(crate::choice::ChoicePending::Card(req))
+        }
+    }
+
+    fn confirm(
+        &mut self,
+        state: &GameState,
+        asker: PlayerId,
+        prompt: &str,
+    ) -> Result<bool, crate::choice::ChoicePending> {
+        if !self.is_human(Some(asker)) {
+            return self.inner.confirm(state, asker, prompt);
+        }
+        if let Some(ans) = self.replay.get(self.cursor).cloned() {
+            self.cursor += 1;
+            match ans {
+                crate::choice::ScriptedAnswer::Confirm(b) => Ok(b),
+                other => panic!(
+                    "HumanReplayOracle: replay[{cur}] was {other:?}, expected ScriptedAnswer::Confirm",
+                    cur = self.cursor - 1
+                ),
+            }
+        } else {
+            Err(crate::choice::ChoicePending::Confirm {
+                asker,
+                prompt: prompt.to_string(),
+            })
+        }
+    }
+
+    fn choose_player(
+        &mut self,
+        state: &GameState,
+        req: crate::choice::ChoosePlayerRequest,
+    ) -> Result<Option<PlayerId>, crate::choice::ChoicePending> {
+        let asker = state.active_player;
+        if !self.is_human(Some(asker)) {
+            return self.inner.choose_player(state, req);
+        }
+        if let Some(ans) = self.replay.get(self.cursor).cloned() {
+            self.cursor += 1;
+            match ans {
+                crate::choice::ScriptedAnswer::Player(p) => Ok(p),
+                other => panic!(
+                    "HumanReplayOracle: replay[{cur}] was {other:?}, expected ScriptedAnswer::Player",
+                    cur = self.cursor - 1
+                ),
+            }
+        } else {
+            Err(crate::choice::ChoicePending::Player(req))
+        }
+    }
+
+    fn choose_int(
+        &mut self,
+        state: &GameState,
+        req: crate::choice::ChooseIntRequest,
+    ) -> Result<i32, crate::choice::ChoicePending> {
+        let asker = state.active_player;
+        if !self.is_human(Some(asker)) {
+            return self.inner.choose_int(state, req);
+        }
+        if let Some(ans) = self.replay.get(self.cursor).cloned() {
+            self.cursor += 1;
+            match ans {
+                crate::choice::ScriptedAnswer::Int(n) => Ok(n),
+                other => panic!(
+                    "HumanReplayOracle: replay[{cur}] was {other:?}, expected ScriptedAnswer::Int",
+                    cur = self.cursor - 1
+                ),
+            }
+        } else {
+            Err(crate::choice::ChoicePending::Int(req))
+        }
+    }
+
+    fn set_next_intent(&mut self, intent: Option<crate::choice::TargetIntent>) {
+        self.inner.set_next_intent(intent);
+    }
+}
+
 impl<O: ChoiceOracle> HumanAwareOracle<O> {
     pub fn new(inner: O, human: Option<(PlayerId, Arc<HumanInterface>)>) -> Self {
         Self { inner, human }
@@ -489,25 +568,30 @@ impl<O: ChoiceOracle> ChoiceOracle for HumanAwareOracle<O> {
         &mut self,
         state: &GameState,
         req: ChooseCardRequest,
-    ) -> Option<InstanceId> {
+    ) -> Result<Option<InstanceId>, crate::choice::ChoicePending> {
         if let Some(asker) = req.asker {
             if let Some(iface) = self.human_for(asker) {
-                return iface.choose_card(
+                return Ok(iface.choose_card(
                     state,
                     asker,
                     req.pool,
                     req.host,
                     req.optional,
                     req.prompt,
-                );
+                ));
             }
         }
         self.inner.choose_card(state, req)
     }
 
-    fn confirm(&mut self, state: &GameState, asker: PlayerId, prompt: &str) -> bool {
+    fn confirm(
+        &mut self,
+        state: &GameState,
+        asker: PlayerId,
+        prompt: &str,
+    ) -> Result<bool, crate::choice::ChoicePending> {
         if let Some(iface) = self.human_for(asker) {
-            return iface.confirm(state, asker, prompt.to_string());
+            return Ok(iface.confirm(state, asker, prompt.to_string()));
         }
         self.inner.confirm(state, asker, prompt)
     }
@@ -516,7 +600,7 @@ impl<O: ChoiceOracle> ChoiceOracle for HumanAwareOracle<O> {
         &mut self,
         state: &GameState,
         req: ChoosePlayerRequest,
-    ) -> Option<PlayerId> {
+    ) -> Result<Option<PlayerId>, crate::choice::ChoicePending> {
         // Asker isn't carried on the request; use active_player as the
         // implicit asker (correct for handlers triggered on the
         // controller's turn).
@@ -527,15 +611,19 @@ impl<O: ChoiceOracle> ChoiceOracle for HumanAwareOracle<O> {
                 .into_iter()
                 .filter(|p| !exclude.contains(p))
                 .collect();
-            return iface.choose_player(state, asker, candidates, req.optional, req.prompt);
+            return Ok(iface.choose_player(state, asker, candidates, req.optional, req.prompt));
         }
         self.inner.choose_player(state, req)
     }
 
-    fn choose_int(&mut self, state: &GameState, req: ChooseIntRequest) -> i32 {
+    fn choose_int(
+        &mut self,
+        state: &GameState,
+        req: ChooseIntRequest,
+    ) -> Result<i32, crate::choice::ChoicePending> {
         let asker = state.active_player;
         if let Some(iface) = self.human_for(asker) {
-            return iface.choose_int(state, asker, req.min, req.max, req.prompt);
+            return Ok(iface.choose_int(state, asker, req.min, req.max, req.prompt));
         }
         self.inner.choose_int(state, req)
     }
@@ -629,74 +717,4 @@ mod tests {
         assert!(stats.turns > 0, "game recorded zero turns");
     }
 
-    /// D4 shim probe: verify the scripted+panic mechanism survives a
-    /// trip through `run_game_continue` and (notably) any mlua call
-    /// boundaries the engine crosses on the way to the first human
-    /// decision. If mlua catches the panic and converts it to a Lua
-    /// error, this test fails — and we know the shim approach needs
-    /// rework.
-    #[test]
-    fn scripted_empty_panics_with_yield_signal_through_run_game() {
-        use std::panic::AssertUnwindSafe;
-        use crate::sim::run::run_game_continue;
-        use crate::sim::AiKind;
-
-        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
-        let template = registry
-            .cards()
-            .iter()
-            .find(|c| {
-                matches!(c.kind, CardType::Creature)
-                    && c.handlers.is_empty()
-                    && c.cost.iter().all(|cc| {
-                        !cc.is_x
-                            && matches!(
-                                cc.source,
-                                crate::card::CostSource::Hand
-                                    | crate::card::CostSource::Mill
-                            )
-                    })
-            })
-            .unwrap()
-            .clone();
-        let deck_a: Vec<_> = (0..50).map(|_| template.clone()).collect();
-        let deck_b = deck_a.clone();
-        let mut state = GameState::new(deck_a, deck_b);
-        state.replay_journal = Some(Journal::new());
-
-        // HumanInterface in scripted mode with an EMPTY action queue.
-        // First round_trip will pop None → panic with YieldSignal.
-        let (iface, _prompt_rx, _action_tx) = HumanInterface::new();
-        *iface
-            .scripted
-            .lock()
-            .expect("fresh mutex isn't poisoned") = Some(ScriptedSource {
-            actions: Vec::new(),
-            cursor: 0,
-        });
-        let iface = Arc::new(iface);
-
-        let ais = [AiKind::Human(iface.clone()), AiKind::Heuristic];
-        let mut rng = StdRng::seed_from_u64(0xCAFE);
-        let mut log: Vec<String> = Vec::new();
-
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &ais)
-        }));
-
-        let payload = result.expect_err("expected YieldSignal panic from exhausted scripted source");
-        let signal = payload
-            .downcast::<YieldSignal>()
-            .expect("panic payload was not a YieldSignal (mlua may have eaten it?)");
-        match signal.prompt {
-            HumanPrompt::PickCard { player, .. } => {
-                assert_eq!(
-                    player,
-                    crate::game::PlayerId::A,
-                    "first yield should be the human's main-phase PickCard"
-                );
-            }
-            other => panic!("expected first prompt = PickCard, got {other:?}"),
-        }
-    }
 }

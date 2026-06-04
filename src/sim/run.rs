@@ -84,6 +84,14 @@ pub(crate) enum BuildChoiceResult {
     /// play, and mark `played_creature` to prevent re-picking if
     /// the candidate was a creature.
     UnaffordableX { picked_is_creature: bool },
+    /// An oracle call returned `Err(ChoicePending)` — the human still
+    /// owes the engine an answer. Caller (StepEngine S7) lifts this
+    /// into a `NeedHuman` yield and retries `build_pattern_b_choices`
+    /// once the answer is supplied via the replay history. The legacy
+    /// `run_game_continue` path never hits this branch because
+    /// `HumanAwareOracle` resolves human answers synchronously via the
+    /// channel API.
+    Pending(crate::choice::ChoicePending),
 }
 
 /// Build the same `PlayChoices` Pattern B builds inline today —
@@ -183,14 +191,17 @@ pub(crate) fn build_pattern_b_choices(
         if max_x < 1 {
             return BuildChoiceResult::UnaffordableX { picked_is_creature };
         }
-        let x = oracle.choose_int(
+        let x = match oracle.choose_int(
             state,
             ChooseIntRequest {
                 min: 1,
                 max: max_x,
                 prompt: format!("X for {}", short(picked)),
             },
-        );
+        ) {
+            Ok(x) => x,
+            Err(pending) => return BuildChoiceResult::Pending(pending),
+        };
         state.bump_action("choose_int", active);
         choices.x_value = Some(x);
         let hand_needed: usize = cost
@@ -209,7 +220,10 @@ pub(crate) fn build_pattern_b_choices(
             }
             if remaining > 0 {
                 choices.hand_payment_ids =
-                    state.resolve_hand_payment(active, picked, remaining, oracle);
+                    match state.resolve_hand_payment(active, picked, remaining, oracle) {
+                        Ok(ids) => ids,
+                        Err(pending) => return BuildChoiceResult::Pending(pending),
+                    };
             }
         }
         let raw_gy_needed: usize = cost
@@ -255,7 +269,10 @@ pub(crate) fn build_pattern_b_choices(
         }
         if hand_needed > 0 {
             choices.hand_payment_ids =
-                state.resolve_hand_payment(active, picked, hand_needed, oracle);
+                match state.resolve_hand_payment(active, picked, hand_needed, oracle) {
+                    Ok(ids) => ids,
+                    Err(pending) => return BuildChoiceResult::Pending(pending),
+                };
         }
         let raw_gy_needed: usize = cost
             .iter()
@@ -303,7 +320,10 @@ pub(crate) fn build_pattern_b_choices(
         }
         if hand_needed > 0 {
             choices.hand_payment_ids =
-                state.resolve_hand_payment(active, picked, hand_needed, oracle);
+                match state.resolve_hand_payment(active, picked, hand_needed, oracle) {
+                    Ok(ids) => ids,
+                    Err(pending) => return BuildChoiceResult::Pending(pending),
+                };
         }
         let raw_gy_needed: usize = cost
             .iter()
@@ -667,6 +687,16 @@ pub fn run_game_continue(
                         }
                         continue;
                     }
+                    BuildChoiceResult::Pending(p) => {
+                        // run_game_continue uses HumanAwareOracle which
+                        // resolves human answers synchronously via the
+                        // channel API — it can't return Pending. This
+                        // branch is reachable only if a future caller
+                        // wires a yielding oracle here.
+                        panic!(
+                            "run_game_continue: unexpected ChoicePending from HumanAwareOracle: {p:?}"
+                        );
+                    }
                 };
                 // Update sacrifice telemetry from the picked ids.
                 for sac_iid in &choices.sacrifice_ids {
@@ -1020,6 +1050,9 @@ pub fn run_game_continue(
                         let choices = match build_result {
                             BuildChoiceResult::Choices(c) => c,
                             BuildChoiceResult::UnaffordableX { .. } => continue,
+                            BuildChoiceResult::Pending(p) => panic!(
+                                "run_game_continue Main2: unexpected ChoicePending: {p:?}"
+                            ),
                         };
                         oracle.clear();
                         let result = state.play_card(
@@ -1081,7 +1114,7 @@ pub fn run_game_continue(
 /// surfaces. Walks the player's board, expands each card's
 /// activations, and includes any whose `can_activate` check passes
 /// right now (the same predicate the heuristic activation pass uses).
-fn enumerate_human_activations(
+pub(crate) fn enumerate_human_activations(
     state: &GameState,
     player: PlayerId,
 ) -> Vec<super::human::ActivationOption> {

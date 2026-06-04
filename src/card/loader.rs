@@ -56,8 +56,9 @@ fn read_string_vec(t: &Table, key: &str) -> mlua::Result<Vec<String>> {
 }
 
 /// `colors` accepts two shapes, mirroring `symbols`:
-///   - Array: `colors = {"green", "red"}` → unordered identity list.
-///   - Map:   `colors = { C = "green", T = "red" }` → identity + slot.
+/// - Array: `colors = {"green", "red"}` → unordered identity list.
+/// - Map:   `colors = { C = "green", T = "red" }` → identity + slot.
+///
 /// Mixed forms (some integer keys, some string keys) are rejected.
 /// Slot form additionally rejects duplicate color values: each color
 /// owns exactly one slot. Returns `(colors_vec, color_slots_map)`.

@@ -49,46 +49,100 @@ chains (hand-payment slots, target picks, X-pick).
   (Activation passes folded into S9; Pattern B handles suicide rollback +
   sacrifice telemetry now. Test: `step_engine_completes_vanilla_heuristic_game`.)
 
-- [ ] **S3: Parity test vs run_game_continue.**
-  Heuristic-vs-Heuristic game on a fixed seed runs to the same winner /
-  turn count / stats via `StepEngine::run_to_end()` and via the existing
-  `run_game_continue`. Byte-identical or flagged divergence.
-  (Test green: `step_engine_parity_vs_run_game_continue` byte-identical
-  on seed `0xBEEF`. Two ordering subtleties surfaced: (1) journal must
-  open AFTER `build_pattern_b_choices` so
+- [x] ~~**S3: Parity test vs run_game_continue.**~~
+  ~~Heuristic-vs-Heuristic game on a fixed seed runs to the same winner /~~
+  ~~turn count / stats via `StepEngine::run_to_end()` and via the existing~~
+  ~~`run_game_continue`. Byte-identical or flagged divergence.~~
+  (Byte-identical on seed `0xBEEF`. Test:
+  `step_engine_parity_vs_run_game_continue`. Two ordering subtleties
+  surfaced: (1) journal must open AFTER `build_pattern_b_choices` so
   `rig_creature_free_haste`'s cost-clear stays outside the preview-
   rollback envelope; (2) each phase advance constructs a fresh
   `RandomOracle` from `rng.gen()` rather than reusing the persistent
   oracle. Template filter excludes cards with `activated` abilities —
-  activation passes are S9 scope. Awaiting confirmation before marking
-  complete.)
+  activation passes are S9 scope.)
 
 ## Phase 2 — human decision points (unblocks D4)
 
-- [ ] **S4: PickCard human yield.**
-  `PatternBPick` Human arm returns `NeedHuman(PickCard{…})` on
-  `pending=None`; consumes Pass / PlayCard on next step. Resolve phase
-  fires `play_card` once chosen.
+- [x] ~~**S4: PickCard human yield.**~~
+  ~~`PatternBPick` Human arm returns `NeedHuman(PickCard{…})` on~~
+  ~~`pending=None`; consumes Pass / PlayCard on next step. Resolve phase~~
+  ~~fires `play_card` once chosen.~~
+  (Yield + Pass + PlayCard wired. `Activate` re-prompts pending S9.
+  Tests: `step_engine_yields_pickcard_for_human_on_pattern_b`,
+  `step_engine_human_pass_advances_to_combat`. The end-to-end
+  "PlayCard → board" assertion is deferred to S7 — `resolve_hand_payment`
+  inside `build_pattern_b_choices` still calls `HumanAwareOracle`,
+  which would deadlock on the channel without the S7 ChooseCard
+  yields.)
 
-- [ ] **S5: PickAttackers + PickBlocks human yields.**
-  Same pattern for combat. Defender's `Human` AI yields PickBlocks;
-  attacker's yields PickAttackers. Confirm phases call into the existing
-  `declare_attacker` / `declare_blocker` engine APIs.
+- [x] ~~**S5: PickAttackers + PickBlocks human yields.**~~
+  ~~Same pattern for combat. Defender's `Human` AI yields PickBlocks;~~
+  ~~attacker's yields PickAttackers. Confirm phases call into the existing~~
+  ~~`declare_attacker` / `declare_blocker` engine APIs.~~
+  (`step_declare_attackers` / `step_declare_blockers` mirror S4: yield
+  on `pending=None`, consume `Attackers{iids}` / `Blocks{pairs}` on
+  resume, panic on mismatched action variants. Tests:
+  `step_engine_yields_pickattackers_for_human`,
+  `step_engine_human_attackers_empty_advances_to_endturn`,
+  `step_engine_yields_pickblocks_for_human_defender`,
+  `step_engine_human_blocks_empty_advances_to_endturn`.)
 
-- [ ] **S6: tsot_start_game / tsot_apply_action use StepEngine.**
-  Wasm path unblocked. Native D2/D3 tests rewired to step through
-  StepEngine instead of thread+channel. Delete the thread spawn path.
+- [x] ~~**S6: tsot_start_game / tsot_apply_action use StepEngine.**~~
+  ~~Wasm path unblocked. Native D2/D3 tests rewired to step through~~
+  ~~StepEngine instead of thread+channel. Delete the thread spawn path.~~
+  (`GameSession` now owns a live `StepEngine`; `_impl` functions
+  build the engine, call `step(pending)` until `NeedHuman` / `Done`,
+  serialize the prompt. Same code path on native and wasm — no
+  threads, no `catch_unwind`, no `panic_unwind` ABI dance. `ScriptedSource`,
+  `YieldSignal`, and `HumanInterface::scripted` deleted. Tests:
+  `session_lifecycle_install_use_clear`,
+  `start_game_returns_first_pickcard_prompt`,
+  `apply_action_pass_advances_to_attacker_prompt`.
+  Oracle round-trips for hand-payment / target picks still flow
+  through `HumanInterface::round_trip` and would block the wasm thread
+  the moment a human plays a card with a hand cost — those become
+  yields in S7.)
 
 ## Phase 3 — ChoiceOracle round-trips
 
-- [ ] **S7: ChooseCard yields.**
-  Hand-payment slots inside `build_pattern_b_choices` and target picks
-  inside Lua handlers each become inner cursors. Resume threads a
-  selected iid back through the oracle's return.
+- [x] ~~**S7: ChooseCard yields.**~~
+  ~~Hand-payment slots inside `build_pattern_b_choices` and target picks~~
+  ~~inside Lua handlers each become inner cursors. Resume threads a~~
+  ~~selected iid back through the oracle's return.~~
+  (`ChoiceOracle::*` now return `Result<_, ChoicePending>`. New
+  `HumanReplayOracle<O>` replaces `HumanAwareOracle` in `StepEngine`:
+  serves answers from a replay queue, captures the request as
+  `Err(ChoicePending)` when exhausted. `build_pattern_b_choices`
+  gains a `BuildChoiceResult::Pending(_)` variant. New cursor
+  `PatternBResolving { picked, history, played_creature_before }`
+  accumulates `ChoiceCard / ChoiceConfirm / ChoicePlayer / ChoiceInt`
+  responses and re-runs the resolve from scratch with the seeded
+  queue. Test:
+  `step_engine_human_playcard_yields_choose_card_for_hand_payment`
+  (human plays 1H creature → ChooseCard yield → ChoiceCard{iid}
+  resume → card on board, hand −2). Lua-side `game.choose_*`
+  callbacks convert `ChoicePending` to `mlua::Error` for now —
+  yielding from inside a Lua handler is S7-extended.)
 
-- [ ] **S8: Confirm / ChoosePlayer / ChooseInt yields.**
-  Remaining ChoiceOracle methods. May-prompts, player picks, X-cost
-  values. Same inner-cursor pattern; smaller surfaces than S7.
+- [x] ~~**S8: Confirm / ChoosePlayer / ChooseInt yields.**~~
+  ~~Remaining ChoiceOracle methods. May-prompts, player picks, X-cost~~
+  ~~values. Same inner-cursor pattern; smaller surfaces than S7.~~
+  (`HumanReplayOracle` already captures all four `ChoicePending`
+  variants; `pending_to_prompt` lifts each to its `HumanPrompt::*`
+  twin; `PatternBResolving` accepts `ChoiceCard` / `ChoiceConfirm`
+  / `ChoicePlayer` / `ChoiceInt` resume actions. Non-Lua call sites
+  exercised:
+  - `ChooseInt` — `build_pattern_b_choices` X-pick. Test:
+    `step_engine_human_x_cost_yields_choose_int_then_choose_card`
+    (human plays an X-cost hydra → ChooseInt yield → resume with X=1
+    → ChooseCard yield → resume with payment iid → card on board).
+  
+  `Confirm` and `ChoosePlayer` are currently only reachable from
+  Lua handlers via `game.confirm` / `game.choose_player`; those
+  callbacks convert `ChoicePending` into `mlua::Error` rather than
+  yielding (S7-extended). Once that conversion lands, the same
+  cursor flow already handles their resume.)
 
 ## Phase 4 — activations + Main2
 

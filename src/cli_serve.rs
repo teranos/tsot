@@ -110,7 +110,7 @@ pub fn run_serve(
         "uct" => AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.uct_iterations,
             exploration_c: args.uct_c,
-            base_seed: seed.wrapping_add(0xC0FF_EE_BA),
+            base_seed: seed.wrapping_add(0xC0FF_EEBA),
             max_candidates: args.max_candidates,
         }),
         other => {

@@ -19,12 +19,17 @@
   ~~return next HumanPrompt as JSON. JS calls with `{async: true}`.~~
   (Native verified; wasm path returns Err until D4.)
 
-- [ ] **D4: HumanInterface bridge (wasm-side).**
-  Save-and-replay shim works on native (`catch_unwind` + `YieldSignal`),
-  but wasm fails at link time — precompiled stdlib references
-  `__cxa_find_matching_catch_*` against the wrong exception ABI.
-  **Blocked on STATE_MACHINE.md S1-S6.** Native impl tested + ready;
-  wasm `_impl` functions return error stubs until S6 lands.
+- [x] ~~**D4: HumanInterface bridge (wasm-side).**~~
+  ~~Save-and-replay shim works on native (`catch_unwind` + `YieldSignal`),~~
+  ~~but wasm fails at link time — precompiled stdlib references~~
+  ~~`__cxa_find_matching_catch_*` against the wrong exception ABI.~~
+  ~~**Blocked on STATE_MACHINE.md S1-S6.** Native impl tested + ready;~~
+  ~~wasm `_impl` functions return error stubs until S6 lands.~~
+  (Resolved by STATE_MACHINE.md S6: `tsot_*_impl` now drive a
+  `StepEngine` directly — no `catch_unwind`, no `panic_unwind` ABI
+  dependency, identical code path on native and wasm. Save-and-replay
+  scaffolding deleted along with `ScriptedSource` / `YieldSignal`.
+  D4-era D2/D3 tests rewired and still green.)
 
 - [ ] **D5: Port assets/play.html to WASM.**
   Replace `fetch('/state'|'/action')` with `Module.ccall('tsot_*', ..., {async:true})`.

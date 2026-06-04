@@ -294,7 +294,7 @@ impl GameState {
         instance: &InstanceId,
         hand_needed: usize,
         oracle: &mut dyn ChoiceOracle,
-    ) -> Vec<InstanceId> {
+    ) -> Result<Vec<InstanceId>, crate::choice::ChoicePending> {
         let cast_ident = self.card_identity(instance);
         let identity_matches = |hid: &InstanceId| -> bool {
             if cast_ident.is_empty() {
@@ -339,11 +339,11 @@ impl GameState {
                 prompt: format!("hand payment slot {}", slot + 1),
             };
             let pick = oracle
-                .choose_card(self, req)
+                .choose_card(self, req)?
                 .unwrap_or_else(|| pool_for_fallback[0].clone());
             picked_set.insert(pick.clone());
             chosen.push(pick);
         }
-        chosen
+        Ok(chosen)
     }
 }
