@@ -36,6 +36,7 @@ return {
     "when this creature dies, draw a card.",
   },
   stats = {x = 2, y = 1},
+  flavor = "From a planet that is not Teranos.",
   static = {
     affects = {
       scope = "source_only",

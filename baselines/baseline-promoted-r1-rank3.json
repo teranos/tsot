@@ -1,6 +1,6 @@
 {
   "label": "evo_ea01_r3_curated",
-  "fitness": 0.5,
+  "fitness": 0.46875,
   "base_seed": 59905,
   "generations_run": 30,
   "card_ids": [
