@@ -244,6 +244,98 @@ fn pending_to_prompt(state: &GameState, pending: crate::choice::ChoicePending) -
     }
 }
 
+/// Outcome of a play-card attempt after S11's suicide-rescue gate.
+/// `final_suicide` is the suicide flag AFTER the optional flip-retry —
+/// the caller checks this rather than the raw post-play_card winner
+/// state, because a retry may have rescued the cast.
+#[derive(Debug)]
+pub(crate) struct PlayAttemptOutcome {
+    /// `Ok` if the (possibly retried) `play_card` succeeded;
+    /// `Err(PlayError)` if it failed (and wasn't rescued by retry).
+    pub result: Result<(), crate::game::PlayError>,
+    /// Whether the active player ended up with `state.winner ==
+    /// Some(opponent)` after the (possibly retried) attempt. The
+    /// caller rolls back the journal when this is true.
+    pub final_suicide: bool,
+    /// `true` if a flip-retry actually rescued a suicide. The caller
+    /// bumps `preview_retry_rescued` so the stat surfaces in
+    /// `cards-report.py`. Always `false` on the AI side without a
+    /// flip-retry path (no Player choice in the recording).
+    pub rescued: bool,
+}
+
+/// S11: post-`play_card` suicide-rescue gate. Mirrors
+/// `run_game_continue`'s flow:
+///
+/// 1. If `play_card` succeeded but `state.winner == Some(opponent)`,
+///    the active player suicided.
+/// 2. If `response_fired` is true (an opposing instant resolved on
+///    the chain during this cast), the suicide is response-driven —
+///    no retry, that's the opponent's win.
+/// 3. Otherwise, if the oracle recording has a `Player` answer,
+///    `ScriptedOracle::flip_first_player` builds a flipped sequence;
+///    we roll back the journal, reopen it, and re-run `play_card`
+///    with the flipped script as the oracle.
+/// 4. If the retry survives, `bump_action("preview_retry_rescued")`
+///    on the way out.
+///
+/// Wired in by S11 implementation; until then this helper is
+/// `unimplemented!()`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn try_suicide_retry(
+    state: &mut GameState,
+    active: PlayerId,
+    opponent_of_active: PlayerId,
+    picked: &InstanceId,
+    choices_for_retry: crate::game::PlayChoices,
+    initial_result: Result<(), crate::game::PlayError>,
+    initial_suicide: bool,
+    response_fired: bool,
+    recording: &[crate::choice::ScriptedAnswer],
+    registry_lua: &mlua::Lua,
+) -> PlayAttemptOutcome {
+    // Not a suicide, or response-driven suicide: no retry.
+    if !initial_suicide || response_fired {
+        return PlayAttemptOutcome {
+            result: initial_result,
+            final_suicide: initial_suicide,
+            rescued: false,
+        };
+    }
+    // No Player answer in the recording → nothing to flip.
+    let Some(flipped) = crate::choice::ScriptedOracle::flip_first_player(recording) else {
+        return PlayAttemptOutcome {
+            result: initial_result,
+            final_suicide: initial_suicide,
+            rescued: false,
+        };
+    };
+
+    // Roll back the failed journal, open a fresh one for the retry.
+    // Mirrors run_game_continue's rescue block.
+    if let Some(journal) = state.journal.take() {
+        journal.rollback(state);
+    }
+    state.journal = Some(crate::game::Journal::new());
+    let mut scripted = crate::choice::ScriptedOracle::new(flipped);
+    let retry_result = state.play_card(
+        active,
+        picked,
+        choices_for_retry,
+        Some(&mut EventContext::new(registry_lua, &mut scripted)),
+    );
+    let retry_suicide = state.winner == Some(opponent_of_active);
+    let rescued = !retry_suicide && retry_result.is_ok();
+    if rescued {
+        state.bump_action("preview_retry_rescued", active);
+    }
+    PlayAttemptOutcome {
+        result: retry_result,
+        final_suicide: retry_suicide,
+        rescued,
+    }
+}
+
 /// Same initial `GameStats` layout that `run_game_continue` uses.
 /// Extracted here so the step engine and the legacy runner start
 /// from byte-identical stats and S3's parity check works.
@@ -559,15 +651,63 @@ impl StepEngine {
             .map(|j| j.len())
             .unwrap_or(0) as u64;
 
-        let result = self.state.play_card(
+        // S11: clone choices so the rescue helper has them for the
+        // flipped-oracle retry. play_card consumes by value.
+        let choices_for_retry = choices.clone();
+        let resp_before = self
+            .state
+            .action_counts
+            .get("instant_response_played")
+            .copied()
+            .unwrap_or([0, 0]);
+
+        let initial_result = self.state.play_card(
             active,
             &picked,
             choices,
             Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
         );
 
-        let suicide = !matches!(self.ais[active.index()], AiKind::Human(_))
+        let resp_after = self
+            .state
+            .action_counts
+            .get("instant_response_played")
+            .copied()
+            .unwrap_or([0, 0]);
+        let response_fired =
+            resp_after[0] > resp_before[0] || resp_after[1] > resp_before[1];
+        let active_is_human = matches!(self.ais[active.index()], AiKind::Human(_));
+        let initial_suicide = !active_is_human
             && self.state.winner == Some(opponent_of_active);
+
+        // S11: rescue gate. Only AI-side casts attempt rescue (human
+        // owns their decisions). `try_suicide_retry` rolls back the
+        // journal, reopens it, replays play_card with a flipped
+        // oracle if applicable; returns the final outcome.
+        let outcome = if active_is_human {
+            PlayAttemptOutcome {
+                result: initial_result,
+                final_suicide: false, // human casts never auto-rolled
+                rescued: false,
+            }
+        } else {
+            let recording: Vec<crate::choice::ScriptedAnswer> =
+                self.oracle.recording().to_vec();
+            try_suicide_retry(
+                &mut self.state,
+                active,
+                opponent_of_active,
+                &picked,
+                choices_for_retry,
+                initial_result,
+                initial_suicide,
+                response_fired,
+                &recording,
+                self.registry.lua(),
+            )
+        };
+        let result = outcome.result;
+        let suicide = outcome.final_suicide;
         let preview_size = self
             .state
             .journal
@@ -805,7 +945,6 @@ impl StepEngine {
         // can be rolled back (parity with step_pattern_b_pick).
         self.state.journal = Some(crate::game::Journal::new());
 
-        let opponent_of_active = active.opponent();
         let preview_size_before = self
             .state
             .journal
@@ -820,7 +959,12 @@ impl StepEngine {
             Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
         );
 
-        let suicide = self.state.winner == Some(opponent_of_active);
+        // S11: human-side resolve. Per run_game_continue, human casts
+        // are NEVER auto-suicide-rolled-back — the human owns the
+        // decision and may legitimately play a card that loses the
+        // game. No flip-retry either (the human's recording is the
+        // human's choice).
+        let suicide = false;
         let preview_size = self
             .state
             .journal
@@ -1076,7 +1220,6 @@ impl StepEngine {
         self.oracle.clear();
         self.state.journal = Some(crate::game::Journal::new());
 
-        let opponent_of_active = active.opponent();
         let preview_size_before = self
             .state
             .journal
@@ -1091,7 +1234,9 @@ impl StepEngine {
             Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
         );
 
-        let suicide = self.state.winner == Some(opponent_of_active);
+        // S11: human Main2 cast — no auto suicide-rollback (the human
+        // owns the decision), no flip-retry.
+        let suicide = false;
         let preview_size = self
             .state
             .journal
@@ -2145,6 +2290,127 @@ mod tests {
             }
             ref other => panic!("expected PickCard, got {other:?}"),
         }
+    }
+
+    /// S11 scanner: probe seeds for one that triggers
+    /// `preview_retry_rescued` under run_game_continue. The seed (or
+    /// a list of seeds) found here becomes the fixture for the
+    /// parity assertion above. `#[ignore]` so it doesn't run by
+    /// default — invoke with `cargo test ... -- --include-ignored
+    /// step_engine_finds_rescue_seed --nocapture` when hunting.
+    #[test]
+    #[ignore]
+    fn step_engine_finds_rescue_seed() {
+        use crate::game::Journal;
+        use crate::sim::genome::to_deck;
+        use crate::sim::run::run_game_continue;
+        use rand::SeedableRng;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let pool_ids: Vec<String> = registry
+            .cards()
+            .iter()
+            .filter(|c| {
+                matches!(c.kind, CardType::Creature | CardType::Spell | CardType::Artifact)
+            })
+            .map(|c| c.id.clone())
+            .collect();
+        let deck_ids: Vec<String> =
+            (0..50).map(|i| pool_ids[i % pool_ids.len()].clone()).collect();
+
+        for seed in 0u64..64 {
+            let deck_a = to_deck(&registry, &deck_ids).unwrap();
+            let deck_b = to_deck(&registry, &deck_ids).unwrap();
+            let mut state = GameState::new(deck_a, deck_b);
+            state.replay_journal = Some(Journal::new());
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut log: Vec<String> = Vec::new();
+            let ais = [AiKind::Heuristic, AiKind::Heuristic];
+            let _stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &ais);
+            let rescued = state
+                .action_counts
+                .get("preview_retry_rescued")
+                .map(|v| v[0] + v[1])
+                .unwrap_or(0);
+            if rescued > 0 {
+                eprintln!("[rescue-seed] seed={seed:#x} rescued={rescued}");
+            }
+        }
+    }
+
+    /// S11: AI-vs-AI parity on the suicide-rescue counter. Runs
+    /// `run_game_continue` and `StepEngine::run_to_end` over the same
+    /// full-corpus deck on the same seed; asserts they produce the
+    /// same `action_counts["preview_retry_rescued"]` totals. The
+    /// guarantee: even if no rescue fires for this seed (counter ==
+    /// 0 on both sides), the assertion still pins them together —
+    /// any future divergence in rescue behavior surfaces immediately.
+    #[test]
+    fn step_engine_matches_run_game_continue_preview_retry_rescued() {
+        use crate::game::Journal;
+        use crate::sim::genome::to_deck;
+        use crate::sim::run::run_game_continue;
+        use rand::SeedableRng;
+
+        let seed: u64 = 0xD15EA5E;
+        let registry_a = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        // Full-corpus random mix — 50 distinct ids that include the
+        // choose_player carriers (field-notes, azure-recursion,
+        // bci-megafly) so the recording can actually have a Player
+        // entry to flip.
+        let pool_ids: Vec<String> = registry_a
+            .cards()
+            .iter()
+            .filter(|c| matches!(c.kind, CardType::Creature | CardType::Spell | CardType::Artifact))
+            .map(|c| c.id.clone())
+            .collect();
+        let deck_ids: Vec<String> =
+            (0..50).map(|i| pool_ids[i % pool_ids.len()].clone()).collect();
+
+        // Path 1: legacy run_game_continue. Decks loaded from
+        // registry_a's Lua VM.
+        let deck_a_1 = to_deck(&registry_a, &deck_ids).expect("deck A build");
+        let deck_b_1 = to_deck(&registry_a, &deck_ids).expect("deck B build");
+        let mut state1 = GameState::new(deck_a_1, deck_b_1);
+        state1.replay_journal = Some(Journal::new());
+        let mut rng1 = StdRng::seed_from_u64(seed);
+        let mut log1: Vec<String> = Vec::new();
+        let ais1 = [AiKind::Heuristic, AiKind::Heuristic];
+        let _stats1 = run_game_continue(&mut state1, &mut rng1, &mut log1, registry_a.lua(), &ais1);
+
+        // Path 2: StepEngine. Fresh registry so the StepEngine owns
+        // its own Lua VM; rebuild the deck against THIS registry to
+        // avoid mixing Lua functions across VMs.
+        let registry_b = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let deck_a_2 = to_deck(&registry_b, &deck_ids).expect("deck A build (b)");
+        let deck_b_2 = to_deck(&registry_b, &deck_ids).expect("deck B build (b)");
+        let state2 = GameState::new(deck_a_2, deck_b_2);
+        let mut engine = StepEngine::new(
+            state2,
+            [AiKind::Heuristic, AiKind::Heuristic],
+            registry_b,
+            seed,
+        );
+        let _stats2 = engine.run_to_end();
+
+        let rescued_1 = state1
+            .action_counts
+            .get("preview_retry_rescued")
+            .map(|v| v[0] + v[1])
+            .unwrap_or(0);
+        let rescued_2 = engine
+            .state
+            .action_counts
+            .get("preview_retry_rescued")
+            .map(|v| v[0] + v[1])
+            .unwrap_or(0);
+        eprintln!(
+            "[s11] preview_retry_rescued: run_game_continue={rescued_1}, StepEngine={rescued_2}"
+        );
+        assert_eq!(
+            rescued_1, rescued_2,
+            "preview_retry_rescued counter must match between paths"
+        );
     }
 
     /// S9: AI-side activation pass fires for cards with activated
