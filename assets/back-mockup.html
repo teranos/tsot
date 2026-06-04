@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>tsot — back face mockup v2 (fanned hand)</title>
+<style>
+  :root {
+    --table: #07050a;
+    --cardstock: #1a1c1f;
+    --grid: #2a2c2f;
+    --border: #45494e;
+    --glyph: #e8e4d8;
+    --phone-w: 390px;
+    --phone-h: 844px;
+    --phone-scale: 1;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    overflow: hidden;
+    background: #0a0a0b;
+    color: var(--glyph);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .phone {
+    position: relative;
+    width: var(--phone-w);
+    height: var(--phone-h);
+    /* Scale set by JS based on viewport size + chosen phone height. */
+    transform: scale(var(--phone-scale));
+    transform-origin: center;
+    background: var(--table);
+    border: 10px solid #1d1d1f;
+    border-radius: 44px;
+    box-shadow: 0 0 0 2px #2c2c2e, 0 24px 60px rgba(0, 0, 0, 0.7);
+    overflow: hidden;
+  }
+
+  .phone::before {
+    /* Dynamic Island — true black (OLED off in that region). */
+    content: '';
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 110px;
+    height: 30px;
+    background: #000;
+    border-radius: 16px;
+    z-index: 100;
+  }
+
+  .hand {
+    position: absolute;
+    top: 52px;
+    left: 0;
+    width: 100%;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .card {
+    position: relative;
+    width: 68px;
+    aspect-ratio: 3 / 5;
+    background: var(--grid);
+    border: 1.5px solid var(--border);
+    border-radius: 5px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(5, 1fr);
+    gap: 1px;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  }
+
+  .cell {
+    background: var(--cardstock);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--glyph);
+    position: relative;
+  }
+
+  .cell.transparent::after {
+    content: '';
+    position: absolute;
+    width: 40%;
+    aspect-ratio: 1 / 1;
+    border-radius: 50%;
+    background: var(--table);
+  }
+
+  .device-picker {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 200;
+    background: rgba(20, 20, 22, 0.85);
+    color: var(--glyph);
+    border: 1px solid #2c2c2e;
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    backdrop-filter: blur(6px);
+  }
+  .device-picker label { color: #888; margin-right: 6px; }
+  .device-picker select {
+    background: #111;
+    color: var(--glyph);
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-family: inherit;
+    font-size: 11px;
+  }
+  .device-dims {
+    color: #777;
+    margin-left: 8px;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+
+<div class="device-picker">
+  <label for="device">iPhone</label>
+  <select id="device">
+    <option value="390,844" selected>14 / 13 / 12</option>
+    <option value="393,852">15 / 16</option>
+    <option value="402,874">16 Pro</option>
+    <option value="428,926">14 Plus</option>
+    <option value="430,932">15 / 16 Plus / Pro Max</option>
+    <option value="440,956">16 Pro Max</option>
+  </select>
+  <span class="device-dims" id="dims">390×844</span>
+</div>
+
+<div class="phone" aria-label="phone screen mockup">
+<div class="hand" aria-label="opponent's fanned hand of 5 card backs">
+
+  <!-- card 1: 1 symbol at C -->
+  <div class="card">
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell">꩜</div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+  </div>
+
+  <!-- card 2: 3 symbols at C, U, UR -->
+  <div class="card">
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell">≡</div><div class="cell">⨳</div>
+    <div class="cell"></div><div class="cell">⊨</div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+  </div>
+
+  <!-- card 3: 5 symbols at C, U, UR, R, DR -->
+  <div class="card">
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell">≡</div><div class="cell">⨳</div>
+    <div class="cell"></div><div class="cell">⊨</div><div class="cell">⋈</div>
+    <div class="cell"></div><div class="cell"></div><div class="cell">꩜</div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+  </div>
+
+  <!-- card 4: 3 symbols + hole at L -->
+  <div class="card">
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell">≡</div><div class="cell">⨳</div>
+    <div class="cell transparent"></div><div class="cell">⊨</div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+  </div>
+
+  <!-- card 5: 2 symbols at C, U -->
+  <div class="card">
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell">≡</div><div class="cell"></div>
+    <div class="cell"></div><div class="cell">⊨</div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+  </div>
+
+</div>
+</div>
+
+<script>
+  const root = document.documentElement;
+  const sel = document.getElementById('device');
+  const dims = document.getElementById('dims');
+
+  function apply() {
+    const [w, h] = sel.value.split(',').map(Number);
+    root.style.setProperty('--phone-w', w + 'px');
+    root.style.setProperty('--phone-h', h + 'px');
+    dims.textContent = w + '×' + h;
+    const bezelAndShadow = 40;
+    const scale = Math.min(1, (window.innerHeight - bezelAndShadow) / (h + 20));
+    root.style.setProperty('--phone-scale', scale.toFixed(3));
+  }
+  sel.addEventListener('change', apply);
+  window.addEventListener('resize', apply);
+  apply();
+</script>
+
+</body>
+</html>
