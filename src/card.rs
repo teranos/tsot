@@ -593,6 +593,17 @@ pub struct Card {
     /// once V.8 ships per-slot).
     #[serde(default)]
     pub symbol_slots: std::collections::BTreeMap<Slot, String>,
+    /// Positional color placement — `Slot → color name`. Opt-in. When
+    /// set, the card's color identity is also drawn on the back as a
+    /// circle at the named slot(s); when empty, the card carries color
+    /// identity (`colors`) but does not display it on the back. Each
+    /// entry's value must already appear in `colors`. The loader
+    /// populates this from slot-form `colors = { C = "green", T = "red" }`
+    /// in Lua; list-form `colors = {"green"}` leaves this empty. No
+    /// engine site reads this yet — captured for the per-slot reveal
+    /// engine that supersedes the V.8/V.9 deck-top channel.
+    #[serde(default)]
+    pub color_slots: std::collections::BTreeMap<Slot, String>,
     /// Cosmetic surface treatments (e.g. `"shiny"`, `"holo"`). Pure
     /// metadata — no engine rule reads this. Stacks, so a card can be
     /// both shiny and holo. Distinct from `frame` (geometry / hole) and

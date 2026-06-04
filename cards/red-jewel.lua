@@ -11,7 +11,8 @@
 return {
   id = "red-jewel",
   name = "Red Jewel",
-  colors = {"red"},
+  colors = { C = "red" },
+  symbol = "⨳",
   type = "artifact",
   subtypes = {"jewel"},
   cost = {},

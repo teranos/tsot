@@ -3,6 +3,7 @@ return {
   id = "glass-moth",
   name = "Glass Moth",
   colors = {"pink"},
+  holes = {"BR", "B", "BL", "DL", "L", "UL", "TL"},
   type = "creature",
   subtypes = {"insect"},
   cost = {

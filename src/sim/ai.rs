@@ -752,6 +752,7 @@ mod tests {
             frame: None,
             holes: Vec::new(),
             symbol_slots: std::collections::BTreeMap::new(),
+            color_slots: std::collections::BTreeMap::new(),
             face: Vec::new(),
             cost: vec![],
             abilities: vec![],

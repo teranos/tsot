@@ -3,6 +3,7 @@ return {
   id = "glass-ant",
   name = "Glass Ant",
   colors = {"black"},
+  holes = {"TR", "T", "U", "UR", "R"},
   type = "creature",
   subtypes = {"insect"},
   cost = {

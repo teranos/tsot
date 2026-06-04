@@ -4,7 +4,8 @@
 return {
   id = "green-jewel",
   name = "Green Jewel",
-  colors = {"green"},
+  colors = { C = "green" },
+  symbol = "⨳",
   type = "artifact",
   subtypes = {"jewel"},
   cost = {},

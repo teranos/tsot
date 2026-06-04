@@ -55,11 +55,78 @@ fn read_string_vec(t: &Table, key: &str) -> mlua::Result<Vec<String>> {
     }
 }
 
-fn read_color_vec(t: &Table) -> mlua::Result<Vec<String>> {
-    Ok(read_string_vec(t, "colors")?
-        .into_iter()
-        .map(|s| normalize_color(&s))
-        .collect())
+/// `colors` accepts two shapes, mirroring `symbols`:
+///   - Array: `colors = {"green", "red"}` → unordered identity list.
+///   - Map:   `colors = { C = "green", T = "red" }` → identity + slot.
+/// Mixed forms (some integer keys, some string keys) are rejected.
+/// Slot form additionally rejects duplicate color values: each color
+/// owns exactly one slot. Returns `(colors_vec, color_slots_map)`.
+fn read_color_vec(t: &Table) -> mlua::Result<(Vec<String>, std::collections::BTreeMap<crate::card::Slot, String>)> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let raw: Table = match t.get::<Value>("colors")? {
+        Value::Nil => return Ok((Vec::new(), BTreeMap::new())),
+        Value::Table(tt) => tt,
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "card.colors must be a list or slot-keyed table, got {other:?}"
+            )))
+        }
+    };
+    let mut arr: Vec<String> = Vec::new();
+    let mut map: BTreeMap<crate::card::Slot, String> = BTreeMap::new();
+    let mut form: Option<&'static str> = None;
+    for pair in raw.pairs::<Value, String>() {
+        let (k, v) = pair?;
+        let v = normalize_color(&v);
+        match k {
+            Value::Integer(_) => {
+                if form == Some("map") {
+                    return Err(mlua::Error::runtime(
+                        "card.colors cannot mix array entries with slot-keyed entries".to_string()
+                    ));
+                }
+                form = Some("array");
+                arr.push(v);
+            }
+            Value::String(ks) => {
+                if form == Some("array") {
+                    return Err(mlua::Error::runtime(
+                        "card.colors cannot mix array entries with slot-keyed entries".to_string()
+                    ));
+                }
+                form = Some("map");
+                let name = ks.to_str()?.to_string();
+                let slot = name.parse::<crate::card::Slot>()
+                    .map_err(mlua::Error::runtime)?;
+                map.insert(slot, v);
+            }
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "card.colors keys must be integers or slot names; got {other:?}"
+                )))
+            }
+        }
+    }
+    if !map.is_empty() {
+        // Slot form. Reject duplicate colors — each color owns one slot.
+        let mut seen: BTreeSet<&String> = BTreeSet::new();
+        for c in map.values() {
+            if !seen.insert(c) {
+                return Err(mlua::Error::runtime(format!(
+                    "card.colors slot form has duplicate color {c:?}; each color may occupy at most one slot"
+                )));
+            }
+        }
+        // Derive the identity Vec from the map values in canonical Slot::ALL
+        // order so anything reading `colors` sees a stable list.
+        let derived: Vec<String> = crate::card::Slot::ALL
+            .iter()
+            .filter_map(|s| map.get(s).cloned())
+            .collect();
+        Ok((derived, map))
+    } else {
+        Ok((arr, map))
+    }
 }
 
 fn read_cost(t: &Table) -> mlua::Result<Vec<CostComponent>> {
@@ -786,7 +853,7 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
             "card `{id}`: transparent-frame cards cannot declare symbols (got {symbols:?})"
         )));
     }
-    let colors = read_color_vec(table)?;
+    let (colors, color_slots) = read_color_vec(table)?;
     let cost = read_cost(table)?;
     let stats = read_stats(table)?;
     let static_def = read_static(table)?;
@@ -822,6 +889,7 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
         frame,
         holes,
         symbol_slots,
+        color_slots,
         face,
         cost,
         abilities,
@@ -957,6 +1025,61 @@ mod tests {
         let stats = card.stats.expect("pale-apparition has stats");
         assert_eq!(stats.x, 0.5, "X must round-trip as 0.5, not truncate");
         assert_eq!(stats.y, 1.0);
+    }
+
+    #[test]
+    fn colors_list_form_populates_only_colors() {
+        let card = load_card_from_lua(r#"
+            return {
+                id = "under-test",
+                type = "creature",
+                colors = {"green", "red"},
+                stats = {x = 1, y = 1},
+            }
+        "#);
+        assert_eq!(card.colors, vec!["green", "red"]);
+        assert!(card.color_slots.is_empty(), "list form must leave color_slots empty");
+    }
+
+    #[test]
+    fn colors_slot_form_populates_both_colors_and_color_slots() {
+        let card = load_card_from_lua(r#"
+            return {
+                id = "under-test",
+                type = "creature",
+                colors = { C = "green", T = "red" },
+                stats = {x = 1, y = 1},
+            }
+        "#);
+        // Identity Vec is derived in Slot::ALL canonical order — T comes
+        // before C, so the values come out (red, green).
+        assert_eq!(card.colors, vec!["red", "green"]);
+        assert_eq!(card.color_slots.len(), 2);
+        assert_eq!(card.color_slots.get(&crate::card::Slot::C).map(String::as_str), Some("green"));
+        assert_eq!(card.color_slots.get(&crate::card::Slot::T).map(String::as_str), Some("red"));
+    }
+
+    #[test]
+    fn colors_slot_form_rejects_duplicate_colors() {
+        let lua = Lua::new();
+        let value: Value = lua
+            .load(r#"return { id = "dup", colors = { C = "green", T = "green" } }"#)
+            .eval()
+            .unwrap();
+        let table = match value { Value::Table(t) => t, _ => panic!() };
+        assert!(read_color_vec(&table).is_err(), "duplicate color must error");
+    }
+
+    #[test]
+    fn colors_mixed_form_rejected() {
+        // Lua treats this as a mix of integer (1) and string (T) keys.
+        let lua = Lua::new();
+        let value: Value = lua
+            .load(r#"return { id = "mixed", colors = { "green", T = "red" } }"#)
+            .eval()
+            .unwrap();
+        let table = match value { Value::Table(t) => t, _ => panic!() };
+        assert!(read_color_vec(&table).is_err(), "mixed form must error");
     }
 
     fn handlers_from(lua: &Lua, src: &str) -> BTreeMap<EventName, Function> {

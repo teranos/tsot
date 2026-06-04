@@ -1,8 +1,9 @@
 return {
   id = "signal-goblin",
   name = "Signal Goblin",
-  symbol = "꩜",
+  symbols = { U = "꩜" },
   colors = {"blue", "red"},
+  holes = {"C"},
   type = "creature",
   subtypes = {"goblin"},
   cost = {
