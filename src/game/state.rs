@@ -229,6 +229,7 @@ pub struct CastPayments {
     pub attached: Vec<InstanceId>,
     pub graveyard: Vec<InstanceId>,
     pub mill: Vec<InstanceId>,
+    pub sacrifice: Vec<InstanceId>,
 }
 
 /// The full game state.

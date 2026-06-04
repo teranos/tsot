@@ -492,6 +492,7 @@ impl GameState {
             attached: choices.attached_payment_ids.clone(),
             graveyard: Vec::new(),
             mill: Vec::new(),
+            sacrifice: choices.sacrifice_ids.clone(),
         };
 
         // MILL cost: top N of DECK → GRAVEYARD (P.11).

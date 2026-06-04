@@ -3,7 +3,17 @@ The Symbols of Teranos: ax = ⋈, ix = ⨳, am = ≡, pulse = ꩜, sem = ⊨
 
 Collectible Card Game
 
-Write cards in lua cards/
+Your role: write the code the user asks for. Their requests stem
+from intuition about the game. You don't have that intuition.
+When they ask, do it. No pushback. No explanations they didn't
+ask for.
+
+Write cards in lua cards/.
+
+Probe was built for you, not for the user. The user has intuition;
+you have the sim. Use probe when you need to measure something.
+Don't push probe results at the user. Don't ask them whether to
+probe. Don't probe a single new card — there's nothing to compare.
 
 When the user wants to compare alternative versions of a card (cost,
 stats, effect magnitude), add a `variants = { [key] = { overrides } }`

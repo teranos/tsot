@@ -927,12 +927,14 @@ macro_rules! build_game_table {
                         t.set("attached", lua.create_sequence_from(p.attached.clone())?)?;
                         t.set("graveyard", lua.create_sequence_from(p.graveyard.clone())?)?;
                         t.set("mill", lua.create_sequence_from(p.mill.clone())?)?;
+                        t.set("sacrifice", lua.create_sequence_from(p.sacrifice.clone())?)?;
                     }
                     None => {
                         t.set("hand", lua.create_sequence_from(Vec::<String>::new())?)?;
                         t.set("attached", lua.create_sequence_from(Vec::<String>::new())?)?;
                         t.set("graveyard", lua.create_sequence_from(Vec::<String>::new())?)?;
                         t.set("mill", lua.create_sequence_from(Vec::<String>::new())?)?;
+                        t.set("sacrifice", lua.create_sequence_from(Vec::<String>::new())?)?;
                     }
                 }
                 Ok(t)
