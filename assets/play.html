@@ -104,7 +104,7 @@
 
 <div class="zone">
   <h2>Log</h2>
-  <div id="log" style="max-height: 6rem; overflow-y: auto; font-size: 0.7rem; color: #777;"></div>
+  <pre id="log" style="max-height: 24rem; overflow-y: auto; font-size: 0.75rem; color: #aaa; white-space: pre; margin: 0;"></pre>
 </div>
 
 <script src="tsot_wasm.js"></script>
@@ -138,7 +138,7 @@ function defaultStartArgs() {
     seed: Math.floor(Math.random() * 0xFFFFFFFF),
     deck_a_ids: deck,
     deck_b_ids: deck,
-    opp_ai: 'heuristic',
+    opp_ai: 'uct',
   };
 }
 
@@ -146,15 +146,37 @@ function defaultStartArgs() {
 // GameOver. Subsequent calls would re-run `tsot_start_game` and
 // reset the game — so this is one-shot, guarded by `wasmStarted`.
 let wasmStarted = false;
+// Append a batch of log lines to the #log pane and scroll to bottom.
+// The Rust side returns `engine.log` drained since the last yield;
+// each line is rendered verbatim (multi-line strings — the UCT trace
+// ASCII tree — are passed through unchanged so the indentation reads
+// correctly inside the <pre>).
+function appendLog(lines) {
+  if (!lines || lines.length === 0) return;
+  const logEl = document.getElementById('log');
+  for (const line of lines) {
+    logEl.appendChild(document.createTextNode(line + '\n'));
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// Parse the `{prompt, log}` envelope the Rust FFI now returns. Push
+// log lines into the LOG panel as a side effect, then yield the
+// prompt object the rest of the UI consumes.
+function parseEnvelope(out) {
+  if (out.startsWith('error:')) throw new Error(out);
+  const env = JSON.parse(out);
+  appendLog(env.log);
+  return env.prompt;
+}
+
 async function fetchState() {
   if (!wasmStarted) {
     wasmStarted = true;
     const args = defaultStartArgs();
-    const out = wasmCallString('tsot_start_game', JSON.stringify(args));
-    if (out.startsWith('error:')) {
-      throw new Error(out);
-    }
-    const prompt = JSON.parse(out);
+    const prompt = parseEnvelope(
+      wasmCallString('tsot_start_game', JSON.stringify(args))
+    );
     return { ...prompt, state: prompt.state };
   }
   // The HTTP shim used to support arbitrary GET /state polls; in the
@@ -165,11 +187,9 @@ async function fetchState() {
 }
 
 const _send = async (action) => {
-  const out = wasmCallString('tsot_apply_action', JSON.stringify(action));
-  if (out.startsWith('error:')) {
-    throw new Error(out);
-  }
-  return JSON.parse(out);
+  return parseEnvelope(
+    wasmCallString('tsot_apply_action', JSON.stringify(action))
+  );
 };
 const sendAction = async (action) => {
   const next = await _send(action);

@@ -645,7 +645,9 @@ pub fn run_game_continue(
                     super::mcts::pick_play(state, active, kind_filter, mcts_cfg, registry)
                 }
                 super::AiKind::Uct(uct_cfg) => {
-                    super::uct::pick_play_uct(state, active, kind_filter, uct_cfg, registry)
+                    // Deprecated run_game_continue path: the UCT trace
+                    // is for the wasm UI log only; native runs discard it.
+                    super::uct::pick_play_uct(state, active, kind_filter, uct_cfg, registry).0
                 }
                 super::AiKind::Human(iface) => {
                     let candidates =

@@ -134,12 +134,18 @@ impl StepEngine {
         pending: Option<HumanAction>,
     ) -> StepResult {
         let active = self.state.active_player;
-        let kind_filter = if played_creature {
-            PickKindFilter::NonCreatureOnly
-        } else {
-            PickKindFilter::Any
-        };
+        // P.34: no per-turn creature cap. The legacy `played_creature`
+        // gate forced NonCreatureOnly after the first creature, which
+        // is not a real rule — only payment + targeting limit plays.
+        // The flag is kept on the cursor so existing callers keep
+        // compiling; it's now ignored.
+        let _ = played_creature;
+        let kind_filter = PickKindFilter::Any;
 
+        // Captured from the UCT arm so the post-match logging block
+        // can attach the ASCII tree to engine.log. None for any other
+        // AI / human path.
+        let mut uct_trace_log: Option<String> = None;
         let pick = match &self.ais[active.index()] {
             AiKind::Heuristic => pick_random_playable_in_hand(
                 &self.state,
@@ -159,13 +165,25 @@ impl StepEngine {
             }
             AiKind::Uct(cfg) => {
                 let cfg = cfg.clone();
-                crate::sim::uct::pick_play_uct(
+                let (chosen, trace) = crate::sim::uct::pick_play_uct(
                     &mut self.state,
                     active,
                     kind_filter,
                     &cfg,
                     &self.registry,
-                )
+                );
+                let formatted = trace.format_ascii(
+                    |iid| {
+                        self.state
+                            .card_pool
+                            .get(iid)
+                            .map(|i| i.card.name.clone())
+                            .unwrap_or_else(|| iid.to_string())
+                    },
+                    2,
+                );
+                uct_trace_log = Some(formatted);
+                chosen
             }
             AiKind::Human(_) => match pending {
                 None => {
@@ -212,6 +230,30 @@ impl StepEngine {
                 ),
             },
         };
+
+        // Surface the decision into engine.log so the wasm UI's LOG
+        // panel can render it. Cheap (a couple of strings per turn);
+        // native CLI gets the same lines for free.
+        let actor = match active {
+            PlayerId::A => "A",
+            PlayerId::B => "B",
+        };
+        let summary = match &pick {
+            Some(iid) => {
+                let name = self
+                    .state
+                    .card_pool
+                    .get(iid)
+                    .map(|i| i.card.name.clone())
+                    .unwrap_or_else(|| iid.to_string());
+                format!("turn {} ({}) Main1: play {}", self.state.turn, actor, name)
+            }
+            None => format!("turn {} ({}) Main1: pass", self.state.turn, actor),
+        };
+        self.log.push(summary);
+        if let Some(t) = uct_trace_log {
+            self.log.push(t);
+        }
 
         let Some(picked) = pick else {
             // No more plays this turn; advance into the pre-combat
@@ -491,11 +533,10 @@ impl StepEngine {
             return StepResult::Continue;
         }
         let active = self.state.active_player;
-        let kind_filter = if played_creature {
-            PickKindFilter::NonCreatureOnly
-        } else {
-            PickKindFilter::Any
-        };
+        // P.34: no per-turn creature cap. See the matching note in
+        // step_pattern_b_pick. `played_creature` is now ignored.
+        let _ = played_creature;
+        let kind_filter = PickKindFilter::Any;
 
         // Human dispatch only — AI side never lands in Main2Pick
         // (step_activation_pass routes AI directly to EndTurn).
@@ -518,10 +559,32 @@ impl StepEngine {
                 StepResult::NeedHuman(Box::new(prompt))
             }
             Some(HumanAction::Pass) => {
+                let actor = match active {
+                    PlayerId::A => "A",
+                    PlayerId::B => "B",
+                };
+                self.log.push(format!(
+                    "turn {} ({}) Main2: pass",
+                    self.state.turn, actor
+                ));
                 self.cursor = EngineCursor::EndTurn;
                 StepResult::Continue
             }
             Some(HumanAction::PlayCard { iid }) => {
+                let actor = match active {
+                    PlayerId::A => "A",
+                    PlayerId::B => "B",
+                };
+                let name = self
+                    .state
+                    .card_pool
+                    .get(&iid)
+                    .map(|i| i.card.name.clone())
+                    .unwrap_or_else(|| iid.to_string());
+                self.log.push(format!(
+                    "turn {} ({}) Main2: play {}",
+                    self.state.turn, actor, name
+                ));
                 self.cursor = EngineCursor::Main2Resolving {
                     picked: iid,
                     history: Vec::new(),

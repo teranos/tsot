@@ -92,10 +92,16 @@ pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
     let engine = build_engine(&args)?;
     let mut session = GameSession { engine };
     let prompt = drive_to_next_yield(&mut session.engine, None)?;
-    let prompt_json =
-        serde_json::to_string(&prompt).map_err(|e| format!("serialize first prompt: {e}"))?;
+    // Drain the engine log into the envelope so the JS LOG panel can
+    // surface every internal decision (card picks, attackers, blocks,
+    // UCT trace ASCII tree) without devtools. The buffer is cleared
+    // after every yield so JS sees only the lines since the last call.
+    let log = std::mem::take(&mut session.engine.log);
+    let envelope = serde_json::json!({ "prompt": prompt, "log": log });
+    let envelope_json =
+        serde_json::to_string(&envelope).map_err(|e| format!("serialize first prompt: {e}"))?;
     install_session(session);
-    Ok(prompt_json)
+    Ok(envelope_json)
 }
 
 /// Submit a HumanAction. The engine resumes with the supplied action,
@@ -105,9 +111,14 @@ pub(crate) fn tsot_apply_action_impl(action_json: &str) -> Result<String, String
     let action: HumanAction = serde_json::from_str(action_json)
         .map_err(|e| format!("tsot_apply_action: bad action JSON: {e}"))?;
 
-    let prompt = with_session(|s| drive_to_next_yield(&mut s.engine, Some(action)))
-        .map_err(|e| e.to_string())??;
-    serde_json::to_string(&prompt).map_err(|e| format!("serialize next prompt: {e}"))
+    let (prompt, log) = with_session(|s| -> Result<_, String> {
+        let prompt = drive_to_next_yield(&mut s.engine, Some(action))?;
+        let log = std::mem::take(&mut s.engine.log);
+        Ok((prompt, log))
+    })
+    .map_err(|e| e.to_string())??;
+    let envelope = serde_json::json!({ "prompt": prompt, "log": log });
+    serde_json::to_string(&envelope).map_err(|e| format!("serialize next prompt: {e}"))
 }
 
 /// Construct the engine from the JSON args. Card registry is rebuilt

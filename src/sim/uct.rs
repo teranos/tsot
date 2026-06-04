@@ -166,8 +166,119 @@ impl Node {
     }
 }
 
-/// Pick the next card via UCT. Returns `None` if no candidate is
-/// playable (caller treats as pass), `Some(iid)` otherwise.
+/// Debug snapshot of the tree at the end of a [`pick_play_uct`] call.
+/// Used by the wasm UI's log panel to show what UCT considered each
+/// time the AI side gets priority. Not used by the engine itself —
+/// the picker still returns just the chosen iid.
+#[derive(Debug, Clone, Default)]
+pub struct UctTrace {
+    /// Total iterations requested (matches `cfg.iterations`).
+    pub iterations: u32,
+    /// Why no tree was built (single-candidate fast-path, empty
+    /// candidates, etc). Empty string when a real search ran.
+    pub note: String,
+    /// The iid the picker returned. `None` when there were no
+    /// candidates and the caller treats it as a pass.
+    pub picked: Option<InstanceId>,
+    /// The root node's full subtree. `visits` at the root equals the
+    /// number of iterations that completed a backprop pass.
+    pub root: UctTraceNode,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UctTraceNode {
+    /// `None` at the root; `Some(iid)` for every action edge.
+    pub iid: Option<InstanceId>,
+    pub visits: u32,
+    pub wins: f64,
+    pub children: Vec<UctTraceNode>,
+}
+
+fn snapshot_subtree(node: &Node, iid: Option<InstanceId>) -> UctTraceNode {
+    let mut children: Vec<UctTraceNode> = node
+        .children
+        .iter()
+        .map(|(child_iid, child_node)| snapshot_subtree(child_node, Some(child_iid.clone())))
+        .collect();
+    // Most-visited first so the ASCII rendering reads top-down by
+    // exploration priority.
+    children.sort_by_key(|n| std::cmp::Reverse(n.visits));
+    UctTraceNode {
+        iid,
+        visits: node.visits,
+        wins: node.wins,
+        children,
+    }
+}
+
+impl UctTrace {
+    /// Render the trace as an indented ASCII tree. `name_of` maps a
+    /// candidate iid to a display label (card name); the caller pulls
+    /// it from the game's card pool so this module stays
+    /// game-state-free. Depth is capped to keep the log readable —
+    /// UCT's tree fans out fast and the user only needs the first
+    /// couple of levels to understand the decision.
+    pub fn format_ascii<F>(&self, name_of: F, max_depth: usize) -> String
+    where
+        F: Fn(&InstanceId) -> String,
+    {
+        let mut out = String::new();
+        if !self.note.is_empty() {
+            out.push_str(&self.note);
+            return out;
+        }
+        let picked_str = self
+            .picked
+            .as_ref()
+            .map(|iid| format!("{} ({})", name_of(iid), iid))
+            .unwrap_or_else(|| "(pass)".to_string());
+        out.push_str(&format!(
+            "UCT {} iters, root visits={}, pick: {}\n",
+            self.iterations, self.root.visits, picked_str
+        ));
+        write_node(&mut out, &self.root.children, "", max_depth, &name_of);
+        out
+    }
+}
+
+fn write_node<F>(
+    out: &mut String,
+    children: &[UctTraceNode],
+    prefix: &str,
+    remaining_depth: usize,
+    name_of: &F,
+) where
+    F: Fn(&InstanceId) -> String,
+{
+    let last_idx = children.len().saturating_sub(1);
+    for (i, ch) in children.iter().enumerate() {
+        let is_last = i == last_idx;
+        let connector = if is_last { "└─ " } else { "├─ " };
+        let label = ch
+            .iid
+            .as_ref()
+            .map(|iid| format!("{} ({})", name_of(iid), iid))
+            .unwrap_or_else(|| "(root)".to_string());
+        let wr = if ch.visits == 0 {
+            "—".to_string()
+        } else {
+            format!("{:.2}", ch.wins / ch.visits as f64)
+        };
+        out.push_str(&format!(
+            "{}{}{}  v={} wr={}\n",
+            prefix, connector, label, ch.visits, wr
+        ));
+        if remaining_depth > 0 && !ch.children.is_empty() {
+            let child_prefix = format!("{}{}", prefix, if is_last { "   " } else { "│  " });
+            write_node(out, &ch.children, &child_prefix, remaining_depth - 1, name_of);
+        }
+    }
+}
+
+/// Pick the next card via UCT. Returns `(choice, trace)` where
+/// `choice` is `None` if no candidate is playable (caller treats as
+/// pass) and `trace` is a debug snapshot of the search tree for log
+/// surfaces (the engine itself only consumes `choice`).
 ///
 /// The returned iid is the root child with the highest visit count
 /// — UCT's most-robust answer (more exploration → more confidence).
@@ -178,15 +289,35 @@ pub fn pick_play_uct(
     kind_filter: PickKindFilter,
     cfg: &UctConfig,
     registry: &std::sync::Arc<crate::card::CardRegistry>,
-) -> Option<InstanceId> {
+) -> (Option<InstanceId>, UctTrace) {
     UCT_PICK_CALLS.fetch_add(1, Ordering::SeqCst);
 
     let mut candidates = enumerate_playable_in_hand(state, player, kind_filter);
     if candidates.is_empty() {
-        return None;
+        return (
+            None,
+            UctTrace {
+                iterations: cfg.iterations,
+                note: "UCT: no candidates → pass".to_string(),
+                picked: None,
+                root: UctTraceNode::default(),
+            },
+        );
     }
     if candidates.len() == 1 {
-        return candidates.into_iter().next();
+        let only = candidates.into_iter().next();
+        return (
+            only.clone(),
+            UctTrace {
+                iterations: cfg.iterations,
+                note: format!(
+                    "UCT: single candidate fast-path → {}",
+                    only.as_ref().map(|i| i.to_string()).unwrap_or_default()
+                ),
+                picked: only,
+                root: UctTraceNode::default(),
+            },
+        );
     }
     if (candidates.len() as u32) > cfg.max_candidates {
         candidates.sort();
@@ -241,14 +372,22 @@ pub fn pick_play_uct(
     }
 
     // Pick the most-visited root child (UCT-robust choice).
-    root.children
+    let picked = root
+        .children
         .iter()
         .max_by_key(|(_, c)| c.visits)
         .map(|(iid, _)| iid.clone())
         // Fallback: if no iterations expanded a child (shouldn't
         // happen with iterations >= candidates), pick the first
         // candidate.
-        .or_else(|| candidates.into_iter().next())
+        .or_else(|| candidates.into_iter().next());
+    let trace = UctTrace {
+        iterations: cfg.iterations,
+        note: String::new(),
+        picked: picked.clone(),
+        root: snapshot_subtree(&root, None),
+    };
+    (picked, trace)
 }
 
 /// Walk the tree from root via UCB1 until reaching a node with

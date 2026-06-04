@@ -56,6 +56,36 @@ impl StepEngine {
                 ),
             },
         };
+        // Log the attacker selection so the wasm UI's LOG panel can
+        // show what the AI (or human) just decided.
+        let actor = match active {
+            PlayerId::A => "A",
+            PlayerId::B => "B",
+        };
+        if attackers.is_empty() {
+            self.log.push(format!(
+                "turn {} ({}) Combat: no attackers",
+                self.state.turn, actor
+            ));
+        } else {
+            let names: Vec<String> = attackers
+                .iter()
+                .map(|iid| {
+                    self.state
+                        .card_pool
+                        .get(iid)
+                        .map(|i| i.card.name.clone())
+                        .unwrap_or_else(|| iid.to_string())
+                })
+                .collect();
+            self.log.push(format!(
+                "turn {} ({}) Combat: attack with {}",
+                self.state.turn,
+                actor,
+                names.join(", ")
+            ));
+        }
+
         let mut declared_atk_count = 0u32;
         for atk in &attackers {
             if self
@@ -117,6 +147,43 @@ impl StepEngine {
                 ),
             },
         };
+        // Log the block assignment.
+        let def_label = match defender {
+            PlayerId::A => "A",
+            PlayerId::B => "B",
+        };
+        if assignments.is_empty() {
+            self.log.push(format!(
+                "turn {} ({}) Combat: no blocks",
+                self.state.turn, def_label
+            ));
+        } else {
+            let pairs: Vec<String> = assignments
+                .iter()
+                .map(|(blk, atk)| {
+                    let bn = self
+                        .state
+                        .card_pool
+                        .get(blk)
+                        .map(|i| i.card.name.clone())
+                        .unwrap_or_else(|| blk.to_string());
+                    let an = self
+                        .state
+                        .card_pool
+                        .get(atk)
+                        .map(|i| i.card.name.clone())
+                        .unwrap_or_else(|| atk.to_string());
+                    format!("{} → {}", bn, an)
+                })
+                .collect();
+            self.log.push(format!(
+                "turn {} ({}) Combat: block {}",
+                self.state.turn,
+                def_label,
+                pairs.join("; ")
+            ));
+        }
+
         for (blk, atk) in &assignments {
             let _ = self
                 .state

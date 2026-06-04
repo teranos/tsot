@@ -43,6 +43,17 @@ tiny_http = "=0.12.0"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "=0.2.15", features = ["js"] }
 
+[profile.release]
+# panic = "abort" stops Rust's panic_unwind crate (and the
+# `__cxa_find_matching_catch_*` references it emits) from being linked
+# in. Required for the wasm32-unknown-emscripten build — rustc forces
+# `-fwasm-exceptions` (new ABI) in its target spec, but the precompiled
+# stdlib's panic_unwind references the LEGACY ABI symbols. With
+# panic=abort, the unwind machinery isn't pulled in at all so the
+# mismatch never matters. Native release builds also abort on panic,
+# which is fine for a CLI that has no panic recovery anywhere.
+panic = "abort"
+
 [lints.clippy]
 # Determinism: see clippy.toml for the disallowed sets.
 disallowed_types = "deny"

@@ -249,8 +249,10 @@ WASM_DIST   := dist
 
 wasm:
 	@command -v emcc >/dev/null 2>&1 || { \
-		echo "error: emcc not on PATH. Install emscripten via emsdk and"; \
-		echo "       \`source ./emsdk_env.sh\` before \`make wasm\`."; \
+		echo "error: emcc not on PATH."; \
+		echo "       Nix users: re-enter the dev shell — flake.nix now provides emscripten."; \
+		echo "         \`exit && nix develop\`"; \
+		echo "       Non-Nix: install emscripten via emsdk and \`source ./emsdk_env.sh\`."; \
 		exit 1; \
 	}
 	cargo build --target $(WASM_TARGET) --release --bin tsot_wasm
@@ -273,8 +275,12 @@ wasm-serve: wasm
 		echo "error: python3 not on PATH"; exit 1; \
 	}
 	@echo ""
-	@echo "Serving $(WASM_DIST)/ at http://localhost:$(WASM_SERVE_PORT)/"
-	@cd $(WASM_DIST) && python3 -m http.server $(WASM_SERVE_PORT)
+	@echo "Serving $(WASM_DIST)/ at http://localhost:$(WASM_SERVE_PORT)/  (Ctrl-C to stop)"
+	@# `exec` replaces the make-spawned shell so Ctrl-C goes straight to
+	@# python (no orphaned child). `allow_reuse_address = True` skips
+	@# Python's default TIME_WAIT — without it, the next `make wasm-serve`
+	@# after a stop fails with "Address already in use" for ~60s.
+	@cd $(WASM_DIST) && exec python3 -c "import http.server, socketserver; socketserver.TCPServer.allow_reuse_address = True; http.server.test(HandlerClass=http.server.SimpleHTTPRequestHandler, port=$(WASM_SERVE_PORT), bind='')"
 
 clean-wasm:
 	rm -rf $(WASM_DIST)

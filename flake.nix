@@ -4,12 +4,33 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    # rust-overlay gives us a `rust-bin` with configurable targets —
+    # needed for the WASM_PLAN.md D6 wasm build which targets
+    # wasm32-unknown-emscripten. nixpkgs' bare rustc ships without
+    # cross-targets.
+    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ (import rust-overlay) ];
+        };
+        # Nightly rust with the wasm target preinstalled. Nightly is
+        # required for `-Z build-std=std,panic_abort` (set in
+        # `.cargo/config.toml`'s `[unstable]` section) — we rebuild std
+        # from source for the wasm target so its exception ABI matches
+        # emscripten 5.x's `-fwasm-exceptions` default. Without it the
+        # precompiled stable std's legacy `__cxa_find_matching_catch_*`
+        # / `invoke_*` references don't link against new-ABI emcc.
+        # `rust-src` is the source tree build-std consumes.
+        rust = pkgs.rust-bin.nightly.latest.default.override {
+          extensions = [ "rust-src" ];
+          targets = [ "wasm32-unknown-emscripten" ];
+        };
       in {
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "tsot";
@@ -30,13 +51,54 @@
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
-            cargo
-            rustc
-            rustfmt
-            clippy
+            # `rust` bundles cargo + rustc + rustfmt + clippy + the
+            # wasm32-unknown-emscripten target (see `let rust = …`
+            # at the top of this flake).
+            rust
             rust-analyzer
             lua5_4
+            # WASM_PLAN.md D6: `make wasm` / `make wasm-serve` need
+            # emcc on PATH. Bundling here so the dev shell is the
+            # single source of truth — no separate emsdk install.
+            emscripten
+            python3
           ];
+
+          # nixpkgs' emscripten ships with a read-only $NIX_STORE-side
+          # cache. emcc wants a writable cache for ports + ports-build.
+          # Point it at a project-local dir so the build doesn't fail
+          # the first time it tries to materialize a Lua-side dependency.
+          #
+          # Also tell `cc-rs` to use emcc / em++ for any C/C++ compiled
+          # for the wasm target. Without these, mlua-sys's build.rs
+          # picks up the Nix-wrapped native clang (which injects
+          # arm64-apple-darwin flags like -fzero-call-used-regs that
+          # wasm clang rejects).
+          shellHook = ''
+            export EM_CACHE="$PWD/.em-cache"
+            mkdir -p "$EM_CACHE"
+            export CC_wasm32_unknown_emscripten=emcc
+            export CXX_wasm32_unknown_emscripten=em++
+            export AR_wasm32_unknown_emscripten=emar
+            # cc-rs honors CRATE_CC_NO_DEFAULTS to skip the default
+            # cflag set that the Nix wrapper picked up; otherwise its
+            # native-toolchain flags still leak into the emcc invocation.
+            export CRATE_CC_NO_DEFAULTS=1
+            # mlua-sys vendors Lua's C runtime; Lua uses setjmp/longjmp
+            # for error handling. emcc's default longjmp support emits
+            # `__cxa_find_matching_catch_*` (LEGACY exception ABI) which
+            # conflicts with the new wasm-exceptions ABI rustc forces at
+            # link time. Routing setjmp/longjmp through wasm-native
+            # exception instructions eliminates the legacy references:
+            #   - -fwasm-exceptions enables the codegen path
+            #   - -sSUPPORT_LONGJMP=wasm picks the wasm-native runtime
+            # Setting via EMCC_CFLAGS (honored by emcc on every
+            # invocation, regardless of caller) is more robust than
+            # CFLAGS_wasm32_unknown_emscripten alone — cc-rs's env-var
+            # lookup pathway has caching quirks in build scripts.
+            export EMCC_CFLAGS="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm"
+            export CFLAGS_wasm32_unknown_emscripten="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm"
+          '';
         };
       });
 }
