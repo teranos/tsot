@@ -870,33 +870,6 @@ impl ScriptedOracle {
     }
 }
 
-impl ScriptedOracle {
-    /// Build a new sequence with the first `Player` answer swapped to the
-    /// alternative candidate from `req`. Returns `None` if no `Player` answer
-    /// is present, or no alternative exists. Used by the sim to retry a
-    /// suicidal play with a different "target player" pick.
-    pub fn flip_first_player(answers: &[ScriptedAnswer]) -> Option<Vec<ScriptedAnswer>> {
-        let pos = answers
-            .iter()
-            .position(|a| matches!(a, ScriptedAnswer::Player(_)))?;
-        let original = match &answers[pos] {
-            ScriptedAnswer::Player(p) => *p,
-            _ => unreachable!(),
-        };
-        // 1v1: flip A↔B. If the original was None, force A as a fallback —
-        // None means the oracle declined an optional pick, and retrying with
-        // an actual pick is the whole point.
-        let alt = match original {
-            Some(PlayerId::A) => Some(PlayerId::B),
-            Some(PlayerId::B) => Some(PlayerId::A),
-            None => Some(PlayerId::A),
-        };
-        let mut out: Vec<ScriptedAnswer> = answers.to_vec();
-        out[pos] = ScriptedAnswer::Player(alt);
-        Some(out)
-    }
-}
-
 impl ChoiceOracle for ScriptedOracle {
     fn choose_card(
         &mut self,
@@ -1021,10 +994,9 @@ impl<O: ChoiceOracle> ChoiceOracle for RecordingOracle<O> {
     }
 
     /// Forwards to inner. Not added to the recording — `ResponseAction`
-    /// isn't a `ScriptedAnswer` variant and the suicide-retry replay only
-    /// flips the first `choose_player`, not response decisions. Re-running
-    /// the same handler with the same answer sequence will produce the
-    /// same response decisions because RandomOracle's rng is deterministic.
+    /// isn't a `ScriptedAnswer` variant and recordings are now used
+    /// purely for read-only inspection (the old suicide-retry replay
+    /// that consumed them is gone).
     fn respond_or_pass(&mut self, state: &GameState, player: PlayerId) -> ResponseAction {
         self.inner.respond_or_pass(state, player)
     }

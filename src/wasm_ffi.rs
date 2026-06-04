@@ -365,8 +365,12 @@ mod tests {
         })
         .to_string();
 
-        let prompt_json = tsot_start_game_impl(&args).expect("tsot_start_game returned Err");
-        let prompt: Value = serde_json::from_str(&prompt_json).expect("prompt JSON parses");
+        let env_json = tsot_start_game_impl(&args).expect("tsot_start_game returned Err");
+        let env: Value = serde_json::from_str(&env_json).expect("envelope JSON parses");
+        // The wasm FFI now returns `{prompt, log}` envelope so the JS
+        // LOG panel can surface engine log lines per yield. Test
+        // reads through `.prompt`.
+        let prompt = &env["prompt"];
         assert_eq!(prompt["kind"], "PickCard", "first decision should be a card pick");
         assert_eq!(prompt["player"], "A", "first decision is on side A (the human)");
         let candidates = prompt["candidates"]
@@ -399,11 +403,12 @@ mod tests {
         let _first_prompt = tsot_start_game_impl(&args).expect("tsot_start_game returned Err");
 
         let action_json = serde_json::json!({ "kind": "Pass" }).to_string();
-        let next_prompt_json =
+        let next_env_json =
             tsot_apply_action_impl(&action_json).expect("tsot_apply_action returned Err");
 
-        let next: Value =
-            serde_json::from_str(&next_prompt_json).expect("prompt JSON parses");
+        let env: Value =
+            serde_json::from_str(&next_env_json).expect("envelope JSON parses");
+        let next = &env["prompt"];
         assert_eq!(
             next["kind"], "PickAttackers",
             "after Pass on Main1, next decision is combat attacker pick (got {next})"

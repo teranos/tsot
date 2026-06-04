@@ -57,6 +57,7 @@ Phase 3 landed: static-granted activated abilities (RULES A.10). `StaticDef.gran
 Deferred:
 - SACRIFICE / SELF cost components in activations — needed by Portable Bolt's "exile this card" rider (SELF).
 - Activations from non-BOARD zones — needed by Portable Bolt's portable rider (activate from ATTACHED) and by cycling-style hand activations.
+- **AI activation timing is asymmetric vs. human.** The sim AI auto-fires its activation pass at one fixed engine moment (post-combat in `step/combat.rs::step_activation_pass`, body in `run.rs::run_activation_pass`), firing the *first* eligible ability per board card. The human drives activations explicitly via `HumanAction::Activate { iid, ability_index, x }` at any moment during Main1 or Main2. This means UCT/MCTS never see activations as branching choices in their search trees — they fire automatically after the tree's plays resolve, outside the decision graph. Probe results that depend on activation sequencing (mostly the jewel cycle, vigilant-human, dark salamander's X cost) are not reflecting honest AI play. Fix: lift activations into Pattern B's candidate set so they're first-class actions; widen `enumerate_playable_in_hand` to `enumerate_priority_actions → Vec<Action>` where `Action = Play(iid) | Activate(iid, idx, x) | Pass`; change UCT/MCTS pick signatures to return `Action`; delete `run_activation_pass` entirely.
 
 Per RULES A.5 activations resolve immediately and cannot be responded to. This is a deliberate deviation from MTG and is not on a "to fix" list.
 

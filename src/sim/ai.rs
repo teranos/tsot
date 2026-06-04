@@ -44,29 +44,17 @@ pub fn enumerate_playable_in_hand(
             }
             match inst.card.kind {
                 CardType::Creature => {
-                    // Creatures with `is_x` hand-pay (hydra, dark-salamander)
-                    // MUST be affordability-gated — same as instants. Without
-                    // this, the picker accepts an X-cost creature whose
-                    // identity-matching hand is 0, run.rs computes max_x = 0,
-                    // hits `continue`, and the picker re-returns the same
-                    // creature: Pattern B infinite loop. Plain creatures
-                    // (no `is_x`, no setup cost) are always playable for
-                    // free, so they skip the check.
-                    //
-                    // `Attached` belongs in the gate too — attach-shuffler
-                    // (1h + 2att) needs ≥2 attached cards on the player's
-                    // BOARD to actually pay. Without this, build_pattern_b
-                    // truncates an empty pool, attached_payment_ids stays
-                    // empty, P.31 transfer/exile bumps never fire, and the
-                    // sim silently casts the creature without paying its
-                    // attached cost (caught by sim_pays_attached_cost_*).
-                    let needs_affordability = inst.card.cost.iter().any(|c| {
-                        matches!(
-                            c.source,
-                            CostSource::Sacrifice | CostSource::Graveyard | CostSource::Attached
-                        ) || c.is_x
-                    });
-                    !needs_affordability || can_pay_instant_cost(state, player, iid)
+                    // Always affordability-gate creatures now that the
+                    // `rig_creature_free_haste` shortcut is gone — plain
+                    // 1-hand creatures used to be unconditionally
+                    // playable (the rig wiped their cost mid-cast), but
+                    // they need a real check now: hand of size 1 can't
+                    // pay a 1-hand cost (the card itself leaves hand at
+                    // cast announcement per P.33 and there's nothing
+                    // left to discard). Without this, the picker keeps
+                    // re-returning an unplayable creature and Pattern B
+                    // loops on the same iid forever.
+                    can_pay_instant_cost(state, player, iid)
                 }
                 CardType::Spell => can_pay_instant_cost(state, player, iid),
                 CardType::Artifact => can_pay_instant_cost(state, player, iid),
@@ -696,40 +684,6 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
     }
 
     assignments
-}
-
-/// Rig a creature to free + haste before the sim plays it. Used for the
-/// vast majority of creatures (those without SETUP costs). Lets the sim
-/// keep throughput high without exhausting hand resources every turn.
-///
-/// The mutation is JOURNALED via
-/// [`crate::game::JournalEntry::RigCreatureFreeHaste`] so MCTS rollouts
-/// and any other rollback-driven flow restore byte-identical state.
-///
-/// TODO(B — proper-play-cost refactor): replace this hack with a real
-/// `play_card` call that resolves hand-payment via the oracle. Would
-/// eliminate the need for the dedicated journal variant and bring the
-/// sim's creature-play path in line with the spell / artifact path.
-/// Bigger refactor — measurably changes EA games because the sim
-/// would actually pay hand costs for creatures.
-pub fn rig_creature_free_haste(state: &mut GameState, iid: &InstanceId) {
-    use crate::game::JournalEntry;
-    let Some(inst) = state.card_pool.get_mut(iid) else {
-        return;
-    };
-    let was_cost = inst.card.cost.clone();
-    let was_abilities = inst.card.abilities.clone();
-    inst.card.cost = vec![];
-    if !inst.card.abilities.iter().any(|a| a == "haste") {
-        inst.card.abilities.push("haste".to_string());
-    }
-    if let Some(j) = state.active_journal() {
-        j.push(JournalEntry::RigCreatureFreeHaste {
-            iid: iid.clone(),
-            was_cost,
-            was_abilities,
-        });
-    }
 }
 
 #[cfg(test)]

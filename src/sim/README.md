@@ -39,10 +39,6 @@ fitness signal for the EA. The AI lives in `ai.rs`; main loop in `run.rs`.
   the AI picks first-N from `find_attached_payments` sorted ascending by
   `attached_keep_value` (mutation-presence, crystal-color-uniqueness,
   granted-activated, shell-redundancy — weights placeholder pending EA tuning).
-- **`rig_creature_free_haste`** — non-setup-cost creatures get their cost
-  wiped and haste granted at cast time. Lets the EA explore creature payoff
-  without modeling early-game hand economy; setup-cost creatures (Sacrifice /
-  Graveyard cost) keep their printed cost.
 - **Per-game watchdog** — wall-clock and Pattern-B-inner-loop safety caps in
   `run_game`. On hang the engine dumps state to stderr (turn, active player,
   hand/board/GY card ids, last picked, last activated), scores the active

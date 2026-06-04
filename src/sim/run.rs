@@ -16,11 +16,11 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use crate::card::{CardRegistry, CardType, CostSource};
-use crate::choice::{ChoiceOracle, ChooseIntRequest, RandomOracle, RecordingOracle, ScriptedOracle};
+use crate::choice::{ChoiceOracle, ChooseIntRequest, RandomOracle, RecordingOracle};
 use crate::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 use super::ai::{
-    attached_keep_value, pick_blocks, pick_random_playable_in_hand, rig_creature_free_haste,
+    attached_keep_value, pick_blocks, pick_random_playable_in_hand,
     sacrifice_keep_value, select_attackers, PickKindFilter,
 };
 use super::stats::{
@@ -109,31 +109,20 @@ pub(crate) enum BuildChoiceResult {
 /// Mirrors the inline logic exactly:
 ///   - X-cost: cap by tightest resource, oracle picks X, resolve hand
 ///     payment (smart-pitch via oracle) + GY substitutes + GY-pay
-///   - Creature: hand payment + GY payment + rig_creature_free_haste
-///     shortcut when no setup cost
-///   - Spell / Artifact / Mutation: hand payment + GY pay + mutation
-///     target selection
+///   - Creature / Spell / Artifact / Mutation: hand payment + GY pay
+///     + mutation target selection
 ///   - Sacrifice slots (any card kind): low-value picker
 ///   - P.31 ATTACHED-source slots
 ///
-/// The function mutates `state` for the rig + sacrifice picking +
-/// activations are not journaled directly here; the journaled
-/// helpers (set_*, move_card, etc.) handle that, and rig_creature_
-/// free_haste is journaled via its own variant. So MCTS rollouts can
-/// rollback the entire build_pattern_b_choices + play_card sequence.
-///
-/// `active_is_human` controls whether the AI-side `rig_creature_free_haste`
-/// shortcut applies. That shortcut clears the cast cost and grants haste
-/// to non-setup-cost creatures so the AI can swing same-turn — desirable
-/// for fitness sims, but it permanently mutates the card and breaks the
-/// rules for a human player. Pass `false` for AI sides (default behavior),
-/// `true` to skip the rig (human play).
+/// Mutates `state` for sacrifice picking + activations are not
+/// journaled directly here; the journaled helpers (set_*, move_card,
+/// etc.) handle that, so MCTS rollouts can rollback the entire
+/// build_pattern_b_choices + play_card sequence.
 pub(crate) fn build_pattern_b_choices(
     state: &mut GameState,
     active: PlayerId,
     picked: &InstanceId,
     oracle: &mut dyn ChoiceOracle,
-    active_is_human: bool,
 ) -> BuildChoiceResult {
     let kind = state
         .card_pool
@@ -292,12 +281,10 @@ pub(crate) fn build_pattern_b_choices(
             choices.graveyard_payment_ids =
                 state.resolve_graveyard_payment(active, picked, gy_needed);
         }
-        let has_setup_cost = cost
-            .iter()
-            .any(|c| matches!(c.source, CostSource::Sacrifice | CostSource::Graveyard));
-        if !has_setup_cost && !active_is_human {
-            rig_creature_free_haste(state, picked);
-        }
+        // No rig: creatures pay their printed cost via the same path
+        // as any other card kind. The earlier `rig_creature_free_haste`
+        // shortcut (free-cast + auto-haste for AI sides without a
+        // setup cost) was a sim handicap, not a rule, and is gone.
     } else if matches!(
         kind,
         CardType::Spell | CardType::Artifact | CardType::Mutation | CardType::Unspecified
@@ -700,7 +687,6 @@ pub fn run_game_continue(
                     active,
                     &picked,
                     &mut oracle,
-                    matches!(ais[active.index()], super::AiKind::Human(_)),
                 );
                 let choices = match build_result {
                     BuildChoiceResult::Choices(c) => c,
@@ -730,19 +716,8 @@ pub fn run_game_continue(
                     }
                 }
                 oracle.clear();
-                let resp_before_a = state
-                    .action_counts
-                    .get("instant_response_played")
-                    .map(|v| v[0])
-                    .unwrap_or(0);
-                let resp_before_b = state
-                    .action_counts
-                    .get("instant_response_played")
-                    .map(|v| v[1])
-                    .unwrap_or(0);
                 state.journal = Some(crate::game::Journal::new());
                 let opponent_of_active = active.opponent();
-                let choices_for_retry = choices.clone();
                 // Per-cast wall-clock tripwire: a single cast resolving for >1s
                 // suggests a Lua handler in a tight loop (no Rust-side watchdog
                 // covers handler-internal time).
@@ -766,50 +741,10 @@ pub fn run_game_continue(
                     );
                     state.bump_action("slow_cast", active);
                 }
-                let resp_after_a = state
-                    .action_counts
-                    .get("instant_response_played")
-                    .map(|v| v[0])
-                    .unwrap_or(0);
-                let resp_after_b = state
-                    .action_counts
-                    .get("instant_response_played")
-                    .map(|v| v[1])
-                    .unwrap_or(0);
-                let response_fired =
-                    resp_after_a > resp_before_a || resp_after_b > resp_before_b;
-                // "Suicide skip": if the engine landed in a state where
-                // the active player has already lost (e.g., a Lua handler
-                // killed them mid-cast), the AI rolls back so its
-                // preview doesn't commit a fatal play. For HUMAN sides
-                // we never auto-skip — the player chose this card and
-                // is allowed to make any legal play, even a bad one.
-                let active_is_human = matches!(ais[active.index()], super::AiKind::Human(_));
-                let mut suicide = !active_is_human && state.winner == Some(opponent_of_active);
+                let suicide = state.winner == Some(opponent_of_active);
                 let preview_size = state.journal.as_ref().map(|j| j.len()).unwrap_or(0) as u64;
 
                 bump_preview_attempt(&mut stats, active, preview_size);
-
-                let mut result = result;
-                if suicide && !response_fired {
-                    if let Some(flipped) = ScriptedOracle::flip_first_player(oracle.recording()) {
-                        if let Some(journal) = state.journal.take() {
-                            journal.rollback(state);
-                        }
-                        state.journal = Some(crate::game::Journal::new());
-                        let mut scripted = ScriptedOracle::new(flipped);
-                        result = state.play_card(
-                            active,
-                            &picked,
-                            choices_for_retry,
-                            Some(&mut EventContext::new(lua, &mut scripted)),
-                        );
-                        suicide = state.winner == Some(opponent_of_active);
-                        if !suicide && result.is_ok() {
-                            state.bump_action("preview_retry_rescued", active);
-                        }
-                    }
-                }
 
                 if result.is_ok() && !suicide {
                     if let Some(mut preview) = state.journal.take() {
@@ -885,6 +820,7 @@ pub fn run_game_continue(
                             .get(&picked)
                             .map(|c| c.card.id.clone())
                             .unwrap_or_else(|| picked.clone());
+                        let active_is_human = matches!(ais[active.index()], super::AiKind::Human(_));
                         log.push(format!(
                             "turn {turn} ({active:?}): play_card({card_id}) failed: {err:?}{}",
                             if active_is_human { " [HUMAN — visible failure]" } else { "" }
@@ -1070,7 +1006,7 @@ pub fn run_game_continue(
                             .map(|c| c.card.kind == CardType::Creature)
                             .unwrap_or(false);
                         let build_result = build_pattern_b_choices(
-                            state, active, &picked, &mut oracle, true,
+                            state, active, &picked, &mut oracle,
                         );
                         let choices = match build_result {
                             BuildChoiceResult::Choices(c) => c,

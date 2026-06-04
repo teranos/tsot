@@ -11,7 +11,7 @@ use crate::sim::run::{build_pattern_b_choices, BuildChoiceResult};
 use crate::sim::stats::{bump_played, bump_preview_attempt, bump_preview_rollback};
 use crate::sim::AiKind;
 
-use super::{pending_to_prompt, try_suicide_retry, EngineCursor, PlayAttemptOutcome, StepEngine, StepResult};
+use super::{pending_to_prompt, EngineCursor, StepEngine, StepResult};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -279,17 +279,15 @@ impl StepEngine {
             .map(|c| c.card.kind)
             .unwrap_or(CardType::Unspecified);
 
-        // Order matches run_game_continue: build_pattern_b_choices runs
-        // with journal=None so `rig_creature_free_haste`'s cost-clear is
-        // a permanent mutation (rig sits OUTSIDE the preview-rollback
-        // envelope by design). Only THEN open the preview journal for
-        // play_card's mutations.
+        // Order matches run_game_continue: build_pattern_b_choices
+        // runs with journal=None so its sacrifice picks etc. are
+        // permanent mutations OUTSIDE the preview-rollback envelope.
+        // The preview journal opens only for play_card's mutations.
         let build_result = build_pattern_b_choices(
             &mut self.state,
             active,
             &picked,
             &mut self.oracle,
-            matches!(self.ais[active.index()], AiKind::Human(_)),
         );
         let choices = match build_result {
             BuildChoiceResult::Choices(c) => c,
@@ -350,63 +348,18 @@ impl StepEngine {
             .map(|j| j.len())
             .unwrap_or(0) as u64;
 
-        // S11: clone choices so the rescue helper has them for the
-        // flipped-oracle retry. play_card consumes by value.
-        let choices_for_retry = choices.clone();
-        let resp_before = self
-            .state
-            .action_counts
-            .get("instant_response_played")
-            .copied()
-            .unwrap_or([0, 0]);
-
-        let initial_result = self.state.play_card(
+        let result = self.state.play_card(
             active,
             &picked,
             choices,
             Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
         );
-
-        let resp_after = self
-            .state
-            .action_counts
-            .get("instant_response_played")
-            .copied()
-            .unwrap_or([0, 0]);
-        let response_fired =
-            resp_after[0] > resp_before[0] || resp_after[1] > resp_before[1];
-        let active_is_human = matches!(self.ais[active.index()], AiKind::Human(_));
-        let initial_suicide = !active_is_human
-            && self.state.winner == Some(opponent_of_active);
-
-        // S11: rescue gate. Only AI-side casts attempt rescue (human
-        // owns their decisions). `try_suicide_retry` rolls back the
-        // journal, reopens it, replays play_card with a flipped
-        // oracle if applicable; returns the final outcome.
-        let outcome = if active_is_human {
-            PlayAttemptOutcome {
-                result: initial_result,
-                final_suicide: false, // human casts never auto-rolled
-                rescued: false,
-            }
-        } else {
-            let recording: Vec<crate::choice::ScriptedAnswer> =
-                self.oracle.recording().to_vec();
-            try_suicide_retry(
-                &mut self.state,
-                active,
-                opponent_of_active,
-                &picked,
-                choices_for_retry,
-                initial_result,
-                initial_suicide,
-                response_fired,
-                &recording,
-                self.registry.lua(),
-            )
-        };
-        let result = outcome.result;
-        let suicide = outcome.final_suicide;
+        // No suicide-rescue rewind: both AI and human commit to their
+        // played card. If the play causes the active player to lose,
+        // they lose. The earlier rescue gate (rolled the oracle's
+        // first-player flip and replayed the play for AI-side casts)
+        // is gone — it was an asymmetric AI advantage.
+        let suicide = self.state.winner == Some(opponent_of_active);
         let preview_size = self
             .state
             .journal
@@ -683,7 +636,6 @@ impl StepEngine {
             active,
             &picked,
             &mut self.oracle,
-            true, // active_is_human (this helper only fires for human side)
         );
         let choices = match build_result {
             BuildChoiceResult::Choices(c) => c,

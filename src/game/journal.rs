@@ -136,24 +136,6 @@ pub enum JournalEntry {
         /// Rollback reinserts at the stored positions.
         removed: Vec<(usize, Modifier)>,
     },
-    /// Sim shortcut `rig_creature_free_haste`: clears a creature's
-    /// printed cost and appends "haste" to its abilities so the AI
-    /// can play it for free with summoning-sickness already cleared.
-    /// Mutates the card template inside its CardInstance (not just
-    /// runtime state), which is why it needs its own journal entry.
-    /// `was_cost` + `was_abilities` capture the pre-mutation values so
-    /// rollback can restore them. Forward: re-apply the clear + append.
-    ///
-    /// TODO(B): replace the rig hack with proper play_card that resolves
-    /// hand-payment via the oracle. Would eliminate the need for this
-    /// variant and bring the sim's "creature play" path in line with
-    /// the rest. Bigger refactor — measurably changes EA games. See
-    /// also `src/sim/ai.rs::rig_creature_free_haste`.
-    RigCreatureFreeHaste {
-        iid: InstanceId,
-        was_cost: Vec<crate::card::CostComponent>,
-        was_abilities: Vec<String>,
-    },
 }
 
 /// Journal — sequence of mutation entries.
@@ -402,16 +384,6 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
                 }
             }
         }
-        JournalEntry::RigCreatureFreeHaste {
-            iid,
-            was_cost,
-            was_abilities,
-        } => {
-            if let Some(inst) = state.card_pool.get_mut(&iid) {
-                inst.card.cost = was_cost;
-                inst.card.abilities = was_abilities;
-            }
-        }
     }
 }
 
@@ -536,20 +508,6 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
             if let Some(inst) = state.card_pool.get_mut(&iid) {
                 inst.modifiers
                     .retain(|m| !matches!(m, Modifier::EotStatBoost { .. }));
-            }
-        }
-        JournalEntry::RigCreatureFreeHaste {
-            iid,
-            was_cost: _,
-            was_abilities: _,
-        } => {
-            // Forward: re-apply the rig (clear cost, append "haste").
-            // Mirrors `sim::ai::rig_creature_free_haste`.
-            if let Some(inst) = state.card_pool.get_mut(&iid) {
-                inst.card.cost = vec![];
-                if !inst.card.abilities.iter().any(|a| a == "haste") {
-                    inst.card.abilities.push("haste".to_string());
-                }
             }
         }
     }

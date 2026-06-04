@@ -25,12 +25,12 @@ rustflags = [
   "-C", "link-args=-sUSE_PTHREADS=0",
 ]
 
-# build-std rebuilds the standard library from source against the
-# current toolchain + flags, so std's wasm-exception ABI matches
-# emcc's `-fwasm-exceptions` instead of the legacy ABI baked into the
-# precompiled stable std. Requires nightly + `rust-src` (both
-# provided by the flake's `pkgs.rust-bin.nightly.latest.default`
-# override). Paired with `panic = "abort"` in Cargo.toml so
-# panic_unwind isn't pulled in at all.
-[unstable]
-build-std = ["std", "panic_abort"]
+# NOTE: `-Z build-std=std,panic_abort` is NOT set globally in this
+# file because cargo's `[unstable]` table applies to every cargo
+# invocation, which would force native `cargo test` / `cargo build` to
+# rebuild std for the host and trip "duplicate lang item" errors
+# against the precompiled host std. The flag is passed only to the
+# wasm build from the Makefile's `make wasm` target. The wasm build
+# still needs it (paired with `panic = "abort"` in Cargo.toml) so std
+# gets rebuilt under panic_abort and emits no legacy
+# `__cxa_find_matching_catch_*` references.

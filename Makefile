@@ -255,7 +255,7 @@ wasm:
 		echo "       Non-Nix: install emscripten via emsdk and \`source ./emsdk_env.sh\`."; \
 		exit 1; \
 	}
-	cargo build --target $(WASM_TARGET) --release --bin tsot_wasm
+	cargo build -Z build-std=std,panic_abort --target $(WASM_TARGET) --release --bin tsot_wasm
 	@mkdir -p $(WASM_DIST)
 	cp $(WASM_OUT)/tsot_wasm.js $(WASM_DIST)/tsot_wasm.js
 	cp $(WASM_OUT)/tsot_wasm.wasm $(WASM_DIST)/tsot_wasm.wasm
