@@ -19,6 +19,43 @@
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
+/// Scripted action source: a pre-loaded sequence of `HumanAction`s
+/// that `HumanInterface::round_trip` consumes BEFORE falling back to
+/// the channel API. When the cursor exhausts the queue,
+/// `round_trip` panics with a [`YieldSignal`] payload carrying the
+/// prompt that would have been waited on. The wasm save-and-replay
+/// FFI shim catches the panic to surface the prompt back to JS
+/// without ever blocking the single-threaded wasm runtime.
+///
+/// Native code paths don't use this — leaves `scripted` set to `None`
+/// and the channel API behaves identically to the pre-D4 shape.
+#[derive(Debug)]
+pub struct ScriptedSource {
+    pub actions: Vec<HumanAction>,
+    pub cursor: usize,
+}
+
+impl ScriptedSource {
+    /// Pop the next action if any; `None` when exhausted.
+    pub fn next(&mut self) -> Option<HumanAction> {
+        if self.cursor >= self.actions.len() {
+            return None;
+        }
+        let a = self.actions[self.cursor].clone();
+        self.cursor += 1;
+        Some(a)
+    }
+}
+
+/// Payload of the panic that `round_trip` raises when its scripted
+/// source is exhausted. Caught by `std::panic::catch_unwind` at the
+/// wasm FFI shim; downcast to `YieldSignal` recovers the prompt
+/// without re-panicking. Implements `Send` so `panic_any` accepts it.
+#[derive(Debug)]
+pub struct YieldSignal {
+    pub prompt: HumanPrompt,
+}
+
 use crate::choice::{
     ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest, TargetIntent,
 };
@@ -193,6 +230,13 @@ pub enum HumanAction {
 pub struct HumanInterface {
     prompt_tx: Sender<HumanPrompt>,
     action_rx: Mutex<Receiver<HumanAction>>,
+    /// Save-and-replay mode (D4 wasm shim). When `Some`, every
+    /// `round_trip` consumes from `actions` instead of blocking on
+    /// `action_rx`. Exhausted scripted source → panic with a
+    /// [`YieldSignal`] carrying the prompt. `None` (the default)
+    /// falls through to the channel API and behaves identically
+    /// to pre-D4.
+    pub scripted: Mutex<Option<ScriptedSource>>,
 }
 
 impl HumanInterface {
@@ -206,6 +250,7 @@ impl HumanInterface {
         let interface = Self {
             prompt_tx,
             action_rx: Mutex::new(action_rx),
+            scripted: Mutex::new(None),
         };
         (interface, prompt_rx, action_tx)
     }
@@ -215,6 +260,29 @@ impl HumanInterface {
     /// variant. Panics if either channel is closed (the frontend died
     /// mid-game) — recovery is the caller's problem, not the engine's.
     fn round_trip(&self, prompt: HumanPrompt) -> HumanAction {
+        // Scripted-first path (D4 wasm shim). When `scripted` is `Some`
+        // and not yet exhausted, pop the next action and return it
+        // without touching the channel. When exhausted, panic with
+        // a `YieldSignal` so the wasm FFI driver can `catch_unwind`
+        // and surface the prompt back to JS.
+        {
+            let mut scripted_guard = self
+                .scripted
+                .lock()
+                .expect("HumanInterface: scripted mutex poisoned");
+            if let Some(source) = scripted_guard.as_mut() {
+                if let Some(action) = source.next() {
+                    return action;
+                }
+                // Exhausted. Drop the lock before panicking so the
+                // mutex doesn't end up poisoned for nothing.
+                drop(scripted_guard);
+                std::panic::panic_any(YieldSignal { prompt });
+            }
+        }
+
+        // Channel-based path (native: cli_serve, scripted tests, anywhere
+        // an engine thread + JS-thread pair drives the interaction).
         self.prompt_tx
             .send(prompt)
             .expect("HumanInterface: frontend dropped prompt channel mid-game");
@@ -559,5 +627,76 @@ mod tests {
 
         assert!(prompts_seen > 0, "script thread never saw a prompt");
         assert!(stats.turns > 0, "game recorded zero turns");
+    }
+
+    /// D4 shim probe: verify the scripted+panic mechanism survives a
+    /// trip through `run_game_continue` and (notably) any mlua call
+    /// boundaries the engine crosses on the way to the first human
+    /// decision. If mlua catches the panic and converts it to a Lua
+    /// error, this test fails — and we know the shim approach needs
+    /// rework.
+    #[test]
+    fn scripted_empty_panics_with_yield_signal_through_run_game() {
+        use std::panic::AssertUnwindSafe;
+        use crate::sim::run::run_game_continue;
+        use crate::sim::AiKind;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| {
+                matches!(c.kind, CardType::Creature)
+                    && c.handlers.is_empty()
+                    && c.cost.iter().all(|cc| {
+                        !cc.is_x
+                            && matches!(
+                                cc.source,
+                                crate::card::CostSource::Hand
+                                    | crate::card::CostSource::Mill
+                            )
+                    })
+            })
+            .unwrap()
+            .clone();
+        let deck_a: Vec<_> = (0..50).map(|_| template.clone()).collect();
+        let deck_b = deck_a.clone();
+        let mut state = GameState::new(deck_a, deck_b);
+        state.replay_journal = Some(Journal::new());
+
+        // HumanInterface in scripted mode with an EMPTY action queue.
+        // First round_trip will pop None → panic with YieldSignal.
+        let (iface, _prompt_rx, _action_tx) = HumanInterface::new();
+        *iface
+            .scripted
+            .lock()
+            .expect("fresh mutex isn't poisoned") = Some(ScriptedSource {
+            actions: Vec::new(),
+            cursor: 0,
+        });
+        let iface = Arc::new(iface);
+
+        let ais = [AiKind::Human(iface.clone()), AiKind::Heuristic];
+        let mut rng = StdRng::seed_from_u64(0xCAFE);
+        let mut log: Vec<String> = Vec::new();
+
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &ais)
+        }));
+
+        let payload = result.expect_err("expected YieldSignal panic from exhausted scripted source");
+        let signal = payload
+            .downcast::<YieldSignal>()
+            .expect("panic payload was not a YieldSignal (mlua may have eaten it?)");
+        match signal.prompt {
+            HumanPrompt::PickCard { player, .. } => {
+                assert_eq!(
+                    player,
+                    crate::game::PlayerId::A,
+                    "first yield should be the human's main-phase PickCard"
+                );
+            }
+            other => panic!("expected first prompt = PickCard, got {other:?}"),
+        }
     }
 }

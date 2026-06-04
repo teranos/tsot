@@ -19,31 +19,23 @@ use std::sync::Arc;
 
 use crate::sim::human::{HumanAction, HumanInterface, HumanPrompt};
 
-/// Live game session — one per browser tab. The JS side talks to
-/// this; the engine itself (CardRegistry + GameState + Lua VM) lives
-/// elsewhere (engine thread on native, single-threaded yielding fiber
-/// on wasm — D4) since `mlua::Lua` is `!Send` and the engine's
-/// `mpsc::recv()` calls would deadlock a single-threaded process.
+/// Live game session — one per browser tab. The D4 shim model is
+/// save-and-replay: the session holds the JSON args + a growing
+/// history of HumanActions the user has submitted; each FFI call
+/// rebuilds the engine from scratch and replays through the history.
+/// O(N) work per step, O(N²) total per game. Acceptable for v1; the
+/// state-machine refactor (STATE_MACHINE.md) is the proper fix.
 ///
-/// Field roles:
-/// - `iface` — refcount on the `HumanInterface` shared with whichever
-///    `AiKind::Human` arm drives the engine's human-side decisions.
-///    Held here so we can introspect / dispose without unwrapping the
-///    AiKind.
-/// - `prompt_rx` — JS-facing prompt source. Engine pushes
-///    `HumanPrompt`s through `iface.prompt_tx`; we pull them here
-///    and serialize them across the FFI.
-/// - `action_tx` — JS-facing action sink. JS pushes
-///    `HumanAction`s here; engine consumes via `iface.action_rx`.
-/// - `engine_join` — native-only thread handle for the engine task.
-///    `None` on wasm (single-thread, no native spawn). Used at
-///    teardown to join the engine thread cleanly.
+/// `iface` is kept around so identity-comparison tests still work
+/// (lifecycle test in D1). Not strictly needed by the replay path
+/// since each FFI call constructs a fresh HumanInterface inside
+/// `drive_engine_to_next_yield`.
 pub(crate) struct GameSession {
+    pub args: StartGameArgs,
+    pub history: Vec<HumanAction>,
     pub iface: Arc<HumanInterface>,
     pub prompt_rx: Receiver<HumanPrompt>,
     pub action_tx: Sender<HumanAction>,
-    #[cfg(not(target_arch = "wasm32"))]
-    pub engine_join: Option<std::thread::JoinHandle<()>>,
 }
 
 thread_local! {
@@ -83,169 +75,188 @@ pub(crate) fn clear_session() -> bool {
 /// Args accepted by [`tsot_start_game_impl`]. JSON-encoded by the JS
 /// caller. `opp_ai` is one of "heuristic" / "mcts" / "uct"; the
 /// human always plays side A in v1.
-#[derive(serde::Deserialize)]
-struct StartGameArgs {
+#[derive(Clone, serde::Deserialize)]
+pub(crate) struct StartGameArgs {
     seed: u64,
     deck_a_ids: Vec<String>,
     deck_b_ids: Vec<String>,
     opp_ai: String,
 }
 
-/// Initialize a session + run the engine to the first human decision,
-/// return the first prompt as JSON. This is the Rust-internal worker
-/// that both the native test and the wasm `extern "C"` export call.
+/// Initialize a session + drive the engine to the first human
+/// decision, return the prompt JSON.
 ///
-/// Native: spawns an engine thread (`mlua::Lua` is `!Send` so the
-/// registry + GameState are built INSIDE that thread). Main thread
-/// waits on `prompt_rx.recv()` for the first prompt.
+/// Save-and-replay shim: rebuilds the engine, replays the action
+/// history through a `HumanInterface` in scripted mode, panics with
+/// `YieldSignal` on the first decision past the history end.
+/// `catch_unwind` recovers the prompt — depends on Rust's
+/// `panic_unwind` crate.
 ///
-/// Wasm: not implemented in this commit — needs D4 (Asyncify
-/// bridge) before the single-threaded model works. Returns Err for
-/// now so the failure is clean instead of a deadlock.
+/// Native: works. Wasm: blocks at link time (see `.cargo/config.toml`
+/// — `panic_unwind` symbol resolution requires nightly + build-std
+/// OR the StepEngine refactor that doesn't use `catch_unwind` at all).
+/// The StepEngine path (STATE_MACHINE.md S1-S13) is the chosen fix.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
     let args: StartGameArgs = serde_json::from_str(args_json)
         .map_err(|e| format!("tsot_start_game: bad args JSON: {e}"))?;
 
-    // Wipe any prior session before starting fresh.
     let _ = clear_session();
 
-    // Build channels. iface lives in the engine's `AiKind::Human(_)`;
-    // we keep prompt_rx + action_tx for the JS-facing handles.
-    let (iface, prompt_rx, action_tx) = HumanInterface::new();
-    let iface = Arc::new(iface);
-    let iface_for_engine = iface.clone();
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let engine_join = Some(spawn_engine_thread_native(args, iface_for_engine));
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = iface_for_engine; // suppress unused for wasm stub
-        return Err(
-            "tsot_start_game: wasm engine driver not yet wired (waiting on D4 Asyncify bridge)"
-                .to_string(),
-        );
-    }
-
-    // Wait for the engine to push its first prompt. On native this
-    // blocks the main thread; on wasm this would deadlock without
-    // D4 (which is why the wasm path above is stubbed).
-    let first_prompt = prompt_rx
-        .recv()
-        .map_err(|e| format!("engine dropped prompt channel before first prompt: {e}"))?;
+    let first_prompt = drive_engine_to_next_yield(&args, &[])?;
     let prompt_json = serde_json::to_string(&first_prompt)
         .map_err(|e| format!("serialize first prompt: {e}"))?;
 
+    // The iface / channels stay in the session purely so the D1
+    // identity-check test keeps working. The replay path constructs
+    // a fresh `HumanInterface` on every FFI call.
+    let (iface, prompt_rx, action_tx) = HumanInterface::new();
     install_session(GameSession {
-        iface,
+        args,
+        history: Vec::new(),
+        iface: Arc::new(iface),
         prompt_rx,
         action_tx,
-        #[cfg(not(target_arch = "wasm32"))]
-        engine_join,
     });
 
     Ok(prompt_json)
 }
 
-/// Submit a HumanAction (JSON-encoded) to the engine, then wait for
-/// and return the next HumanPrompt. The Rust-internal worker both
-/// the native test and the wasm `extern "C"` export call.
-///
-/// Native: pushes the action through `action_tx` (which unblocks the
-/// engine thread's `action_rx.recv()`), then blocks the main thread
-/// on `prompt_rx.recv()` until the engine produces the next prompt
-/// or signals game-over by dropping its end of the channel.
-///
-/// Wasm: same flow but the "block" is replaced by an Asyncify yield
-/// (D4 — not wired yet). Returns Err on the wasm path for now.
+/// Append the action to history, replay, return the next prompt.
+/// Same save-and-replay shim shape as [`tsot_start_game_impl`].
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tsot_apply_action_impl(action_json: &str) -> Result<String, String> {
     let action: HumanAction = serde_json::from_str(action_json)
         .map_err(|e| format!("tsot_apply_action: bad action JSON: {e}"))?;
 
-    // Push the action and wait for the next prompt, all while holding
-    // the session-mutex briefly. We can't hold it across the
-    // `recv()` because the engine thread may need to access
-    // shared session state (it doesn't today, but keep the
-    // critical section narrow). Take ownership of the channel
-    // handles via clone (Senders) and re-borrow for Receivers.
-    let send_result = with_session(|s| s.action_tx.send(action))
-        .map_err(|e| format!("{e}"))?;
-    send_result.map_err(|e| format!("engine dropped action channel: {e}"))?;
+    // Snapshot args + extend history while holding the session lock
+    // briefly; the engine drive happens outside the lock to keep the
+    // critical section short.
+    let (args, mut history) = with_session(|s| (s.args.clone(), s.history.clone()))
+        .map_err(|e| e.to_string())?;
+    history.push(action);
 
-    let next_prompt = with_session(|s| s.prompt_rx.recv())
-        .map_err(|e| format!("{e}"))?
-        .map_err(|e| format!("engine dropped prompt channel: {e}"))?;
+    let next_prompt = drive_engine_to_next_yield(&args, &history)?;
+    let prompt_json = serde_json::to_string(&next_prompt)
+        .map_err(|e| format!("serialize next prompt: {e}"))?;
 
-    serde_json::to_string(&next_prompt)
-        .map_err(|e| format!("serialize next prompt: {e}"))
+    let _ = with_session(|s| {
+        s.history = history;
+    });
+
+    Ok(prompt_json)
 }
 
-/// Native-only engine thread. Builds its own CardRegistry (Lua VM
-/// is `!Send`, can't be moved across thread boundaries), rebuilds
-/// decks from id-strings, runs `run_game_continue` with the human
-/// on side A and the configured AI on side B. Exits when the game
-/// ends; the channels are dropped on exit, which wakes any pending
-/// JS-side `recv()` with a disconnect error.
+/// Wasm stub: returns an error pointing at the StepEngine refactor.
+/// Real wasm-side driving will land with S6.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn tsot_start_game_impl(_args_json: &str) -> Result<String, String> {
+    Err("tsot_start_game: wasm path needs StepEngine (STATE_MACHINE.md S1-S6) — \
+         catch_unwind-based shim doesn't link against the precompiled wasm \
+         stdlib's exception ABI."
+        .to_string())
+}
+
+/// Wasm stub: see `tsot_start_game_impl`.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn tsot_apply_action_impl(_action_json: &str) -> Result<String, String> {
+    Err("tsot_apply_action: wasm path needs StepEngine (STATE_MACHINE.md S1-S6)".to_string())
+}
+
+/// Build the engine from `args`, replay `history` through a scripted
+/// HumanInterface, catch the YieldSignal that fires on the first
+/// human decision past the history. Returns the captured prompt, or
+/// (when the engine ran to completion without any further human
+/// decisions) a synthesized `GameOver` prompt with the final state.
+///
+/// Re-panics on any panic payload that isn't a `YieldSignal` so real
+/// engine bugs aren't silently swallowed.
 #[cfg(not(target_arch = "wasm32"))]
-fn spawn_engine_thread_native(
-    args: StartGameArgs,
-    iface_for_engine: Arc<HumanInterface>,
-) -> std::thread::JoinHandle<()> {
+fn drive_engine_to_next_yield(
+    args: &StartGameArgs,
+    history: &[HumanAction],
+) -> Result<HumanPrompt, String> {
+    use std::panic::AssertUnwindSafe;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
     use crate::card::CardRegistry;
     use crate::game::GameState;
     use crate::sim::genome::to_deck;
+    use crate::sim::human::{ScriptedSource, YieldSignal};
     use crate::sim::run::run_game_continue;
+    use crate::sim::snapshot::build_state_view;
     use crate::sim::AiKind;
 
-    std::thread::spawn(move || {
-        // Per-thread CardRegistry (mlua's Lua is !Send).
-        let registry = match CardRegistry::load_embedded() {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("[engine] failed to load card registry: {e}");
-                return;
-            }
-        };
-        let deck_a = match to_deck(&registry, &args.deck_a_ids) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("[engine] deck A rebuild failed: {e:?}");
-                return;
-            }
-        };
-        let deck_b = match to_deck(&registry, &args.deck_b_ids) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("[engine] deck B rebuild failed: {e:?}");
-                return;
-            }
-        };
+    // Capture the engine's final state via a Mutex so the
+    // post-catch_unwind branch can grab it after the closure runs.
+    let final_state_slot: std::sync::Mutex<Option<GameState>> = std::sync::Mutex::new(None);
+    let args_owned = args.clone();
+    let history_owned = history.to_vec();
+
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        // Per-call CardRegistry. Cheap to rebuild but the dominant
+        // cost of repeated FFI calls; cache here if it becomes a hot
+        // path (it shouldn't for v1 — humans decide slower than this).
+        let registry = CardRegistry::load_embedded()
+            .map_err(|e| format!("registry load: {e}"))?;
+        let deck_a = to_deck(&registry, &args_owned.deck_a_ids)
+            .map_err(|e| format!("deck A rebuild: {e:?}"))?;
+        let deck_b = to_deck(&registry, &args_owned.deck_b_ids)
+            .map_err(|e| format!("deck B rebuild: {e:?}"))?;
         let mut state = GameState::new(deck_a, deck_b);
         state.replay_journal = Some(crate::game::Journal::new());
 
-        let opp = match args.opp_ai.as_str() {
+        let (iface, _prompt_rx, _action_tx) = HumanInterface::new();
+        *iface.scripted.lock().expect("fresh mutex") = Some(ScriptedSource {
+            actions: history_owned,
+            cursor: 0,
+        });
+        let iface = Arc::new(iface);
+
+        let opp = match args_owned.opp_ai.as_str() {
             "heuristic" => AiKind::Heuristic,
             "mcts" => AiKind::Mcts(crate::sim::mcts::MctsConfig {
-                base_seed: args.seed.wrapping_add(0xCAFE_BABE),
+                base_seed: args_owned.seed.wrapping_add(0xCAFE_BABE),
                 ..Default::default()
             }),
             "uct" => AiKind::Uct(crate::sim::uct::UctConfig {
-                base_seed: args.seed.wrapping_add(0xC0FF_EE),
+                base_seed: args_owned.seed.wrapping_add(0x00C0_FFEE),
                 ..Default::default()
             }),
             other => {
-                eprintln!("[engine] unknown opp_ai {other:?}, defaulting to heuristic");
-                AiKind::Heuristic
+                return Err(format!("unknown opp_ai {other:?}"));
             }
         };
-        let ais = [AiKind::Human(iface_for_engine), opp];
+        let ais = [AiKind::Human(iface), opp];
 
-        let mut rng = StdRng::seed_from_u64(args.seed);
+        let mut rng = StdRng::seed_from_u64(args_owned.seed);
         let mut log: Vec<String> = Vec::new();
         let _stats = run_game_continue(&mut state, &mut rng, &mut log, registry.lua(), &ais);
-    })
+
+        // Game ran to completion without any further human decision.
+        *final_state_slot.lock().expect("final-state mutex") = Some(state);
+        Ok(())
+    }));
+
+    match outcome {
+        Err(payload) => match payload.downcast::<YieldSignal>() {
+            Ok(signal) => Ok(signal.prompt),
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+        Ok(Ok(())) => {
+            let state = final_state_slot
+                .into_inner()
+                .map_err(|e| format!("final-state mutex poisoned: {e}"))?
+                .ok_or_else(|| "engine returned without populating final state".to_string())?;
+            let viewer = crate::game::PlayerId::A; // human is always side A in v1
+            let view = build_state_view(&state, viewer);
+            Ok(HumanPrompt::GameOver {
+                state: view,
+                winner: state.winner,
+            })
+        }
+        Ok(Err(e)) => Err(e),
+    }
 }
 
 
@@ -299,20 +310,50 @@ mod wasm_exports {
         export(format!("echo: {s}"))
     }
 
-    // Asyncify proof-of-concept. `emscripten_sleep` yields to the JS
-    // event loop for the given ms, then resumes Rust execution as if
-    // the call had blocked. With `-sASYNCIFY=1` and `{async: true}`
-    // on the JS ccall, returns a Promise.
-    extern "C" {
-        fn emscripten_sleep(ms: u32);
+    // (Previous Asyncify proof `tsot_async_sleep` removed —
+    // ASYNCIFY=1 is incompatible with the Rust `catch_unwind` the D4
+    // shim depends on, and we no longer need JS-yielding extern
+    // functions for the synchronous save-and-replay model.)
+
+    /// Start a new game. JSON args: `{seed, deck_a_ids, deck_b_ids,
+    /// opp_ai}`. Returns first HumanPrompt as JSON, or an error
+    /// string starting with `"error: "`. Free the returned pointer
+    /// with [`tsot_free_string`] when done.
+    ///
+    /// # Safety
+    /// `args` must be a valid pointer to a null-terminated UTF-8 string.
+    #[no_mangle]
+    pub unsafe extern "C" fn tsot_start_game(args: *const c_char) -> *mut c_char {
+        if args.is_null() {
+            return export("error: null args");
+        }
+        let s = unsafe { CStr::from_ptr(args) }
+            .to_str()
+            .unwrap_or("<invalid utf-8>");
+        match super::tsot_start_game_impl(s) {
+            Ok(prompt) => export(prompt),
+            Err(e) => export(format!("error: {e}")),
+        }
     }
 
-    /// Async smoke-test export. Sleeps 100ms (yielding to JS), then
-    /// returns a string.
+    /// Submit a HumanAction. JSON shape per `HumanAction`'s
+    /// internally-tagged serde format. Returns next HumanPrompt as
+    /// JSON, or `"error: …"`. Free with [`tsot_free_string`].
+    ///
+    /// # Safety
+    /// `action` must be a valid pointer to a null-terminated UTF-8 string.
     #[no_mangle]
-    pub extern "C" fn tsot_async_sleep() -> *mut c_char {
-        unsafe { emscripten_sleep(100); }
-        export("yielded and resumed")
+    pub unsafe extern "C" fn tsot_apply_action(action: *const c_char) -> *mut c_char {
+        if action.is_null() {
+            return export("error: null action");
+        }
+        let s = unsafe { CStr::from_ptr(action) }
+            .to_str()
+            .unwrap_or("<invalid utf-8>");
+        match super::tsot_apply_action_impl(s) {
+            Ok(prompt) => export(prompt),
+            Err(e) => export(format!("error: {e}")),
+        }
     }
 }
 
@@ -324,7 +365,6 @@ pub use wasm_exports::*;
 mod tests {
     use super::*;
     use crate::card::CardRegistry;
-    use crate::cast_routing::CastRouting;
     use crate::game::PlayerId;
     use serde_json::Value;
 
@@ -344,11 +384,16 @@ mod tests {
         let iface_outer = iface.clone();
 
         let session = GameSession {
+            args: StartGameArgs {
+                seed: 0,
+                deck_a_ids: Vec::new(),
+                deck_b_ids: Vec::new(),
+                opp_ai: "heuristic".to_string(),
+            },
+            history: Vec::new(),
             iface,
             prompt_rx,
             action_tx,
-            #[cfg(not(target_arch = "wasm32"))]
-            engine_join: None,
         };
 
         install_session(session);

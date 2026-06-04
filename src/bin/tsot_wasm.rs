@@ -12,7 +12,8 @@ fn _retain_ffi_symbols() {
     let _ = tsot::wasm_ffi::tsot_hello as usize;
     let _ = tsot::wasm_ffi::tsot_echo as usize;
     let _ = tsot::wasm_ffi::tsot_free_string as usize;
-    let _ = tsot::wasm_ffi::tsot_async_sleep as usize;
+    let _ = tsot::wasm_ffi::tsot_start_game as usize;
+    let _ = tsot::wasm_ffi::tsot_apply_action as usize;
 }
 
 fn main() {}

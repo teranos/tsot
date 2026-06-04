@@ -19,9 +19,12 @@
   ~~return next HumanPrompt as JSON. JS calls with `{async: true}`.~~
   (Native verified; wasm path returns Err until D4.)
 
-- [ ] **D4: Asyncify-yielding HumanInterface bridge.**
-  Make `action_rx.recv()` yield to JS through Asyncify (single thread). Either
-  swap mpsc for a poll-loop with `emscripten_sleep(0)`, or wire Asyncify directly.
+- [ ] **D4: HumanInterface bridge (wasm-side).**
+  Save-and-replay shim works on native (`catch_unwind` + `YieldSignal`),
+  but wasm fails at link time — precompiled stdlib references
+  `__cxa_find_matching_catch_*` against the wrong exception ABI.
+  **Blocked on STATE_MACHINE.md S1-S6.** Native impl tested + ready;
+  wasm `_impl` functions return error stubs until S6 lands.
 
 - [ ] **D5: Port assets/play.html to WASM.**
   Replace `fetch('/state'|'/action')` with `Module.ccall('tsot_*', ..., {async:true})`.

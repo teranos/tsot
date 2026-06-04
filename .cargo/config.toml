@@ -6,17 +6,45 @@
 # to call into them. Output is a single combined .wasm + .js loader
 # (Modularize mode lets the embedding HTML name the module factory).
 rustflags = [
-  "-C", "link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_async_sleep",
+  "-C", "link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_start_game,_tsot_apply_action",
   "-C", "link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8",
   "-C", "link-args=-sMODULARIZE=1",
   "-C", "link-args=-sEXPORT_NAME=createTsotModule",
   "-C", "link-args=-sALLOW_MEMORY_GROWTH=1",
   # The engine doesn't fork or use threads in the wasm build — keep
-  # the binary lean by disabling pthread/wasm-worker codepaths.
+  # the binary lean by disabling pthread/wasm-worker codepaths. Real
+  # threads via `-sUSE_PTHREADS=1` would let the native engine code
+  # run as-is, but the precompiled Rust stdlib for this target was
+  # built without the `atomics` feature, so std crates fail at link
+  # with `--shared-memory is disallowed`. Re-enabling pthreads
+  # requires nightly + `-Z build-std=std` to rebuild stdlib — a
+  # toolchain dependency we'd rather avoid for v1.
   "-C", "link-args=-sUSE_PTHREADS=0",
-  # Asyncify: transform specified functions so they can yield to JS
-  # mid-execution and be resumed later. The engine's blocking calls
-  # (`prompt_rx.recv()` etc.) ride this — JS sees promises, Rust sees
-  # synchronous code. Adds ~30-50% binary bloat and some runtime cost.
-  "-C", "link-args=-sASYNCIFY=1",
+  # Asyncify was used for the early `tsot_async_sleep` proof but
+  # conflicts with `-fwasm-exceptions` (the Rust panic_unwind
+  # personality emits __cxa_find_matching_catch_* references that
+  # ASYNCIFY=1 disallows). The D4 save-and-replay shim is
+  # synchronous from JS's perspective — no yields needed — so we
+  # leave Asyncify off. Will revisit if we need long-running
+  # JS-yielding calls again (e.g. for the StepEngine pipeline).
+
+  # Rust's `panic_unwind` emits `__cxa_find_matching_catch_*`
+  # references (legacy emscripten C++ exception ABI). To resolve them,
+  # both compile + link must opt into emscripten's exception support
+  # and disable the default "catch all exceptions are dropped" mode.
+  # Required for `std::panic::catch_unwind` to work — the D4
+  # save-and-replay shim depends on it.
+  # D4 status: the save-and-replay shim depends on
+  # `std::panic::catch_unwind`, which depends on Rust's `panic_unwind`
+  # crate. The precompiled stdlib for wasm32-unknown-emscripten
+  # references `__cxa_find_matching_catch_*` (legacy emscripten
+  # exception ABI). Resolving those needs either:
+  #   1. nightly + `-Z build-std=std,panic_abort` to rebuild stdlib
+  #      against the emscripten ABI we want, OR
+  #   2. the StepEngine refactor (STATE_MACHINE.md S1-S13), which
+  #      avoids `catch_unwind` entirely by yielding via cursor
+  #      transitions instead of Rust panics.
+  # Going with (2). Until S1-S13 land, the wasm `tsot_start_game`
+  # and `tsot_apply_action` exports will error out at runtime — they
+  # build and link, just don't execute usefully.
 ]
