@@ -6,8 +6,13 @@
 # to call into them. Output is a single combined .wasm + .js loader
 # (Modularize mode lets the embedding HTML name the module factory).
 rustflags = [
-  "-C", "link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_start_game,_tsot_apply_action",
+  "-C", "link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_start_game,_tsot_apply_action,_tsot_drain_partial_trace",
   "-C", "link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8",
+  # Resolves the `tsot_emit_iteration_event` Rust extern declared in
+  # src/sim/uct.rs. The lib lives in worker scope (assets/tsot-worker.js
+  # spawns the wasm), so its postMessage goes worker → main, surfacing
+  # per-iteration UCT events live while the FFI call is mid-flight.
+  "-C", "link-args=--js-library=assets/wasm-worker-lib.js",
   "-C", "link-args=-sMODULARIZE=1",
   "-C", "link-args=-sEXPORT_NAME=createTsotModule",
   "-C", "link-args=-sALLOW_MEMORY_GROWTH=1",

@@ -260,6 +260,7 @@ wasm:
 	cp $(WASM_OUT)/tsot_wasm.js $(WASM_DIST)/tsot_wasm.js
 	cp $(WASM_OUT)/tsot_wasm.wasm $(WASM_DIST)/tsot_wasm.wasm
 	cp assets/play.html $(WASM_DIST)/index.html
+	cp assets/tsot-worker.js $(WASM_DIST)/tsot-worker.js
 	@echo ""
 	@echo "wasm bundle staged in $(WASM_DIST)/"
 	@ls -lah $(WASM_DIST)/

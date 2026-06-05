@@ -107,25 +107,82 @@
   <pre id="log" style="max-height: 24rem; overflow-y: auto; font-size: 0.75rem; color: #aaa; white-space: pre; margin: 0;"></pre>
 </div>
 
-<script src="tsot_wasm.js"></script>
 <script>
 const state = { current: null, selectedAttackers: new Set(), selectedBlocks: {}, blockerPickFor: null };
 
-// D5: wasm runtime handle. Populated by the bootstrap at the bottom of
-// this file before any UI code runs. All engine calls go through
-// `wasmCallString` which manually frees the returned `CString` to
-// avoid leaking heap memory per call.
-let wasmModule = null;
+// Web Worker hosts the wasm engine. The worker spawns tsot_wasm.js,
+// which is linked against assets/wasm-worker-lib.js — that JS lib
+// resolves the `tsot_emit_iteration_event` Rust extern declared in
+// src/sim/uct.rs. The extern is called inside the UCT iteration
+// loop and postMessages a `{kind:'uct_iter'}` envelope to main
+// scope. Those messages arrive WHILE the outer FFI call is still
+// blocked in worker scope — that's how live progress lands on the
+// UI thread without Asyncify.
+let wasmWorker = null;
+let wasmReady = null;       // Promise resolved on worker's `{kind:'ready'}`
+let pendingFfi = null;      // { resolve, reject } — at most one inflight
 
-function wasmCallString(name, argJson) {
-  const ptr = wasmModule.ccall(name, 'number', ['string'], [argJson]);
-  if (ptr === 0) return '';
-  const s = wasmModule.UTF8ToString(ptr);
-  // FFI contract: every char* returned by `tsot_*` was allocated via
-  // `CString::into_raw` on the Rust side and MUST be freed via
-  // `tsot_free_string`. Skipping this leaks one allocation per call.
-  wasmModule.ccall('tsot_free_string', null, ['number'], [ptr]);
-  return s;
+function bootWorker() {
+  wasmWorker = new Worker('tsot-worker.js');
+  wasmReady = new Promise((resolve, reject) => {
+    const initHandler = (ev) => {
+      const m = ev.data;
+      if (m.kind === 'ready') {
+        wasmWorker.removeEventListener('message', initHandler);
+        resolve();
+      } else if (m.kind === 'error') {
+        wasmWorker.removeEventListener('message', initHandler);
+        reject(new Error(m.error));
+      }
+    };
+    wasmWorker.addEventListener('message', initHandler);
+  });
+  wasmWorker.addEventListener('message', (ev) => {
+    const m = ev.data;
+    if (m.kind === 'uct_iter') {
+      appendLiveUctIter(m.line);
+    } else if (m.kind === 'envelope') {
+      const p = pendingFfi;
+      pendingFfi = null;
+      if (p) p.resolve(m.json);
+    } else if (m.kind === 'error') {
+      const p = pendingFfi;
+      pendingFfi = null;
+      if (p) p.reject(new Error(m.error));
+    }
+  });
+}
+
+// Round-trip a command to the worker. The protocol is `{cmd, ...payload}`
+// outbound, `{kind:'envelope', json}` inbound. The engine is single-
+// threaded, so at most one FFI call is in flight at a time and we
+// only need a single `pendingFfi` slot, not a queue.
+function workerCall(cmd, payload) {
+  if (pendingFfi) {
+    return Promise.reject(new Error('FFI call already in flight; previous call did not resolve'));
+  }
+  return new Promise((resolve, reject) => {
+    pendingFfi = { resolve, reject };
+    wasmWorker.postMessage({ cmd, ...payload });
+  });
+}
+
+// Mid-flight live UCT iteration event — arrives from worker's
+// tsot_emit_iteration_event while the FFI call is still blocked.
+// Rendered with a distinct `[live UctIter]` prefix so it's visually
+// distinguishable from the post-envelope `[UctIter]` lines emitted
+// by appendTrace once the call returns.
+function appendLiveUctIter(line) {
+  let formatted;
+  try {
+    const ev = JSON.parse(line);
+    formatted = `[live UctIter] iter=${ev.iter}/${ev.total}  ${(ev.duration_us / 1000).toFixed(1)}ms  turns=${ev.rollout_turns} plays=${ev.rollout_plays} atks=${ev.rollout_attacks} deaths=${ev.rollout_deaths} fires=${ev.rollout_handler_fires}`;
+  } catch (_) {
+    formatted = `[live UctIter] ${line}`;
+  }
+  const logEl = document.getElementById('log');
+  logEl.appendChild(document.createTextNode(formatted + '\n'));
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
 // Defaults for the first `tsot_start_game` call on page load. v1: a
@@ -134,9 +191,12 @@ function wasmCallString(name, argJson) {
 function defaultStartArgs() {
   const deck = [];
   for (let i = 0; i < 24; i++) deck.push('blue-monkey');
-  for (let i = 0; i < 24; i++) deck.push('clear-blue');
+  for (let i = 0; i < 21; i++) deck.push('clear-blue');
   deck.push('blue-jewel');
   deck.push('blue-jewel');
+  deck.push('companion-bird');
+  deck.push('counterspell');
+  deck.push('surge');
   return {
     seed: Math.floor(Math.random() * 0xFFFFFFFF),
     deck_a_ids: deck,
@@ -286,7 +346,7 @@ async function fetchState() {
   if (!wasmStarted) {
     wasmStarted = true;
     const args = defaultStartArgs();
-    const prompt = ffiCall('tsot_start_game', JSON.stringify(args), 'start_game');
+    const prompt = await ffiCall('start_game', { args }, 'start_game');
     return { ...prompt, state: prompt.state };
   }
   // The HTTP shim used to support arbitrary GET /state polls; in the
@@ -300,9 +360,15 @@ async function fetchState() {
 // breakdown lands in the LOG panel. `label` is the short name that
 // appears in the summary line; pass something specific like
 // `apply_action(Pass)` so different actions are distinguishable.
-function ffiCall(name, argJson, label) {
+//
+// Worker path: `cmd` is the worker protocol command ('start_game' /
+// 'apply_action'), `payload` is the object spread into the postMessage
+// envelope alongside `cmd`. Synchronous wasmCallString is gone — the
+// engine lives in worker scope and we await a `{kind:'envelope'}`
+// reply.
+async function ffiCall(cmd, payload, label) {
   const t0 = performance.now();
-  const raw = wasmCallString(name, argJson);
+  const raw = await workerCall(cmd, payload);
   const t_wasm = performance.now();
   const { prompt, measurements } = parseEnvelope(raw);
   const t_done = performance.now();
@@ -319,9 +385,9 @@ function ffiCall(name, argJson, label) {
 }
 
 const _send = async (action) => {
-  return ffiCall(
-    'tsot_apply_action',
-    JSON.stringify(action),
+  return await ffiCall(
+    'apply_action',
+    { action },
     `apply_action(${action.kind})`,
   );
 };
@@ -804,16 +870,17 @@ function labelFor(view, iid) {
 }
 
 (async () => {
-  // Bootstrap: load + instantiate the wasm module first. `createTsotModule`
-  // is the factory exposed by tsot_wasm.js (MODULARIZE=1 +
-  // EXPORT_NAME=createTsotModule per .cargo/config.toml). Returns a
-  // promise that resolves once the wasm is compiled, instantiated,
-  // and the JS glue is ready for ccall.
+  // Bootstrap: spawn the worker, await its `{kind:'ready'}`. The wasm
+  // lives in worker scope from here on; the main thread only sees
+  // postMessage envelopes. tsot_wasm.js is loaded by the worker via
+  // importScripts (see assets/tsot-worker.js), not by a <script> tag
+  // here — that keeps the heavy compile off the main thread.
   try {
-    wasmModule = await createTsotModule();
+    bootWorker();
+    await wasmReady;
   } catch (e) {
     document.getElementById('prompt').textContent =
-      'Failed to load wasm module: ' + (e && e.message ? e.message : e);
+      'Failed to load wasm worker: ' + (e && e.message ? e.message : e);
     return;
   }
   try {

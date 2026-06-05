@@ -242,6 +242,15 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     mill_need = mill_need.saturating_sub(mill_red);
     gy_need = gy_need.saturating_sub(gy_red);
     attached_need = attached_need.saturating_sub(att_red);
+    // RULES P.24a + P.24c: tapping a same-color jewel on BOARD can
+    // substitute for exactly one HAND-source component. If one is
+    // available, drop the hand_need by 1. Without this, the picker
+    // (and human affordability prompt) treats a card as unplayable
+    // when the hand is short by exactly one — even if a jewel could
+    // cover it.
+    if hand_need > 0 && state.find_jewel_tap_candidate(player, iid).is_some() {
+        hand_need -= 1;
+    }
     let p = state.player(player);
     // Identity-match: only hand cards sharing ≥1 element of the casting
     // card's identity set (colors ∪ symbol) count toward hand_have.
@@ -605,6 +614,11 @@ pub fn eligible_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId
             let Some(inst) = state.card_pool.get(*iid) else {
                 return false;
             };
+            // RULES B.1: only creatures attack. Artifacts /
+            // environments / mutations don't.
+            if inst.card.kind != CardType::Creature {
+                return false;
+            }
             if inst.tapped {
                 return false;
             }

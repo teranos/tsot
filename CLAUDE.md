@@ -26,6 +26,16 @@ in @src/sim/README.md.
 
 Rust side strict TDD required.
 
+**KNOW** the developer is always running the latest version of TSOT. If there is an issue, it is in the code.
+
+Never:
+- Ask if the developer has rebuilt/restarted
+- Suggest running build commands
+- Remind about rebuild steps after code changes
+- Imply the running binary might be stale
+
+**A commit is verified code** — the developer has tested it and confirmed it matches intent. Uncommitted changes in the working tree ARE the running code. Never use commit history to determine what is or isn't running.
+
 When running long jobs (probes, EA, builds, `cargo test`): write to a
 file the user can tail, never `| tail -N` or `| head -N` the live
 stream. Truncating the output is optimizing your own legibility at the

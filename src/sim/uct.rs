@@ -44,6 +44,15 @@ use crate::game::{GameState, InstanceId, Journal, PlayerId};
 use super::ai::{enumerate_playable_in_hand, PickKindFilter};
 use super::AiKind;
 
+// Web Worker model: wasm runs in a worker thread. Each UCT
+// iteration emits one event via the JS-side callback below; the
+// callback `postMessage`s the event to the main thread for live
+// rendering. Wasm32-only — native callers no-op via #[cfg].
+#[cfg(target_arch = "wasm32")]
+extern "C" {
+    fn tsot_emit_iteration_event(json_ptr: *const u8, json_len: usize);
+}
+
 /// Diagnostic counters. Reset via `reset_uct_diagnostics()`.
 pub static UCT_PICK_CALLS: AtomicU64 = AtomicU64::new(0);
 pub static UCT_ITERATIONS: AtomicU64 = AtomicU64::new(0);
@@ -414,6 +423,20 @@ pub fn pick_play_uct(
                 rollout_deaths: stats.a_deaths + stats.b_deaths,
                 rollout_handler_fires,
             });
+            // Live UCT in Web Worker model: emit one iteration
+            // summary as a JSON line. JS-side (in the worker) calls
+            // postMessage on the line; main thread renders.
+            #[cfg(target_arch = "wasm32")]
+            {
+                let line = format!(
+                    "{{\"kind\":\"UctIterLive\",\"iter\":{},\"total\":{},\"duration_us\":{},\"rollout_turns\":{},\"rollout_plays\":{},\"rollout_attacks\":{},\"rollout_deaths\":{},\"rollout_handler_fires\":{}}}",
+                    it, cfg.iterations, iter_t0.elapsed().as_micros() as u64,
+                    stats.turns, stats.a_played + stats.b_played, stats.a_attacks + stats.b_attacks, stats.a_deaths + stats.b_deaths, rollout_handler_fires,
+                );
+                unsafe {
+                    tsot_emit_iteration_event(line.as_ptr(), line.len());
+                }
+            }
         }
 
         // 4. Backprop along the path.

@@ -249,6 +249,19 @@ mod wasm_exports {
         export(format!("tsot wasm alive (build {})", env!("CARGO_PKG_VERSION")))
     }
 
+    /// Drain the partial trace buffer mid-flight. Called by JS while
+    /// awaiting `tsot_apply_action` (with `async: true`) — JS polls
+    /// this on a `setInterval` so UCT iteration events render in
+    /// the LOG as they're emitted, not at the end of the FFI call.
+    /// Returns a JSON array (possibly empty). Always freed via
+    /// `tsot_free_string`.
+    #[no_mangle]
+    pub extern "C" fn tsot_drain_partial_trace() -> *mut c_char {
+        let events = crate::trace::drain();
+        let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
+        export(json)
+    }
+
     /// Echo a string back through the FFI. Used to verify input
     /// handling before wiring real game APIs.
     ///

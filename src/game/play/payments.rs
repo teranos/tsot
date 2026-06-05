@@ -304,6 +304,25 @@ impl GameState {
             !cast_ident.is_disjoint(&pay_ident)
         };
 
+        // RULES C.14: when the cast is BOARD-placed (creature /
+        // artifact / environment) and non-transparent-frame,
+        // transparent-frame cards can't pay. Pre-filter so the
+        // oracle never offers them — otherwise the user picks a
+        // transparent card, play_card rejects with
+        // `HandPaymentTransparentForBoardPlaced`, and the human
+        // sees no UI hint at the picker stage.
+        let cast_is_board_placed = self
+            .card_pool
+            .get(instance)
+            .map(|inst| {
+                matches!(
+                    inst.card.kind,
+                    crate::card::CardType::Creature
+                        | crate::card::CardType::Artifact
+                        | crate::card::CardType::Environment
+                )
+            })
+            .unwrap_or(false);
         let mut chosen: Vec<InstanceId> = Vec::with_capacity(hand_needed);
         let mut picked_set: BTreeSet<InstanceId> = BTreeSet::new();
         for slot in 0..hand_needed {
@@ -317,6 +336,8 @@ impl GameState {
                 .filter(|iid| {
                     !self.has_restriction(iid, crate::card::Restriction::CannotBeCostPaid)
                 })
+                // C.14: transparent-frame can't pay BOARD-placed casts.
+                .filter(|iid| !(cast_is_board_placed && self.is_transparent(iid)))
                 // Identity-match: discard must share a color or
                 // symbol with the casting card, or be a no-identity
                 // wildcard (no colors and no symbol).
