@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { watch } from 'fs';
+import { appendFile, writeFile } from 'fs/promises';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { join } from 'path';
@@ -76,6 +77,21 @@ const server = Bun.serve({
           },
         },
       );
+    }
+
+    // Debug capture — the in-page debug.ts POSTs counter + trace
+    // snapshots here every second. We append to debug.log so the
+    // operator can tail it without DevTools.
+    if (url.pathname === '/debug' && req.method === 'POST') {
+      const body = await req.text();
+      await appendFile(join(root, 'debug.log'), body + '\n---\n');
+      return new Response('ok');
+    }
+
+    // Reset the debug log (useful between investigations).
+    if (url.pathname === '/debug/reset' && req.method === 'POST') {
+      await writeFile(join(root, 'debug.log'), '');
+      return new Response('reset');
     }
 
     if (url.pathname === '/' || url.pathname === '') {

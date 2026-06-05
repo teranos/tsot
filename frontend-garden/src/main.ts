@@ -1,3 +1,8 @@
+// IMPORTANT: import debug FIRST so its wrappers (indexedDB.open,
+// document.addEventListener) are installed before any other code
+// registers listeners or opens databases.
+import './debug';
+
 import {
   configureGlyphs,
   createCursorElement,
