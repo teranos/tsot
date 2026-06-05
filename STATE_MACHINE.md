@@ -172,10 +172,23 @@ chains (hand-payment slots, target picks, X-pick).
   Pass → PickAttackers → empty → Main2 PickCard fires, `state.phase
   == "Main2"`).)
 
-- [ ] **S11: Edge cases (rig + suicide rollback + response windows).**
-  `rig_creature_free_haste`, suicide-rollback gating, instant response
-  window timing. All the special-casing in run_game_continue gets
-  ported. Suite regression check.
+- [x] ~~**S11: Edge cases (rig + suicide rollback + response windows).**~~
+  ~~`rig_creature_free_haste`, suicide-rollback gating, instant response~~
+  ~~window timing. All the special-casing in run_game_continue gets~~
+  ~~ported. Suite regression check.~~
+  (Completed-then-superseded. Commit 53c1d68 shipped the port:
+  `try_suicide_retry` helper, response_fired computed from
+  `instant_response_played` snapshots so response-driven suicides
+  skip the retry, human-side resolves flip `suicide=false` because
+  humans own their own decisions. Parity test
+  `step_engine_matches_run_game_continue_preview_retry_rescued`
+  pinned the counter against `run_game_continue`. Commit f81dff4
+  then deleted both the rig (`rig_creature_free_haste`) and the
+  suicide-rescue retry entirely — they were engine cheats giving the
+  AI free advantages; `try_suicide_retry` and the parity test went
+  with them. Response-window timing belongs to the separate STACK.md
+  theme. The port work is done; the feature it ported is gone by
+  design.)
 
 ## Phase 5 — migration + cleanup
 

@@ -53,7 +53,7 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts serve wasm wasm-serve clean-wasm
+.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts wasm wasm-serve clean-wasm
 
 help:
 	@echo ""
@@ -225,17 +225,6 @@ MATCHUP_MCTS_ARGS ?=
 matchup-mcts:
 	cargo run --release -- matchup-mcts $(MATCHUP_MCTS_ARGS)
 
-# Launch the playable HTTP frontend. Defaults: side A, MCTS opponent at
-# rollouts=5/max-candidates=10, port 8080. Override via SERVE_ARGS.
-#
-# Note: D5 ported assets/play.html to call the wasm module via
-# Module.ccall. The HTTP shim only serves the HTML — it does NOT
-# serve the wasm bundle next to it — so opening the page through
-# `make serve` fails to bootstrap. Use `make wasm-serve` instead until
-# D8 retires this whole subcommand.
-serve:
-	cargo run --release -- serve $(SERVE_ARGS)
-
 # Build the wasm bundle and stage everything the browser needs
 # (`tsot_wasm.js`, `tsot_wasm.wasm`, `index.html`) into `dist/`.
 # Requires emscripten on PATH — `emcc --version` should work before
@@ -265,10 +254,10 @@ wasm:
 	@echo "wasm bundle staged in $(WASM_DIST)/"
 	@ls -lah $(WASM_DIST)/
 
-# Serve the dist directory on localhost. Defaults to port 8080 to
-# match the legacy `make serve`; override via `PORT=...`. No COOP/COEP
-# headers — those are only needed if we later enable SharedArrayBuffer
-# (pthreads / wasm-workers), which we don't for v1.
+# Serve the dist directory on localhost. Default port 8080; override
+# via `WASM_SERVE_PORT=...`. No COOP/COEP headers — those are only
+# needed if we later enable SharedArrayBuffer (pthreads / wasm-workers),
+# which we don't for v1.
 WASM_SERVE_PORT ?= 8080
 
 wasm-serve: wasm

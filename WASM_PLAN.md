@@ -95,9 +95,18 @@
   test target. Picked up when iOS build work (F2) starts; Safari is
   the desktop proxy for WKWebView so its result gates F2 confidence.
 
-- [ ] **D8: Drop the HTTP shim.**
-  Delete src/cli_serve.rs, the Serve subcommand wiring, the `make serve`
-  target, and tiny_http from Cargo.toml. Replace with `make wasm`.
+- [x] ~~**D8: Drop the HTTP shim.**~~
+  ~~Delete src/cli_serve.rs, the Serve subcommand wiring, the `make serve`~~
+  ~~target, and tiny_http from Cargo.toml. Replace with `make wasm`.~~
+  (Narrowed scope: HTTP shim cluster only. Deleted `src/cli_serve.rs`,
+  `mod cli_serve` + `use cli_serve::ServeArgs` + `Serve(ServeArgs)`
+  variant + dispatch arm from `src/main.rs`, `tiny_http = "=0.12.0"`
+  from `Cargo.toml`, `serve:` target + its doc comment from `Makefile`,
+  `serve` from the .PHONY list. `make serve` no longer exists; the
+  browser entry point is `make wasm-serve`. `run_game_continue` is
+  still `#[deprecated]` and reached by `cli_matchup_mcts`,
+  `sim::run::run_game_with_ai`, and two tests — left in place; the
+  day no caller exists it deletes itself.)
 
 ## Phase E — P2P multiplayer
 
