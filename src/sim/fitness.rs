@@ -117,8 +117,18 @@ pub fn fitness_breakdown(
         let mut opp_wins = 0u32;
         let mut opp_games = 0u32;
         for _ in 0..n_per_side {
+            // RULES S.0: shuffle each player's deck before the game
+            // so the opening hand isn't a fixed prefix of the
+            // genome. Shuffle seeds are drawn from `rng` so the
+            // whole gauntlet is replayable from the outer seed.
             // genome as side A
-            let state = GameState::new(deck_g.clone(), opp.clone());
+            let mut deck_g_a = deck_g.clone();
+            let mut deck_opp_a = opp.clone();
+            let mut shuf_rng_a = StdRng::seed_from_u64(rng.gen());
+            let mut shuf_rng_b = StdRng::seed_from_u64(rng.gen());
+            crate::sim::genome::shuffle_deck(&mut deck_g_a, &mut shuf_rng_a);
+            crate::sim::genome::shuffle_deck(&mut deck_opp_a, &mut shuf_rng_b);
+            let state = GameState::new(deck_g_a, deck_opp_a);
             let mut game_rng = StdRng::seed_from_u64(rng.gen());
             let mut log: Vec<String> = Vec::new();
             let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_candidate_a);
@@ -127,7 +137,13 @@ pub fn fitness_breakdown(
             }
             opp_games += 1;
             // genome as side B
-            let state = GameState::new(opp.clone(), deck_g.clone());
+            let mut deck_opp_b = opp.clone();
+            let mut deck_g_b = deck_g.clone();
+            let mut shuf_rng_a = StdRng::seed_from_u64(rng.gen());
+            let mut shuf_rng_b = StdRng::seed_from_u64(rng.gen());
+            crate::sim::genome::shuffle_deck(&mut deck_opp_b, &mut shuf_rng_a);
+            crate::sim::genome::shuffle_deck(&mut deck_g_b, &mut shuf_rng_b);
+            let state = GameState::new(deck_opp_b, deck_g_b);
             let mut game_rng = StdRng::seed_from_u64(rng.gen());
             let mut log = Vec::new();
             let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_candidate_b);

@@ -133,7 +133,10 @@ function wasmCallString(name, argJson) {
 // selection UI is a follow-up (D-extended).
 function defaultStartArgs() {
   const deck = [];
-  for (let i = 0; i < 50; i++) deck.push('blue-monkey');
+  for (let i = 0; i < 24; i++) deck.push('blue-monkey');
+  for (let i = 0; i < 24; i++) deck.push('clear-blue');
+  deck.push('blue-jewel');
+  deck.push('blue-jewel');
   return {
     seed: Math.floor(Math.random() * 0xFFFFFFFF),
     deck_a_ids: deck,

@@ -14,6 +14,7 @@
 
 ## Setup (S)
 
+- **S.0** Before drawing the opening HAND, each player shuffles their DECK uniformly at random. The shuffle is not observable to either player.
 - **S.1** Each player starts the game with 5 cards in their HAND.
 - **S.2** Each player may send up to 2 cards from their HAND to the bottom of their DECK.
 - **S.3** A player who sends cards back draws an equal number of replacement cards.

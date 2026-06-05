@@ -143,14 +143,23 @@ pub(crate) fn tsot_apply_action_impl(action_json: &str) -> Result<String, String
 fn build_engine(args: &StartGameArgs) -> Result<StepEngine, String> {
     use crate::card::CardRegistry;
     use crate::game::GameState;
-    use crate::sim::genome::to_deck;
+    use crate::sim::genome::{shuffle_deck, to_deck};
     use crate::sim::AiKind;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     let registry = CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;
-    let deck_a =
+    let mut deck_a =
         to_deck(&registry, &args.deck_a_ids).map_err(|e| format!("deck A rebuild: {e:?}"))?;
-    let deck_b =
+    let mut deck_b =
         to_deck(&registry, &args.deck_b_ids).map_err(|e| format!("deck B rebuild: {e:?}"))?;
+    // RULES S.0: shuffle each deck before drawing the opening 5.
+    // Per-deck seed derived from `args.seed` so A and B shuffle
+    // independently but the whole game is replayable from one seed.
+    let mut rng_a = StdRng::seed_from_u64(args.seed.wrapping_add(0xA000_A000));
+    let mut rng_b = StdRng::seed_from_u64(args.seed.wrapping_add(0xB000_B000));
+    shuffle_deck(&mut deck_a, &mut rng_a);
+    shuffle_deck(&mut deck_b, &mut rng_b);
     let mut state = GameState::new(deck_a, deck_b);
     state.replay_journal = Some(crate::game::Journal::new());
 

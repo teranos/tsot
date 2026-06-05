@@ -17,6 +17,15 @@ use rand::seq::SliceRandom;
 
 use crate::card::{Card, CardRegistry};
 
+/// RULES S.0: shuffle a deck uniformly at random using the
+/// provided RNG. Mutates in place via Fisher-Yates (`SliceRandom::shuffle`).
+/// Callers building a `GameState` for a real (non-test) game MUST call
+/// this on each player's deck after `to_deck` and before `GameState::new`,
+/// so the opening 5-card hand isn't deterministic from genome order.
+pub fn shuffle_deck(deck: &mut [Card], rng: &mut StdRng) {
+    deck.shuffle(rng);
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GenomeError {
     UnknownCardId(String),
@@ -147,6 +156,91 @@ mod tests {
         let bogus = "this-card-id-does-not-exist".to_string();
         let err = to_deck(&registry, std::slice::from_ref(&bogus)).unwrap_err();
         assert_eq!(err, GenomeError::UnknownCardId(bogus));
+    }
+
+    /// INTENT: `shuffle_deck` preserves the multiset — same cards,
+    /// same counts. Permutation only, no insertion / deletion.
+    #[test]
+    fn shuffle_deck_preserves_multiset() {
+        use rand::SeedableRng;
+        let registry = load_registry();
+        let ids: Vec<String> = registry
+            .cards()
+            .iter()
+            .take(50)
+            .map(|c| c.id.clone())
+            .collect();
+        let mut deck = to_deck(&registry, &ids).unwrap();
+        let before: BTreeMap<String, u32> = deck
+            .iter()
+            .map(|c| c.id.clone())
+            .fold(BTreeMap::new(), |mut m, id| {
+                *m.entry(id).or_insert(0) += 1;
+                m
+            });
+        let mut rng = StdRng::seed_from_u64(0xC0DE_C0DE);
+        shuffle_deck(&mut deck, &mut rng);
+        let after: BTreeMap<String, u32> = deck
+            .iter()
+            .map(|c| c.id.clone())
+            .fold(BTreeMap::new(), |mut m, id| {
+                *m.entry(id).or_insert(0) += 1;
+                m
+            });
+        assert_eq!(before, after, "shuffle must not lose or duplicate cards");
+        assert_eq!(deck.len(), 50);
+    }
+
+    /// INTENT: `shuffle_deck` is deterministic per seed.
+    /// Same seed + same input = same output permutation.
+    /// Critical for replay / reproducibility.
+    #[test]
+    fn shuffle_deck_is_deterministic_per_seed() {
+        use rand::SeedableRng;
+        let registry = load_registry();
+        let ids: Vec<String> = registry
+            .cards()
+            .iter()
+            .take(50)
+            .map(|c| c.id.clone())
+            .collect();
+        let mut deck1 = to_deck(&registry, &ids).unwrap();
+        let mut deck2 = to_deck(&registry, &ids).unwrap();
+        let mut rng1 = StdRng::seed_from_u64(0xC0DE_C0DE);
+        let mut rng2 = StdRng::seed_from_u64(0xC0DE_C0DE);
+        shuffle_deck(&mut deck1, &mut rng1);
+        shuffle_deck(&mut deck2, &mut rng2);
+        let order1: Vec<String> = deck1.iter().map(|c| c.id.clone()).collect();
+        let order2: Vec<String> = deck2.iter().map(|c| c.id.clone()).collect();
+        assert_eq!(order1, order2);
+    }
+
+    /// INTENT: different seeds produce different orderings (almost
+    /// always). A 50-card shuffle has 50! ≈ 3×10^64 permutations;
+    /// the probability two distinct seeds yield the same order is
+    /// vanishingly small.
+    #[test]
+    fn shuffle_deck_different_seeds_yield_different_order() {
+        use rand::SeedableRng;
+        let registry = load_registry();
+        let ids: Vec<String> = registry
+            .cards()
+            .iter()
+            .take(50)
+            .map(|c| c.id.clone())
+            .collect();
+        let mut deck1 = to_deck(&registry, &ids).unwrap();
+        let mut deck2 = to_deck(&registry, &ids).unwrap();
+        let mut rng1 = StdRng::seed_from_u64(1);
+        let mut rng2 = StdRng::seed_from_u64(2);
+        shuffle_deck(&mut deck1, &mut rng1);
+        shuffle_deck(&mut deck2, &mut rng2);
+        let order1: Vec<String> = deck1.iter().map(|c| c.id.clone()).collect();
+        let order2: Vec<String> = deck2.iter().map(|c| c.id.clone()).collect();
+        assert_ne!(
+            order1, order2,
+            "two distinct seeds should produce different shuffles"
+        );
     }
 
     use rand::SeedableRng;
