@@ -197,7 +197,7 @@ fn format_effective_cost(
         .join("+")
 }
 
-fn format_cost(components: &[crate::card::CostComponent]) -> String {
+pub(crate) fn format_cost(components: &[crate::card::CostComponent]) -> String {
     if components.is_empty() {
         return "0".to_string();
     }

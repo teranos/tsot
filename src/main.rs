@@ -17,8 +17,8 @@ mod report_style;
 // cdylib build so the browser frontend can drive the engine.
 
 use clap::{Parser, Subcommand};
-use tsot::card::{Card, CardRegistry, CardType, CostSource};
-use tsot::CastRouting;
+use tsot::card::{Card, CardRegistry, CardType};
+use tsot::sim::playable_pool::playable_pool;
 
 use cli_balance_probe::BalanceProbeArgs;
 use cli_champions_report::ChampionsReportArgs;
@@ -87,44 +87,7 @@ fn main() -> mlua::Result<()> {
     // just to print help text.
     let cli = Cli::parse();
     let registry = std::sync::Arc::new(CardRegistry::load_embedded()?);
-    let playable_pool: Vec<Card> = registry
-        .cards()
-        .iter()
-        .filter(|c| c.kind.is_castable())
-        // Balance-probe variants are excluded from the main pool — they
-        // only exist for `tsot balance-probe` and shouldn't pollute
-        // `evolve` / `champions-report` / gauntlet curation.
-        .filter(|c| !c.is_variant)
-        .filter(|c| !c.subtypes.iter().any(|s| s.eq_ignore_ascii_case("test")))
-        .filter(|c| {
-            c.cost.iter().all(|cc| {
-                matches!(
-                    cc.source,
-                    CostSource::Hand
-                        | CostSource::Mill
-                        | CostSource::Graveyard
-                        | CostSource::Sacrifice
-                        | CostSource::Attached
-                        | CostSource::SelfExile
-                )
-            })
-        })
-        // X-cost spells without an `on_play` handler are no-ops if
-        // cast — the cost is paid but nothing happens. Filter them
-        // out so the EA doesn't waste budget exploring traps. Hydra
-        // (creature) is unaffected because its effect lives in a
-        // passive static, not on_play.
-        .filter(|c| {
-            let has_x = c.cost.iter().any(|cc| cc.is_x);
-            let is_spell = matches!(c.kind, CardType::Spell);
-            let has_play_handler = c
-                .handlers
-                .keys()
-                .any(|e| matches!(e, tsot::card::EventName::OnPlay));
-            !(has_x && is_spell && !has_play_handler)
-        })
-        .cloned()
-        .collect();
+    let playable_pool: Vec<Card> = playable_pool(registry.cards());
     let creature_count = playable_pool
         .iter()
         .filter(|c| matches!(c.kind, CardType::Creature))

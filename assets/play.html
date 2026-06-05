@@ -51,6 +51,26 @@
   .empty-note { color: #666; font-style: italic; font-size: 0.7rem; }
   .meta { color: #888; font-size: 0.75rem; margin-bottom: 0.5rem; }
   .deck-top { color: #6cf; }
+  /* Deckbuilder layout — two-column grid: pool left, current deck right. */
+  #deckbuilder { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; }
+  #deckbuilder .pool, #deckbuilder .deck { border: 1px solid #333; padding: 0.5rem; }
+  #deckbuilder h2 { font-size: 0.7rem; margin: 0 0 0.4rem 0; color: #888; font-weight: normal; text-transform: uppercase; letter-spacing: 0.05em; }
+  #deckbuilder .filters { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+  #deckbuilder .filters select { background: #1c1c20; color: #ddd; border: 1px solid #444; padding: 0.2rem 0.4rem; font-family: inherit; font-size: 0.7rem; }
+  #deckbuilder .pool-grid { display: flex; flex-wrap: wrap; gap: 0.3rem; max-height: 32rem; overflow-y: auto; }
+  /* Pool cards: same look as in-game cards, with a + badge in the corner. */
+  #deckbuilder .pool-card { position: relative; cursor: pointer; }
+  #deckbuilder .pool-card:hover { background: #234; }
+  #deckbuilder .pool-card::after { content: '+'; position: absolute; top: 2px; right: 4px; color: #6f9; font-size: 0.9rem; font-weight: bold; }
+  #deckbuilder .deck-row { display: flex; align-items: center; justify-content: space-between; padding: 0.2rem 0.4rem; border-bottom: 1px solid #222; font-size: 0.75rem; }
+  #deckbuilder .deck-row .qty { color: #fc6; min-width: 2.5rem; }
+  #deckbuilder .deck-row .name { color: #eee; flex: 1; margin-left: 0.4rem; }
+  #deckbuilder .deck-row button { padding: 0.1rem 0.4rem; font-size: 0.7rem; }
+  #deckbuilder .deck-controls { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem; }
+  #deckbuilder .deck-controls label { color: #888; font-size: 0.7rem; display: flex; align-items: center; gap: 0.4rem; }
+  #deckbuilder .deck-controls select { background: #1c1c20; color: #ddd; border: 1px solid #444; padding: 0.2rem 0.4rem; font-family: inherit; font-size: 0.7rem; flex: 1; }
+  #deckbuilder .deck-summary { color: #888; font-size: 0.7rem; margin-bottom: 0.4rem; }
+  #deckbuilder .start { margin-top: 0.8rem; padding: 0.5rem 1rem; font-size: 0.85rem; border-color: #6f9; }
 </style>
 </head>
 <body>
@@ -60,47 +80,56 @@
 
 <div class="meta" id="meta"></div>
 
-<div class="row">
-  <div class="zone opponent" style="flex: 2;">
-    <h2>Opponent <span class="counts" id="opp-counts"></span></h2>
-    <div class="cards" id="opp-board-cards"></div>
-  </div>
-  <div class="zone" style="flex: 1;">
-    <h2>Opp graveyard <span class="counts" id="opp-gy-count"></span></h2>
-    <div class="cards" id="opp-graveyard-cards"></div>
-  </div>
-</div>
+<!-- Deckbuilder: shown pre-game while state.phase === 'deckbuilding'.
+     Hidden once the user clicks Start; the game-screen below takes over. -->
+<div id="deckbuilder" style="display:none;"></div>
 
-<div class="row">
-  <div class="zone" style="flex: 2;">
-    <h2>You</h2>
-    <div class="cards" id="your-board-cards"></div>
+<!-- Game screen: hidden until the user finishes the deckbuilder. The
+     existing render() targets these IDs directly, so toggling the
+     container's display preserves all interactions. -->
+<div id="game-screen" style="display:none;">
+  <div class="row">
+    <div class="zone opponent" style="flex: 2;">
+      <h2>Opponent <span class="counts" id="opp-counts"></span></h2>
+      <div class="cards" id="opp-board-cards"></div>
+    </div>
+    <div class="zone" style="flex: 1;">
+      <h2>Opp graveyard <span class="counts" id="opp-gy-count"></span></h2>
+      <div class="cards" id="opp-graveyard-cards"></div>
+    </div>
   </div>
-  <div class="zone" style="flex: 1;">
-    <h2>Your graveyard <span class="counts" id="your-gy-count"></span></h2>
-    <div class="cards" id="your-graveyard-cards"></div>
-  </div>
-</div>
 
-<div class="row">
-  <div class="zone">
-    <h2>Your hand <span class="counts" id="your-hand-counts"></span></h2>
-    <div class="cards" id="your-hand-cards"></div>
+  <div class="row">
+    <div class="zone" style="flex: 2;">
+      <h2>You</h2>
+      <div class="cards" id="your-board-cards"></div>
+    </div>
+    <div class="zone" style="flex: 1;">
+      <h2>Your graveyard <span class="counts" id="your-gy-count"></span></h2>
+      <div class="cards" id="your-graveyard-cards"></div>
+    </div>
   </div>
-</div>
 
-<div class="row">
-  <div class="zone" style="flex: 0 0 14rem;">
-    <h2>Opp deck top</h2>
-    <div class="cards" id="opp-deck-top"></div>
+  <div class="row">
+    <div class="zone">
+      <h2>Your hand <span class="counts" id="your-hand-counts"></span></h2>
+      <div class="cards" id="your-hand-cards"></div>
+    </div>
   </div>
-  <div class="zone" style="flex: 0 0 14rem;">
-    <h2>Your deck top</h2>
-    <div class="cards" id="your-deck-top"></div>
-  </div>
-</div>
 
-<div id="buttons"></div>
+  <div class="row">
+    <div class="zone" style="flex: 0 0 14rem;">
+      <h2>Opp deck top</h2>
+      <div class="cards" id="opp-deck-top"></div>
+    </div>
+    <div class="zone" style="flex: 0 0 14rem;">
+      <h2>Your deck top</h2>
+      <div class="cards" id="your-deck-top"></div>
+    </div>
+  </div>
+
+  <div id="buttons"></div>
+</div>
 
 <div class="zone">
   <h2>Log</h2>
@@ -185,23 +214,33 @@ function appendLiveUctIter(line) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-// Defaults for the first `tsot_start_game` call on page load. v1: a
-// vanilla 50-card mirror of `blue-monkey` against a heuristic AI. Deck
-// selection UI is a follow-up (D-extended).
-function defaultStartArgs() {
-  const deck = [];
-  for (let i = 0; i < 24; i++) deck.push('blue-monkey');
-  for (let i = 0; i < 21; i++) deck.push('clear-blue');
-  deck.push('blue-jewel');
-  deck.push('blue-jewel');
-  deck.push('companion-bird');
-  deck.push('counterspell');
-  deck.push('surge');
+// Pre-game phase: the deckbuilder. The wasm returns the playable
+// card pool + shipped preset decks via two one-shot FFI calls
+// (tsot_list_card_pool / tsot_list_preset_decks); the user assembles
+// a deck before the first `tsot_start_game` fires. Once the user
+// clicks Start, `state.phase` flips to 'playing' and the existing
+// game-render path takes over.
+//
+// Mirror always for v1: opponent uses the same deck the user built.
+// Persistence is G1's job — decks live only in memory for now.
+state.phase = 'deckbuilding';
+state.cardPool = [];      // [{id, name, kind, cost_text, colors, symbols, subtypes, power, toughness, timing, abilities}, …]
+state.presets = [];       // [{id, name, cards: [card_id, …]}, …] — starter + 7 gauntlet
+state.deck = [];          // current working deck, flat array of card_ids with repetition
+state.oppAi = 'uct';      // 'heuristic' | 'mcts' | 'uct'
+
+// Filter state for the pool browser. Empty = no filter.
+state.poolFilterColor = '';
+state.poolFilterKind = '';
+
+// Build the start_game args from the user's deckbuilder choices.
+// Mirror always — opponent uses your deck.
+function startArgsFromDeckbuilder() {
   return {
     seed: Math.floor(Math.random() * 0xFFFFFFFF),
-    deck_a_ids: deck,
-    deck_b_ids: deck,
-    opp_ai: 'uct',
+    deck_a_ids: state.deck.slice(),
+    deck_b_ids: state.deck.slice(),
+    opp_ai: state.oppAi,
   };
 }
 
@@ -345,7 +384,7 @@ function parseEnvelope(out) {
 async function fetchState() {
   if (!wasmStarted) {
     wasmStarted = true;
-    const args = defaultStartArgs();
+    const args = startArgsFromDeckbuilder();
     const prompt = await ffiCall('start_game', { args }, 'start_game');
     return { ...prompt, state: prompt.state };
   }
@@ -869,6 +908,220 @@ function labelFor(view, iid) {
   return iid;
 }
 
+// ---------------- Deckbuilder ----------------
+
+// Group state.deck (flat array w/ repetition) into {card_id → count}.
+function deckCounts() {
+  const counts = new Map();
+  for (const id of state.deck) {
+    counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  return counts;
+}
+
+function poolCardEl(entry) {
+  const div = document.createElement('div');
+  div.className = 'card pool-card';
+  // Same head/meta/abilities structure as the in-game cardEl, scaled
+  // down a touch — keeps the visual language consistent so the user
+  // recognizes cards from pool to hand.
+  const head = document.createElement('div');
+  head.className = 'head';
+  head.innerHTML = `<span class="name">${entry.name}</span><span class="cost">${entry.cost_text || ''}</span>`;
+  div.appendChild(head);
+
+  const metaParts = [];
+  if (entry.kind === 'Creature' && entry.power != null) {
+    metaParts.push(`<span class="stats">${entry.power}/${entry.toughness}</span>`);
+  }
+  if (entry.colors && entry.colors.length) metaParts.push(entry.colors.map(colorTag).join(''));
+  if (entry.symbols && entry.symbols.length) metaParts.push(entry.symbols.map(symbolTag).join(''));
+  if (entry.subtypes && entry.subtypes.length) {
+    metaParts.push(`<span style="color:#888;">${entry.subtypes.join('·')}</span>`);
+  }
+  if (metaParts.length) {
+    const m = document.createElement('div');
+    m.className = 'meta-line';
+    m.innerHTML = metaParts.join(' ');
+    div.appendChild(m);
+  }
+  if (entry.abilities && entry.abilities.length) {
+    const a = document.createElement('div');
+    a.className = 'abilities';
+    a.innerHTML = entry.abilities.map(s => `<div>${s}</div>`).join('');
+    div.appendChild(a);
+  }
+  div.title = entry.id;
+  div.onclick = () => {
+    state.deck.push(entry.id);
+    renderDeckbuilder();
+  };
+  return div;
+}
+
+function poolMatchesFilters(entry) {
+  if (state.poolFilterColor && !(entry.colors || []).includes(state.poolFilterColor)) {
+    return false;
+  }
+  if (state.poolFilterKind && entry.kind !== state.poolFilterKind) {
+    return false;
+  }
+  return true;
+}
+
+function renderDeckbuilder() {
+  document.getElementById('prompt').textContent =
+    'Pre-game — build your deck. Click cards on the left to add; click [-] to remove. Mirror match: your opponent uses the same deck.';
+  document.getElementById('meta').textContent = '';
+  document.getElementById('game-screen').style.display = 'none';
+  const root = document.getElementById('deckbuilder');
+  root.style.display = 'grid';
+  root.innerHTML = '';
+
+  // Pool side.
+  const poolSide = document.createElement('div');
+  poolSide.className = 'pool';
+  poolSide.innerHTML = `<h2>Card pool (${state.cardPool.length})</h2>`;
+
+  const filters = document.createElement('div');
+  filters.className = 'filters';
+  // Color filter — only show colors that actually appear in the pool.
+  const allColors = new Set();
+  for (const c of state.cardPool) for (const col of (c.colors || [])) allColors.add(col);
+  const colorSel = document.createElement('select');
+  colorSel.innerHTML = `<option value="">all colors</option>` +
+    [...allColors].sort().map(c => `<option value="${c}">${c}</option>`).join('');
+  colorSel.value = state.poolFilterColor;
+  colorSel.onchange = () => { state.poolFilterColor = colorSel.value; renderDeckbuilder(); };
+  filters.appendChild(colorSel);
+  // Kind filter.
+  const kindSel = document.createElement('select');
+  kindSel.innerHTML = `
+    <option value="">all kinds</option>
+    <option value="Creature">Creatures</option>
+    <option value="Spell">Spells</option>
+    <option value="Artifact">Artifacts</option>
+    <option value="Environment">Environments</option>
+    <option value="Mutation">Mutations</option>
+  `;
+  kindSel.value = state.poolFilterKind;
+  kindSel.onchange = () => { state.poolFilterKind = kindSel.value; renderDeckbuilder(); };
+  filters.appendChild(kindSel);
+  poolSide.appendChild(filters);
+
+  const grid = document.createElement('div');
+  grid.className = 'pool-grid';
+  for (const entry of state.cardPool) {
+    if (!poolMatchesFilters(entry)) continue;
+    grid.appendChild(poolCardEl(entry));
+  }
+  poolSide.appendChild(grid);
+  root.appendChild(poolSide);
+
+  // Deck side.
+  const deckSide = document.createElement('div');
+  deckSide.className = 'deck';
+  deckSide.innerHTML = `<h2>Your deck</h2>`;
+  const summary = document.createElement('div');
+  summary.className = 'deck-summary';
+  summary.textContent = `${state.deck.length} cards`;
+  deckSide.appendChild(summary);
+
+  // Preset dropdown + clear.
+  const controls = document.createElement('div');
+  controls.className = 'deck-controls';
+  const presetLabel = document.createElement('label');
+  presetLabel.textContent = 'Load preset:';
+  const presetSel = document.createElement('select');
+  presetSel.innerHTML = `<option value="">(choose…)</option>` +
+    state.presets.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  presetSel.onchange = () => {
+    const choice = state.presets.find(p => p.id === presetSel.value);
+    if (choice) {
+      state.deck = choice.cards.slice();
+      renderDeckbuilder();
+    }
+  };
+  presetLabel.appendChild(presetSel);
+  controls.appendChild(presetLabel);
+
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'danger';
+  clearBtn.textContent = 'Clear deck';
+  clearBtn.onclick = () => { state.deck = []; renderDeckbuilder(); };
+  controls.appendChild(clearBtn);
+
+  // Opponent AI.
+  const oppLabel = document.createElement('label');
+  oppLabel.textContent = 'Opponent AI:';
+  const oppSel = document.createElement('select');
+  oppSel.innerHTML = `
+    <option value="heuristic">Heuristic (fast)</option>
+    <option value="uct">UCT (search)</option>
+    <option value="mcts">MCTS (search)</option>
+  `;
+  oppSel.value = state.oppAi;
+  oppSel.onchange = () => { state.oppAi = oppSel.value; };
+  oppLabel.appendChild(oppSel);
+  controls.appendChild(oppLabel);
+
+  deckSide.appendChild(controls);
+
+  // Deck rows, grouped by id and sorted by count desc then name asc.
+  const counts = deckCounts();
+  const idToEntry = new Map(state.cardPool.map(e => [e.id, e]));
+  const rows = [...counts.entries()].sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    const an = (idToEntry.get(a[0])?.name) || a[0];
+    const bn = (idToEntry.get(b[0])?.name) || b[0];
+    return an.localeCompare(bn);
+  });
+  const list = document.createElement('div');
+  for (const [id, qty] of rows) {
+    const row = document.createElement('div');
+    row.className = 'deck-row';
+    const entry = idToEntry.get(id);
+    const name = entry ? entry.name : id;
+    row.innerHTML = `<span class="qty">${qty}×</span><span class="name">${name}</span>`;
+    const rm = document.createElement('button');
+    rm.textContent = '-';
+    rm.onclick = () => {
+      const idx = state.deck.indexOf(id);
+      if (idx >= 0) state.deck.splice(idx, 1);
+      renderDeckbuilder();
+    };
+    row.appendChild(rm);
+    list.appendChild(row);
+  }
+  deckSide.appendChild(list);
+
+  // Start button.
+  const startBtn = document.createElement('button');
+  startBtn.className = 'start';
+  startBtn.textContent = 'Start game';
+  startBtn.disabled = state.deck.length === 0;
+  startBtn.onclick = startGameFromDeckbuilder;
+  deckSide.appendChild(startBtn);
+
+  root.appendChild(deckSide);
+}
+
+async function startGameFromDeckbuilder() {
+  if (state.deck.length === 0) return;
+  state.phase = 'playing';
+  document.getElementById('deckbuilder').style.display = 'none';
+  document.getElementById('game-screen').style.display = '';
+  document.getElementById('prompt').textContent = 'Starting game…';
+  try {
+    const initial = await fetchState();
+    state.current = { state: initial.state, prompt: initial };
+    render(state.current);
+  } catch (e) {
+    document.getElementById('prompt').textContent =
+      'Engine error: ' + (e && e.message ? e.message : e);
+  }
+}
+
 (async () => {
   // Bootstrap: spawn the worker, await its `{kind:'ready'}`. The wasm
   // lives in worker scope from here on; the main thread only sees
@@ -884,12 +1137,21 @@ function labelFor(view, iid) {
     return;
   }
   try {
-    const initial = await fetchState();
-    state.current = { state: initial.state, prompt: initial };
-    render(state.current);
+    // Deckbuilder pre-game: load the card pool + shipped preset decks
+    // sequentially (the worker enforces one inflight FFI at a time via
+    // `pendingFfi`), seed the working deck with the Starter preset,
+    // and render the builder. start_game doesn't fire until the user
+    // clicks Start.
+    const poolJson = await workerCall('list_card_pool', {});
+    state.cardPool = JSON.parse(poolJson);
+    const presetsJson = await workerCall('list_preset_decks', {});
+    state.presets = JSON.parse(presetsJson);
+    const starter = state.presets.find(p => p.id === 'starter') || state.presets[0];
+    state.deck = starter ? starter.cards.slice() : [];
+    renderDeckbuilder();
   } catch (e) {
     document.getElementById('prompt').textContent =
-      'Engine error: ' + (e && e.message ? e.message : e);
+      'Failed to load deckbuilder data: ' + (e && e.message ? e.message : e);
   }
 })();
 </script>

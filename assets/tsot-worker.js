@@ -1,12 +1,18 @@
 // Web Worker scope. Owns the wasm engine + posts events to main.
 //
 // Protocol:
-//   main → worker: { cmd: "start_game", args: {…} }
+//   main → worker: { cmd: "list_card_pool" }
+//                  { cmd: "list_preset_decks" }
+//                  { cmd: "start_game", args: {…} }
 //                  { cmd: "apply_action", action: {…} }
 //   worker → main: { kind: "ready" }
 //                  { kind: "uct_iter", line: "<json>" } // mid-call live event
-//                  { kind: "envelope", json: "<full envelope JSON>" }
+//                  { kind: "envelope", cmd, json: "<JSON payload>" }
 //                  { kind: "error", error: "<message>" }
+//
+// `list_card_pool` and `list_preset_decks` are one-shot static
+// queries used by the pre-game deckbuilder; no session is required.
+// `start_game` / `apply_action` drive the running game.
 //
 // The `uct_iter` events are posted from `tsot_emit_iteration_event`
 // (see assets/wasm-worker-lib.js) which the wasm calls directly
@@ -32,9 +38,27 @@ function callWasm(name, argJson) {
   return s;
 }
 
+function callWasmNoArgs(name) {
+  const ptr = module.ccall(name, 'number', [], []);
+  if (ptr === 0) return '';
+  const s = module.UTF8ToString(ptr);
+  module.ccall('tsot_free_string', null, ['number'], [ptr]);
+  return s;
+}
+
 onmessage = (ev) => {
   const { cmd, args, action } = ev.data;
   try {
+    if (cmd === 'list_card_pool') {
+      const json = callWasmNoArgs('tsot_list_card_pool');
+      postMessage({ kind: 'envelope', cmd, json });
+      return;
+    }
+    if (cmd === 'list_preset_decks') {
+      const json = callWasmNoArgs('tsot_list_preset_decks');
+      postMessage({ kind: 'envelope', cmd, json });
+      return;
+    }
     if (cmd === 'start_game') {
       const json = callWasm('tsot_start_game', JSON.stringify(args));
       postMessage({ kind: 'envelope', cmd, json });

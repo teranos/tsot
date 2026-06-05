@@ -30,6 +30,38 @@ use std::sync::Arc;
 use crate::sim::human::{HumanAction, HumanInterface, HumanPrompt};
 use crate::sim::step::{StepEngine, StepResult};
 
+/// Deckbuilder FFI: serialized card pool. JSON shape:
+/// `[{id, name, kind, cost_text, colors, symbols, subtypes, power,
+/// toughness, timing, abilities}, …]`. Stable across the session;
+/// JS calls once during bootstrap.
+pub(crate) fn tsot_list_card_pool_impl() -> Result<String, String> {
+    use crate::card::CardRegistry;
+    use crate::sim::deck_presets::build_card_pool_entries;
+    use crate::sim::playable_pool::playable_pool;
+
+    let registry =
+        CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;
+    let pool = playable_pool(registry.cards());
+    let entries = build_card_pool_entries(&pool);
+    serde_json::to_string(&entries).map_err(|e| format!("serialize card pool: {e}"))
+}
+
+/// Deckbuilder FFI: shipped preset decks (starter + 7 gauntlet
+/// variants). JSON shape: `[{id, name, cards: [card_id…]}, …]`.
+/// `cards` is flat with repetition — same shape the start_game FFI's
+/// `deck_a_ids` consumes. Length 8.
+pub(crate) fn tsot_list_preset_decks_impl() -> Result<String, String> {
+    use crate::card::CardRegistry;
+    use crate::sim::deck_presets::build_preset_decks;
+    use crate::sim::playable_pool::playable_pool;
+
+    let registry =
+        CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;
+    let pool = playable_pool(registry.cards());
+    let presets = build_preset_decks(&pool);
+    serde_json::to_string(&presets).map_err(|e| format!("serialize presets: {e}"))
+}
+
 /// Live game session — one per browser tab. Owns the [`StepEngine`]
 /// that drives the game; each FFI call resumes the engine where it
 /// left off (no save-and-replay, no rebuild-per-step).
@@ -318,6 +350,27 @@ mod wasm_exports {
             Err(e) => export(format!("error: {e}")),
         }
     }
+
+    /// Deckbuilder: full playable card pool as JSON. One-shot, no
+    /// session needed. Free with [`tsot_free_string`].
+    #[no_mangle]
+    pub extern "C" fn tsot_list_card_pool() -> *mut c_char {
+        match super::tsot_list_card_pool_impl() {
+            Ok(json) => export(json),
+            Err(e) => export(format!("error: {e}")),
+        }
+    }
+
+    /// Deckbuilder: shipped preset decks (starter + 7 gauntlet
+    /// variants) as JSON. One-shot, no session needed. Free with
+    /// [`tsot_free_string`].
+    #[no_mangle]
+    pub extern "C" fn tsot_list_preset_decks() -> *mut c_char {
+        match super::tsot_list_preset_decks_impl() {
+            Ok(json) => export(json),
+            Err(e) => export(format!("error: {e}")),
+        }
+    }
 }
 
 // Re-export so the wasm bin can reach them through `tsot::wasm_ffi::tsot_*`.
@@ -575,6 +628,67 @@ mod tests {
             .expect("envelope.trace should be an array");
         assert!(!trace.is_empty(), "trace should be non-empty after Pass");
         assert!(clear_session());
+    }
+
+    // ----- Deckbuilder FFI ---------------------------------------
+
+    /// INTENT: `tsot_list_card_pool_impl` returns a non-empty JSON
+    /// array of card pool entries with the fields the JS deckbuilder
+    /// renders. No session required.
+    #[test]
+    fn list_card_pool_returns_pool_entries_json() {
+        let json = tsot_list_card_pool_impl().expect("list_card_pool returned Err");
+        let arr: Vec<Value> =
+            serde_json::from_str(&json).expect("card pool JSON parses as array");
+        assert!(!arr.is_empty(), "card pool should be non-empty");
+        // Every entry has the keys the JS deckbuilder renders.
+        for (i, entry) in arr.iter().enumerate() {
+            for field in [
+                "id",
+                "name",
+                "kind",
+                "cost_text",
+                "colors",
+                "symbols",
+                "subtypes",
+                "abilities",
+            ] {
+                assert!(
+                    entry.get(field).is_some(),
+                    "entry[{i}] missing field {field}: {entry}"
+                );
+            }
+        }
+    }
+
+    /// INTENT: `tsot_list_preset_decks_impl` returns exactly 8 preset
+    /// decks (starter + 7 gauntlet), each with a flat `cards` array
+    /// of 50 card IDs — the shape `tsot_start_game`'s `deck_a_ids`
+    /// consumes.
+    #[test]
+    fn list_preset_decks_returns_starter_plus_gauntlet_json() {
+        let json = tsot_list_preset_decks_impl().expect("list_preset_decks returned Err");
+        let arr: Vec<Value> =
+            serde_json::from_str(&json).expect("presets JSON parses as array");
+        assert_eq!(arr.len(), 8, "1 starter + 7 gauntlet = 8 presets");
+        assert_eq!(arr[0]["id"], "starter", "first preset is the starter");
+        for (i, preset) in arr.iter().enumerate() {
+            let cards = preset["cards"]
+                .as_array()
+                .unwrap_or_else(|| panic!("preset[{i}] missing cards array: {preset}"));
+            assert_eq!(
+                cards.len(),
+                50,
+                "preset[{i}] ({}) should have 50 cards",
+                preset["id"]
+            );
+            for card_id in cards {
+                assert!(
+                    card_id.is_string(),
+                    "preset[{i}] cards must be strings, got {card_id}"
+                );
+            }
+        }
     }
 
     /// INTENT: each FFI call's trace is fresh — events from the

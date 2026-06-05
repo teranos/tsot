@@ -11,6 +11,7 @@
 pub mod ai;
 #[cfg(test)]
 mod ai_trace_tests;
+pub mod deck_presets;
 pub mod deck_token;
 pub mod diversity;
 pub mod evolve;
@@ -21,6 +22,7 @@ pub mod human;
 pub mod mcts;
 pub mod ops;
 pub mod parallel_eval;
+pub mod playable_pool;
 pub mod run;
 pub mod snapshot;
 pub mod stats;
