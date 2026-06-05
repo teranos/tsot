@@ -53,7 +53,7 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts wasm wasm-serve clean-wasm
+.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts wasm wasm-serve wasm-dev wasm-dev-serve clean-wasm
 
 help:
 	@echo ""
@@ -81,6 +81,8 @@ help:
 	@echo "WASM browser play:"
 	@echo "  make wasm                build the wasm bundle + stage dist/ (needs emcc on PATH)"
 	@echo "  make wasm-serve          \`make wasm\` then python3 -m http.server on dist/ (PORT=8080 default)"
+	@echo "  make wasm-dev            wasm build with -g (names section preserved) for readable stacks"
+	@echo "  make wasm-dev-serve      \`make wasm-dev\` then serve dist/ (PORT=8080 default)"
 	@echo "  make clean-wasm          rm -rf dist/"
 
 matchup-decks:
@@ -232,9 +234,10 @@ matchup-mcts:
 #   git clone https://github.com/emscripten-core/emsdk; cd emsdk
 #   ./emsdk install latest && ./emsdk activate latest
 #   source ./emsdk_env.sh
-WASM_TARGET := wasm32-unknown-emscripten
-WASM_OUT    := target/$(WASM_TARGET)/release
-WASM_DIST   := dist
+WASM_TARGET    := wasm32-unknown-emscripten
+WASM_OUT       := target/$(WASM_TARGET)/release
+WASM_OUT_DEV   := target/$(WASM_TARGET)/debug
+WASM_DIST      := dist
 
 wasm:
 	@command -v emcc >/dev/null 2>&1 || { \
@@ -270,6 +273,45 @@ wasm-serve: wasm
 	@# python (no orphaned child). `allow_reuse_address = True` skips
 	@# Python's default TIME_WAIT — without it, the next `make wasm-serve`
 	@# after a stop fails with "Address already in use" for ~60s.
+	@cd $(WASM_DIST) && exec python3 -c "import http.server, socketserver; socketserver.TCPServer.allow_reuse_address = True; http.server.test(HandlerClass=http.server.SimpleHTTPRequestHandler, port=$(WASM_SERVE_PORT), bind='')"
+
+# Developer build. Same staging as `make wasm` but the wasm carries
+# the names section (`-g` to emcc) so the JS exception stacks the
+# worker captures resolve `wasm-function[N]` indices to Rust symbol
+# names. Also builds in the cargo `dev` profile (no --release), which
+# keeps debug-assertions on and produces friendlier panic messages.
+# Slower to compile, bigger binary, but a load-bug stack now reads
+# `tsot::sim::step::StepEngine::step` instead of `wasm-function[641]`.
+#
+# `RUSTFLAGS` here REPLACES `.cargo/config.toml`'s `target.<triple>.rustflags`
+# per cargo's documented precedence, so we duplicate the production link-
+# args list and append `-g`. If we ever change the production link-args,
+# keep these two lists in sync.
+wasm-dev:
+	@command -v emcc >/dev/null 2>&1 || { \
+		echo "error: emcc not on PATH."; \
+		echo "       Nix users: re-enter the dev shell — flake.nix now provides emscripten."; \
+		echo "         \`exit && nix develop\`"; \
+		echo "       Non-Nix: install emscripten via emsdk and \`source ./emsdk_env.sh\`."; \
+		exit 1; \
+	}
+	RUSTFLAGS='-C link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_start_game,_tsot_apply_action,_tsot_drain_partial_trace,_tsot_list_card_pool,_tsot_list_preset_decks,_tsot_save_game,_tsot_load_game,_tsot_test_panic -C link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8 -C link-args=--js-library=assets/wasm-worker-lib.js -C link-args=-sMODULARIZE=1 -C link-args=-sEXPORT_NAME=createTsotModule -C link-args=-sALLOW_MEMORY_GROWTH=1 -C link-args=-sSUPPORT_LONGJMP=wasm -C link-args=-sUSE_PTHREADS=0 -C link-arg=-g' cargo build -Z build-std=std,panic_abort --target $(WASM_TARGET) --bin tsot_wasm
+	@mkdir -p $(WASM_DIST)
+	cp $(WASM_OUT_DEV)/tsot_wasm.js $(WASM_DIST)/tsot_wasm.js
+	cp $(WASM_OUT_DEV)/tsot_wasm.wasm $(WASM_DIST)/tsot_wasm.wasm
+	cp assets/play.html $(WASM_DIST)/index.html
+	cp assets/tsot-worker.js $(WASM_DIST)/tsot-worker.js
+	@echo ""
+	@echo "wasm-dev bundle (with -g symbol names) staged in $(WASM_DIST)/"
+	@ls -lah $(WASM_DIST)/
+
+# Same as `wasm-serve` but builds the dev bundle first.
+wasm-dev-serve: wasm-dev
+	@command -v python3 >/dev/null 2>&1 || { \
+		echo "error: python3 not on PATH"; exit 1; \
+	}
+	@echo ""
+	@echo "Serving $(WASM_DIST)/ (dev) at http://localhost:$(WASM_SERVE_PORT)/  (Ctrl-C to stop)"
 	@cd $(WASM_DIST) && exec python3 -c "import http.server, socketserver; socketserver.TCPServer.allow_reuse_address = True; http.server.test(HandlerClass=http.server.SimpleHTTPRequestHandler, port=$(WASM_SERVE_PORT), bind='')"
 
 clean-wasm:

@@ -39,7 +39,7 @@ mod trace_tests;
 /// `DeclareBlockers`). S7-S10 add `ChoiceOracle` and activation
 /// sub-cursors. Subject to refinement once we actually port
 /// `run_game_continue`'s loop state into struct fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum EngineCursor {
     /// Initial state — engine constructed but no step() called yet.
     /// Transitions to TurnSetup on first step().

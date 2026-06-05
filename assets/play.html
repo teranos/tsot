@@ -51,6 +51,15 @@
   .empty-note { color: #666; font-style: italic; font-size: 0.7rem; }
   .meta { color: #888; font-size: 0.75rem; margin-bottom: 0.5rem; }
   .deck-top { color: #6cf; }
+  /* Error block: errors-as-first-class. Distinct red treatment so a
+     captured failure (Rust panic, FFI Err, worker exception) is
+     impossible to miss when scrolling the LOG. Multi-line, no
+     truncation — the whole envelope is visible. */
+  .log-error { border: 1px solid #f44; background: rgba(255, 68, 68, 0.06); padding: 0.4rem 0.6rem; margin: 0.3rem 0; }
+  .log-error-header { color: #f88; font-weight: bold; white-space: pre-wrap; word-break: break-word; }
+  .log-error-meta { color: #b66; font-size: 0.7rem; margin-top: 0.1rem; }
+  .log-error-trail { color: #888; font-size: 0.7rem; margin-top: 0.3rem; }
+  .log-error-trail-line { color: #bbb; font-size: 0.7rem; padding-left: 1rem; }
   /* Deckbuilder layout — two-column grid: pool left, current deck right. */
   #deckbuilder { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; }
   #deckbuilder .pool, #deckbuilder .deck { border: 1px solid #333; padding: 0.5rem; }
@@ -77,6 +86,27 @@
 <h1>tsot — play</h1>
 
 <div id="prompt">Loading...</div>
+
+<!-- Save / load controls. Visible in both phases; Save + Download
+     are disabled until a game is in progress. Saves persist to
+     IndexedDB (`tsot` database, `saves` store) and survive page
+     reload. Download / Load file is the bug-report workflow:
+     attach the JSON to a message so it can be loaded on another
+     machine. -->
+<div id="save-controls" style="margin-bottom: 0.5rem; display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center;">
+  <button id="btn-save" disabled>Save</button>
+  <button id="btn-load-saved">Load saved…</button>
+  <button id="btn-download" disabled>Download</button>
+  <button id="btn-load-file">Load file…</button>
+  <input id="file-input" type="file" accept="application/json" style="display:none;" />
+  <!-- Observability probe: clicking this triggers a Rust panic on
+       purpose. If the panic hook works, the LOG shows a rich
+       [RUST-PANIC] block with file:line; if not, we see a
+       [WASM-TRAP] — telling us the hook never reached the JS side. -->
+  <button id="btn-test-panic" class="danger" style="margin-left: auto;">Trigger test panic</button>
+  <span id="save-status" style="color:#888; font-size: 0.7rem;"></span>
+</div>
+<div id="saved-list" style="display:none; border:1px solid #333; padding:0.4rem; margin-bottom:0.5rem;"></div>
 
 <div class="meta" id="meta"></div>
 
@@ -175,9 +205,73 @@ function bootWorker() {
       pendingFfi = null;
       if (p) p.resolve(m.json);
     } else if (m.kind === 'error') {
+      // Worker-caught JS exception inside `callWasm`. Wrap as a
+      // first-class TraceEvent::Error so it lands in the LOG (audit
+      // trail) AND can be rendered inline at the failing click.
+      const errEvent = {
+        kind: 'Error', at_us: 0, source: 'wasm-trap',
+        ffi_call: null, message: m.error || 'worker exception',
+        location: null, recent_trace: [],
+      };
+      appendErrorEvent(errEvent);
       const p = pendingFfi;
       pendingFfi = null;
-      if (p) p.reject(new Error(m.error));
+      if (p) {
+        const err = new Error(errEvent.message);
+        err.errorEvent = errEvent;
+        p.reject(err);
+      }
+    } else if (m.kind === 'panic') {
+      // Rust panic captured by the panic hook BEFORE the wasm trap.
+      // The line IS a TraceEvent::Error envelope already. Render it
+      // in the LOG and reject any inflight FFI with the rich event
+      // attached so the inline renderer can show the same context.
+      // The wasm module is dead after this — a reload is needed to
+      // continue.
+      let errEvent;
+      try { errEvent = JSON.parse(m.line); } catch (_) { errEvent = null; }
+      if (!errEvent) {
+        errEvent = {
+          kind: 'Error', at_us: 0, source: 'rust-panic',
+          ffi_call: null,
+          message: 'unparseable panic envelope: ' + m.line,
+          location: null, recent_trace: [],
+        };
+      }
+      appendErrorEvent(errEvent);
+      const p = pendingFfi;
+      pendingFfi = null;
+      if (p) {
+        const err = new Error(errEvent.message || 'wasm panic');
+        err.errorEvent = errEvent;
+        p.reject(err);
+      }
+    } else if (m.kind === 'ready') {
+      // Bootstrap signal — handled by the init promise above. Reach
+      // here on the persistent handler too; no-op.
+    } else if (m.kind === 'info') {
+      // "I am alive" signals from the wasm side — used by
+      // `install_panic_hook` to confirm in the LOG that the hook
+      // actually ran, and by `tsot_wasm::main` to confirm main()
+      // was invoked. Visible event in the LOG with a distinct
+      // prefix so we can see the bootstrap chain.
+      let info;
+      try { info = JSON.parse(m.line); } catch (_) { info = { message: m.line }; }
+      const logEl = document.getElementById('log');
+      const node = document.createElement('div');
+      node.style.color = '#6f9';
+      node.textContent = `[info] ${info.message || m.line}`;
+      logEl.appendChild(node);
+      logEl.scrollTop = logEl.scrollHeight;
+    } else {
+      // Unknown message kind — surface it so it isn't silently
+      // swallowed. Errors are sacred.
+      appendErrorEvent({
+        kind: 'Error', at_us: 0, source: 'worker',
+        ffi_call: null,
+        message: 'unknown worker message kind: ' + (m && m.kind),
+        location: null, recent_trace: [],
+      });
     }
   });
 }
@@ -186,12 +280,45 @@ function bootWorker() {
 // outbound, `{kind:'envelope', json}` inbound. The engine is single-
 // threaded, so at most one FFI call is in flight at a time and we
 // only need a single `pendingFfi` slot, not a queue.
+//
+// Errors-as-first-class: when the wasm side returns an envelope with
+// `ok: false`, workerCall pushes the trace (which carries a
+// TraceEvent::Error) to the LOG via appendTrace, then rejects with
+// an Error whose `.errorEvent` carries the rich Rust-side event so
+// the inline renderer at the click site can use it.
 function workerCall(cmd, payload) {
   if (pendingFfi) {
     return Promise.reject(new Error('FFI call already in flight; previous call did not resolve'));
   }
   return new Promise((resolve, reject) => {
-    pendingFfi = { resolve, reject };
+    pendingFfi = {
+      resolve: (raw) => {
+        let env;
+        try { env = JSON.parse(raw); } catch (_) { env = null; }
+        if (env && env.ok === false) {
+          const trace = env.trace || [];
+          // Push the whole trace through the standard renderer so the
+          // breadcrumb context is in the LOG alongside the Error event.
+          appendTrace(trace);
+          const errEvent =
+            trace.find((e) => e && e.kind === 'Error') || {
+              kind: 'Error',
+              at_us: 0,
+              source: 'rust-ffi',
+              ffi_call: cmd,
+              message: env.error || 'unknown error',
+              location: null,
+              recent_trace: [],
+            };
+          const err = new Error(errEvent.message);
+          err.errorEvent = errEvent;
+          reject(err);
+          return;
+        }
+        resolve(raw);
+      },
+      reject,
+    };
     wasmWorker.postMessage({ cmd, ...payload });
   });
 }
@@ -212,6 +339,161 @@ function appendLiveUctIter(line) {
   const logEl = document.getElementById('log');
   logEl.appendChild(document.createTextNode(formatted + '\n'));
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+// Build a styled `.log-error` block from a `TraceEvent::Error`
+// envelope. Same DOM regardless of where it will be inserted —
+// callers decide the anchor: appendErrorEvent puts it in the LOG;
+// renderErrorAt puts it right next to the button that failed.
+// Errors are first-class observability events — same shape, full
+// context (source, FFI call, message, location, breadcrumb),
+// never collapsed, never truncated.
+function buildErrorBlock(ev) {
+  const block = document.createElement('div');
+  block.className = 'log-error';
+  const source = ev.source || 'error';
+  const header = document.createElement('div');
+  header.className = 'log-error-header';
+  header.textContent = `[${source.toUpperCase()}] ${ev.message || '(no message)'}`;
+  block.appendChild(header);
+  const sub = document.createElement('div');
+  sub.className = 'log-error-meta';
+  const parts = [];
+  if (ev.location) parts.push(`at ${ev.location}`);
+  if (ev.ffi_call) parts.push(`inside FFI ${ev.ffi_call}`);
+  if (typeof ev.at_us === 'number') parts.push(`t=${(ev.at_us / 1000).toFixed(1)}ms`);
+  sub.textContent = parts.join('  ·  ');
+  block.appendChild(sub);
+  const trail = ev.recent_trace || [];
+  if (trail.length) {
+    const breadcrumb = document.createElement('div');
+    breadcrumb.className = 'log-error-trail';
+    breadcrumb.textContent = `--- last ${trail.length} trace events before failure ---`;
+    block.appendChild(breadcrumb);
+    for (const inner of trail) {
+      const line2 = document.createElement('div');
+      line2.className = 'log-error-trail-line';
+      try { line2.textContent = fmtTraceEvent(inner); }
+      catch (_) { line2.textContent = JSON.stringify(inner); }
+      block.appendChild(line2);
+    }
+  }
+  // If the envelope carried a JS-side stack (worker catch path,
+  // when Rust didn't write anything to stderr), surface it inline.
+  // We don't have a Rust file:line, but the JS stack at least tells
+  // us which wasm function index trapped — that's all we can get
+  // when panic=abort skips the printErr path.
+  if (ev.js_stack) {
+    const stackLabel = document.createElement('div');
+    stackLabel.className = 'log-error-trail';
+    stackLabel.textContent = '--- JS exception stack ---';
+    block.appendChild(stackLabel);
+    const stackPre = document.createElement('div');
+    stackPre.className = 'log-error-trail-line';
+    stackPre.style.whiteSpace = 'pre-wrap';
+    stackPre.textContent = ev.js_stack;
+    block.appendChild(stackPre);
+  }
+  if (ev.raw_stderr) {
+    const stderrLabel = document.createElement('div');
+    stderrLabel.className = 'log-error-trail';
+    stderrLabel.textContent = '--- raw stderr from wasm ---';
+    block.appendChild(stderrLabel);
+    const stderrPre = document.createElement('div');
+    stderrPre.className = 'log-error-trail-line';
+    stderrPre.style.whiteSpace = 'pre-wrap';
+    stderrPre.textContent = ev.raw_stderr;
+    block.appendChild(stderrPre);
+  }
+  if (source === 'rust-panic' || source === 'wasm-trap') {
+    const footer = document.createElement('div');
+    footer.className = 'log-error-meta';
+    footer.textContent = 'wasm module aborted after this point — reload the page to continue';
+    block.appendChild(footer);
+  }
+  return block;
+}
+
+// Append the error block to the LOG (the audit trail). Always
+// happens — errors are recorded centrally regardless of where they
+// also display.
+function appendErrorEvent(ev) {
+  const logEl = document.getElementById('log');
+  logEl.appendChild(buildErrorBlock(ev));
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// Display the error block immediately after `anchor` (the button or
+// row that triggered the action). Replaces any previous inline
+// error attached to the same anchor so the surface stays current.
+// The intent: a click that fails shows the failure RIGHT THERE,
+// never requires scrolling the LOG to figure out what went wrong.
+function renderErrorAt(anchor, ev) {
+  if (!anchor || !anchor.parentNode) return;
+  // Remove any previous inline error block attached to this anchor.
+  if (anchor._inlineError && anchor._inlineError.parentNode) {
+    anchor._inlineError.parentNode.removeChild(anchor._inlineError);
+  }
+  const block = buildErrorBlock(ev);
+  block.classList.add('log-error-inline');
+  anchor._inlineError = block;
+  anchor.parentNode.insertBefore(block, anchor.nextSibling);
+}
+
+// Clear the inline error attached to `anchor`, if any. Called when
+// the next action at the same anchor succeeds so stale errors don't
+// linger.
+function clearInlineErrorAt(anchor) {
+  if (!anchor) return;
+  if (anchor._inlineError && anchor._inlineError.parentNode) {
+    anchor._inlineError.parentNode.removeChild(anchor._inlineError);
+  }
+  anchor._inlineError = null;
+}
+
+// Build a `TraceEvent::Error`-shaped envelope from a JS-side
+// exception. Used by every onclick that wraps an FFI call so we
+// can flow JS-caught errors through the same renderer as Rust ones.
+function jsErrorEnvelope(label, e) {
+  return {
+    kind: 'Error',
+    at_us: 0,
+    source: 'js',
+    ffi_call: label,
+    message: (e && e.message) ? e.message : String(e),
+    location: null,
+    recent_trace: [],
+  };
+}
+
+// Wrap a click handler so any failure renders inline at the
+// clicked element AND in the LOG. The handler receives the event;
+// if it returns a Promise we await it. Successful runs clear any
+// stale inline error at that anchor.
+//
+// If the caught exception carries an `errorEvent` (set by workerCall
+// when the wasm returned an Err envelope, or by the worker error /
+// panic message handlers), we use that rich Rust-side event for the
+// inline display — and skip adding to the LOG a second time because
+// the rich event has already been appended there. Otherwise we
+// synthesize a `source:"js"` envelope and add it to both surfaces.
+function withInlineError(label, fn) {
+  return async function(ev) {
+    const anchor = ev?.currentTarget || ev?.target || null;
+    clearInlineErrorAt(anchor);
+    try {
+      await fn(ev);
+    } catch (e) {
+      let env;
+      if (e && e.errorEvent) {
+        env = e.errorEvent;
+      } else {
+        env = jsErrorEnvelope(label, e);
+        appendErrorEvent(env);
+      }
+      if (anchor) renderErrorAt(anchor, env);
+    }
+  };
 }
 
 // Pre-game phase: the deckbuilder. The wasm returns the playable
@@ -322,12 +604,17 @@ function fmtTraceEvent(ev) {
 
 // O5: append a TraceEvent array as formatted lines into the LOG
 // panel. Trace + log share the panel for now; filter chips arrive
-// in O13. Each event is one text node so future click-to-expand
-// (O14) can swap in DOM elements without restructuring.
+// in O13. Most events render as a one-line text node; Error events
+// get the full styled block via appendErrorEvent so they're impossible
+// to miss when scrolling.
 function appendTrace(events) {
   if (!events || events.length === 0) return;
   const logEl = document.getElementById('log');
   for (const ev of events) {
+    if (ev && ev.kind === 'Error') {
+      appendErrorEvent(ev);
+      continue;
+    }
     logEl.appendChild(document.createTextNode(fmtTraceEvent(ev) + '\n'));
   }
   logEl.scrollTop = logEl.scrollHeight;
@@ -354,14 +641,12 @@ function jsPushSummary(label, breakdown) {
   );
 }
 
-// Parse the `{prompt, log, trace}` envelope the Rust FFI returns.
+// Parse the `{prompt, log, trace}` envelope the Rust FFI returns
+// on success. (Err envelopes — `{ok:false, …}` — are caught inside
+// workerCall, never reach this function.)
 // Side effects: push `log` lines + `trace` events into the LOG
 // panel. Returns the prompt object the rest of the UI consumes.
-//
-// O5+: returns measurement breakdown alongside the prompt so the
-// caller can include parse + DOM-append times in its summary.
 function parseEnvelope(out) {
-  if (out.startsWith('error:')) throw new Error(out);
   const t0 = performance.now();
   const env = JSON.parse(out);
   const t_parse = performance.now();
@@ -908,6 +1193,220 @@ function labelFor(view, iid) {
   return iid;
 }
 
+// ---------------- Save / Load ----------------
+
+// IndexedDB wrapper. One object store keyed by auto-increment id;
+// records carry { id, name, savedAt: ISO string, json }. Schema is
+// tiny on purpose — Save/Load is for development right now (bug
+// reports + quick "go back 3 turns") not a full slot-list product.
+
+const DB_NAME = 'tsot';
+const STORE = 'saves';
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        db.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+      }
+    };
+  });
+}
+
+async function dbPut(record) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const req = tx.objectStore(STORE).put(record);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbGetAll() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbDelete(id) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const req = tx.objectStore(STORE).delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function setSaveStatus(msg) {
+  document.getElementById('save-status').textContent = msg;
+}
+
+// Returns the SaveFile JSON for the current session. Throws on
+// "no game in progress" (worker returns an error envelope).
+async function fetchCurrentSaveJson() {
+  const json = await workerCall('save_game', {});
+  if (json.startsWith('error:')) throw new Error(json);
+  return json;
+}
+
+// Inner-handler shape: throws on failure so `withInlineError` wraps
+// catch + render. Status text is only used for SUCCESS notifications;
+// errors flow through the inline + LOG paths.
+async function onSaveClick() {
+  const json = await fetchCurrentSaveJson();
+  const name = window.prompt('Save name', `turn ${state.current?.state?.turn ?? '?'}`) || `save-${Date.now()}`;
+  await dbPut({ name, savedAt: new Date().toISOString(), json });
+  setSaveStatus(`saved "${name}"`);
+  if (document.getElementById('saved-list').style.display !== 'none') {
+    renderSavedList();
+  }
+}
+
+async function onDownloadClick() {
+  const json = await fetchCurrentSaveJson();
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `tsot-save-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  setSaveStatus('downloaded');
+}
+
+async function loadSaveJson(saveJson) {
+  // The opp_ai picked in the deckbuilder is reused; user can change
+  // it before saving (H1 only persists it in-memory). Fresh seed per
+  // load — SaveFile doesn't preserve rng state, see ADR notes.
+  // workerCall throws (with `.errorEvent`) on `{ok:false}` envelopes,
+  // so by the time we get a string here, the wasm succeeded.
+  const loadArgs = {
+    save_json: saveJson,
+    opp_ai: state.oppAi || 'uct',
+    seed: Math.floor(Math.random() * 0xFFFFFFFF),
+  };
+  const rawEnvelope = await workerCall('load_game', { loadArgs });
+  state.phase = 'playing';
+  document.getElementById('deckbuilder').style.display = 'none';
+  document.getElementById('game-screen').style.display = '';
+  document.getElementById('saved-list').style.display = 'none';
+  const { prompt } = parseEnvelope(rawEnvelope);
+  state.current = { state: prompt.state, prompt };
+  render(state.current);
+  wasmStarted = true;
+  setSaveStatus('loaded');
+}
+
+async function renderSavedList() {
+  const panel = document.getElementById('saved-list');
+  panel.innerHTML = '';
+  panel.style.display = '';
+  let records;
+  try {
+    records = await dbGetAll();
+  } catch (e) {
+    panel.textContent = 'Failed to read IndexedDB: ' + (e?.message || e);
+    return;
+  }
+  if (!records.length) {
+    panel.textContent = '(no saves yet)';
+    return;
+  }
+  records.sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''));
+  for (const rec of records) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; gap:0.4rem; align-items:center; padding:0.2rem 0;';
+    row.innerHTML = `<span style="flex:1;">${rec.name} <span style="color:#666;">— ${rec.savedAt}</span></span>`;
+    const loadBtn = document.createElement('button');
+    loadBtn.textContent = 'Load';
+    loadBtn.onclick = withInlineError(`load_game ("${rec.name}")`, async () => {
+      await loadSaveJson(rec.json);
+    });
+    const dlBtn = document.createElement('button');
+    dlBtn.textContent = 'Download';
+    dlBtn.onclick = withInlineError(`download ("${rec.name}")`, () => {
+      const blob = new Blob([rec.json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${rec.name.replace(/[^a-z0-9_-]+/gi, '_')}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+    const delBtn = document.createElement('button');
+    delBtn.className = 'danger';
+    delBtn.textContent = 'Delete';
+    delBtn.onclick = withInlineError(`delete ("${rec.name}")`, async () => {
+      if (!confirm(`Delete "${rec.name}"?`)) return;
+      await dbDelete(rec.id);
+      renderSavedList();
+    });
+    row.appendChild(loadBtn);
+    row.appendChild(dlBtn);
+    row.appendChild(delBtn);
+    panel.appendChild(row);
+  }
+}
+
+async function onLoadFileChange(ev) {
+  const file = ev.target.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    await loadSaveJson(text);
+  } finally {
+    ev.target.value = '';
+  }
+}
+
+function wireSaveControls() {
+  document.getElementById('btn-save').onclick =
+    withInlineError('save_game', () => onSaveClick());
+  document.getElementById('btn-download').onclick =
+    withInlineError('save_game (download)', () => onDownloadClick());
+  document.getElementById('btn-load-saved').onclick = () => {
+    const panel = document.getElementById('saved-list');
+    if (panel.style.display === 'none') renderSavedList();
+    else panel.style.display = 'none';
+  };
+  document.getElementById('btn-load-file').onclick = () => {
+    document.getElementById('file-input').click();
+  };
+  document.getElementById('file-input').onchange =
+    withInlineError('load_game (file)', (ev) => onLoadFileChange(ev));
+  // Observability probe: a click that panics on purpose. The wasm
+  // dies after — but only after the panic hook (if working) emits
+  // the rich envelope. The button's inline error block shows what
+  // path the panic took: rust-panic = hook fired; wasm-trap = hook
+  // missed it; one click tells us which.
+  document.getElementById('btn-test-panic').onclick =
+    withInlineError('test_panic', async () => {
+      await workerCall('test_panic', {});
+    });
+}
+
+// Save + Download are only useful when a session is running.
+// Called whenever the phase transitions.
+function updateSaveButtonsEnabled() {
+  const playing = state.phase === 'playing';
+  document.getElementById('btn-save').disabled = !playing;
+  document.getElementById('btn-download').disabled = !playing;
+}
+
 // ---------------- Deckbuilder ----------------
 
 // Group state.deck (flat array w/ repetition) into {card_id → count}.
@@ -1112,6 +1611,7 @@ async function startGameFromDeckbuilder() {
   document.getElementById('deckbuilder').style.display = 'none';
   document.getElementById('game-screen').style.display = '';
   document.getElementById('prompt').textContent = 'Starting game…';
+  updateSaveButtonsEnabled();
   try {
     const initial = await fetchState();
     state.current = { state: initial.state, prompt: initial };
@@ -1123,6 +1623,8 @@ async function startGameFromDeckbuilder() {
 }
 
 (async () => {
+  wireSaveControls();
+  updateSaveButtonsEnabled();
   // Bootstrap: spawn the worker, await its `{kind:'ready'}`. The wasm
   // lives in worker scope from here on; the main thread only sees
   // postMessage envelopes. tsot_wasm.js is loaded by the worker via

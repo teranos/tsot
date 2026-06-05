@@ -62,6 +62,107 @@ pub(crate) fn tsot_list_preset_decks_impl() -> Result<String, String> {
     serde_json::to_string(&presets).map_err(|e| format!("serialize presets: {e}"))
 }
 
+/// Save the current session's game state + cursor as a JSON
+/// `SaveFile`. Caller is expected to be in the middle of a game
+/// (i.e., `tsot_start_game` has been called); returns Err if no
+/// session is active. The save captures `GameState` + the
+/// `EngineCursor` so the load path can place the engine at the
+/// same decision point. It does NOT capture the RNG state or the
+/// opponent AI — those are reconstructed at load time from the
+/// load_game args + a fresh seed.
+pub(crate) fn tsot_save_game_impl() -> Result<String, String> {
+    use crate::replay::SaveFile;
+    crate::trace::set_ffi_call_label("tsot_save_game");
+    let json = with_session(|s| -> Result<String, String> {
+        let save = SaveFile::from_step_engine(&s.engine, 0);
+        save.to_json().map_err(|e| format!("save: {e}"))
+    })
+    .map_err(|e| e.to_string())??;
+    crate::trace::clear_ffi_call_label();
+    Ok(json)
+}
+
+/// Load-game args: the `SaveFile` JSON plus the AI to drive the
+/// opponent on resume. Human is always side A in v1; the save
+/// doesn't remember what AI played opposite — the caller picks.
+#[derive(serde::Deserialize)]
+pub(crate) struct LoadGameArgs {
+    pub save_json: String,
+    /// `"heuristic"` / `"uct"` / `"mcts"`.
+    pub opp_ai: String,
+    /// Fresh seed for the post-load engine RNG. Save doesn't preserve
+    /// the original engine seed (StdRng's state isn't serialized), so
+    /// AI rollouts after a load won't be byte-identical to a
+    /// continuous play — but the loaded position itself is exact.
+    pub seed: u64,
+}
+
+/// Install a session from a `SaveFile` JSON. Returns the envelope
+/// the UI would have received from the next-prompt-after-resume
+/// (matches `tsot_start_game`'s contract), so JS can re-render
+/// directly without an extra round-trip.
+pub(crate) fn tsot_load_game_impl(args_json: &str) -> Result<String, String> {
+    use crate::card::CardRegistry;
+    use crate::replay::SaveFile;
+    use crate::sim::step::StepEngine;
+    use crate::sim::AiKind;
+
+    crate::trace::set_ffi_call_label("tsot_load_game");
+    let args: LoadGameArgs = serde_json::from_str(args_json)
+        .map_err(|e| format!("load_game: bad args JSON: {e}"))?;
+
+    let _ = clear_session();
+    let _ = crate::trace::drain();
+    crate::trace::enable(true);
+
+    let save = SaveFile::from_json(&args.save_json)
+        .map_err(|e| format!("load_game[parse SaveFile]: {e}"))?;
+    let cursor_opt = save.cursor.clone();
+    let registry = CardRegistry::load_embedded()
+        .map_err(|e| format!("load_game[registry load]: {e}"))?;
+    let state = save
+        .restore(&registry)
+        .map_err(|e| format!("load_game[rebind handlers]: {e}"))?;
+
+    let opp = match args.opp_ai.as_str() {
+        "heuristic" => AiKind::Heuristic,
+        "mcts" => AiKind::Mcts(crate::sim::mcts::MctsConfig {
+            base_seed: args.seed.wrapping_add(0xCAFE_BABE),
+            ..Default::default()
+        }),
+        "uct" => AiKind::Uct(crate::sim::uct::UctConfig {
+            base_seed: args.seed.wrapping_add(0x00C0_FFEE),
+            ..Default::default()
+        }),
+        other => return Err(format!("load_game: unknown opp_ai {other:?}")),
+    };
+    let (iface, _prompt_rx, _action_tx) = HumanInterface::new();
+    let ais = [AiKind::Human(Arc::new(iface)), opp];
+    let mut engine = StepEngine::new(state, ais, registry, args.seed);
+    // Apply the saved cursor so the engine resumes at the exact
+    // decision point. If the save predates cursor-aware FFI (cursor
+    // is None), leave engine.cursor at its default StartTurn — the
+    // engine will then re-enter turn-setup, which may re-run untap/
+    // draw on a state already past those phases. That's the legacy
+    // SaveFile shape; documented in replay.rs.
+    if let Some(cursor) = cursor_opt {
+        engine.cursor = cursor;
+    }
+
+    let mut session = GameSession { engine };
+    let prompt = drive_to_next_yield(&mut session.engine, None)
+        .map_err(|e| format!("load_game[drive_to_next_yield]: {e}"))?;
+    let log = std::mem::take(&mut session.engine.log);
+    let trace_events = crate::trace::drain();
+    let envelope =
+        serde_json::json!({ "prompt": prompt, "log": log, "trace": trace_events });
+    let envelope_json = serde_json::to_string(&envelope)
+        .map_err(|e| format!("load_game[serialize envelope]: {e}"))?;
+    install_session(session);
+    crate::trace::clear_ffi_call_label();
+    Ok(envelope_json)
+}
+
 /// Live game session — one per browser tab. Owns the [`StepEngine`]
 /// that drives the game; each FFI call resumes the engine where it
 /// left off (no save-and-replay, no rebuild-per-step).
@@ -116,6 +217,7 @@ pub(crate) struct StartGameArgs {
 /// Build a fresh engine from `args`, drive it to the first human
 /// decision, install the session, return the prompt JSON.
 pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
+    crate::trace::set_ffi_call_label("tsot_start_game");
     let args: StartGameArgs = serde_json::from_str(args_json)
         .map_err(|e| format!("tsot_start_game: bad args JSON: {e}"))?;
 
@@ -141,6 +243,7 @@ pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
     let envelope_json =
         serde_json::to_string(&envelope).map_err(|e| format!("serialize first prompt: {e}"))?;
     install_session(session);
+    crate::trace::clear_ffi_call_label();
     Ok(envelope_json)
 }
 
@@ -148,6 +251,7 @@ pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
 /// drives forward until the next NeedHuman / Done, returns the prompt
 /// JSON.
 pub(crate) fn tsot_apply_action_impl(action_json: &str) -> Result<String, String> {
+    crate::trace::set_ffi_call_label("tsot_apply_action");
     let action: HumanAction = serde_json::from_str(action_json)
         .map_err(|e| format!("tsot_apply_action: bad action JSON: {e}"))?;
 
@@ -166,7 +270,10 @@ pub(crate) fn tsot_apply_action_impl(action_json: &str) -> Result<String, String
     let trace_events = crate::trace::drain();
     let envelope =
         serde_json::json!({ "prompt": prompt, "log": log, "trace": trace_events });
-    serde_json::to_string(&envelope).map_err(|e| format!("serialize next prompt: {e}"))
+    let json = serde_json::to_string(&envelope)
+        .map_err(|e| format!("serialize next prompt: {e}"))?;
+    crate::trace::clear_ffi_call_label();
+    Ok(json)
 }
 
 /// Construct the engine from the JSON args. Card registry is rebuilt
@@ -245,6 +352,27 @@ fn drive_to_next_yield(
             }
         }
     }
+}
+
+// Errors-as-first-class envelope. When an `_impl` returns Err, we
+// push a `TraceEvent::Error` into the bus (so the breadcrumb trail
+// is preserved), drain the bus, and return a JSON envelope shaped
+// `{ok:false, error, trace: [...]}`. JS sees the same trace array
+// shape it sees on success, with the Error event included, and the
+// LOG renders it through the existing `appendTrace` path. No
+// "error: …" prefixed strings, no silent suppression.
+pub(crate) fn err_envelope(stage: Option<&str>, message: &str) -> String {
+    crate::trace::emit_error("rust-ffi", stage, message);
+    let trace = crate::trace::drain();
+    serde_json::to_string(&serde_json::json!({
+        "ok": false,
+        "error": message,
+        "trace": trace,
+    }))
+    .unwrap_or_else(|_| {
+        "{\"ok\":false,\"error\":\"<err_envelope serialize failed>\",\"trace\":[]}"
+            .to_string()
+    })
 }
 
 // Below: wasm-only FFI exports. The session-management primitives
@@ -327,7 +455,7 @@ mod wasm_exports {
             .unwrap_or("<invalid utf-8>");
         match super::tsot_start_game_impl(s) {
             Ok(prompt) => export(prompt),
-            Err(e) => export(format!("error: {e}")),
+            Err(e) => export(super::err_envelope(None, &e)),
         }
     }
 
@@ -347,7 +475,7 @@ mod wasm_exports {
             .unwrap_or("<invalid utf-8>");
         match super::tsot_apply_action_impl(s) {
             Ok(prompt) => export(prompt),
-            Err(e) => export(format!("error: {e}")),
+            Err(e) => export(super::err_envelope(None, &e)),
         }
     }
 
@@ -357,7 +485,7 @@ mod wasm_exports {
     pub extern "C" fn tsot_list_card_pool() -> *mut c_char {
         match super::tsot_list_card_pool_impl() {
             Ok(json) => export(json),
-            Err(e) => export(format!("error: {e}")),
+            Err(e) => export(super::err_envelope(None, &e)),
         }
     }
 
@@ -368,8 +496,51 @@ mod wasm_exports {
     pub extern "C" fn tsot_list_preset_decks() -> *mut c_char {
         match super::tsot_list_preset_decks_impl() {
             Ok(json) => export(json),
-            Err(e) => export(format!("error: {e}")),
+            Err(e) => export(super::err_envelope(None, &e)),
         }
+    }
+
+    /// Save the current session as a JSON `SaveFile`. Returns
+    /// `"error: …"` if no session is active. Free with
+    /// [`tsot_free_string`].
+    #[no_mangle]
+    pub extern "C" fn tsot_save_game() -> *mut c_char {
+        match super::tsot_save_game_impl() {
+            Ok(json) => export(json),
+            Err(e) => export(super::err_envelope(None, &e)),
+        }
+    }
+
+    /// Replace the session with one restored from a JSON `SaveFile`.
+    /// JSON args: `{save_json, opp_ai, seed}`. Returns the envelope
+    /// the next-prompt-after-resume produces (matches start_game's
+    /// contract). Free with [`tsot_free_string`].
+    ///
+    /// # Safety
+    /// `args` must be a valid pointer to a null-terminated UTF-8 string.
+    #[no_mangle]
+    pub unsafe extern "C" fn tsot_load_game(args: *const c_char) -> *mut c_char {
+        if args.is_null() {
+            return export("error: null args");
+        }
+        let s = unsafe { CStr::from_ptr(args) }
+            .to_str()
+            .unwrap_or("<invalid utf-8>");
+        match super::tsot_load_game_impl(s) {
+            Ok(prompt) => export(prompt),
+            Err(e) => export(super::err_envelope(None, &e)),
+        }
+    }
+
+    /// Observability probe: panic on purpose. If the panic hook is
+    /// installed and works through emscripten's trap path, the LOG
+    /// shows a rich `[RUST-PANIC]` block with file:line. If it
+    /// doesn't, we see an opaque `[WASM-TRAP]` — telling us the
+    /// hook isn't reaching the JS side. One-click diagnostic.
+    #[no_mangle]
+    pub extern "C" fn tsot_test_panic() -> *mut c_char {
+        crate::trace::set_ffi_call_label("tsot_test_panic");
+        panic!("tsot_test_panic: intentional panic from the FFI surface");
     }
 }
 
@@ -689,6 +860,200 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ----- Save / Load FFI ---------------------------------------
+
+    /// INTENT: `tsot_save_game_impl` requires a live session.
+    /// Without one, returns Err and the caller surfaces "no game in
+    /// progress" rather than crashing.
+    #[test]
+    fn save_game_without_session_returns_error() {
+        let _ = clear_session();
+        let result = tsot_save_game_impl();
+        assert!(
+            result.is_err(),
+            "save_game with no session should Err, got: {result:?}"
+        );
+    }
+
+    /// INTENT: `tsot_save_game_impl` returns parseable SaveFile JSON
+    /// when a session is active.
+    #[test]
+    fn save_game_returns_parseable_savefile_json() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "heuristic",
+        })
+        .to_string();
+        let _ = tsot_start_game_impl(&args).expect("start_game");
+
+        let save_json = tsot_save_game_impl().expect("save_game returned Err");
+        let parsed: Value =
+            serde_json::from_str(&save_json).expect("save JSON parses");
+        assert!(
+            parsed.get("state").is_some(),
+            "SaveFile JSON should have a state field"
+        );
+        assert!(
+            parsed.get("cursor").is_some(),
+            "SaveFile JSON should have a cursor field (set by from_step_engine)"
+        );
+        assert!(clear_session());
+    }
+
+    /// INTENT: reproduce the user's "index out of bounds" load
+    /// failure with the actual starter deck (multi-card mix) on a
+    /// game that has been ADVANCED — turn the user saw fail was
+    /// turn 9, not turn 1. Drive several Pass actions to advance
+    /// the game state before saving, then save → load. If the load
+    /// panics, the native backtrace tells us file:line.
+    #[test]
+    fn starter_deck_advanced_save_then_load_does_not_panic() {
+        let _ = clear_session();
+        let deck_ids = crate::sim::deck_presets::STARTER_DECK_IDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let start_args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "uct",
+        })
+        .to_string();
+        let _ = tsot_start_game_impl(&start_args).expect("start_game");
+
+        // Advance the game by sending Pass actions until the engine
+        // is at least at turn 5 (matches the user's "mid-game"
+        // save more closely than turn-1 does). Pass loops human's
+        // PickCard / PickAttackers / PickBlocks / Main2.
+        let pass = serde_json::json!({ "kind": "Pass" }).to_string();
+        let empty_attackers = serde_json::json!({ "kind": "Attackers", "iids": [] }).to_string();
+        let empty_blocks = serde_json::json!({ "kind": "Blocks", "pairs": [] }).to_string();
+        for _ in 0..40 {
+            // Drain the current prompt via with_session, decide what
+            // shape to send.
+            let phase_action = with_session(|s| -> Option<String> {
+                let phase_dbg = format!("{:?}", s.engine.state.phase);
+                let turn = s.engine.state.turn;
+                if turn >= 5 {
+                    return None; // stop the loop
+                }
+                // Default: Pass works for Main1 / Main2.
+                // PickAttackers / PickBlocks need their own shape.
+                if phase_dbg.contains("Combat") {
+                    Some(empty_attackers.clone())
+                } else {
+                    Some(pass.clone())
+                }
+            })
+            .expect("session present");
+            let Some(action_json) = phase_action else { break };
+            // Determine if we should send Pass / Attackers / Blocks
+            // based on the most recent prompt — we cheat and just
+            // try Pass, falling back to empty_blocks / attackers if
+            // wrong. The point is to advance state, not to play well.
+            let attempt = tsot_apply_action_impl(&action_json);
+            if attempt.is_err() {
+                let _ = tsot_apply_action_impl(&empty_blocks);
+            }
+        }
+
+        let save_json = tsot_save_game_impl().expect("save_game");
+        assert!(clear_session(), "session present pre-clear");
+        let load_args = serde_json::json!({
+            "save_json": save_json,
+            "opp_ai": "uct",
+            "seed": 0xBEEF_u64,
+        })
+        .to_string();
+        let _ = tsot_load_game_impl(&load_args).expect("load_game must not panic");
+        assert!(clear_session());
+    }
+
+    /// INTENT: reproduce the user's "index out of bounds" load
+    /// failure with the actual starter deck (multi-card mix) instead
+    /// of a 50-card single-template deck. This is the exact flow:
+    /// start_game with starter deck → save → load. If load panics,
+    /// the native backtrace tells us file:line.
+    #[test]
+    fn starter_deck_save_then_load_does_not_panic() {
+        let _ = clear_session();
+        let deck_ids = crate::sim::deck_presets::STARTER_DECK_IDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let start_args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "uct",
+        })
+        .to_string();
+        let _ = tsot_start_game_impl(&start_args).expect("start_game");
+        let save_json = tsot_save_game_impl().expect("save_game");
+        assert!(clear_session(), "session present pre-clear");
+        let load_args = serde_json::json!({
+            "save_json": save_json,
+            "opp_ai": "uct",
+            "seed": 0xBEEF_u64,
+        })
+        .to_string();
+        let _ = tsot_load_game_impl(&load_args).expect("load_game must not panic");
+        assert!(clear_session());
+    }
+
+    /// INTENT: round-trip — start a game, save, load it back via
+    /// the FFI with a fresh opp_ai + seed, the session is alive and
+    /// the resumed game-state phase matches.
+    #[test]
+    fn save_then_load_restores_game_phase() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let start_args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "heuristic",
+        })
+        .to_string();
+        let start_env_json =
+            tsot_start_game_impl(&start_args).expect("start_game returned Err");
+        let start_env: Value =
+            serde_json::from_str(&start_env_json).expect("start envelope parses");
+        let phase_before =
+            start_env["prompt"]["state"]["phase"].as_str().unwrap_or("").to_string();
+        assert!(!phase_before.is_empty(), "start prompt should carry a phase");
+
+        let save_json = tsot_save_game_impl().expect("save_game returned Err");
+
+        // Tear down then load_game from the JSON.
+        assert!(clear_session(), "session should be present pre-clear");
+        let load_args = serde_json::json!({
+            "save_json": save_json,
+            "opp_ai": "heuristic",
+            "seed": 0xBEEF_u64,
+        })
+        .to_string();
+        let load_env_json =
+            tsot_load_game_impl(&load_args).expect("load_game returned Err");
+        let load_env: Value =
+            serde_json::from_str(&load_env_json).expect("load envelope parses");
+        let phase_after =
+            load_env["prompt"]["state"]["phase"].as_str().unwrap_or("").to_string();
+
+        assert_eq!(
+            phase_before, phase_after,
+            "save → load should land in the same phase (before={phase_before}, after={phase_after})"
+        );
+        assert!(clear_session(), "load_game should install a session");
     }
 
     /// INTENT: each FFI call's trace is fresh — events from the

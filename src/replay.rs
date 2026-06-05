@@ -85,10 +85,21 @@ impl ReplayFile {
 /// Mid-game snapshot. Serializes the entire current `GameState` plus any
 /// open replay journal so far. Distinct from `ReplayFile`, which carries
 /// only the initial setup + full mutation log.
+///
+/// `cursor` is `Option<_>` so older saves that pre-dated step-engine
+/// awareness deserialize cleanly — callers that want to fully resume
+/// the StepEngine should use a save whose `cursor` is `Some(_)`.
+/// Fields not on this file (ais, rng, stats, log) are reconstructed at
+/// load time from caller-provided AI choices + a fresh seed; the
+/// trade-off is that rollouts after a load aren't byte-identical to a
+/// continuous play, which is acceptable for the developer-facing
+/// "send me a savefile, I'll debug it" workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveFile {
     pub master_seed: u64,
     pub state: GameState,
+    #[serde(default)]
+    pub cursor: Option<crate::sim::step::EngineCursor>,
 }
 
 impl SaveFile {
@@ -96,6 +107,20 @@ impl SaveFile {
         Self {
             master_seed,
             state: state.clone(),
+            cursor: None,
+        }
+    }
+
+    /// Build a save from a live StepEngine. Captures the cursor so
+    /// load can place the engine at the same decision point.
+    pub fn from_step_engine(
+        engine: &crate::sim::step::StepEngine,
+        master_seed: u64,
+    ) -> Self {
+        Self {
+            master_seed,
+            state: engine.state.clone(),
+            cursor: Some(engine.cursor.clone()),
         }
     }
 

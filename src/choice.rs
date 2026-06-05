@@ -854,7 +854,7 @@ pub struct ScriptedOracle {
     answers: VecDeque<ScriptedAnswer>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ScriptedAnswer {
     Card(Option<InstanceId>),
     Confirm(bool),
