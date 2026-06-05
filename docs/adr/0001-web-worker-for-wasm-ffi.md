@@ -3,6 +3,20 @@
 **Date:** 2026-06-05
 **Status:** Accepted, shipped (commit 066305c)
 
+## Context
+
+TSOT is greenfield and wasm-first. We own the engine, the FFI shape,
+and the JS surface; we can refactor the moment it pays. There is no
+legacy synchronous codebase to preserve.
+
+This matters because the dominant value proposition of the yield-based
+mechanisms (Asyncify, JSPI) is "I have synchronous source I can't or
+won't rewrite — let me pause it from inside without touching the code."
+That value proposition doesn't exist for us. The trade space therefore
+collapses onto runtime properties (bundle size, mobile reach, main-
+thread responsiveness, live observability) rather than authoring
+ergonomics, which is where Web Worker wins decisively.
+
 ## Decision
 
 The wasm engine runs in a Web Worker. The main thread talks to it via

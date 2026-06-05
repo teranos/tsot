@@ -77,14 +77,23 @@
   remain disabled for v1 per `.cargo/config.toml`. `dist/` was already
   in `.gitignore`.)
 
-- [ ] **D7: Smoke test in Chrome + Safari.**
-  Play a full game vs UCT in both browsers. Verify payment / target picks /
-  combat / activations / Main2 / game-over. Safari = future iOS WebView.
-  (Status 2026-06-05: Firefox booted to first prompt — off-spec target,
-  confirms the Worker model isn't Chromium-specific, but does NOT
-  satisfy D7. Chrome + Safari both untouched. Within Firefox: bootstrap +
-  hand-render verified; full-game flow / UCT live stream / combat /
-  Main2 / game-over still untested in any browser.)
+- [ ] **D7a: Smoke test in Firefox.** (primary test target)
+  Play a full game vs UCT. Verify payment / target picks / combat /
+  activations / Main2 / game-over. `[live UctIter]` lines stream during
+  UCT search.
+  (Status 2026-06-05: bootstrap + start_game + hand-render verified.
+  Full-game flow / UCT live stream / combat / Main2 / game-over still
+  untested.)
+
+- [ ] **D7b: Smoke test in Chrome.** (deferred)
+  Same checklist as D7a, in Chrome. Deferred — Firefox is the active
+  test target. Picked up if a Chrome-specific regression is reported
+  or once mobile work (F-phase) makes Chromium parity load-bearing.
+
+- [ ] **D7c: Smoke test in Safari.** (deferred — iOS WebView proxy)
+  Same checklist as D7a, in Safari. Deferred — Firefox is the active
+  test target. Picked up when iOS build work (F2) starts; Safari is
+  the desktop proxy for WKWebView so its result gates F2 confidence.
 
 - [ ] **D8: Drop the HTTP shim.**
   Delete src/cli_serve.rs, the Serve subcommand wiring, the `make serve`
