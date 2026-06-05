@@ -9,6 +9,8 @@
 //! - [`deck_token`] — base32 deck-identity tokens (legacy, narrow use).
 
 pub mod ai;
+#[cfg(test)]
+mod ai_trace_tests;
 pub mod deck_token;
 pub mod diversity;
 pub mod evolve;

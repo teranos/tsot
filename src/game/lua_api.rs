@@ -145,7 +145,7 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
             // typically a forced trigger from an opponent's action
             // (e.g., squirrel-overrun being blocked late game).
             s.bump_action("decked_by_handler_draw", pid);
-            s.set_winner(Some(pid.opponent()));
+            s.set_winner(Some(pid.opponent()), "deckout_handler_draw");
             break;
         }
         let Some(top) = s.player(pid).deck.first().cloned() else {
@@ -1279,6 +1279,12 @@ pub(crate) fn fire_self_only(
     let owner = inst.owner;
     let card_id = inst.card.id.clone();
 
+    // O9: bracket the Lua scope with `Instant::now()` so the Handler
+    // event records the handler's wall-clock cost. Cheap no-op when
+    // trace is off.
+    let trace_active = crate::trace::is_enabled();
+    let t0 = trace_active.then(std::time::Instant::now);
+
     let state_cell = RefCell::new(&mut *state);
     let oracle_cell = RefCell::new(&mut *oracle);
     let result: Result<()> = lua.scope(|scope| {
@@ -1291,6 +1297,16 @@ pub(crate) fn fire_self_only(
 
     let _ = state_cell;
     let _ = oracle_cell;
+    if let Some(t0) = t0 {
+        crate::trace::push(crate::trace::TraceEvent::Handler {
+            at_us: crate::trace::now_us(),
+            event: event.lua_key().to_string(),
+            source: source.clone(),
+            partner: None,
+            duration_us: t0.elapsed().as_micros() as u64,
+            error: result.as_ref().err().map(|e| e.to_string()),
+        });
+    }
     match result {
         Ok(()) => credit_fire(state, event, owner),
         Err(e) => eprintln!("[lua] {} handler for {card_id} failed: {e}", event.lua_key()),
@@ -1388,6 +1404,9 @@ pub(crate) fn fire_with_partner(
     let owner = inst.owner;
     let card_id = inst.card.id.clone();
 
+    let trace_active = crate::trace::is_enabled();
+    let t0 = trace_active.then(std::time::Instant::now);
+
     let state_cell = RefCell::new(&mut *state);
     let oracle_cell = RefCell::new(&mut *oracle);
     let result: Result<()> = lua.scope(|scope| {
@@ -1400,6 +1419,16 @@ pub(crate) fn fire_with_partner(
 
     let _ = state_cell;
     let _ = oracle_cell;
+    if let Some(t0) = t0 {
+        crate::trace::push(crate::trace::TraceEvent::Handler {
+            at_us: crate::trace::now_us(),
+            event: event.lua_key().to_string(),
+            source: source.clone(),
+            partner: Some(partner.clone()),
+            duration_us: t0.elapsed().as_micros() as u64,
+            error: result.as_ref().err().map(|e| e.to_string()),
+        });
+    }
     match result {
         Ok(()) => credit_fire(state, event, owner),
         Err(e) => eprintln!("[lua] {} handler for {card_id} failed: {e}", event.lua_key()),

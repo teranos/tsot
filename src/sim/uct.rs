@@ -292,8 +292,20 @@ pub fn pick_play_uct(
 ) -> (Option<InstanceId>, UctTrace) {
     UCT_PICK_CALLS.fetch_add(1, Ordering::SeqCst);
 
-    let mut candidates = enumerate_playable_in_hand(state, player, kind_filter);
+    // O6: bracket whole search with `Instant::now()` so AiPick events
+    // carry duration_us. Cheap no-op when trace is off.
+    let trace_active = crate::trace::is_enabled();
+    let t0 = trace_active.then(std::time::Instant::now);
+
+    // Dedup: see `dedup_candidates_by_card_id` rationale. Without
+    // this, 6 blue-monkeys in hand give 6 root children with ~8
+    // visits each — same successor state, no signal differentiation.
+    let mut candidates = crate::sim::ai::dedup_candidates_by_card_id(
+        state,
+        enumerate_playable_in_hand(state, player, kind_filter),
+    );
     if candidates.is_empty() {
+        emit_uct_ai_pick(&[], &None, t0);
         return (
             None,
             UctTrace {
@@ -306,6 +318,11 @@ pub fn pick_play_uct(
     }
     if candidates.len() == 1 {
         let only = candidates.into_iter().next();
+        emit_uct_ai_pick(
+            only.iter().map(|iid| (iid.clone(), 0i32)).collect::<Vec<_>>().as_slice(),
+            &only,
+            t0,
+        );
         return (
             only.clone(),
             UctTrace {
@@ -329,6 +346,12 @@ pub fn pick_play_uct(
 
     for it in 0..cfg.iterations {
         UCT_ITERATIONS.fetch_add(1, Ordering::SeqCst);
+
+        // O6+: per-iteration wall-clock. Each iteration emits one
+        // UctIteration event with path + winner + duration so the
+        // wasm UI can see what UCT is exploring and how long each
+        // rollout actually takes. Rollout internals stay suspended.
+        let iter_t0 = crate::trace::is_enabled().then(std::time::Instant::now);
 
         // Open a per-iteration journal so the simulation's mutations
         // can be rolled back at the end.
@@ -357,10 +380,41 @@ pub fn pick_play_uct(
             registry.clone(),
             rollout_seed,
         );
-        let stats = engine.run_to_end();
+        // O6 fix: suspend the trace bus during the rollout so its
+        // millions of Step / Cursor / Mutation events don't
+        // accumulate into the parent envelope. Without this, the
+        // serde JSON serialization at FFI exit takes seconds-to-
+        // minutes for any UCT decision.
+        let stats = crate::trace::suspend(|| engine.run_to_end());
         *state = engine.state;
         let winner = stats.winner;
         clear_planned_actions();
+
+        // O6+: per-iteration event AFTER suspend completes so it
+        // actually lands in the buffer. Shows the breakdown the
+        // user needs to answer "which part of the search costs
+        // the most" — turns simulated, plays in rollout, attacks,
+        // deaths, and total Lua handler fires.
+        if let Some(iter_t0) = iter_t0 {
+            let rollout_handler_fires: u32 = stats
+                .event_fires
+                .values()
+                .map(|v| v[0] + v[1])
+                .sum();
+            crate::trace::push(crate::trace::TraceEvent::UctIteration {
+                at_us: crate::trace::now_us(),
+                iter: it,
+                total: cfg.iterations,
+                path: path.clone(),
+                winner,
+                duration_us: iter_t0.elapsed().as_micros() as u64,
+                rollout_turns: stats.turns,
+                rollout_plays: stats.a_played + stats.b_played,
+                rollout_attacks: stats.a_attacks + stats.b_attacks,
+                rollout_deaths: stats.a_deaths + stats.b_deaths,
+                rollout_handler_fires,
+            });
+        }
 
         // 4. Backprop along the path.
         backpropagate(&mut root, &path, expanded_path_index, winner, root_player);
@@ -381,6 +435,15 @@ pub fn pick_play_uct(
         // happen with iterations >= candidates), pick the first
         // candidate.
         .or_else(|| candidates.into_iter().next());
+    // O6: emit AiPick with each root child's visit count as its
+    // score. UCT's chosen iid is the visit-max, so score == visits
+    // is the right signal for "why did UCT pick this."
+    let scored: Vec<(InstanceId, i32)> = root
+        .children
+        .iter()
+        .map(|(iid, child)| (iid.clone(), child.visits as i32))
+        .collect();
+    emit_uct_ai_pick(&scored, &picked, t0);
     let trace = UctTrace {
         iterations: cfg.iterations,
         note: String::new(),
@@ -388,6 +451,33 @@ pub fn pick_play_uct(
         root: snapshot_subtree(&root, None),
     };
     (picked, trace)
+}
+
+/// O6: shared AiPick emission for `pick_play_uct`. Captures the
+/// candidate list with per-candidate visit counts (or zeros for
+/// pre-search fast paths), the chosen iid, and wall-clock duration
+/// since the Instant at function entry.
+fn emit_uct_ai_pick(
+    scored: &[(InstanceId, i32)],
+    chosen: &Option<InstanceId>,
+    t0: Option<std::time::Instant>,
+) {
+    let Some(t0) = t0 else { return };
+    let candidates: Vec<crate::trace::CandidateScore> = scored
+        .iter()
+        .map(|(iid, score)| crate::trace::CandidateScore {
+            iid: iid.clone(),
+            score: *score,
+            rejected_reason: None,
+        })
+        .collect();
+    crate::trace::push(crate::trace::TraceEvent::AiPick {
+        at_us: crate::trace::now_us(),
+        ai: "Uct".to_string(),
+        candidates,
+        chosen: chosen.clone(),
+        duration_us: t0.elapsed().as_micros() as u64,
+    });
 }
 
 /// Walk the tree from root via UCB1 until reaching a node with

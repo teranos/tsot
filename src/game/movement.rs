@@ -113,7 +113,7 @@ mod tests {
         s.set_damage(&iid, 3.0);
         s.set_face_down(&iid, true);
         s.set_summoning_sick(&iid, true);
-        s.set_winner(Some(PlayerId::A));
+        s.set_winner(Some(PlayerId::A), "test");
         s.bump_action("test", PlayerId::A);
         s.bump_event_fire(crate::card::EventName::OnDie, PlayerId::B);
 

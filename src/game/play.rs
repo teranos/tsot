@@ -45,6 +45,36 @@ impl GameState {
         choices: PlayChoices,
         ctx: Option<&mut EventContext>,
     ) -> Result<(), PlayError> {
+        // O4: bracket the entire body with `Instant::now()` + emit
+        // a single Play event on exit, regardless of early returns.
+        let trace_active = crate::trace::is_enabled();
+        let t0 = trace_active.then(std::time::Instant::now);
+        let iid_for_trace = trace_active.then(|| instance.clone());
+
+        let result = self.play_card_inner(player, instance, choices, ctx);
+
+        if let (Some(t0), Some(iid)) = (t0, iid_for_trace) {
+            let outcome = match &result {
+                Ok(()) => "ok".to_string(),
+                Err(e) => format!("err:{e:?}"),
+            };
+            crate::trace::push(crate::trace::TraceEvent::Play {
+                at_us: crate::trace::now_us(),
+                iid,
+                outcome,
+                duration_us: t0.elapsed().as_micros() as u64,
+            });
+        }
+        result
+    }
+
+    fn play_card_inner(
+        &mut self,
+        player: PlayerId,
+        instance: &InstanceId,
+        choices: PlayChoices,
+        ctx: Option<&mut EventContext>,
+    ) -> Result<(), PlayError> {
         let mut ctx = ctx;
         if self.winner.is_some() {
             return Err(PlayError::GameOver);

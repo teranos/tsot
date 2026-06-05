@@ -18,6 +18,9 @@ mod turn;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
+#[cfg(test)]
+mod trace_tests;
+
 pub use combat::{CombatError, CombatOutcome};
 pub use context::EventContext;
 pub use journal::{Journal, JournalEntry};

@@ -11,6 +11,7 @@ pub mod choice;
 pub mod game;
 pub mod replay;
 pub mod sim;
+pub mod trace;
 
 // FFI surface for the WASM frontend. Browser JS calls these via
 // emscripten's `Module.ccall("tsot_*", ...)`. JSON-string payloads

@@ -18,6 +18,7 @@ impl GameState {
         if self.winner.is_some() {
             return;
         }
+        let from = self.phase;
         let next = match self.phase {
             Phase::Untap => Phase::Draw,
             Phase::Draw => Phase::Main1,
@@ -45,6 +46,19 @@ impl GameState {
             }
         };
         self.set_phase(next);
+        // O2: Phase advance event. Emitted regardless of whether the
+        // phase value actually differs (the End → Untap transition
+        // also flips turn counter, which is a useful observation
+        // even though both phases are upper-bound bookkeeping). The
+        // bus push is a no-op when trace is disabled.
+        if crate::trace::is_enabled() {
+            crate::trace::push(crate::trace::TraceEvent::Phase {
+                at_us: crate::trace::now_us(),
+                turn: self.turn,
+                from,
+                to: next,
+            });
+        }
         // OnTurnBegin: fires when entering Untap (start of a new turn).
         // Broadcasts to every BOARD card of the active player plus
         // every card attached to one of those cards.
@@ -132,7 +146,7 @@ impl GameState {
     fn do_draw_step(&mut self) {
         let pid = self.active_player;
         if self.player(pid).deck.is_empty() {
-            self.set_winner(Some(pid.opponent()));
+            self.set_winner(Some(pid.opponent()), "deckout_draw");
             return;
         }
         let top = self.player(pid).deck[0].clone();

@@ -152,6 +152,17 @@ impl Journal {
     }
 
     pub fn push(&mut self, entry: JournalEntry) {
+        // O3: fan out every mutation to the trace bus. Cheap no-op
+        // when trace is disabled (native EA / probe paths); cloning
+        // the entry once per push is the visibility cost we pay
+        // when trace is on. Push happens BEFORE the local append so
+        // the buffer order matches execution order.
+        if crate::trace::is_enabled() {
+            crate::trace::push(crate::trace::TraceEvent::Mutation {
+                at_us: crate::trace::now_us(),
+                entry: entry.clone(),
+            });
+        }
         self.entries.push(entry);
     }
 

@@ -258,7 +258,7 @@ impl StepEngine {
         let Some(picked) = pick else {
             // No more plays this turn; advance into the pre-combat
             // activation pass (S9), then combat.
-            self.cursor = EngineCursor::PreCombatActivations;
+            self.set_cursor(EngineCursor::PreCombatActivations);
             return StepResult::Continue;
         };
 
@@ -295,13 +295,13 @@ impl StepEngine {
                 // Same loop-advance as run.rs: if it was a creature,
                 // mark played_creature so we don't re-pick it; else
                 // bail out of Pattern B and head into combat.
-                self.cursor = if pic {
+                self.set_cursor(if pic {
                     EngineCursor::PatternBPick {
                         played_creature: true,
                     }
                 } else {
                     EngineCursor::PreCombatActivations
-                };
+                });
                 return StepResult::Continue;
             }
             BuildChoiceResult::Pending(p) => {
@@ -309,11 +309,11 @@ impl StepEngine {
                 // we'd need to retry the resolve, transition into the
                 // resolving cursor, and yield the prompt. The next
                 // step() call will land in `step_pattern_b_resolve`.
-                self.cursor = EngineCursor::PatternBResolving {
+                self.set_cursor(EngineCursor::PatternBResolving {
                     picked: picked.clone(),
                     history: Vec::new(),
                     played_creature_before: played_creature,
-                };
+                });
                 let prompt = pending_to_prompt(&self.state, p);
                 return StepResult::NeedHuman(Box::new(prompt));
             }
@@ -408,9 +408,9 @@ impl StepEngine {
                     .push((card_id, turn_now, active));
             }
             let new_played_creature = played_creature || picked_is_creature;
-            self.cursor = EngineCursor::PatternBPick {
+            self.set_cursor(EngineCursor::PatternBPick {
                 played_creature: new_played_creature,
-            };
+            });
         } else {
             // Failure (or suicide): rollback the preview journal.
             if let Some(journal) = self.state.journal.take() {
@@ -424,11 +424,11 @@ impl StepEngine {
             // mark played_creature so we stop re-picking the same
             // suicidal creature; non-creature failures bail.
             if picked_is_creature {
-                self.cursor = EngineCursor::PatternBPick {
+                self.set_cursor(EngineCursor::PatternBPick {
                     played_creature: true,
-                };
+                });
             } else {
-                self.cursor = EngineCursor::PreCombatActivations;
+                self.set_cursor(EngineCursor::PreCombatActivations);
             }
         }
 
@@ -473,7 +473,7 @@ impl StepEngine {
         while self.state.phase != Phase::Main2 && self.state.winner.is_none() {
             // We've already passed End somehow → bail to EndTurn.
             if matches!(self.state.phase, Phase::Untap | Phase::Draw) {
-                self.cursor = EngineCursor::EndTurn;
+                self.set_cursor(EngineCursor::EndTurn);
                 return StepResult::Continue;
             }
             let mut oracle = RandomOracle::new(StdRng::seed_from_u64(self.rng.gen()));
@@ -520,7 +520,7 @@ impl StepEngine {
                     "turn {} ({}) Main2: pass",
                     self.state.turn, actor
                 ));
-                self.cursor = EngineCursor::EndTurn;
+                self.set_cursor(EngineCursor::EndTurn);
                 StepResult::Continue
             }
             Some(HumanAction::PlayCard { iid }) => {
@@ -538,11 +538,11 @@ impl StepEngine {
                     "turn {} ({}) Main2: play {}",
                     self.state.turn, actor, name
                 ));
-                self.cursor = EngineCursor::Main2Resolving {
+                self.set_cursor(EngineCursor::Main2Resolving {
                     picked: iid,
                     history: Vec::new(),
                     played_creature,
-                };
+                });
                 StepResult::Continue
             }
             Some(HumanAction::Activate { .. }) => {
@@ -640,11 +640,13 @@ impl StepEngine {
         let choices = match build_result {
             BuildChoiceResult::Choices(c) => c,
             BuildChoiceResult::UnaffordableX { .. } => {
-                self.cursor = ctx.on_unaffordable(picked_is_creature);
+                let new_cursor = ctx.on_unaffordable(picked_is_creature);
+                self.set_cursor(new_cursor);
                 return StepResult::Continue;
             }
             BuildChoiceResult::Pending(p) => {
-                self.cursor = ctx.on_pending(picked.clone(), history);
+                let new_cursor = ctx.on_pending(picked.clone(), history);
+                self.set_cursor(new_cursor);
                 let prompt = pending_to_prompt(&self.state, p);
                 return StepResult::NeedHuman(Box::new(prompt));
             }
@@ -737,7 +739,8 @@ impl StepEngine {
                     .card_play_turn_events
                     .push((card_id, turn_now, active));
             }
-            self.cursor = ctx.on_success(picked_is_creature);
+            let new_cursor = ctx.on_success(picked_is_creature);
+            self.set_cursor(new_cursor);
         } else {
             if let Some(journal) = self.state.journal.take() {
                 journal.rollback(&mut self.state);
@@ -746,7 +749,8 @@ impl StepEngine {
             if suicide {
                 self.state.bump_action("preview_skip_suicide", active);
             }
-            self.cursor = ctx.on_failure(picked_is_creature);
+            let new_cursor = ctx.on_failure(picked_is_creature);
+            self.set_cursor(new_cursor);
         }
 
         StepResult::Continue

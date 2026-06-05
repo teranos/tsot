@@ -160,23 +160,130 @@ function appendLog(lines) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-// Parse the `{prompt, log}` envelope the Rust FFI now returns. Push
-// log lines into the LOG panel as a side effect, then yield the
-// prompt object the rest of the UI consumes.
+// O5: format one TraceEvent as a single rendered line. Δms is
+// `at_us / 1000` from the bus's session origin (set in Rust by
+// `trace::enable(true)` on the first FFI call). The category
+// prefix lets the reader scan the stream; the payload after is
+// formatted per-variant. Raw-stream rendering only — filters /
+// click-to-expand land in Phase 5 (O13–O15).
+function fmtTraceEvent(ev) {
+  const t = (ev.at_us / 1000).toFixed(1).padStart(8);
+  switch (ev.kind) {
+    case 'Step':
+      return `[${t}ms Step]      ${ev.from}  ->  ${ev.to}  (${(ev.duration_us / 1000).toFixed(2)}ms)  -> ${ev.result}`;
+    case 'Cursor':
+      return `[${t}ms Cursor]    ${ev.from}  ->  ${ev.to}`;
+    case 'Phase':
+      return `[${t}ms Phase]     turn=${ev.turn} ${ev.from}  ->  ${ev.to}`;
+    case 'Mutation':
+      return `[${t}ms Mutation]  ${JSON.stringify(ev.entry)}`;
+    case 'Count':
+      return `[${t}ms Count]     ${ev.key}[${ev.player}] ${ev.before}  ->  ${ev.after}`;
+    case 'Oracle':
+      return `[${t}ms Oracle]    ${ev.call}(asker=${ev.asker})  ->  ${ev.answer}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    case 'Play':
+      return `[${t}ms Play]      ${ev.iid}  ->  ${ev.outcome}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    case 'Winner':
+      return `[${t}ms Winner]    ${ev.who} wins  (cause: ${ev.cause})`;
+    case 'Ffi':
+      return `[${t}ms Ffi]       ${ev.span}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    case 'AiPick': {
+      const top = (ev.candidates || []).slice(0, 6)
+        .map(c => `${c.iid}=${c.score}`)
+        .join(', ');
+      const more = (ev.candidates || []).length > 6 ? ` +${ev.candidates.length - 6} more` : '';
+      return `[${t}ms AiPick]    ${ev.ai}  candidates=[${top}${more}]  -> ${ev.chosen || '(none)'}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    }
+    case 'AttackerSelection': {
+      const elig = (ev.eligible || []).join(',');
+      const chosen = (ev.chosen || []).join(',');
+      return `[${t}ms Attackers] ${ev.player}: eligible=[${elig}]  chosen=[${chosen}]  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    }
+    case 'BlockerSelection': {
+      const atks = (ev.attackers || []).join(',');
+      const pairs = (ev.assignments || []).map(p => `${p[0]}->${p[1]}`).join(', ');
+      return `[${t}ms Blockers]  ${ev.defender}: attackers=[${atks}]  blocks=[${pairs}]  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    }
+    case 'Handler': {
+      const partner = ev.partner ? ` partner=${ev.partner}` : '';
+      const err = ev.error ? `  ERR: ${ev.error}` : '';
+      return `[${t}ms Handler]   ${ev.event}  source=${ev.source}${partner}  (${(ev.duration_us / 1000).toFixed(2)}ms)${err}`;
+    }
+    case 'UctIteration': {
+      const path = (ev.path || []).join(' -> ');
+      return `[${t}ms UctIter]   iter=${ev.iter}/${ev.total}  ${(ev.duration_us / 1000).toFixed(1)}ms  turns=${ev.rollout_turns} plays=${ev.rollout_plays} atks=${ev.rollout_attacks} deaths=${ev.rollout_deaths} fires=${ev.rollout_handler_fires}  winner=${ev.winner}  path=[${path}]`;
+    }
+    default:
+      return `[${t}ms ${ev.kind || '?'}] ${JSON.stringify(ev)}`;
+  }
+}
+
+// O5: append a TraceEvent array as formatted lines into the LOG
+// panel. Trace + log share the panel for now; filter chips arrive
+// in O13. Each event is one text node so future click-to-expand
+// (O14) can swap in DOM elements without restructuring.
+function appendTrace(events) {
+  if (!events || events.length === 0) return;
+  const logEl = document.getElementById('log');
+  for (const ev of events) {
+    logEl.appendChild(document.createTextNode(fmtTraceEvent(ev) + '\n'));
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// O5+: JS-side observability. The wasm-side trace stops at FFI
+// exit; everything between Rust returning + the next FFI call is
+// JS / DOM / browser work. We bracket each phase with
+// `performance.now()` and emit ONE summary line per click into the
+// LOG panel so the previously-invisible gap is now itemized.
+//
+// Format mirrors the Rust trace lines for visual consistency. The
+// summary is appended FIRST so even if subsequent rendering blocks
+// the UI thread, the user still sees the previous click's
+// breakdown.
+function jsPushSummary(label, breakdown) {
+  const logEl = document.getElementById('log');
+  const parts = Object.entries(breakdown)
+    .filter(([_, v]) => v !== undefined)
+    .map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(1) + 'ms' : v}`)
+    .join(' ');
+  logEl.appendChild(
+    document.createTextNode(`[js summary] ${label}: ${parts}\n`)
+  );
+}
+
+// Parse the `{prompt, log, trace}` envelope the Rust FFI returns.
+// Side effects: push `log` lines + `trace` events into the LOG
+// panel. Returns the prompt object the rest of the UI consumes.
+//
+// O5+: returns measurement breakdown alongside the prompt so the
+// caller can include parse + DOM-append times in its summary.
 function parseEnvelope(out) {
   if (out.startsWith('error:')) throw new Error(out);
+  const t0 = performance.now();
   const env = JSON.parse(out);
+  const t_parse = performance.now();
   appendLog(env.log);
-  return env.prompt;
+  const t_appendLog = performance.now();
+  appendTrace(env.trace);
+  const t_appendTrace = performance.now();
+  return {
+    prompt: env.prompt,
+    measurements: {
+      parse: t_parse - t0,
+      appendLog: t_appendLog - t_parse,
+      appendTrace: t_appendTrace - t_appendLog,
+      trace_n: env.trace ? env.trace.length : 0,
+      log_n: env.log ? env.log.length : 0,
+    },
+  };
 }
 
 async function fetchState() {
   if (!wasmStarted) {
     wasmStarted = true;
     const args = defaultStartArgs();
-    const prompt = parseEnvelope(
-      wasmCallString('tsot_start_game', JSON.stringify(args))
-    );
+    const prompt = ffiCall('tsot_start_game', JSON.stringify(args), 'start_game');
     return { ...prompt, state: prompt.state };
   }
   // The HTTP shim used to support arbitrary GET /state polls; in the
@@ -186,9 +293,33 @@ async function fetchState() {
   return state.current;
 }
 
+// O5+: every FFI call goes through here so the wall-clock
+// breakdown lands in the LOG panel. `label` is the short name that
+// appears in the summary line; pass something specific like
+// `apply_action(Pass)` so different actions are distinguishable.
+function ffiCall(name, argJson, label) {
+  const t0 = performance.now();
+  const raw = wasmCallString(name, argJson);
+  const t_wasm = performance.now();
+  const { prompt, measurements } = parseEnvelope(raw);
+  const t_done = performance.now();
+  jsPushSummary(label, {
+    wasm: t_wasm - t0,
+    parse: measurements.parse,
+    appendLog: measurements.appendLog,
+    appendTrace: measurements.appendTrace,
+    total: t_done - t0,
+    trace_n: measurements.trace_n,
+    log_n: measurements.log_n,
+  });
+  return prompt;
+}
+
 const _send = async (action) => {
-  return parseEnvelope(
-    wasmCallString('tsot_apply_action', JSON.stringify(action))
+  return ffiCall(
+    'tsot_apply_action',
+    JSON.stringify(action),
+    `apply_action(${action.kind})`,
   );
 };
 const sendAction = async (action) => {
@@ -264,6 +395,19 @@ function cardEl(card, opts = {}) {
 }
 
 function render(s) {
+  // O5+: render() is the single per-click DOM-rebuild path. We
+  // bracket it with `performance.now()` so the summary line lands
+  // in the LOG panel alongside the ffi/parse/appendTrace
+  // breakdown. The summary is appended AFTER render finishes — by
+  // then the new prompt is already on screen, so emitting one
+  // extra text node is amortized over the full update.
+  const _render_t0 = performance.now();
+  _renderInner(s);
+  const _render_dt = performance.now() - _render_t0;
+  jsPushSummary('render', { render: _render_dt });
+}
+
+function _renderInner(s) {
   state.current = s;
   const prompt = s.prompt || { kind: 'Loading' };
   const view = s.state;

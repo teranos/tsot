@@ -124,6 +124,11 @@ pub fn pick_play(
     cfg: &MctsConfig,
     registry: &std::sync::Arc<crate::card::CardRegistry>,
 ) -> Option<InstanceId> {
+    // O6: bracket whole search for AiPick `duration_us`. Cheap
+    // no-op when trace is off.
+    let trace_active = crate::trace::is_enabled();
+    let t0 = trace_active.then(std::time::Instant::now);
+
     // Resolve the search depth for THIS call. Top-level entry (no
     // budget set) uses `cfg.max_depth`; re-entry from inside a rollout
     // uses whatever budget the outer rollout left for us.
@@ -138,17 +143,33 @@ pub fn pick_play(
     // (or top-level caller with max_depth=0) keeps making progress.
     if depth_for_this_call == 0 {
         let mut rng = StdRng::seed_from_u64(cfg.base_seed.wrapping_add(0xDEAD_BEEF));
-        return pick_random_playable_in_hand(state, player, &mut rng, kind_filter);
+        let chosen = pick_random_playable_in_hand(state, player, &mut rng, kind_filter);
+        // Heuristic emits its own AiPick (with ai="Heuristic"); we
+        // don't emit a second Mcts-tagged event for this passthrough.
+        let _ = t0;
+        return chosen;
     }
 
     MCTS_PICK_CALLS.fetch_add(1, Ordering::SeqCst);
-    let mut candidates = enumerate_playable_in_hand(state, player, kind_filter);
+    // Dedup: see `dedup_candidates_by_card_id`. Without it, 6
+    // identical iids burn 6× the rollout budget on the same outcome.
+    let mut candidates = crate::sim::ai::dedup_candidates_by_card_id(
+        state,
+        enumerate_playable_in_hand(state, player, kind_filter),
+    );
     MCTS_TOTAL_CANDIDATES.fetch_add(candidates.len() as u64, Ordering::SeqCst);
     if candidates.is_empty() {
+        emit_mcts_ai_pick(&[], &None, t0);
         return None;
     }
     if candidates.len() == 1 {
-        return candidates.into_iter().next();
+        let only = candidates.into_iter().next();
+        emit_mcts_ai_pick(
+            only.iter().map(|iid| (iid.clone(), 0i32)).collect::<Vec<_>>().as_slice(),
+            &only,
+            t0,
+        );
+        return only;
     }
     if (candidates.len() as u32) > cfg.max_candidates {
         candidates.sort();
@@ -185,7 +206,42 @@ pub fn pick_play(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.0.cmp(&b.0))
     });
-    scored.into_iter().next().map(|(iid, _, _)| iid)
+    let chosen = scored.first().map(|(iid, _, _)| iid.clone());
+    // O6: emit AiPick. Each candidate's score = wins (rollouts that
+    // won out of `rollouts_per_candidate`). Trace consumer can
+    // compute win-rate by dividing by `rollouts_per_candidate`.
+    let candidate_scores: Vec<(InstanceId, i32)> = scored
+        .iter()
+        .map(|(iid, wins, _)| (iid.clone(), *wins as i32))
+        .collect();
+    emit_mcts_ai_pick(&candidate_scores, &chosen, t0);
+    chosen
+}
+
+/// O6: shared AiPick emission for `pick_play` (MCTS). Same shape
+/// as the UCT helper; tagged `ai = "Mcts"`. Scores are rollout
+/// win counts (out of `cfg.rollouts_per_candidate`).
+fn emit_mcts_ai_pick(
+    scored: &[(InstanceId, i32)],
+    chosen: &Option<InstanceId>,
+    t0: Option<std::time::Instant>,
+) {
+    let Some(t0) = t0 else { return };
+    let candidates: Vec<crate::trace::CandidateScore> = scored
+        .iter()
+        .map(|(iid, score)| crate::trace::CandidateScore {
+            iid: iid.clone(),
+            score: *score,
+            rejected_reason: None,
+        })
+        .collect();
+    crate::trace::push(crate::trace::TraceEvent::AiPick {
+        at_us: crate::trace::now_us(),
+        ai: "Mcts".to_string(),
+        candidates,
+        chosen: chosen.clone(),
+        duration_us: t0.elapsed().as_micros() as u64,
+    });
 }
 
 /// Derive a rollout-specific seed from (base, candidate_idx, rollout_idx).
@@ -281,7 +337,9 @@ fn simulate_rollout(
         let rollout_seed = seed.wrapping_add(0xF1F1_F1F1);
         let mut engine =
             crate::sim::step::StepEngine::new(taken, ais, registry.clone(), rollout_seed);
-        let stats = engine.run_to_end();
+        // O6 fix: suspend trace bus during the rollout. See
+        // matching note in `pick_play_uct`.
+        let stats = crate::trace::suspend(|| engine.run_to_end());
         *state = engine.state;
         stats.winner == player
     } else if cast_ok {

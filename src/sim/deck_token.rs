@@ -230,9 +230,9 @@ mod tests {
         // Inject lowercase + hyphens + ambiguous chars.
         let messy = format!(
             "{}-{}-{}-{}",
-            &encoded[0..4].to_lowercase(),
+            encoded[0..4].to_lowercase(),
             &encoded[4..8],
-            &encoded[8..12].to_lowercase(),
+            encoded[8..12].to_lowercase(),
             &encoded[12..16]
         );
         let decoded = DeckToken::decode(&messy).unwrap();

@@ -414,7 +414,7 @@ impl GameState {
             damaged_attackers.extend(unblocked_attackers);
         }
         if self.player(defender).deck.is_empty() {
-            self.set_winner(Some(defender.opponent()));
+            self.set_winner(Some(defender.opponent()), "deckout_combat_mill");
         }
 
         // Fire OnDealtDamageToPlayer for each attacker that successfully

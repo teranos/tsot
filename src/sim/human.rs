@@ -455,27 +455,82 @@ impl<O: ChoiceOracle> HumanReplayOracle<O> {
     }
 }
 
+/// O4: shared trace emission for `HumanReplayOracle`'s four
+/// methods. Called from each method's exit; cheap no-op when trace
+/// is disabled (the `t0` argument is `None` in that case).
+fn oracle_emit(
+    call: &'static str,
+    asker: Option<PlayerId>,
+    answer: &str,
+    t0: Option<std::time::Instant>,
+) {
+    if let Some(t0) = t0 {
+        crate::trace::push(crate::trace::TraceEvent::Oracle {
+            at_us: crate::trace::now_us(),
+            call: call.to_string(),
+            asker,
+            answer: answer.to_string(),
+            duration_us: t0.elapsed().as_micros() as u64,
+        });
+    }
+}
+
+fn fmt_card_result(r: &Result<Option<InstanceId>, crate::choice::ChoicePending>) -> String {
+    match r {
+        Ok(Some(iid)) => format!("Some({iid})"),
+        Ok(None) => "None".to_string(),
+        Err(_) => "Pending".to_string(),
+    }
+}
+
+fn fmt_confirm_result(r: &Result<bool, crate::choice::ChoicePending>) -> String {
+    match r {
+        Ok(b) => format!("{b}"),
+        Err(_) => "Pending".to_string(),
+    }
+}
+
+fn fmt_player_result(r: &Result<Option<PlayerId>, crate::choice::ChoicePending>) -> String {
+    match r {
+        Ok(Some(p)) => format!("{p:?}"),
+        Ok(None) => "None".to_string(),
+        Err(_) => "Pending".to_string(),
+    }
+}
+
+fn fmt_int_result(r: &Result<i32, crate::choice::ChoicePending>) -> String {
+    match r {
+        Ok(n) => format!("{n}"),
+        Err(_) => "Pending".to_string(),
+    }
+}
+
 impl<O: ChoiceOracle> ChoiceOracle for HumanReplayOracle<O> {
     fn choose_card(
         &mut self,
         state: &GameState,
         req: crate::choice::ChooseCardRequest,
     ) -> Result<Option<InstanceId>, crate::choice::ChoicePending> {
-        if !self.is_human(req.asker) {
-            return self.inner.choose_card(state, req);
-        }
-        if let Some(ans) = self.replay.get(self.cursor).cloned() {
-            self.cursor += 1;
-            match ans {
-                crate::choice::ScriptedAnswer::Card(c) => Ok(c),
-                other => panic!(
-                    "HumanReplayOracle: replay[{cur}] was {other:?}, expected ScriptedAnswer::Card",
-                    cur = self.cursor - 1
-                ),
-            }
-        } else {
-            Err(crate::choice::ChoicePending::Card(req))
-        }
+        let trace_active = crate::trace::is_enabled();
+        let t0 = trace_active.then(std::time::Instant::now);
+        let asker_for_trace = req.asker;
+        let result: Result<Option<InstanceId>, crate::choice::ChoicePending> =
+            if !self.is_human(req.asker) {
+                self.inner.choose_card(state, req)
+            } else if let Some(ans) = self.replay.get(self.cursor).cloned() {
+                self.cursor += 1;
+                match ans {
+                    crate::choice::ScriptedAnswer::Card(c) => Ok(c),
+                    other => panic!(
+                        "HumanReplayOracle: replay[{cur}] was {other:?}, expected ScriptedAnswer::Card",
+                        cur = self.cursor - 1
+                    ),
+                }
+            } else {
+                Err(crate::choice::ChoicePending::Card(req))
+            };
+        oracle_emit("choose_card", asker_for_trace, &fmt_card_result(&result), t0);
+        result
     }
 
     fn confirm(
@@ -484,10 +539,11 @@ impl<O: ChoiceOracle> ChoiceOracle for HumanReplayOracle<O> {
         asker: PlayerId,
         prompt: &str,
     ) -> Result<bool, crate::choice::ChoicePending> {
-        if !self.is_human(Some(asker)) {
-            return self.inner.confirm(state, asker, prompt);
-        }
-        if let Some(ans) = self.replay.get(self.cursor).cloned() {
+        let trace_active = crate::trace::is_enabled();
+        let t0 = trace_active.then(std::time::Instant::now);
+        let result: Result<bool, crate::choice::ChoicePending> = if !self.is_human(Some(asker)) {
+            self.inner.confirm(state, asker, prompt)
+        } else if let Some(ans) = self.replay.get(self.cursor).cloned() {
             self.cursor += 1;
             match ans {
                 crate::choice::ScriptedAnswer::Confirm(b) => Ok(b),
@@ -501,7 +557,9 @@ impl<O: ChoiceOracle> ChoiceOracle for HumanReplayOracle<O> {
                 asker,
                 prompt: prompt.to_string(),
             })
-        }
+        };
+        oracle_emit("confirm", Some(asker), &fmt_confirm_result(&result), t0);
+        result
     }
 
     fn choose_player(
@@ -509,22 +567,26 @@ impl<O: ChoiceOracle> ChoiceOracle for HumanReplayOracle<O> {
         state: &GameState,
         req: crate::choice::ChoosePlayerRequest,
     ) -> Result<Option<PlayerId>, crate::choice::ChoicePending> {
+        let trace_active = crate::trace::is_enabled();
+        let t0 = trace_active.then(std::time::Instant::now);
         let asker = state.active_player;
-        if !self.is_human(Some(asker)) {
-            return self.inner.choose_player(state, req);
-        }
-        if let Some(ans) = self.replay.get(self.cursor).cloned() {
-            self.cursor += 1;
-            match ans {
-                crate::choice::ScriptedAnswer::Player(p) => Ok(p),
-                other => panic!(
-                    "HumanReplayOracle: replay[{cur}] was {other:?}, expected ScriptedAnswer::Player",
-                    cur = self.cursor - 1
-                ),
-            }
-        } else {
-            Err(crate::choice::ChoicePending::Player(req))
-        }
+        let result: Result<Option<PlayerId>, crate::choice::ChoicePending> =
+            if !self.is_human(Some(asker)) {
+                self.inner.choose_player(state, req)
+            } else if let Some(ans) = self.replay.get(self.cursor).cloned() {
+                self.cursor += 1;
+                match ans {
+                    crate::choice::ScriptedAnswer::Player(p) => Ok(p),
+                    other => panic!(
+                        "HumanReplayOracle: replay[{cur}] was {other:?}, expected ScriptedAnswer::Player",
+                        cur = self.cursor - 1
+                    ),
+                }
+            } else {
+                Err(crate::choice::ChoicePending::Player(req))
+            };
+        oracle_emit("choose_player", Some(asker), &fmt_player_result(&result), t0);
+        result
     }
 
     fn choose_int(
@@ -532,11 +594,12 @@ impl<O: ChoiceOracle> ChoiceOracle for HumanReplayOracle<O> {
         state: &GameState,
         req: crate::choice::ChooseIntRequest,
     ) -> Result<i32, crate::choice::ChoicePending> {
+        let trace_active = crate::trace::is_enabled();
+        let t0 = trace_active.then(std::time::Instant::now);
         let asker = state.active_player;
-        if !self.is_human(Some(asker)) {
-            return self.inner.choose_int(state, req);
-        }
-        if let Some(ans) = self.replay.get(self.cursor).cloned() {
+        let result: Result<i32, crate::choice::ChoicePending> = if !self.is_human(Some(asker)) {
+            self.inner.choose_int(state, req)
+        } else if let Some(ans) = self.replay.get(self.cursor).cloned() {
             self.cursor += 1;
             match ans {
                 crate::choice::ScriptedAnswer::Int(n) => Ok(n),
@@ -547,7 +610,9 @@ impl<O: ChoiceOracle> ChoiceOracle for HumanReplayOracle<O> {
             }
         } else {
             Err(crate::choice::ChoicePending::Int(req))
-        }
+        };
+        oracle_emit("choose_int", Some(asker), &fmt_int_result(&result), t0);
+        result
     }
 
     fn set_next_intent(&mut self, intent: Option<crate::choice::TargetIntent>) {

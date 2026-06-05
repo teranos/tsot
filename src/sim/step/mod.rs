@@ -27,6 +27,8 @@ mod combat;
 mod main_phases;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trace_tests;
 
 /// Where the engine is in the game flow. One variant per yield-able
 /// decision point + the boundary states (start of turn / game over).
@@ -294,28 +296,78 @@ fn fresh_game_stats() -> GameStats {
 }
 
 impl StepEngine {
+    /// O2: every cursor reassignment goes through here so a
+    /// `TraceEvent::Cursor { from, to }` is recorded for the
+    /// observability bus. Direct `self.cursor = …` is reserved for
+    /// the GameOver-collapse short circuit in `step()` itself (which
+    /// records its own transition through the bracketing Step event).
+    pub(crate) fn set_cursor(&mut self, new: EngineCursor) {
+        if crate::trace::is_enabled() {
+            crate::trace::push(crate::trace::TraceEvent::Cursor {
+                at_us: crate::trace::now_us(),
+                from: crate::trace::cursor_label(&self.cursor),
+                to: crate::trace::cursor_label(&new),
+            });
+        }
+        self.cursor = new;
+    }
+
+    /// O2: one-line tag for the bus, derived from the StepResult
+    /// variant without copying the payload.
+    fn step_result_tag(r: &StepResult) -> &'static str {
+        match r {
+            StepResult::Continue => "Continue",
+            StepResult::NeedHuman(_) => "NeedHuman",
+            StepResult::Done(_) => "Done",
+        }
+    }
+
     /// Advance the engine one transition. Returns `Continue` to keep
     /// driving via `step(None)`, `NeedHuman` to surface a prompt back
     /// to the caller, or `Done` when the game has ended.
     ///
-    /// S2 scope: vanilla decks (no Lua handlers, no activated
-    /// abilities, no X-cost), AI-only dispatch (Heuristic / MCTS /
-    /// UCT). Human dispatch arrives in S4-S5; activations + Lua in
-    /// S7-S10; the surrounding edge cases (suicide rollback,
-    /// response windows) in S11.
+    /// O2: each invocation is bracketed by `trace::now_us()` +
+    /// `Instant::now()` so a `TraceEvent::Step` is recorded with the
+    /// pre/post cursor labels, the result tag, and the wall-clock
+    /// duration. Cursor reassignments inside the inner logic emit
+    /// their own `TraceEvent::Cursor` events earlier in the buffer.
     pub fn step(&mut self, pending: Option<HumanAction>) -> StepResult {
+        let trace_active = crate::trace::is_enabled();
+        let t0 = trace_active.then(std::time::Instant::now);
+        let from_label = if trace_active {
+            crate::trace::cursor_label(&self.cursor)
+        } else {
+            String::new()
+        };
+        let result = self.step_inner(pending);
+        if let (Some(t0), true) = (t0, trace_active) {
+            crate::trace::push(crate::trace::TraceEvent::Step {
+                at_us: crate::trace::now_us(),
+                duration_us: t0.elapsed().as_micros() as u64,
+                from: from_label,
+                to: crate::trace::cursor_label(&self.cursor),
+                result: Self::step_result_tag(&result).to_string(),
+            });
+        }
+        result
+    }
+
+    /// Inner step body — the original dispatcher. Split from `step`
+    /// so the public entry point can wrap it with O2 timing without
+    /// repeating the early-return logic for every match arm.
+    fn step_inner(&mut self, pending: Option<HumanAction>) -> StepResult {
         // Game-over short circuit: any cursor with state.winner set
         // collapses into GameOver. This keeps the per-cursor logic
         // below from needing to repeat the check.
         if self.state.winner.is_some() && !matches!(self.cursor, EngineCursor::GameOver) {
             self.finalize_stats();
-            self.cursor = EngineCursor::GameOver;
+            self.set_cursor(EngineCursor::GameOver);
             return StepResult::Done(Box::new(self.stats.clone()));
         }
 
         match self.cursor.clone() {
             EngineCursor::StartTurn => {
-                self.cursor = EngineCursor::TurnSetup;
+                self.set_cursor(EngineCursor::TurnSetup);
                 StepResult::Continue
             }
             EngineCursor::TurnSetup => {
@@ -333,9 +385,9 @@ impl StepEngine {
                         &mut oracle,
                     )));
                 }
-                self.cursor = EngineCursor::PatternBPick {
+                self.set_cursor(EngineCursor::PatternBPick {
                     played_creature: false,
-                };
+                });
                 StepResult::Continue
             }
             EngineCursor::PatternBPick { played_creature } => {
@@ -372,7 +424,7 @@ impl StepEngine {
                         &mut oracle,
                     )));
                 }
-                self.cursor = EngineCursor::StartTurn;
+                self.set_cursor(EngineCursor::StartTurn);
                 StepResult::Continue
             }
             EngineCursor::GameOver => StepResult::Done(Box::new(self.stats.clone())),

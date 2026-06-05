@@ -435,8 +435,27 @@ impl GameState {
         }
     }
 
-    pub fn set_winner(&mut self, winner: Option<PlayerId>) {
+    /// `cause` is a short categorical label ("deckout", "suicide",
+    /// "combat_damage", "lua_kill", "rollback_restore", …) carried
+    /// on the O4 Winner event. Sites that pass `None` should still
+    /// supply a label (it goes unobserved for None → None / Some →
+    /// None transitions). The Winner event only fires for None →
+    /// Some transitions — declaring a winner. Clearing the winner
+    /// (rollback) is a different observation handled by the
+    /// surrounding Mutation event.
+    pub fn set_winner(&mut self, winner: Option<PlayerId>, cause: &str) {
         let was = self.winner;
+        if was.is_none() {
+            if let Some(who) = winner {
+                if crate::trace::is_enabled() {
+                    crate::trace::push(crate::trace::TraceEvent::Winner {
+                        at_us: crate::trace::now_us(),
+                        who,
+                        cause: cause.to_string(),
+                    });
+                }
+            }
+        }
         self.winner = winner;
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetWinner { was, now: winner });
@@ -957,7 +976,21 @@ impl GameState {
             PlayerId::A => 0,
             PlayerId::B => 1,
         };
+        let before = entry[idx];
         entry[idx] += 1;
+        let after = entry[idx];
+        // O3: every counter bump surfaces on the trace bus with
+        // before/after values so the UI can show counter growth
+        // without needing to diff snapshots.
+        if crate::trace::is_enabled() {
+            crate::trace::push(crate::trace::TraceEvent::Count {
+                at_us: crate::trace::now_us(),
+                key: action.to_string(),
+                player: who,
+                before,
+                after,
+            });
+        }
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::BumpAction {
                 action: action.to_string(),

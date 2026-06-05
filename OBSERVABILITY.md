@@ -67,17 +67,19 @@ instrumentation that covers ~80% of "what is the engine doing" — cursor
 transitions, journal mutations, oracle Q&A, action_counts diffs, play
 outcomes, winner-set events, per-step timing.
 
-- [ ] **O1: TraceEvent enum + emission bus.**
-  Define the enum, add `trace: Vec<TraceEvent>` to `StepEngine`,
-  drain in `drive_to_next_yield` into the envelope, wire JS-side to
-  receive `env.trace` alongside `env.log`. No event sites instrumented
-  yet — Phase 1's foundation.
+- [x] ~~**O1: TraceEvent enum + emission bus.**~~
+  ~~Define the enum, add `trace: Vec<TraceEvent>` to `StepEngine`,~~
+  ~~drain in `drive_to_next_yield` into the envelope, wire JS-side to~~
+  ~~receive `env.trace` alongside `env.log`. No event sites instrumented~~
+  ~~yet — Phase 1's foundation.~~
+  (Bus in `src/trace.rs`: thread-local buffer, `enable/is_enabled/push/drain/now_us` helpers, `TraceEvent` tagged enum with all Phase-1+ variants pre-defined. Stored as thread-local rather than `StepEngine` field — sites without engine access (`Journal::push`, `state.bump_action`, oracle methods) push directly. Native callers default to disabled; wasm enables before each FFI call. 8 bus contract tests. Envelope wiring + JS-side receive deferred to O5 once events are emitted.)
 
-- [ ] **O2: Step + Cursor + Phase events.**
-  Wrap each `engine.step()` call with `Instant::now()`; emit
-  `TraceEvent::Step` with from/to cursor + result + duration. Every
-  `self.cursor = …` in `step/` becomes a `Cursor` event. Every phase
-  advance (`state.next_phase`) becomes a `Phase` event.
+- [x] ~~**O2: Step + Cursor + Phase events.**~~
+  ~~Wrap each `engine.step()` call with `Instant::now()`; emit~~
+  ~~`TraceEvent::Step` with from/to cursor + result + duration. Every~~
+  ~~`self.cursor = …` in `step/` becomes a `Cursor` event. Every phase~~
+  ~~advance (`state.next_phase`) becomes a `Phase` event.~~
+  (Public `StepEngine::step` brackets a private `step_inner` with `Instant::now()` + `cursor_label` snapshots; emits `TraceEvent::Step{from,to,result,duration_us}`. 21 cursor assignments across `step/{mod,main_phases,combat}.rs` routed through new `StepEngine::set_cursor` helper that emits `TraceEvent::Cursor{from,to}` before assigning. `GameState::next_phase` emits `TraceEvent::Phase{turn,from,to}` after `set_phase`. 7 contract tests in `src/sim/step/trace_tests.rs`.)
 
 - [ ] **O3: Mutation + Count events.**
   `Journal::push` also pushes a `Mutation` event into the engine

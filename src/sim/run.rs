@@ -536,7 +536,7 @@ pub fn run_game_continue(
                 last_picked.as_ref(),
                 last_activated.as_ref(),
             );
-            state.set_winner(Some(state.active_player.opponent()));
+            state.set_winner(Some(state.active_player.opponent()), "watchdog_outer_loop");
             break;
         }
         if last_heartbeat.elapsed() > Duration::from_secs(5) {
@@ -589,7 +589,7 @@ pub fn run_game_continue(
                     last_picked.as_ref(),
                     last_activated.as_ref(),
                 );
-                state.set_winner(Some(state.active_player.opponent()));
+                state.set_winner(Some(state.active_player.opponent()), "watchdog_pattern_b_iter");
                 break;
             }
             if game_start.elapsed() > timeout {
@@ -599,7 +599,7 @@ pub fn run_game_continue(
                     last_picked.as_ref(),
                     last_activated.as_ref(),
                 );
-                state.set_winner(Some(state.active_player.opponent()));
+                state.set_winner(Some(state.active_player.opponent()), "watchdog_pattern_b_walltime");
                 break;
             }
             if state.winner.is_some() {

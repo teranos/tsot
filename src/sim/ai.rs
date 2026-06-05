@@ -82,29 +82,87 @@ pub fn enumerate_playable_in_hand(
         .collect()
 }
 
+/// Collapse a candidate list down to one representative per
+/// `card.id`. Multiple copies of the same card in hand produce
+/// identical successor states when played; exploring each separately
+/// burns search budget on redundant branches. Used by every AI
+/// picker (heuristic, UCT, MCTS) before scoring or rolling out.
+///
+/// First-occurrence wins. Ordering of distinct ids is preserved.
+pub fn dedup_candidates_by_card_id(
+    state: &GameState,
+    candidates: Vec<InstanceId>,
+) -> Vec<InstanceId> {
+    use std::collections::BTreeSet;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut out: Vec<InstanceId> = Vec::with_capacity(candidates.len());
+    for iid in candidates {
+        let id = state
+            .card_pool
+            .get(&iid)
+            .map(|i| i.card.id.clone())
+            .unwrap_or_default();
+        if seen.insert(id) {
+            out.push(iid);
+        }
+    }
+    out
+}
+
 pub fn pick_random_playable_in_hand(
     state: &GameState,
     player: PlayerId,
     rng: &mut impl Rng,
     kind_filter: PickKindFilter,
 ) -> Option<InstanceId> {
-    let candidates = enumerate_playable_in_hand(state, player, kind_filter);
-    if candidates.is_empty() {
-        return None;
-    }
-    // Priority-tiered pick: score each candidate once, find the max,
-    // then filter to that tier. (Earlier version computed the score
-    // twice per candidate.)
+    // O6: bracket the whole pick decision with `Instant::now()` so
+    // the emitted AiPick event carries duration_us. Cheap no-op
+    // when trace is off.
+    let trace_active = crate::trace::is_enabled();
+    let t0 = trace_active.then(std::time::Instant::now);
+
+    // Dedup: copies of the same card.id collapse into one
+    // representative. With 6 blue-monkeys, picking among 6 iids is
+    // burned search budget — same successor state every time.
+    let candidates = dedup_candidates_by_card_id(
+        state,
+        enumerate_playable_in_hand(state, player, kind_filter),
+    );
+    // Score each candidate once (used both for the pick and for the
+    // emitted AiPick record).
     let scored: Vec<(&InstanceId, i32)> = candidates
         .iter()
         .map(|iid| (iid, play_priority_score(state, iid)))
         .collect();
     let max_priority = scored.iter().map(|(_, s)| *s).max().unwrap_or(0);
-    let top: Vec<&InstanceId> = scored
-        .into_iter()
-        .filter_map(|(iid, s)| if s == max_priority { Some(iid) } else { None })
-        .collect();
-    top.choose(rng).map(|iid| (*iid).clone())
+    let chosen = if scored.is_empty() {
+        None
+    } else {
+        let top: Vec<&InstanceId> = scored
+            .iter()
+            .filter_map(|(iid, s)| if *s == max_priority { Some(*iid) } else { None })
+            .collect();
+        top.choose(rng).map(|iid| (*iid).clone())
+    };
+
+    if let Some(t0) = t0 {
+        let trace_candidates: Vec<crate::trace::CandidateScore> = scored
+            .iter()
+            .map(|(iid, score)| crate::trace::CandidateScore {
+                iid: (*iid).clone(),
+                score: *score,
+                rejected_reason: None,
+            })
+            .collect();
+        crate::trace::push(crate::trace::TraceEvent::AiPick {
+            at_us: crate::trace::now_us(),
+            ai: "Heuristic".to_string(),
+            candidates: trace_candidates,
+            chosen: chosen.clone(),
+            duration_us: t0.elapsed().as_micros() as u64,
+        });
+    }
+    chosen
 }
 
 /// Heuristic: how urgent is this card to play THIS TURN? Higher = play
@@ -437,8 +495,21 @@ fn can_block_attacker(
 pub fn select_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> {
     use std::collections::BTreeSet;
 
+    // O8: emit AttackerSelection event at exit with eligible + chosen.
+    let trace_active = crate::trace::is_enabled();
+    let t0 = trace_active.then(std::time::Instant::now);
+
     let attackers = eligible_attackers(state, player);
     if attackers.is_empty() {
+        if let Some(t0) = t0 {
+            crate::trace::push(crate::trace::TraceEvent::AttackerSelection {
+                at_us: crate::trace::now_us(),
+                player,
+                eligible: Vec::new(),
+                chosen: Vec::new(),
+                duration_us: t0.elapsed().as_micros() as u64,
+            });
+        }
         return Vec::new();
     }
     let defender = player.opponent();
@@ -513,6 +584,15 @@ pub fn select_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId> 
         chosen.push(atk.clone());
     }
 
+    if let Some(t0) = t0 {
+        crate::trace::push(crate::trace::TraceEvent::AttackerSelection {
+            at_us: crate::trace::now_us(),
+            player,
+            eligible: attackers,
+            chosen: chosen.clone(),
+            duration_us: t0.elapsed().as_micros() as u64,
+        });
+    }
     chosen
 }
 
@@ -564,18 +644,27 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
     use std::collections::BTreeSet;
     use crate::game::CombatState;
 
+    // O8: emit BlockerSelection event at every exit.
+    let trace_active = crate::trace::is_enabled();
+    let t0 = trace_active.then(std::time::Instant::now);
+
     let declared: Vec<InstanceId> = match &state.combat {
         Some(CombatState::AwaitingBlockers { attacks }) => {
             attacks.iter().map(|a| a.attacker.clone()).collect()
         }
-        _ => return Vec::new(),
+        _ => {
+            emit_blocker_selection(defender, Vec::new(), Vec::new(), t0);
+            return Vec::new();
+        }
     };
     if declared.is_empty() {
+        emit_blocker_selection(defender, Vec::new(), Vec::new(), t0);
         return Vec::new();
     }
 
     let blockers = eligible_blockers(state, defender);
     if blockers.is_empty() {
+        emit_blocker_selection(defender, declared, Vec::new(), t0);
         return Vec::new();
     }
 
@@ -683,7 +772,26 @@ pub fn pick_blocks(state: &GameState, defender: PlayerId) -> Vec<(InstanceId, In
         }
     }
 
+    emit_blocker_selection(defender, declared, assignments.clone(), t0);
     assignments
+}
+
+/// O8: shared BlockerSelection emission. No-op when `t0` is None
+/// (trace was off at function entry).
+fn emit_blocker_selection(
+    defender: PlayerId,
+    attackers: Vec<InstanceId>,
+    assignments: Vec<(InstanceId, InstanceId)>,
+    t0: Option<std::time::Instant>,
+) {
+    let Some(t0) = t0 else { return };
+    crate::trace::push(crate::trace::TraceEvent::BlockerSelection {
+        at_us: crate::trace::now_us(),
+        defender,
+        attackers,
+        assignments,
+        duration_us: t0.elapsed().as_micros() as u64,
+    });
 }
 
 #[cfg(test)]

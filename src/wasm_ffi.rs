@@ -89,6 +89,12 @@ pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
 
     let _ = clear_session();
 
+    // O5: enable the trace bus for the duration of this FFI call.
+    // Any stale events from a previous call get cleared so the
+    // envelope carries only this call's slice.
+    let _ = crate::trace::drain();
+    crate::trace::enable(true);
+
     let engine = build_engine(&args)?;
     let mut session = GameSession { engine };
     let prompt = drive_to_next_yield(&mut session.engine, None)?;
@@ -97,7 +103,9 @@ pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
     // UCT trace ASCII tree) without devtools. The buffer is cleared
     // after every yield so JS sees only the lines since the last call.
     let log = std::mem::take(&mut session.engine.log);
-    let envelope = serde_json::json!({ "prompt": prompt, "log": log });
+    let trace_events = crate::trace::drain();
+    let envelope =
+        serde_json::json!({ "prompt": prompt, "log": log, "trace": trace_events });
     let envelope_json =
         serde_json::to_string(&envelope).map_err(|e| format!("serialize first prompt: {e}"))?;
     install_session(session);
@@ -111,13 +119,21 @@ pub(crate) fn tsot_apply_action_impl(action_json: &str) -> Result<String, String
     let action: HumanAction = serde_json::from_str(action_json)
         .map_err(|e| format!("tsot_apply_action: bad action JSON: {e}"))?;
 
+    // O5: fresh trace slice per FFI call. Drain any leftover events
+    // (from the start_game call or a panicked previous call) so this
+    // envelope's `trace` carries only this apply_action's work.
+    let _ = crate::trace::drain();
+    crate::trace::enable(true);
+
     let (prompt, log) = with_session(|s| -> Result<_, String> {
         let prompt = drive_to_next_yield(&mut s.engine, Some(action))?;
         let log = std::mem::take(&mut s.engine.log);
         Ok((prompt, log))
     })
     .map_err(|e| e.to_string())??;
-    let envelope = serde_json::json!({ "prompt": prompt, "log": log });
+    let trace_events = crate::trace::drain();
+    let envelope =
+        serde_json::json!({ "prompt": prompt, "log": log, "trace": trace_events });
     serde_json::to_string(&envelope).map_err(|e| format!("serialize next prompt: {e}"))
 }
 
@@ -419,5 +435,171 @@ mod tests {
         );
 
         assert!(clear_session(), "session should still be active");
+    }
+
+    // ----- O5: wasm FFI envelope contains the structured trace ---
+
+    /// INTENT: `tsot_start_game_impl` returns an envelope with a
+    /// `trace` field that is a JSON array. This is the foundation
+    /// for the UI rendering: the trace stream crosses the FFI
+    /// boundary as structured data, not strings.
+    #[test]
+    fn start_game_envelope_contains_trace_array() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "heuristic",
+        })
+        .to_string();
+
+        let env_json = tsot_start_game_impl(&args).expect("tsot_start_game returned Err");
+        let env: Value = serde_json::from_str(&env_json).expect("envelope parses");
+        let trace = env["trace"]
+            .as_array()
+            .expect("envelope.trace should be an array");
+        assert!(
+            !trace.is_empty(),
+            "trace should contain events from the engine run, got empty"
+        );
+        assert!(clear_session(), "expected start_game to install a session");
+    }
+
+    /// INTENT: the trace array carries Step events recorded by the
+    /// engine during `tsot_start_game`. Proves the bus is enabled
+    /// at FFI entry and the structured events flow through.
+    #[test]
+    fn start_game_trace_contains_step_events() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "heuristic",
+        })
+        .to_string();
+
+        let env_json = tsot_start_game_impl(&args).expect("tsot_start_game returned Err");
+        let env: Value = serde_json::from_str(&env_json).expect("envelope parses");
+        let trace = env["trace"].as_array().expect("trace is array");
+        let step_count = trace
+            .iter()
+            .filter(|e| e["kind"] == "Step")
+            .count();
+        assert!(
+            step_count >= 1,
+            "trace should contain ≥1 Step event, got {step_count} (full trace: {trace:?})"
+        );
+        assert!(clear_session());
+    }
+
+    /// INTENT: the trace array carries Cursor events. Proves the
+    /// O2 instrumentation flows from the engine across the FFI.
+    #[test]
+    fn start_game_trace_contains_cursor_events() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "heuristic",
+        })
+        .to_string();
+
+        let env_json = tsot_start_game_impl(&args).expect("tsot_start_game returned Err");
+        let env: Value = serde_json::from_str(&env_json).expect("envelope parses");
+        let trace = env["trace"].as_array().expect("trace is array");
+        let cursor_count = trace
+            .iter()
+            .filter(|e| e["kind"] == "Cursor")
+            .count();
+        assert!(
+            cursor_count >= 1,
+            "trace should contain ≥1 Cursor event, got {cursor_count}"
+        );
+        assert!(clear_session());
+    }
+
+    /// INTENT: `tsot_apply_action_impl` also returns an envelope
+    /// with `trace`. Same contract — every FFI call carries its
+    /// own trace slice.
+    #[test]
+    fn apply_action_envelope_contains_trace_array() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "heuristic",
+        })
+        .to_string();
+
+        let _ = tsot_start_game_impl(&args).expect("tsot_start_game returned Err");
+        let action_json = serde_json::json!({ "kind": "Pass" }).to_string();
+        let env_json =
+            tsot_apply_action_impl(&action_json).expect("tsot_apply_action returned Err");
+        let env: Value = serde_json::from_str(&env_json).expect("envelope parses");
+        let trace = env["trace"]
+            .as_array()
+            .expect("envelope.trace should be an array");
+        assert!(!trace.is_empty(), "trace should be non-empty after Pass");
+        assert!(clear_session());
+    }
+
+    /// INTENT: each FFI call's trace is fresh — events from the
+    /// previous call don't bleed into the next. The FFI drains the
+    /// bus at exit (no cross-call accumulation).
+    #[test]
+    fn apply_action_trace_does_not_inherit_start_game_trace() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "heuristic",
+        })
+        .to_string();
+        let start_env: Value = serde_json::from_str(
+            &tsot_start_game_impl(&args).expect("tsot_start_game returned Err"),
+        )
+        .expect("envelope parses");
+        let start_step_count = start_env["trace"]
+            .as_array()
+            .map(|arr| arr.iter().filter(|e| e["kind"] == "Step").count())
+            .unwrap_or(0);
+
+        let action_json = serde_json::json!({ "kind": "Pass" }).to_string();
+        let next_env: Value = serde_json::from_str(
+            &tsot_apply_action_impl(&action_json).expect("tsot_apply_action returned Err"),
+        )
+        .expect("envelope parses");
+        let next_trace = next_env["trace"]
+            .as_array()
+            .expect("envelope.trace should be an array");
+        assert!(
+            next_trace.len() < start_step_count + 1000,
+            "trace should be the slice for THIS call, not accumulated; got {} (start had {start_step_count} Steps)",
+            next_trace.len()
+        );
+        let next_step_count = next_trace
+            .iter()
+            .filter(|e| e["kind"] == "Step")
+            .count();
+        assert!(
+            next_step_count >= 1,
+            "apply_action should still contain Step events for its own call, got {next_step_count}"
+        );
+        assert!(clear_session());
     }
 }

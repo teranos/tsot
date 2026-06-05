@@ -284,7 +284,7 @@ fn probe_one_card(
             *presence.entry(id.to_string()).or_insert(0.0) += 1.0;
         }
     }
-    for (_, v) in presence.iter_mut() {
+    for v in presence.values_mut() {
         *v /= pop_size;
     }
     let best_curve: Vec<f64> = result.best_per_generation.iter().map(|(_, f)| *f).collect();
@@ -496,7 +496,7 @@ fn build_comparison_html(
                                 details {
                                     summary { "fitness curve (per generation)" }
                                     pre style="font-size: 10px;" {
-                                        (format!("gen  best   mean\n"))
+                                        ("gen  best   mean\n".to_string())
                                         @for i in 0..r.best_fitness_curve.len() {
                                             (format!("{:>3}  {:.3}  {:.3}\n",
                                                 i,

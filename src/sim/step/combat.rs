@@ -101,12 +101,12 @@ impl StepEngine {
         }
         if declared_atk_count > 0 {
             self.state.confirm_attacks().unwrap();
-            self.cursor = EngineCursor::DeclareBlockers;
+            self.set_cursor(EngineCursor::DeclareBlockers);
         } else {
             // No attackers declared → skip blockers, still run the
             // post-combat activation pass (run_game_continue runs it
             // unconditionally).
-            self.cursor = EngineCursor::PostCombatActivations;
+            self.set_cursor(EngineCursor::PostCombatActivations);
         }
         // Eligibility list is consumed; let the compiler know.
         let _ = eligible_attackers(&self.state, active);
@@ -211,7 +211,7 @@ impl StepEngine {
         // Eligibility list for the engine's own bookkeeping.
         let _ = eligible_blockers(&self.state, defender);
         // Post-combat activation pass (S9) runs before EndTurn.
-        self.cursor = EngineCursor::PostCombatActivations;
+        self.set_cursor(EngineCursor::PostCombatActivations);
         StepResult::Continue
     }
 
@@ -234,7 +234,7 @@ impl StepEngine {
             &mut last_activated,
             &self.ais,
         );
-        self.cursor = if non_creatures_only {
+        let new_cursor = if non_creatures_only {
             EngineCursor::DeclareAttackers
         } else if matches!(self.ais[active.index()], AiKind::Human(_)) {
             // S10: human-active turn routes through Main2 between
@@ -247,6 +247,7 @@ impl StepEngine {
         } else {
             EngineCursor::EndTurn
         };
+        self.set_cursor(new_cursor);
         StepResult::Continue
     }
 }
