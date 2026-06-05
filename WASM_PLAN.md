@@ -34,20 +34,34 @@
 - [x] ~~**D5: Port assets/play.html to WASM.**~~
   ~~Replace `fetch('/state'|'/action')` with `Module.ccall('tsot_*', ..., {async:true})`.~~
   ~~Load tsot_wasm.js via `<script>`. UI code (cards, click handlers) unchanged.~~
-  (`<script src="tsot_wasm.js">` loads the emscripten loader; bootstrap
-  awaits `createTsotModule()`. `wasmCallString` wraps `ccall` with a
-  follow-up `tsot_free_string` so every `CString::into_raw` from the
-  Rust side gets freed. `fetchState()` is now one-shot — runs
-  `tsot_start_game` on first call with default args (random seed,
-  50×blue-monkey mirror, heuristic opponent); subsequent calls return
-  the stashed prompt since the engine only advances via
-  `tsot_apply_action`. `sendAction` JSON-stringifies the
-  `HumanAction`, parses the returned prompt JSON, stashes it on
-  `state.current`. Asyncify is OFF (`.cargo/config.toml`) so the
-  ccalls are synchronous — no `{async:true}` needed. UI / render code
-  unchanged. `make serve` (HTTP shim) is broken until D8 retires it —
-  the page now expects `tsot_wasm.js` alongside the HTML which the
-  shim doesn't serve. D6 ships the static dev server that does.)
+  (Shipped as the Worker model — see G4 for why-not-Asyncify. Main
+  thread spawns `new Worker('tsot-worker.js')`; the worker
+  `importScripts('tsot_wasm.js')` and `createTsotModule()` instantiates
+  the wasm in worker scope. FFI is async via `postMessage`:
+  `{cmd: 'start_game' | 'apply_action', ...}` outbound, the worker
+  ccalls synchronously and posts `{kind: 'envelope', json}` back; main
+  resolves a single `pendingFfi` Promise per call (engine is
+  single-threaded, only one inflight FFI). `wasmCallString` lives
+  inside the worker and frees every `CString::into_raw` via
+  `tsot_free_string`. Asyncify is OFF in `.cargo/config.toml`; the
+  ccalls inside the worker are still synchronous — the async surface
+  is the postMessage round-trip on the main side. Live observability
+  arrives mid-FFI: `--js-library=assets/wasm-worker-lib.js` resolves
+  the `tsot_emit_iteration_event` extern in `src/sim/uct.rs`, which
+  posts `{kind: 'uct_iter', line}` from worker → main once per UCT
+  iteration; main renders `[live UctIter]` lines into the LOG while
+  the search is still hanging. (Worker + async FFI verified
+  end-to-end on Firefox: page loads, `start_game` round-trips,
+  hand renders. `[live UctIter]` mid-FFI rendering is shipped but
+  not yet verified — needs a cast that triggers a real UCT search.
+  Chrome + Safari are D7.) `fetchState()` runs `start_game` on
+  first call with default args (random seed, 50-card varied deck,
+  UCT opponent); subsequent calls return the stashed prompt since the
+  engine only advances via `apply_action`. UI / render code unchanged.
+  `make serve` (HTTP shim) is broken until D8 retires it — the page
+  now expects `tsot_wasm.js` + `tsot-worker.js` alongside the HTML
+  which the shim doesn't serve. D6 ships the static dev server that
+  does.)
 
 - [x] ~~**D6: Static dev-server scaffold.**~~
   ~~`make wasm-serve` target running `python3 -m http.server` from the dist dir.~~
@@ -66,6 +80,11 @@
 - [ ] **D7: Smoke test in Chrome + Safari.**
   Play a full game vs UCT in both browsers. Verify payment / target picks /
   combat / activations / Main2 / game-over. Safari = future iOS WebView.
+  (Status 2026-06-05: Firefox booted to first prompt — off-spec target,
+  confirms the Worker model isn't Chromium-specific, but does NOT
+  satisfy D7. Chrome + Safari both untouched. Within Firefox: bootstrap +
+  hand-render verified; full-game flow / UCT live stream / combat /
+  Main2 / game-over still untested in any browser.)
 
 - [ ] **D8: Drop the HTTP shim.**
   Delete src/cli_serve.rs, the Serve subcommand wiring, the `make serve`
@@ -145,6 +164,13 @@
   README.md: `make serve` → `make wasm`. LUA.md: emscripten path is now live.
   JOURNAL.md: cross out "multiplayer rollback netcode" once E5 lands.
 
-- [ ] **G4: Decision log — Asyncify vs step-mode.**
-  Note in JOURNAL.md (or new ADR): chose Asyncify for v1 (~1 day, ~50% bloat).
-  Step-mode revisit if binary > 10MB on mobile or runtime overhead is visible.
+- [x] ~~**G4: Decision log — Web Worker for wasm FFI.**~~
+  ~~Note in JOURNAL.md (or new ADR) comparing Web Worker against the~~
+  ~~yield-based alternatives (Asyncify, JSPI). Comparison table +~~
+  ~~costs accepted + references.~~
+  (Shipped as `docs/adr/0001-web-worker-for-wasm-ffi.md`. ADR
+  centers on Web Worker as the chosen mechanism; includes the 5-row
+  comparison table against JSPI + Asyncify; documents why neither
+  yield-primitive fits — both stay single-threaded so an 80s UCT
+  search still freezes the UI, and JSPI specifically has no mobile
+  reach as of June 2026.)
