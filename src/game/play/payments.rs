@@ -169,6 +169,41 @@ impl GameState {
             .count()
     }
 
+    /// SHARED predicate — the canonical mutation-target eligibility
+    /// set for a cast. Both the picker (sim/ai.rs::enumerate_playable_in_hand)
+    /// and the resolver (sim/run.rs::build_pattern_b_choices) must
+    /// use this so play_card's mutation-target validation
+    /// (game/play.rs:455-481) never sees a target the picker offered.
+    ///
+    /// Filters applied (matching play_card exactly):
+    ///   1. target is on A's or B's BOARD
+    ///   2. target is a creature (C.6 implicit — mutations attach
+    ///      to creatures only)
+    ///   3. target does NOT have `Restriction::CannotBeAttachedTo`
+    ///      (glass-insect cycle / glass-damselfly etc.)
+    ///   4. C.14: if the cast is transparent-frame, target must also
+    ///      be transparent-frame. Non-transparent mutations attach
+    ///      to anything (subject to the above).
+    pub fn eligible_mutation_targets(&self, cast_iid: &InstanceId) -> Vec<InstanceId> {
+        let cast_transparent = self.is_transparent(cast_iid);
+        self.a
+            .board
+            .iter()
+            .chain(self.b.board.iter())
+            .filter(|t| {
+                self.card_pool
+                    .get(*t)
+                    .map(|i| i.card.kind == crate::card::CardType::Creature)
+                    .unwrap_or(false)
+            })
+            .filter(|t| {
+                !self.has_restriction(t, crate::card::Restriction::CannotBeAttachedTo)
+            })
+            .filter(|t| !cast_transparent || self.is_transparent(t))
+            .cloned()
+            .collect()
+    }
+
     /// P.31: collect up to `max_count` attached iids from cards the player
     /// controls on the BOARD. Iteration order: board iteration order, then
     /// per-host attached order. No scoring — sim uses first-N selection.

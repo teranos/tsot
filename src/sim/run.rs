@@ -154,7 +154,7 @@ pub(crate) fn build_pattern_b_choices(
                     .unwrap_or(false)
             })
             .count();
-        let identity_count = state.identity_matching_hand_count(active, picked);
+        let identity_count = state.eligible_hand_payments(active, picked).len();
         let gy_subs_available = p
             .graveyard
             .iter()
@@ -273,7 +273,7 @@ pub(crate) fn build_pattern_b_choices(
             }
         }
         if hand_needed > 0 {
-            let identity_match_count = state.identity_matching_hand_count(active, picked);
+            let identity_match_count = state.eligible_hand_payments(active, picked).len();
             if identity_match_count < hand_needed {
                 let want_gy = hand_needed - identity_match_count;
                 let gy_subs = state.find_gy_hand_substitutes(active, picked, want_gy);
@@ -322,7 +322,7 @@ pub(crate) fn build_pattern_b_choices(
             }
         }
         if hand_needed > 0 {
-            let identity_match_count = state.identity_matching_hand_count(active, picked);
+            let identity_match_count = state.eligible_hand_payments(active, picked).len();
             if identity_match_count < hand_needed {
                 let want_gy = hand_needed - identity_match_count;
                 let gy_subs = state.find_gy_hand_substitutes(active, picked, want_gy);
@@ -350,20 +350,10 @@ pub(crate) fn build_pattern_b_choices(
                 state.resolve_graveyard_payment(active, picked, gy_needed);
         }
         if matches!(kind, CardType::Mutation) {
-            let mut pool: Vec<InstanceId> = state
-                .a
-                .board
-                .iter()
-                .chain(state.b.board.iter())
-                .filter(|t| {
-                    state
-                        .card_pool
-                        .get(*t)
-                        .map(|i| i.card.kind == CardType::Creature)
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
+            // Same eligibility set as the picker uses (and that
+            // play_card validates) — no picker/resolver disagreement
+            // on mutation targets possible.
+            let mut pool = state.eligible_mutation_targets(picked);
             pool.sort_by(|a, b| {
                 let key = |t: &InstanceId| {
                     let inst = state.card_pool.get(t);

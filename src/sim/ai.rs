@@ -62,13 +62,11 @@ pub fn enumerate_playable_in_hand(
                     if !can_pay_instant_cost(state, player, iid) {
                         return false;
                     }
-                    state.a.board.iter().chain(state.b.board.iter()).any(|t| {
-                        state
-                            .card_pool
-                            .get(t)
-                            .map(|i| i.card.kind == CardType::Creature)
-                            .unwrap_or(false)
-                    })
+                    // Use the shared eligibility helper so the picker
+                    // can't offer a mutation whose only viable targets
+                    // get refused at play_card (e.g., glass-insect
+                    // CannotBeAttachedTo or C.14 transparent mismatch).
+                    !state.eligible_mutation_targets(iid).is_empty()
                 }
                 // Typeless casts (P.1 default to GRAVEYARD; SelfExile
                 // shortcut to EXILE). Affordability-gated like spells —
