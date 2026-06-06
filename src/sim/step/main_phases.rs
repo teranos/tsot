@@ -250,9 +250,9 @@ impl StepEngine {
             }
             None => format!("turn {} ({}) Main1: pass", self.state.turn, actor),
         };
-        self.log.push(summary);
+        crate::sim::instrument::tee_log(&mut self.log, summary);
         if let Some(t) = uct_trace_log {
-            self.log.push(t);
+            crate::sim::instrument::tee_log(&mut self.log, t);
         }
 
         let Some(picked) = pick else {
@@ -419,6 +419,70 @@ impl StepEngine {
             bump_preview_rollback(&mut self.stats, active);
             if suicide {
                 self.state.bump_action("preview_skip_suicide", active);
+            }
+            // Mirror run.rs's outer-loop failure logging so the
+            // operator sees WHICH error play_card returned. Without
+            // this the StepEngine retries silently when a creature
+            // fails, which produces the picker/play_card loop pattern
+            // observed in the rollout.
+            let card_id = self
+                .state
+                .card_pool
+                .get(&picked)
+                .map(|c| c.card.id.clone())
+                .unwrap_or_else(|| picked.clone());
+            if let Err(err) = &result {
+                let describe = |h: &crate::game::InstanceId| -> String {
+                    let inst = self.state.card_pool.get(h);
+                    let id = inst
+                        .map(|c| c.card.id.clone())
+                        .unwrap_or_else(|| h.clone());
+                    let mut tags: Vec<&str> = Vec::new();
+                    if self.state.has_restriction(
+                        h,
+                        crate::card::Restriction::CannotBeCostPaid,
+                    ) {
+                        tags.push("cant_pay");
+                    }
+                    if self.state.is_transparent(h) {
+                        tags.push("transparent");
+                    }
+                    if inst.map(|c| c.card.gy_hand_substitute).unwrap_or(false) {
+                        tags.push("gy_sub");
+                    }
+                    if tags.is_empty() {
+                        id
+                    } else {
+                        format!("{id}[{}]", tags.join(","))
+                    }
+                };
+                let active_hand: Vec<String> =
+                    self.state.player(active).hand.iter().map(&describe).collect();
+                let active_gy: Vec<String> = self
+                    .state
+                    .player(active)
+                    .graveyard
+                    .iter()
+                    .map(&describe)
+                    .collect();
+                crate::sim::instrument::tee_log(
+                    &mut self.log,
+                    format!(
+                        "turn {} ({:?}) Main1: play_card({card_id}) failed: {err:?}  hand=[{}]  gy=[{}]",
+                        self.state.turn,
+                        active,
+                        active_hand.join(", "),
+                        active_gy.join(", "),
+                    ),
+                );
+            } else if suicide {
+                crate::sim::instrument::tee_log(
+                    &mut self.log,
+                    format!(
+                        "turn {} ({:?}) Main1: {card_id} rolled back (would have lost)",
+                        self.state.turn, active,
+                    ),
+                );
             }
             // Same advance heuristic as run.rs: creature failures
             // mark played_creature so we stop re-picking the same

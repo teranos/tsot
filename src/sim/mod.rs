@@ -19,6 +19,7 @@ pub mod evolved_deck;
 pub mod fitness;
 pub mod genome;
 pub mod human;
+pub mod instrument;
 pub mod mcts;
 pub mod ops;
 pub mod parallel_eval;

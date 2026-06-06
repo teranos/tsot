@@ -210,10 +210,66 @@ impl GameState {
         // whole bundle suffices). When the anchor is supplied, P.12b
         // suspends P.7a's identity check on HAND payments for this cast.
         //
-        // Determines `gy_supplies_color_anchor`, used below to bypass
-        // the HAND-identity checks (P.12b).
+        // Smart auto-pitch: when the caller leaves
+        // `choices.graveyard_payment_ids` empty, the engine builds the
+        // pitch list itself. The legacy strategy of "take the last N
+        // cards from GY" caused picker/play_card disagreement — the
+        // picker (sim/ai.rs:340) checks whether *any* card in GY can
+        // anchor, but the engine then pitched the back-of-GY cards
+        // which often didn't anchor, returning NoGraveyardPaymentForColor.
+        // That gap caused rollout hangs (e.g., glass-damselfly
+        // re-picked forever). The smart strategy: take one anchor
+        // (the most-recent color-matching card) plus the rest from
+        // back-of-GY, matching the picker's optimism.
+        //
+        // The computed `auto_gy_pitch` is also used at exile-time
+        // below so the check and the actual move stay coherent.
+        let cast_colors_set: BTreeSet<String> = cast_card_colors.iter().cloned().collect();
+        let auto_gy_pitch: Vec<InstanceId> = if graveyard_needed > 0
+            && choices.graveyard_payment_ids.is_empty()
+        {
+            let gy = &self.player(player).graveyard;
+            if cast_colors_set.is_empty() {
+                // Empty-color cast: anchor moot, back-of-GY is fine.
+                let start = gy.len().saturating_sub(graveyard_needed);
+                gy[start..].to_vec()
+            } else {
+                // Find the most-recent card whose printed colors share
+                // anything with the cast. Lowercase-fold both sides.
+                let anchor_idx: Option<usize> = (0..gy.len()).rev().find(|&i| {
+                    self.card_pool
+                        .get(&gy[i])
+                        .map(|inst| {
+                            inst.card.colors.iter().any(|c| {
+                                cast_colors_set.contains(&c.to_ascii_lowercase())
+                            })
+                        })
+                        .unwrap_or(false)
+                });
+                let mut chosen: Vec<usize> = Vec::with_capacity(graveyard_needed);
+                if let Some(a) = anchor_idx {
+                    chosen.push(a);
+                }
+                // Fill remaining slots from the back of GY, skipping
+                // the already-picked anchor.
+                for i in (0..gy.len()).rev() {
+                    if chosen.len() >= graveyard_needed {
+                        break;
+                    }
+                    if !chosen.contains(&i) {
+                        chosen.push(i);
+                    }
+                }
+                // Exile order: most-recent first (matches the legacy
+                // back-of-GY loop's order for the non-anchor entries
+                // and keeps journal locality predictable).
+                chosen.sort_by(|a, b| b.cmp(a));
+                chosen.iter().map(|&i| gy[i].clone()).collect()
+            }
+        } else {
+            Vec::new()
+        };
         let gy_supplies_color_anchor = if graveyard_needed > 0 {
-            let cast_colors_set: BTreeSet<String> = cast_card_colors.iter().cloned().collect();
             if cast_colors_set.is_empty() {
                 // Empty-color cast is a wildcard already; anchor moot.
                 true
@@ -221,9 +277,7 @@ impl GameState {
                 let pitch_ids: Vec<InstanceId> = if !choices.graveyard_payment_ids.is_empty() {
                     choices.graveyard_payment_ids.clone()
                 } else {
-                    let gy = &self.player(player).graveyard;
-                    let start = gy.len().saturating_sub(graveyard_needed);
-                    gy[start..].to_vec()
+                    auto_gy_pitch.clone()
                 };
                 let mut found = false;
                 for gid in &pitch_ids {
@@ -535,17 +589,15 @@ impl GameState {
         }
 
         // GRAVEYARD cost (P.12): if the caller supplied explicit
-        // `graveyard_payment_ids`, exile those in order. Otherwise fall
-        // back to the legacy "most-recent N" behavior (back of GY) —
-        // preserves byte-identical semantics for callers that haven't
-        // migrated to id-explicit GY payment yet.
+        // `graveyard_payment_ids`, exile those in order. Otherwise use
+        // the smart auto-pitch computed up-front (anchor-first when
+        // the cast has colors, back-of-GY otherwise). Using the same
+        // list as the P.12a check keeps the two coherent — no more
+        // picker/play_card disagreement on which cards anchor.
         if choices.graveyard_payment_ids.is_empty() {
-            for _ in 0..graveyard_needed {
-                let Some(back) = self.player(player).graveyard.last().cloned() else {
-                    break;
-                };
-                payments_snapshot.graveyard.push(back.clone());
-                let _ = self.move_card(&back, player, Zone::Graveyard, Zone::Exile);
+            for gid in &auto_gy_pitch {
+                payments_snapshot.graveyard.push(gid.clone());
+                let _ = self.move_card(gid, player, Zone::Graveyard, Zone::Exile);
             }
         } else {
             payments_snapshot.graveyard = choices.graveyard_payment_ids.clone();

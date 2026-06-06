@@ -274,23 +274,18 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             })
             .unwrap_or(false)
     };
-    let hand_have_identity = if hand_need == 0 || cast_ident.is_empty() {
-        p.hand
-            .iter()
-            .filter(|h| *h != iid)
-            .filter(|h| !cast_is_board_placed || !is_transparent(h))
-            .count()
-    } else {
-        p.hand
-            .iter()
-            .filter(|h| *h != iid)
-            .filter(|h| !cast_is_board_placed || !is_transparent(h))
-            .filter(|h| {
-                let pay_ident = state.card_identity(h);
-                !cast_ident.is_disjoint(&pay_ident)
-            })
-            .count()
-    };
+    // Single source of truth — the SAME filter set that
+    // resolve_hand_payment applies. Picker and resolver can no
+    // longer disagree on which hand cards count as payable. This
+    // closes the class of bug where the picker over-counts (e.g.,
+    // missing a static restriction filter) and offers a cast the
+    // resolver then refuses to fund, producing pick/resolve loops.
+    //
+    // Notes: `iid` (the cast card) is excluded inside the helper;
+    // `cast_is_board_placed` / `is_transparent` / `cant_pay` /
+    // identity-match are all applied there.
+    let _ = (cast_is_board_placed, &is_transparent, &cast_ident);
+    let hand_have_identity = state.eligible_hand_payments(player, iid).len();
     // Clear View-style GY-substitutes can fill HAND slots without
     // identity matching. Count eligible cards in GY and add their
     // capacity to the affordability calculation. They cover slots the
@@ -307,6 +302,48 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
         })
         .count();
     let hand_have = hand_have_identity + gy_subs_available;
+    // P.12b identity-coverage gate (matches game/play.rs:359-363):
+    // when the cast has any identity (colors ∪ symbols), substitutes
+    // alone cannot fund payment unless the GY pitch supplies a
+    // color-anchor (which suspends P.7a per P.12b). The picker must
+    // mirror this: at least ONE actual hand-payment card is required.
+    //
+    // Without this gate the picker offers casts that fund via
+    // substitutes only and play_card then rejects with
+    // NoHandPaymentForIdentity → pick/resolve loop (observed with
+    // midnight-raven when B's only blue eligible payment was a
+    // gy_sub clear-view).
+    //
+    // Skipped when: cast has empty identity (wildcard), or hand_need
+    // is 0 (no hand payment required at all), or a GY anchor will be
+    // supplied (gy_need > 0 and at least one color-matching GY card
+    // exists — checked just below as the standard P.12a guard).
+    if hand_need > 0 && !cast_ident.is_empty() && hand_have_identity == 0 {
+        // Would the GY anchor save us via P.12b?
+        let cast_colors_lc: std::collections::BTreeSet<String> = inst
+            .card
+            .colors
+            .iter()
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        let gy_anchor_possible = gy_need > 0
+            && !cast_colors_lc.is_empty()
+            && p.graveyard.iter().any(|gid| {
+                state
+                    .card_pool
+                    .get(gid)
+                    .map(|i| {
+                        i.card
+                            .colors
+                            .iter()
+                            .any(|c| cast_colors_lc.contains(&c.to_ascii_lowercase()))
+                    })
+                    .unwrap_or(false)
+            });
+        if !gy_anchor_possible {
+            return false;
+        }
+    }
     let mut available: Vec<InstanceId> = p.board.clone();
     let mut sac_ok = true;
     for required_kind in &sac_slots {

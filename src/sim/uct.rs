@@ -400,6 +400,10 @@ pub fn pick_play_uct(
     let mut root = Node::new(root_player, candidates.clone());
 
     for it in 0..cfg.iterations {
+        crate::sim::instrument::set_current_op(format!(
+            "UCT iteration {}/{} turn={} player={:?}",
+            it + 1, cfg.iterations, state.turn, player
+        ));
         // Cooperative cancellation: yield mid-search if the caller
         // requested it (e.g., JS posted a cancel because the user
         // got impatient). Best-so-far selection happens below using

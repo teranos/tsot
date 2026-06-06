@@ -288,14 +288,30 @@ impl GameState {
     /// Fallback: if the oracle returns None (RandomOracle for empty pool, or
     /// a future oracle that declines), we pick the first remaining eligible
     /// card — payment is mandatory, so we can't skip a slot.
-    pub fn resolve_hand_payment(
+    /// SHARED predicate — the canonical hand-payment eligibility set
+    /// for a cast. Both the sim AI's affordability check and the
+    /// resolver's per-slot pool must use this so they can never
+    /// disagree on what counts as a payable hand card. Filters
+    /// applied (in order):
+    ///   1. exclude the cast card itself
+    ///   2. exclude cards with `Restriction::CannotBeCostPaid`
+    ///      (e.g., flesh-eating-plant suppresses opponent insects)
+    ///   3. C.14: exclude transparent-frame cards when the cast is
+    ///      BOARD-placed (creature/artifact/environment)
+    ///   4. P.7a identity match — payment shares ≥1 element of
+    ///      colors ∪ symbols with the cast. Empty-identity cast is
+    ///      a wildcard so identity check passes.
+    ///
+    /// This function is the SINGLE SOURCE OF TRUTH for "which hand
+    /// cards can pay this cast". When picker and resolver agree on
+    /// `eligible_hand_payments(...).len()`, no pick/resolve loop is
+    /// possible.
+    pub fn eligible_hand_payments(
         &self,
         player: PlayerId,
-        instance: &InstanceId,
-        hand_needed: usize,
-        oracle: &mut dyn ChoiceOracle,
-    ) -> Result<Vec<InstanceId>, crate::choice::ChoicePending> {
-        let cast_ident = self.card_identity(instance);
+        cast_iid: &InstanceId,
+    ) -> Vec<InstanceId> {
+        let cast_ident = self.card_identity(cast_iid);
         let identity_matches = |hid: &InstanceId| -> bool {
             if cast_ident.is_empty() {
                 return true;
@@ -303,17 +319,9 @@ impl GameState {
             let pay_ident = self.card_identity(hid);
             !cast_ident.is_disjoint(&pay_ident)
         };
-
-        // RULES C.14: when the cast is BOARD-placed (creature /
-        // artifact / environment) and non-transparent-frame,
-        // transparent-frame cards can't pay. Pre-filter so the
-        // oracle never offers them — otherwise the user picks a
-        // transparent card, play_card rejects with
-        // `HandPaymentTransparentForBoardPlaced`, and the human
-        // sees no UI hint at the picker stage.
         let cast_is_board_placed = self
             .card_pool
-            .get(instance)
+            .get(cast_iid)
             .map(|inst| {
                 matches!(
                     inst.card.kind,
@@ -323,25 +331,36 @@ impl GameState {
                 )
             })
             .unwrap_or(false);
+        self.player(player)
+            .hand
+            .iter()
+            .filter(|iid| *iid != cast_iid)
+            .filter(|iid| {
+                !self.has_restriction(iid, crate::card::Restriction::CannotBeCostPaid)
+            })
+            .filter(|iid| !(cast_is_board_placed && self.is_transparent(iid)))
+            .filter(|iid| identity_matches(iid))
+            .cloned()
+            .collect()
+    }
+
+    pub fn resolve_hand_payment(
+        &self,
+        player: PlayerId,
+        instance: &InstanceId,
+        hand_needed: usize,
+        oracle: &mut dyn ChoiceOracle,
+    ) -> Result<Vec<InstanceId>, crate::choice::ChoicePending> {
+        // Use the shared predicate. Per-slot we then exclude
+        // already-picked iids so a single card doesn't fill two
+        // slots.
+        let eligible = self.eligible_hand_payments(player, instance);
         let mut chosen: Vec<InstanceId> = Vec::with_capacity(hand_needed);
         let mut picked_set: BTreeSet<InstanceId> = BTreeSet::new();
         for slot in 0..hand_needed {
-            let pool: Vec<InstanceId> = self
-                .player(player)
-                .hand
+            let pool: Vec<InstanceId> = eligible
                 .iter()
-                .filter(|iid| *iid != instance && !picked_set.contains(*iid))
-                // Phase 3: filter out cards with a `cannot_be_cost_paid`
-                // restriction so the oracle never sees them as candidates.
-                .filter(|iid| {
-                    !self.has_restriction(iid, crate::card::Restriction::CannotBeCostPaid)
-                })
-                // C.14: transparent-frame can't pay BOARD-placed casts.
-                .filter(|iid| !(cast_is_board_placed && self.is_transparent(iid)))
-                // Identity-match: discard must share a color or
-                // symbol with the casting card, or be a no-identity
-                // wildcard (no colors and no symbol).
-                .filter(|iid| identity_matches(iid))
+                .filter(|iid| !picked_set.contains(*iid))
                 .cloned()
                 .collect();
             if pool.is_empty() {

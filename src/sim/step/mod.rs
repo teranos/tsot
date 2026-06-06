@@ -438,7 +438,75 @@ impl StepEngine {
     /// `run_game_continue` for AI-only games. Will be migrated to
     /// be the only entry point in S12.
     pub fn run_to_end(&mut self) -> GameStats {
+        let mut steps: u64 = 0;
+        let mut last_turn = self.state.turn;
+        let mut last_turn_change_step: u64 = 0;
+        // Defense-in-depth: any rollout that takes more than this many
+        // steps without advancing the turn counter is treated as a
+        // stall. The outer `run_game_with_ai` flow has a similar guard
+        // (`pattern_b_iter > 200`); the rollout path didn't, so a
+        // picker/play_card disagreement (e.g., glass-damselfly's
+        // P.12a auto-pitch mismatch) could spin forever. 50000 is
+        // ~10x the largest observed legitimate-progress span.
+        const ROLLOUT_STALL_LIMIT: u64 = 10_000;
         loop {
+            steps += 1;
+            if self.state.turn != last_turn {
+                last_turn = self.state.turn;
+                last_turn_change_step = steps;
+            }
+            if steps - last_turn_change_step > ROLLOUT_STALL_LIMIT {
+                let hand_ids = |iids: &[crate::game::InstanceId]| -> Vec<String> {
+                    iids.iter()
+                        .filter_map(|i| {
+                            self.state.card_pool.get(i).map(|c| c.card.id.clone())
+                        })
+                        .collect()
+                };
+                eprintln!(
+                    "[rollout-stall] StepEngine::run_to_end aborting: \
+                     {ROLLOUT_STALL_LIMIT} steps without turn change. \
+                     turn={} phase={:?} active={:?} \
+                     A_board={:?} B_board={:?} A_hand={:?} B_hand={:?} \
+                     A_deck={} B_deck={}",
+                    self.state.turn,
+                    self.state.phase,
+                    self.state.active_player,
+                    hand_ids(&self.state.a.board),
+                    hand_ids(&self.state.b.board),
+                    hand_ids(&self.state.a.hand),
+                    hand_ids(&self.state.b.hand),
+                    self.state.a.deck.len(),
+                    self.state.b.deck.len(),
+                );
+                // Rollout-level stall is recoverable within the
+                // session — the surrounding UCT search treats this
+                // rollout as a loss for the active player and
+                // continues. We do NOT bump the global timeout
+                // counter (which would HALT the whole sim after 5
+                // such events); that would kill curve-sample over a
+                // single deck's picker/resolver mismatch. Each stall
+                // is already loudly logged with full state above —
+                // that's how the operator finds the underlying bug.
+                let opp = self.state.active_player.opponent();
+                self.state.set_winner(Some(opp), "rollout_stall");
+                self.finalize_stats();
+                return self.stats.clone();
+            }
+            if steps % 1000 == 0 {
+                crate::sim::instrument::set_current_op(format!(
+                    "StepEngine::run_to_end step={steps} turn={} phase={:?} active={:?} A_board={} B_board={} A_deck={} B_deck={} A_hand={} B_hand={}",
+                    self.state.turn,
+                    self.state.phase,
+                    self.state.active_player,
+                    self.state.a.board.len(),
+                    self.state.b.board.len(),
+                    self.state.a.deck.len(),
+                    self.state.b.deck.len(),
+                    self.state.a.hand.len(),
+                    self.state.b.hand.len(),
+                ));
+            }
             match self.step(None) {
                 StepResult::Continue => continue,
                 StepResult::NeedHuman(prompt) => panic!(

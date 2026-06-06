@@ -200,11 +200,30 @@ pub(crate) fn build_pattern_b_choices(
         };
         state.bump_action("choose_int", active);
         choices.x_value = Some(x);
-        let hand_needed: usize = cost
+        // BOTH is_x AND non-is_x hand components must be counted.
+        // The X-branch used to only sum is_x components, silently
+        // dropping cards like spectrum-cull (1 non-X hand + X gy + X
+        // mill) — play_card sees the non-X slot, build doesn't fill
+        // it, and the cycle hangs. Mirror the same shape gy uses
+        // just below.
+        let raw_hand_needed: usize = cost
             .iter()
-            .filter(|c| c.is_x && matches!(c.source, CostSource::Hand))
-            .map(|_| x.max(0) as usize)
+            .filter(|c| matches!(c.source, CostSource::Hand))
+            .map(|c| {
+                if c.is_x {
+                    x.max(0) as usize
+                } else {
+                    c.amount.max(0) as usize
+                }
+            })
             .sum();
+        // play_card applies cost_reduction(Hand) BEFORE checking
+        // hand_payment_ids.len(); build must mirror or it over-fills
+        // hand_payment_ids and play_card rejects with
+        // WrongHandPaymentCount { expected: 0, got: N } when a static
+        // (modern-lcd-clock) reduces the cost.
+        let hand_red_x = state.cost_reduction(picked, CostSource::Hand).max(0) as usize;
+        let hand_needed: usize = raw_hand_needed.saturating_sub(hand_red_x);
         if hand_needed > 0 {
             let mut remaining = hand_needed;
             if identity_count < remaining {
@@ -362,11 +381,21 @@ pub(crate) fn build_pattern_b_choices(
     }
 
     // Sacrifice slots (any kind): pick lowest-value first.
+    // is_x components scale with the chosen X value (set just above
+    // in the X-branch); non-X components use c.amount. Without
+    // handling is_x, casts like `reckoning` (X sacrifices) silently
+    // skip sac-slot creation, play_card rejects with
+    // WrongSacrificeCount, and the pick/resolve loops.
+    let x_value = choices.x_value.unwrap_or(0).max(0) as usize;
     let sacrifice_slots: Vec<Option<CardType>> = cost
         .iter()
         .filter(|c| matches!(c.source, CostSource::Sacrifice))
         .flat_map(|c| {
-            let n = c.amount.max(0) as usize;
+            let n = if c.is_x {
+                x_value
+            } else {
+                c.amount.max(0) as usize
+            };
             std::iter::repeat_n(c.kind, n)
         })
         .collect();
@@ -561,13 +590,21 @@ pub fn run_game_continue(
         last_picked = None;
         last_activated = None;
         let mut events: Vec<String> = Vec::new();
+        crate::sim::instrument::set_current_op(format!(
+            "turn {turn} ({active:?}) phase={:?} outer-loop-tick",
+            state.phase
+        ));
 
         while state.phase != Phase::Main1 && state.winner.is_none() {
+            crate::sim::instrument::set_current_op(format!(
+                "turn {turn} ({active:?}) next_phase from {:?}",
+                state.phase
+            ));
             let mut oracle = RandomOracle::new(StdRng::seed_from_u64(rng.gen()));
             state.next_phase(Some(&mut EventContext::new(lua, &mut oracle)));
         }
         if state.winner.is_some() {
-            log.push(format!("turn {turn} ({active:?}): deck-out before Main1"));
+            crate::sim::instrument::tee_log(log, format!("turn {turn} ({active:?}): deck-out before Main1"));
             break;
         }
 
@@ -613,6 +650,10 @@ pub fn run_game_continue(
             // Per-player AI: each player can run its own decision policy.
             // Default (Heuristic for both) is byte-identical to pre-MCTS
             // behavior; mixed Heuristic/Mcts is how matchup-mcts compares.
+            crate::sim::instrument::set_current_op(format!(
+                "turn {turn} ({active:?}) phase={:?} pick_play ai={:?} kind_filter={:?}",
+                state.phase, ais[active.index()], kind_filter
+            ));
             let pick = match &ais[active.index()] {
                 super::AiKind::Heuristic => {
                     // UCT iteration mode: while a search is running,
@@ -655,7 +696,7 @@ pub fn run_game_continue(
                                 x,
                                 Some(&mut EventContext::new(lua, &mut oracle)),
                             ) {
-                                log.push(format!(
+                                crate::sim::instrument::tee_log(log, format!(
                                     "turn {turn} ({active:?}): human activation {iid}[{ability_index}] failed: {e:?}"
                                 ));
                             }
@@ -821,7 +862,7 @@ pub fn run_game_continue(
                             .map(|c| c.card.id.clone())
                             .unwrap_or_else(|| picked.clone());
                         let active_is_human = matches!(ais[active.index()], super::AiKind::Human(_));
-                        log.push(format!(
+                        crate::sim::instrument::tee_log(log, format!(
                             "turn {turn} ({active:?}): play_card({card_id}) failed: {err:?}{}",
                             if active_is_human { " [HUMAN — visible failure]" } else { "" }
                         ));
@@ -831,7 +872,7 @@ pub fn run_game_continue(
                             .get(&picked)
                             .map(|c| c.card.id.clone())
                             .unwrap_or_else(|| picked.clone());
-                        log.push(format!(
+                        crate::sim::instrument::tee_log(log, format!(
                             "turn {turn} ({active:?}): {card_id} rolled back (would have lost the game)"
                         ));
                     }
@@ -861,7 +902,7 @@ pub fn run_game_continue(
         }
         if state.winner.is_some() {
             if !events.is_empty() {
-                log.push(format!("turn {turn} ({active:?}): {}", events.join("; ")));
+                crate::sim::instrument::tee_log(log, format!("turn {turn} ({active:?}): {}", events.join("; ")));
             }
             break;
         }
@@ -994,7 +1035,7 @@ pub fn run_game_continue(
                             x,
                             Some(&mut EventContext::new(lua, &mut oracle)),
                         ) {
-                            log.push(format!(
+                            crate::sim::instrument::tee_log(log, format!(
                                 "turn {turn} ({active:?}): main2 activation {iid}[{ability_index}] failed: {e:?}"
                             ));
                         }
@@ -1028,7 +1069,7 @@ pub fn run_game_continue(
                                 .get(&picked)
                                 .map(|c| c.card.id.clone())
                                 .unwrap_or_else(|| picked.clone());
-                            log.push(format!(
+                            crate::sim::instrument::tee_log(log, format!(
                                 "turn {turn} ({active:?}): main2 play_card({card_id}) failed: {err:?}"
                             ));
                         } else if picked_is_creature {
@@ -1039,7 +1080,7 @@ pub fn run_game_continue(
             }
         }
 
-        log.push(format!("turn {turn} ({active:?}): {}", events.join("; ")));
+        crate::sim::instrument::tee_log(log, format!("turn {turn} ({active:?}): {}", events.join("; ")));
 
         let starting_turn = state.turn;
         while state.turn == starting_turn && state.winner.is_none() {
