@@ -96,11 +96,24 @@ pub fn run_curve_sample(
     };
     let ais = [ai_kind.clone(), ai_kind.clone()];
 
+    use tsot::sim::instrument::{
+        paint_blue, paint_bold_green, paint_bold_red, paint_cyan, paint_dim, paint_green,
+        paint_red, paint_yellow,
+    };
     println!();
-    println!("=== curve-sample ===");
-    println!("  games={} seed={:#x}", args.games, args.seed);
-    println!("  pool size: {} cards", playable_pool.len());
-    println!("  ai: {:?} (both seats)", ai_kind);
+    println!("{}", paint_cyan("=== curve-sample ==="));
+    println!(
+        "  {} games={} seed={:#x}",
+        paint_dim("·"),
+        args.games,
+        args.seed
+    );
+    println!(
+        "  {} pool size: {} cards",
+        paint_dim("·"),
+        playable_pool.len()
+    );
+    println!("  {} ai: {:?} (both seats)", paint_dim("·"), ai_kind);
     println!();
 
     // Observability principle: print everything that exists. No
@@ -118,6 +131,7 @@ pub fn run_curve_sample(
     let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let watch_shutdown = shutdown.clone();
     let watchdog = std::thread::spawn(move || {
+        use tsot::sim::instrument::{paint_dim, paint_yellow};
         while !watch_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_secs(1));
             let snap = watch.lock().ok().and_then(|g| g.clone());
@@ -125,8 +139,10 @@ pub fn run_curve_sample(
                 let elapsed = started.elapsed();
                 let op = tsot::sim::instrument::current_op();
                 eprintln!(
-                    "  [heartbeat] game {gnum} elapsed {:.1?}  current_op={op}",
+                    "  {} game {gnum} elapsed {:.1?}  current_op={}",
+                    paint_yellow("[heartbeat]"),
                     elapsed,
+                    paint_dim(op),
                 );
             }
         }
@@ -168,8 +184,13 @@ pub fn run_curve_sample(
             format!("{:.0}s", per_game * (args.games - g) as f64)
         };
         eprintln!(
-            "  game {running:>4}/{} START  seed={game_seed:#x}  elapsed_total {:>5.1?}  eta {eta_so_far:>5}  decks_dumped_to={dump_path}",
-            args.games, elapsed_so_far,
+            "  {} game {running:>4}/{}  seed={}  elapsed_total {:>5.1?}  eta {}  {}",
+            paint_yellow("◇ START"),
+            args.games,
+            paint_dim(format!("{game_seed:#x}")),
+            elapsed_so_far,
+            paint_dim(&eta_so_far),
+            paint_dim(format!("decks={dump_path}")),
         );
 
         let deck_a = to_deck(registry, &genome_a)
@@ -195,57 +216,85 @@ pub fn run_curve_sample(
         // event-fire and action-count maps. Hiding any of this would
         // mean making the operator dig for it later when something
         // looks weird.
+        let noisy = log.iter().any(|line| {
+            line.contains("failed:") || line.contains("rollout-stall")
+        });
         let winner_str = match stats.winner {
             tsot::game::PlayerId::A => "A",
             tsot::game::PlayerId::B => "B",
         };
+        let end_tag = if noisy {
+            paint_bold_red("✗ END  ")
+        } else {
+            paint_bold_green("● END  ")
+        };
+        let took_painted = if game_elapsed.as_secs_f64() > 2.0 {
+            paint_yellow(format!("took {game_elapsed:>7.2?}"))
+        } else {
+            paint_dim(format!("took {game_elapsed:>7.2?}"))
+        };
+        let winner_painted = match stats.winner {
+            tsot::game::PlayerId::A => paint_green("winner=A"),
+            tsot::game::PlayerId::B => paint_blue("winner=B"),
+        };
         eprintln!(
-            "  game {running:>4}/{} END    took {:>7.2?}  turns={}  winner={winner_str}  plays(A/B)={}/{}  atks(A/B)={}/{}  deaths(A/B)={}/{}  mill_to_exile(A/B)={}/{}  final_board(A/B)={}/{}  final_gy(A/B)={}/{}  replay_journal={}",
-            args.games, game_elapsed, stats.turns,
-            stats.a_played, stats.b_played,
-            stats.a_attacks, stats.b_attacks,
-            stats.a_deaths, stats.b_deaths,
-            stats.a_milled_to_exile, stats.b_milled_to_exile,
-            stats.a_final_board, stats.b_final_board,
-            stats.a_final_gy, stats.b_final_gy,
-            stats.replay_journal_entries,
+            "  {} game {running:>4}/{}  {}  turns={}  {}  {}",
+            end_tag,
+            args.games,
+            took_painted,
+            stats.turns,
+            winner_painted,
+            paint_dim(format!(
+                "plays(A/B)={}/{}  atks(A/B)={}/{}  deaths(A/B)={}/{}  mill(A/B)={}/{}  board(A/B)={}/{}  gy(A/B)={}/{}  rj={}",
+                stats.a_played, stats.b_played,
+                stats.a_attacks, stats.b_attacks,
+                stats.a_deaths, stats.b_deaths,
+                stats.a_milled_to_exile, stats.b_milled_to_exile,
+                stats.a_final_board, stats.b_final_board,
+                stats.a_final_gy, stats.b_final_gy,
+                stats.replay_journal_entries,
+            )),
         );
-        // Lua-handler events and engine action counts: print only the
-        // entries that actually fired (zeros are noise). Nothing
-        // truncated within the non-zero set.
-        let fires: Vec<String> = stats.event_fires.iter()
-            .filter(|(_, [a, b])| a + b > 0)
-            .map(|(k, [a, b])| format!("{k:?}={a}/{b}"))
-            .collect();
-        let actions: Vec<String> = stats.action_counts.iter()
-            .filter(|(_, [a, b])| a + b > 0)
-            .map(|(k, [a, b])| format!("{k}={a}/{b}"))
-            .collect();
-        if !fires.is_empty() {
-            eprintln!("            event_fires(A/B): {}", fires.join("  "));
-        }
-        if !actions.is_empty() {
-            eprintln!("            actions(A/B):     {}", actions.join("  "));
-        }
-        // Sacrifices and discards, per-card. Show every entry.
-        if !stats.card_sacrificed_count.is_empty() {
-            let s: Vec<String> = stats.card_sacrificed_count.iter()
-                .map(|(k, v)| format!("{k}={v}")).collect();
-            eprintln!("            sacrificed:       {}", s.join("  "));
-        }
-        if !stats.card_discarded_count.is_empty() {
-            let s: Vec<String> = stats.card_discarded_count.iter()
-                .map(|(k, v)| format!("{k}={v}")).collect();
-            eprintln!("            discarded:        {}", s.join("  "));
-        }
-        // Full action log for this game — written by the engine
-        // during run_game_with_ai. We were discarding it silently;
-        // that was hiding data. Print it under the END line so the
-        // operator can read exactly what happened action-by-action.
-        // The lines themselves come from the engine and are not
-        // summarized or filtered here.
-        for line in &log {
-            eprintln!("            | {line}");
+        let _ = winner_str;
+        if noisy {
+            let fires: Vec<String> = stats.event_fires.iter()
+                .filter(|(_, [a, b])| a + b > 0)
+                .map(|(k, [a, b])| format!("{k:?}={a}/{b}"))
+                .collect();
+            let actions: Vec<String> = stats.action_counts.iter()
+                .filter(|(_, [a, b])| a + b > 0)
+                .map(|(k, [a, b])| format!("{k}={a}/{b}"))
+                .collect();
+            if !fires.is_empty() {
+                eprintln!("            event_fires(A/B): {}", fires.join("  "));
+            }
+            if !actions.is_empty() {
+                eprintln!("            actions(A/B):     {}", actions.join("  "));
+            }
+            if !stats.card_sacrificed_count.is_empty() {
+                let s: Vec<String> = stats.card_sacrificed_count.iter()
+                    .map(|(k, v)| format!("{k}={v}")).collect();
+                eprintln!("            sacrificed:       {}", s.join("  "));
+            }
+            if !stats.card_discarded_count.is_empty() {
+                let s: Vec<String> = stats.card_discarded_count.iter()
+                    .map(|(k, v)| format!("{k}={v}")).collect();
+                eprintln!("            discarded:        {}", s.join("  "));
+            }
+            eprintln!(
+                "            | full engine log ({} lines):",
+                log.len()
+            );
+            for line in &log {
+                let painted = if line.contains("failed:") {
+                    paint_red(line)
+                } else if line.contains("rollout-stall") {
+                    paint_yellow(line)
+                } else {
+                    paint_dim(line)
+                };
+                eprintln!("            | {painted}");
+            }
         }
 
         for (card_id, turn, _player) in &stats.card_play_turn_events {
@@ -258,10 +307,17 @@ pub fn run_curve_sample(
     let _ = watchdog.join();
     let total_elapsed = t_start.elapsed();
     eprintln!(
-        "  {} games  | total {:>5.1?}  | avg {:>4.1}s/game  | slowest #{} at {:.2?}  | {total_plays} plays",
-        args.games, total_elapsed,
-        total_elapsed.as_secs_f64() / args.games as f64,
-        slowest.0, slowest.1,
+        "  {}  {} games  total {}  avg {}/game  slowest {} at {}  {} plays",
+        paint_bold_green("∎ done"),
+        args.games,
+        paint_yellow(format!("{total_elapsed:>5.1?}")),
+        paint_dim(format!(
+            "{:>4.1}s",
+            total_elapsed.as_secs_f64() / args.games as f64
+        )),
+        paint_dim(format!("#{}", slowest.0)),
+        paint_yellow(format!("{:.2?}", slowest.1)),
+        total_plays,
     );
 
     // JSON output, hand-formatted so each card lives on its own line.
@@ -293,43 +349,53 @@ pub fn run_curve_sample(
         .map_err(|e| mlua::Error::runtime(format!("write {}: {e}", args.out)))?;
     println!("→ wrote {}", args.out);
 
-    // Quick stdout summary: top 15 most-played cards with median turn.
-    println!();
-    println!("=== top 15 most-played cards (median turn) ===");
-    let mut summary: Vec<(&String, &BTreeMap<u32, u32>)> = acc.iter().collect();
-    summary.sort_by(|a, b| {
-        let a_total: u32 = a.1.values().sum();
-        let b_total: u32 = b.1.values().sum();
-        b_total.cmp(&a_total)
-    });
-    for (id, by_turn) in summary.iter().take(15) {
-        let plays: u32 = by_turn.values().sum();
-        let mut all_turns: Vec<u32> = Vec::new();
-        for (t, c) in *by_turn {
-            for _ in 0..*c {
-                all_turns.push(*t);
-            }
-        }
-        all_turns.sort();
-        let median = if all_turns.is_empty() {
-            0.0
-        } else {
-            let m = all_turns.len() / 2;
-            if all_turns.len().is_multiple_of(2) {
-                (all_turns[m - 1] + all_turns[m]) as f64 / 2.0
-            } else {
-                all_turns[m] as f64
-            }
-        };
-        let mean: f64 = if plays == 0 {
-            0.0
-        } else {
-            all_turns.iter().map(|t| *t as f64).sum::<f64>() / plays as f64
-        };
+    // Stdout summary: top 15 cards played on turn 1, turn 2, and
+    // turn 3 each. Reads the same `acc` map (card_id → turn →
+    // count) — for each target turn N, rank cards by their count at
+    // turn N descending. Shows the early-game cast distribution
+    // directly instead of mean/median which can mask early-vs-late
+    // bimodality.
+    for target_turn in [1u32, 2, 3] {
+        println!();
         println!(
-            "  {:<32}  plays={:>4}  median_turn={:.1}  mean_turn={:.2}",
-            id, plays, median, mean,
+            "{}",
+            paint_cyan(format!("=== top 15 cards played on turn {target_turn} ==="))
         );
+        let mut ranked: Vec<(&String, u32)> = acc
+            .iter()
+            .filter_map(|(id, by_turn)| {
+                let n = *by_turn.get(&target_turn).unwrap_or(&0);
+                if n > 0 { Some((id, n)) } else { None }
+            })
+            .collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        if ranked.is_empty() {
+            println!("  {}", paint_dim("(no plays recorded on this turn)"));
+            continue;
+        }
+        for (id, plays_on_turn) in ranked.iter().take(15) {
+            let total: u32 = acc.get(*id).map(|m| m.values().sum()).unwrap_or(0);
+            let share_pct = if total > 0 {
+                (*plays_on_turn as f64) * 100.0 / (total as f64)
+            } else {
+                0.0
+            };
+            // Highlight cards with a high share (this turn is their
+            // primary cast turn) in green; the rest stay default.
+            let id_painted = if share_pct >= 25.0 {
+                paint_green(format!("{id:<32}"))
+            } else {
+                format!("{id:<32}")
+            };
+            println!(
+                "  {}  {} {}  {}  {}",
+                id_painted,
+                paint_yellow(format!("plays_t{target_turn}=")),
+                paint_yellow(format!("{plays_on_turn:>3}")),
+                paint_dim(format!("share={share_pct:>5.1}%")),
+                paint_dim(format!("total={total:>4}")),
+            );
+        }
     }
 
     Ok(())

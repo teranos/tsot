@@ -463,21 +463,32 @@ impl StepEngine {
                         })
                         .collect()
                 };
-                eprintln!(
-                    "[rollout-stall] StepEngine::run_to_end aborting: \
-                     {ROLLOUT_STALL_LIMIT} steps without turn change. \
-                     turn={} phase={:?} active={:?} \
-                     A_board={:?} B_board={:?} A_hand={:?} B_hand={:?} \
-                     A_deck={} B_deck={}",
-                    self.state.turn,
-                    self.state.phase,
-                    self.state.active_player,
-                    hand_ids(&self.state.a.board),
-                    hand_ids(&self.state.b.board),
-                    hand_ids(&self.state.a.hand),
-                    hand_ids(&self.state.b.hand),
-                    self.state.a.deck.len(),
-                    self.state.b.deck.len(),
+                // Goes into the engine log Vec (not stderr) so the
+                // outer driver (curve-sample, evolve, etc.) can
+                // decide whether to surface it. When a single game
+                // produces hundreds of these, dumping each one to
+                // stderr live destroys the operator's view; the
+                // outer driver's per-game classifier sees "noisy"
+                // and emits the whole log with the stall lines
+                // colored yellow as warnings.
+                crate::sim::instrument::tee_log(
+                    &mut self.log,
+                    format!(
+                        "[rollout-stall] StepEngine::run_to_end aborting: \
+                         {ROLLOUT_STALL_LIMIT} steps without turn change. \
+                         turn={} phase={:?} active={:?} \
+                         A_board={:?} B_board={:?} A_hand={:?} B_hand={:?} \
+                         A_deck={} B_deck={}",
+                        self.state.turn,
+                        self.state.phase,
+                        self.state.active_player,
+                        hand_ids(&self.state.a.board),
+                        hand_ids(&self.state.b.board),
+                        hand_ids(&self.state.a.hand),
+                        hand_ids(&self.state.b.hand),
+                        self.state.a.deck.len(),
+                        self.state.b.deck.len(),
+                    ),
                 );
                 // Rollout-level stall is recoverable within the
                 // session — the surrounding UCT search treats this
@@ -485,9 +496,7 @@ impl StepEngine {
                 // continues. We do NOT bump the global timeout
                 // counter (which would HALT the whole sim after 5
                 // such events); that would kill curve-sample over a
-                // single deck's picker/resolver mismatch. Each stall
-                // is already loudly logged with full state above —
-                // that's how the operator finds the underlying bug.
+                // single deck's picker/resolver mismatch.
                 let opp = self.state.active_player.opponent();
                 self.state.set_winner(Some(opp), "rollout_stall");
                 self.finalize_stats();
