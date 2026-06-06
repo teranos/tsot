@@ -20,7 +20,7 @@ use crate::choice::{ChoiceOracle, ChooseIntRequest, RandomOracle, RecordingOracl
 use crate::game::{EventContext, GameState, InstanceId, Phase, PlayChoices, PlayerId};
 
 use super::ai::{
-    attached_keep_value, pick_blocks, pick_random_playable_in_hand,
+    attached_keep_value, pick_blocks, pick_heuristic_playable_in_hand,
     sacrifice_keep_value, select_attackers, PickKindFilter,
 };
 use super::stats::{
@@ -625,7 +625,7 @@ pub fn run_game_continue(
                     if let Some(planned) = super::uct::take_planned_action() {
                         Some(planned)
                     } else {
-                        pick_random_playable_in_hand(state, active, rng, kind_filter)
+                        pick_heuristic_playable_in_hand(state, active, rng, kind_filter)
                     }
                 }
                 super::AiKind::Mcts(mcts_cfg) => {

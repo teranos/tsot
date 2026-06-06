@@ -19,7 +19,7 @@ pub enum PickKindFilter {
 }
 
 /// Return every playable card in `player`'s hand that passes the
-/// `kind_filter`. Same filter as `pick_random_playable_in_hand` uses,
+/// `kind_filter`. Same filter as `pick_heuristic_playable_in_hand` uses,
 /// just collected instead of randomly chosen. Used by `sim::mcts` for
 /// candidate enumeration.
 pub fn enumerate_playable_in_hand(
@@ -109,7 +109,7 @@ pub fn dedup_candidates_by_card_id(
     out
 }
 
-pub fn pick_random_playable_in_hand(
+pub fn pick_heuristic_playable_in_hand(
     state: &GameState,
     player: PlayerId,
     rng: &mut impl Rng,

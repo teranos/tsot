@@ -1,6 +1,6 @@
 //! O6 contract — Heuristic AI narration.
 //!
-//! `pick_random_playable_in_hand` is the heuristic AI's entry
+//! `pick_heuristic_playable_in_hand` is the heuristic AI's entry
 //! point for "which card from hand do I play?". The instrumentation
 //! emits one `TraceEvent::AiPick` per call: the candidate set with
 //! per-card scores, the chosen iid, and (Phase 2-extended)
@@ -8,7 +8,7 @@
 
 use crate::game::{GameState, MoveError, PlayerId, Zone};
 use crate::game::test_helpers;
-use crate::sim::ai::{pick_random_playable_in_hand, PickKindFilter};
+use crate::sim::ai::{pick_heuristic_playable_in_hand, PickKindFilter};
 use crate::trace::{self, CandidateScore, TraceEvent};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -43,14 +43,14 @@ fn state_with_hand(n: usize) -> GameState {
     state
 }
 
-/// INTENT: one `pick_random_playable_in_hand` call emits exactly
+/// INTENT: one `pick_heuristic_playable_in_hand` call emits exactly
 /// one AiPick event. That's the per-decision summary record.
 #[test]
-fn pick_random_playable_in_hand_emits_exactly_one_ai_pick_event() {
+fn pick_heuristic_playable_in_hand_emits_exactly_one_ai_pick_event() {
     fresh_trace();
     let state = state_with_hand(3);
     let mut rng = StdRng::seed_from_u64(0);
-    let _ = pick_random_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
+    let _ = pick_heuristic_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
     let events = trace::drain();
     let count = events
         .iter()
@@ -62,11 +62,11 @@ fn pick_random_playable_in_hand_emits_exactly_one_ai_pick_event() {
 /// INTENT: the AiPick event tags the AI as `"Heuristic"`. UCT /
 /// MCTS will emit other tags in later tasks.
 #[test]
-fn pick_random_playable_in_hand_records_heuristic_ai_tag() {
+fn pick_heuristic_playable_in_hand_records_heuristic_ai_tag() {
     fresh_trace();
     let state = state_with_hand(3);
     let mut rng = StdRng::seed_from_u64(0);
-    let _ = pick_random_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
+    let _ = pick_heuristic_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
     let events = trace::drain();
     let ai = events
         .iter()
@@ -87,7 +87,7 @@ fn ai_pick_candidates_list_contains_each_playable_iid() {
     fresh_trace();
     let state = state_with_hand(3);
     let mut rng = StdRng::seed_from_u64(0);
-    let _ = pick_random_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
+    let _ = pick_heuristic_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
     let events = trace::drain();
     let candidates = events
         .iter()
@@ -109,14 +109,14 @@ fn ai_pick_candidates_list_contains_each_playable_iid() {
 }
 
 /// INTENT: the `chosen` field equals what
-/// `pick_random_playable_in_hand` returned. The same iid the
+/// `pick_heuristic_playable_in_hand` returned. The same iid the
 /// engine acts on is what the trace records as the AI's decision.
 #[test]
 fn ai_pick_chosen_equals_returned_iid() {
     fresh_trace();
     let state = state_with_hand(3);
     let mut rng = StdRng::seed_from_u64(0);
-    let returned = pick_random_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
+    let returned = pick_heuristic_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
     let events = trace::drain();
     let chosen = events
         .iter()
@@ -135,7 +135,7 @@ fn ai_pick_candidates_have_score_field() {
     fresh_trace();
     let state = state_with_hand(2);
     let mut rng = StdRng::seed_from_u64(0);
-    let _ = pick_random_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
+    let _ = pick_heuristic_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
     let events = trace::drain();
     let candidates = events
         .iter()
@@ -163,7 +163,7 @@ fn pick_with_empty_hand_emits_ai_pick_with_none_chosen() {
     fresh_trace();
     let state = state_with_hand(0);
     let mut rng = StdRng::seed_from_u64(0);
-    let returned = pick_random_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
+    let returned = pick_heuristic_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
     assert!(returned.is_none(), "empty hand → None");
     let events = trace::drain();
     let (candidates, chosen) = events
@@ -187,7 +187,7 @@ fn pick_emits_no_ai_pick_when_trace_disabled() {
     let _ = trace::drain();
     let state = state_with_hand(3);
     let mut rng = StdRng::seed_from_u64(0);
-    let _ = pick_random_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
+    let _ = pick_heuristic_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
     assert!(trace::drain().is_empty());
 }
 
@@ -399,11 +399,11 @@ fn pick_blocks_emits_nothing_when_trace_disabled() {
 /// The picker's search budget no longer fans out across redundant
 /// branches that all produce identical successor states.
 #[test]
-fn pick_random_playable_in_hand_dedups_identical_card_ids() {
+fn pick_heuristic_playable_in_hand_dedups_identical_card_ids() {
     fresh_trace();
     let state = state_with_hand(6); // 6 identical cards (all "a-N" from test_helpers::deck_of)
     let mut rng = StdRng::seed_from_u64(0);
-    let _ = pick_random_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
+    let _ = pick_heuristic_playable_in_hand(&state, PlayerId::A, &mut rng, PickKindFilter::Any);
     let events = trace::drain();
     let candidates = events
         .iter()

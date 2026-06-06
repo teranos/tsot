@@ -107,7 +107,7 @@ Subsumes my existing `UctTrace` ASCII tree — that becomes a structured
 `AiPick` payload.
 
 - [ ] **O6: Heuristic AI narration.**
-  `pick_random_playable_in_hand` + `play_priority_score` emit one
+  `pick_heuristic_playable_in_hand` + `play_priority_score` emit one
   `AiPick { ai: Heuristic, candidates: [(iid, score)…], chosen, search: Flat }`.
   Includes affordability rejections (which candidates were filtered
   before scoring + why).

@@ -5,7 +5,7 @@
 
 use crate::card::CardType;
 use crate::game::{EventContext, InstanceId};
-use crate::sim::ai::{pick_random_playable_in_hand, PickKindFilter};
+use crate::sim::ai::{pick_heuristic_playable_in_hand, PickKindFilter};
 use crate::sim::human::{HumanAction, HumanPrompt};
 use crate::sim::run::{build_pattern_b_choices, BuildChoiceResult};
 use crate::sim::stats::{bump_played, bump_preview_attempt, bump_preview_rollback};
@@ -147,7 +147,7 @@ impl StepEngine {
         // AI / human path.
         let mut uct_trace_log: Option<String> = None;
         let pick = match &self.ais[active.index()] {
-            AiKind::Heuristic => pick_random_playable_in_hand(
+            AiKind::Heuristic => pick_heuristic_playable_in_hand(
                 &self.state,
                 active,
                 &mut self.rng,

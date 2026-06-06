@@ -6,7 +6,7 @@
 
 //! One-ply rollout MCTS for the Pattern B card-pick decision.
 //!
-//! Wraps `pick_random_playable_in_hand`: enumerate candidates, for each
+//! Wraps `pick_heuristic_playable_in_hand`: enumerate candidates, for each
 //! one apply it via `state.play_card` then play out the rest of the
 //! game with the heuristic AI as the rollout policy, score by win-rate,
 //! pick the candidate with the highest win-rate. Journal-based rollback
@@ -33,7 +33,7 @@ use rand::SeedableRng;
 use crate::choice::{RandomOracle, RecordingOracle};
 use crate::game::{EventContext, GameState, InstanceId, Journal, PlayerId};
 
-use super::ai::{enumerate_playable_in_hand, pick_random_playable_in_hand, PickKindFilter};
+use super::ai::{enumerate_playable_in_hand, pick_heuristic_playable_in_hand, PickKindFilter};
 use super::run::{build_pattern_b_choices, BuildChoiceResult};
 use super::AiKind;
 
@@ -143,7 +143,7 @@ pub fn pick_play(
     // (or top-level caller with max_depth=0) keeps making progress.
     if depth_for_this_call == 0 {
         let mut rng = StdRng::seed_from_u64(cfg.base_seed.wrapping_add(0xDEAD_BEEF));
-        let chosen = pick_random_playable_in_hand(state, player, &mut rng, kind_filter);
+        let chosen = pick_heuristic_playable_in_hand(state, player, &mut rng, kind_filter);
         // Heuristic emits its own AiPick (with ai="Heuristic"); we
         // don't emit a second Mcts-tagged event for this passthrough.
         let _ = t0;

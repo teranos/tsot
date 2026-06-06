@@ -29,7 +29,7 @@
 --      P.7a per-payment check skips Clear View slots (Clear View has
 --      empty identity, so the check would always fail anyway — but
 --      it should be a deliberate skip, not an accidental pass).
---   2. **Sim AI integration** — `pick_random_playable_in_hand`'s
+--   2. **Sim AI integration** — `pick_heuristic_playable_in_hand`'s
 --      affordability check needs to know: a Clear View in graveyard
 --      adds 1 to "effective hand-pay capacity" for casts whose other
 --      payments still satisfy P.7a. The AI's smart-pitch heuristic

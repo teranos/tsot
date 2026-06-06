@@ -8,7 +8,7 @@
 //! wasm host) uses to drive decisions through a channel pair.
 //!
 //! Shape: each decision site that previously called `select_attackers` /
-//! `pick_blocks` / `pick_random_playable_in_hand` / `ChoiceOracle::*` now
+//! `pick_blocks` / `pick_heuristic_playable_in_hand` / `ChoiceOracle::*` now
 //! dispatches on `AiKind`. The `AiKind::Human(Arc<HumanInterface>)` arm
 //! sends a [`HumanPrompt`] to the frontend and blocks on a [`HumanAction`]
 //! coming back.
