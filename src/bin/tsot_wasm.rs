@@ -20,6 +20,8 @@ fn _retain_ffi_symbols() {
     let _ = tsot::wasm_ffi::tsot_save_game as usize;
     let _ = tsot::wasm_ffi::tsot_load_game as usize;
     let _ = tsot::wasm_ffi::tsot_test_panic as usize;
+    let _ = tsot::wasm_ffi::tsot_preview_uct as usize;
+    let _ = tsot::wasm_ffi::tsot_cancel_uct as usize;
 }
 
 fn main() {

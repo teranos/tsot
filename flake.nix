@@ -96,8 +96,15 @@
             # invocation, regardless of caller) is more robust than
             # CFLAGS_wasm32_unknown_emscripten alone — cc-rs's env-var
             # lookup pathway has caching quirks in build scripts.
-            export EMCC_CFLAGS="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm"
-            export CFLAGS_wasm32_unknown_emscripten="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm"
+            # `-pthread` here is for atomic-instruction emission in the
+            # C-side object files (Lua C runtime via mlua-sys). With
+            # `-sSHARED_MEMORY=1` in the link args, wasm-ld refuses any
+            # .o that wasn't compiled with the atomic/bulk-memory
+            # features — `-pthread` is the umbrella that turns both on
+            # at the C compiler level. No actual thread runtime spawns;
+            # see PTHREAD_POOL_SIZE=0 in .cargo/config.toml.
+            export EMCC_CFLAGS="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm -pthread"
+            export CFLAGS_wasm32_unknown_emscripten="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm -pthread"
           '';
         };
       });

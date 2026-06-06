@@ -8,6 +8,8 @@
 //                  { cmd: "save_game" }
 //                  { cmd: "load_game", loadArgs: {save_json, opp_ai, seed} }
 //                  { cmd: "test_panic" }  // observability probe
+//                  { cmd: "preview_uct", previewArgs: {iterations, exploration_c, max_candidates} }
+//                  { cmd: "cancel_uct" }
 //   worker → main: { kind: "ready" }
 //                  { kind: "uct_iter", line: "<json>" } // mid-call live event
 //                  { kind: "info",     line: "<json>" } // "I am alive" signals
@@ -82,7 +84,22 @@ createTsotModule({
   },
 }).then((m) => {
   module = m;
-  postMessage({ kind: 'ready' });
+  // Path 1 wiring: pass the shared wasm heap + the wasm-side address
+  // of UCT_CANCEL_FLAG to main scope. Main writes to that address via
+  // Atomics.store, and wasm reads it via the same atomic each UCT
+  // iteration — no postMessage hop, no waiting for the worker to be
+  // idle. That's what makes mid-search cancellation actually
+  // interrupt UCT. Requires SHARED_MEMORY=1 in the wasm build and
+  // COOP/COEP on the dev server.
+  const heapBuffer = m.HEAP8 && m.HEAP8.buffer;
+  const cancelOffset = m._UCT_CANCEL_FLAG;
+  postMessage({
+    kind: 'ready',
+    sharedHeap: heapBuffer,
+    cancelFlagOffset: typeof cancelOffset === 'number' ? cancelOffset : null,
+    crossOriginIsolated:
+      typeof crossOriginIsolated !== 'undefined' ? crossOriginIsolated : null,
+  });
 }).catch((e) => {
   postMessage({ kind: 'error', error: 'wasm init: ' + (e && e.message ? e.message : String(e)) });
 });
@@ -148,6 +165,24 @@ onmessage = (ev) => {
       // side. If the panic hook works, the LOG renders a rich
       // rust-panic block; if not, we see an opaque wasm-trap.
       const json = callWasmNoArgs('tsot_test_panic');
+      postMessage({ kind: 'envelope', cmd, json });
+      return;
+    }
+    if (cmd === 'preview_uct') {
+      // Run UCT on a clone of the session state and return the
+      // ranked candidate envelope. Doesn't mutate the live game.
+      const { previewArgs } = ev.data;
+      const json = callWasm('tsot_preview_uct', JSON.stringify(previewArgs || {}));
+      postMessage({ kind: 'envelope', cmd, json });
+      return;
+    }
+    if (cmd === 'cancel_uct') {
+      // Single-threaded-worker caveat: this `onmessage` only fires
+      // between FFI calls, not during one. So if a preview is
+      // already in flight when 'cancel_uct' arrives, the cancel
+      // takes effect for the NEXT search instead. Documented in
+      // src/wasm_ffi.rs::tsot_preview_uct_impl.
+      const json = callWasmNoArgs('tsot_cancel_uct');
       postMessage({ kind: 'envelope', cmd, json });
       return;
     }

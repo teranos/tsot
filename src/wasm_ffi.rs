@@ -62,6 +62,110 @@ pub(crate) fn tsot_list_preset_decks_impl() -> Result<String, String> {
     serde_json::to_string(&presets).map_err(|e| format!("serialize presets: {e}"))
 }
 
+/// Preview-UCT FFI args. Defaults mirror `UctConfig::default()`.
+#[derive(serde::Deserialize)]
+pub(crate) struct PreviewUctArgs {
+    #[serde(default = "default_preview_iterations")]
+    pub iterations: u32,
+    #[serde(default = "default_preview_exploration_c")]
+    pub exploration_c: f64,
+    #[serde(default = "default_preview_max_candidates")]
+    pub max_candidates: u32,
+}
+
+fn default_preview_iterations() -> u32 {
+    200
+}
+
+fn default_preview_exploration_c() -> f64 {
+    std::f64::consts::SQRT_2
+}
+
+fn default_preview_max_candidates() -> u32 {
+    8
+}
+
+/// Run UCT on a clone of the current session state and return a
+/// ranked candidate list — the AI's belief about what the player at
+/// the current prompt should do. Doesn't mutate the session: state is
+/// cloned, UCT runs against the clone, the result is just data.
+///
+/// Use case: "what would the AI pick here?" hints in the prompt
+/// panel; later, the input for the regret-report eval loop (per-pick
+/// comparison of human choice vs UCT's choice).
+///
+/// Cancellation note: the `UCT_CANCEL_REQUESTED` flag is checked once
+/// per iteration inside `pick_play_uct`. Because the wasm worker is
+/// single-threaded, a JS-side `cancel_uct` message arriving while
+/// this FFI is mid-call can't be processed until the current FFI
+/// returns — so cancel only affects the NEXT search, not the
+/// in-flight one. True mid-call cancellation would require
+/// SharedArrayBuffer (COOP/COEP headers), out of scope here. Keep
+/// `iterations` small enough that the wait is acceptable.
+pub(crate) fn tsot_preview_uct_impl(args_json: &str) -> Result<String, String> {
+    crate::trace::set_ffi_call_label("tsot_preview_uct");
+    let args: PreviewUctArgs = serde_json::from_str(args_json)
+        .map_err(|e| format!("preview_uct: bad args JSON: {e}"))?;
+
+    let json = with_session(|s| -> Result<String, String> {
+        let mut state = s.engine.state.clone();
+        let active = state.active_player;
+        let cfg = crate::sim::uct::UctConfig {
+            iterations: args.iterations,
+            exploration_c: args.exploration_c,
+            base_seed: (state.turn as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            max_candidates: args.max_candidates,
+        };
+        let (picked, trace) = crate::sim::uct::pick_play_uct(
+            &mut state,
+            active,
+            crate::sim::ai::PickKindFilter::Any,
+            &cfg,
+            &s.engine.registry,
+        );
+        let candidates: Vec<serde_json::Value> = trace
+            .root
+            .children
+            .iter()
+            .map(|c| {
+                let win_rate = if c.visits > 0 {
+                    c.wins / c.visits as f64
+                } else {
+                    0.0
+                };
+                serde_json::json!({
+                    "iid": c.iid,
+                    "visits": c.visits,
+                    "wins": c.wins,
+                    "win_rate": win_rate,
+                })
+            })
+            .collect();
+        let envelope = serde_json::json!({
+            "ok": true,
+            "asker": format!("{:?}", active),
+            "chosen": picked,
+            "candidates": candidates,
+            "iterations_requested": args.iterations,
+            "iterations_completed": trace.root.visits,
+            "note": trace.note,
+        });
+        serde_json::to_string(&envelope).map_err(|e| format!("serialize preview: {e}"))
+    })
+    .map_err(|e| e.to_string())??;
+    crate::trace::clear_ffi_call_label();
+    Ok(json)
+}
+
+/// Set the UCT cancel flag from the JS side. Returns immediately;
+/// the next iteration boundary inside any running `pick_play_uct`
+/// will see the flag and break. See `tsot_preview_uct_impl` for the
+/// single-threaded-worker caveat.
+pub(crate) fn tsot_cancel_uct_impl() -> Result<String, String> {
+    crate::sim::uct::request_uct_cancel();
+    Ok("{\"ok\":true}".to_string())
+}
+
 /// Save the current session's game state + cursor as a JSON
 /// `SaveFile`. Caller is expected to be in the middle of a game
 /// (i.e., `tsot_start_game` has been called); returns Err if no
@@ -108,6 +212,7 @@ pub(crate) fn tsot_load_game_impl(args_json: &str) -> Result<String, String> {
     use crate::sim::AiKind;
 
     crate::trace::set_ffi_call_label("tsot_load_game");
+    crate::sim::uct::clear_uct_cancel();
     let args: LoadGameArgs = serde_json::from_str(args_json)
         .map_err(|e| format!("load_game: bad args JSON: {e}"))?;
 
@@ -218,6 +323,7 @@ pub(crate) struct StartGameArgs {
 /// decision, install the session, return the prompt JSON.
 pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
     crate::trace::set_ffi_call_label("tsot_start_game");
+    crate::sim::uct::clear_uct_cancel();
     let args: StartGameArgs = serde_json::from_str(args_json)
         .map_err(|e| format!("tsot_start_game: bad args JSON: {e}"))?;
 
@@ -252,6 +358,7 @@ pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
 /// JSON.
 pub(crate) fn tsot_apply_action_impl(action_json: &str) -> Result<String, String> {
     crate::trace::set_ffi_call_label("tsot_apply_action");
+    crate::sim::uct::clear_uct_cancel();
     let action: HumanAction = serde_json::from_str(action_json)
         .map_err(|e| format!("tsot_apply_action: bad action JSON: {e}"))?;
 
@@ -541,6 +648,38 @@ mod wasm_exports {
     pub extern "C" fn tsot_test_panic() -> *mut c_char {
         crate::trace::set_ffi_call_label("tsot_test_panic");
         panic!("tsot_test_panic: intentional panic from the FFI surface");
+    }
+
+    /// Run UCT on a clone of the current session state and return a
+    /// ranked candidate envelope. JSON args:
+    /// `{iterations, exploration_c, max_candidates}` (all optional;
+    /// defaults from `PreviewUctArgs`). Returns the envelope JSON.
+    ///
+    /// # Safety
+    /// `args` must be a valid pointer to a null-terminated UTF-8 string.
+    #[no_mangle]
+    pub unsafe extern "C" fn tsot_preview_uct(args: *const c_char) -> *mut c_char {
+        if args.is_null() {
+            return export("error: null args");
+        }
+        let s = unsafe { CStr::from_ptr(args) }
+            .to_str()
+            .unwrap_or("<invalid utf-8>");
+        match super::tsot_preview_uct_impl(s) {
+            Ok(json) => export(json),
+            Err(e) => export(super::err_envelope(None, &e)),
+        }
+    }
+
+    /// Request UCT cancellation. The next iteration boundary in any
+    /// running `pick_play_uct` checks the flag and breaks. Single-
+    /// threaded-worker caveat applies (see `tsot_preview_uct_impl`).
+    #[no_mangle]
+    pub extern "C" fn tsot_cancel_uct() -> *mut c_char {
+        match super::tsot_cancel_uct_impl() {
+            Ok(json) => export(json),
+            Err(e) => export(super::err_envelope(None, &e)),
+        }
     }
 }
 
@@ -971,6 +1110,104 @@ mod tests {
     fn prompt_kind_of(env_json: &str) -> Option<String> {
         let v: Value = serde_json::from_str(env_json).ok()?;
         v.get("prompt")?.get("kind")?.as_str().map(String::from)
+    }
+
+    // ----- Preview UCT FFI ---------------------------------------
+
+    /// INTENT: `tsot_preview_uct_impl` without an active session
+    /// returns Err — same contract as `tsot_save_game_impl`.
+    #[test]
+    fn preview_uct_without_session_returns_error() {
+        let _ = clear_session();
+        let args = "{}";
+        let result = tsot_preview_uct_impl(args);
+        assert!(
+            result.is_err(),
+            "preview_uct with no session must Err, got: {result:?}"
+        );
+    }
+
+    /// INTENT: with a live session, `tsot_preview_uct_impl` returns
+    /// a parseable envelope carrying the candidate array, requested/
+    /// completed iteration counts, and ok=true.
+    #[test]
+    fn preview_uct_returns_candidates_envelope() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "heuristic",
+        })
+        .to_string();
+        let _ = tsot_start_game_impl(&args).expect("start_game");
+
+        let preview_args = serde_json::json!({
+            "iterations": 4,
+            "exploration_c": std::f64::consts::SQRT_2,
+            "max_candidates": 4,
+        })
+        .to_string();
+        let env_json = tsot_preview_uct_impl(&preview_args).expect("preview_uct");
+        let env: Value = serde_json::from_str(&env_json).expect("preview envelope parses");
+        assert_eq!(env["ok"], true, "preview returns ok:true");
+        assert!(env.get("candidates").and_then(|c| c.as_array()).is_some(),
+            "envelope has a `candidates` array");
+        assert_eq!(env["iterations_requested"], 4);
+        assert!(
+            env["iterations_completed"].as_u64().is_some(),
+            "iterations_completed is a number"
+        );
+        assert!(clear_session());
+    }
+
+    /// INTENT: preview must not mutate the live session state. Run
+    /// start_game, snapshot the current turn/phase, run a preview,
+    /// re-read the session — turn/phase unchanged.
+    #[test]
+    fn preview_uct_does_not_mutate_session_state() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "opp_ai": "heuristic",
+        })
+        .to_string();
+        let _ = tsot_start_game_impl(&args).expect("start_game");
+
+        let (turn_before, phase_before, active_before) =
+            with_session(|s| (s.engine.state.turn, s.engine.state.phase, s.engine.state.active_player))
+                .expect("session");
+
+        let preview_args = serde_json::json!({"iterations": 4, "max_candidates": 4}).to_string();
+        let _ = tsot_preview_uct_impl(&preview_args).expect("preview_uct");
+
+        let (turn_after, phase_after, active_after) =
+            with_session(|s| (s.engine.state.turn, s.engine.state.phase, s.engine.state.active_player))
+                .expect("session");
+        assert_eq!(turn_before, turn_after, "preview must not advance turn");
+        assert_eq!(phase_before, phase_after, "preview must not change phase");
+        assert_eq!(active_before, active_after, "preview must not change active player");
+        assert!(clear_session());
+    }
+
+    /// INTENT: `tsot_cancel_uct_impl` flips the cancel flag visible
+    /// to `pick_play_uct`. Same thread, single-call round-trip.
+    #[test]
+    fn cancel_uct_sets_the_thread_local_flag() {
+        crate::sim::uct::clear_uct_cancel();
+        assert!(!crate::sim::uct::is_uct_cancel_requested());
+        let _ = tsot_cancel_uct_impl().expect("cancel_uct");
+        assert!(
+            crate::sim::uct::is_uct_cancel_requested(),
+            "cancel_uct must set the flag"
+        );
+        crate::sim::uct::clear_uct_cancel();
     }
 
     /// INTENT: load the user's actual failing save (turn 1, Main1

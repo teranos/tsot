@@ -1,0 +1,21 @@
+# Dev server for `dist/` — used by `make wasm-serve` and `make wasm-dev-serve`.
+#
+# COOP/COEP headers put the page in a cross-origin-isolated context,
+# which is the browser prerequisite for SharedArrayBuffer / shared
+# wasm memory / atomic UCT cancellation (Path 1 of the preview slice
+# — see src/sim/uct.rs::UCT_CANCEL_FLAG).
+#
+# Port is `$WASM_SERVE_PORT` from the Makefile (default 8080). The
+# `auto_https off` global keeps Caddy from trying to fetch a TLS
+# certificate on localhost; everything below stays plain HTTP.
+
+{
+	auto_https off
+}
+
+:{$WASM_SERVE_PORT:8080} {
+	header Cross-Origin-Opener-Policy "same-origin"
+	header Cross-Origin-Embedder-Policy "require-corp"
+	root * dist
+	file_server
+}

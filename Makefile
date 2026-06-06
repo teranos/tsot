@@ -253,6 +253,10 @@ wasm:
 	cp $(WASM_OUT)/tsot_wasm.wasm $(WASM_DIST)/tsot_wasm.wasm
 	cp assets/play.html $(WASM_DIST)/index.html
 	cp assets/tsot-worker.js $(WASM_DIST)/tsot-worker.js
+	@# Build-info footer: the page reads window.__TSOT_BUILD__ and
+	@# renders it faintly in the bottom-right. Tells the developer
+	@# WHICH build they're running without leaving the dev tool.
+	@printf 'window.__TSOT_BUILD__=%s;\n' '{"profile":"release","builtAt":"$(shell date -u +%Y-%m-%dT%H:%M:%SZ)","commit":"$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)"}' > $(WASM_DIST)/build-info.js
 	@echo ""
 	@echo "wasm bundle staged in $(WASM_DIST)/"
 	@ls -lah $(WASM_DIST)/
@@ -264,16 +268,18 @@ wasm:
 WASM_SERVE_PORT ?= 8080
 
 wasm-serve: wasm
-	@command -v python3 >/dev/null 2>&1 || { \
-		echo "error: python3 not on PATH"; exit 1; \
+	@command -v caddy >/dev/null 2>&1 || { \
+		echo "error: caddy not on PATH. Install via your package manager"; \
+		echo "       (Nix shell: add `caddy` to flake.nix devShell)."; \
+		exit 1; \
 	}
 	@echo ""
-	@echo "Serving $(WASM_DIST)/ at http://localhost:$(WASM_SERVE_PORT)/  (Ctrl-C to stop)"
-	@# `exec` replaces the make-spawned shell so Ctrl-C goes straight to
-	@# python (no orphaned child). `allow_reuse_address = True` skips
-	@# Python's default TIME_WAIT — without it, the next `make wasm-serve`
-	@# after a stop fails with "Address already in use" for ~60s.
-	@cd $(WASM_DIST) && exec python3 -c "import http.server, socketserver; socketserver.TCPServer.allow_reuse_address = True; http.server.test(HandlerClass=http.server.SimpleHTTPRequestHandler, port=$(WASM_SERVE_PORT), bind='')"
+	@echo "Serving $(WASM_DIST)/ at http://localhost:$(WASM_SERVE_PORT)/  (COOP/COEP enabled, Ctrl-C to stop)"
+	@# Caddyfile reads $WASM_SERVE_PORT, defaults to 8080. COOP/COEP
+	@# headers put the page in a cross-origin-isolated context —
+	@# prerequisite for SharedArrayBuffer / shared wasm memory /
+	@# atomic UCT cancellation.
+	@exec env WASM_SERVE_PORT=$(WASM_SERVE_PORT) caddy run --config Caddyfile --adapter caddyfile
 
 # Developer build. Same staging as `make wasm` but the wasm carries
 # the names section (`-g` to emcc) so the JS exception stacks the
@@ -295,24 +301,29 @@ wasm-dev:
 		echo "       Non-Nix: install emscripten via emsdk and \`source ./emsdk_env.sh\`."; \
 		exit 1; \
 	}
-	RUSTFLAGS='-C link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_start_game,_tsot_apply_action,_tsot_drain_partial_trace,_tsot_list_card_pool,_tsot_list_preset_decks,_tsot_save_game,_tsot_load_game,_tsot_test_panic -C link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8 -C link-args=--js-library=assets/wasm-worker-lib.js -C link-args=-sMODULARIZE=1 -C link-args=-sEXPORT_NAME=createTsotModule -C link-args=-sALLOW_MEMORY_GROWTH=1 -C link-args=-sSTACK_SIZE=16777216 -C link-args=-sSUPPORT_LONGJMP=wasm -C link-args=-sUSE_PTHREADS=0 -C link-arg=-g' cargo build -Z build-std=std,panic_abort --target $(WASM_TARGET) --bin tsot_wasm
+	EMCC_CFLAGS="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm -pthread" \
+	CFLAGS_wasm32_unknown_emscripten="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm -pthread" \
+	RUSTFLAGS='-C link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_start_game,_tsot_apply_action,_tsot_drain_partial_trace,_tsot_list_card_pool,_tsot_list_preset_decks,_tsot_save_game,_tsot_load_game,_tsot_test_panic,_tsot_preview_uct,_tsot_cancel_uct,_UCT_CANCEL_FLAG -C link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAP8 -C link-args=--js-library=assets/wasm-worker-lib.js -C link-args=-sMODULARIZE=1 -C link-args=-sEXPORT_NAME=createTsotModule -C link-args=-sALLOW_MEMORY_GROWTH=1 -C link-args=-sSTACK_SIZE=16777216 -C link-args=-sINITIAL_MEMORY=67108864 -C link-args=-sSUPPORT_LONGJMP=wasm -C link-args=-sUSE_PTHREADS=1 -C link-args=-sPTHREAD_POOL_SIZE=0 -C link-args=-sSHARED_MEMORY=1 -C target-feature=+atomics,+bulk-memory -C link-arg=-g' cargo build -Z build-std=std,panic_abort --target $(WASM_TARGET) --bin tsot_wasm
 	@mkdir -p $(WASM_DIST)
 	cp $(WASM_OUT_DEV)/tsot_wasm.js $(WASM_DIST)/tsot_wasm.js
 	cp $(WASM_OUT_DEV)/tsot_wasm.wasm $(WASM_DIST)/tsot_wasm.wasm
 	cp assets/play.html $(WASM_DIST)/index.html
 	cp assets/tsot-worker.js $(WASM_DIST)/tsot-worker.js
+	@printf 'window.__TSOT_BUILD__=%s;\n' '{"profile":"dev","builtAt":"$(shell date -u +%Y-%m-%dT%H:%M:%SZ)","commit":"$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)"}' > $(WASM_DIST)/build-info.js
 	@echo ""
 	@echo "wasm-dev bundle (with -g symbol names) staged in $(WASM_DIST)/"
 	@ls -lah $(WASM_DIST)/
 
 # Same as `wasm-serve` but builds the dev bundle first.
 wasm-dev-serve: wasm-dev
-	@command -v python3 >/dev/null 2>&1 || { \
-		echo "error: python3 not on PATH"; exit 1; \
+	@command -v caddy >/dev/null 2>&1 || { \
+		echo "error: caddy not on PATH. Install via your package manager"; \
+		echo "       (Nix shell: add `caddy` to flake.nix devShell)."; \
+		exit 1; \
 	}
 	@echo ""
-	@echo "Serving $(WASM_DIST)/ (dev) at http://localhost:$(WASM_SERVE_PORT)/  (Ctrl-C to stop)"
-	@cd $(WASM_DIST) && exec python3 -c "import http.server, socketserver; socketserver.TCPServer.allow_reuse_address = True; http.server.test(HandlerClass=http.server.SimpleHTTPRequestHandler, port=$(WASM_SERVE_PORT), bind='')"
+	@echo "Serving $(WASM_DIST)/ (dev) at http://localhost:$(WASM_SERVE_PORT)/  (COOP/COEP enabled, Ctrl-C to stop)"
+	@exec env WASM_SERVE_PORT=$(WASM_SERVE_PORT) caddy run --config Caddyfile --adapter caddyfile
 
 clean-wasm:
 	rm -rf $(WASM_DIST)

@@ -6,8 +6,8 @@
 # to call into them. Output is a single combined .wasm + .js loader
 # (Modularize mode lets the embedding HTML name the module factory).
 rustflags = [
-  "-C", "link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_start_game,_tsot_apply_action,_tsot_drain_partial_trace,_tsot_list_card_pool,_tsot_list_preset_decks,_tsot_save_game,_tsot_load_game,_tsot_test_panic",
-  "-C", "link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8",
+  "-C", "link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_start_game,_tsot_apply_action,_tsot_drain_partial_trace,_tsot_list_card_pool,_tsot_list_preset_decks,_tsot_save_game,_tsot_load_game,_tsot_test_panic,_tsot_preview_uct,_tsot_cancel_uct,_UCT_CANCEL_FLAG",
+  "-C", "link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAP8",
   # Resolves the `tsot_emit_iteration_event` Rust extern declared in
   # src/sim/uct.rs. The lib lives in worker scope (assets/tsot-worker.js
   # spawns the wasm), so its postMessage goes worker → main, surfacing
@@ -24,6 +24,10 @@ rustflags = [
   # mid-game FFI error looked identical and opaque. 16MB is generous;
   # comparable to a desktop OS's default thread stack.
   "-C", "link-args=-sSTACK_SIZE=16777216",
+  # Initial wasm memory: emscripten default is 16MB, but STACK_SIZE
+  # (16MB) + Lua runtime + heap need more before the first allocation.
+  # 64MB gives headroom; ALLOW_MEMORY_GROWTH still lets it grow past.
+  "-C", "link-args=-sINITIAL_MEMORY=67108864",
   # Exception-ABI is resolved at the source: Cargo.toml's
   # `panic = "abort"` keeps Rust's panic_unwind out of the link, and
   # the `[unstable]` block below rebuilds std under panic_abort so
@@ -32,10 +36,29 @@ rustflags = [
   # still need the matching wasm-native runtime — paired with
   # CFLAGS_wasm32_unknown_emscripten in the flake's shellHook.
   "-C", "link-args=-sSUPPORT_LONGJMP=wasm",
-  # The engine is single-threaded in the wasm build — disable pthread
-  # codepaths to keep the binary lean. (Native uses rayon, but the
-  # tsot_wasm bin doesn't touch it.)
-  "-C", "link-args=-sUSE_PTHREADS=0",
+  # Shared wasm memory + atomics so the main thread can flip the
+  # UCT_CANCEL_FLAG atomic synchronously and the worker's running
+  # pick_play_uct sees it on the next iteration. Path 1 of the
+  # preview slice.
+  #
+  # `+atomics,+bulk-memory` is a CODEGEN feature — it tells rustc/
+  # LLVM to emit wasm atomic instructions in our object files
+  # (without this, wasm-ld refuses `--shared-memory` because our
+  # .o files don't carry the atomic-features marker).
+  #
+  # `-sSHARED_MEMORY=1` is the emscripten link flag that makes the
+  # produced `WebAssembly.Memory` shared (backed by a
+  # SharedArrayBuffer the main thread can also see).
+  #
+  # `USE_PTHREADS=1` + `PTHREAD_POOL_SIZE=0` gives us the pthread
+  # symbol stubs (needed because parking_lot, pulled in transitively
+  # by std with atomics enabled, references pthread_*) WITHOUT
+  # actually spawning any worker threads. The engine still runs on a
+  # single thread; we just satisfy the linker.
+  "-C", "target-feature=+atomics,+bulk-memory",
+  "-C", "link-args=-sSHARED_MEMORY=1",
+  "-C", "link-args=-sUSE_PTHREADS=1",
+  "-C", "link-args=-sPTHREAD_POOL_SIZE=0",
 ]
 
 # NOTE: `-Z build-std=std,panic_abort` is NOT set globally in this
