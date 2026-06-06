@@ -42,11 +42,13 @@ Browser play:
 
 ```sh
 # Needs emscripten on PATH (https://emscripten.org/docs/getting_started/downloads.html).
-make wasm                 # build the wasm bundle, stage into dist/
+make wasm                 # release wasm bundle, stage into dist/
 make wasm-serve           # build + serve dist/ on http://localhost:8080
+make wasm-dev             # debug wasm with -g (preserves wasm names section)
+make wasm-dev-serve       # build dev + serve
 ```
 
-The wasm path uses `StepEngine::step` via the `wasm_ffi` shim (`tsot_start_game` / `tsot_apply_action`) — no threads, no `catch_unwind`. The page in `assets/play.html` calls `Module.ccall(...)` directly against the bundle. The legacy `make serve` (HTTP shim) is retired once D8 of `WASM_PLAN.md` lands.
+The wasm engine lives in a Web Worker — `assets/tsot-worker.js` spawns the module and the main page talks to it via `postMessage` envelopes. FFI is async on the JS side; the wasm side stays single-threaded and panic-free across calls because the engine is driven through `StepEngine::step` (see `wasm_ffi.rs` and ADR-0001 `docs/adr/0001-web-worker-for-wasm-ffi.md`). The legacy HTTP-shim `make serve` was retired in D8.
 
 Via Nix:
 

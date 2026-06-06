@@ -170,9 +170,19 @@
 
 ## Phase G — polish
 
-- [ ] **G1: localStorage save/load.**
-  Reuse the JSON round-trip from tests/save_load.rs. FFI `tsot_serialize_state`
-  / `tsot_load_state`; JS persists to localStorage. Resume-on-tab-reopen.
+- [x] ~~**G1: localStorage save/load.**~~
+  ~~Reuse the JSON round-trip from tests/save_load.rs. FFI `tsot_serialize_state`~~
+  ~~/ `tsot_load_state`; JS persists to localStorage. Resume-on-tab-reopen.~~
+  (Superseded by H2 — went IndexedDB instead of localStorage. FFI
+  shipped as `tsot_save_game` / `tsot_load_game` carrying SaveFile JSON
+  (state + EngineCursor). JS persists to IndexedDB `tsot.saves` keyed
+  by auto-increment id with `{name, savedAt, json}`. Save / Load saved
+  / Download / Load file buttons in `assets/play.html` cover both
+  in-browser persistence and the dev-loop bug-report round-trip.
+  IndexedDB rather than localStorage because saves run hundreds of KB
+  with full GameState + journal, well past localStorage's ~5MB string
+  quota and synchronous-API ceiling; tab-reopen resume works for free
+  off the same store.)
 
 - [ ] **G2: WASM size optimization.**
   After full engine wasm is built (~3-5MB?), wasm-opt -Oz, strip debug,
