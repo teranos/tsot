@@ -4,7 +4,7 @@ return {
   symbol = "≡",
   colors = {"black"},
   type = "environment",
-  subtypes = {"Urban"},
+  subtypes = {"Urban", "City"},
   cost = {
     {amount = 4, source = "mill"},
     {amount = 4, source = "graveyard"},
