@@ -10,6 +10,7 @@
 
 import type { Glyph } from '@qntx/glyphs';
 import type { CardView, CardFace } from './tsot-card-types';
+import { wrapRenderContent } from './debug';
 
 /** Visual row-major slot order (per SLOTS.md, 5 rows × 3 cols). */
 const SLOT_GRID = [
@@ -121,14 +122,18 @@ export function setCardFace(el: HTMLElement, face: CardFace): void {
  * flip to the front.
  */
 export function createCardGlyph(card: CardView): Glyph {
+  const id = `tsot:card:${card.iid}`;
   return {
-    id: `tsot:card:${card.iid}`,
+    id,
     title: card.name || 'card',
     symbol: card.symbols[0] ?? '·',
     manifestationType: 'window',
     initialWidth: '280px',
     initialHeight: '500px',
-    renderContent: () => {
+    // Wrapped so the debug counter sees each invocation. Per the
+    // stash pattern this must fire ONCE per glyph lifetime — if the
+    // counter for this id exceeds 1 the stash was bypassed.
+    renderContent: wrapRenderContent(id, () => {
       const root = document.createElement('div');
       root.className = 'tsot-card-window';
       const cardEl = renderCard(card, 'back');
@@ -138,6 +143,6 @@ export function createCardGlyph(card: CardView): Glyph {
       });
       root.appendChild(cardEl);
       return root;
-    },
+    }),
   };
 }
