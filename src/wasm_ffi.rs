@@ -909,9 +909,9 @@ mod tests {
 
     /// INTENT: reproduce the user's "index out of bounds" load
     /// failure with the actual starter deck (multi-card mix) on a
-    /// game that has been ADVANCED — turn the user saw fail was
-    /// turn 9, not turn 1. Drive several Pass actions to advance
-    /// the game state before saving, then save → load. If the load
+    /// game that has been ADVANCED — the turn the user saw fail
+    /// was 9, not 1. Drive turns by dispatching the action that
+    /// matches each prompt's kind, save, then load. If load
     /// panics, the native backtrace tells us file:line.
     #[test]
     fn starter_deck_advanced_save_then_load_does_not_panic() {
@@ -927,42 +927,30 @@ mod tests {
             "opp_ai": "uct",
         })
         .to_string();
-        let _ = tsot_start_game_impl(&start_args).expect("start_game");
+        let first_env = tsot_start_game_impl(&start_args).expect("start_game");
+        let mut last_prompt_kind = prompt_kind_of(&first_env);
 
-        // Advance the game by sending Pass actions until the engine
-        // is at least at turn 5 (matches the user's "mid-game"
-        // save more closely than turn-1 does). Pass loops human's
-        // PickCard / PickAttackers / PickBlocks / Main2.
-        let pass = serde_json::json!({ "kind": "Pass" }).to_string();
-        let empty_attackers = serde_json::json!({ "kind": "Attackers", "iids": [] }).to_string();
-        let empty_blocks = serde_json::json!({ "kind": "Blocks", "pairs": [] }).to_string();
-        for _ in 0..40 {
-            // Drain the current prompt via with_session, decide what
-            // shape to send.
-            let phase_action = with_session(|s| -> Option<String> {
-                let phase_dbg = format!("{:?}", s.engine.state.phase);
-                let turn = s.engine.state.turn;
-                if turn >= 5 {
-                    return None; // stop the loop
-                }
-                // Default: Pass works for Main1 / Main2.
-                // PickAttackers / PickBlocks need their own shape.
-                if phase_dbg.contains("Combat") {
-                    Some(empty_attackers.clone())
-                } else {
-                    Some(pass.clone())
-                }
-            })
-            .expect("session present");
-            let Some(action_json) = phase_action else { break };
-            // Determine if we should send Pass / Attackers / Blocks
-            // based on the most recent prompt — we cheat and just
-            // try Pass, falling back to empty_blocks / attackers if
-            // wrong. The point is to advance state, not to play well.
-            let attempt = tsot_apply_action_impl(&action_json);
-            if attempt.is_err() {
-                let _ = tsot_apply_action_impl(&empty_blocks);
+        // Drive the game forward by dispatching an action that
+        // matches the prompt's kind. Pass for PickCard / Main2Pick,
+        // empty Attackers for PickAttackers, empty Blocks for
+        // PickBlocks. Stop once turn ≥ 5.
+        for _ in 0..400 {
+            let turn = with_session(|s| s.engine.state.turn).expect("session");
+            if turn >= 9 {
+                break;
             }
+            let action = match last_prompt_kind.as_deref() {
+                Some("PickAttackers") => {
+                    serde_json::json!({ "kind": "Attackers", "iids": [] }).to_string()
+                }
+                Some("PickBlocks") => {
+                    serde_json::json!({ "kind": "Blocks", "pairs": [] }).to_string()
+                }
+                Some("GameOver") => break,
+                _ => serde_json::json!({ "kind": "Pass" }).to_string(),
+            };
+            let env = tsot_apply_action_impl(&action).expect("apply_action");
+            last_prompt_kind = prompt_kind_of(&env);
         }
 
         let save_json = tsot_save_game_impl().expect("save_game");
@@ -974,6 +962,37 @@ mod tests {
         })
         .to_string();
         let _ = tsot_load_game_impl(&load_args).expect("load_game must not panic");
+        assert!(clear_session());
+    }
+
+    /// Pull the `prompt.kind` out of an FFI envelope JSON. Returns
+    /// `None` if the envelope shape doesn't match (e.g., GameOver
+    /// or error envelope).
+    fn prompt_kind_of(env_json: &str) -> Option<String> {
+        let v: Value = serde_json::from_str(env_json).ok()?;
+        v.get("prompt")?.get("kind")?.as_str().map(String::from)
+    }
+
+    /// INTENT: load the user's actual failing save (turn 1, Main1
+    /// after casting blue-monkey) and verify the load itself does
+    /// not panic. Native backtrace will name the exact file:line if
+    /// it does. Reproduces the user's "index out of bounds" wasm
+    /// trap that the JS stack only attributed to `tsot_load_game`.
+    #[test]
+    fn user_failing_save_turn_1_load_does_not_panic() {
+        let _ = clear_session();
+        let save_json = std::fs::read_to_string(
+            "tests/fixtures/failing-load-turn-1.json",
+        )
+        .expect("read fixture turn-1 save");
+        let load_args = serde_json::json!({
+            "save_json": save_json,
+            "opp_ai": "uct",
+            "seed": 0xBEEF_u64,
+        })
+        .to_string();
+        let _ = tsot_load_game_impl(&load_args)
+            .expect("load_game must not panic");
         assert!(clear_session());
     }
 

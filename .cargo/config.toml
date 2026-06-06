@@ -16,6 +16,14 @@ rustflags = [
   "-C", "link-args=-sMODULARIZE=1",
   "-C", "link-args=-sEXPORT_NAME=createTsotModule",
   "-C", "link-args=-sALLOW_MEMORY_GROWTH=1",
+  # Engine call chains (StepEngine::step → step_inner → resolve →
+  # enumerate_playable_in_hand → build_pattern_b_choices → …) blow
+  # past emscripten's default 64KB stack on real mid-game states.
+  # Stack overflow in wasm surfaces as "index out of bounds" memory
+  # trap (same message as any other OOM access), which is why every
+  # mid-game FFI error looked identical and opaque. 16MB is generous;
+  # comparable to a desktop OS's default thread stack.
+  "-C", "link-args=-sSTACK_SIZE=16777216",
   # Exception-ABI is resolved at the source: Cargo.toml's
   # `panic = "abort"` keeps Rust's panic_unwind out of the link, and
   # the `[unstable]` block below rebuilds std under panic_abort so

@@ -295,7 +295,7 @@ wasm-dev:
 		echo "       Non-Nix: install emscripten via emsdk and \`source ./emsdk_env.sh\`."; \
 		exit 1; \
 	}
-	RUSTFLAGS='-C link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_start_game,_tsot_apply_action,_tsot_drain_partial_trace,_tsot_list_card_pool,_tsot_list_preset_decks,_tsot_save_game,_tsot_load_game,_tsot_test_panic -C link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8 -C link-args=--js-library=assets/wasm-worker-lib.js -C link-args=-sMODULARIZE=1 -C link-args=-sEXPORT_NAME=createTsotModule -C link-args=-sALLOW_MEMORY_GROWTH=1 -C link-args=-sSUPPORT_LONGJMP=wasm -C link-args=-sUSE_PTHREADS=0 -C link-arg=-g' cargo build -Z build-std=std,panic_abort --target $(WASM_TARGET) --bin tsot_wasm
+	RUSTFLAGS='-C link-args=-sEXPORTED_FUNCTIONS=_main,_tsot_hello,_tsot_echo,_tsot_free_string,_tsot_start_game,_tsot_apply_action,_tsot_drain_partial_trace,_tsot_list_card_pool,_tsot_list_preset_decks,_tsot_save_game,_tsot_load_game,_tsot_test_panic -C link-args=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8 -C link-args=--js-library=assets/wasm-worker-lib.js -C link-args=-sMODULARIZE=1 -C link-args=-sEXPORT_NAME=createTsotModule -C link-args=-sALLOW_MEMORY_GROWTH=1 -C link-args=-sSTACK_SIZE=16777216 -C link-args=-sSUPPORT_LONGJMP=wasm -C link-args=-sUSE_PTHREADS=0 -C link-arg=-g' cargo build -Z build-std=std,panic_abort --target $(WASM_TARGET) --bin tsot_wasm
 	@mkdir -p $(WASM_DIST)
 	cp $(WASM_OUT_DEV)/tsot_wasm.js $(WASM_DIST)/tsot_wasm.js
 	cp $(WASM_OUT_DEV)/tsot_wasm.wasm $(WASM_DIST)/tsot_wasm.wasm

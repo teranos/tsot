@@ -1,0 +1,5963 @@
+{
+  "master_seed": 0,
+  "state": {
+    "a": {
+      "board": [
+        "A:0003:blue-monkey"
+      ],
+      "hand": [
+        "A:0000:clear-blue",
+        "A:0001:blue-monkey",
+        "A:0004:clear-blue",
+        "A:0005:blue-monkey"
+      ],
+      "deck": [
+        "A:0006:clear-blue",
+        "A:0007:surge",
+        "A:0008:blue-monkey",
+        "A:0009:blue-monkey",
+        "A:0010:clear-blue",
+        "A:0011:blue-monkey",
+        "A:0012:counterspell",
+        "A:0013:blue-monkey",
+        "A:0014:clear-blue",
+        "A:0015:blue-jewel",
+        "A:0016:clear-blue",
+        "A:0017:clear-blue",
+        "A:0018:blue-monkey",
+        "A:0019:blue-monkey",
+        "A:0020:blue-monkey",
+        "A:0021:clear-blue",
+        "A:0022:blue-monkey",
+        "A:0023:clear-blue",
+        "A:0024:clear-blue",
+        "A:0025:clear-blue",
+        "A:0026:blue-monkey",
+        "A:0027:blue-monkey",
+        "A:0028:clear-blue",
+        "A:0029:blue-monkey",
+        "A:0030:clear-blue",
+        "A:0031:clear-blue",
+        "A:0032:blue-monkey",
+        "A:0033:blue-monkey",
+        "A:0034:clear-blue",
+        "A:0035:clear-blue",
+        "A:0036:blue-monkey",
+        "A:0037:blue-monkey",
+        "A:0038:clear-blue",
+        "A:0039:blue-monkey",
+        "A:0040:blue-monkey",
+        "A:0041:blue-monkey",
+        "A:0042:clear-blue",
+        "A:0043:clear-blue",
+        "A:0044:clear-blue",
+        "A:0045:blue-jewel",
+        "A:0046:clear-blue",
+        "A:0047:companion-bird",
+        "A:0048:blue-monkey",
+        "A:0049:blue-monkey"
+      ],
+      "graveyard": [],
+      "exile": []
+    },
+    "b": {
+      "board": [],
+      "hand": [
+        "B:0000:blue-monkey",
+        "B:0001:clear-blue",
+        "B:0002:surge",
+        "B:0003:blue-monkey",
+        "B:0004:clear-blue"
+      ],
+      "deck": [
+        "B:0005:clear-blue",
+        "B:0006:clear-blue",
+        "B:0007:blue-monkey",
+        "B:0008:clear-blue",
+        "B:0009:clear-blue",
+        "B:0010:clear-blue",
+        "B:0011:counterspell",
+        "B:0012:companion-bird",
+        "B:0013:blue-monkey",
+        "B:0014:blue-monkey",
+        "B:0015:blue-monkey",
+        "B:0016:clear-blue",
+        "B:0017:blue-monkey",
+        "B:0018:clear-blue",
+        "B:0019:blue-monkey",
+        "B:0020:blue-monkey",
+        "B:0021:blue-monkey",
+        "B:0022:blue-jewel",
+        "B:0023:clear-blue",
+        "B:0024:clear-blue",
+        "B:0025:blue-monkey",
+        "B:0026:blue-monkey",
+        "B:0027:clear-blue",
+        "B:0028:blue-jewel",
+        "B:0029:blue-monkey",
+        "B:0030:clear-blue",
+        "B:0031:blue-monkey",
+        "B:0032:clear-blue",
+        "B:0033:clear-blue",
+        "B:0034:clear-blue",
+        "B:0035:blue-monkey",
+        "B:0036:clear-blue",
+        "B:0037:blue-monkey",
+        "B:0038:blue-monkey",
+        "B:0039:clear-blue",
+        "B:0040:blue-monkey",
+        "B:0041:blue-monkey",
+        "B:0042:blue-monkey",
+        "B:0043:blue-monkey",
+        "B:0044:clear-blue",
+        "B:0045:blue-monkey",
+        "B:0046:blue-monkey",
+        "B:0047:clear-blue",
+        "B:0048:clear-blue",
+        "B:0049:blue-monkey"
+      ],
+      "graveyard": [],
+      "exile": []
+    },
+    "card_pool": {
+      "A:0000:clear-blue": {
+        "instance_id": "A:0000:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0001:blue-monkey": {
+        "instance_id": "A:0001:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0002:blue-monkey": {
+        "instance_id": "A:0002:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": true,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0003:blue-monkey": {
+        "instance_id": "A:0003:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": true,
+        "attacked_this_turn": false,
+        "attached": [
+          "A:0002:blue-monkey"
+        ],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0004:clear-blue": {
+        "instance_id": "A:0004:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0005:blue-monkey": {
+        "instance_id": "A:0005:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0006:clear-blue": {
+        "instance_id": "A:0006:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0007:surge": {
+        "instance_id": "A:0007:surge",
+        "card": {
+          "id": "surge",
+          "name": "Surge",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Spell",
+          "timing": "Instant",
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 2,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "untap all creatures you control. draw a card."
+          ],
+          "flavor": "",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0008:blue-monkey": {
+        "instance_id": "A:0008:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0009:blue-monkey": {
+        "instance_id": "A:0009:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0010:clear-blue": {
+        "instance_id": "A:0010:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0011:blue-monkey": {
+        "instance_id": "A:0011:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0012:counterspell": {
+        "instance_id": "A:0012:counterspell",
+        "card": {
+          "id": "counterspell",
+          "name": "Counterspell",
+          "colors": [
+            "blue",
+            "purple"
+          ],
+          "kind": "Spell",
+          "timing": "Instant",
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "꩜"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "꩜"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Graveyard",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "counter target card."
+          ],
+          "flavor": "",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": "Chain",
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0013:blue-monkey": {
+        "instance_id": "A:0013:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0014:clear-blue": {
+        "instance_id": "A:0014:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0015:blue-jewel": {
+        "instance_id": "A:0015:blue-jewel",
+        "card": {
+          "id": "blue-jewel",
+          "name": "Blue Jewel",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Artifact",
+          "timing": null,
+          "subtypes": [
+            "jewel"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "⨳"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "⨳"
+          },
+          "color_slots": {
+            "C": "blue"
+          },
+          "face": [],
+          "cost": [],
+          "abilities": [
+            "T: pay for one hand-source component of a card you cast that shares a color with this jewel.",
+            "T: draw a card, then discard a card.",
+            "when this card is attached as a cost to a blue card, that creature gets +1/+1 and gains: T: draw a card, then discard a card."
+          ],
+          "flavor": "",
+          "stats": null,
+          "static_def": {
+            "affects": {
+              "subtypes": [],
+              "colors": [],
+              "controller": null,
+              "exclude_self": false,
+              "scope": "AttachedHost",
+              "kind": null,
+              "has_keyword": null
+            },
+            "modifier_x": {
+              "Fixed": 0
+            },
+            "modifier_y": {
+              "Fixed": 0
+            },
+            "modifier_keyword": null,
+            "condition": null,
+            "restrictions": [],
+            "cost_modifiers": [],
+            "granted_colors": [],
+            "granted_face": []
+          },
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0016:clear-blue": {
+        "instance_id": "A:0016:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0017:clear-blue": {
+        "instance_id": "A:0017:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0018:blue-monkey": {
+        "instance_id": "A:0018:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0019:blue-monkey": {
+        "instance_id": "A:0019:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0020:blue-monkey": {
+        "instance_id": "A:0020:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0021:clear-blue": {
+        "instance_id": "A:0021:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0022:blue-monkey": {
+        "instance_id": "A:0022:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0023:clear-blue": {
+        "instance_id": "A:0023:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0024:clear-blue": {
+        "instance_id": "A:0024:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0025:clear-blue": {
+        "instance_id": "A:0025:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0026:blue-monkey": {
+        "instance_id": "A:0026:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0027:blue-monkey": {
+        "instance_id": "A:0027:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0028:clear-blue": {
+        "instance_id": "A:0028:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0029:blue-monkey": {
+        "instance_id": "A:0029:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0030:clear-blue": {
+        "instance_id": "A:0030:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0031:clear-blue": {
+        "instance_id": "A:0031:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0032:blue-monkey": {
+        "instance_id": "A:0032:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0033:blue-monkey": {
+        "instance_id": "A:0033:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0034:clear-blue": {
+        "instance_id": "A:0034:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0035:clear-blue": {
+        "instance_id": "A:0035:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0036:blue-monkey": {
+        "instance_id": "A:0036:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0037:blue-monkey": {
+        "instance_id": "A:0037:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0038:clear-blue": {
+        "instance_id": "A:0038:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0039:blue-monkey": {
+        "instance_id": "A:0039:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0040:blue-monkey": {
+        "instance_id": "A:0040:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0041:blue-monkey": {
+        "instance_id": "A:0041:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0042:clear-blue": {
+        "instance_id": "A:0042:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0043:clear-blue": {
+        "instance_id": "A:0043:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0044:clear-blue": {
+        "instance_id": "A:0044:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0045:blue-jewel": {
+        "instance_id": "A:0045:blue-jewel",
+        "card": {
+          "id": "blue-jewel",
+          "name": "Blue Jewel",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Artifact",
+          "timing": null,
+          "subtypes": [
+            "jewel"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "⨳"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "⨳"
+          },
+          "color_slots": {
+            "C": "blue"
+          },
+          "face": [],
+          "cost": [],
+          "abilities": [
+            "T: pay for one hand-source component of a card you cast that shares a color with this jewel.",
+            "T: draw a card, then discard a card.",
+            "when this card is attached as a cost to a blue card, that creature gets +1/+1 and gains: T: draw a card, then discard a card."
+          ],
+          "flavor": "",
+          "stats": null,
+          "static_def": {
+            "affects": {
+              "subtypes": [],
+              "colors": [],
+              "controller": null,
+              "exclude_self": false,
+              "scope": "AttachedHost",
+              "kind": null,
+              "has_keyword": null
+            },
+            "modifier_x": {
+              "Fixed": 0
+            },
+            "modifier_y": {
+              "Fixed": 0
+            },
+            "modifier_keyword": null,
+            "condition": null,
+            "restrictions": [],
+            "cost_modifiers": [],
+            "granted_colors": [],
+            "granted_face": []
+          },
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0046:clear-blue": {
+        "instance_id": "A:0046:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0047:companion-bird": {
+        "instance_id": "A:0047:companion-bird",
+        "card": {
+          "id": "companion-bird",
+          "name": "Companion Bird",
+          "colors": [
+            "blue",
+            "white"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "bird"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "flying.",
+            "while this card is attached to a creature, that creature has flying."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 1.0,
+            "y": 1.0
+          },
+          "static_def": {
+            "affects": {
+              "subtypes": [],
+              "colors": [],
+              "controller": null,
+              "exclude_self": false,
+              "scope": "AttachedHost",
+              "kind": null,
+              "has_keyword": null
+            },
+            "modifier_x": {
+              "Fixed": 0
+            },
+            "modifier_y": {
+              "Fixed": 0
+            },
+            "modifier_keyword": "flying",
+            "condition": null,
+            "restrictions": [],
+            "cost_modifiers": [],
+            "granted_colors": [],
+            "granted_face": []
+          },
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0048:blue-monkey": {
+        "instance_id": "A:0048:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "A:0049:blue-monkey": {
+        "instance_id": "A:0049:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "A",
+        "controller": "A",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0000:blue-monkey": {
+        "instance_id": "B:0000:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0001:clear-blue": {
+        "instance_id": "B:0001:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0002:surge": {
+        "instance_id": "B:0002:surge",
+        "card": {
+          "id": "surge",
+          "name": "Surge",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Spell",
+          "timing": "Instant",
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 2,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "untap all creatures you control. draw a card."
+          ],
+          "flavor": "",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0003:blue-monkey": {
+        "instance_id": "B:0003:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0004:clear-blue": {
+        "instance_id": "B:0004:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0005:clear-blue": {
+        "instance_id": "B:0005:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0006:clear-blue": {
+        "instance_id": "B:0006:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0007:blue-monkey": {
+        "instance_id": "B:0007:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0008:clear-blue": {
+        "instance_id": "B:0008:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0009:clear-blue": {
+        "instance_id": "B:0009:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0010:clear-blue": {
+        "instance_id": "B:0010:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0011:counterspell": {
+        "instance_id": "B:0011:counterspell",
+        "card": {
+          "id": "counterspell",
+          "name": "Counterspell",
+          "colors": [
+            "blue",
+            "purple"
+          ],
+          "kind": "Spell",
+          "timing": "Instant",
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "꩜"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "꩜"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Graveyard",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "counter target card."
+          ],
+          "flavor": "",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": "Chain",
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0012:companion-bird": {
+        "instance_id": "B:0012:companion-bird",
+        "card": {
+          "id": "companion-bird",
+          "name": "Companion Bird",
+          "colors": [
+            "blue",
+            "white"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "bird"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "flying.",
+            "while this card is attached to a creature, that creature has flying."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 1.0,
+            "y": 1.0
+          },
+          "static_def": {
+            "affects": {
+              "subtypes": [],
+              "colors": [],
+              "controller": null,
+              "exclude_self": false,
+              "scope": "AttachedHost",
+              "kind": null,
+              "has_keyword": null
+            },
+            "modifier_x": {
+              "Fixed": 0
+            },
+            "modifier_y": {
+              "Fixed": 0
+            },
+            "modifier_keyword": "flying",
+            "condition": null,
+            "restrictions": [],
+            "cost_modifiers": [],
+            "granted_colors": [],
+            "granted_face": []
+          },
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0013:blue-monkey": {
+        "instance_id": "B:0013:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0014:blue-monkey": {
+        "instance_id": "B:0014:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0015:blue-monkey": {
+        "instance_id": "B:0015:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0016:clear-blue": {
+        "instance_id": "B:0016:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0017:blue-monkey": {
+        "instance_id": "B:0017:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0018:clear-blue": {
+        "instance_id": "B:0018:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0019:blue-monkey": {
+        "instance_id": "B:0019:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0020:blue-monkey": {
+        "instance_id": "B:0020:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0021:blue-monkey": {
+        "instance_id": "B:0021:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0022:blue-jewel": {
+        "instance_id": "B:0022:blue-jewel",
+        "card": {
+          "id": "blue-jewel",
+          "name": "Blue Jewel",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Artifact",
+          "timing": null,
+          "subtypes": [
+            "jewel"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "⨳"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "⨳"
+          },
+          "color_slots": {
+            "C": "blue"
+          },
+          "face": [],
+          "cost": [],
+          "abilities": [
+            "T: pay for one hand-source component of a card you cast that shares a color with this jewel.",
+            "T: draw a card, then discard a card.",
+            "when this card is attached as a cost to a blue card, that creature gets +1/+1 and gains: T: draw a card, then discard a card."
+          ],
+          "flavor": "",
+          "stats": null,
+          "static_def": {
+            "affects": {
+              "subtypes": [],
+              "colors": [],
+              "controller": null,
+              "exclude_self": false,
+              "scope": "AttachedHost",
+              "kind": null,
+              "has_keyword": null
+            },
+            "modifier_x": {
+              "Fixed": 0
+            },
+            "modifier_y": {
+              "Fixed": 0
+            },
+            "modifier_keyword": null,
+            "condition": null,
+            "restrictions": [],
+            "cost_modifiers": [],
+            "granted_colors": [],
+            "granted_face": []
+          },
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0023:clear-blue": {
+        "instance_id": "B:0023:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0024:clear-blue": {
+        "instance_id": "B:0024:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0025:blue-monkey": {
+        "instance_id": "B:0025:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0026:blue-monkey": {
+        "instance_id": "B:0026:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0027:clear-blue": {
+        "instance_id": "B:0027:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0028:blue-jewel": {
+        "instance_id": "B:0028:blue-jewel",
+        "card": {
+          "id": "blue-jewel",
+          "name": "Blue Jewel",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Artifact",
+          "timing": null,
+          "subtypes": [
+            "jewel"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "⨳"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "⨳"
+          },
+          "color_slots": {
+            "C": "blue"
+          },
+          "face": [],
+          "cost": [],
+          "abilities": [
+            "T: pay for one hand-source component of a card you cast that shares a color with this jewel.",
+            "T: draw a card, then discard a card.",
+            "when this card is attached as a cost to a blue card, that creature gets +1/+1 and gains: T: draw a card, then discard a card."
+          ],
+          "flavor": "",
+          "stats": null,
+          "static_def": {
+            "affects": {
+              "subtypes": [],
+              "colors": [],
+              "controller": null,
+              "exclude_self": false,
+              "scope": "AttachedHost",
+              "kind": null,
+              "has_keyword": null
+            },
+            "modifier_x": {
+              "Fixed": 0
+            },
+            "modifier_y": {
+              "Fixed": 0
+            },
+            "modifier_keyword": null,
+            "condition": null,
+            "restrictions": [],
+            "cost_modifiers": [],
+            "granted_colors": [],
+            "granted_face": []
+          },
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0029:blue-monkey": {
+        "instance_id": "B:0029:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0030:clear-blue": {
+        "instance_id": "B:0030:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0031:blue-monkey": {
+        "instance_id": "B:0031:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0032:clear-blue": {
+        "instance_id": "B:0032:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0033:clear-blue": {
+        "instance_id": "B:0033:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0034:clear-blue": {
+        "instance_id": "B:0034:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0035:blue-monkey": {
+        "instance_id": "B:0035:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0036:clear-blue": {
+        "instance_id": "B:0036:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0037:blue-monkey": {
+        "instance_id": "B:0037:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0038:blue-monkey": {
+        "instance_id": "B:0038:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0039:clear-blue": {
+        "instance_id": "B:0039:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0040:blue-monkey": {
+        "instance_id": "B:0040:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0041:blue-monkey": {
+        "instance_id": "B:0041:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0042:blue-monkey": {
+        "instance_id": "B:0042:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0043:blue-monkey": {
+        "instance_id": "B:0043:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0044:clear-blue": {
+        "instance_id": "B:0044:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0045:blue-monkey": {
+        "instance_id": "B:0045:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0046:blue-monkey": {
+        "instance_id": "B:0046:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0047:clear-blue": {
+        "instance_id": "B:0047:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0048:clear-blue": {
+        "instance_id": "B:0048:clear-blue",
+        "card": {
+          "id": "clear-blue",
+          "name": "Clear Blue",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Unspecified",
+          "timing": null,
+          "subtypes": [],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [],
+          "frame": "transparent",
+          "holes": [],
+          "symbol_slots": {},
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "SelfExile",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "when you play this card, search your deck for a blue-jewel and move it to your hand. self-exile per P.5 — clear blue goes to EXILE on resolution, not GRAVEYARD.",
+            "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast."
+          ],
+          "flavor": "A clean idea.",
+          "stats": null,
+          "static_def": null,
+          "gy_hand_substitute": true,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      },
+      "B:0049:blue-monkey": {
+        "instance_id": "B:0049:blue-monkey",
+        "card": {
+          "id": "blue-monkey",
+          "name": "Blue Monkey",
+          "colors": [
+            "blue"
+          ],
+          "kind": "Creature",
+          "timing": null,
+          "subtypes": [
+            "monkey"
+          ],
+          "cannot_block_subtypes": [],
+          "can_block_subtypes": [],
+          "symbols": [
+            "≡"
+          ],
+          "frame": null,
+          "holes": [],
+          "symbol_slots": {
+            "C": "≡"
+          },
+          "color_slots": {},
+          "face": [],
+          "cost": [
+            {
+              "amount": 1,
+              "source": "Hand",
+              "is_x": false,
+              "kind": null
+            }
+          ],
+          "abilities": [
+            "2 hand: draw a card."
+          ],
+          "flavor": "",
+          "stats": {
+            "x": 2.0,
+            "y": 2.0
+          },
+          "static_def": null,
+          "gy_hand_substitute": false,
+          "allow_x_zero": false,
+          "target": null,
+          "is_variant": false,
+          "variant_of": null
+        },
+        "owner": "B",
+        "controller": "B",
+        "tapped": false,
+        "face_down": false,
+        "damage": 0.0,
+        "summoning_sick": false,
+        "attacked_this_turn": false,
+        "attached": [],
+        "modifiers": [],
+        "status_effects": []
+      }
+    },
+    "active_player": "A",
+    "turn": 1,
+    "phase": "Main1",
+    "winner": null,
+    "combat": null,
+    "event_fires": {},
+    "action_counts": {},
+    "journal": null,
+    "replay_journal": {
+      "entries": [
+        {
+          "SetPhase": {
+            "was": "Untap",
+            "now": "Draw"
+          }
+        },
+        {
+          "MoveCard": {
+            "iid": "A:0005:blue-monkey",
+            "owner": "A",
+            "from_zone": "Deck",
+            "from_pos": 0,
+            "to_zone": "Hand"
+          }
+        },
+        {
+          "SetPhase": {
+            "was": "Draw",
+            "now": "Main1"
+          }
+        },
+        {
+          "RemoveFromZone": {
+            "iid": "A:0003:blue-monkey",
+            "owner": "A",
+            "zone": "Hand",
+            "was_pos": 3
+          }
+        },
+        {
+          "SetPriorityState": {
+            "was": null,
+            "now": {
+              "chain": [
+                {
+                  "PlayedCard": {
+                    "card": "A:0003:blue-monkey",
+                    "controller": "A",
+                    "choices": {
+                      "hand_payment_ids": [
+                        "A:0002:blue-monkey"
+                      ],
+                      "x_value": null,
+                      "jewel_tap": null,
+                      "sacrifice_ids": [],
+                      "mutation_target": null,
+                      "gy_hand_payment_ids": [],
+                      "attached_payment_ids": [],
+                      "graveyard_payment_ids": []
+                    }
+                  }
+                }
+              ],
+              "next_to_act": "A",
+              "consecutive_passes": 0
+            }
+          }
+        },
+        {
+          "SetPriorityState": {
+            "was": {
+              "chain": [
+                {
+                  "PlayedCard": {
+                    "card": "A:0003:blue-monkey",
+                    "controller": "A",
+                    "choices": {
+                      "hand_payment_ids": [
+                        "A:0002:blue-monkey"
+                      ],
+                      "x_value": null,
+                      "jewel_tap": null,
+                      "sacrifice_ids": [],
+                      "mutation_target": null,
+                      "gy_hand_payment_ids": [],
+                      "attached_payment_ids": [],
+                      "graveyard_payment_ids": []
+                    }
+                  }
+                }
+              ],
+              "next_to_act": "A",
+              "consecutive_passes": 0
+            },
+            "now": {
+              "chain": [
+                {
+                  "PlayedCard": {
+                    "card": "A:0003:blue-monkey",
+                    "controller": "A",
+                    "choices": {
+                      "hand_payment_ids": [
+                        "A:0002:blue-monkey"
+                      ],
+                      "x_value": null,
+                      "jewel_tap": null,
+                      "sacrifice_ids": [],
+                      "mutation_target": null,
+                      "gy_hand_payment_ids": [],
+                      "attached_payment_ids": [],
+                      "graveyard_payment_ids": []
+                    }
+                  }
+                }
+              ],
+              "next_to_act": "B",
+              "consecutive_passes": 1
+            }
+          }
+        },
+        {
+          "SetPriorityState": {
+            "was": {
+              "chain": [
+                {
+                  "PlayedCard": {
+                    "card": "A:0003:blue-monkey",
+                    "controller": "A",
+                    "choices": {
+                      "hand_payment_ids": [
+                        "A:0002:blue-monkey"
+                      ],
+                      "x_value": null,
+                      "jewel_tap": null,
+                      "sacrifice_ids": [],
+                      "mutation_target": null,
+                      "gy_hand_payment_ids": [],
+                      "attached_payment_ids": [],
+                      "graveyard_payment_ids": []
+                    }
+                  }
+                }
+              ],
+              "next_to_act": "B",
+              "consecutive_passes": 1
+            },
+            "now": null
+          }
+        },
+        {
+          "RemoveFromZone": {
+            "iid": "A:0002:blue-monkey",
+            "owner": "A",
+            "zone": "Hand",
+            "was_pos": 2
+          }
+        },
+        {
+          "AddAttached": {
+            "host": "A:0003:blue-monkey",
+            "attached": "A:0002:blue-monkey"
+          }
+        },
+        {
+          "SetFaceDown": {
+            "iid": "A:0002:blue-monkey",
+            "was": false,
+            "now": true
+          }
+        },
+        {
+          "AddToZone": {
+            "iid": "A:0003:blue-monkey",
+            "owner": "A",
+            "zone": "Board"
+          }
+        },
+        {
+          "SetSummoningSick": {
+            "iid": "A:0003:blue-monkey",
+            "was": false,
+            "now": true
+          }
+        }
+      ]
+    },
+    "priority": null,
+    "creature_attacked_this_turn": false,
+    "extra_turns_pending": []
+  },
+  "cursor": {
+    "PatternBPick": {
+      "played_creature": true
+    }
+  }
+}
