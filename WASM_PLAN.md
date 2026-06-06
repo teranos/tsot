@@ -77,13 +77,14 @@
   remain disabled for v1 per `.cargo/config.toml`. `dist/` was already
   in `.gitignore`.)
 
-- [ ] **D7a: Smoke test in Firefox.** (primary test target)
-  Play a full game vs UCT. Verify payment / target picks / combat /
-  activations / Main2 / game-over. `[live UctIter]` lines stream during
-  UCT search.
-  (Status 2026-06-05: bootstrap + start_game + hand-render verified.
-  Full-game flow / UCT live stream / combat / Main2 / game-over still
-  untested.)
+- [x] ~~**D7a: Smoke test in Firefox.**~~ (primary test target)
+  ~~Play a full game vs UCT. Verify payment / target picks / combat /~~
+  ~~activations / Main2 / game-over. `[live UctIter]` lines stream during~~
+  ~~UCT search.~~
+  (Closed 2026-06-06 — full game vs UCT played end-to-end in Firefox,
+  reached game-over. Path 1 SharedArrayBuffer cancellation (H4) made
+  preview responsive enough that the click-during-thinking case
+  worked. No reproducible bugs observed in the run.)
 
 - [ ] **D7b: Smoke test in Chrome.** (deferred)
   Same checklist as D7a, in Chrome. Deferred — Firefox is the active
