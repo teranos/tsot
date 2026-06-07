@@ -74,16 +74,16 @@ port logTextIn : (String -> msg) -> Sub msg
 port logErrorIn : (D.Value -> msg) -> Sub msg
 
 
-port decisionReportClickedIn : (() -> msg) -> Sub msg
-
-
 port decisionLogIn : (D.Value -> msg) -> Sub msg
 
 
 port decisionFetchOut : () -> Cmd msg
 
 
-port savedListToggleIn : (() -> msg) -> Sub msg
+port decisionExportOut : () -> Cmd msg
+
+
+port decisionClearOut : () -> Cmd msg
 
 
 port savedListIn : (D.Value -> msg) -> Sub msg
@@ -93,6 +93,24 @@ port savedListFetchOut : () -> Cmd msg
 
 
 port savedItemActionOut : { action : String, id : Int } -> Cmd msg
+
+
+port saveStatusIn : (String -> msg) -> Sub msg
+
+
+port gamePhaseIn : (String -> msg) -> Sub msg
+
+
+port saveGameOut : () -> Cmd msg
+
+
+port downloadGameOut : () -> Cmd msg
+
+
+port loadFromFileOut : () -> Cmd msg
+
+
+port testPanicOut : () -> Cmd msg
 
 
 
@@ -196,11 +214,20 @@ type SavedListState
     | SavedError String
 
 
+type GamePhase
+    = Deckbuilding
+    | Playing
+    | Spectating
+    | UnknownPhase
+
+
 type alias Model =
     { build : BuildState
     , log : List LogEntry
     , decisionPanel : DecisionPanel
     , savedList : SavedListState
+    , saveStatus : String
+    , gamePhase : GamePhase
     }
 
 
@@ -218,6 +245,8 @@ type Msg
     | LogTextReceived String
     | LogErrorReceived D.Value
     | DecisionReportClicked
+    | DecisionExportClicked
+    | DecisionClearClicked
     | DecisionLogReceived D.Value
     | DecisionPanelClosed
     | SavedListToggleClicked
@@ -226,6 +255,12 @@ type Msg
     | SavedItemDownload Int
     | SavedItemDelete Int
     | SavedListClosed
+    | SaveClicked
+    | DownloadClicked
+    | LoadFromFileClicked
+    | TestPanicClicked
+    | SaveStatusReceived String
+    | GamePhaseReceived String
     | NoOp
 
 
@@ -239,9 +274,27 @@ init _ =
       , log = []
       , decisionPanel = DecisionHidden
       , savedList = SavedHidden
+      , saveStatus = ""
+      , gamePhase = UnknownPhase
       }
     , Cmd.none
     )
+
+
+parseGamePhase : String -> GamePhase
+parseGamePhase s =
+    case s of
+        "deckbuilding" ->
+            Deckbuilding
+
+        "playing" ->
+            Playing
+
+        "spectating" ->
+            Spectating
+
+        _ ->
+            UnknownPhase
 
 
 
@@ -299,6 +352,12 @@ update msg model =
                     , Cmd.none
                     )
 
+        DecisionExportClicked ->
+            ( model, decisionExportOut () )
+
+        DecisionClearClicked ->
+            ( model, decisionClearOut () )
+
         DecisionPanelClosed ->
             ( { model | decisionPanel = DecisionHidden }, Cmd.none )
 
@@ -354,6 +413,24 @@ update msg model =
 
         SavedListClosed ->
             ( { model | savedList = SavedHidden }, Cmd.none )
+
+        SaveClicked ->
+            ( model, saveGameOut () )
+
+        DownloadClicked ->
+            ( model, downloadGameOut () )
+
+        LoadFromFileClicked ->
+            ( model, loadFromFileOut () )
+
+        TestPanicClicked ->
+            ( model, testPanicOut () )
+
+        SaveStatusReceived msgText ->
+            ( { model | saveStatus = msgText }, Cmd.none )
+
+        GamePhaseReceived phaseStr ->
+            ( { model | gamePhase = parseGamePhase phaseStr }, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )
@@ -783,10 +860,10 @@ subscriptions _ =
         [ buildInfoIn BuildInfoReceived
         , logTextIn LogTextReceived
         , logErrorIn LogErrorReceived
-        , decisionReportClickedIn (\_ -> DecisionReportClicked)
         , decisionLogIn DecisionLogReceived
-        , savedListToggleIn (\_ -> SavedListToggleClicked)
         , savedListIn SavedListReceived
+        , saveStatusIn SaveStatusReceived
+        , gamePhaseIn GamePhaseReceived
         ]
 
 
@@ -797,10 +874,68 @@ subscriptions _ =
 view : Model -> Html Msg
 view model =
     div []
-        [ viewSavedListPanel model.savedList
+        [ viewSaveControls model
+        , viewSavedListPanel model.savedList
         , viewDecisionPanel model.decisionPanel
         , viewLog model.log
         , viewBuildFooter model.build
+        ]
+
+
+viewSaveControls : Model -> Html Msg
+viewSaveControls model =
+    let
+        playing =
+            model.gamePhase == Playing
+    in
+    div
+        [ id "save-controls"
+        , style "margin-bottom" "0.5rem"
+        , style "display" "flex"
+        , style "gap" "0.4rem"
+        , style "flex-wrap" "wrap"
+        , style "align-items" "center"
+        ]
+        [ button
+            [ onClick SaveClicked
+            , Html.Attributes.disabled (not playing)
+            ]
+            [ text "Save" ]
+        , button [ onClick SavedListToggleClicked ] [ text "Load saved\u{2026}" ]
+        , button
+            [ onClick DownloadClicked
+            , Html.Attributes.disabled (not playing)
+            ]
+            [ text "Download" ]
+        , button [ onClick LoadFromFileClicked ] [ text "Load file\u{2026}" ]
+        , button
+            [ onClick DecisionReportClicked
+            , Html.Attributes.title "Inline decision report — UCT-vs-human stats from all played games"
+            ]
+            [ text "Decision report" ]
+        , button
+            [ onClick DecisionExportClicked
+            , Html.Attributes.title "Export decision log as JSONL (for the Python aggregator)"
+            ]
+            [ text "Export" ]
+        , button
+            [ onClick DecisionClearClicked
+            , class "danger"
+            , Html.Attributes.title "Delete all recorded decision-log records from IndexedDB"
+            ]
+            [ text "Clear" ]
+        , button
+            [ onClick TestPanicClicked
+            , class "danger"
+            , style "margin-left" "auto"
+            ]
+            [ text "Trigger test panic" ]
+        , span
+            [ id "save-status"
+            , style "color" "#888"
+            , style "font-size" "0.7rem"
+            ]
+            [ text model.saveStatus ]
         ]
 
 

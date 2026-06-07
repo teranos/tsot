@@ -98,22 +98,13 @@
      reload. Download / Load file is the bug-report workflow:
      attach the JSON to a message so it can be loaded on another
      machine. -->
-<div id="save-controls" style="margin-bottom: 0.5rem; display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center;">
-  <button id="btn-save" disabled>Save</button>
-  <button id="btn-load-saved">Load saved…</button>
-  <button id="btn-download" disabled>Download</button>
-  <button id="btn-load-file">Load file…</button>
-  <input id="file-input" type="file" accept="application/json" style="display:none;" />
-  <!-- Observability probe: clicking this triggers a Rust panic on
-       purpose. If the panic hook works, the LOG shows a rich
-       [RUST-PANIC] block with file:line; if not, we see a
-       [WASM-TRAP] — telling us the hook never reached the JS side. -->
-  <button id="btn-show-report" title="Inline decision report — UCT-vs-human stats from all played games">Decision report</button>
-  <button id="btn-export-decisions" title="Export decision log as JSONL (for the Python aggregator)">Export</button>
-  <button id="btn-clear-decisions" class="danger" title="Delete all recorded decision-log records from IndexedDB">Clear</button>
-  <button id="btn-test-panic" class="danger" style="margin-left: auto;">Trigger test panic</button>
-  <span id="save-status" style="color:#888; font-size: 0.7rem;"></span>
-</div>
+<!-- H7-Elm Stage 6: the entire save-controls bar (Save / Load saved… /
+     Download / Load file… / Decision report / Export / Clear /
+     Trigger test panic + #save-status span + the hidden file input)
+     is now rendered by Elm — see Main.elm's viewSaveControls. JS
+     still owns the actions themselves (window.tsotSaveGame /
+     tsotDownloadGame / tsotTestPanic shims for the ones that touch
+     live game state; tsotLoadSaveJson for the file-input path). -->
 <!-- H7-Elm Stage 4: the decision-report panel is rendered by Elm
      (see Main.elm's viewDecisionPanel) — it appears at the top of
      Elm's view tree, above the LOG, when the user clicks the
@@ -642,7 +633,15 @@ function withInlineError(label, fn) {
 //
 // Mirror always for v1: opponent uses the same deck the user built.
 // Persistence is G1's job — decks live only in memory for now.
-state.phase = 'deckbuilding';
+// H7-Elm Stage 6: every state.phase assignment goes through setPhase
+// so Elm's gamePhaseIn port hears about it — that's how the
+// Save/Download buttons (now rendered by Elm) enable/disable. Reading
+// state.phase still works the same way; only the write side changes.
+function setPhase(p) {
+  state.phase = p;
+  if (window.tsotSetPhase) window.tsotSetPhase(p);
+}
+setPhase('deckbuilding');
 state.cardPool = [];      // [{id, name, kind, cost_text, colors, symbols, subtypes, power, toughness, timing, abilities}, …]
 state.presets = [];       // [{id, name, cards: [card_id, …]}, …] — starter + 7 gauntlet
 state.deck = [];          // current working deck, flat array of card_ids with repetition
@@ -1611,7 +1610,10 @@ async function dbAppendDecision(record) {
 // will move when the prompt-recording flow itself ports to Elm.
 
 function setSaveStatus(msg) {
-  document.getElementById('save-status').textContent = msg;
+  // H7-Elm Stage 6: #save-status is rendered by Elm. Forward to the
+  // saveStatusIn port via the shim; falls through silently if the
+  // port wiring drifted (the bridge logs a warning in that case).
+  if (window.tsotSetSaveStatus) window.tsotSetSaveStatus(msg);
 }
 
 // Returns the SaveFile JSON for the current session. Throws on
@@ -1667,7 +1669,7 @@ async function loadSaveJson(saveJson) {
     seed: Math.floor(Math.random() * 0xFFFFFFFF),
   };
   const rawEnvelope = await workerCall('load_game', { loadArgs });
-  state.phase = 'playing';
+  setPhase('playing');
   document.getElementById('deckbuilder').style.display = 'none';
   document.getElementById('game-screen').style.display = '';
   // H7-Elm Stage 5: the saved-list panel is Elm-owned. After a
@@ -1688,67 +1690,25 @@ async function loadSaveJson(saveJson) {
 // the IDB read/delete sides moved into assets/js-bridge.js.
 window.tsotLoadSaveJson = loadSaveJson;
 
-async function onLoadFileChange(ev) {
-  const file = ev.target.files?.[0];
-  if (!file) return;
-  try {
-    const text = await file.text();
-    await loadSaveJson(text);
-  } finally {
-    ev.target.value = '';
-  }
-}
-
-function wireSaveControls() {
-  document.getElementById('btn-save').onclick =
-    withInlineError('save_game', () => onSaveClick());
-  document.getElementById('btn-download').onclick =
-    withInlineError('save_game (download)', () => onDownloadClick());
-  // H7-Elm Stage 5: the saved-list panel is rendered by Elm.
-  // Toggle visibility via the savedListToggleIn port; Elm decides
-  // whether to fetch records or hide.
-  document.getElementById('btn-load-saved').onclick = () => {
-    window.tsotSavedListToggle();
-  };
-  document.getElementById('btn-load-file').onclick = () => {
-    document.getElementById('file-input').click();
-  };
-  document.getElementById('file-input').onchange =
-    withInlineError('load_game (file)', (ev) => onLoadFileChange(ev));
-  // Observability probe: a click that panics on purpose. The wasm
-  // dies after — but only after the panic hook (if working) emits
-  // the rich envelope. The button's inline error block shows what
-  // path the panic took: rust-panic = hook fired; wasm-trap = hook
-  // missed it; one click tells us which.
-  document.getElementById('btn-test-panic').onclick =
-    withInlineError('test_panic', async () => {
-      await workerCall('test_panic', {});
-    });
-  // H7-Elm Stage 4: the three decision-report click handlers route
-  // through js-bridge.js shims. Decision report toggles via Elm
-  // state (clicking again hides the panel); Export + Clear stay JS
-  // — they don't change Elm state, just IDB + #save-status text.
-  document.getElementById('btn-show-report').onclick =
-    withInlineError('decision_report', async () => {
-      window.tsotDecisionReport();
-    });
-  document.getElementById('btn-export-decisions').onclick =
-    withInlineError('export_decisions', async () => {
-      await window.tsotDecisionExport();
-    });
-  document.getElementById('btn-clear-decisions').onclick =
-    withInlineError('clear_decisions', async () => {
-      await window.tsotDecisionClear();
-    });
-}
-
-// Save + Download are only useful when a session is running.
-// Called whenever the phase transitions.
-function updateSaveButtonsEnabled() {
-  const playing = state.phase === 'playing';
-  document.getElementById('btn-save').disabled = !playing;
-  document.getElementById('btn-download').disabled = !playing;
-}
+// H7-Elm Stage 6: save-controls bar moved into Elm. The four
+// JS-owned actions (Save / Download / Load file / Test panic) get
+// exposed here as window.tsot* shims that js-bridge.js's port
+// subscribers call. The Decision report / Export / Clear buttons
+// route entirely through Elm now (no JS shim needed). The Load
+// saved… button fires SavedListToggleClicked directly in Elm. The
+// previous `wireSaveControls` and `updateSaveButtonsEnabled`
+// functions are gone — Elm renders the bar, Elm tracks enabled
+// state from `Model.gamePhase` via the gamePhaseIn port. The
+// previous `onLoadFileChange` is gone — js-bridge.js owns the
+// transient file input.
+window.tsotSaveGame = () =>
+  withInlineError('save_game', () => onSaveClick())();
+window.tsotDownloadGame = () =>
+  withInlineError('save_game (download)', () => onDownloadClick())();
+window.tsotTestPanic = () =>
+  withInlineError('test_panic', async () => {
+    await workerCall('test_panic', {});
+  })();
 
 // ---------------- Deckbuilder ----------------
 
@@ -1995,7 +1955,7 @@ function freshGameId() {
 
 async function startSpectate() {
   if (state.deck.length === 0) return;
-  state.phase = 'spectating';
+  setPhase('spectating');
   state.gameId = null;       // spectated games aren't in the human decision log
   state.gameOverRecorded = false;
   state.preview = null;      // no preview in spectate mode
@@ -2116,7 +2076,7 @@ function spectatePause() {
 function spectateExit() {
   if (state.spectate) spectatePause();
   state.spectate = null;
-  state.phase = 'deckbuilding';
+  setPhase('deckbuilding');
   document.getElementById('spectator-bar').style.display = 'none';
   document.getElementById('game-screen').style.display = 'none';
   renderDeckbuilder();
@@ -2153,13 +2113,12 @@ function wireSpectatorBar() {
 
 async function startGameFromDeckbuilder() {
   if (state.deck.length === 0) return;
-  state.phase = 'playing';
+  setPhase('playing');
   state.gameId = freshGameId();
   state.gameOverRecorded = false;
   document.getElementById('deckbuilder').style.display = 'none';
   document.getElementById('game-screen').style.display = '';
   document.getElementById('prompt').textContent = 'Starting game…';
-  updateSaveButtonsEnabled();
   try {
     const initial = await fetchState();
     state.current = { state: initial.state, prompt: initial };
@@ -2171,9 +2130,7 @@ async function startGameFromDeckbuilder() {
 }
 
 (async () => {
-  wireSaveControls();
   wireSpectatorBar();
-  updateSaveButtonsEnabled();
   // Bootstrap: spawn the worker, await its `{kind:'ready'}`. The wasm
   // lives in worker scope from here on; the main thread only sees
   // postMessage envelopes. tsot_wasm.js is loaded by the worker via
