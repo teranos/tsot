@@ -166,6 +166,151 @@ pub(crate) fn tsot_cancel_uct_impl() -> Result<String, String> {
     Ok("{\"ok\":true}".to_string())
 }
 
+/// Spectate-mode args. Both sides are AI — no `Human` AiKind, no
+/// session install. The wasm runs the whole game in one ccall and
+/// returns the full timeline of phase-boundary snapshots to JS, which
+/// holds them in memory for the scrubber UI.
+#[derive(serde::Deserialize)]
+pub(crate) struct AutoGameArgs {
+    pub seed: u64,
+    pub deck_a_ids: Vec<String>,
+    pub deck_b_ids: Vec<String>,
+    /// `"heuristic"` / `"uct"` / `"mcts"`.
+    pub ai_a: String,
+    /// `"heuristic"` / `"uct"` / `"mcts"`.
+    pub ai_b: String,
+}
+
+/// Run a both-AI game to completion and return phase-boundary state
+/// snapshots so JS can render a scrubbable timeline of the game.
+///
+/// One snapshot is captured whenever any of `(turn, phase,
+/// active_player)` changes — that's the granularity the scrubber UI
+/// surfaces. With a 50-turn deckout cap and ~4 phase boundaries per
+/// turn, the upper bound is ~200 snapshots × ~50–100 KB JSON each.
+///
+/// Both AIs must be non-Human; `NeedHuman` during this call indicates
+/// a bug and returns an error envelope (it shouldn't happen — we
+/// don't pass an `AiKind::Human` to the engine).
+pub(crate) fn tsot_run_auto_game_impl(args_json: &str) -> Result<String, String> {
+    use crate::card::CardRegistry;
+    use crate::game::{GameState, Journal, PlayerId};
+    use crate::sim::genome::{shuffle_deck, to_deck};
+    use crate::sim::snapshot::build_state_view;
+    use crate::sim::step::{StepEngine, StepResult};
+    use crate::sim::AiKind;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    crate::trace::set_ffi_call_label("tsot_run_auto_game");
+    crate::sim::uct::clear_uct_cancel();
+    let _ = crate::trace::drain();
+    crate::trace::enable(true);
+
+    let args: AutoGameArgs = serde_json::from_str(args_json)
+        .map_err(|e| format!("auto_game: bad args JSON: {e}"))?;
+
+    fn parse_auto_ai(name: &str, seed: u64) -> Result<AiKind, String> {
+        Ok(match name {
+            "heuristic" => AiKind::Heuristic,
+            "mcts" => AiKind::Mcts(crate::sim::mcts::MctsConfig {
+                base_seed: seed,
+                ..Default::default()
+            }),
+            "uct" => AiKind::Uct(crate::sim::uct::UctConfig {
+                base_seed: seed,
+                ..Default::default()
+            }),
+            other => return Err(format!("auto_game: unknown ai {other:?}")),
+        })
+    }
+    let ai_a = parse_auto_ai(&args.ai_a, args.seed.wrapping_add(0xA0_C0FF_EE))?;
+    let ai_b = parse_auto_ai(&args.ai_b, args.seed.wrapping_add(0xB0_C0FF_EE))?;
+
+    let registry =
+        CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;
+    let mut deck_a = to_deck(&registry, &args.deck_a_ids)
+        .map_err(|e| format!("auto_game: deck A: {e:?}"))?;
+    let mut deck_b = to_deck(&registry, &args.deck_b_ids)
+        .map_err(|e| format!("auto_game: deck B: {e:?}"))?;
+    let mut rng_a = StdRng::seed_from_u64(args.seed.wrapping_add(0xA000_A000));
+    let mut rng_b = StdRng::seed_from_u64(args.seed.wrapping_add(0xB000_B000));
+    shuffle_deck(&mut deck_a, &mut rng_a);
+    shuffle_deck(&mut deck_b, &mut rng_b);
+    let mut state = GameState::new(deck_a, deck_b);
+    state.replay_journal = Some(Journal::new());
+
+    let ais = [ai_a, ai_b];
+    let mut engine = StepEngine::new(state, ais, registry, args.seed);
+
+    let viewer = PlayerId::A;
+    let mut snapshots: Vec<serde_json::Value> = Vec::new();
+    let snap = |engine: &StepEngine| {
+        serde_json::json!({
+            "turn": engine.state.turn,
+            "phase": format!("{:?}", engine.state.phase),
+            "active_player": engine.state.active_player,
+            "state": build_state_view(&engine.state, viewer),
+        })
+    };
+    let key_of = |engine: &StepEngine| {
+        (
+            engine.state.turn,
+            format!("{:?}", engine.state.phase),
+            engine.state.active_player,
+        )
+    };
+
+    // Initial snapshot before any step runs.
+    snapshots.push(snap(&engine));
+    let mut last_key = key_of(&engine);
+
+    // Defensive step budget — the 50-turn deckout cap should bound
+    // this naturally, but UCT/MCTS rollouts inside step() could be
+    // long; bail loudly rather than spin.
+    let mut budget = 200_000u32;
+    let winner_id: Option<PlayerId> = loop {
+        budget = budget
+            .checked_sub(1)
+            .ok_or_else(|| "auto_game: step budget exhausted".to_string())?;
+        match engine.step(None) {
+            StepResult::Continue => {
+                let key = key_of(&engine);
+                if key != last_key {
+                    snapshots.push(snap(&engine));
+                    last_key = key;
+                }
+            }
+            StepResult::NeedHuman(_) => {
+                return Err(
+                    "auto_game: engine yielded NeedHuman — one of the AIs is Human"
+                        .to_string(),
+                );
+            }
+            StepResult::Done(stats) => break Some(stats.winner),
+        }
+    };
+
+    // Always append the final state so the scrubber can land on
+    // "GameOver" even when the final step didn't change phase.
+    snapshots.push(snap(&engine));
+
+    let log = std::mem::take(&mut engine.log);
+    let trace_events = crate::trace::drain();
+    let envelope = serde_json::json!({
+        "ok": true,
+        "snapshots": snapshots,
+        "winner": winner_id,
+        "total_turns": engine.state.turn,
+        "log": log,
+        "trace": trace_events,
+    });
+    let json =
+        serde_json::to_string(&envelope).map_err(|e| format!("auto_game: serialize: {e}"))?;
+    crate::trace::clear_ffi_call_label();
+    Ok(json)
+}
+
 /// Save the current session's game state + cursor as a JSON
 /// `SaveFile`. Caller is expected to be in the middle of a game
 /// (i.e., `tsot_start_game` has been called); returns Err if no
@@ -681,6 +826,27 @@ mod wasm_exports {
             Err(e) => export(super::err_envelope(None, &e)),
         }
     }
+
+    /// Spectator entry point: run a both-AI game to completion and
+    /// return the timeline of phase-boundary snapshots so JS can
+    /// render the scrubber. JSON args:
+    /// `{seed, deck_a_ids, deck_b_ids, ai_a, ai_b}`.
+    ///
+    /// # Safety
+    /// `args` must be a valid pointer to a null-terminated UTF-8 string.
+    #[no_mangle]
+    pub unsafe extern "C" fn tsot_run_auto_game(args: *const c_char) -> *mut c_char {
+        if args.is_null() {
+            return export("error: null args");
+        }
+        let s = unsafe { CStr::from_ptr(args) }
+            .to_str()
+            .unwrap_or("<invalid utf-8>");
+        match super::tsot_run_auto_game_impl(s) {
+            Ok(json) => export(json),
+            Err(e) => export(super::err_envelope(None, &e)),
+        }
+    }
 }
 
 // Re-export so the wasm bin can reach them through `tsot::wasm_ffi::tsot_*`.
@@ -999,6 +1165,133 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ----- Auto-game (spectate) FFI -----------------------------
+
+    /// INTENT: `tsot_run_auto_game_impl` with both Heuristic AIs and
+    /// a vanilla deck runs the game to completion and returns a
+    /// snapshot timeline + a winner. The vanilla template is fast
+    /// (no Lua handlers) so this finishes in ms even in debug.
+    #[test]
+    fn auto_game_heuristic_vs_heuristic_returns_snapshots_and_winner() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "ai_a": "heuristic",
+            "ai_b": "heuristic",
+        })
+        .to_string();
+        let json = tsot_run_auto_game_impl(&args).expect("auto_game ran");
+        let env: Value = serde_json::from_str(&json).expect("envelope parses");
+        assert_eq!(env["ok"], true);
+        let snapshots = env["snapshots"]
+            .as_array()
+            .expect("snapshots is an array");
+        assert!(
+            snapshots.len() >= 2,
+            "expected ≥ 2 snapshots (initial + final), got {}",
+            snapshots.len()
+        );
+        assert!(
+            env.get("winner").is_some(),
+            "envelope must carry a winner field"
+        );
+        assert!(
+            env["total_turns"].as_u64().is_some(),
+            "total_turns is a number"
+        );
+    }
+
+    /// INTENT: each snapshot carries the keys the scrubber UI
+    /// reads — `turn`, `phase`, `active_player`, and a `state` view.
+    #[test]
+    fn auto_game_snapshots_carry_state_view_and_keys() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "ai_a": "heuristic",
+            "ai_b": "heuristic",
+        })
+        .to_string();
+        let json = tsot_run_auto_game_impl(&args).expect("auto_game ran");
+        let env: Value = serde_json::from_str(&json).expect("envelope parses");
+        let snapshots = env["snapshots"].as_array().unwrap();
+        for (i, s) in snapshots.iter().enumerate() {
+            for field in ["turn", "phase", "active_player", "state"] {
+                assert!(
+                    s.get(field).is_some(),
+                    "snapshot[{i}] missing field `{field}`: {s}"
+                );
+            }
+            assert!(
+                s["state"].get("players").is_some(),
+                "snapshot[{i}] state should be a StateView with `players` field: {s}"
+            );
+        }
+    }
+
+    /// INTENT: snapshots advance monotonically by `(turn, phase,
+    /// active_player)` key — no duplicates back-to-back, and we
+    /// never go backward in turn.
+    #[test]
+    fn auto_game_snapshots_advance_monotonically() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "ai_a": "heuristic",
+            "ai_b": "heuristic",
+        })
+        .to_string();
+        let json = tsot_run_auto_game_impl(&args).expect("auto_game ran");
+        let env: Value = serde_json::from_str(&json).expect("envelope parses");
+        let snapshots = env["snapshots"].as_array().unwrap();
+        // Turns never go down; back-to-back identical (turn, phase,
+        // active_player) triples are allowed only for the final
+        // duplicate-of-last-state we always append at game end.
+        let mut prev_turn: u64 = 0;
+        for s in snapshots {
+            let t = s["turn"].as_u64().unwrap_or(0);
+            assert!(t >= prev_turn, "turn went backward: {prev_turn} -> {t}");
+            prev_turn = t;
+        }
+    }
+
+    /// INTENT: unknown ai name fails cleanly with an error, not a
+    /// panic — the scrubber UI's AI picker should never produce one
+    /// of these, but a typo on the JS side shouldn't crash the FFI.
+    #[test]
+    fn auto_game_unknown_ai_name_returns_error() {
+        let _ = clear_session();
+        let template = vanilla_template();
+        let deck_ids: Vec<String> = (0..50).map(|_| template.id.clone()).collect();
+        let args = serde_json::json!({
+            "seed": 0xCAFE_u64,
+            "deck_a_ids": deck_ids,
+            "deck_b_ids": deck_ids,
+            "ai_a": "heuristic",
+            "ai_b": "no-such-ai",
+        })
+        .to_string();
+        let result = tsot_run_auto_game_impl(&args);
+        assert!(result.is_err(), "unknown ai must Err, got: {result:?}");
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("unknown ai") && msg.contains("no-such-ai"),
+            "error message should name the bad value: {msg}"
+        );
     }
 
     // ----- Save / Load FFI ---------------------------------------

@@ -123,6 +123,32 @@
      Hidden once the user clicks Start; the game-screen below takes over. -->
 <div id="deckbuilder" style="display:none;"></div>
 
+<!-- Spectator bar: scrubber + play/pause/step controls. Only visible
+     while `state.phase === 'spectating'`. Reads from state.spectate
+     (snapshots array + index + interval handle). The actual game
+     state rendering reuses the same #game-screen DOM below. -->
+<div id="spectator-bar" style="display:none; padding:0.4rem 0.6rem; background:#1c1c24; border:1px solid #333; margin-bottom:0.5rem;">
+  <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+    <button id="spec-back-end">⏮</button>
+    <button id="spec-step-back">◀</button>
+    <button id="spec-play">⏵</button>
+    <button id="spec-step-fwd">▶</button>
+    <button id="spec-fwd-end">⏭</button>
+    <span id="spec-readout" style="color:#888; font-size:0.75rem; margin-left:0.5rem; min-width:18rem;"></span>
+    <label style="color:#888; font-size:0.7rem; margin-left:auto;">
+      speed
+      <select id="spec-speed" style="background:#1c1c20; color:#ddd; border:1px solid #444; padding:0.15rem 0.3rem; font-family:inherit;">
+        <option value="200">fast (200ms)</option>
+        <option value="500" selected>normal (500ms)</option>
+        <option value="1000">slow (1s)</option>
+        <option value="2000">very slow (2s)</option>
+      </select>
+    </label>
+    <button id="spec-exit" class="danger">Exit spectate</button>
+  </div>
+  <input id="spec-slider" type="range" min="0" max="0" value="0" style="width:100%; margin-top:0.4rem;" />
+</div>
+
 <!-- Game screen: hidden until the user finishes the deckbuilder. The
      existing render() targets these IDs directly, so toggling the
      container's display preserves all interactions. -->
@@ -596,6 +622,9 @@ state.cardPool = [];      // [{id, name, kind, cost_text, colors, symbols, subty
 state.presets = [];       // [{id, name, cards: [card_id, …]}, …] — starter + 7 gauntlet
 state.deck = [];          // current working deck, flat array of card_ids with repetition
 state.oppAi = 'uct';      // 'heuristic' | 'mcts' | 'uct'
+state.specAiA = 'uct';    // both-AI spectate: AI for side A
+state.specAiB = 'uct';    // both-AI spectate: AI for side B
+state.spectate = null;    // { snapshots, index, playing, intervalId, msPerStep, winner, total_turns }
 
 // Filter state for the pool browser. Empty = no filter.
 state.poolFilterColor = '';
@@ -1230,6 +1259,26 @@ function _renderInner(s) {
   const buttons = document.getElementById('buttons');
   buttons.innerHTML = '';
   const promptEl = document.getElementById('prompt');
+
+  if (prompt.kind === 'Spectate') {
+    // Spectate render: read-only view of the snapshot. No clickable
+    // hand cards, no Pass button, no UCT preview. Header reflects
+    // the snapshot's turn/phase + winner if at end-of-game.
+    const ap = String(prompt.active_player || '').toUpperCase();
+    const endTag = (prompt.at_end && prompt.winner)
+      ? ` · GAME OVER · ${String(prompt.winner).toUpperCase()} wins`
+      : '';
+    promptEl.innerHTML = `<span style="color:#cf6;">Spectating</span> · turn ${prompt.turn} · ${prompt.phase} · ${ap} acts${endTag}`;
+    // Render both sides un-clickable. Reuses cardEl with clickable=false.
+    opp.board.forEach(c => oppBoard.appendChild(cardEl(c)));
+    (opp.graveyard || []).forEach(c => oppGy.appendChild(cardEl(c)));
+    you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
+    (you.graveyard || []).forEach(c => yourGy.appendChild(cardEl(c)));
+    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
+    renderDeckTop('opp-deck-top', opp.deck_top);
+    renderDeckTop('your-deck-top', you.deck_top);
+    return;
+  }
 
   if (prompt.kind === 'GameOver') {
     const w = prompt.winner ? prompt.winner.toLowerCase() : null;
@@ -2084,6 +2133,40 @@ function renderDeckbuilder() {
   startBtn.onclick = startGameFromDeckbuilder;
   deckSide.appendChild(startBtn);
 
+  // Spectate (both-AI) block. Pickers for A + B + a Spectate button.
+  // Runs the whole game in wasm and returns the snapshot timeline
+  // for the scrubber UI (H6). Mirror always: both sides use the
+  // deck you've built.
+  const specWrap = document.createElement('div');
+  specWrap.style.cssText = 'margin-top:1.2rem; padding-top:0.6rem; border-top:1px solid #333; display:flex; flex-direction:column; gap:0.4rem;';
+  specWrap.innerHTML = `<div style="color:#888; font-size:0.7rem;">Spectate (both AI, watch with scrubber)</div>`;
+  const mkAiPicker = (key, label) => {
+    const wrap = document.createElement('label');
+    wrap.style.cssText = 'color:#888; font-size:0.7rem; display:flex; align-items:center; gap:0.4rem;';
+    wrap.textContent = label;
+    const sel = document.createElement('select');
+    sel.innerHTML = `
+      <option value="heuristic">Heuristic</option>
+      <option value="uct">UCT</option>
+      <option value="mcts">MCTS</option>
+    `;
+    sel.style.cssText = 'background:#1c1c20; color:#ddd; border:1px solid #444; padding:0.2rem 0.4rem; font-family:inherit; font-size:0.7rem; flex:1;';
+    sel.value = state[key];
+    sel.onchange = () => { state[key] = sel.value; };
+    wrap.appendChild(sel);
+    return wrap;
+  };
+  specWrap.appendChild(mkAiPicker('specAiA', 'A:'));
+  specWrap.appendChild(mkAiPicker('specAiB', 'B:'));
+  const specBtn = document.createElement('button');
+  specBtn.className = 'start';
+  specBtn.style.cssText = 'border-color:#cf6;';
+  specBtn.textContent = 'Spectate (both AI)';
+  specBtn.disabled = state.deck.length === 0;
+  specBtn.onclick = startSpectate;
+  specWrap.appendChild(specBtn);
+  deckSide.appendChild(specWrap);
+
   root.appendChild(deckSide);
 }
 
@@ -2095,6 +2178,166 @@ function freshGameId() {
   }
   return 'g-' + Date.now() + '-' + Math.floor(Math.random() * 1e9).toString(36);
 }
+
+// ============== Spectate (H6) ==============
+
+async function startSpectate() {
+  if (state.deck.length === 0) return;
+  state.phase = 'spectating';
+  state.gameId = null;       // spectated games aren't in the human decision log
+  state.gameOverRecorded = false;
+  state.preview = null;      // no preview in spectate mode
+  document.getElementById('deckbuilder').style.display = 'none';
+  document.getElementById('game-screen').style.display = '';
+  document.getElementById('spectator-bar').style.display = '';
+  document.getElementById('prompt').textContent = 'Running game… (both AIs play to completion)';
+  const args = {
+    seed: Math.floor(Math.random() * 0xFFFFFFFF),
+    deck_a_ids: state.deck.slice(),
+    deck_b_ids: state.deck.slice(),
+    ai_a: state.specAiA,
+    ai_b: state.specAiB,
+  };
+  try {
+    const raw = await workerCall('run_auto_game', { autoArgs: args });
+    const env = JSON.parse(raw);
+    if (!env || env.ok === false) {
+      throw new Error('run_auto_game returned an error envelope');
+    }
+    // Surface log + trace just like a normal envelope so the LOG
+    // panel shows what UCT was doing during the run.
+    if (env.log) appendLog(env.log);
+    if (env.trace) appendTrace(env.trace);
+    state.spectate = {
+      snapshots: env.snapshots || [],
+      winner: env.winner,
+      total_turns: env.total_turns,
+      index: 0,
+      playing: false,
+      intervalId: null,
+      msPerStep: parseInt(document.getElementById('spec-speed').value, 10) || 500,
+    };
+    // Initialize the slider range to match snapshot count.
+    const slider = document.getElementById('spec-slider');
+    slider.min = '0';
+    slider.max = String(Math.max(0, state.spectate.snapshots.length - 1));
+    slider.value = '0';
+    spectateRenderCurrent();
+  } catch (e) {
+    document.getElementById('prompt').textContent =
+      'Spectate failed: ' + (e?.message || e);
+  }
+}
+
+function spectateRenderCurrent() {
+  const sp = state.spectate;
+  if (!sp || !sp.snapshots[sp.index]) return;
+  const snap = sp.snapshots[sp.index];
+  const view = snap.state;
+  // Wrap in the same shape render() expects, with a synthesized
+  // Spectate prompt that _renderInner handles distinctly.
+  state.current = {
+    state: view,
+    prompt: {
+      kind: 'Spectate',
+      state: view,
+      turn: snap.turn,
+      phase: snap.phase,
+      active_player: snap.active_player,
+      at_end: sp.index === sp.snapshots.length - 1,
+      winner: sp.winner,
+    },
+  };
+  render(state.current);
+  // Sync slider + readout.
+  const slider = document.getElementById('spec-slider');
+  if (slider && parseInt(slider.value, 10) !== sp.index) slider.value = String(sp.index);
+  const readout = document.getElementById('spec-readout');
+  if (readout) {
+    const w = sp.winner ? sp.winner.toUpperCase() : null;
+    const endTag = (sp.index === sp.snapshots.length - 1 && w)
+      ? `  · GAME OVER · ${w} wins`
+      : '';
+    readout.textContent = `snapshot ${sp.index + 1}/${sp.snapshots.length}  · turn ${snap.turn} · ${snap.phase} · ${String(snap.active_player).toUpperCase()} acts${endTag}`;
+  }
+  // Play/pause label.
+  const playBtn = document.getElementById('spec-play');
+  if (playBtn) playBtn.textContent = sp.playing ? '⏸' : '⏵';
+}
+
+function spectateSeek(i) {
+  const sp = state.spectate;
+  if (!sp) return;
+  sp.index = Math.max(0, Math.min(sp.snapshots.length - 1, i));
+  spectateRenderCurrent();
+}
+
+function spectateStep(delta) {
+  const sp = state.spectate;
+  if (!sp) return;
+  spectateSeek(sp.index + delta);
+}
+
+function spectatePlay() {
+  const sp = state.spectate;
+  if (!sp || sp.playing) return;
+  sp.playing = true;
+  sp.intervalId = setInterval(() => {
+    if (!state.spectate) return spectatePause();
+    if (state.spectate.index >= state.spectate.snapshots.length - 1) {
+      return spectatePause();
+    }
+    spectateStep(1);
+  }, sp.msPerStep);
+  spectateRenderCurrent();
+}
+
+function spectatePause() {
+  const sp = state.spectate;
+  if (!sp) return;
+  if (sp.intervalId !== null) clearInterval(sp.intervalId);
+  sp.intervalId = null;
+  sp.playing = false;
+  spectateRenderCurrent();
+}
+
+function spectateExit() {
+  if (state.spectate) spectatePause();
+  state.spectate = null;
+  state.phase = 'deckbuilding';
+  document.getElementById('spectator-bar').style.display = 'none';
+  document.getElementById('game-screen').style.display = 'none';
+  renderDeckbuilder();
+}
+
+function wireSpectatorBar() {
+  const $ = (id) => document.getElementById(id);
+  $('spec-back-end').onclick = () => spectateSeek(0);
+  $('spec-step-back').onclick = () => spectateStep(-1);
+  $('spec-step-fwd').onclick = () => spectateStep(1);
+  $('spec-fwd-end').onclick = () => {
+    if (state.spectate) spectateSeek(state.spectate.snapshots.length - 1);
+  };
+  $('spec-play').onclick = () => {
+    const sp = state.spectate;
+    if (!sp) return;
+    if (sp.playing) spectatePause(); else spectatePlay();
+  };
+  $('spec-slider').oninput = (ev) => {
+    const i = parseInt(ev.target.value, 10);
+    if (!Number.isNaN(i)) spectateSeek(i);
+  };
+  $('spec-speed').onchange = (ev) => {
+    const sp = state.spectate;
+    if (!sp) return;
+    sp.msPerStep = parseInt(ev.target.value, 10) || 500;
+    // If currently playing, restart the interval with the new pace.
+    if (sp.playing) { spectatePause(); spectatePlay(); }
+  };
+  $('spec-exit').onclick = spectateExit;
+}
+
+// ============================================
 
 async function startGameFromDeckbuilder() {
   if (state.deck.length === 0) return;
@@ -2117,6 +2360,7 @@ async function startGameFromDeckbuilder() {
 
 (async () => {
   wireSaveControls();
+  wireSpectatorBar();
   updateSaveButtonsEnabled();
   // Bootstrap: spawn the worker, await its `{kind:'ready'}`. The wasm
   // lives in worker scope from here on; the main thread only sees

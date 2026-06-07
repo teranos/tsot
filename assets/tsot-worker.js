@@ -10,6 +10,7 @@
 //                  { cmd: "test_panic" }  // observability probe
 //                  { cmd: "preview_uct", previewArgs: {iterations, exploration_c, max_candidates} }
 //                  { cmd: "cancel_uct" }
+//                  { cmd: "run_auto_game", autoArgs: {seed, deck_a_ids, deck_b_ids, ai_a, ai_b} }
 //   worker → main: { kind: "ready" }
 //                  { kind: "uct_iter", line: "<json>" } // mid-call live event
 //                  { kind: "info",     line: "<json>" } // "I am alive" signals
@@ -173,6 +174,17 @@ onmessage = (ev) => {
       // ranked candidate envelope. Doesn't mutate the live game.
       const { previewArgs } = ev.data;
       const json = callWasm('tsot_preview_uct', JSON.stringify(previewArgs || {}));
+      postMessage({ kind: 'envelope', cmd, json });
+      return;
+    }
+    if (cmd === 'run_auto_game') {
+      // Spectate: both-AI game runs to completion in one ccall and
+      // returns the full phase-boundary snapshot timeline for the
+      // scrubber. Long-running for UCT-vs-UCT; the LOG still streams
+      // live UCT iter events because tsot_emit_iteration_event posts
+      // mid-call (see ADR-0001).
+      const { autoArgs } = ev.data;
+      const json = callWasm('tsot_run_auto_game', JSON.stringify(autoArgs || {}));
       postMessage({ kind: 'envelope', cmd, json });
       return;
     }

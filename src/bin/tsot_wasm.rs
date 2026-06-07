@@ -22,6 +22,7 @@ fn _retain_ffi_symbols() {
     let _ = tsot::wasm_ffi::tsot_test_panic as usize;
     let _ = tsot::wasm_ffi::tsot_preview_uct as usize;
     let _ = tsot::wasm_ffi::tsot_cancel_uct as usize;
+    let _ = tsot::wasm_ffi::tsot_run_auto_game as usize;
 }
 
 fn main() {
