@@ -91,6 +91,13 @@ pub enum CardType {
     /// `scope = "attached_host"`. HAND payments go to GRAVEYARD (like
     /// spells); the mutation itself attaches to the target.
     Mutation,
+    /// Per RULES C.17 / P.37: a board-placed permanent keyed by exactly
+    /// one printed color and one printed symbol. ETB untapped (P.37),
+    /// no summoning sickness (C.17a), unique-in-play by `id` (P.36),
+    /// at most one cast per turn (P.35). The cap, uniqueness, and
+    /// top-of-deck casting (P.38) are enforced at the cast-validation
+    /// site, not by this enum; the enum just identifies the kind.
+    Symbol,
 }
 
 /// When a spell can be cast.

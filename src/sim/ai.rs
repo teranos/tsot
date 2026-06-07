@@ -5,6 +5,7 @@
 use rand::seq::SliceRandom;
 use rand::Rng;
 use crate::card::{CardType, CostSource};
+use crate::cast_routing::CastRouting;
 use crate::game::{GameState, InstanceId, PlayerId};
 
 /// Filter for which kinds the picker is allowed to return. Used by the
@@ -256,10 +257,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     // discards are NOT.
     let cast_ident = state.card_identity(iid);
     // C.14: transparent cards can't pay for BOARD-placed casts.
-    let cast_is_board_placed = matches!(
-        inst.card.kind,
-        CardType::Creature | CardType::Artifact | CardType::Environment
-    );
+    let cast_is_board_placed = inst.card.kind.is_board_placed();
     let is_transparent = |h: &InstanceId| -> bool {
         state
             .card_pool

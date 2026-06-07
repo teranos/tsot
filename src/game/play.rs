@@ -128,18 +128,66 @@ impl GameState {
             return Err(PlayError::GameOver);
         }
 
-        if !self.player(player).hand.contains(instance) {
-            return Err(PlayError::NotInHand);
-        }
-
-        // Snapshot card data so the borrow on card_pool can be dropped.
+        // P.38: a Symbol card on top of its controller's DECK is
+        // castable from there as if it were in HAND. Every cast-time
+        // check (P.32 / P.35 / P.36 / timing / cost) still runs; only
+        // the source-zone selection differs. The cast iid leaves DECK
+        // (not HAND) at announcement and resolves to BOARD per P.37.
         let inst_ref = self.card_pool.get(instance).ok_or(PlayError::NotInHand)?;
         let card_kind = inst_ref.card.kind;
         let card_cost = inst_ref.card.cost.clone();
+        let from_hand = self.player(player).hand.contains(instance);
+        let from_top_of_deck = matches!(card_kind, CardType::Symbol)
+            && self.player(player).deck.first() == Some(instance);
+        if !from_hand && !from_top_of_deck {
+            return Err(PlayError::NotInHand);
+        }
+        let cast_source_zone = if from_hand {
+            Zone::Hand
+        } else {
+            Zone::Deck
+        };
 
         if !card_kind.is_castable() {
             // TODO(types): Environment (→ BOARD per P.21 + P.22 slot management).
             return Err(PlayError::UnsupportedType(card_kind));
+        }
+        // P.35: per-turn Symbol cap. Checked here so the cast is
+        // refused before any cost is paid and the card stays in HAND
+        // (mirroring CastValidateFailed semantics). The cap is per-
+        // player: the flag is set in resolve_played_card_inner when
+        // the cast actually completes, so a self-exile Symbol or any
+        // future early-exit doesn't burn the player's one slot.
+        let symbol_idx = match player {
+            super::state::PlayerId::A => 0,
+            super::state::PlayerId::B => 1,
+        };
+        if matches!(card_kind, CardType::Symbol)
+            && self.symbol_cast_this_turn[symbol_idx]
+        {
+            return Err(PlayError::SymbolCastCapReached);
+        }
+        // P.36: Symbol uniqueness in play. A second cast with the same
+        // card-`id` while a Symbol carrying that id is on either player's
+        // BOARD is refused before any cost is paid. Scope is BOARD only
+        // (not GRAVEYARD / EXILE / HAND): once the first leaves the
+        // BOARD the id is castable again.
+        if matches!(card_kind, CardType::Symbol) {
+            let cast_card_id = inst_ref.card.id.clone();
+            let any_on_board = self
+                .a
+                .board
+                .iter()
+                .chain(self.b.board.iter())
+                .any(|iid| {
+                    self.card_pool
+                        .get(iid)
+                        .map(|i| i.card.id == cast_card_id)
+                        .unwrap_or(false)
+                });
+            if any_on_board {
+                return Err(PlayError::SymbolUniquenessViolated);
+            }
         }
         // Sorcery timing: a Spell with Timing::Sorcery cannot be cast while
         // a response window is open (main-phase only).
@@ -240,15 +288,85 @@ impl GameState {
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(jewel_iid) = &choices.jewel_tap {
-            if hand_needed == 0 {
-                return Err(PlayError::JewelTapWithoutHandCost);
+        // P.24a / P.24b / P.24e share the `choices.jewel_tap` slot,
+        // implementing the P.24c "at most one substitution per cast"
+        // rule structurally (one field — pick at most one mechanism).
+        // The three differ in coverage and side-effects:
+        //   - jewel (P.24a):  tap + sacrifice; up to 2 components,
+        //                     HAND and/or GRAVEYARD; color overlap
+        //                     with cast required.
+        //   - crystal (P.24b): tap; exactly 1 HAND component; one of
+        //                     the crystal's attached cards must share
+        //                     a color with the cast.
+        //   - symbol (P.24e):  tap; exactly 1 HAND or GRAVEYARD
+        //                     component; no color requirement, just
+        //                     untapped + controller's BOARD.
+        if let Some(sub_iid) = &choices.jewel_tap {
+            let (sub_is_jewel, sub_is_crystal, sub_is_symbol) = self
+                .card_pool
+                .get(sub_iid)
+                .map(|i| {
+                    let subs = &i.card.subtypes;
+                    (
+                        subs.iter().any(|s| s.eq_ignore_ascii_case("jewel")),
+                        subs.iter().any(|s| s.eq_ignore_ascii_case("crystal")),
+                        matches!(i.card.kind, CardType::Symbol),
+                    )
+                })
+                .unwrap_or((false, false, false));
+            if sub_is_jewel || sub_is_crystal {
+                let valid = self.is_valid_jewel_tap(player, sub_iid, &cast_card_colors);
+                if !valid {
+                    return Err(PlayError::InvalidJewelTap(sub_iid.clone()));
+                }
+            } else if sub_is_symbol {
+                // No color overlap requirement. Just: on this
+                // player's BOARD, controlled by them, untapped.
+                let valid = self
+                    .card_pool
+                    .get(sub_iid)
+                    .map(|i| {
+                        !i.tapped
+                            && i.controller == player
+                            && self.player(player).board.contains(sub_iid)
+                    })
+                    .unwrap_or(false);
+                if !valid {
+                    return Err(PlayError::InvalidJewelTap(sub_iid.clone()));
+                }
+            } else {
+                return Err(PlayError::InvalidJewelTap(sub_iid.clone()));
             }
-            let valid = self.is_valid_jewel_tap(player, jewel_iid, &cast_card_colors);
-            if !valid {
-                return Err(PlayError::InvalidJewelTap(jewel_iid.clone()));
+            // Coverage budget.
+            if sub_is_jewel {
+                if hand_needed == 0 && graveyard_needed == 0 {
+                    return Err(PlayError::JewelTapWithoutHandCost);
+                }
+                let mut budget: usize = 2;
+                let hand_take = hand_needed.min(budget);
+                hand_needed -= hand_take;
+                budget -= hand_take;
+                let gy_take = graveyard_needed.min(budget);
+                graveyard_needed -= gy_take;
+            } else if sub_is_crystal {
+                // P.24b: crystal substitutes for exactly one HAND
+                // component, no GRAVEYARD coverage.
+                if hand_needed == 0 {
+                    return Err(PlayError::JewelTapWithoutHandCost);
+                }
+                hand_needed -= 1;
+            } else {
+                // P.24e (Symbol): one component, HAND preferred,
+                // GRAVEYARD if no HAND need.
+                if hand_needed == 0 && graveyard_needed == 0 {
+                    return Err(PlayError::JewelTapWithoutHandCost);
+                }
+                if hand_needed > 0 {
+                    hand_needed -= 1;
+                } else {
+                    graveyard_needed -= 1;
+                }
             }
-            hand_needed -= 1;
         }
 
         // P.12a + P.12b color-anchor on GRAVEYARD-source payments.
@@ -485,10 +603,8 @@ impl GameState {
             // transparent card. For HAND payments to BOARD-placed casts
             // (P.6 attaches them), refuse when the payment is transparent
             // and the cast itself isn't. Transparent ↔ transparent is OK.
-            if matches!(
-                card_kind,
-                CardType::Creature | CardType::Artifact | CardType::Environment
-            ) && self.is_transparent(hid)
+            if card_kind.is_board_placed()
+                && self.is_transparent(hid)
                 && !self.is_transparent(instance)
             {
                 return Err(PlayError::HandPaymentTransparentForBoardPlaced(
@@ -638,10 +754,8 @@ impl GameState {
             // C.14: ATTACHED-source payments re-attach to BOARD-placed
             // casts (P.31). A transparent attached card can only land
             // on a transparent host.
-            if matches!(
-                card_kind,
-                CardType::Creature | CardType::Artifact | CardType::Environment
-            ) && self.is_transparent(aid)
+            if card_kind.is_board_placed()
+                && self.is_transparent(aid)
                 && !self.is_transparent(instance)
             {
                 return Err(PlayError::AttachedPaymentInvalid(aid.clone()));
@@ -694,9 +808,22 @@ impl GameState {
         // play_card (here) and resolve_played_card_inner.
         self.current_cast_payments = Some(payments_snapshot);
 
-        // P.24: tap the substituting jewel as part of cost payment.
-        if let Some(jewel_iid) = &choices.jewel_tap {
-            self.set_tapped(jewel_iid, true);
+        // P.24: cost-substitution apply. All three mechanisms tap the
+        // source. Only the jewel (P.24a) is additionally sacrificed.
+        // Crystal (P.24b) and Symbol (P.24e) stay on the BOARD,
+        // tapped, until normal untap (U.2). P.8's attached-cascade
+        // still applies to the jewel sacrifice.
+        if let Some(sub_iid) = &choices.jewel_tap {
+            let sub_iid = sub_iid.clone();
+            let is_jewel = self
+                .card_pool
+                .get(&sub_iid)
+                .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("jewel")))
+                .unwrap_or(false);
+            self.set_tapped(&sub_iid, true);
+            if is_jewel {
+                let _ = self.move_card(&sub_iid, player, Zone::Board, Zone::Graveyard);
+            }
             self.bump_action("jewel_tap_substitution", player);
         }
 
@@ -753,7 +880,7 @@ impl GameState {
         // alternate identical responses indefinitely (see Bug 3).
         // HAND payments still stay in hand until resolution (their
         // refund-on-counter semantic is unchanged).
-        let _ = self.remove_from_zone(instance, player, Zone::Hand);
+        let _ = self.remove_from_zone(instance, player, cast_source_zone);
 
         // Announce the cast. Non-hand cost (mill, graveyard) is already
         // paid; HAND payments stay in hand until resolution (mirrors MTG:
@@ -1071,6 +1198,15 @@ impl GameState {
             }
             if matches!(card_kind, CardType::Artifact) {
                 self.bump_action("artifact_played", player);
+            }
+            if matches!(card_kind, CardType::Symbol) {
+                // P.35: a Symbol cast has now resolved onto BOARD;
+                // burn this player's per-turn cap. Failed casts never
+                // reach here (the gate above returns SymbolCastCapReached
+                // before any state mutation), so we don't ratchet the
+                // flag for refused attempts.
+                self.set_symbol_cast_this_turn(player, true);
+                self.bump_action("symbol_played", player);
             }
         } else {
             // P.1 default destination: GRAVEYARD (spell convention,

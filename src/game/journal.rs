@@ -85,6 +85,13 @@ pub enum JournalEntry {
         was: bool,
         now: bool,
     },
+    /// P.35: per-player Symbol-cast cap flag. `player_idx` is 0 (A) or
+    /// 1 (B) — matching `GameState::symbol_cast_this_turn`'s indexing.
+    SetSymbolCastThisTurn {
+        player_idx: usize,
+        was: bool,
+        now: bool,
+    },
     SetPriorityState {
         was: Option<super::PriorityState>,
         now: Option<super::PriorityState>,
@@ -323,6 +330,9 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::SetCreatureAttackedThisTurn { was, .. } => {
             state.creature_attacked_this_turn = was;
         }
+        JournalEntry::SetSymbolCastThisTurn { player_idx, was, .. } => {
+            state.symbol_cast_this_turn[player_idx] = was;
+        }
         JournalEntry::SetPriorityState { was, .. } => {
             state.priority = was;
         }
@@ -465,6 +475,9 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         }
         JournalEntry::SetCreatureAttackedThisTurn { now, .. } => {
             state.creature_attacked_this_turn = now;
+        }
+        JournalEntry::SetSymbolCastThisTurn { player_idx, now, .. } => {
+            state.symbol_cast_this_turn[player_idx] = now;
         }
         JournalEntry::SetPriorityState { now, .. } => {
             state.priority = now;

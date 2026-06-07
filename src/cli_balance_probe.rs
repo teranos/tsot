@@ -347,6 +347,7 @@ fn variant_hero(card: &Card) -> Markup {
         tsot::card::CardType::Artifact => "artifact",
         tsot::card::CardType::Environment => "environment",
         tsot::card::CardType::Mutation => "mutation",
+        tsot::card::CardType::Symbol => "symbol",
         tsot::card::CardType::Unspecified => "card",
     };
     let cost_str = if card.cost.is_empty() {

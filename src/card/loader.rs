@@ -29,6 +29,7 @@ fn parse_type(s: &str) -> Result<(CardType, Option<Timing>), String> {
         "artifact" => Ok((CardType::Artifact, None)),
         "environment" => Ok((CardType::Environment, None)),
         "mutation" => Ok((CardType::Mutation, None)),
+        "symbol" => Ok((CardType::Symbol, None)),
         other => Err(format!("unknown type: {other}")),
     }
 }

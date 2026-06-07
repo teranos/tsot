@@ -270,6 +270,13 @@ pub struct GameState {
     /// only has one attacking side per turn anyway.
     #[serde(default)]
     pub creature_attacked_this_turn: bool,
+    /// P.35: per-player flag, set true when that player casts a Symbol
+    /// (`CardType::Symbol`) successfully. Reset to false for both
+    /// players on End → Untap transition. Indexed by player (0 = A,
+    /// 1 = B). Bool because the cap is exactly one cast; a counter
+    /// would be misleading.
+    #[serde(default)]
+    pub symbol_cast_this_turn: [bool; 2],
     /// Transient X value for the activation currently resolving. Set
     /// by `activate_ability` before firing the handler; cleared after.
     /// Exposed to Lua handlers as `game.x_value()`. None outside of an
@@ -321,6 +328,7 @@ impl GameState {
             replay_journal: None,
             priority: None,
             creature_attacked_this_turn: false,
+            symbol_cast_this_turn: [false; 2],
             current_activation_x: None,
             current_cast_payments: None,
             extra_turns_pending: Vec::new(),
@@ -523,6 +531,28 @@ impl GameState {
         self.creature_attacked_this_turn = now;
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetCreatureAttackedThisTurn { was, now });
+        }
+    }
+
+    /// P.35: journal-aware setter for the per-player Symbol-cast cap
+    /// flag. `who` selects A or B; the rule is per-player per-turn so
+    /// both indices reset independently on End → Untap.
+    pub fn set_symbol_cast_this_turn(&mut self, who: PlayerId, now: bool) {
+        let idx = match who {
+            PlayerId::A => 0,
+            PlayerId::B => 1,
+        };
+        let was = self.symbol_cast_this_turn[idx];
+        if was == now {
+            return;
+        }
+        self.symbol_cast_this_turn[idx] = now;
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetSymbolCastThisTurn {
+                player_idx: idx,
+                was,
+                now,
+            });
         }
     }
 

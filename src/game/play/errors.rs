@@ -198,4 +198,14 @@ pub enum PlayError {
     /// Clear View — there's no hand-payment slot left to satisfy
     /// P.7a's identity check.
     NoHandPaymentForIdentity,
+    /// P.35: a player may cast at most one Symbol card per turn. The
+    /// cap is checked before any cost is paid; the second cast is
+    /// refused with the card still in HAND.
+    SymbolCastCapReached,
+    /// P.36: a Symbol card with the same `id` is already on either
+    /// player's BOARD. The cast is refused before any cost is paid.
+    /// When the first Symbol leaves BOARD the id becomes castable
+    /// again (no replacement effect — the second cast must be a fresh
+    /// attempt).
+    SymbolUniquenessViolated,
 }

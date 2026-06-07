@@ -7,15 +7,25 @@ return {
   frame = "transparent",
   cost = {{amount = 1, source = "self"}},
   abilities = {
-    "when you play this card, search your deck for a green-jewel and move it to your hand. self-exile per P.5 — clear green goes to EXILE on resolution, not GRAVEYARD.",
+    "when you play this card, search your deck for a green-jewel OR a green-symbol card and move it to your hand. self-exile per P.5 — clear green goes to EXILE on resolution, not GRAVEYARD.",
     "while this card is in your graveyard, you may exile it to fill 1 hand-source slot of a spell you cast.",
   },
   on_play = function(game, self)
     for _, iid in ipairs(game.zones(self.owner).deck) do
       local c = game.card(iid)
-      if c and c.id == "green-jewel" then
-        game.move(iid, "hand")
-        return
+      if c then
+        if c.id == "green-jewel" then
+          game.move(iid, "hand")
+          return
+        end
+        if c.type == "symbol" and c.colors then
+          for _, col in ipairs(c.colors) do
+            if col == "green" then
+              game.move(iid, "hand")
+              return
+            end
+          end
+        end
       end
     end
   end,

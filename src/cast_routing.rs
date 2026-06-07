@@ -44,12 +44,19 @@ impl CastRouting for CardType {
                 | CardType::Spell
                 | CardType::Artifact
                 | CardType::Mutation
+                | CardType::Symbol
                 | CardType::Unspecified
         )
     }
 
     fn is_board_placed(&self) -> bool {
-        matches!(self, CardType::Creature | CardType::Artifact)
+        // P.37: Symbol joins Creature + Artifact on the BOARD-placed
+        // path. Environment intentionally stays out — `is_castable`
+        // rejects it ahead of routing.
+        matches!(
+            self,
+            CardType::Creature | CardType::Artifact | CardType::Symbol
+        )
     }
 
     fn attaches_to_target(&self) -> bool {
@@ -57,6 +64,7 @@ impl CastRouting for CardType {
     }
 
     fn applies_summoning_sickness(&self) -> bool {
+        // C.17a: Symbol skips B.3, parallel to Artifact's exemption.
         matches!(self, CardType::Creature)
     }
 }

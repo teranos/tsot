@@ -137,14 +137,7 @@ impl GameState {
         let cast_is_board_placed = self
             .card_pool
             .get(cast_iid)
-            .map(|i| {
-                matches!(
-                    i.card.kind,
-                    crate::card::CardType::Creature
-                        | crate::card::CardType::Artifact
-                        | crate::card::CardType::Environment
-                )
-            })
+            .map(|i| crate::cast_routing::CastRouting::is_board_placed(&i.card.kind))
             .unwrap_or(false);
         let cast_transparent = self.is_transparent(cast_iid);
         let transparent_payment_excluded = cast_is_board_placed && !cast_transparent;
@@ -243,14 +236,7 @@ impl GameState {
         let cast_is_board_placed = self
             .card_pool
             .get(cast_iid)
-            .map(|i| {
-                matches!(
-                    i.card.kind,
-                    crate::card::CardType::Creature
-                        | crate::card::CardType::Artifact
-                        | crate::card::CardType::Environment
-                )
-            })
+            .map(|i| crate::cast_routing::CastRouting::is_board_placed(&i.card.kind))
             .unwrap_or(false);
         let cast_transparent = self.is_transparent(cast_iid);
         let mut out = Vec::new();
@@ -404,14 +390,7 @@ impl GameState {
         let cast_is_board_placed = self
             .card_pool
             .get(cast_iid)
-            .map(|inst| {
-                matches!(
-                    inst.card.kind,
-                    crate::card::CardType::Creature
-                        | crate::card::CardType::Artifact
-                        | crate::card::CardType::Environment
-                )
-            })
+            .map(|inst| crate::cast_routing::CastRouting::is_board_placed(&inst.card.kind))
             .unwrap_or(false);
         self.player(player)
             .hand

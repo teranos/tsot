@@ -337,6 +337,279 @@ fn play_card_routes_artifact_to_board() {
     assert!(!s.a.hand.contains(&iid));
 }
 
+// C.17 + P.37: Symbol cards are a board-placed permanent kind. They
+// land on BOARD on cast, ETB untapped, and skip B.3 summoning sickness
+// (C.17a). Cost = {} mirrors jewels; the design gate is P.35/P.36, not
+// a printed cost.
+#[test]
+fn play_card_routes_symbol_to_board() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Symbol;
+    assert_eq!(
+        s.play_card(PlayerId::A, &iid, PlayChoices::default(), None),
+        Ok(())
+    );
+    assert!(s.a.board.contains(&iid));
+    assert!(!s.a.hand.contains(&iid));
+}
+
+#[test]
+fn play_card_symbol_etb_untapped() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Symbol;
+    s.play_card(PlayerId::A, &iid, PlayChoices::default(), None)
+        .expect("symbol cast");
+    let inst = s.card_pool.get(&iid).expect("instance");
+    assert!(!inst.tapped, "P.37: symbol cards enter untapped");
+}
+
+// P.35: a player may cast at most one Symbol card per turn. The first
+// cast resolves; the second on the same turn returns SymbolCastCapReached
+// without paying any cost.
+#[test]
+fn play_card_symbol_cast_cap_blocks_second() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid_first = s.a.hand[0].clone();
+    let iid_second = s.a.hand[1].clone();
+    s.card_pool.get_mut(&iid_first).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&iid_second).unwrap().card.kind = CardType::Symbol;
+    assert_eq!(
+        s.play_card(PlayerId::A, &iid_first, PlayChoices::default(), None),
+        Ok(())
+    );
+    assert_eq!(
+        s.play_card(PlayerId::A, &iid_second, PlayChoices::default(), None),
+        Err(PlayError::SymbolCastCapReached)
+    );
+    // The refused cast must not leave HAND.
+    assert!(s.a.hand.contains(&iid_second));
+}
+
+// P.35: the cap resets at turn start so the same player can cast another
+// Symbol on their next turn.
+#[test]
+fn play_card_symbol_cap_resets_on_turn_begin() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let first = s.a.hand[0].clone();
+    let second = s.a.hand[1].clone();
+    s.card_pool.get_mut(&first).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&second).unwrap().card.kind = CardType::Symbol;
+    s.play_card(PlayerId::A, &first, PlayChoices::default(), None)
+        .expect("first symbol cast");
+    // Advance Untap → Draw → Main1 → Combat → Main2 → End → next Untap.
+    for _ in 0..6 {
+        s.next_phase(None);
+    }
+    // Active player flipped to B on turn 2. Advance B's full turn so we
+    // come back to A on turn 3 — A's cap should be cleared by then.
+    for _ in 0..6 {
+        s.next_phase(None);
+    }
+    assert_eq!(s.active_player, PlayerId::A);
+    assert_eq!(
+        s.play_card(PlayerId::A, &second, PlayChoices::default(), None),
+        Ok(())
+    );
+}
+
+// P.35: A's cap doesn't lock B. After A casts a Symbol and the turn
+// passes to B, B may cast a Symbol on B's turn.
+#[test]
+fn play_card_symbol_cap_per_player() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let a_sym = s.a.hand[0].clone();
+    let b_sym = s.b.hand[0].clone();
+    s.card_pool.get_mut(&a_sym).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&b_sym).unwrap().card.kind = CardType::Symbol;
+    s.play_card(PlayerId::A, &a_sym, PlayChoices::default(), None)
+        .expect("A casts symbol");
+    // Advance to B's turn (full A-turn cycle).
+    for _ in 0..6 {
+        s.next_phase(None);
+    }
+    assert_eq!(s.active_player, PlayerId::B);
+    assert_eq!(
+        s.play_card(PlayerId::B, &b_sym, PlayChoices::default(), None),
+        Ok(())
+    );
+}
+
+// P.36: a Symbol card is unique in play by `id`. A second cast with
+// the same `id` while the first is on either player's BOARD is refused.
+// Same controller case.
+#[test]
+fn play_card_symbol_unique_blocks_duplicate_id_self() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let first = s.a.hand[0].clone();
+    let second = s.a.hand[1].clone();
+    // Force the second copy to share the first's card-id so the
+    // uniqueness check sees a duplicate.
+    s.card_pool.get_mut(&first).unwrap().card.kind = CardType::Symbol;
+    let first_id = s.card_pool.get(&first).unwrap().card.id.clone();
+    {
+        let inst = s.card_pool.get_mut(&second).unwrap();
+        inst.card.kind = CardType::Symbol;
+        inst.card.id = first_id;
+    }
+    s.play_card(PlayerId::A, &first, PlayChoices::default(), None)
+        .expect("first symbol cast");
+    // P.35 cap would also fire here; advance to A's next turn so the
+    // cap is clear and only P.36 can refuse the second cast.
+    for _ in 0..12 {
+        s.next_phase(None);
+    }
+    assert_eq!(s.active_player, PlayerId::A);
+    assert_eq!(
+        s.play_card(PlayerId::A, &second, PlayChoices::default(), None),
+        Err(PlayError::SymbolUniquenessViolated)
+    );
+    assert!(s.a.hand.contains(&second));
+}
+
+// P.36: uniqueness check spans BOTH players' boards. A casts Red IX,
+// B tries to cast Red IX on B's turn — refused.
+#[test]
+fn play_card_symbol_unique_blocks_duplicate_id_opponent() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let a_sym = s.a.hand[0].clone();
+    let b_sym = s.b.hand[0].clone();
+    s.card_pool.get_mut(&a_sym).unwrap().card.kind = CardType::Symbol;
+    let shared_id = s.card_pool.get(&a_sym).unwrap().card.id.clone();
+    {
+        let inst = s.card_pool.get_mut(&b_sym).unwrap();
+        inst.card.kind = CardType::Symbol;
+        inst.card.id = shared_id;
+    }
+    s.play_card(PlayerId::A, &a_sym, PlayChoices::default(), None)
+        .expect("A casts symbol");
+    // Advance to B's turn.
+    for _ in 0..6 {
+        s.next_phase(None);
+    }
+    assert_eq!(s.active_player, PlayerId::B);
+    assert_eq!(
+        s.play_card(PlayerId::B, &b_sym, PlayChoices::default(), None),
+        Err(PlayError::SymbolUniquenessViolated)
+    );
+    assert!(s.b.hand.contains(&b_sym));
+}
+
+// P.36: once the first Symbol leaves BOARD, the id becomes castable
+// again — by either player.
+#[test]
+fn play_card_symbol_unique_castable_after_leaves_board() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let a_sym = s.a.hand[0].clone();
+    let b_sym = s.b.hand[0].clone();
+    s.card_pool.get_mut(&a_sym).unwrap().card.kind = CardType::Symbol;
+    let shared_id = s.card_pool.get(&a_sym).unwrap().card.id.clone();
+    {
+        let inst = s.card_pool.get_mut(&b_sym).unwrap();
+        inst.card.kind = CardType::Symbol;
+        inst.card.id = shared_id;
+    }
+    s.play_card(PlayerId::A, &a_sym, PlayChoices::default(), None)
+        .expect("A casts symbol");
+    // Send A's symbol to the graveyard so the BOARD copy is gone.
+    let _ = s.move_card(&a_sym, PlayerId::A, Zone::Board, Zone::Graveyard);
+    // Advance to B's turn.
+    for _ in 0..6 {
+        s.next_phase(None);
+    }
+    assert_eq!(s.active_player, PlayerId::B);
+    assert_eq!(
+        s.play_card(PlayerId::B, &b_sym, PlayChoices::default(), None),
+        Ok(())
+    );
+}
+
+// P.38: a Symbol card on top of a player's DECK is castable from
+// there. On resolution it moves DECK → BOARD (skipping HAND).
+#[test]
+fn play_card_symbol_castable_from_top_of_deck() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let top = s.a.deck[0].clone();
+    s.card_pool.get_mut(&top).unwrap().card.kind = CardType::Symbol;
+    assert_eq!(
+        s.play_card(PlayerId::A, &top, PlayChoices::default(), None),
+        Ok(())
+    );
+    assert!(s.a.board.contains(&top));
+    assert!(!s.a.deck.contains(&top));
+}
+
+// P.38: only the very top is castable from DECK. A Symbol at slot 1
+// (second from top) is not yet reachable.
+#[test]
+fn play_card_symbol_not_top_of_deck_refused() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let second = s.a.deck[1].clone();
+    s.card_pool.get_mut(&second).unwrap().card.kind = CardType::Symbol;
+    assert_eq!(
+        s.play_card(PlayerId::A, &second, PlayChoices::default(), None),
+        Err(PlayError::NotInHand)
+    );
+    assert!(s.a.deck.contains(&second));
+}
+
+// P.38 is Symbol-only. A non-Symbol card on top of DECK is still
+// refused with NotInHand.
+#[test]
+fn play_card_non_symbol_top_of_deck_refused() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let top = s.a.deck[0].clone();
+    // top is a default Creature from deck_of — kind stays Creature.
+    assert_eq!(
+        s.play_card(PlayerId::A, &top, PlayChoices::default(), None),
+        Err(PlayError::NotInHand)
+    );
+}
+
+// P.38: the source-zone selection still flows through every P.32 /
+// P.35 / P.36 gate. A duplicate cast from top-of-deck must still
+// trip P.36 uniqueness if a same-id Symbol is already on BOARD.
+#[test]
+fn play_card_symbol_top_of_deck_still_respects_uniqueness() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let from_hand = s.a.hand[0].clone();
+    let from_deck = s.a.deck[0].clone();
+    s.card_pool.get_mut(&from_hand).unwrap().card.kind = CardType::Symbol;
+    let shared_id = s.card_pool.get(&from_hand).unwrap().card.id.clone();
+    {
+        let inst = s.card_pool.get_mut(&from_deck).unwrap();
+        inst.card.kind = CardType::Symbol;
+        inst.card.id = shared_id;
+    }
+    s.play_card(PlayerId::A, &from_hand, PlayChoices::default(), None)
+        .expect("first symbol from hand");
+    // Clear the P.35 cap directly so this test isolates the P.36 path
+    // (a turn-advance would trigger draws that shift the top of A's
+    // DECK; setting the flag back is cheaper than reconstructing the
+    // deck ordering).
+    s.symbol_cast_this_turn[0] = false;
+    assert_eq!(s.a.deck.first(), Some(&from_deck));
+    assert_eq!(
+        s.play_card(PlayerId::A, &from_deck, PlayChoices::default(), None),
+        Err(PlayError::SymbolUniquenessViolated)
+    );
+}
+
+#[test]
+fn play_card_symbol_no_summoning_sickness() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Symbol;
+    s.play_card(PlayerId::A, &iid, PlayChoices::default(), None)
+        .expect("symbol cast");
+    let inst = s.card_pool.get(&iid).expect("instance");
+    assert!(
+        !inst.summoning_sick,
+        "C.17a: symbol cards skip summoning sickness (parallel to artifacts)"
+    );
+}
+
 /// Set up: a red jewel on A's BOARD (untapped), a red creature in A's hand
 /// with 1 HAND cost, a payment-eligible second card in A's hand. Returns
 /// (state, jewel_iid, cast_iid, payment_iid).
@@ -377,6 +650,10 @@ fn setup_jewel_tap_scenario() -> (GameState, InstanceId, InstanceId, InstanceId)
     (s, jewel, cast, payment)
 }
 
+// P.24a (rewritten): the jewel is tapped AND sacrificed when used as
+// cost substitution. After the cast resolves, the jewel is no longer
+// on BOARD; it sits in the controller's GRAVEYARD (P.16 sacrifice
+// destination) and is tapped at the moment of sacrifice.
 #[test]
 fn jewel_tap_substitutes_for_one_hand_slot() {
     let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
@@ -395,20 +672,151 @@ fn jewel_tap_substitutes_for_one_hand_slot() {
         None,
     );
     assert_eq!(result, Ok(()));
-    // Jewel is now tapped on BOARD.
-    let jewel_inst = s.card_pool.get(&jewel).unwrap();
-    assert!(jewel_inst.tapped);
-    assert!(s.a.board.contains(&jewel));
-    // Cast card on BOARD (it's a creature).
+    // Jewel was sacrificed: gone from BOARD, sits in GRAVEYARD, tapped.
+    assert!(!s.a.board.contains(&jewel));
+    assert!(s.a.graveyard.contains(&jewel));
+    assert!(s.card_pool.get(&jewel).unwrap().tapped);
     assert!(s.a.board.contains(&cast));
-    // The substituted payment slot wasn't pitched from hand: bump_action
-    // for jewel_tap_substitution recorded.
     let bumps = s
         .action_counts
         .get("jewel_tap_substitution")
         .map(|v| v[0])
         .unwrap_or(0);
     assert_eq!(bumps, 1);
+}
+
+// P.24a rewrite: a single jewel pays for BOTH HAND components of a
+// 2-hand cost. hand_payment_ids stays empty; no extra discard.
+#[test]
+fn jewel_pays_two_hand_components() {
+    let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 2,
+            source: CostSource::Hand,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(jewel.clone()),
+            sacrifice_ids: vec![],
+            mutation_target: None,
+            gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
+            graveyard_payment_ids: vec![],        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    assert!(s.a.graveyard.contains(&jewel));
+    assert!(!s.a.board.contains(&jewel));
+}
+
+// P.24a rewrite: a single jewel pays for BOTH GRAVEYARD components of
+// a 2-graveyard cost — no cards exiled from GRAVEYARD. The cast still
+// resolves successfully.
+#[test]
+fn jewel_pays_two_graveyard_components() {
+    let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
+    // Seed GY with a few red cards. Anchor check is colour-based, so
+    // colouring them red avoids NoGraveyardPaymentForColor if any
+    // unintended pitch leaks through. After jewel covers both GY
+    // components, no pitch should fire and gy size grows only by 1
+    // (the sacrificed jewel itself).
+    let filler_a = s.a.hand[2].clone();
+    let filler_b = s.a.hand[3].clone();
+    let _ = s.move_card(&filler_a, PlayerId::A, Zone::Hand, Zone::Graveyard);
+    let _ = s.move_card(&filler_b, PlayerId::A, Zone::Hand, Zone::Graveyard);
+    for iid in [&filler_a, &filler_b] {
+        s.card_pool.get_mut(iid).unwrap().card.colors = vec!["red".to_string()];
+    }
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 2,
+            source: CostSource::Graveyard,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let gy_before: usize = s.a.graveyard.len();
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(jewel.clone()),
+            sacrifice_ids: vec![],
+            mutation_target: None,
+            gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
+            graveyard_payment_ids: vec![],        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    // No GY exiles happened: gy is exactly the prior contents plus the
+    // sacrificed jewel.
+    assert!(s.a.graveyard.contains(&jewel));
+    assert_eq!(s.a.graveyard.len(), gy_before + 1);
+}
+
+// P.24a rewrite: a single jewel pays one HAND and one GRAVEYARD
+// component on the same cast — mixed coverage.
+#[test]
+fn jewel_pays_one_hand_one_graveyard_mixed() {
+    let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
+    // Seed a red anchor in GY so if any GY pitch leaks the anchor
+    // check still passes.
+    let filler = s.a.hand[3].clone();
+    let _ = s.move_card(&filler, PlayerId::A, Zone::Hand, Zone::Graveyard);
+    s.card_pool.get_mut(&filler).unwrap().card.colors = vec!["red".to_string()];
+    set_cost(
+        &mut s,
+        &cast,
+        vec![
+            CostComponent {
+                amount: 1,
+                source: CostSource::Hand,
+                is_x: false,
+                kind: None,
+            },
+            CostComponent {
+                amount: 1,
+                source: CostSource::Graveyard,
+                is_x: false,
+                kind: None,
+            },
+        ],
+    );
+    let gy_before: usize = s.a.graveyard.len();
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(jewel.clone()),
+            sacrifice_ids: vec![],
+            mutation_target: None,
+            gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
+            graveyard_payment_ids: vec![],        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    // No GY pitch fired (jewel covered the GY slot). The only new GY
+    // entry is the jewel itself.
+    assert!(s.a.graveyard.contains(&jewel));
+    assert_eq!(s.a.graveyard.len(), gy_before + 1);
 }
 
 #[test]
@@ -500,13 +908,15 @@ fn jewel_tap_rejected_when_cast_has_no_hand_cost() {
 
 #[test]
 fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
-    // 2 HAND cost, 1 jewel-tap + 1 hand payment.
+    // P.24a (rewritten): the jewel covers up to TWO components, so with
+    // a 3-HAND cost the jewel takes two slots and the controller still
+    // supplies one explicit hand pay for the third.
     let (mut s, jewel, cast, payment) = setup_jewel_tap_scenario();
     set_cost(
         &mut s,
         &cast,
         vec![CostComponent {
-            amount: 2,
+            amount: 3,
             source: CostSource::Hand,
             is_x: false,
             kind: None,
@@ -527,8 +937,7 @@ fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
         None,
     );
     assert_eq!(result, Ok(()));
-    assert!(s.card_pool.get(&jewel).unwrap().tapped);
-    // The payment card is now attached to the cast (creature ETB path).
+    assert!(s.a.graveyard.contains(&jewel));
     assert!(!s.a.hand.contains(&payment));
 }
 
@@ -634,6 +1043,151 @@ fn crystal_tap_rejected_when_no_attached_color_matches() {
         None,
     );
     assert_eq!(result, Err(PlayError::InvalidJewelTap(crystal)));
+}
+
+// P.24e: tap an untapped Symbol on the controller's BOARD to substitute
+// for one HAND-source component. The Symbol stays on the BOARD, tapped
+// (not sacrificed — that's the jewel-only behaviour from P.24a).
+fn setup_symbol_tap_scenario() -> (GameState, InstanceId, InstanceId) {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let symbol = s.a.hand[0].clone();
+    let cast = s.a.hand[1].clone();
+    {
+        let sym = s.card_pool.get_mut(&symbol).unwrap();
+        sym.card.kind = CardType::Symbol;
+        sym.card.colors = vec!["red".to_string()];
+    }
+    let _ = s.move_card(&symbol, PlayerId::A, Zone::Hand, Zone::Board);
+    {
+        let c = s.card_pool.get_mut(&cast).unwrap();
+        c.card.colors = vec!["blue".to_string()];
+    }
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Hand,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    (s, symbol, cast)
+}
+
+#[test]
+fn symbol_tap_substitutes_for_one_hand_component() {
+    let (mut s, symbol, cast) = setup_symbol_tap_scenario();
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(symbol.clone()),
+            sacrifice_ids: vec![],
+            mutation_target: None,
+            gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
+            graveyard_payment_ids: vec![],        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    // Symbol stays on board, tapped; not sacrificed.
+    assert!(s.a.board.contains(&symbol));
+    assert!(!s.a.graveyard.contains(&symbol));
+    assert!(s.card_pool.get(&symbol).unwrap().tapped);
+}
+
+// P.24e: Symbol can substitute for a GRAVEYARD-source component.
+#[test]
+fn symbol_tap_substitutes_for_one_graveyard_component() {
+    let (mut s, symbol, cast) = setup_symbol_tap_scenario();
+    // Seed a same-color GY anchor — cast is blue, so a blue GY card
+    // anchors P.12a if any GY pitch leaks (it shouldn't — symbol
+    // covers the lone GY component).
+    let filler = s.a.hand[1].clone();
+    let _ = s.move_card(&filler, PlayerId::A, Zone::Hand, Zone::Graveyard);
+    s.card_pool.get_mut(&filler).unwrap().card.colors = vec!["blue".into()];
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Graveyard,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let gy_before = s.a.graveyard.len();
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(symbol.clone()),
+            sacrifice_ids: vec![],
+            mutation_target: None,
+            gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
+            graveyard_payment_ids: vec![],        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+    // Symbol still on board, tapped; GY unchanged (no pitch leaked).
+    assert!(s.a.board.contains(&symbol));
+    assert!(s.card_pool.get(&symbol).unwrap().tapped);
+    assert_eq!(s.a.graveyard.len(), gy_before);
+}
+
+// P.24e: Symbol substitution has no color-match requirement (unlike
+// P.24a / P.24b for jewel and crystal). A red Symbol pays for a blue
+// cast just fine.
+#[test]
+fn symbol_tap_no_color_match_required() {
+    let (mut s, symbol, cast) = setup_symbol_tap_scenario();
+    // cast is blue, symbol is red (set up in helper). Confirm no
+    // color overlap.
+    assert!(s.card_pool.get(&cast).unwrap().card.colors == vec!["blue".to_string()]);
+    assert!(s.card_pool.get(&symbol).unwrap().card.colors == vec!["red".to_string()]);
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(symbol.clone()),
+            sacrifice_ids: vec![],
+            mutation_target: None,
+            gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
+            graveyard_payment_ids: vec![],        },
+        None,
+    );
+    assert_eq!(result, Ok(()));
+}
+
+// P.24e: an already-tapped Symbol can't be tapped again as cost.
+#[test]
+fn symbol_tap_rejected_when_already_tapped() {
+    let (mut s, symbol, cast) = setup_symbol_tap_scenario();
+    s.set_tapped(&symbol, true);
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            hand_payment_ids: vec![],
+            x_value: None,
+            jewel_tap: Some(symbol.clone()),
+            sacrifice_ids: vec![],
+            mutation_target: None,
+            gy_hand_payment_ids: vec![],
+            attached_payment_ids: vec![],
+            graveyard_payment_ids: vec![],        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::InvalidJewelTap(symbol)));
 }
 
 /// Set up: a card in A's hand with SACRIFICE 1 cost, and a sacrificable
@@ -929,6 +1483,157 @@ fn on_play_handler_fires_before_card_leaves_hand() {
     let count: i32 = registry.lua().globals().get("fire_on_play_count").unwrap();
     assert_eq!(count, 1);
     assert_eq!(s.event_fires[&crate::card::EventName::OnPlay], [1, 0]);
+}
+
+// P.39: Clear cards tutor for a jewel OR a same-color Symbol. When
+// the deck contains only a Symbol (no jewel), Clear must reach for
+// the Symbol and move it to HAND.
+#[test]
+fn clear_red_tutors_red_symbol_when_no_jewel_in_deck() {
+    let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let clear_red = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "clear-red")
+        .unwrap()
+        .clone();
+    let red_symbol = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "red-ix-symbol")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let clear_iid = s.a.hand[0].clone();
+    let symbol_iid = s.a.deck[3].clone();
+    {
+        let inst = s.card_pool.get_mut(&clear_iid).unwrap();
+        inst.card = clear_red.clone();
+    }
+    {
+        let inst = s.card_pool.get_mut(&symbol_iid).unwrap();
+        inst.card = red_symbol.clone();
+    }
+    // Sanity: no `red-jewel` in deck — the tutor must fall back to
+    // the Symbol path.
+    assert!(!s
+        .a
+        .deck
+        .iter()
+        .filter_map(|iid| s.card_pool.get(iid))
+        .any(|i| i.card.id == "red-jewel"));
+
+    s.play_card(
+        PlayerId::A,
+        &clear_iid,
+        PlayChoices::default(),
+        Some(&mut crate::game::EventContext::lua_only(registry.lua())),
+    )
+    .unwrap();
+
+    // The symbol moved from DECK to HAND.
+    assert!(s.a.hand.contains(&symbol_iid));
+    assert!(!s.a.deck.contains(&symbol_iid));
+}
+
+// P.39: when both a jewel AND a same-color Symbol are in DECK, the
+// tutor still resolves (player-choice in the rules; the lua handler
+// is allowed to pick either deterministically). The contract is just
+// "ONE eligible card moves to HAND".
+#[test]
+fn clear_red_tutors_some_eligible_card_when_both_available() {
+    let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let clear_red = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "clear-red")
+        .unwrap()
+        .clone();
+    let red_jewel = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "red-jewel")
+        .unwrap()
+        .clone();
+    let red_symbol = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "red-ax-symbol")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let clear_iid = s.a.hand[0].clone();
+    let jewel_iid = s.a.deck[2].clone();
+    let symbol_iid = s.a.deck[5].clone();
+    {
+        let inst = s.card_pool.get_mut(&clear_iid).unwrap();
+        inst.card = clear_red.clone();
+    }
+    {
+        let inst = s.card_pool.get_mut(&jewel_iid).unwrap();
+        inst.card = red_jewel.clone();
+    }
+    {
+        let inst = s.card_pool.get_mut(&symbol_iid).unwrap();
+        inst.card = red_symbol.clone();
+    }
+    let hand_size_before = s.a.hand.len();
+    s.play_card(
+        PlayerId::A,
+        &clear_iid,
+        PlayChoices::default(),
+        Some(&mut crate::game::EventContext::lua_only(registry.lua())),
+    )
+    .unwrap();
+    // Exactly one of the eligible cards landed in hand. (Clear's
+    // SELF-cost exile drops clear-red from hand; the tutor adds 1.
+    // Net: hand_size_before stays the same.)
+    let in_hand_now = s.a.hand.contains(&jewel_iid) || s.a.hand.contains(&symbol_iid);
+    assert!(in_hand_now, "tutor must place a jewel or symbol into hand");
+    assert_eq!(s.a.hand.len(), hand_size_before);
+}
+
+// P.39: same-color requirement on the Symbol path. clear-red must NOT
+// tutor a blue symbol when no red-jewel exists.
+#[test]
+fn clear_red_does_not_tutor_off_color_symbol() {
+    let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let clear_red = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "clear-red")
+        .unwrap()
+        .clone();
+    let blue_symbol = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "blue-ix-symbol")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let clear_iid = s.a.hand[0].clone();
+    let symbol_iid = s.a.deck[3].clone();
+    {
+        let inst = s.card_pool.get_mut(&clear_iid).unwrap();
+        inst.card = clear_red.clone();
+    }
+    {
+        let inst = s.card_pool.get_mut(&symbol_iid).unwrap();
+        inst.card = blue_symbol.clone();
+    }
+    s.play_card(
+        PlayerId::A,
+        &clear_iid,
+        PlayChoices::default(),
+        Some(&mut crate::game::EventContext::lua_only(registry.lua())),
+    )
+    .unwrap();
+    // The blue symbol must NOT be tutored (no color overlap).
+    assert!(!s.a.hand.contains(&symbol_iid));
+    assert!(s.a.deck.contains(&symbol_iid));
 }
 
 #[test]

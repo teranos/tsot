@@ -31,6 +31,13 @@ impl GameState {
                 self.clear_eot_modifiers();
                 self.set_creature_attacked_this_turn(false);
                 self.clear_all_attacked_this_turn();
+                // P.35: clear the per-player Symbol-cast cap so each
+                // player gets one cast per their own turn. Both
+                // players reset; only the active player can ever set
+                // the flag, but the inactive side's prior-turn value
+                // would carry forward if we only cleared one side.
+                self.set_symbol_cast_this_turn(super::state::PlayerId::A, false);
+                self.set_symbol_cast_this_turn(super::state::PlayerId::B, false);
                 // Extra-turn queue (azure-recursion etc.): if non-empty,
                 // the front entry becomes the next active player instead
                 // of the default opponent swap.

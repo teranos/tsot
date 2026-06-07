@@ -15,9 +15,19 @@ return {
   on_play = function(game, self)
     for _, iid in ipairs(game.zones(self.owner).deck) do
       local c = game.card(iid)
-      if c and c.id == "azure-jewel" then
-        game.move(iid, "hand")
-        return
+      if c then
+        if c.id == "azure-jewel" then
+          game.move(iid, "hand")
+          return
+        end
+        if c.type == "symbol" and c.colors then
+          for _, col in ipairs(c.colors) do
+            if col == "azure" then
+              game.move(iid, "hand")
+              return
+            end
+          end
+        end
       end
     end
   end,

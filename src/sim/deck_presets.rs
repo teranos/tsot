@@ -6,21 +6,18 @@
 //!   (filtered via [`playable_pool`]). Holds the readable fields the
 //!   browser UI needs: id, name, kind, cost text, colors, symbols,
 //!   subtypes, ability lines, creature stats, spell timing.
-//! - [`PresetDeck`] — one entry per shipped deck: the starter deck +
-//!   the 7 variant-anchored gauntlet decks (Ra/Rb/Hu/Go/Uu/Pr/Gg).
-//!   Each is a flat `Vec<String>` of card IDs (50 entries, with
-//!   repetition) — the same shape `tsot_start_game`'s
-//!   `deck_a_ids` / `deck_b_ids` consume.
+//! - [`PresetDeck`] — one entry per shipped curated deck. Today: a
+//!   Blue Starter and a Red Starter, each a flat `Vec<String>` of
+//!   card IDs (50 entries with repetition) — the same shape
+//!   `tsot_start_game`'s `deck_a_ids` / `deck_b_ids` consume.
 //!
-//! The starter deck matches what was previously hardcoded in
-//! `assets/play.html::defaultStartArgs()` and what the wasm-served
-//! play page boots into. Once persistence (G1) lands the user can
-//! replace it with whatever they save themselves.
+//! The gauntlet-variant decks (Ra/Rb/Hu/Go/Uu/Pr/Gg) used to ship as
+//! presets here; they live on inside `sim::variants` / `sim::fitness`
+//! for the EA's fitness-evaluation gauntlet, but no longer surface in
+//! the preset dropdown.
 
 use crate::card::Card;
-use crate::sim::fitness::{build_gauntlet, GAUNTLET_MASTER_SEED};
 use crate::sim::snapshot::format_cost;
-use crate::sim::variants::{variant_label, VARIANTS};
 
 /// One card available in the deckbuilder. Shape mirrors what the JS
 /// UI reads from in-game `CardView` snapshots so the renderer can be
@@ -67,24 +64,73 @@ pub struct PresetDeck {
 }
 
 /// The current starter deck — same composition that
-/// `assets/play.html` boots the deckbuilder into. Author note: this
-/// list is 24+21+2+1+1+1 = 50 cards.
+/// `assets/play.html` boots the deckbuilder into. Composition after
+/// the Symbol-design slice + the user's blue-shell follow-up:
+///    2 blue-monkey + 11 clear-blue + 10 blue-symbol (2× each glyph)
+///   + 2 blue-jewel + 1 companion-bird + 2 counterspell + 1 surge
+///   + 1 unblockable-human + 2 reef-phantom + 1 stream-of-thought
+///   + 2 klotho + 1 beguile + 1 avatar-of-greed + 1 field-notes
+///   + 2 jellyfish + 2 mesopelagic-fish + 2 mist-bat
+///   + 2 wandering-wizard + 1 frost-cat + 1 glass-damselfly
+///   + 2 blue-scientist  =  50.
 pub const STARTER_DECK_IDS: &[&str] = &[
-    "blue-monkey", "blue-monkey", "blue-monkey", "blue-monkey",
-    "blue-monkey", "blue-monkey", "blue-monkey", "blue-monkey",
-    "blue-monkey", "blue-monkey", "blue-monkey", "blue-monkey",
-    "blue-monkey", "blue-monkey", "blue-monkey", "blue-monkey",
-    "blue-monkey", "blue-monkey", "blue-monkey", "blue-monkey",
-    "blue-monkey", "blue-monkey", "blue-monkey", "blue-monkey",
-    "clear-blue", "clear-blue", "clear-blue", "clear-blue", "clear-blue",
-    "clear-blue", "clear-blue", "clear-blue", "clear-blue", "clear-blue",
+    "blue-monkey", "blue-monkey",
     "clear-blue", "clear-blue", "clear-blue", "clear-blue", "clear-blue",
     "clear-blue", "clear-blue", "clear-blue", "clear-blue", "clear-blue",
     "clear-blue",
+    "blue-ax-symbol", "blue-ax-symbol",
+    "blue-ix-symbol", "blue-ix-symbol",
+    "blue-am-symbol", "blue-am-symbol",
+    "blue-pulse-symbol", "blue-pulse-symbol",
+    "blue-sem-symbol", "blue-sem-symbol",
     "blue-jewel", "blue-jewel",
     "companion-bird",
-    "counterspell",
+    "counterspell", "counterspell",
     "surge",
+    "unblockable-human",
+    "reef-phantom", "reef-phantom",
+    "stream-of-thought",
+    "klotho", "klotho",
+    "beguile",
+    "avatar-of-greed",
+    "field-notes",
+    "jellyfish", "jellyfish",
+    "mesopelagic-fish", "mesopelagic-fish",
+    "mist-bat", "mist-bat",
+    "wandering-wizard", "wandering-wizard",
+    "frost-cat",
+    "glass-damselfly",
+    "blue-scientist", "blue-scientist",
+];
+
+/// Red counterpart of [`STARTER_DECK_IDS`]. Direct color swaps for
+/// every monkey / clear / symbol / jewel; the remaining slots are
+/// filled with user-specified red cards.
+pub const RED_STARTER_DECK_IDS: &[&str] = &[
+    "red-monkey", "red-monkey",
+    "clear-red", "clear-red", "clear-red", "clear-red", "clear-red",
+    "clear-red", "clear-red", "clear-red", "clear-red", "clear-red",
+    "clear-red",
+    "red-ax-symbol", "red-ax-symbol",
+    "red-ix-symbol", "red-ix-symbol",
+    "red-am-symbol", "red-am-symbol",
+    "red-pulse-symbol", "red-pulse-symbol",
+    "red-sem-symbol", "red-sem-symbol",
+    "red-jewel", "red-jewel",
+    "goblin-berserker", "goblin-berserker",
+    "goblin-warchief", "goblin-warchief",
+    "signal-goblin", "signal-goblin",
+    "portable-bolt", "portable-bolt",
+    "fireball", "fireball",
+    "red-devil",
+    "tantrum-imp",
+    "fst",
+    "ember-bat", "ember-bat",
+    "ember-dragon", "ember-dragon",
+    "read-the-embers", "read-the-embers",
+    "sparkle", "sparkle",
+    "haste-human", "haste-human",
+    "cinder-wurm", "cinder-wurm",
 ];
 
 /// Build `CardPoolEntry` rows from a playable-pool slice.
@@ -112,27 +158,21 @@ fn card_to_entry(card: &Card) -> CardPoolEntry {
     }
 }
 
-/// Build the 8 shipped presets: starter + 7 gauntlet variants.
-///
-/// Order is fixed so the JS preset dropdown is stable across reloads.
-/// Starter is first; gauntlets follow in [`VARIANTS`] order.
-pub fn build_preset_decks(playable: &[Card]) -> Vec<PresetDeck> {
-    let mut out = Vec::with_capacity(1 + VARIANTS.len());
-    out.push(PresetDeck {
-        id: "starter".to_string(),
-        name: "Starter — Blue Monkey".to_string(),
-        cards: STARTER_DECK_IDS.iter().map(|s| s.to_string()).collect(),
-    });
-    let gauntlet = build_gauntlet(playable, GAUNTLET_MASTER_SEED);
-    for (i, deck) in gauntlet.into_iter().enumerate() {
-        let variant = VARIANTS[i];
-        out.push(PresetDeck {
-            id: format!("gauntlet-{}", variant_label(variant)),
-            name: format!("Gauntlet — {}", variant_label(variant)),
-            cards: deck.iter().map(|c| c.id.clone()).collect(),
-        });
-    }
-    out
+/// Build the shipped presets. Order is fixed so the JS preset dropdown
+/// is stable across reloads.
+pub fn build_preset_decks(_playable: &[Card]) -> Vec<PresetDeck> {
+    vec![
+        PresetDeck {
+            id: "starter".to_string(),
+            name: "Blue Starter".to_string(),
+            cards: STARTER_DECK_IDS.iter().map(|s| s.to_string()).collect(),
+        },
+        PresetDeck {
+            id: "starter-red".to_string(),
+            name: "Red Starter".to_string(),
+            cards: RED_STARTER_DECK_IDS.iter().map(|s| s.to_string()).collect(),
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -208,19 +248,20 @@ mod tests {
     // ----- PresetDeck --------------------------------------------
 
     #[test]
-    fn preset_decks_returns_starter_plus_seven_gauntlet() {
+    fn preset_decks_returns_blue_and_red_starter() {
         let reg = registry();
         let pool = playable_pool(reg.cards());
         let presets = build_preset_decks(&pool);
-        assert_eq!(presets.len(), 8, "1 starter + 7 gauntlet = 8 presets");
+        assert_eq!(presets.len(), 2, "Blue Starter + Red Starter = 2 presets");
+        assert_eq!(presets[0].id, "starter");
+        assert_eq!(presets[1].id, "starter-red");
     }
 
     #[test]
-    fn preset_decks_first_is_starter() {
+    fn preset_decks_blue_starter_is_50_cards_byte_for_byte() {
         let reg = registry();
         let pool = playable_pool(reg.cards());
         let presets = build_preset_decks(&pool);
-        assert_eq!(presets[0].id, "starter");
         assert_eq!(presets[0].cards.len(), 50);
         assert_eq!(
             presets[0].cards,
@@ -232,63 +273,29 @@ mod tests {
     }
 
     #[test]
-    fn preset_decks_gauntlet_entries_use_stable_variant_ids() {
+    fn preset_decks_red_starter_is_50_cards_byte_for_byte() {
         let reg = registry();
         let pool = playable_pool(reg.cards());
         let presets = build_preset_decks(&pool);
-        let gauntlet_ids: Vec<&str> = presets[1..]
-            .iter()
-            .map(|p| p.id.as_str())
-            .collect();
+        assert_eq!(presets[1].cards.len(), 50);
         assert_eq!(
-            gauntlet_ids,
-            vec![
-                "gauntlet-ra",
-                "gauntlet-rb",
-                "gauntlet-hu",
-                "gauntlet-go",
-                "gauntlet-uu",
-                "gauntlet-pr",
-                "gauntlet-gg",
-            ]
+            presets[1].cards,
+            RED_STARTER_DECK_IDS
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn preset_decks_every_gauntlet_is_50_cards() {
+    fn preset_decks_every_card_id_loads_from_registry() {
         let reg = registry();
-        let pool = playable_pool(reg.cards());
-        let presets = build_preset_decks(&pool);
-        for p in &presets[1..] {
-            assert_eq!(
-                p.cards.len(),
-                50,
-                "gauntlet preset {} should have 50 cards",
-                p.id
-            );
-        }
-    }
-
-    #[test]
-    fn preset_decks_gauntlet_matches_build_gauntlet_byte_for_byte() {
-        // The presets must use the SAME seed + builder the EA uses, so
-        // a deck the human picks in the deckbuilder is identical to
-        // what `fitness` evaluates against.
-        let reg = registry();
-        let pool = playable_pool(reg.cards());
-        let presets = build_preset_decks(&pool);
-        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
-        assert_eq!(gauntlet.len(), 7);
-        for (i, deck) in gauntlet.iter().enumerate() {
-            let preset = &presets[1 + i];
-            let preset_ids: Vec<&str> =
-                preset.cards.iter().map(|s| s.as_str()).collect();
-            let gauntlet_ids: Vec<&str> =
-                deck.iter().map(|c| c.id.as_str()).collect();
-            assert_eq!(
-                preset_ids, gauntlet_ids,
-                "preset {} must equal build_gauntlet[{i}] byte-for-byte",
-                preset.id
+        let by_id: std::collections::BTreeSet<&str> =
+            reg.cards().iter().map(|c| c.id.as_str()).collect();
+        for &id in STARTER_DECK_IDS.iter().chain(RED_STARTER_DECK_IDS.iter()) {
+            assert!(
+                by_id.contains(id),
+                "preset references unknown card id {id:?}"
             );
         }
     }

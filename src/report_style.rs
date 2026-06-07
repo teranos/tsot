@@ -388,6 +388,7 @@ fn kind_label(k: CardType) -> &'static str {
         CardType::Artifact => "artifact",
         CardType::Environment => "environment",
         CardType::Mutation => "mutation",
+        CardType::Symbol => "symbol",
     }
 }
 

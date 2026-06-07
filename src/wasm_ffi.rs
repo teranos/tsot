@@ -1137,17 +1137,18 @@ mod tests {
         }
     }
 
-    /// INTENT: `tsot_list_preset_decks_impl` returns exactly 8 preset
-    /// decks (starter + 7 gauntlet), each with a flat `cards` array
-    /// of 50 card IDs — the shape `tsot_start_game`'s `deck_a_ids`
-    /// consumes.
+    /// INTENT: `tsot_list_preset_decks_impl` returns the curated
+    /// presets (Blue Starter + Red Starter), each with a flat `cards`
+    /// array of 50 card IDs — the shape `tsot_start_game`'s
+    /// `deck_a_ids` consumes.
     #[test]
     fn list_preset_decks_returns_starter_plus_gauntlet_json() {
         let json = tsot_list_preset_decks_impl().expect("list_preset_decks returned Err");
         let arr: Vec<Value> =
             serde_json::from_str(&json).expect("presets JSON parses as array");
-        assert_eq!(arr.len(), 8, "1 starter + 7 gauntlet = 8 presets");
-        assert_eq!(arr[0]["id"], "starter", "first preset is the starter");
+        assert_eq!(arr.len(), 2, "Blue Starter + Red Starter = 2 presets");
+        assert_eq!(arr[0]["id"], "starter", "first preset is the Blue Starter");
+        assert_eq!(arr[1]["id"], "starter-red", "second preset is the Red Starter");
         for (i, preset) in arr.iter().enumerate() {
             let cards = preset["cards"]
                 .as_array()
