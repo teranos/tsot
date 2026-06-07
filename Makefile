@@ -255,6 +255,12 @@ assets:
 	}
 	@mkdir -p $(WASM_DIST)
 	cd $(ELM_SRC) && elm make Main.elm --output=$(CURDIR)/$(WASM_DIST)/bundle.js
+	@# H7-Elm Stage 7: also copy the JS bridge + play.html into dist/
+	@# so `make assets` is a complete frontend refresh — running
+	@# `make wasm-dev-serve` after edits-only-to-Elm-or-JS-bridge no
+	@# longer requires a full Rust rebuild for the new code to land.
+	cp assets/js-bridge.js $(WASM_DIST)/js-bridge.js
+	cp assets/play.html $(WASM_DIST)/index.html
 
 wasm: assets
 	@command -v emcc >/dev/null 2>&1 || { \
