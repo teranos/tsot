@@ -3,9 +3,11 @@
 // wasm Worker handle, IndexedDB, SharedArrayBuffer atomic writes, file
 // download, prompt/confirm, setInterval.
 //
-// H7-Elm Stage 2 wires the first JS→Elm port: `buildInfoIn` carries
-// the `window.__TSOT_BUILD__` envelope set by `dist/build-info.js`.
-// The Elm app decodes it and renders the bottom-right footer.
+// H7-Elm Stage 2: `buildInfoIn` port carries `window.__TSOT_BUILD__`.
+// H7-Elm Stage 3: `logTextIn` + `logErrorIn` ports carry every LOG
+// event (text lines + structured error blocks). The inline JS in
+// play.html still pre-formats trace events into strings before
+// pushing — the formatter lives there, not in Elm.
 (function () {
   var node = document.getElementById('elm-root');
   if (!node) {
@@ -28,5 +30,26 @@
     app.ports.buildInfoIn.send(window.__TSOT_BUILD__ || null);
   } else {
     console.error('js-bridge: app.ports.buildInfoIn missing — Main.elm port wiring drift?');
+  }
+
+  // LOG bridge — every appender in play.html's inline JS calls one of
+  // these instead of mutating #log directly. Errors are sacred: the
+  // shim accepts a pre-shaped object {source, message, location,
+  // ffi_call, at_us, breadcrumb: [strings], js_stack, raw_stderr};
+  // play.html's `appendErrorEvent` pre-formats `recent_trace` into
+  // strings via `fmtTraceEvent` before calling tsotLogPushError.
+  if (app && app.ports && app.ports.logTextIn && app.ports.logErrorIn) {
+    window.tsotLogPushText = function (line) {
+      app.ports.logTextIn.send(String(line));
+    };
+    window.tsotLogPushError = function (formatted) {
+      app.ports.logErrorIn.send(formatted);
+    };
+  } else {
+    console.error('js-bridge: log ports missing — Main.elm port wiring drift?');
+    // Fall back to no-ops so callers don't TypeError; the LOG just
+    // stays empty instead of crashing the whole inline script.
+    window.tsotLogPushText = function () {};
+    window.tsotLogPushError = function () {};
   }
 })();
