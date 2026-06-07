@@ -74,6 +74,14 @@ pub fn enumerate_playable_in_hand(
                 // SELF is trivially payable per `can_pay_instant_cost`,
                 // so the Clear cycle gets picked here.
                 CardType::Unspecified => can_pay_instant_cost(state, player, iid),
+                // C.17 / P.37: Symbol cards are board-placed permanents
+                // — affordability-gated like a creature/artifact, plus
+                // the P.35 one-per-turn cap + P.36 uniqueness checks
+                // already gate them inside play_card. Without this arm
+                // they fell through to `_ => false` and the AI never
+                // offered Symbols, leaving every drawn Symbol dead in
+                // hand.
+                CardType::Symbol => can_pay_instant_cost(state, player, iid),
                 _ => false,
             }
         })
@@ -241,14 +249,37 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     mill_need = mill_need.saturating_sub(mill_red);
     gy_need = gy_need.saturating_sub(gy_red);
     attached_need = attached_need.saturating_sub(att_red);
-    // RULES P.24a + P.24c: tapping a same-color jewel on BOARD can
-    // substitute for exactly one HAND-source component. If one is
-    // available, drop the hand_need by 1. Without this, the picker
-    // (and human affordability prompt) treats a card as unplayable
-    // when the hand is short by exactly one — even if a jewel could
-    // cover it.
-    if hand_need > 0 && state.find_jewel_tap_candidate(player, iid).is_some() {
-        hand_need -= 1;
+    // RULES P.24a (rewritten) + P.24c: an untapped same-color jewel
+    // on BOARD substitutes for UP TO TWO cost components from HAND
+    // and/or GRAVEYARD in any combination. Mirror the engine's
+    // greedy split at game/play.rs's P.24a apply site — drain HAND
+    // first then GRAVEYARD until the 2-component budget is spent —
+    // so the picker and build never disagree on coverage. Without
+    // this, the picker still applied the OLD "jewel = 1 hand only"
+    // shape and refused casts the resolver would accept (2-hand
+    // creatures + 1 jewel, 1-hand + 1-gy + 1 jewel, etc.), surfaced
+    // as picker/build asymmetry inside UCT rollouts.
+    if (hand_need > 0 || gy_need > 0)
+        && state.find_jewel_tap_candidate(player, iid).is_some()
+    {
+        let mut budget: usize = 2;
+        let take_h = hand_need.min(budget);
+        hand_need -= take_h;
+        budget -= take_h;
+        let take_g = gy_need.min(budget);
+        gy_need -= take_g;
+    } else if (hand_need > 0 || gy_need > 0)
+        && state.find_symbol_tap_candidate(player).is_some()
+    {
+        // P.24e: an untapped Symbol on the controller's BOARD
+        // substitutes for exactly ONE component (HAND or GRAVEYARD),
+        // no color requirement. P.24c caps a cast at one substitution
+        // mechanism — credited only when no jewel took the slot.
+        if hand_need > 0 {
+            hand_need -= 1;
+        } else {
+            gy_need -= 1;
+        }
     }
     let p = state.player(player);
     // Identity-match: only hand cards sharing ≥1 element of the casting
@@ -925,6 +956,207 @@ mod tests {
             .card
             .abilities
             .push(ability.to_string());
+    }
+
+    // P.24e: an untapped Symbol on the controller's BOARD substitutes
+    // for exactly ONE cost component (HAND or GRAVEYARD), no color
+    // requirement. P.24c limits a cast to one substitution mechanism
+    // total — the picker credits the jewel first (it covers 2 vs 1),
+    // and only credits a Symbol if no jewel is taking the slot.
+    //
+    // Scenario: 1-hand red creature, no in-hand red payment, no
+    // jewel, but a green Symbol untapped on A's board. Old picker
+    // ignored the Symbol entirely and refused the cast; the engine
+    // would have accepted `choices.jewel_tap = Some(symbol_iid)`.
+    #[test]
+    fn can_pay_instant_cost_symbol_covers_one_hand_component() {
+        use crate::card::{CostComponent, CostSource};
+        let mut s = fresh();
+        let cast = s.player(PlayerId::A).hand[0].clone();
+        let symbol = s.player(PlayerId::A).hand[1].clone();
+        {
+            let c = s.card_pool.get_mut(&cast).unwrap();
+            c.card.colors = vec!["red".to_string()];
+            c.card.cost = vec![CostComponent {
+                amount: 1,
+                source: CostSource::Hand,
+                is_x: false,
+                kind: None,
+            }];
+        }
+        {
+            let sym = s.card_pool.get_mut(&symbol).unwrap();
+            sym.card.kind = CardType::Symbol;
+            // Deliberately a different color from the cast — P.24e has
+            // no color requirement.
+            sym.card.colors = vec!["green".to_string()];
+        }
+        s.player_mut(PlayerId::A).hand.retain(|x| x != &symbol);
+        s.player_mut(PlayerId::A).board.push(symbol.clone());
+        s.card_pool.get_mut(&symbol).unwrap().tapped = false;
+        assert!(
+            can_pay_instant_cost(&s, PlayerId::A, &cast),
+            "Symbol-tap must cover one HAND component per P.24e",
+        );
+    }
+
+    // P.24e: a Symbol can pay for a GRAVEYARD component, including
+    // cases where no color-matching GY anchor exists (the engine
+    // skips the anchor check entirely when no GY pitch happens).
+    // Setup with a blue GY seed (cast is red) so old picker would
+    // refuse via NoGraveyardPaymentForColor; new picker covers the
+    // GY slot with the Symbol-tap and accepts.
+    #[test]
+    fn can_pay_instant_cost_symbol_covers_one_graveyard_component() {
+        use crate::card::{CostComponent, CostSource};
+        let mut s = fresh();
+        let cast = s.player(PlayerId::A).hand[0].clone();
+        let symbol = s.player(PlayerId::A).hand[1].clone();
+        let gy_seed = s.player(PlayerId::A).hand[2].clone();
+        {
+            let c = s.card_pool.get_mut(&cast).unwrap();
+            c.card.colors = vec!["red".to_string()];
+            c.card.cost = vec![CostComponent {
+                amount: 1,
+                source: CostSource::Graveyard,
+                is_x: false,
+                kind: None,
+            }];
+        }
+        {
+            let sym = s.card_pool.get_mut(&symbol).unwrap();
+            sym.card.kind = CardType::Symbol;
+            sym.card.colors = vec!["red".to_string()];
+        }
+        {
+            // Blue GY seed — does NOT anchor a red cast. Without
+            // Symbol-tap coverage the gy_anchor gate refuses.
+            s.card_pool.get_mut(&gy_seed).unwrap().card.colors = vec!["blue".to_string()];
+        }
+        s.player_mut(PlayerId::A).hand.retain(|x| x != &symbol);
+        s.player_mut(PlayerId::A).board.push(symbol.clone());
+        s.card_pool.get_mut(&symbol).unwrap().tapped = false;
+        s.player_mut(PlayerId::A).hand.retain(|x| x != &gy_seed);
+        s.player_mut(PlayerId::A).graveyard.push(gy_seed);
+        assert!(
+            can_pay_instant_cost(&s, PlayerId::A, &cast),
+            "Symbol-tap must cover the GRAVEYARD slot so the anchor check is skipped",
+        );
+    }
+
+    // P.24a (rewritten): the engine's jewel substitution now covers
+    // UP TO TWO cost components from HAND and/or GRAVEYARD. The
+    // picker must mirror that or it will refuse casts the resolver
+    // would happily fund — surfaced as picker/build asymmetry in
+    // the EA's UCT rollouts.
+    //
+    // Scenario: 2-hand red creature in hand, A's hand has no other
+    // red card (identity_count = 0), one red jewel untapped on
+    // board. Old picker reduced hand_need by 1 → still 1 → identity
+    // gate refused. New picker should cover both with the jewel and
+    // accept.
+    #[test]
+    fn can_pay_instant_cost_jewel_covers_two_hand_components() {
+        use crate::card::{CostComponent, CostSource};
+        let mut s = fresh();
+        let cast = s.player(PlayerId::A).hand[0].clone();
+        let jewel = s.player(PlayerId::A).hand[1].clone();
+        {
+            let c = s.card_pool.get_mut(&cast).unwrap();
+            c.card.colors = vec!["red".to_string()];
+            c.card.cost = vec![CostComponent {
+                amount: 2,
+                source: CostSource::Hand,
+                is_x: false,
+                kind: None,
+            }];
+        }
+        {
+            let j = s.card_pool.get_mut(&jewel).unwrap();
+            j.card.kind = CardType::Artifact;
+            j.card.colors = vec!["red".to_string()];
+            j.card.subtypes = vec!["jewel".to_string()];
+        }
+        // Move the jewel to A's board, untapped.
+        s.player_mut(PlayerId::A).hand.retain(|x| x != &jewel);
+        s.player_mut(PlayerId::A).board.push(jewel.clone());
+        s.card_pool.get_mut(&jewel).unwrap().tapped = false;
+        assert!(
+            can_pay_instant_cost(&s, PlayerId::A, &cast),
+            "jewel must cover both HAND components per rewritten P.24a",
+        );
+    }
+
+    // P.24a (rewritten) — mixed HAND + GRAVEYARD coverage. The jewel
+    // pays one HAND and one GRAVEYARD component; without this the
+    // picker would refuse a cast the engine resolves cleanly.
+    #[test]
+    fn can_pay_instant_cost_jewel_covers_one_hand_one_graveyard_mixed() {
+        use crate::card::{CostComponent, CostSource};
+        let mut s = fresh();
+        let cast = s.player(PlayerId::A).hand[0].clone();
+        let jewel = s.player(PlayerId::A).hand[1].clone();
+        // Seed a red graveyard card so the gy_need path has material;
+        // and so the gy-color-anchor check won't NoGraveyardPaymentForColor.
+        let gy_seed = s.player(PlayerId::A).hand[2].clone();
+        {
+            let c = s.card_pool.get_mut(&cast).unwrap();
+            c.card.colors = vec!["red".to_string()];
+            c.card.cost = vec![
+                CostComponent {
+                    amount: 1,
+                    source: CostSource::Hand,
+                    is_x: false,
+                    kind: None,
+                },
+                CostComponent {
+                    amount: 1,
+                    source: CostSource::Graveyard,
+                    is_x: false,
+                    kind: None,
+                },
+            ];
+        }
+        {
+            let j = s.card_pool.get_mut(&jewel).unwrap();
+            j.card.kind = CardType::Artifact;
+            j.card.colors = vec!["red".to_string()];
+            j.card.subtypes = vec!["jewel".to_string()];
+        }
+        {
+            let g = s.card_pool.get_mut(&gy_seed).unwrap();
+            g.card.colors = vec!["red".to_string()];
+        }
+        s.player_mut(PlayerId::A).hand.retain(|x| x != &jewel);
+        s.player_mut(PlayerId::A).board.push(jewel.clone());
+        s.card_pool.get_mut(&jewel).unwrap().tapped = false;
+        s.player_mut(PlayerId::A).hand.retain(|x| x != &gy_seed);
+        s.player_mut(PlayerId::A).graveyard.push(gy_seed);
+        assert!(
+            can_pay_instant_cost(&s, PlayerId::A, &cast),
+            "jewel must cover one HAND + one GRAVEYARD slot per rewritten P.24a",
+        );
+    }
+
+    // C.17 / P.37: a Symbol card in hand with no cost (the canonical
+    // shape from the 50-card grid) must be offered as a playable pick
+    // by the heuristic enumerator. Prior to this fix, Symbol fell
+    // through the picker's `_ => false` arm and every AI treated
+    // Symbols as dead draws.
+    #[test]
+    fn enumerate_playable_in_hand_offers_symbol_cards() {
+        let mut s = fresh();
+        let iid = s.player(PlayerId::A).hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&iid).unwrap();
+            inst.card.kind = CardType::Symbol;
+            inst.card.cost = vec![];
+        }
+        let offered = enumerate_playable_in_hand(&s, PlayerId::A, PickKindFilter::Any);
+        assert!(
+            offered.iter().any(|i| i == &iid),
+            "Symbol card in hand must appear in playable enumeration; got {offered:?}",
+        );
     }
 
     #[test]

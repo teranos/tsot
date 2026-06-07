@@ -280,17 +280,40 @@ pub(crate) fn build_pattern_b_choices(
         // (modern-lcd-clock) reduces the cost.
         let hand_red_x = state.cost_reduction(picked, CostSource::Hand).max(0) as usize;
         let mut hand_needed: usize = raw_hand_needed.saturating_sub(hand_red_x);
-        // P.24: jewel-tap one HAND slot. The non-X creature / spell /
-        // artifact branches below do this; the X-branch used to skip
-        // it, which broke hydra (X hand cost) whenever the picker's
-        // `can_pay_instant_cost` credited the jewel reduction to bypass
-        // the identity gate but build never actually picked the jewel.
-        // play_card then saw hand_needed=1 with no hand payment (just
-        // GY substitutes) and tripped NoHandPaymentForIdentity.
-        if hand_needed > 0 {
+        let raw_gy_needed_x: usize = cost
+            .iter()
+            .filter(|c| matches!(c.source, CostSource::Graveyard))
+            .map(|c| {
+                if c.is_x {
+                    x.max(0) as usize
+                } else {
+                    c.amount.max(0) as usize
+                }
+            })
+            .sum();
+        let gy_red_x = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
+        let mut gy_needed: usize = raw_gy_needed_x.saturating_sub(gy_red_x);
+        // P.24a (rewritten) + P.24e: jewel covers up to 2 mixed
+        // HAND/GRAVEYARD components, Symbol-tap covers 1 (HAND-or-GY)
+        // when no jewel applies. Apply BEFORE filling hand_payment_ids
+        // / gy_hand_payment_ids / graveyard_payment_ids so build
+        // mirrors the engine's apply site at game/play.rs.
+        if hand_needed > 0 || gy_needed > 0 {
             if let Some(jewel) = state.find_jewel_tap_candidate(active, picked) {
                 choices.jewel_tap = Some(jewel);
-                hand_needed -= 1;
+                let mut budget: usize = 2;
+                let take_h = hand_needed.min(budget);
+                hand_needed -= take_h;
+                budget -= take_h;
+                let take_g = gy_needed.min(budget);
+                gy_needed -= take_g;
+            } else if let Some(symbol) = state.find_symbol_tap_candidate(active) {
+                choices.jewel_tap = Some(symbol);
+                if hand_needed > 0 {
+                    hand_needed -= 1;
+                } else {
+                    gy_needed -= 1;
+                }
             }
         }
         if hand_needed > 0 {
@@ -310,19 +333,6 @@ pub(crate) fn build_pattern_b_choices(
                     };
             }
         }
-        let raw_gy_needed: usize = cost
-            .iter()
-            .filter(|c| matches!(c.source, CostSource::Graveyard))
-            .map(|c| {
-                if c.is_x {
-                    x.max(0) as usize
-                } else {
-                    c.amount.max(0) as usize
-                }
-            })
-            .sum();
-        let gy_red = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
-        let gy_needed = raw_gy_needed.saturating_sub(gy_red);
         if gy_needed > 0 {
             choices.graveyard_payment_ids =
                 state.resolve_graveyard_payment(active, picked, gy_needed);
@@ -335,10 +345,34 @@ pub(crate) fn build_pattern_b_choices(
             .sum();
         let hand_red = state.cost_reduction(picked, CostSource::Hand).max(0) as usize;
         let mut hand_needed = raw_hand_needed.saturating_sub(hand_red);
-        if hand_needed > 0 {
+        let raw_gy_needed: usize = cost
+            .iter()
+            .filter(|c| matches!(c.source, CostSource::Graveyard))
+            .map(|c| c.amount.max(0) as usize)
+            .sum();
+        let gy_red = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
+        let mut gy_needed = raw_gy_needed.saturating_sub(gy_red);
+        // P.24a (rewritten): jewel covers up to 2 components mixed
+        // HAND/GRAVEYARD. Drain HAND first then GRAVEYARD, mirroring
+        // the engine's apply site at game/play.rs.
+        if hand_needed > 0 || gy_needed > 0 {
             if let Some(jewel) = state.find_jewel_tap_candidate(active, picked) {
                 choices.jewel_tap = Some(jewel);
-                hand_needed -= 1;
+                let mut budget: usize = 2;
+                let take_h = hand_needed.min(budget);
+                hand_needed -= take_h;
+                budget -= take_h;
+                let take_g = gy_needed.min(budget);
+                gy_needed -= take_g;
+            } else if let Some(symbol) = state.find_symbol_tap_candidate(active) {
+                // P.24e: single-component HAND-or-GY substitution
+                // when no jewel takes the slot.
+                choices.jewel_tap = Some(symbol);
+                if hand_needed > 0 {
+                    hand_needed -= 1;
+                } else {
+                    gy_needed -= 1;
+                }
             }
         }
         if hand_needed > 0 {
@@ -358,13 +392,6 @@ pub(crate) fn build_pattern_b_choices(
                     Err(pending) => return BuildChoiceResult::Pending(pending),
                 };
         }
-        let raw_gy_needed: usize = cost
-            .iter()
-            .filter(|c| matches!(c.source, CostSource::Graveyard))
-            .map(|c| c.amount.max(0) as usize)
-            .sum();
-        let gy_red = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
-        let gy_needed = raw_gy_needed.saturating_sub(gy_red);
         if gy_needed > 0 {
             choices.graveyard_payment_ids =
                 state.resolve_graveyard_payment(active, picked, gy_needed);
@@ -384,10 +411,31 @@ pub(crate) fn build_pattern_b_choices(
             .sum();
         let hand_red = state.cost_reduction(picked, CostSource::Hand).max(0) as usize;
         let mut hand_needed = raw_hand_needed.saturating_sub(hand_red);
-        if hand_needed > 0 {
+        let raw_gy_needed: usize = cost
+            .iter()
+            .filter(|c| matches!(c.source, CostSource::Graveyard))
+            .map(|c| c.amount.max(0) as usize)
+            .sum();
+        let gy_red = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
+        let mut gy_needed = raw_gy_needed.saturating_sub(gy_red);
+        // P.24a (rewritten) + P.24e: jewel covers up to 2 components
+        // mixed HAND/GRAVEYARD; Symbol covers 1 when no jewel applies.
+        if hand_needed > 0 || gy_needed > 0 {
             if let Some(jewel) = state.find_jewel_tap_candidate(active, picked) {
                 choices.jewel_tap = Some(jewel);
-                hand_needed -= 1;
+                let mut budget: usize = 2;
+                let take_h = hand_needed.min(budget);
+                hand_needed -= take_h;
+                budget -= take_h;
+                let take_g = gy_needed.min(budget);
+                gy_needed -= take_g;
+            } else if let Some(symbol) = state.find_symbol_tap_candidate(active) {
+                choices.jewel_tap = Some(symbol);
+                if hand_needed > 0 {
+                    hand_needed -= 1;
+                } else {
+                    gy_needed -= 1;
+                }
             }
         }
         if hand_needed > 0 {
@@ -407,13 +455,6 @@ pub(crate) fn build_pattern_b_choices(
                     Err(pending) => return BuildChoiceResult::Pending(pending),
                 };
         }
-        let raw_gy_needed: usize = cost
-            .iter()
-            .filter(|c| matches!(c.source, CostSource::Graveyard))
-            .map(|c| c.amount.max(0) as usize)
-            .sum();
-        let gy_red = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
-        let gy_needed = raw_gy_needed.saturating_sub(gy_red);
         if gy_needed > 0 {
             choices.graveyard_payment_ids =
                 state.resolve_graveyard_payment(active, picked, gy_needed);

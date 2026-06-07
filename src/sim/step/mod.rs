@@ -502,7 +502,7 @@ impl StepEngine {
                 self.finalize_stats();
                 return self.stats.clone();
             }
-            if steps % 1000 == 0 {
+            if steps.is_multiple_of(1000) {
                 crate::sim::instrument::set_current_op(format!(
                     "StepEngine::run_to_end step={steps} turn={} phase={:?} active={:?} A_board={} B_board={} A_deck={} B_deck={} A_hand={} B_hand={}",
                     self.state.turn,

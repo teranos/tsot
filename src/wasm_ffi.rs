@@ -224,8 +224,8 @@ pub(crate) fn tsot_run_auto_game_impl(args_json: &str) -> Result<String, String>
             other => return Err(format!("auto_game: unknown ai {other:?}")),
         })
     }
-    let ai_a = parse_auto_ai(&args.ai_a, args.seed.wrapping_add(0xA0_C0FF_EE))?;
-    let ai_b = parse_auto_ai(&args.ai_b, args.seed.wrapping_add(0xB0_C0FF_EE))?;
+    let ai_a = parse_auto_ai(&args.ai_a, args.seed.wrapping_add(0xA0_C0_FF_EE))?;
+    let ai_b = parse_auto_ai(&args.ai_b, args.seed.wrapping_add(0xB0_C0_FF_EE))?;
 
     let registry =
         CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;

@@ -99,9 +99,11 @@ pub fn current_op() -> String {
 /// games print full action context.
 ///
 /// Live signals during a long game continue to come from elsewhere:
-///   - watchdog heartbeat (curve-sample's 1s thread, prints current_op)
-///   - engine HEARTBEAT (sim/run.rs:542, every 5s during outer loop)
-///   - rollout-stall stderr dump (sim/step/mod.rs::run_to_end)
+///
+/// - watchdog heartbeat (curve-sample's 1s thread, prints current_op)
+/// - engine HEARTBEAT (sim/run.rs:542, every 5s during outer loop)
+/// - rollout-stall stderr dump (sim/step/mod.rs::run_to_end)
+///
 /// so the operator never loses sight of what the engine is doing
 /// when something hangs.
 pub fn tee_log(log: &mut Vec<String>, msg: String) {

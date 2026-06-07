@@ -119,6 +119,29 @@ impl GameState {
             .cloned()
     }
 
+    /// First untapped Symbol on `player`'s BOARD that's a valid P.24e
+    /// tap substitute for ANY cast (no color requirement). Used by
+    /// both the picker (`sim/ai.rs::can_pay_instant_cost`) and the
+    /// builder (`sim/run.rs::build_pattern_b_choices`) so the two
+    /// agree on coverage and play_card never sees a Symbol-tap the
+    /// picker offered but the builder didn't fill in.
+    pub fn find_symbol_tap_candidate(&self, player: PlayerId) -> Option<InstanceId> {
+        self.player(player)
+            .board
+            .iter()
+            .find(|iid| {
+                self.card_pool
+                    .get(*iid)
+                    .map(|i| {
+                        matches!(i.card.kind, crate::card::CardType::Symbol)
+                            && !i.tapped
+                            && i.controller == player
+                    })
+                    .unwrap_or(false)
+            })
+            .cloned()
+    }
+
     /// Count cards in `player`'s hand whose identity intersects the
     /// cast card's identity per P.7a. Used by the sim AI to decide
     /// whether Clear View substitutes are needed to cover slots the
