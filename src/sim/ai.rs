@@ -208,6 +208,43 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             return false;
         }
     }
+    // RULES P.36: Symbol uniqueness in play. If a Symbol with the
+    // same card.id is on either player's BOARD, the engine refuses
+    // the cast — picker must mirror or it offers iids play_card
+    // immediately rejects with SymbolUniquenessViolated. Without
+    // this, UCT rollouts spin on duplicate-Symbol picks and the
+    // failure sink fills with per-rollout backtrace dumps.
+    if matches!(inst.card.kind, CardType::Symbol) {
+        let cast_id = inst.card.id.clone();
+        let already_in_play = state
+            .a
+            .board
+            .iter()
+            .chain(state.b.board.iter())
+            .any(|bid| {
+                state
+                    .card_pool
+                    .get(bid)
+                    .map(|i| i.card.id == cast_id)
+                    .unwrap_or(false)
+            });
+        if already_in_play {
+            return false;
+        }
+    }
+    // RULES P.35: only one Symbol cast per player per turn. Picker
+    // mirrors the play_card gate (game/play.rs sets
+    // SymbolCastCapReached) so duplicate-cast attempts in the same
+    // turn don't churn the rollout.
+    if matches!(inst.card.kind, CardType::Symbol) {
+        let idx = match player {
+            PlayerId::A => 0,
+            PlayerId::B => 1,
+        };
+        if state.symbol_cast_this_turn[idx] {
+            return false;
+        }
+    }
     let mut hand_need = 0usize;
     let mut mill_need = 0usize;
     let mut gy_need = 0usize;
