@@ -115,6 +115,7 @@ pub(crate) fn tsot_preview_uct_impl(args_json: &str) -> Result<String, String> {
             exploration_c: args.exploration_c,
             base_seed: (state.turn as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
             max_candidates: args.max_candidates,
+            ..Default::default()
         };
         let (picked, trace) = crate::sim::uct::pick_play_uct(
             &mut state,

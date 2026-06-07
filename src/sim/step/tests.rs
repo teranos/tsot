@@ -104,6 +104,105 @@
         );
     }
 
+    // run_to_end_with_turn_cap: rollout-depth cap for UCT/MCTS
+    // simulate phases. Without it a single UCT pick was running 30
+    // rollouts to deck-out (~25 turns each), putting per-pick
+    // wall-clock in the 10–50s range and blowing the per-game
+    // budget. With cap=K the rollout terminates after K turn-changes
+    // and assigns a winner by `score_position_a_minus_b`.
+    #[test]
+    fn run_to_end_with_turn_cap_terminates_within_cap_turns() {
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| {
+                matches!(c.kind, CardType::Creature)
+                    && c.handlers.is_empty()
+                    && c.cost.iter().all(|cc| {
+                        !cc.is_x
+                            && matches!(
+                                cc.source,
+                                crate::card::CostSource::Hand
+                                    | crate::card::CostSource::Mill
+                            )
+                    })
+            })
+            .unwrap()
+            .clone();
+        let deck_a: Vec<_> = (0..50).map(|_| template.clone()).collect();
+        let deck_b = deck_a.clone();
+        let state = GameState::new(deck_a, deck_b);
+        let mut engine = StepEngine::new(
+            state,
+            [AiKind::Heuristic, AiKind::Heuristic],
+            registry,
+            0xCAFE,
+        );
+        let start_turn = engine.state.turn;
+        const TURN_CAP: u32 = 3;
+        let stats = engine.run_to_end_with_turn_cap(TURN_CAP);
+        // Game terminates within `start_turn + TURN_CAP + 1` (the
+        // +1 covers the in-progress turn that triggered the cap).
+        assert!(
+            engine.state.turn <= start_turn + TURN_CAP + 1,
+            "turn cap {} should bound terminal turn near {} + {} but engine reached turn {}",
+            TURN_CAP,
+            start_turn,
+            TURN_CAP,
+            engine.state.turn,
+        );
+        // Cap-terminated rollouts always set a winner (heuristic
+        // never returns a draw — score >= 0 picks A).
+        assert!(
+            matches!(stats.winner, PlayerId::A | PlayerId::B),
+            "capped rollout must produce a winner",
+        );
+    }
+
+    // Uncapped (u32::MAX) reverts to play-to-end — same contract as
+    // the original `run_to_end`. Smoke-tests the wrapper preserves
+    // legacy behavior.
+    #[test]
+    fn run_to_end_with_turn_cap_uncapped_matches_legacy_run_to_end() {
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| {
+                matches!(c.kind, CardType::Creature)
+                    && c.handlers.is_empty()
+                    && c.cost.iter().all(|cc| {
+                        !cc.is_x
+                            && matches!(
+                                cc.source,
+                                crate::card::CostSource::Hand
+                                    | crate::card::CostSource::Mill
+                            )
+                    })
+            })
+            .unwrap()
+            .clone();
+        let deck_a: Vec<_> = (0..50).map(|_| template.clone()).collect();
+        let deck_b = deck_a.clone();
+        let state = GameState::new(deck_a, deck_b);
+        let mut engine = StepEngine::new(
+            state,
+            [AiKind::Heuristic, AiKind::Heuristic],
+            registry,
+            0xCAFE,
+        );
+        let stats = engine.run_to_end_with_turn_cap(u32::MAX);
+        // Uncapped: game played to a real finish, not a rollout-cap
+        // heuristic. Number of turns should comfortably exceed any
+        // sane cap (vanilla 1-hand creatures deck-out in many turns).
+        assert!(
+            stats.turns >= 5,
+            "uncapped game should play many turns, got {}",
+            stats.turns,
+        );
+    }
+
     // step_engine_parity_vs_run_game_continue removed: pinned the
     // StepEngine to the deprecated run_game_continue path's
     // observable behavior. That path goes away in D8, and with the

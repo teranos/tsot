@@ -86,18 +86,40 @@ pub struct EvolveArgs {
     #[arg(long = "opponent-mcts-depth", default_value_t = 1)]
     pub opponent_mcts_depth: u32,
     /// UCT iterations per pick when `--opponent-ai uct` (default).
-    /// Dropped from 50 to 30 to keep daily-driver UCT-vs-UCT evolve
-    /// runs in the ~30-minute window. 50 is the budget at which UCT
-    /// was measured to beat one-ply MCTS 100% on mirror-match baseline
-    /// decks; 30 gives up some search depth for ~40% less per-pick
-    /// cost while staying well above the noise floor.
-    #[arg(long = "opponent-uct-iterations", default_value_t = 30)]
+    /// Dropped to 5 (from the historical 50) after per-pick wall-
+    /// clock instrumentation showed specific cards (reckoning with X
+    /// sacrifice loop, dawn-bat in handler-heavy late-game states)
+    /// pushing single-pick wall to 3-7s even with rollout_turn_cap=2.
+    /// At iter=5 those slow picks bound to ~1s instead of ~5s; the
+    /// 30s per-game wall holds with margin. Raise for stronger UCT
+    /// signal at linear cost.
+    #[arg(long = "opponent-uct-iterations", default_value_t = 5)]
     pub opponent_uct_iterations: u32,
     /// UCT exploration constant when `--opponent-ai uct`. `sqrt(2)`
     /// is classical. Lower = exploit current best more, higher =
     /// explore under-visited branches more.
     #[arg(long = "opponent-uct-c", default_value_t = std::f64::consts::SQRT_2)]
     pub opponent_uct_c: f64,
+    /// UCT rollout depth cap (turns from the rollout's start turn).
+    /// Each simulate-phase terminates after this many turn-changes
+    /// and assigns a heuristic winner. Default 1 (minimum useful)
+    /// after iter=5 + cap=2 still HALT'd on per-game wall — Lua FFI
+    /// per rollout-turn dominates so each extra turn of simulation
+    /// adds significant cost on handler-rich gauntlet decks. At
+    /// cap=1 UCT explores one turn of consequences then defers to
+    /// the heuristic eval. Raise for deeper search at superlinear
+    /// cost; very high values play to deck-out (legacy).
+    #[arg(long = "opponent-uct-rollout-cap", default_value_t = 1)]
+    pub opponent_uct_rollout_cap: u32,
+    /// Hard per-pick wall-clock cap, in milliseconds. When the
+    /// budget runs out mid-rollout the rollout terminates with a
+    /// heuristic winner and UCT returns best-so-far. This is the
+    /// search-space cap: each individual UCT pick is bounded
+    /// strictly by this value (plus at-most-one-step's worth), no
+    /// matter how complex the state or how many handler fires the
+    /// rollout would otherwise have triggered. `0` disables.
+    #[arg(long = "opponent-uct-per-pick-wall-ms", default_value_t = 30_000)]
+    pub opponent_uct_per_pick_wall_ms: u32,
     /// Skip building the variant gauntlet. Requires at least one --extra.
     #[arg(long = "no-variants")]
     pub no_variants: bool,
@@ -174,8 +196,10 @@ pub fn run_ea(
         "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
             exploration_c: args.opponent_uct_c,
-            base_seed: args.seed.wrapping_add(0xC0FF_EEBA),
+            base_seed: args.seed.wrapping_add(0xC0_FF_EE_BA),
             max_candidates: args.opponent_mcts_max_candidates,
+            rollout_turn_cap: args.opponent_uct_rollout_cap,
+            per_pick_wall_ms: args.opponent_uct_per_pick_wall_ms,
         }),
         other => {
             eprintln!("error: --opponent-ai must be 'heuristic' | 'mcts' | 'uct', got {other:?}");

@@ -34,6 +34,21 @@ use super::variants::DeckVariant;
 ///
 /// Internally delegates to [`run_game_continue`]. New callers that
 /// want to drive multiple games on the same state (MCTS rollouts,
+/// Pick an ANSI 256-color index from a curated 16-color palette
+/// keyed by the game's RNG seed. All `[HEARTBEAT]`, `[GAME TIMEOUT]`,
+/// `[SLOW CAST]` lines from one game share the same color so the
+/// operator can visually correlate interleaved parallel-EA output.
+/// Deterministic: same seed → same color across runs.
+fn game_color_for_seed(seed: u64) -> u8 {
+    // Palette skips bright red (clashes with error output) and the
+    // grayscale range (too dim on dark terminals). Covers cyan,
+    // green, yellow, orange, purple, and light-blue families.
+    const PALETTE: [u8; 16] = [
+        39, 45, 51, 82, 118, 154, 190, 208, 214, 220, 165, 171, 177, 99, 105, 111,
+    ];
+    PALETTE[(seed as usize) % PALETTE.len()]
+}
+
 /// scripted multi-game tests, multiplayer rollback) use
 /// `run_game_continue` directly with `&mut GameState`.
 pub fn run_game(
@@ -577,6 +592,41 @@ pub(crate) fn build_pattern_b_choices(
 /// the channel-blocking Human path; the StepEngine drives human
 /// games via the FFI yield protocol instead, so any new caller
 /// should use `StepEngine::run_to_end` (AI-only) or
+/// One AI-decision the per-game wall-clock instrumentation captures.
+/// Used by `PickTiming` so the GAME TIMEOUT dump can answer "where
+/// did the 30s go?" — was it many ordinary picks, or one giant one?
+#[derive(Debug, Clone)]
+struct PickTimingEntry {
+    turn: u32,
+    active: PlayerId,
+    /// What site fired the pick — `pattern_b` for the main-phase
+    /// pick loop, future variants could include `activation` /
+    /// `attack` / `block` as those get instrumented.
+    site: &'static str,
+    /// `card.id` of the chosen card (most-recently-resolved pick),
+    /// `"pass"` when the AI declined.
+    card_id: String,
+    wall_us: u128,
+}
+
+#[derive(Debug, Default)]
+struct PickTiming {
+    total_picks: u32,
+    total_wall_us: u128,
+    /// Top-10 slowest entries, kept sorted descending by wall_us.
+    top_slowest: Vec<PickTimingEntry>,
+}
+
+impl PickTiming {
+    fn record(&mut self, entry: PickTimingEntry) {
+        self.total_picks += 1;
+        self.total_wall_us += entry.wall_us;
+        self.top_slowest.push(entry);
+        self.top_slowest.sort_by_key(|e| std::cmp::Reverse(e.wall_us));
+        self.top_slowest.truncate(10);
+    }
+}
+
 /// `wasm_ffi`'s session driver (human-mixed).
 #[deprecated(
     since = "0.1.0",
@@ -649,24 +699,37 @@ pub fn run_game_continue(
         action_counts: BTreeMap::new(),
     };
 
-    // Per-game wall-clock watchdog. A release game terminates in well
-    // under a second on typical hardware; debug ~5x slower. The budget
-    // is generous (default 30s) so a slow-but-progressing game isn't
-    // killed. When it fires, we dump active player's hand+board+GY card
-    // ids + the most recently picked / activated card so the prune /
-    // EA harness can identify the culprit. The hung game is scored as
-    // a loss for the active player (couldn't make progress on their
-    // turn — conservative). Tunable via `TSOT_GAME_TIMEOUT_SECS`.
+    // Per-game wall-clock watchdog. Default 600s (10 min) — the
+    // per-pick wall budget (UctConfig::per_pick_wall_ms) is the
+    // SEARCH-space cap that actually matters; this outer cap is
+    // just an insurance against a genuine engine hang (Lua handler
+    // infinite loop, rollout-stall failing to fire, etc.). Sum of
+    // pick-budgets bounds the legitimate game cost, so a real game
+    // can be slow but the outer guard catches stuck runs that no
+    // amount of search budget would unstick. Tunable via
+    // `TSOT_GAME_TIMEOUT_SECS`.
     let timeout = std::env::var("TSOT_GAME_TIMEOUT_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .map(Duration::from_secs)
-        .unwrap_or(Duration::from_secs(30));
+        .unwrap_or(Duration::from_secs(600));
+    // Per-game ANSI color so parallel-EA stderr can be visually
+    // demuxed. Drawn from one `rng.gen()` so it's reproducible from
+    // the outer EA seed. All heartbeat / timeout / slow-cast lines
+    // from this game wear this color via the `color_print!` macro.
+    let game_color: u8 = game_color_for_seed(rng.gen());
     let game_start = Instant::now();
     // Reset per turn so the timeout report identifies the actual offending
     // card, not a stale pick from an earlier successful turn.
     let mut last_picked: Option<InstanceId> = None;
     let mut last_activated: Option<(InstanceId, usize)> = None;
+    // Per-pick wall-clock accumulator. Surfaced in the GAME TIMEOUT
+    // dump so the operator can see whether the 30s went to "many
+    // ordinary picks" (legit UCT cost) vs "one or two giant picks"
+    // (a state where a single pick balloons — usually a specific card
+    // multiplier or a search-space explosion). Without this the
+    // dumps only show terminal state, not where the seconds went.
+    let mut pick_timing = PickTiming::default();
     // Heartbeat: log progress every 5s for games that don't finish
     // promptly. Helps identify slow-but-not-hung games before the
     // wall-clock cap fires.
@@ -680,14 +743,21 @@ pub fn run_game_continue(
                 "outer turn loop",
                 last_picked.as_ref(),
                 last_activated.as_ref(),
+                Some(&pick_timing),
+                game_color,
             );
             state.set_winner(Some(state.active_player.opponent()), "watchdog_outer_loop");
             break;
         }
-        if last_heartbeat.elapsed() > Duration::from_secs(5) {
+        // Heartbeat: 30s cadence. Per-pick wall is hard-capped, so
+        // genuinely stuck games surface via [GAME TIMEOUT] / [SLOW
+        // CAST] rather than heartbeat absence; 30s keeps the EA's
+        // parallel stderr readable.
+        if last_heartbeat.elapsed() > Duration::from_secs(30) {
             eprintln!(
-                "[HEARTBEAT] elapsed={:.1?} turn={} phase={:?} active={:?} \
-                 A_board={} B_board={} A_deck={} B_deck={} chain={}",
+                "\x1b[38;5;{}m[HEARTBEAT] elapsed={:.1?} turn={} phase={:?} active={:?} \
+                 A_board={} B_board={} A_deck={} B_deck={} chain={}\x1b[0m",
+                game_color,
                 game_start.elapsed(),
                 state.turn,
                 state.phase,
@@ -741,6 +811,8 @@ pub fn run_game_continue(
                     "Pattern B inner loop",
                     last_picked.as_ref(),
                     last_activated.as_ref(),
+                    Some(&pick_timing),
+                    game_color,
                 );
                 state.set_winner(Some(state.active_player.opponent()), "watchdog_pattern_b_iter");
                 break;
@@ -751,6 +823,8 @@ pub fn run_game_continue(
                     "Pattern B inner loop (wall-clock)",
                     last_picked.as_ref(),
                     last_activated.as_ref(),
+                    Some(&pick_timing),
+                    game_color,
                 );
                 state.set_winner(Some(state.active_player.opponent()), "watchdog_pattern_b_walltime");
                 break;
@@ -770,6 +844,7 @@ pub fn run_game_continue(
                 "turn {turn} ({active:?}) phase={:?} pick_play ai={:?} kind_filter={:?}",
                 state.phase, ais[active.index()], kind_filter
             ));
+            let pick_t0 = Instant::now();
             let pick = match &ais[active.index()] {
                 super::AiKind::Heuristic => {
                     // UCT iteration mode: while a search is running,
@@ -821,6 +896,23 @@ pub fn run_game_continue(
                     }
                 }
             };
+            let pick_wall_us = pick_t0.elapsed().as_micros();
+            // Record the wall-clock of THIS pick (and the chosen card
+            // id, or "pass" if the AI declined) so the GAME TIMEOUT
+            // dump can attribute the 30s budget. Done before the
+            // filter so the time measured is what the AI actually
+            // spent deciding, not what the engine spent validating.
+            let pick_card_id = pick
+                .as_ref()
+                .and_then(|iid| state.card_pool.get(iid).map(|c| c.card.id.clone()))
+                .unwrap_or_else(|| "pass".to_string());
+            pick_timing.record(PickTimingEntry {
+                turn,
+                active,
+                site: "pattern_b",
+                card_id: pick_card_id,
+                wall_us: pick_wall_us,
+            });
             // See parallel comment in sim/step/main_phases.rs: when the
             // pick came from an inner search (UCT/MCTS) that mutated
             // state and rolled back imperfectly, the chosen iid may
@@ -902,8 +994,8 @@ pub fn run_game_continue(
                         .map(|c| c.card.id.clone())
                         .unwrap_or_else(|| format!("?{picked}"));
                     eprintln!(
-                        "[SLOW CAST] turn={} active={:?} card={} elapsed={:.2?} result={:?}",
-                        state.turn, active, card_id, cast_elapsed, result,
+                        "\x1b[38;5;{}m[SLOW CAST] turn={} active={:?} card={} elapsed={:.2?} result={:?}\x1b[0m",
+                        game_color, state.turn, active, card_id, cast_elapsed, result,
                     );
                     state.bump_action("slow_cast", active);
                 }
@@ -1369,6 +1461,8 @@ fn report_game_timeout(
     site: &str,
     last_picked: Option<&InstanceId>,
     last_activated: Option<&(InstanceId, usize)>,
+    pick_timing: Option<&PickTiming>,
+    game_color: u8,
 ) {
     crate::game::bump_timeout_and_maybe_halt(site);
     let ids = |iids: &[InstanceId]| -> Vec<String> {
@@ -1383,28 +1477,83 @@ fn report_game_timeout(
             .map(|c| c.card.id.clone())
             .unwrap_or_else(|| format!("?{iid}"))
     };
+    // Per-game color prefix/suffix so every dump line wears the
+    // same color as the heartbeats from this game — operator can
+    // visually demux interleaved parallel-EA output.
+    let c = format!("\x1b[38;5;{game_color}m");
+    let z = "\x1b[0m";
     eprintln!(
-        "[GAME TIMEOUT] site={site} turn={} active={:?} winner={:?}",
+        "{c}[GAME TIMEOUT] site={site} turn={} active={:?} winner={:?}{z}",
         state.turn, state.active_player, state.winner,
     );
     if let Some(p) = last_picked {
-        eprintln!("  last_picked: {} ({})", p, card_id_of(p));
+        eprintln!("{c}  last_picked: {} ({}){z}", p, card_id_of(p));
     }
     if let Some((iid, idx)) = last_activated {
-        eprintln!("  last_activated: {} ({}) ability_idx={idx}", iid, card_id_of(iid));
+        eprintln!("{c}  last_activated: {} ({}) ability_idx={idx}{z}", iid, card_id_of(iid));
     }
-    eprintln!("  A hand: {:?}", ids(&state.a.hand));
-    eprintln!("  A board: {:?}", ids(&state.a.board));
-    eprintln!("  A graveyard: {:?}", ids(&state.a.graveyard));
-    eprintln!("  B hand: {:?}", ids(&state.b.hand));
-    eprintln!("  B board: {:?}", ids(&state.b.board));
-    eprintln!("  B graveyard: {:?}", ids(&state.b.graveyard));
+    eprintln!("{c}  A hand: {:?}{z}", ids(&state.a.hand));
+    eprintln!("{c}  A board: {:?}{z}", ids(&state.a.board));
+    eprintln!("{c}  A graveyard: {:?}{z}", ids(&state.a.graveyard));
+    eprintln!("{c}  B hand: {:?}{z}", ids(&state.b.hand));
+    eprintln!("{c}  B board: {:?}{z}", ids(&state.b.board));
+    eprintln!("{c}  B graveyard: {:?}{z}", ids(&state.b.graveyard));
+    // Attached observability: P.6 hand-cost pitches and P.26 mutations
+    // live under their host. Without these in the dump, "card came
+    // out as X/Y but the cost was 3-hand" left attached payments
+    // invisible. Print one line per host-with-attached so the dump
+    // shows the full per-zone state, not just card.id lists.
+    let attached_lines = |label: &str, board: &[InstanceId]| {
+        for host_iid in board {
+            let Some(host) = state.card_pool.get(host_iid) else { continue };
+            if host.attached.is_empty() {
+                continue;
+            }
+            let host_id = host.card.id.clone();
+            let att: Vec<String> = host.attached.iter().map(card_id_of).collect();
+            eprintln!("{c}  {label} attached: {host_id} <- {att:?}{z}");
+        }
+    };
+    attached_lines("A", &state.a.board);
+    attached_lines("B", &state.b.board);
     eprintln!(
-        "  decks: A={} B={} | priority_chain={}",
+        "{c}  decks: A={} B={} | priority_chain={}{z}",
         state.a.deck.len(),
         state.b.deck.len(),
         state.priority.as_ref().map(|p| p.chain.len()).unwrap_or(0),
     );
+    // Per-pick wall-clock breakdown so the operator can see WHERE
+    // the 30s went. Many small picks (~tens of ms each) summing to
+    // 30s implies UCT cost is just at the limit on this state; a
+    // handful of giant picks (~seconds each) implies a specific
+    // state/cast is exploding the search. The top-10 slowest
+    // entries pin which (turn, side, card) ate the budget.
+    if let Some(t) = pick_timing {
+        if t.total_picks > 0 {
+            let total_ms = (t.total_wall_us / 1000) as u64;
+            let avg_ms = (t.total_wall_us / t.total_picks as u128 / 1000) as u64;
+            let slowest_ms = t
+                .top_slowest
+                .first()
+                .map(|e| (e.wall_us / 1000) as u64)
+                .unwrap_or(0);
+            eprintln!(
+                "{c}  picks: {} total, {} ms cumulative, {} ms avg, slowest {} ms{z}",
+                t.total_picks, total_ms, avg_ms, slowest_ms,
+            );
+            for (i, e) in t.top_slowest.iter().take(10).enumerate() {
+                eprintln!(
+                    "{c}    #{:>2} turn {:>2} {:?} {} card={} {:>6} ms{z}",
+                    i + 1,
+                    e.turn,
+                    e.active,
+                    e.site,
+                    e.card_id,
+                    (e.wall_us / 1000) as u64,
+                );
+            }
+        }
+    }
 }
 
 pub fn short(iid: &InstanceId) -> String {

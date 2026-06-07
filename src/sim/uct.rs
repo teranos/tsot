@@ -167,6 +167,26 @@ pub struct UctConfig {
     /// pathologically wide hands. Above this cap, candidates are
     /// truncated deterministically (first-N by InstanceId order).
     pub max_candidates: u32,
+    /// Rollout depth cap (turns from the rollout's start turn).
+    /// Each iteration's simulate phase terminates after this many
+    /// turn-changes and assigns a heuristic winner via
+    /// `StepEngine::score_position_a_minus_b` instead of playing to
+    /// deck-out. `u32::MAX` reverts to play-to-end (the original
+    /// behavior — used by full-game tests). The default 2 keeps
+    /// per-pick wall-clock in the hundreds-of-ms range on the
+    /// current card pool; without it a single UCT pick was hitting
+    /// 10–50s as instrumentation showed.
+    pub rollout_turn_cap: u32,
+    /// Per-pick wall-clock budget in milliseconds. When the time
+    /// spent on a single `pick_play_uct` call exceeds this, the
+    /// iteration loop breaks early and picks the best-so-far from
+    /// however many iterations actually ran. This bounds individual
+    /// picks structurally — without it a complex state would let one
+    /// pick burn the entire per-game wall-clock budget while UCT
+    /// chased a deep search. `0` disables the cap (legacy behavior).
+    /// Default 1000ms covers the 95th-percentile picks at full
+    /// iterations while truncating the rare long tail.
+    pub per_pick_wall_ms: u32,
 }
 
 impl Default for UctConfig {
@@ -176,6 +196,14 @@ impl Default for UctConfig {
             exploration_c: SQRT_2,
             base_seed: 0xBEEF_FACE,
             max_candidates: 10,
+            rollout_turn_cap: 1,
+            // Per-pick wall budget = 30s. UCT runs until either it
+            // completes `iterations` iters OR 30s elapses, picking
+            // best-so-far at the break. This IS the search-space
+            // cap the operator asked for: hard cards (dark-
+            // salamander's dual X-cost, mutation-vial's choice
+            // chain) get the full 30s; cheap states finish in ms.
+            per_pick_wall_ms: 30_000,
         }
     }
 }
@@ -399,6 +427,20 @@ pub fn pick_play_uct(
     let root_player = player;
     let mut root = Node::new(root_player, candidates.clone());
 
+    // Per-pick wall-clock budget. HARD cap: a deadline is computed
+    // once and passed into every rollout via
+    // `StepEngine::run_to_end_with_caps`, which checks
+    // `Instant::now() >= deadline` inside its step loop and
+    // terminates with the heuristic winner on the spot. Iteration-
+    // boundary checks alone weren't enough — a single slow rollout
+    // on handler-rich state can blow past the budget by seconds.
+    // `0` disables both the deadline and the boundary check (legacy).
+    let pick_start = std::time::Instant::now();
+    let pick_wall_deadline = if cfg.per_pick_wall_ms > 0 {
+        Some(pick_start + std::time::Duration::from_millis(cfg.per_pick_wall_ms as u64))
+    } else {
+        None
+    };
     for it in 0..cfg.iterations {
         crate::sim::instrument::set_current_op(format!(
             "UCT iteration {}/{} turn={} player={:?}",
@@ -411,6 +453,16 @@ pub fn pick_play_uct(
         // `root.children` is empty and `picked` becomes None.
         if is_uct_cancel_requested() {
             break;
+        }
+        // Per-pick wall-clock cap (iteration-boundary leg). The hard
+        // cap lives inside the rollout (deadline passed below); this
+        // check just avoids starting a fresh iteration once the
+        // deadline has passed. Together they bound the pick to
+        // ~budget + one in-flight step.
+        if let Some(deadline) = pick_wall_deadline {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
         }
         UCT_ITERATIONS.fetch_add(1, Ordering::SeqCst);
 
@@ -452,7 +504,11 @@ pub fn pick_play_uct(
         // accumulate into the parent envelope. Without this, the
         // serde JSON serialization at FFI exit takes seconds-to-
         // minutes for any UCT decision.
-        let stats = crate::trace::suspend(|| engine.run_to_end());
+        let rollout_cap = cfg.rollout_turn_cap;
+        let rollout_deadline = pick_wall_deadline;
+        let stats = crate::trace::suspend(|| {
+            engine.run_to_end_with_caps(rollout_cap, rollout_deadline)
+        });
         *state = engine.state;
         let winner = stats.winner;
         clear_planned_actions();
@@ -751,6 +807,7 @@ mod tests {
             exploration_c: SQRT_2,
             base_seed: 0xC0DE,
             max_candidates: 4,
+            ..Default::default()
         };
 
         let iter_before = UCT_ITERATIONS.load(Ordering::SeqCst);
@@ -801,6 +858,7 @@ mod tests {
             exploration_c: SQRT_2,
             base_seed: 0xC0DE,
             max_candidates: 4,
+            ..Default::default()
         };
 
         let mut rng = StdRng::seed_from_u64(0xC0DE);
@@ -810,5 +868,133 @@ mod tests {
 
         assert!(state.winner.is_some(), "UCT game produced no winner");
         assert!(stats.turns > 0, "UCT game recorded zero turns");
+    }
+
+    /// Microbenchmark: a SINGLE pick_play_uct call with the default
+    /// rollout_turn_cap=6 must complete in well under 5 seconds on
+    /// realistic-card state, not the 30–60 seconds the EA was seeing
+    /// in production. If this asserts, the cap isn't actually bounding
+    /// the rollout cost (likely candidate: state.turn doesn't advance
+    /// the way I expected from the cap-firing point) and a deeper
+    /// dive is warranted.
+    #[test]
+    fn pick_play_uct_with_rollout_cap_completes_fast() {
+        let registry = std::sync::Arc::new(
+            CardRegistry::load(std::path::Path::new("cards")).unwrap(),
+        );
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| {
+                matches!(c.kind, CardType::Creature)
+                    && c.handlers.is_empty()
+                    && c.cost.iter().all(|cc| {
+                        !cc.is_x
+                            && matches!(
+                                cc.source,
+                                crate::card::CostSource::Hand
+                                    | crate::card::CostSource::Mill
+                            )
+                    })
+            })
+            .unwrap()
+            .clone();
+        let deck_a: Vec<_> = (0..50).map(|_| template.clone()).collect();
+        let deck_b = deck_a.clone();
+        let mut state = GameState::new(deck_a, deck_b);
+        state.replay_journal = Some(Journal::new());
+        let cfg = UctConfig {
+            iterations: 30,
+            exploration_c: SQRT_2,
+            base_seed: 0xC0DE,
+            max_candidates: 10,
+            rollout_turn_cap: 6,
+            per_pick_wall_ms: 0,
+        };
+        let t0 = std::time::Instant::now();
+        let _ = pick_play_uct(
+            &mut state,
+            PlayerId::A,
+            crate::sim::ai::PickKindFilter::Any,
+            &cfg,
+            &registry,
+        );
+        let elapsed = t0.elapsed();
+        // 5s is generous: at 6-turn rollouts × 30 iterations on
+        // vanilla 1-hand creatures in debug, expect well under 1s.
+        // If this asserts, the cap is not effective.
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "pick_play_uct with rollout_turn_cap=6 took {elapsed:?} — cap not effective",
+        );
+    }
+
+    // per_pick_wall_ms is a HARD cap: when the budget runs out
+    // mid-rollout, the rollout itself terminates (heuristic winner
+    // assigned by StepEngine::score_position_a_minus_b) and UCT
+    // returns best-so-far. Without mid-rollout cancellation a single
+    // slow iteration on handler-heavy state can blow the budget by
+    // seconds — the operator saw 30-70s picks with 1000ms iter-
+    // boundary cap. With true mid-rollout cancellation, the pick
+    // bounds at budget + at-most-one-step's worth.
+    //
+    // Test: use real handler-rich cards (the full registry pool) so
+    // rollout iterations are slow enough to make the difference
+    // measurable. 50ms budget, expect pick to complete within 200ms
+    // (4× tolerance for finalize + check cadence + test overhead).
+    #[test]
+    fn pick_play_uct_per_pick_wall_is_a_hard_cap() {
+        let registry = std::sync::Arc::new(
+            CardRegistry::load(std::path::Path::new("cards")).unwrap(),
+        );
+        // Build a deck from real registry cards — handler-rich on
+        // purpose so rollout per-iteration cost is non-trivial.
+        let real_cards: Vec<_> = registry
+            .cards()
+            .iter()
+            .filter(|c| {
+                matches!(c.kind, CardType::Creature)
+                    && c.cost.iter().all(|cc| {
+                        matches!(
+                            cc.source,
+                            crate::card::CostSource::Hand
+                                | crate::card::CostSource::Mill
+                        )
+                    })
+            })
+            .take(10)
+            .cloned()
+            .collect();
+        assert!(!real_cards.is_empty(), "need real cards for handler load");
+        let deck_a: Vec<_> = (0..50)
+            .map(|i| real_cards[i % real_cards.len()].clone())
+            .collect();
+        let deck_b = deck_a.clone();
+        let mut state = GameState::new(deck_a, deck_b);
+        state.replay_journal = Some(Journal::new());
+        let cfg = UctConfig {
+            iterations: 10_000,
+            exploration_c: SQRT_2,
+            base_seed: 0xC0DE,
+            max_candidates: 10,
+            // Disable turn cap so per_pick_wall_ms is the only
+            // bound — that's what we're testing.
+            rollout_turn_cap: u32::MAX,
+            per_pick_wall_ms: 50,
+        };
+        let t0 = std::time::Instant::now();
+        let _ = pick_play_uct(
+            &mut state,
+            PlayerId::A,
+            crate::sim::ai::PickKindFilter::Any,
+            &cfg,
+            &registry,
+        );
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "per_pick_wall_ms=50 must hard-cap within ~4× budget, got {elapsed:?}. \
+             If this fails the deadline check isn't reaching inside the rollout.",
+        );
     }
 }

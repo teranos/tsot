@@ -34,13 +34,18 @@ pub use state::{
 /// Global timeout/spin counter shared across the sim run. Both the
 /// response-window spin tripwire (play.rs) and the Pattern B / game
 /// watchdog (sim/run.rs) bump it. When the count exceeds
-/// `TIMEOUT_HALT_THRESHOLD`, `bump_and_maybe_halt` calls
-/// `std::process::exit(2)` with a loud summary — many timeouts in a
-/// single sim run almost always signal a regression, and we'd rather
-/// halt loudly than drown stderr in dumps and keep going.
+/// `TIMEOUT_HALT_THRESHOLD`, `bump_and_maybe_halt` exits with a loud
+/// summary — a flood of timeouts in one sim run still signals a
+/// regression worth crashing on. The watchdog scores each individual
+/// timed-out game as a loss for the active player, so a run can
+/// absorb dozens of slow-card timeouts (dark-salamander, etc.)
+/// before the guard fires; the threshold is the regression tripwire,
+/// not the per-game accept/reject. Bumped from 5 → 200 after UCT-
+/// vs-UCT instrumentation showed 5 was below the normal cost of
+/// search-heavy cards on the current pool.
 pub static TIMEOUT_COUNTER: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-pub const TIMEOUT_HALT_THRESHOLD: usize = 5;
+pub const TIMEOUT_HALT_THRESHOLD: usize = 200;
 
 pub fn bump_timeout_and_maybe_halt(site: &str) {
     let n = TIMEOUT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;

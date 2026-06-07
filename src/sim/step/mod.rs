@@ -438,6 +438,63 @@ impl StepEngine {
     /// `run_game_continue` for AI-only games. Will be migrated to
     /// be the only entry point in S12.
     pub fn run_to_end(&mut self) -> GameStats {
+        self.run_to_end_with_turn_cap(u32::MAX)
+    }
+
+    /// Heuristic terminal evaluator. Composite of differentials per
+    /// the operator's spec: hand size, deck size (closeness to L.1),
+    /// board presence (creatures + other permanents combined), GY
+    /// size (proxy for cards-played progress). Computed from A's
+    /// perspective — positive ⇒ A winning, negative ⇒ B winning,
+    /// zero broken in A's favor (deterministic). Weights are
+    /// integer-only so the function stays cheap inside UCT rollouts.
+    fn score_position_a_minus_b(state: &GameState) -> i32 {
+        let pa = state.player(PlayerId::A);
+        let pb = state.player(PlayerId::B);
+        let hand = pa.hand.len() as i32 - pb.hand.len() as i32;
+        let deck = pa.deck.len() as i32 - pb.deck.len() as i32;
+        let board = pa.board.len() as i32 - pb.board.len() as i32;
+        let gy = pa.graveyard.len() as i32 - pb.graveyard.len() as i32;
+        // Board > deck > hand ≈ gy. Board presence wins games; deck
+        // size encodes L.1 distance; hand is potential; GY is past
+        // activity (slight signal — gy_substitute decks value it more
+        // but the rollout doesn't know archetype, so a small weight).
+        hand + deck * 2 + board * 3 + gy
+    }
+
+    /// Same as `run_to_end` but bounded: after `turn_cap` turn-change
+    /// advances from the entry-turn the rollout terminates and the
+    /// winner is assigned by `score_position_a_minus_b` instead of
+    /// playing out to deck-out. `u32::MAX` == uncapped (legacy
+    /// behavior; `run_to_end` keeps that contract for callers that
+    /// need a real game finish — full-game tests, the deprecated
+    /// `run_game_continue` wrapper).
+    ///
+    /// UCT/MCTS rollouts use the cap to bound per-pick wall-clock:
+    /// without it the StepEngine simulates 25+ turns to deck-out,
+    /// putting a single UCT pick into the 10–50-second range and
+    /// blowing the per-game wall-clock cap. With cap=K the rollout
+    /// finishes in roughly K-times-per-turn-cost steps, and the
+    /// terminal heuristic gives UCT a position evaluation usable for
+    /// backprop. Standard MCTS practice.
+    pub fn run_to_end_with_turn_cap(&mut self, turn_cap: u32) -> GameStats {
+        self.run_to_end_with_caps(turn_cap, None)
+    }
+
+    /// As `run_to_end_with_turn_cap`, plus a hard wall-clock deadline.
+    /// When `Instant::now() >= deadline`, the rollout terminates
+    /// immediately with `score_position_a_minus_b`-assigned winner —
+    /// even if mid-step, mid-Pattern-B, mid-rollout. This is what
+    /// makes `UctConfig::per_pick_wall_ms` a HARD cap instead of a
+    /// per-iteration-boundary suggestion: a single slow rollout on
+    /// handler-rich state can't overshoot the pick budget by seconds.
+    /// `None` disables the wall-clock cap (legacy behavior).
+    pub fn run_to_end_with_caps(
+        &mut self,
+        turn_cap: u32,
+        wall_deadline: Option<std::time::Instant>,
+    ) -> GameStats {
+        let start_turn = self.state.turn;
         let mut steps: u64 = 0;
         let mut last_turn = self.state.turn;
         let mut last_turn_change_step: u64 = 0;
@@ -451,9 +508,45 @@ impl StepEngine {
         const ROLLOUT_STALL_LIMIT: u64 = 10_000;
         loop {
             steps += 1;
+            // Hard wall-clock cap: check before each step so a slow
+            // iteration can't blow past the budget by seconds.
+            // Instant::now() is ~10ns on macOS — cheap enough per
+            // step. When the deadline trips, terminate with the same
+            // heuristic winner the turn cap uses.
+            if let Some(deadline) = wall_deadline {
+                if std::time::Instant::now() >= deadline && self.state.winner.is_none() {
+                    let score = Self::score_position_a_minus_b(&self.state);
+                    let winner = if score >= 0 {
+                        PlayerId::A
+                    } else {
+                        PlayerId::B
+                    };
+                    self.state.set_winner(Some(winner), "rollout_wall_deadline");
+                    self.finalize_stats();
+                    return self.stats.clone();
+                }
+            }
             if self.state.turn != last_turn {
                 last_turn = self.state.turn;
                 last_turn_change_step = steps;
+                // Rollout-depth cap: after `turn_cap` turn advances
+                // from the start, terminate with a heuristic winner.
+                // u32::MAX disables the cap (matches the legacy
+                // `run_to_end` contract).
+                if turn_cap != u32::MAX
+                    && self.state.turn.saturating_sub(start_turn) >= turn_cap
+                    && self.state.winner.is_none()
+                {
+                    let score = Self::score_position_a_minus_b(&self.state);
+                    let winner = if score >= 0 {
+                        PlayerId::A
+                    } else {
+                        PlayerId::B
+                    };
+                    self.state.set_winner(Some(winner), "rollout_turn_cap");
+                    self.finalize_stats();
+                    return self.stats.clone();
+                }
             }
             if steps - last_turn_change_step > ROLLOUT_STALL_LIMIT {
                 let hand_ids = |iids: &[crate::game::InstanceId]| -> Vec<String> {

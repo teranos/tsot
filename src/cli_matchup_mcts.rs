@@ -170,6 +170,7 @@ pub fn run_matchup_mcts(
             exploration_c: args.uct_c,
             base_seed: args.mcts_seed,
             max_candidates: args.max_candidates,
+            ..Default::default()
         })
     } else {
         AiKind::Mcts(mcts_cfg.clone())
