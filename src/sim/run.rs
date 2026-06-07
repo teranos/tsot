@@ -166,23 +166,33 @@ pub(crate) fn build_pattern_b_choices(
                     .unwrap_or(false)
             })
             .count();
-        // Jewel-tap covers one HAND slot — same reduction the non-X
-        // branches and play_card itself apply. Including it in the
-        // cap lets sunburst-drake / hydra cast at X=1 when the only
-        // viable payment is a same-color jewel on board.
-        let jewel_coverage =
-            usize::from(state.find_jewel_tap_candidate(active, picked).is_some());
+        // P.24a/c/e: how many HAND components a tap-substitution can
+        // cover. P.24c caps a cast at one substitution mechanism, so
+        // jewel and Symbol are mutually exclusive — take whichever
+        // covers more. Jewel covers UP TO 2 components (mixed
+        // HAND/GRAVEYARD, hand drained first); Symbol covers exactly
+        // 1 (HAND or GRAVEYARD); crystal covers 1 HAND. For the X-cap
+        // we use the HAND-side coverage only; the GY side is moot for
+        // an X-hand-cost cast that has no GRAVEYARD component.
+        let substitution_coverage = if state.find_jewel_tap_candidate(active, picked).is_some() {
+            2
+        } else if state.find_symbol_tap_candidate(active).is_some() {
+            1
+        } else {
+            0
+        };
         // P.12b identity-coverage gate (mirrored from play.rs:407-449):
         // when the cast has any identity and no Graveyard cost component
         // can supply a color-anchor, play_card requires hand_payment_ids
         // non-empty whenever gy_hand_payment_ids is non-empty. Filling
-        // hand slots entirely with GY substitutes plus jewel still
-        // trips the gate because jewel doesn't satisfy identity. So:
+        // hand slots entirely with GY substitutes plus substitution
+        // still trips the gate because substitution doesn't satisfy
+        // identity. So:
         //   - identity_count >= 1: substitutes can extend X, since at
         //     least one hand_payment will be a real identity card.
         //   - identity_count == 0: X must be small enough that ZERO GY
         //     substitutes are needed. That means hand_needed (= X minus
-        //     jewel_coverage) must be 0, i.e. X <= jewel_coverage.
+        //     substitution_coverage) must be 0, i.e. X <= substitution_coverage.
         // gy_anchor (P.12b) suspends the gate, but only when the cast
         // has gy_need > 0 AND a color-matching GY card exists — only
         // applies to casts with a Graveyard cost component.
@@ -230,7 +240,7 @@ pub(crate) fn build_pattern_b_choices(
                     } else {
                         gy_subs_available
                     };
-                    caps.push(hand_avail + jewel_coverage + subs_room);
+                    caps.push(hand_avail + substitution_coverage + subs_room);
                 }
                 CostSource::Mill => caps.push(deck_size),
                 CostSource::Graveyard => caps.push(gy_size),
@@ -1479,6 +1489,97 @@ mod tests {
             total_transfer + total_exile > 0,
             "expected ≥1 P.31 attached-payment across {} baseline matchups. transfer={total_transfer} exile={total_exile}",
             decks.len() * decks.len()
+        );
+    }
+
+    // X-cost cap must credit Symbol-tap (P.24e) alongside jewel-tap.
+    // hydra-shaped scenario: X-hand cost cast in hand, no identity-
+    // matching hand cards, no gy_anchor possible, but a Symbol on
+    // BOARD untapped. The picker credits Symbol-tap for affordability
+    // at X=1; the builder's X-branch cap (sim/run.rs ~line 233) used
+    // to only credit jewel_coverage, so max_x came out 0 and build
+    // returned UnaffordableX — picker/build asymmetry surfaced in
+    // make evolve UCT rollouts as the turn-2 hydra timeout.
+    #[test]
+    fn build_pattern_b_choices_x_cap_credits_symbol_tap_substitution() {
+        use crate::card::{CardType, CostComponent, CostSource};
+        use crate::choice::RandomOracle;
+        use rand::SeedableRng;
+        let registry = std::sync::Arc::new(
+            CardRegistry::load(std::path::Path::new("cards")).unwrap(),
+        );
+        let _ = registry; // load just to ensure registry path exists
+        // Minimal hand: just the cast card so the X-branch's hand_size
+        // logic doesn't accidentally credit identity. Use the helper
+        // pattern from game::test_helpers::deck_of.
+        let card_fn = |id: &str| -> crate::card::Card {
+            crate::card::Card {
+                id: id.to_string(),
+                name: String::new(),
+                colors: Vec::new(),
+                kind: CardType::Creature,
+                timing: None,
+                subtypes: Vec::new(),
+                cannot_block_subtypes: Vec::new(),
+                can_block_subtypes: Vec::new(),
+                symbols: Vec::new(),
+                frame: None,
+                holes: Vec::new(),
+                symbol_slots: std::collections::BTreeMap::new(),
+                color_slots: std::collections::BTreeMap::new(),
+                face: Vec::new(),
+                cost: Vec::new(),
+                abilities: Vec::new(),
+                flavor: String::new(),
+                stats: Some(crate::card::Stats { x: 1.0, y: 1.0 }),
+                static_def: None,
+                handlers: std::collections::BTreeMap::new(),
+                activated: Vec::new(),
+                gy_hand_substitute: false,
+                allow_x_zero: false,
+                target: None,
+                is_variant: false,
+                variant_of: None,
+            }
+        };
+        let deck_a: Vec<crate::card::Card> = (0..60).map(|i| card_fn(&format!("a-{i}"))).collect();
+        let deck_b: Vec<crate::card::Card> = (0..60).map(|i| card_fn(&format!("b-{i}"))).collect();
+        let mut s = GameState::new(deck_a, deck_b);
+        let active = PlayerId::A;
+        // Re-shape A's hand[0] to a hydra-like X-cost green creature
+        // (any color works — picker rejects with empty identity hand).
+        let cast = s.player(active).hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&cast).unwrap();
+            inst.card.colors = vec!["green".to_string()];
+            inst.card.cost = vec![CostComponent {
+                amount: 0,
+                source: CostSource::Hand,
+                is_x: true,
+                kind: None,
+            }];
+        }
+        // Promote A's hand[1] to a Symbol on BOARD untapped — covers
+        // exactly one HAND component via P.24e.
+        let symbol = s.player(active).hand[1].clone();
+        {
+            let inst = s.card_pool.get_mut(&symbol).unwrap();
+            inst.card.kind = CardType::Symbol;
+            inst.card.colors = vec!["blue".to_string()];
+        }
+        s.player_mut(active).hand.retain(|x| x != &symbol);
+        s.player_mut(active).board.push(symbol.clone());
+        s.card_pool.get_mut(&symbol).unwrap().tapped = false;
+        // Run the build path. With symbol_coverage missing the
+        // X-branch returns UnaffordableX; with it credited, max_x≥1
+        // and the oracle's choose_int produces Choices.
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0xC0DE);
+        let mut oracle = RandomOracle::new(&mut rng);
+        let result = build_pattern_b_choices(&mut s, active, &cast, &mut oracle);
+        let accepted = matches!(result, BuildChoiceResult::Choices(_));
+        assert!(
+            accepted,
+            "build_pattern_b_choices must accept hydra-shape X-hand with a Symbol on board (P.24e)",
         );
     }
 
