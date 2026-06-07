@@ -193,10 +193,21 @@ pub fn run_curve_sample(
             let state = GameState::new(deck_a, deck_b);
             let mut game_rng = StdRng::seed_from_u64(spec.seed);
             let mut log: Vec<String> = Vec::new();
+            // Clear any failure entries lingering from a prior game
+            // this thread happened to run. Rayon reuses worker
+            // threads, so the thread-local sink could have residuals.
+            let _ = tsot::sim::instrument::drain_failures();
             let game_t0 = std::time::Instant::now();
             let (stats, _) =
                 sim::run_game_with_ai(state, &mut game_rng, &mut log, &reg, &ais);
             let game_elapsed = game_t0.elapsed();
+            // Fold every failure message this game produced into the
+            // game's engine log. The failed-game classifier picks
+            // them up (they contain "failed:" / "rollout-stall" /
+            // "[play_card-ERR]" / "[NoHandPaymentForIdentity]") and
+            // the failed-game dump surfaces them at game-end as one
+            // batched write.
+            log.extend(tsot::sim::instrument::drain_failures());
 
             // Format every line into one String so the whole game's
             // output is one atomic write (println-lock guarantees no
@@ -335,10 +346,16 @@ fn format_game_output(
         paint_blue, paint_bold_green, paint_bold_red, paint_dim, paint_green, paint_red,
         paint_yellow,
     };
-    let noisy = log
-        .iter()
-        .any(|line| line.contains("failed:") || line.contains("rollout-stall"));
-    let end_tag = if noisy {
+    // A game is FAILED if any play_card returned Err, or if any
+    // rollout stalled. Failures are signal — they get the full
+    // engine log dumped below, always.
+    let failed = log.iter().any(|line| {
+        line.contains("failed:")
+            || line.contains("rollout-stall")
+            || line.contains("[play_card-ERR]")
+            || line.contains("[NoHandPaymentForIdentity]")
+    });
+    let end_tag = if failed {
         paint_bold_red("✗ END  ")
     } else {
         paint_bold_green("● END  ")
@@ -373,7 +390,7 @@ fn format_game_output(
             stats.replay_journal_entries,
         )),
     );
-    if !noisy {
+    if !failed {
         return buf;
     }
     let fires: Vec<String> = stats

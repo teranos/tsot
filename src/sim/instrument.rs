@@ -11,8 +11,39 @@
 //! instrumentation sits at the boundaries of multi-millisecond inner
 //! calls, so overhead is negligible.
 
+use std::cell::RefCell;
 use std::io::IsTerminal;
 use std::sync::{Mutex, OnceLock};
+
+thread_local! {
+    /// Per-thread buffer for failure-context messages emitted from
+    /// inside the engine (e.g., `play_card` errors). Writing to
+    /// stderr directly inside hot rollout loops serialises every
+    /// thread against a single global mutex and dominates runtime;
+    /// pushing here is a `String` move into a `Vec`, microseconds,
+    /// no lock contention.
+    ///
+    /// The parallel game runner in cli_curve_sample drains this at
+    /// the end of every game and appends the entries into that
+    /// game's local engine log. The failed-game classifier then
+    /// surfaces the full set of failure messages at game-end as one
+    /// batched write — keeping the "errors are sacred" principle
+    /// (no error lost) while removing the per-error stderr cost.
+    static FAILURE_SINK: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Append a failure-context message to the current thread's sink.
+/// Cheap: just `Vec::push`.
+pub fn push_failure(msg: String) {
+    FAILURE_SINK.with(|cell| cell.borrow_mut().push(msg));
+}
+
+/// Drain the current thread's failure sink. Called by the per-game
+/// runner after a game completes to flush whatever failure messages
+/// accumulated during that game's play_card calls.
+pub fn drain_failures() -> Vec<String> {
+    FAILURE_SINK.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
+}
 
 /// ANSI coloring is enabled iff stderr is a terminal. Detected once
 /// at first use and cached. When piped (e.g., into a file or another

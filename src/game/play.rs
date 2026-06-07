@@ -51,7 +51,56 @@ impl GameState {
         let t0 = trace_active.then(std::time::Instant::now);
         let iid_for_trace = trace_active.then(|| instance.clone());
 
+        // Permanent diagnostic — capture the cast snapshot BEFORE
+        // play_card_inner runs so it survives the call even when
+        // play_card_inner Errs after consuming `choices`.
+        let cast_snapshot = self.card_pool.get(instance).map(|i| i.card.id.clone());
+        let hand_snapshot: Vec<String> = self
+            .player(player)
+            .hand
+            .iter()
+            .filter_map(|h| self.card_pool.get(h).map(|i| i.card.id.clone()))
+            .collect();
+        let gy_snapshot: Vec<String> = self
+            .player(player)
+            .graveyard
+            .iter()
+            .filter_map(|h| self.card_pool.get(h).map(|i| i.card.id.clone()))
+            .collect();
+        let x_snapshot = choices.x_value;
+        let hand_pay_snapshot: Vec<String> = choices
+            .hand_payment_ids
+            .iter()
+            .filter_map(|h| self.card_pool.get(h).map(|i| i.card.id.clone()))
+            .collect();
+        let gy_pay_snapshot: Vec<String> = choices
+            .gy_hand_payment_ids
+            .iter()
+            .filter_map(|h| self.card_pool.get(h).map(|i| i.card.id.clone()))
+            .collect();
         let result = self.play_card_inner(player, instance, choices, ctx);
+
+        // Errors are sacred (CLAUDE.md). Every play_card failure
+        // captures its full triangulation — cast, player, choices,
+        // hand, GY — into the per-thread failure sink. The parallel
+        // game runner drains the sink at game end and folds the
+        // entries into that game's engine log; failed-game dump
+        // surfaces them all together. No per-error stderr lock
+        // contention (which previously slowed games into the
+        // 30-second wall-clock cap), no card scoping, no truncation.
+        if let Err(err) = &result {
+            let cast = cast_snapshot.unwrap_or_default();
+            crate::sim::instrument::push_failure(format!(
+                "[play_card-ERR] cast={cast} player={player:?} \
+                 err={err:?} x_value={x_snapshot:?} \
+                 hand_payment_ids=[{}] gy_hand_payment_ids=[{}] \
+                 hand=[{}] graveyard=[{}]",
+                hand_pay_snapshot.join(", "),
+                gy_pay_snapshot.join(", "),
+                hand_snapshot.join(", "),
+                gy_snapshot.join(", "),
+            ));
+        }
 
         if let (Some(t0), Some(iid)) = (t0, iid_for_trace) {
             let outcome = match &result {
@@ -362,6 +411,40 @@ impl GameState {
         {
             let cast_ident = self.card_identity(instance);
             if !cast_ident.is_empty() {
+                // Errors are sacred — the engine knows exactly which
+                // state produced this rejection and the operator
+                // must see it. Captured into the per-thread failure
+                // sink (drained at game end) so the per-error cost
+                // is a string format + Vec push, not a stderr lock.
+                let card_id = self
+                    .card_pool
+                    .get(instance)
+                    .map(|i| i.card.id.clone())
+                    .unwrap_or_default();
+                let ids = |zone: &[InstanceId]| -> Vec<String> {
+                    zone.iter()
+                        .map(|h| {
+                            self.card_pool
+                                .get(h)
+                                .map(|i| i.card.id.clone())
+                                .unwrap_or_else(|| h.clone())
+                        })
+                        .collect()
+                };
+                let eligible_now = self.eligible_hand_payments(player, instance);
+                let cast_ident_vec: Vec<String> = cast_ident.iter().cloned().collect();
+                crate::sim::instrument::push_failure(format!(
+                    "[NoHandPaymentForIdentity] cast={card_id} player={player:?} \
+                     x_value={:?} cast_ident={cast_ident_vec:?} \
+                     eligible_hand_payments=[{}]  gy_hand_substitutes=[{}]  \
+                     hand_payment_ids=[{}]  hand=[{}]  graveyard=[{}]",
+                    choices.x_value,
+                    ids(&eligible_now).join(", "),
+                    ids(&choices.gy_hand_payment_ids).join(", "),
+                    ids(&choices.hand_payment_ids).join(", "),
+                    ids(&self.player(player).hand).join(", "),
+                    ids(&self.player(player).graveyard).join(", "),
+                ));
                 return Err(PlayError::NoHandPaymentForIdentity);
             }
         }
