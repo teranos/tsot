@@ -45,14 +45,11 @@ file the user can tail, never `| tail -N` or `| head -N` the live
 stream. Truncating the output is optimizing your own legibility at the
 cost of the user's visibility into the run.
 
-Python is the analytics language of choice — dashboards, reports, and
-sim-output analysis all live in `tools/*.py` (see `tools/cards-report.py`).
-
 Balance, power level, "premium cost", card-economy ratios, win-conditions,
-archetype viability — those are `tools/*.py` questions, not chat ones.
-You have no playtest data and no game intuition; don't editorialize.
-Just write the card or the mechanic. If the user asks for balance input,
-point them at sim output or write the analysis.
+archetype viability — not chat answers. You have no playtest data and no
+game intuition; don't editorialize. Just write the card or the mechanic.
+If the user asks for balance input, point them at sim output or write
+the analysis.
 
 Same applies to strategy talk: lines of play, optimal sequencing,
 "tempo", matchup analysis, what a player "should" do with a card,
