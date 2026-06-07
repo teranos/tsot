@@ -1081,6 +1081,113 @@ mod tests {
         );
     }
 
+    // make pool surfaced [play_card-ERR] cast=surge err=WrongHandPaymentCount
+    // { expected: 1, got: 0 } with B's hand=[chaos-dragon, surge,
+    // clear-green]. surge is a 2-hand blue instant; B's hand has no
+    // blue card and B's gy has no clear-* substitutes — so eligible
+    // hand payments are empty. The P.7a identity gate at ai.rs:319
+    // SHOULD refuse: hand_need > 0, cast_ident = {blue} non-empty,
+    // hand_have_identity = 0, no gy_anchor possible (surge has no
+    // GRAVEYARD-source component). Picker offering anyway → build
+    // can't fill the slot → engine errors. This test pins the
+    // minimal repro at the picker.
+    #[test]
+    fn can_pay_instant_cost_refuses_2hand_spell_with_no_identity_match_in_hand() {
+        use crate::card::{CostComponent, CostSource};
+        let mut s = fresh();
+        let cast = s.player(PlayerId::A).hand[0].clone();
+        let off_color_a = s.player(PlayerId::A).hand[1].clone();
+        let off_color_b = s.player(PlayerId::A).hand[2].clone();
+        {
+            // 2-hand blue spell, mirroring surge.
+            let c = s.card_pool.get_mut(&cast).unwrap();
+            c.card.colors = vec!["blue".to_string()];
+            c.card.kind = CardType::Spell;
+            c.card.cost = vec![CostComponent {
+                amount: 2,
+                source: CostSource::Hand,
+                is_x: false,
+                kind: None,
+            }];
+        }
+        // Other hand cards: red + green — neither shares blue's
+        // identity, so eligible_hand_payments returns empty.
+        s.card_pool.get_mut(&off_color_a).unwrap().card.colors = vec!["red".to_string()];
+        s.card_pool.get_mut(&off_color_b).unwrap().card.colors = vec!["green".to_string()];
+        // No jewel / symbol on board, no clear-* substitutes in gy.
+        assert!(
+            !can_pay_instant_cost(&s, PlayerId::A, &cast),
+            "2-hand spell with no identity-matching hand card and no GY substitutes / jewel / symbol must be refused by the picker",
+        );
+    }
+
+    // Same setup as above + a Spell-affecting hand-cost-reduction
+    // static on the controller's BOARD. The engine sees raw 2 - red 1 = 1
+    // hand_needed; build can't fill the slot (no eligible hand pay,
+    // no GY sub); engine errors `WrongHandPaymentCount { expected: 1,
+    // got: 0 }`. The picker MUST still refuse this state: after
+    // hand_red reduces hand_need to 1, hand_have_identity is 0 and no
+    // gy_anchor possible — gate at ai.rs:319 fires. If the gate is
+    // skipping for some reason (this is the surge repro from
+    // make pool), the picker accepts and the test fails.
+    #[test]
+    fn can_pay_instant_cost_refuses_2hand_spell_with_static_hand_reduction_and_no_identity_match() {
+        use crate::card::{
+            CardType, CostComponent, CostModifier, CostSource, ModifierValue, StaticAffects,
+            StaticDef,
+        };
+        let mut s = fresh();
+        let cast = s.player(PlayerId::A).hand[0].clone();
+        let off_color_a = s.player(PlayerId::A).hand[1].clone();
+        let off_color_b = s.player(PlayerId::A).hand[2].clone();
+        let reducer = s.player(PlayerId::A).hand[3].clone();
+        {
+            // 2-hand blue spell.
+            let c = s.card_pool.get_mut(&cast).unwrap();
+            c.card.colors = vec!["blue".to_string()];
+            c.card.kind = CardType::Spell;
+            c.card.cost = vec![CostComponent {
+                amount: 2,
+                source: CostSource::Hand,
+                is_x: false,
+                kind: None,
+            }];
+        }
+        s.card_pool.get_mut(&off_color_a).unwrap().card.colors = vec!["red".to_string()];
+        s.card_pool.get_mut(&off_color_b).unwrap().card.colors = vec!["green".to_string()];
+        // Static that reduces Spell hand cost by 1. Mirrors modern-
+        // lcd-clock's shape but targets Spell kind instead of Creature.
+        {
+            let r = s.card_pool.get_mut(&reducer).unwrap();
+            r.card.kind = CardType::Artifact;
+            r.card.static_def = Some(StaticDef {
+                affects: StaticAffects {
+                    kind: Some(CardType::Spell),
+                    ..Default::default()
+                },
+                modifier_x: ModifierValue::Fixed(0),
+                modifier_y: ModifierValue::Fixed(0),
+                modifier_keyword: None,
+                condition: None,
+                restrictions: Vec::new(),
+                cost_modifiers: vec![CostModifier {
+                    source: CostSource::Hand,
+                    amount: 1,
+                }],
+                granted_activated: None,
+                granted_colors: Vec::new(),
+                granted_face: Vec::new(),
+            });
+        }
+        // Reducer goes to BOARD so its static fires.
+        s.player_mut(PlayerId::A).hand.retain(|x| x != &reducer);
+        s.player_mut(PlayerId::A).board.push(reducer.clone());
+        assert!(
+            !can_pay_instant_cost(&s, PlayerId::A, &cast),
+            "even with a -1 hand static reducing cost to 1, picker must refuse a blue spell when no identity-matching pay exists and no GY anchor possible",
+        );
+    }
+
     // P.24a (rewritten): the engine's jewel substitution now covers
     // UP TO TWO cost components from HAND and/or GRAVEYARD. The
     // picker must mirror that or it will refuse casts the resolver
