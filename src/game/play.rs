@@ -80,21 +80,20 @@ impl GameState {
             .collect();
         let result = self.play_card_inner(player, instance, choices, ctx);
 
-        // Errors are sacred (CLAUDE.md). Every play_card failure
-        // captures its full triangulation — cast, player, choices,
-        // hand, GY — into the per-thread failure sink. The parallel
-        // game runner drains the sink at game end and folds the
-        // entries into that game's engine log; failed-game dump
-        // surfaces them all together. No per-error stderr lock
-        // contention (which previously slowed games into the
-        // 30-second wall-clock cap), no card scoping, no truncation.
+        // Errors are sacred. Every play_card failure captures its
+        // full triangulation — cast, player, choices, hand, GY, AND
+        // the caller's backtrace so the call origin of a residual
+        // picker/resolver disagreement is recoverable without
+        // re-instrumenting. Goes through the per-thread failure
+        // sink (Vec push, no stderr lock), drained at game end.
         if let Err(err) = &result {
             let cast = cast_snapshot.unwrap_or_default();
+            let bt = std::backtrace::Backtrace::force_capture();
             crate::sim::instrument::push_failure(format!(
                 "[play_card-ERR] cast={cast} player={player:?} \
                  err={err:?} x_value={x_snapshot:?} \
                  hand_payment_ids=[{}] gy_hand_payment_ids=[{}] \
-                 hand=[{}] graveyard=[{}]",
+                 hand=[{}] graveyard=[{}]\nbacktrace:\n{bt}",
                 hand_pay_snapshot.join(", "),
                 gy_pay_snapshot.join(", "),
                 hand_snapshot.join(", "),

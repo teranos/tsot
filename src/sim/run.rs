@@ -223,7 +223,20 @@ pub(crate) fn build_pattern_b_choices(
         // WrongHandPaymentCount { expected: 0, got: N } when a static
         // (modern-lcd-clock) reduces the cost.
         let hand_red_x = state.cost_reduction(picked, CostSource::Hand).max(0) as usize;
-        let hand_needed: usize = raw_hand_needed.saturating_sub(hand_red_x);
+        let mut hand_needed: usize = raw_hand_needed.saturating_sub(hand_red_x);
+        // P.24: jewel-tap one HAND slot. The non-X creature / spell /
+        // artifact branches below do this; the X-branch used to skip
+        // it, which broke hydra (X hand cost) whenever the picker's
+        // `can_pay_instant_cost` credited the jewel reduction to bypass
+        // the identity gate but build never actually picked the jewel.
+        // play_card then saw hand_needed=1 with no hand payment (just
+        // GY substitutes) and tripped NoHandPaymentForIdentity.
+        if hand_needed > 0 {
+            if let Some(jewel) = state.find_jewel_tap_candidate(active, picked) {
+                choices.jewel_tap = Some(jewel);
+                hand_needed -= 1;
+            }
+        }
         if hand_needed > 0 {
             let mut remaining = hand_needed;
             if identity_count < remaining {
@@ -434,7 +447,13 @@ pub(crate) fn build_pattern_b_choices(
     let att_red = state.cost_reduction(picked, CostSource::Attached).max(0) as usize;
     let attached_need = raw_attached_need.saturating_sub(att_red);
     if attached_need > 0 {
-        let mut pool = state.find_attached_payments(active, usize::MAX);
+        // Use the shared eligibility helper so the picker's
+        // attached_have count and the resolver's actual pool never
+        // disagree on which attached iids may pay this cast. Closes
+        // the C.14 attached-transparency gap (transparent attached
+        // can't pay non-transparent board-placed casts) that
+        // produced AttachedPaymentInvalid loops on hollow + clear-*.
+        let mut pool = state.eligible_attached_payments(active, picked);
         pool.sort_by_key(|aid| attached_keep_value(state, aid));
         pool.truncate(attached_need);
         choices.attached_payment_ids = pool;

@@ -342,7 +342,18 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             return false;
         }
     }
-    let mut available: Vec<InstanceId> = p.board.clone();
+    // Mirror build_pattern_b_choices's sacrifice filter: a creature with
+    // the "can't be sacrificed" keyword (P.31 restriction) is invisible
+    // to sacrifice payment. Without this filter the picker over-counts
+    // (every board creature looks sacrificable) and build then finds
+    // zero eligible — play_card rejects with WrongSacrificeCount and the
+    // pick/resolve loop spins (observed on mortal-bee + red-devil).
+    let mut available: Vec<InstanceId> = p
+        .board
+        .iter()
+        .filter(|iid| !state.has_keyword(iid, "can't be sacrificed"))
+        .cloned()
+        .collect();
     let mut sac_ok = true;
     for required_kind in &sac_slots {
         let pos = available.iter().position(|iid| {
@@ -366,12 +377,12 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             }
         }
     }
-    let attached_have: usize = p
-        .board
-        .iter()
-        .filter_map(|hid| state.card_pool.get(hid))
-        .map(|inst| inst.attached.len())
-        .sum();
+    // Use the shared eligibility helper so the picker can't over-
+    // count attached payments the resolver will refuse — closes the
+    // C.14 transparent-attached-vs-board-placed-cast disagreement
+    // that produced AttachedPaymentInvalid loops on hollow + clear-*.
+    let attached_have: usize = state.eligible_attached_payments(player, iid).len();
+    let _ = p;
     // P.12a: a cast with non-empty colors and a GRAVEYARD cost component
     // requires at least one color-matching card in GY (the anchor). Without
     // this gate the picker burns rolls on casts play_card refuses with

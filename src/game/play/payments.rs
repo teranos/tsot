@@ -225,6 +225,53 @@ impl GameState {
         out
     }
 
+    /// SHARED predicate — the canonical ATTACHED-payment eligibility
+    /// set for a cast. Both the sim AI's affordability check and the
+    /// resolver's pool must use this so play_card's ATTACHED-payment
+    /// validation (game/play.rs:619-650) never sees an attached iid
+    /// the picker offered.
+    ///
+    /// Filters applied (matching play_card exactly):
+    ///   1. host is on `player`'s BOARD and controlled by `player`
+    ///   2. C.14: if the cast is BOARD-placed and non-transparent,
+    ///      transparent attached cards are excluded.
+    pub fn eligible_attached_payments(
+        &self,
+        player: PlayerId,
+        cast_iid: &InstanceId,
+    ) -> Vec<InstanceId> {
+        let cast_is_board_placed = self
+            .card_pool
+            .get(cast_iid)
+            .map(|i| {
+                matches!(
+                    i.card.kind,
+                    crate::card::CardType::Creature
+                        | crate::card::CardType::Artifact
+                        | crate::card::CardType::Environment
+                )
+            })
+            .unwrap_or(false);
+        let cast_transparent = self.is_transparent(cast_iid);
+        let mut out = Vec::new();
+        for host_iid in &self.player(player).board {
+            let Some(host) = self.card_pool.get(host_iid) else { continue };
+            if host.controller != player {
+                continue;
+            }
+            for aid in &host.attached {
+                if cast_is_board_placed
+                    && !cast_transparent
+                    && self.is_transparent(aid)
+                {
+                    continue;
+                }
+                out.push(aid.clone());
+            }
+        }
+        out
+    }
+
     /// Sim AI helper: pick `n` GY cards to pay an `N graveyard` cost on
     /// a cast, prioritizing P.12a's color-anchor requirement. Returns up
     /// to `n` ids:
