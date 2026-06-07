@@ -87,12 +87,21 @@ port saveStatusIn : (String -> msg) -> Sub msg
 port gamePhaseIn : (String -> msg) -> Sub msg
 
 
-{-| One outbound port for every worker-bound action. Carries a string
-cmd (`"save_game"` / `"download"` / `"load_from_file"` / `"test_panic"`).
-js-bridge dispatches by string; unknown cmds throw and surface via the
-fault-surface diagnostic.
+{-| One outbound port for every worker-bound action. Carries an
+`{cmd, payload}` envelope. cmd is the operation name
+(`"save_game"` / `"download"` / `"load_from_file"` / `"test_panic"` /
+`"start_game"` / `"start_spectate"`); payload carries args when the
+op needs them (else `E.null`). js-bridge dispatches by cmd string;
+unknown cmds throw and surface via the fault-surface diagnostic.
 -}
-port workerCmdOut : String -> Cmd msg
+port workerCmdOut : { cmd : String, payload : E.Value } -> Cmd msg
+
+
+{-| Bootstrap data from play.html — the card pool + preset decks the
+worker returned during startup (`list_card_pool` + `list_preset_decks`).
+Sent once on page load. Carries `{cardPool : [...], presets : [...]}`.
+-}
+port bootDataIn : (D.Value -> msg) -> Sub msg
 
 
 {-| One outbound port for every IDB-bound action. Carries an
@@ -212,6 +221,28 @@ type GamePhase
     | UnknownPhase
 
 
+type alias CardPoolEntry =
+    { id : String
+    , name : String
+    , kind : String
+    , costText : String
+    , colors : List String
+    , symbols : List String
+    , subtypes : List String
+    , power : Maybe Float
+    , toughness : Maybe Float
+    , timing : Maybe String
+    , abilities : List String
+    }
+
+
+type alias PresetDeck =
+    { id : String
+    , name : String
+    , cards : List String
+    }
+
+
 type alias Model =
     { build : BuildState
     , log : List LogEntry
@@ -219,6 +250,14 @@ type alias Model =
     , savedList : SavedListState
     , saveStatus : String
     , gamePhase : GamePhase
+    , cardPool : List CardPoolEntry
+    , presets : List PresetDeck
+    , deck : List String
+    , oppAi : String
+    , specAiA : String
+    , specAiB : String
+    , poolFilterColor : String
+    , poolFilterKind : String
     }
 
 
@@ -252,6 +291,18 @@ type Msg
     | TestPanicClicked
     | SaveStatusReceived String
     | GamePhaseReceived String
+    | BootDataReceived D.Value
+    | PoolCardClicked String
+    | DeckRowRemove String
+    | DeckClearClicked
+    | PresetChosen String
+    | OppAiChanged String
+    | SpecAiAChanged String
+    | SpecAiBChanged String
+    | PoolFilterColorChanged String
+    | PoolFilterKindChanged String
+    | StartGameClicked
+    | StartSpectateClicked
     | NoOp
 
 
@@ -267,6 +318,14 @@ init _ =
       , savedList = SavedHidden
       , saveStatus = ""
       , gamePhase = UnknownPhase
+      , cardPool = []
+      , presets = []
+      , deck = []
+      , oppAi = "uct"
+      , specAiA = "uct"
+      , specAiB = "uct"
+      , poolFilterColor = ""
+      , poolFilterKind = ""
       }
     , Cmd.none
     )
@@ -415,16 +474,16 @@ update msg model =
             ( { model | savedList = SavedHidden }, Cmd.none )
 
         SaveClicked ->
-            ( model, workerCmdOut "save_game" )
+            ( model, workerCmdOut { cmd = "save_game", payload = E.null } )
 
         DownloadClicked ->
-            ( model, workerCmdOut "download" )
+            ( model, workerCmdOut { cmd = "download", payload = E.null } )
 
         LoadFromFileClicked ->
-            ( model, workerCmdOut "load_from_file" )
+            ( model, workerCmdOut { cmd = "load_from_file", payload = E.null } )
 
         TestPanicClicked ->
-            ( model, workerCmdOut "test_panic" )
+            ( model, workerCmdOut { cmd = "test_panic", payload = E.null } )
 
         SaveStatusReceived msgText ->
             ( { model | saveStatus = msgText }, Cmd.none )
@@ -432,8 +491,127 @@ update msg model =
         GamePhaseReceived phaseStr ->
             ( { model | gamePhase = parseGamePhase phaseStr }, Cmd.none )
 
+        BootDataReceived value ->
+            case D.decodeValue decodeBootData value of
+                Ok boot ->
+                    let
+                        starterCards =
+                            boot.presets
+                                |> List.filter (\p -> p.id == "starter")
+                                |> List.head
+                                |> (\m ->
+                                        case m of
+                                            Just p ->
+                                                p.cards
+
+                                            Nothing ->
+                                                case List.head boot.presets of
+                                                    Just p ->
+                                                        p.cards
+
+                                                    Nothing ->
+                                                        []
+                                   )
+
+                        deck =
+                            if List.isEmpty model.deck then
+                                starterCards
+
+                            else
+                                model.deck
+                    in
+                    ( { model
+                        | cardPool = boot.cardPool
+                        , presets = boot.presets
+                        , deck = deck
+                      }
+                    , Cmd.none
+                    )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        PoolCardClicked cardId ->
+            ( { model | deck = model.deck ++ [ cardId ] }, Cmd.none )
+
+        DeckRowRemove cardId ->
+            ( { model | deck = removeFirst cardId model.deck }, Cmd.none )
+
+        DeckClearClicked ->
+            ( { model | deck = [] }, Cmd.none )
+
+        PresetChosen presetId ->
+            case List.filter (\p -> p.id == presetId) model.presets |> List.head of
+                Just p ->
+                    ( { model | deck = p.cards }, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        OppAiChanged ai ->
+            ( { model | oppAi = ai }, Cmd.none )
+
+        SpecAiAChanged ai ->
+            ( { model | specAiA = ai }, Cmd.none )
+
+        SpecAiBChanged ai ->
+            ( { model | specAiB = ai }, Cmd.none )
+
+        PoolFilterColorChanged color ->
+            ( { model | poolFilterColor = color }, Cmd.none )
+
+        PoolFilterKindChanged kind ->
+            ( { model | poolFilterKind = kind }, Cmd.none )
+
+        StartGameClicked ->
+            if List.isEmpty model.deck then
+                ( model, Cmd.none )
+
+            else
+                ( model
+                , workerCmdOut
+                    { cmd = "start_game"
+                    , payload =
+                        E.object
+                            [ ( "deckIds", E.list E.string model.deck )
+                            , ( "oppAi", E.string model.oppAi )
+                            ]
+                    }
+                )
+
+        StartSpectateClicked ->
+            if List.isEmpty model.deck then
+                ( model, Cmd.none )
+
+            else
+                ( model
+                , workerCmdOut
+                    { cmd = "start_spectate"
+                    , payload =
+                        E.object
+                            [ ( "deckIds", E.list E.string model.deck )
+                            , ( "aiA", E.string model.specAiA )
+                            , ( "aiB", E.string model.specAiB )
+                            ]
+                    }
+                )
+
         NoOp ->
             ( model, Cmd.none )
+
+
+removeFirst : a -> List a -> List a
+removeFirst target list =
+    case list of
+        [] ->
+            []
+
+        x :: xs ->
+            if x == target then
+                xs
+
+            else
+                x :: removeFirst target xs
 
 
 scrollLogToBottom : Cmd Msg
@@ -545,6 +723,59 @@ decodeSaveItem =
         (D.field "id" D.int)
         (D.field "name" D.string)
         (D.field "savedAt" D.string)
+
+
+type alias BootData =
+    { cardPool : List CardPoolEntry
+    , presets : List PresetDeck
+    }
+
+
+decodeBootData : D.Decoder BootData
+decodeBootData =
+    D.map2 BootData
+        (D.field "cardPool" (D.list decodeCardPoolEntry))
+        (D.field "presets" (D.list decodePresetDeck))
+
+
+{-| 11-field decoder via the standard applicative `andMap` pattern,
+since elm/json's stock `map*` family stops at 8. `required` reads a
+plain field; `optional` wraps in `D.maybe (D.field …)` so a missing
+or null field decodes to `Nothing` — used for Creature-only stats
+(`power`, `toughness`) and Spell-only `timing`.
+-}
+decodeCardPoolEntry : D.Decoder CardPoolEntry
+decodeCardPoolEntry =
+    D.succeed CardPoolEntry
+        |> required "id" D.string
+        |> required "name" D.string
+        |> required "kind" D.string
+        |> required "cost_text" D.string
+        |> required "colors" (D.list D.string)
+        |> required "symbols" (D.list D.string)
+        |> required "subtypes" (D.list D.string)
+        |> optional "power" D.float
+        |> optional "toughness" D.float
+        |> optional "timing" D.string
+        |> required "abilities" (D.list D.string)
+
+
+decodePresetDeck : D.Decoder PresetDeck
+decodePresetDeck =
+    D.map3 PresetDeck
+        (D.field "id" D.string)
+        (D.field "name" D.string)
+        (D.field "cards" (D.list D.string))
+
+
+required : String -> D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
+required field aDec fDec =
+    D.map2 (\f a -> f a) fDec (D.field field aDec)
+
+
+optional : String -> D.Decoder a -> D.Decoder (Maybe a -> b) -> D.Decoder b
+optional field aDec fDec =
+    D.map2 (\f a -> f a) fDec (D.maybe (D.field field aDec))
 
 
 optionalField : String -> D.Decoder a -> D.Decoder (Maybe a)
@@ -864,6 +1095,7 @@ subscriptions _ =
         , savedListIn SavedListReceived
         , saveStatusIn SaveStatusReceived
         , gamePhaseIn GamePhaseReceived
+        , bootDataIn BootDataReceived
         ]
 
 
@@ -875,11 +1107,425 @@ view : Model -> Html Msg
 view model =
     div []
         [ viewSaveControls model
+        , viewDeckbuilder model
         , viewSavedListPanel model.savedList
         , viewDecisionPanel model.decisionPanel
         , viewLog model.log
         , viewBuildFooter model.build
         ]
+
+
+viewDeckbuilder : Model -> Html Msg
+viewDeckbuilder model =
+    if model.gamePhase /= Deckbuilding then
+        text ""
+
+    else
+        div
+            [ id "deckbuilder"
+            , style "display" "grid"
+            , style "grid-template-columns" "2fr 1fr"
+            , style "gap" "1rem"
+            ]
+            [ viewDeckbuilderPool model
+            , viewDeckbuilderDeck model
+            ]
+
+
+viewDeckbuilderPool : Model -> Html Msg
+viewDeckbuilderPool model =
+    div [ class "pool", style "border" "1px solid #333", style "padding" "0.5rem" ]
+        [ Html.h2
+            [ style "font-size" "0.7rem"
+            , style "margin" "0 0 0.4rem 0"
+            , style "color" "#888"
+            , style "font-weight" "normal"
+            , style "text-transform" "uppercase"
+            , style "letter-spacing" "0.05em"
+            ]
+            [ text ("Card pool (" ++ String.fromInt (List.length model.cardPool) ++ ")") ]
+        , viewPoolFilters model
+        , viewPoolGrid model
+        ]
+
+
+viewPoolFilters : Model -> Html Msg
+viewPoolFilters model =
+    let
+        allColors =
+            model.cardPool
+                |> List.concatMap .colors
+                |> dedupSorted
+    in
+    div
+        [ class "filters"
+        , style "display" "flex"
+        , style "gap" "0.5rem"
+        , style "margin-bottom" "0.5rem"
+        , style "flex-wrap" "wrap"
+        ]
+        [ deckSelect model.poolFilterColor PoolFilterColorChanged <|
+            ( "all colors", "" )
+                :: List.map (\c -> ( c, c )) allColors
+        , deckSelect model.poolFilterKind PoolFilterKindChanged
+            [ ( "all kinds", "" )
+            , ( "Creatures", "Creature" )
+            , ( "Spells", "Spell" )
+            , ( "Artifacts", "Artifact" )
+            , ( "Environments", "Environment" )
+            , ( "Mutations", "Mutation" )
+            ]
+        ]
+
+
+deckSelect : String -> (String -> Msg) -> List ( String, String ) -> Html Msg
+deckSelect current toMsg opts =
+    Html.select
+        [ Html.Events.onInput toMsg
+        , style "background" "#1c1c20"
+        , style "color" "#ddd"
+        , style "border" "1px solid #444"
+        , style "padding" "0.2rem 0.4rem"
+        , style "font-family" "inherit"
+        , style "font-size" "0.7rem"
+        ]
+        (List.map
+            (\( label, value ) ->
+                Html.option
+                    [ Html.Attributes.value value
+                    , Html.Attributes.selected (value == current)
+                    ]
+                    [ text label ]
+            )
+            opts
+        )
+
+
+viewPoolGrid : Model -> Html Msg
+viewPoolGrid model =
+    let
+        visible =
+            List.filter (poolMatchesFilters model) model.cardPool
+    in
+    div
+        [ class "pool-grid"
+        , style "display" "flex"
+        , style "flex-wrap" "wrap"
+        , style "gap" "0.3rem"
+        , style "max-height" "32rem"
+        , style "overflow-y" "auto"
+        ]
+        (List.map viewPoolCard visible)
+
+
+poolMatchesFilters : Model -> CardPoolEntry -> Bool
+poolMatchesFilters model entry =
+    let
+        colorOk =
+            model.poolFilterColor == "" || List.member model.poolFilterColor entry.colors
+
+        kindOk =
+            model.poolFilterKind == "" || entry.kind == model.poolFilterKind
+    in
+    colorOk && kindOk
+
+
+viewPoolCard : CardPoolEntry -> Html Msg
+viewPoolCard entry =
+    div
+        [ class "card pool-card"
+        , Html.Attributes.title entry.id
+        , onClick (PoolCardClicked entry.id)
+        ]
+        ([ div [ class "head" ]
+            [ span [ class "name" ] [ text entry.name ]
+            , span [ class "cost" ] [ text entry.costText ]
+            ]
+         ]
+            ++ viewCardMetaLine entry
+            ++ viewCardAbilities entry.abilities
+        )
+
+
+viewCardMetaLine : CardPoolEntry -> List (Html Msg)
+viewCardMetaLine entry =
+    let
+        statsHtml =
+            case ( entry.kind, entry.power, entry.toughness ) of
+                ( "Creature", Just p, Just t ) ->
+                    [ span [ class "stats" ]
+                        [ text (formatStat p ++ "/" ++ formatStat t) ]
+                    ]
+
+                _ ->
+                    []
+
+        colorTags =
+            List.map colorTag entry.colors
+
+        symTags =
+            List.map symbolTag entry.symbols
+
+        subtypeSpan =
+            if List.isEmpty entry.subtypes then
+                []
+
+            else
+                [ span [ style "color" "#888" ]
+                    [ text (String.join "·" entry.subtypes) ]
+                ]
+
+        parts =
+            statsHtml ++ colorTags ++ symTags ++ subtypeSpan
+    in
+    if List.isEmpty parts then
+        []
+
+    else
+        [ div
+            [ class "meta-line"
+            , style "display" "flex"
+            , style "gap" "0.4rem"
+            , style "flex-wrap" "wrap"
+            ]
+            parts
+        ]
+
+
+formatStat : Float -> String
+formatStat f =
+    if toFloat (round f) == f then
+        String.fromInt (round f)
+
+    else
+        String.fromFloat f
+
+
+colorTag : String -> Html Msg
+colorTag c =
+    span [ class ("color-" ++ String.left 1 (String.toLower c)) ] [ text c ]
+
+
+symbolTag : String -> Html Msg
+symbolTag s =
+    span [ class "symbol" ] [ text s ]
+
+
+viewCardAbilities : List String -> List (Html Msg)
+viewCardAbilities abilities =
+    if List.isEmpty abilities then
+        []
+
+    else
+        [ div [ class "abilities" ]
+            (List.map (\s -> div [] [ text s ]) abilities)
+        ]
+
+
+viewDeckbuilderDeck : Model -> Html Msg
+viewDeckbuilderDeck model =
+    div [ class "deck", style "border" "1px solid #333", style "padding" "0.5rem" ]
+        ([ Html.h2
+            [ style "font-size" "0.7rem"
+            , style "margin" "0 0 0.4rem 0"
+            , style "color" "#888"
+            , style "font-weight" "normal"
+            , style "text-transform" "uppercase"
+            , style "letter-spacing" "0.05em"
+            ]
+            [ text "Your deck" ]
+         , div
+            [ class "deck-summary"
+            , style "color" "#888"
+            , style "font-size" "0.7rem"
+            , style "margin-bottom" "0.4rem"
+            ]
+            [ text (String.fromInt (List.length model.deck) ++ " cards") ]
+         , viewDeckControls model
+         , viewDeckRows model
+         , viewStartButton model
+         , viewSpectateBlock model
+         ]
+        )
+
+
+viewDeckControls : Model -> Html Msg
+viewDeckControls model =
+    div
+        [ class "deck-controls"
+        , style "margin-top" "0.5rem"
+        , style "display" "flex"
+        , style "flex-direction" "column"
+        , style "gap" "0.4rem"
+        ]
+        [ Html.label
+            [ style "color" "#888"
+            , style "font-size" "0.7rem"
+            , style "display" "flex"
+            , style "align-items" "center"
+            , style "gap" "0.4rem"
+            ]
+            [ text "Load preset:"
+            , deckSelect "" PresetChosen <|
+                ( "(choose\u{2026})", "" )
+                    :: List.map (\p -> ( p.name, p.id )) model.presets
+            ]
+        , button [ class "danger", onClick DeckClearClicked ] [ text "Clear deck" ]
+        , Html.label
+            [ style "color" "#888"
+            , style "font-size" "0.7rem"
+            , style "display" "flex"
+            , style "align-items" "center"
+            , style "gap" "0.4rem"
+            ]
+            [ text "Opponent AI:"
+            , deckSelect model.oppAi OppAiChanged
+                [ ( "Heuristic (fast)", "heuristic" )
+                , ( "UCT (search)", "uct" )
+                , ( "MCTS (search)", "mcts" )
+                ]
+            ]
+        ]
+
+
+viewDeckRows : Model -> Html Msg
+viewDeckRows model =
+    let
+        counts =
+            countById model.deck
+
+        nameOf id =
+            model.cardPool
+                |> List.filter (\e -> e.id == id)
+                |> List.head
+                |> Maybe.map .name
+                |> Maybe.withDefault id
+
+        sorted =
+            counts
+                |> List.sortWith
+                    (\( ida, qa ) ( idb, qb ) ->
+                        if qa /= qb then
+                            compare qb qa
+
+                        else
+                            compare (nameOf ida) (nameOf idb)
+                    )
+    in
+    div [] (List.map (\( id, qty ) -> viewDeckRow (nameOf id) id qty) sorted)
+
+
+viewDeckRow : String -> String -> Int -> Html Msg
+viewDeckRow displayName cardId qty =
+    div
+        [ class "deck-row"
+        , style "display" "flex"
+        , style "align-items" "center"
+        , style "justify-content" "space-between"
+        , style "padding" "0.2rem 0.4rem"
+        , style "border-bottom" "1px solid #222"
+        , style "font-size" "0.75rem"
+        ]
+        [ span [ class "qty", style "color" "#fc6", style "min-width" "2.5rem" ]
+            [ text (String.fromInt qty ++ "\u{00D7}") ]
+        , span
+            [ class "name"
+            , style "color" "#eee"
+            , style "flex" "1"
+            , style "margin-left" "0.4rem"
+            ]
+            [ text displayName ]
+        , button
+            [ onClick (DeckRowRemove cardId)
+            , style "padding" "0.1rem 0.4rem"
+            , style "font-size" "0.7rem"
+            ]
+            [ text "-" ]
+        ]
+
+
+countById : List String -> List ( String, Int )
+countById ids =
+    ids
+        |> List.foldl
+            (\id dict ->
+                Dict.update id (\m -> Just (Maybe.withDefault 0 m + 1)) dict
+            )
+            Dict.empty
+        |> Dict.toList
+
+
+viewStartButton : Model -> Html Msg
+viewStartButton model =
+    button
+        [ class "start"
+        , onClick StartGameClicked
+        , Html.Attributes.disabled (List.isEmpty model.deck)
+        , style "margin-top" "0.8rem"
+        , style "padding" "0.5rem 1rem"
+        , style "font-size" "0.85rem"
+        , style "border-color" "#6f9"
+        ]
+        [ text "Start game" ]
+
+
+viewSpectateBlock : Model -> Html Msg
+viewSpectateBlock model =
+    div
+        [ style "margin-top" "1.2rem"
+        , style "padding-top" "0.6rem"
+        , style "border-top" "1px solid #333"
+        , style "display" "flex"
+        , style "flex-direction" "column"
+        , style "gap" "0.4rem"
+        ]
+        [ div [ style "color" "#888", style "font-size" "0.7rem" ]
+            [ text "Spectate (both AI, watch with scrubber)" ]
+        , aiPickerLabel "A:" model.specAiA SpecAiAChanged
+        , aiPickerLabel "B:" model.specAiB SpecAiBChanged
+        , button
+            [ class "start"
+            , onClick StartSpectateClicked
+            , Html.Attributes.disabled (List.isEmpty model.deck)
+            , style "border-color" "#cf6"
+            , style "padding" "0.5rem 1rem"
+            , style "font-size" "0.85rem"
+            ]
+            [ text "Spectate (both AI)" ]
+        ]
+
+
+aiPickerLabel : String -> String -> (String -> Msg) -> Html Msg
+aiPickerLabel labelText current toMsg =
+    Html.label
+        [ style "color" "#888"
+        , style "font-size" "0.7rem"
+        , style "display" "flex"
+        , style "align-items" "center"
+        , style "gap" "0.4rem"
+        ]
+        [ text labelText
+        , deckSelect current toMsg
+            [ ( "Heuristic", "heuristic" )
+            , ( "UCT", "uct" )
+            , ( "MCTS", "mcts" )
+            ]
+        ]
+
+
+dedupSorted : List String -> List String
+dedupSorted xs =
+    xs
+        |> List.foldl
+            (\x acc ->
+                if List.member x acc then
+                    acc
+
+                else
+                    x :: acc
+            )
+            []
+        |> List.sort
 
 
 viewSaveControls : Model -> Html Msg

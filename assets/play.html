@@ -117,7 +117,10 @@
 
 <!-- Deckbuilder: shown pre-game while state.phase === 'deckbuilding'.
      Hidden once the user clicks Start; the game-screen below takes over. -->
-<div id="deckbuilder" style="display:none;"></div>
+<!-- Stage 10: deckbuilder is rendered by Elm. Main.elm's
+     viewDeckbuilder mounts the same id="deckbuilder" so the existing
+     #deckbuilder .pool / .deck-row CSS in <style> above keeps
+     matching — but only when gamePhase == Deckbuilding. -->
 
 <!-- Spectator bar: scrubber + play/pause/step controls. Only visible
      while `state.phase === 'spectating'`. Reads from state.spectate
@@ -1670,7 +1673,7 @@ async function loadSaveJson(saveJson) {
   };
   const rawEnvelope = await workerCall('load_game', { loadArgs });
   setPhase('playing');
-  document.getElementById('deckbuilder').style.display = 'none';
+  // Stage 10: deckbuilder hides itself when gamePhase != Deckbuilding.
   document.getElementById('game-screen').style.display = '';
   // H7-Elm Stage 5: the saved-list panel is Elm-owned. After a
   // successful load we want it closed in case the user opened it to
@@ -1710,238 +1713,12 @@ window.tsotTestPanic = () =>
     await workerCall('test_panic', {});
   })();
 
-// ---------------- Deckbuilder ----------------
-
-// Group state.deck (flat array w/ repetition) into {card_id → count}.
-function deckCounts() {
-  const counts = new Map();
-  for (const id of state.deck) {
-    counts.set(id, (counts.get(id) || 0) + 1);
-  }
-  return counts;
-}
-
-function poolCardEl(entry) {
-  const div = document.createElement('div');
-  div.className = 'card pool-card';
-  // Same head/meta/abilities structure as the in-game cardEl, scaled
-  // down a touch — keeps the visual language consistent so the user
-  // recognizes cards from pool to hand.
-  const head = document.createElement('div');
-  head.className = 'head';
-  head.innerHTML = `<span class="name">${entry.name}</span><span class="cost">${entry.cost_text || ''}</span>`;
-  div.appendChild(head);
-
-  const metaParts = [];
-  if (entry.kind === 'Creature' && entry.power != null) {
-    metaParts.push(`<span class="stats">${entry.power}/${entry.toughness}</span>`);
-  }
-  if (entry.colors && entry.colors.length) metaParts.push(entry.colors.map(colorTag).join(''));
-  if (entry.symbols && entry.symbols.length) metaParts.push(entry.symbols.map(symbolTag).join(''));
-  if (entry.subtypes && entry.subtypes.length) {
-    metaParts.push(`<span style="color:#888;">${entry.subtypes.join('·')}</span>`);
-  }
-  if (metaParts.length) {
-    const m = document.createElement('div');
-    m.className = 'meta-line';
-    m.innerHTML = metaParts.join(' ');
-    div.appendChild(m);
-  }
-  if (entry.abilities && entry.abilities.length) {
-    const a = document.createElement('div');
-    a.className = 'abilities';
-    a.innerHTML = entry.abilities.map(s => `<div>${s}</div>`).join('');
-    div.appendChild(a);
-  }
-  div.title = entry.id;
-  div.onclick = () => {
-    state.deck.push(entry.id);
-    renderDeckbuilder();
-  };
-  return div;
-}
-
-function poolMatchesFilters(entry) {
-  if (state.poolFilterColor && !(entry.colors || []).includes(state.poolFilterColor)) {
-    return false;
-  }
-  if (state.poolFilterKind && entry.kind !== state.poolFilterKind) {
-    return false;
-  }
-  return true;
-}
-
-function renderDeckbuilder() {
-  document.getElementById('prompt').textContent =
-    'Pre-game — build your deck. Click cards on the left to add; click [-] to remove. Mirror match: your opponent uses the same deck.';
-  document.getElementById('meta').textContent = '';
-  document.getElementById('game-screen').style.display = 'none';
-  const root = document.getElementById('deckbuilder');
-  root.style.display = 'grid';
-  root.innerHTML = '';
-
-  // Pool side.
-  const poolSide = document.createElement('div');
-  poolSide.className = 'pool';
-  poolSide.innerHTML = `<h2>Card pool (${state.cardPool.length})</h2>`;
-
-  const filters = document.createElement('div');
-  filters.className = 'filters';
-  // Color filter — only show colors that actually appear in the pool.
-  const allColors = new Set();
-  for (const c of state.cardPool) for (const col of (c.colors || [])) allColors.add(col);
-  const colorSel = document.createElement('select');
-  colorSel.innerHTML = `<option value="">all colors</option>` +
-    [...allColors].sort().map(c => `<option value="${c}">${c}</option>`).join('');
-  colorSel.value = state.poolFilterColor;
-  colorSel.onchange = () => { state.poolFilterColor = colorSel.value; renderDeckbuilder(); };
-  filters.appendChild(colorSel);
-  // Kind filter.
-  const kindSel = document.createElement('select');
-  kindSel.innerHTML = `
-    <option value="">all kinds</option>
-    <option value="Creature">Creatures</option>
-    <option value="Spell">Spells</option>
-    <option value="Artifact">Artifacts</option>
-    <option value="Environment">Environments</option>
-    <option value="Mutation">Mutations</option>
-  `;
-  kindSel.value = state.poolFilterKind;
-  kindSel.onchange = () => { state.poolFilterKind = kindSel.value; renderDeckbuilder(); };
-  filters.appendChild(kindSel);
-  poolSide.appendChild(filters);
-
-  const grid = document.createElement('div');
-  grid.className = 'pool-grid';
-  for (const entry of state.cardPool) {
-    if (!poolMatchesFilters(entry)) continue;
-    grid.appendChild(poolCardEl(entry));
-  }
-  poolSide.appendChild(grid);
-  root.appendChild(poolSide);
-
-  // Deck side.
-  const deckSide = document.createElement('div');
-  deckSide.className = 'deck';
-  deckSide.innerHTML = `<h2>Your deck</h2>`;
-  const summary = document.createElement('div');
-  summary.className = 'deck-summary';
-  summary.textContent = `${state.deck.length} cards`;
-  deckSide.appendChild(summary);
-
-  // Preset dropdown + clear.
-  const controls = document.createElement('div');
-  controls.className = 'deck-controls';
-  const presetLabel = document.createElement('label');
-  presetLabel.textContent = 'Load preset:';
-  const presetSel = document.createElement('select');
-  presetSel.innerHTML = `<option value="">(choose…)</option>` +
-    state.presets.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-  presetSel.onchange = () => {
-    const choice = state.presets.find(p => p.id === presetSel.value);
-    if (choice) {
-      state.deck = choice.cards.slice();
-      renderDeckbuilder();
-    }
-  };
-  presetLabel.appendChild(presetSel);
-  controls.appendChild(presetLabel);
-
-  const clearBtn = document.createElement('button');
-  clearBtn.className = 'danger';
-  clearBtn.textContent = 'Clear deck';
-  clearBtn.onclick = () => { state.deck = []; renderDeckbuilder(); };
-  controls.appendChild(clearBtn);
-
-  // Opponent AI.
-  const oppLabel = document.createElement('label');
-  oppLabel.textContent = 'Opponent AI:';
-  const oppSel = document.createElement('select');
-  oppSel.innerHTML = `
-    <option value="heuristic">Heuristic (fast)</option>
-    <option value="uct">UCT (search)</option>
-    <option value="mcts">MCTS (search)</option>
-  `;
-  oppSel.value = state.oppAi;
-  oppSel.onchange = () => { state.oppAi = oppSel.value; };
-  oppLabel.appendChild(oppSel);
-  controls.appendChild(oppLabel);
-
-  deckSide.appendChild(controls);
-
-  // Deck rows, grouped by id and sorted by count desc then name asc.
-  const counts = deckCounts();
-  const idToEntry = new Map(state.cardPool.map(e => [e.id, e]));
-  const rows = [...counts.entries()].sort((a, b) => {
-    if (b[1] !== a[1]) return b[1] - a[1];
-    const an = (idToEntry.get(a[0])?.name) || a[0];
-    const bn = (idToEntry.get(b[0])?.name) || b[0];
-    return an.localeCompare(bn);
-  });
-  const list = document.createElement('div');
-  for (const [id, qty] of rows) {
-    const row = document.createElement('div');
-    row.className = 'deck-row';
-    const entry = idToEntry.get(id);
-    const name = entry ? entry.name : id;
-    row.innerHTML = `<span class="qty">${qty}×</span><span class="name">${name}</span>`;
-    const rm = document.createElement('button');
-    rm.textContent = '-';
-    rm.onclick = () => {
-      const idx = state.deck.indexOf(id);
-      if (idx >= 0) state.deck.splice(idx, 1);
-      renderDeckbuilder();
-    };
-    row.appendChild(rm);
-    list.appendChild(row);
-  }
-  deckSide.appendChild(list);
-
-  // Start button.
-  const startBtn = document.createElement('button');
-  startBtn.className = 'start';
-  startBtn.textContent = 'Start game';
-  startBtn.disabled = state.deck.length === 0;
-  startBtn.onclick = startGameFromDeckbuilder;
-  deckSide.appendChild(startBtn);
-
-  // Spectate (both-AI) block. Pickers for A + B + a Spectate button.
-  // Runs the whole game in wasm and returns the snapshot timeline
-  // for the scrubber UI (H6). Mirror always: both sides use the
-  // deck you've built.
-  const specWrap = document.createElement('div');
-  specWrap.style.cssText = 'margin-top:1.2rem; padding-top:0.6rem; border-top:1px solid #333; display:flex; flex-direction:column; gap:0.4rem;';
-  specWrap.innerHTML = `<div style="color:#888; font-size:0.7rem;">Spectate (both AI, watch with scrubber)</div>`;
-  const mkAiPicker = (key, label) => {
-    const wrap = document.createElement('label');
-    wrap.style.cssText = 'color:#888; font-size:0.7rem; display:flex; align-items:center; gap:0.4rem;';
-    wrap.textContent = label;
-    const sel = document.createElement('select');
-    sel.innerHTML = `
-      <option value="heuristic">Heuristic</option>
-      <option value="uct">UCT</option>
-      <option value="mcts">MCTS</option>
-    `;
-    sel.style.cssText = 'background:#1c1c20; color:#ddd; border:1px solid #444; padding:0.2rem 0.4rem; font-family:inherit; font-size:0.7rem; flex:1;';
-    sel.value = state[key];
-    sel.onchange = () => { state[key] = sel.value; };
-    wrap.appendChild(sel);
-    return wrap;
-  };
-  specWrap.appendChild(mkAiPicker('specAiA', 'A:'));
-  specWrap.appendChild(mkAiPicker('specAiB', 'B:'));
-  const specBtn = document.createElement('button');
-  specBtn.className = 'start';
-  specBtn.style.cssText = 'border-color:#cf6;';
-  specBtn.textContent = 'Spectate (both AI)';
-  specBtn.disabled = state.deck.length === 0;
-  specBtn.onclick = startSpectate;
-  specWrap.appendChild(specBtn);
-  deckSide.appendChild(specWrap);
-
-  root.appendChild(deckSide);
-}
-
+// Stage 10: deckbuilder UI (`deckCounts`, `poolCardEl`,
+// `poolMatchesFilters`, `renderDeckbuilder`) moved into Main.elm.
+// `viewDeckbuilder` + helpers in Elm own the render path; the
+// `bootDataIn` port seeds the card pool + presets from the bootstrap
+// fetch below. The functions below are gone — only the headstone
+// remains.
 // Generate a fresh game id for the decision log. Falls back to a
 // timestamp-based id if crypto.randomUUID isn't available.
 function freshGameId() {
@@ -1953,13 +1730,21 @@ function freshGameId() {
 
 // ============== Spectate (H6) ==============
 
-async function startSpectate() {
-  if (state.deck.length === 0) return;
+// Stage 10: Elm's Spectate button fires `workerCmdOut { cmd:
+// "start_spectate", payload: { deckIds, aiA, aiB } }`. js-bridge
+// dispatches to this. Payload mirrors into state.* so the rest of
+// the codebase (save flow, snapshot index) keeps reading the same
+// values.
+window.tsotStartSpectate = async function (payload) {
+  const deckIds = (payload && payload.deckIds) || [];
+  if (deckIds.length === 0) return;
+  state.deck = deckIds.slice();
+  state.specAiA = (payload && payload.aiA) || state.specAiA;
+  state.specAiB = (payload && payload.aiB) || state.specAiB;
   setPhase('spectating');
   state.gameId = null;       // spectated games aren't in the human decision log
   state.gameOverRecorded = false;
   state.preview = null;      // no preview in spectate mode
-  document.getElementById('deckbuilder').style.display = 'none';
   document.getElementById('game-screen').style.display = '';
   document.getElementById('spectator-bar').style.display = '';
   document.getElementById('prompt').textContent = 'Running game… (both AIs play to completion)';
@@ -2079,7 +1864,11 @@ function spectateExit() {
   setPhase('deckbuilding');
   document.getElementById('spectator-bar').style.display = 'none';
   document.getElementById('game-screen').style.display = 'none';
-  renderDeckbuilder();
+  // Stage 10: Elm's viewDeckbuilder re-renders itself when gamePhase
+  // transitions back to Deckbuilding. The prompt copy is restored here
+  // since play.html owns #prompt until a later stage.
+  document.getElementById('prompt').textContent =
+    'Pre-game — build your deck. Click cards on the left to add; click [-] to remove. Mirror match: your opponent uses the same deck.';
 }
 
 function wireSpectatorBar() {
@@ -2111,12 +1900,18 @@ function wireSpectatorBar() {
 
 // ============================================
 
-async function startGameFromDeckbuilder() {
-  if (state.deck.length === 0) return;
+// Stage 10: Elm's Start-game button fires `workerCmdOut { cmd:
+// "start_game", payload: { deckIds, oppAi } }`. js-bridge dispatches
+// here. Payload mirrors into state.deck / state.oppAi so getStartArgs
+// + the save flow keep working.
+window.tsotStartGameFromDeckbuilder = async function (payload) {
+  const deckIds = (payload && payload.deckIds) || [];
+  if (deckIds.length === 0) return;
+  state.deck = deckIds.slice();
+  state.oppAi = (payload && payload.oppAi) || state.oppAi;
   setPhase('playing');
   state.gameId = freshGameId();
   state.gameOverRecorded = false;
-  document.getElementById('deckbuilder').style.display = 'none';
   document.getElementById('game-screen').style.display = '';
   document.getElementById('prompt').textContent = 'Starting game…';
   try {
@@ -2127,37 +1922,70 @@ async function startGameFromDeckbuilder() {
     document.getElementById('prompt').textContent =
       'Engine error: ' + (e && e.message ? e.message : e);
   }
-}
+};
 
 (async () => {
+  // Each await sets a stage marker so a hang surfaces in the prompt
+  // line (visible in the page) instead of staying as the inert
+  // "Loading..." default. Wasm loads can take seconds on first paint;
+  // a timeout watchdog flips the prompt to a diagnostic if the wait
+  // exceeds a threshold so the developer doesn't read "Loading" as
+  // "stuck forever."
+  const setBootStage = (s) => {
+    const el = document.getElementById('prompt');
+    if (el) el.textContent = s;
+    window.tsotLogPushText && window.tsotLogPushText('[bootstrap] ' + s);
+  };
+
+  setBootStage('Bootstrap: wireSpectatorBar');
   wireSpectatorBar();
-  // Bootstrap: spawn the worker, await its `{kind:'ready'}`. The wasm
-  // lives in worker scope from here on; the main thread only sees
-  // postMessage envelopes. tsot_wasm.js is loaded by the worker via
-  // importScripts (see assets/tsot-worker.js), not by a <script> tag
-  // here — that keeps the heavy compile off the main thread.
+
+  let bootWatchdog = null;
+  const armWatchdog = (label, ms) => {
+    if (bootWatchdog) clearTimeout(bootWatchdog);
+    bootWatchdog = setTimeout(() => {
+      const el = document.getElementById('prompt');
+      if (el) el.textContent = '[bootstrap stuck > ' + ms + 'ms at: ' + label + ']';
+      window.tsotLogPushText && window.tsotLogPushText('[bootstrap stuck > ' + ms + 'ms at: ' + label + ']');
+    }, ms);
+  };
+  const disarmWatchdog = () => {
+    if (bootWatchdog) clearTimeout(bootWatchdog);
+    bootWatchdog = null;
+  };
+
   try {
+    setBootStage('Bootstrap: spawning worker');
+    armWatchdog('await wasmReady', 8000);
     bootWorker();
     await wasmReady;
+    disarmWatchdog();
+    setBootStage('Bootstrap: worker ready, requesting card pool');
   } catch (e) {
+    disarmWatchdog();
     document.getElementById('prompt').textContent =
       'Failed to load wasm worker: ' + (e && e.message ? e.message : e);
     return;
   }
   try {
-    // Deckbuilder pre-game: load the card pool + shipped preset decks
-    // sequentially (the worker enforces one inflight FFI at a time via
-    // `pendingFfi`), seed the working deck with the Starter preset,
-    // and render the builder. start_game doesn't fire until the user
-    // clicks Start.
+    armWatchdog('workerCall list_card_pool', 8000);
     const poolJson = await workerCall('list_card_pool', {});
-    state.cardPool = JSON.parse(poolJson);
+    disarmWatchdog();
+    const cardPool = JSON.parse(poolJson);
+    setBootStage('Bootstrap: card pool received, requesting presets');
+    armWatchdog('workerCall list_preset_decks', 8000);
     const presetsJson = await workerCall('list_preset_decks', {});
-    state.presets = JSON.parse(presetsJson);
-    const starter = state.presets.find(p => p.id === 'starter') || state.presets[0];
+    disarmWatchdog();
+    const presets = JSON.parse(presetsJson);
+    state.cardPool = cardPool;
+    state.presets = presets;
+    const starter = presets.find(p => p.id === 'starter') || presets[0];
     state.deck = starter ? starter.cards.slice() : [];
-    renderDeckbuilder();
+    window.tsotBootData({ cardPool, presets });
+    document.getElementById('prompt').textContent =
+      'Pre-game — build your deck. Click cards on the left to add; click [-] to remove. Mirror match: your opponent uses the same deck.';
   } catch (e) {
+    disarmWatchdog();
     document.getElementById('prompt').textContent =
       'Failed to load deckbuilder data: ' + (e && e.message ? e.message : e);
   }

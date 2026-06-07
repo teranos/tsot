@@ -253,7 +253,9 @@ function tsotShowBridgeFailure(stage, err) {
   if (!(app && app.ports && app.ports.workerCmdOut)) {
     throw new Error('workerCmdOut port missing — Main.elm wiring drift');
   }
-  app.ports.workerCmdOut.subscribe(async function (cmd) {
+  app.ports.workerCmdOut.subscribe(async function (envelope) {
+    const cmd = envelope && envelope.cmd;
+    const payload = envelope && envelope.payload;
     try {
       switch (cmd) {
         case 'save_game':
@@ -286,6 +288,12 @@ function tsotShowBridgeFailure(stage, err) {
         }
         case 'test_panic':
           await window.tsotTestPanic();
+          break;
+        case 'start_game':
+          await window.tsotStartGameFromDeckbuilder(payload);
+          break;
+        case 'start_spectate':
+          await window.tsotStartSpectate(payload);
           break;
         default:
           throw new Error('unknown worker cmd: ' + String(cmd));
@@ -364,6 +372,19 @@ function tsotShowBridgeFailure(stage, err) {
       tsotShowBridgeFailure('idbReq:' + String(op), e);
     }
   });
+
+  stage = 'bootDataIn shim';
+  // Stage 10 deckbuilder retry: play.html's bootstrap calls
+  // window.tsotBootData({cardPool, presets}) once it has both from the
+  // worker (list_card_pool + list_preset_decks). Elm decodes into
+  // Model.cardPool / Model.presets and seeds the working deck with the
+  // Starter preset on first paint.
+  if (!app.ports.bootDataIn) {
+    throw new Error('bootDataIn port missing — Main.elm wiring drift');
+  }
+  window.tsotBootData = function (data) {
+    app.ports.bootDataIn.send(data);
+  };
 
   // Push a fresh saves list to Elm. Used by play.html's onSaveClick
   // after a successful Save — if the panel happens to be open it

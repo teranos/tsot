@@ -51,10 +51,10 @@ generic envelope forwarding.
   string instead of port name; unknown cmd/op surfaces via the fault
   banner.~~
 
-- [ ] **10: Deckbuilder (retry on collapsed bridge).**
-  Same scope as stage 7 — pool/filters/deck/preset/AI/Start/Spectate.
-  Sends `idbReqOut { op = "list_card_pool" }`-style envelopes through
-  ports that already exist; no new ports needed.
+- [x] ~~**10: Deckbuilder (retry on collapsed bridge).**~~
+  ~~Same scope as stage 7 — pool/filters/deck/preset/AI/Start/Spectate
+  in Elm. workerCmdOut extended to `{cmd, payload}` envelope; one
+  `bootDataIn` inbound port for the startup card-pool + presets push.~~
 
 - [ ] **11: Game-screen render.**
   Biggest remaining island. `_renderInner` + `cardEl` + every
