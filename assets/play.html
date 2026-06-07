@@ -114,11 +114,13 @@
   <button id="btn-test-panic" class="danger" style="margin-left: auto;">Trigger test panic</button>
   <span id="save-status" style="color:#888; font-size: 0.7rem;"></span>
 </div>
-<div id="saved-list" style="display:none; border:1px solid #333; padding:0.4rem; margin-bottom:0.5rem;"></div>
 <!-- H7-Elm Stage 4: the decision-report panel is rendered by Elm
      (see Main.elm's viewDecisionPanel) — it appears at the top of
      Elm's view tree, above the LOG, when the user clicks the
-     Decision report button. -->
+     Decision report button.
+     H7-Elm Stage 5: the saved-list panel is also Elm-rendered (see
+     Main.elm's viewSavedListPanel) — it appears above the
+     decision-report panel when the user clicks "Load saved…". -->
 
 <div class="meta" id="meta"></div>
 
@@ -1583,25 +1585,11 @@ async function dbPut(record) {
   });
 }
 
-async function dbGetAll() {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readonly');
-    const req = tx.objectStore(STORE).getAll();
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function dbDelete(id) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    const req = tx.objectStore(STORE).delete(id);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
+// H7-Elm Stage 5: `dbGetAll` + `dbDelete` (saves-store read + delete)
+// moved into assets/js-bridge.js (as `tsotDbGetAllSaves` /
+// `tsotDbDeleteSave` / `tsotDbGetSaveById`). The write side (`dbPut`)
+// stays here — it's still called by `onSaveClick` whose button +
+// flow haven't been ported to Elm yet (Stage 6).
 
 // ---- decision log helpers (read/write `DECISION_STORE`) ----
 
@@ -1642,9 +1630,10 @@ async function onSaveClick() {
   const name = window.prompt('Save name', `turn ${state.current?.state?.turn ?? '?'}`) || `save-${Date.now()}`;
   await dbPut({ name, savedAt: new Date().toISOString(), json });
   setSaveStatus(`saved "${name}"`);
-  if (document.getElementById('saved-list').style.display !== 'none') {
-    renderSavedList();
-  }
+  // H7-Elm Stage 5: ask Elm's saved-list panel to refresh. If the
+  // panel is hidden, Elm ignores the update (see SavedListReceived);
+  // if shown, it re-renders with the new save included.
+  if (window.tsotSavedListRefresh) window.tsotSavedListRefresh();
 }
 
 async function onDownloadClick() {
@@ -1681,7 +1670,10 @@ async function loadSaveJson(saveJson) {
   state.phase = 'playing';
   document.getElementById('deckbuilder').style.display = 'none';
   document.getElementById('game-screen').style.display = '';
-  document.getElementById('saved-list').style.display = 'none';
+  // H7-Elm Stage 5: the saved-list panel is Elm-owned. After a
+  // successful load we want it closed in case the user opened it to
+  // pick this save; Elm hides it via window.tsotSavedListToggle if
+  // currently shown.
   const { prompt } = parseEnvelope(rawEnvelope);
   state.current = { state: prompt.state, prompt };
   render(state.current);
@@ -1689,58 +1681,12 @@ async function loadSaveJson(saveJson) {
   setSaveStatus('loaded');
 }
 
-async function renderSavedList() {
-  const panel = document.getElementById('saved-list');
-  panel.innerHTML = '';
-  panel.style.display = '';
-  let records;
-  try {
-    records = await dbGetAll();
-  } catch (e) {
-    panel.textContent = 'Failed to read IndexedDB: ' + (e?.message || e);
-    return;
-  }
-  if (!records.length) {
-    panel.textContent = '(no saves yet)';
-    return;
-  }
-  records.sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''));
-  for (const rec of records) {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex; gap:0.4rem; align-items:center; padding:0.2rem 0;';
-    row.innerHTML = `<span style="flex:1;">${rec.name} <span style="color:#666;">— ${rec.savedAt}</span></span>`;
-    const loadBtn = document.createElement('button');
-    loadBtn.textContent = 'Load';
-    loadBtn.onclick = withInlineError(`load_game ("${rec.name}")`, async () => {
-      await loadSaveJson(rec.json);
-    });
-    const dlBtn = document.createElement('button');
-    dlBtn.textContent = 'Download';
-    dlBtn.onclick = withInlineError(`download ("${rec.name}")`, () => {
-      const blob = new Blob([rec.json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${rec.name.replace(/[^a-z0-9_-]+/gi, '_')}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    });
-    const delBtn = document.createElement('button');
-    delBtn.className = 'danger';
-    delBtn.textContent = 'Delete';
-    delBtn.onclick = withInlineError(`delete ("${rec.name}")`, async () => {
-      if (!confirm(`Delete "${rec.name}"?`)) return;
-      await dbDelete(rec.id);
-      renderSavedList();
-    });
-    row.appendChild(loadBtn);
-    row.appendChild(dlBtn);
-    row.appendChild(delBtn);
-    panel.appendChild(row);
-  }
-}
+// H7-Elm Stage 5: the saved-list panel + its per-row Load / Download /
+// Delete buttons moved into Elm (Main.elm's viewSavedListPanel +
+// viewSaveRow). The inline `renderSavedList` here was REMOVED — JS
+// now just exposes `window.tsotLoadSaveJson` for the Load action and
+// the IDB read/delete sides moved into assets/js-bridge.js.
+window.tsotLoadSaveJson = loadSaveJson;
 
 async function onLoadFileChange(ev) {
   const file = ev.target.files?.[0];
@@ -1758,10 +1704,11 @@ function wireSaveControls() {
     withInlineError('save_game', () => onSaveClick());
   document.getElementById('btn-download').onclick =
     withInlineError('save_game (download)', () => onDownloadClick());
+  // H7-Elm Stage 5: the saved-list panel is rendered by Elm.
+  // Toggle visibility via the savedListToggleIn port; Elm decides
+  // whether to fetch records or hide.
   document.getElementById('btn-load-saved').onclick = () => {
-    const panel = document.getElementById('saved-list');
-    if (panel.style.display === 'none') renderSavedList();
-    else panel.style.display = 'none';
+    window.tsotSavedListToggle();
   };
   document.getElementById('btn-load-file').onclick = () => {
     document.getElementById('file-input').click();

@@ -83,6 +83,18 @@ port decisionLogIn : (D.Value -> msg) -> Sub msg
 port decisionFetchOut : () -> Cmd msg
 
 
+port savedListToggleIn : (() -> msg) -> Sub msg
+
+
+port savedListIn : (D.Value -> msg) -> Sub msg
+
+
+port savedListFetchOut : () -> Cmd msg
+
+
+port savedItemActionOut : { action : String, id : Int } -> Cmd msg
+
+
 
 -- MODEL
 
@@ -170,10 +182,25 @@ type DecisionPanel
     | DecisionError String
 
 
+type alias SaveItem =
+    { id : Int
+    , name : String
+    , savedAt : String
+    }
+
+
+type SavedListState
+    = SavedHidden
+    | SavedLoading
+    | SavedShown (List SaveItem)
+    | SavedError String
+
+
 type alias Model =
     { build : BuildState
     , log : List LogEntry
     , decisionPanel : DecisionPanel
+    , savedList : SavedListState
     }
 
 
@@ -193,6 +220,12 @@ type Msg
     | DecisionReportClicked
     | DecisionLogReceived D.Value
     | DecisionPanelClosed
+    | SavedListToggleClicked
+    | SavedListReceived D.Value
+    | SavedItemLoad Int
+    | SavedItemDownload Int
+    | SavedItemDelete Int
+    | SavedListClosed
     | NoOp
 
 
@@ -205,6 +238,7 @@ init _ =
     ( { build = AwaitingPort
       , log = []
       , decisionPanel = DecisionHidden
+      , savedList = SavedHidden
       }
     , Cmd.none
     )
@@ -267,6 +301,59 @@ update msg model =
 
         DecisionPanelClosed ->
             ( { model | decisionPanel = DecisionHidden }, Cmd.none )
+
+        SavedListToggleClicked ->
+            case model.savedList of
+                SavedShown _ ->
+                    ( { model | savedList = SavedHidden }, Cmd.none )
+
+                SavedError _ ->
+                    ( { model | savedList = SavedHidden }, Cmd.none )
+
+                _ ->
+                    ( { model | savedList = SavedLoading }, savedListFetchOut () )
+
+        SavedListReceived value ->
+            -- A refresh push from JS (after a Save or Delete) arrives
+            -- here too. Only update visibility if the panel is shown;
+            -- background refresh shouldn't yank a hidden panel open.
+            case model.savedList of
+                SavedHidden ->
+                    ( model, Cmd.none )
+
+                _ ->
+                    case D.decodeValue decodeSavedListEnvelope value of
+                        Ok (Ok items) ->
+                            ( { model | savedList = SavedShown items }, Cmd.none )
+
+                        Ok (Err err) ->
+                            ( { model | savedList = SavedError err }, Cmd.none )
+
+                        Err err ->
+                            ( { model | savedList = SavedError (D.errorToString err) }
+                            , Cmd.none
+                            )
+
+        SavedItemLoad id ->
+            -- JS reads the record, calls the inline `loadSaveJson`
+            -- (still in play.html) which mutates game state + renders.
+            -- Elm doesn't track that side; the panel stays Shown so
+            -- the user can pick a different save if loading fails.
+            ( model, savedItemActionOut { action = "load", id = id } )
+
+        SavedItemDownload id ->
+            ( model, savedItemActionOut { action = "download", id = id } )
+
+        SavedItemDelete id ->
+            -- JS asks confirm(), then deletes, then sends the fresh list
+            -- back via savedListIn. Elm transitions to Loading so the
+            -- user sees the panel is updating.
+            ( { model | savedList = SavedLoading }
+            , savedItemActionOut { action = "delete", id = id }
+            )
+
+        SavedListClosed ->
+            ( { model | savedList = SavedHidden }, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )
@@ -361,6 +448,26 @@ decodeSummaryDetails =
     D.map2 SummaryDetails
         (D.field "gameId" D.string)
         (optionalField "winner" D.string)
+
+
+{-| js-bridge sends `{ items: [...] }` on success or `{ error: "..." }`
+on failure. The Result-typed envelope keeps the two paths explicit at
+the call site in `update`.
+-}
+decodeSavedListEnvelope : D.Decoder (Result String (List SaveItem))
+decodeSavedListEnvelope =
+    D.oneOf
+        [ D.field "items" (D.list decodeSaveItem) |> D.map Ok
+        , D.field "error" D.string |> D.map Err
+        ]
+
+
+decodeSaveItem : D.Decoder SaveItem
+decodeSaveItem =
+    D.map3 SaveItem
+        (D.field "id" D.int)
+        (D.field "name" D.string)
+        (D.field "savedAt" D.string)
 
 
 optionalField : String -> D.Decoder a -> D.Decoder (Maybe a)
@@ -678,6 +785,8 @@ subscriptions _ =
         , logErrorIn LogErrorReceived
         , decisionReportClickedIn (\_ -> DecisionReportClicked)
         , decisionLogIn DecisionLogReceived
+        , savedListToggleIn (\_ -> SavedListToggleClicked)
+        , savedListIn SavedListReceived
         ]
 
 
@@ -688,7 +797,8 @@ subscriptions _ =
 view : Model -> Html Msg
 view model =
     div []
-        [ viewDecisionPanel model.decisionPanel
+        [ viewSavedListPanel model.savedList
+        , viewDecisionPanel model.decisionPanel
         , viewLog model.log
         , viewBuildFooter model.build
         ]
@@ -857,6 +967,74 @@ footerDiv children =
         , style "z-index" "1000"
         ]
         children
+
+
+viewSavedListPanel : SavedListState -> Html Msg
+viewSavedListPanel state =
+    case state of
+        SavedHidden ->
+            text ""
+
+        SavedLoading ->
+            savedListDiv [ text "Loading saves…" ]
+
+        SavedShown [] ->
+            savedListDiv
+                [ text "(no saves yet)"
+                , savedListCloseButton
+                ]
+
+        SavedShown items ->
+            savedListDiv
+                (List.map viewSaveRow items
+                    ++ [ savedListCloseButton ]
+                )
+
+        SavedError err ->
+            savedListDiv
+                [ div [ style "color" "#f88" ]
+                    [ text ("Failed to read IndexedDB: " ++ err) ]
+                , savedListCloseButton
+                ]
+
+
+savedListDiv : List (Html Msg) -> Html Msg
+savedListDiv children =
+    div
+        [ id "saved-list"
+        , style "border" "1px solid #333"
+        , style "padding" "0.4rem"
+        , style "margin-bottom" "0.5rem"
+        ]
+        children
+
+
+savedListCloseButton : Html Msg
+savedListCloseButton =
+    div [ style "margin-top" "0.4rem" ]
+        [ button [ onClick SavedListClosed ] [ text "Close" ] ]
+
+
+viewSaveRow : SaveItem -> Html Msg
+viewSaveRow item =
+    div
+        [ style "display" "flex"
+        , style "gap" "0.4rem"
+        , style "align-items" "center"
+        , style "padding" "0.2rem 0"
+        ]
+        [ span [ style "flex" "1" ]
+            [ text item.name
+            , span [ style "color" "#666" ] [ text (" — " ++ item.savedAt) ]
+            ]
+        , button [ onClick (SavedItemLoad item.id) ] [ text "Load" ]
+        , button [ onClick (SavedItemDownload item.id) ] [ text "Download" ]
+        , button
+            [ class "danger"
+            , onClick (SavedItemDelete item.id)
+            ]
+            [ text "Delete" ]
+        ]
 
 
 viewDecisionPanel : DecisionPanel -> Html Msg

@@ -62,6 +62,50 @@ async function tsotDbClearDecisions() {
   });
 }
 
+// H7-Elm Stage 5 — saves-store read helpers. The write side
+// (`dbPut`) still lives in play.html (called by `onSaveClick`); the
+// read + delete sides come here so the Elm saved-list panel and its
+// per-row Load/Delete/Download buttons can drive them via the
+// `savedListFetchOut` + `savedItemActionOut` ports.
+async function tsotDbGetAllSaves() {
+  const db = await tsotOpenDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(TSOT_SAVES_STORE, 'readonly');
+    const req = tx.objectStore(TSOT_SAVES_STORE).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function tsotDbGetSaveById(id) {
+  const db = await tsotOpenDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(TSOT_SAVES_STORE, 'readonly');
+    const req = tx.objectStore(TSOT_SAVES_STORE).get(id);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function tsotDbDeleteSave(id) {
+  const db = await tsotOpenDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(TSOT_SAVES_STORE, 'readwrite');
+    const req = tx.objectStore(TSOT_SAVES_STORE).delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// Strip the (potentially large) `json` field and sort newest-first.
+// Elm only needs metadata for the list view; the json content is read
+// on-demand inside Load / Download handlers below.
+function tsotSavesToMetadataList(records) {
+  return (records || [])
+    .map((r) => ({ id: r.id, name: r.name, savedAt: r.savedAt }))
+    .sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''));
+}
+
 function tsotSetSaveStatus(msg) {
   const el = document.getElementById('save-status');
   if (el) el.textContent = msg;
@@ -181,4 +225,110 @@ function tsotSetSaveStatus(msg) {
       tsotSetSaveStatus('clear failed: ' + String(e));
     }
   };
+
+  // Saved-list bridge (Stage 5). Elm owns the panel state machine +
+  // rendering; JS owns the IDB ops + the per-item Load/Delete/Download
+  // actions because they reach back into play.html's live game state
+  // (`loadSaveJson` mutates `state.phase`, `state.current`, kicks the
+  // render loop) which hasn't been ported to Elm.
+  if (
+    app && app.ports
+    && app.ports.savedListFetchOut
+    && app.ports.savedItemActionOut
+    && app.ports.savedListIn
+    && app.ports.savedListToggleIn
+  ) {
+    app.ports.savedListFetchOut.subscribe(async function () {
+      try {
+        const records = await tsotDbGetAllSaves();
+        app.ports.savedListIn.send({ items: tsotSavesToMetadataList(records) });
+      } catch (e) {
+        app.ports.savedListIn.send({ error: String(e) });
+        console.error('savedListFetchOut: IDB read failed', e);
+      }
+    });
+
+    app.ports.savedItemActionOut.subscribe(async function (payload) {
+      const action = payload && payload.action;
+      const id = payload && payload.id;
+      try {
+        switch (action) {
+          case 'load': {
+            const rec = await tsotDbGetSaveById(id);
+            if (!rec) {
+              tsotSetSaveStatus(`save ${id} not found`);
+              return;
+            }
+            if (typeof window.tsotLoadSaveJson !== 'function') {
+              console.error('window.tsotLoadSaveJson missing — play.html wiring drift?');
+              return;
+            }
+            await window.tsotLoadSaveJson(rec.json);
+            break;
+          }
+          case 'download': {
+            const rec = await tsotDbGetSaveById(id);
+            if (!rec) {
+              tsotSetSaveStatus(`save ${id} not found`);
+              return;
+            }
+            const blob = new Blob([rec.json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = rec.name.replace(/[^a-z0-9_-]+/gi, '_') + '.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            break;
+          }
+          case 'delete': {
+            const rec = await tsotDbGetSaveById(id);
+            if (!rec) {
+              tsotSetSaveStatus(`save ${id} not found`);
+              return;
+            }
+            if (!confirm(`Delete "${rec.name}"?`)) {
+              // User cancelled — re-send the same list so Elm exits
+              // its Loading state (the click moved it there before
+              // the confirm dialog).
+              const records = await tsotDbGetAllSaves();
+              app.ports.savedListIn.send({ items: tsotSavesToMetadataList(records) });
+              return;
+            }
+            await tsotDbDeleteSave(id);
+            const records = await tsotDbGetAllSaves();
+            app.ports.savedListIn.send({ items: tsotSavesToMetadataList(records) });
+            break;
+          }
+          default:
+            console.error('savedItemActionOut: unknown action', action);
+        }
+      } catch (e) {
+        console.error('savedItemActionOut failed', action, e);
+        tsotSetSaveStatus(`${action} failed: ${String(e)}`);
+      }
+    });
+
+    window.tsotSavedListToggle = function () {
+      app.ports.savedListToggleIn.send(null);
+    };
+
+    // Push a fresh saves list to Elm. Used after a successful Save —
+    // if the panel happens to be open it refreshes in place; if
+    // hidden, Elm ignores the update (see `SavedListReceived`).
+    window.tsotSavedListRefresh = async function () {
+      try {
+        const records = await tsotDbGetAllSaves();
+        app.ports.savedListIn.send({ items: tsotSavesToMetadataList(records) });
+      } catch (e) {
+        console.error('tsotSavedListRefresh failed', e);
+      }
+    };
+  } else {
+    console.error('js-bridge: saved-list ports missing — Main.elm port wiring drift?');
+    window.tsotSavedListToggle = function () {};
+    window.tsotSavedListRefresh = function () {};
+  }
 })();
