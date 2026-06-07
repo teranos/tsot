@@ -261,7 +261,16 @@ pub(crate) fn build_pattern_b_choices(
                 CostSource::Graveyard => caps.push(gy_size),
                 CostSource::Sacrifice => caps.push(board_creatures),
                 CostSource::SelfExile => {}
-                CostSource::Attached => {}
+                // P.31 (X-attached): cap by how many attached cards
+                // are actually eligible to pay. Without this, casts
+                // with X-attached components (wither: X-hand +
+                // X-graveyard + X-attached) let the oracle pick X
+                // higher than attached availability, then build's
+                // attached-fill returns 1 when play_card expects 2 —
+                // WrongAttachedPaymentCount { expected: X, got: <X }.
+                CostSource::Attached => {
+                    caps.push(state.eligible_attached_payments(active, picked).len());
+                }
             }
         }
         let max_x = caps.into_iter().min().unwrap_or(0).min(10) as i32;
