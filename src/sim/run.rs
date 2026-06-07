@@ -166,6 +166,55 @@ pub(crate) fn build_pattern_b_choices(
                     .unwrap_or(false)
             })
             .count();
+        // Jewel-tap covers one HAND slot — same reduction the non-X
+        // branches and play_card itself apply. Including it in the
+        // cap lets sunburst-drake / hydra cast at X=1 when the only
+        // viable payment is a same-color jewel on board.
+        let jewel_coverage =
+            usize::from(state.find_jewel_tap_candidate(active, picked).is_some());
+        // P.12b identity-coverage gate (mirrored from play.rs:407-449):
+        // when the cast has any identity and no Graveyard cost component
+        // can supply a color-anchor, play_card requires hand_payment_ids
+        // non-empty whenever gy_hand_payment_ids is non-empty. Filling
+        // hand slots entirely with GY substitutes plus jewel still
+        // trips the gate because jewel doesn't satisfy identity. So:
+        //   - identity_count >= 1: substitutes can extend X, since at
+        //     least one hand_payment will be a real identity card.
+        //   - identity_count == 0: X must be small enough that ZERO GY
+        //     substitutes are needed. That means hand_needed (= X minus
+        //     jewel_coverage) must be 0, i.e. X <= jewel_coverage.
+        // gy_anchor (P.12b) suspends the gate, but only when the cast
+        // has gy_need > 0 AND a color-matching GY card exists — only
+        // applies to casts with a Graveyard cost component.
+        let cast_ident = state.card_identity(picked);
+        let has_gy_cost = cost
+            .iter()
+            .any(|c| matches!(c.source, CostSource::Graveyard));
+        let cast_colors_lc: std::collections::BTreeSet<String> = state
+            .card_pool
+            .get(picked)
+            .map(|i| {
+                i.card
+                    .colors
+                    .iter()
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let gy_anchor_possible = has_gy_cost
+            && !cast_colors_lc.is_empty()
+            && p.graveyard.iter().any(|gid| {
+                state
+                    .card_pool
+                    .get(gid)
+                    .map(|i| {
+                        i.card
+                            .colors
+                            .iter()
+                            .any(|c| cast_colors_lc.contains(&c.to_ascii_lowercase()))
+                    })
+                    .unwrap_or(false)
+            });
         let mut caps: Vec<usize> = Vec::new();
         for c in &cost {
             if !c.is_x {
@@ -174,7 +223,14 @@ pub(crate) fn build_pattern_b_choices(
             match c.source {
                 CostSource::Hand => {
                     let hand_avail = identity_count.min(hand_size.saturating_sub(1));
-                    caps.push(hand_avail + gy_subs_available);
+                    let gates_block_subs =
+                        !cast_ident.is_empty() && identity_count == 0 && !gy_anchor_possible;
+                    let subs_room = if gates_block_subs {
+                        0
+                    } else {
+                        gy_subs_available
+                    };
+                    caps.push(hand_avail + jewel_coverage + subs_room);
                 }
                 CostSource::Mill => caps.push(deck_size),
                 CostSource::Graveyard => caps.push(gy_size),
