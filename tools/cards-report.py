@@ -432,9 +432,13 @@ KNOWN_FRAMES = ["transparent"]
 # `face` is a follow-up slice — for now glow appears in this list so
 # the dashboard already knows where to render it when migration lands.
 KNOWN_FACES = ["shiny", "holo", "glow"]
-KNOWN_TYPES = ["creature", "instant", "sorcery", "artifact", "mutation"]
+KNOWN_TYPES = ["creature", "instant", "sorcery", "artifact", "mutation", "symbol"]
 KNOWN_SOURCES = ["hand", "mill", "graveyard", "sacrifice", "self"]
 COST_BUCKETS: list = [0, 1, 2, 3, 4, 5, "6+", "X"]
+# Teranos symbol set per CLAUDE.md: ax = ⋈, ix = ⨳, am = ≡, pulse = ꩜, sem = ⊨.
+# Rendered top-to-bottom in matrices and left-to-right in chip rows.
+KNOWN_SYMBOLS = ["⋈", "⨳", "≡", "꩜", "⊨"]
+SYMBOL_NAMES = {"⋈": "ax", "⨳": "ix", "≡": "am", "꩜": "pulse", "⊨": "sem"}
 
 
 def bucket_cost(tc):
@@ -462,8 +466,11 @@ def build_aggregates(cards: list[dict]) -> dict:
         "by_type": {},
         "by_subtype": {},
         "by_keyword": {kw: 0 for kw in KNOWN_KEYWORDS},
+        "by_symbol": {s: 0 for s in KNOWN_SYMBOLS},
+        "symbolless": 0,
         "color_x_cost": {c: {b: 0 for b in COST_BUCKETS} for c in all_colors},
         "color_x_type": {c: {t: 0 for t in KNOWN_TYPES} for c in all_colors},
+        "color_x_symbol": {c: {s: 0 for s in KNOWN_SYMBOLS} for c in all_colors},
         "source_mix": {c: {"total": 0, **{s: 0 for s in KNOWN_SOURCES}} for c in all_colors},
         "multicolor": {"single": 0, "hybrid": 0, "colorless": 0},
     }
@@ -493,11 +500,21 @@ def build_aggregates(cards: list[dict]) -> dict:
         tc = card_total_cost(card)
         bucket = bucket_cost(tc)
         cost_targets = ["colorless"] if not cs else cs
+        sym = card.get("symbol")
+        if sym in KNOWN_SYMBOLS:
+            agg["by_symbol"][sym] += 1
+        elif sym:
+            agg["by_symbol"][sym] = agg["by_symbol"].get(sym, 0) + 1
+        else:
+            agg["symbolless"] += 1
         for color in cost_targets:
             cx = agg["color_x_cost"].setdefault(color, {b: 0 for b in COST_BUCKETS})
             cx[bucket] = cx.get(bucket, 0) + 1
             ct = agg["color_x_type"].setdefault(color, {t: 0 for t in KNOWN_TYPES})
             ct[t] = ct.get(t, 0) + 1
+            if sym:
+                cxs = agg["color_x_symbol"].setdefault(color, {s: 0 for s in KNOWN_SYMBOLS})
+                cxs[sym] = cxs.get(sym, 0) + 1
 
         if card.get("cost"):
             for comp in card["cost"]:
@@ -898,6 +915,24 @@ def render_html(
         n = agg["by_face"].get(fa, 0)
         if n > 0:
             w(f'<span class="chip">{face_badge(fa)}<b>{n}</b></span>')
+    w("</div><div style='margin-top:6px'>")
+    for s in KNOWN_SYMBOLS:
+        n = agg["by_symbol"].get(s, 0)
+        label = SYMBOL_NAMES.get(s, s)
+        w(
+            f'<span class="chip"><span class="sym-glyph">{esc(s)}</span> '
+            f'{esc(label)}<b>{n}</b></span>'
+        )
+    extra_syms = sorted(
+        (s, n) for s, n in agg["by_symbol"].items() if s not in KNOWN_SYMBOLS and n > 0
+    )
+    for s, n in extra_syms:
+        w(
+            f'<span class="chip"><span class="sym-glyph">{esc(s)}</span>'
+            f'<b>{n}</b></span>'
+        )
+    if agg["symbolless"] > 0:
+        w(f'<span class="chip">no symbol<b>{agg["symbolless"]}</b></span>')
     w("</div>")
 
     color_rows = list(KNOWN_COLORS)
@@ -949,6 +984,34 @@ def render_html(
             else:
                 w('<td class="num"></td>')
         w("</tr>")
+    w("</tbody></table>")
+
+    # Color × symbol
+    w("<h2>Color × symbol</h2>")
+    w('<p class="note">Which colors carry which Teranos symbols. ')
+    w("Empty cells surface the color/symbol pairs that don't exist yet. ")
+    w("Cards without a symbol are excluded from this matrix.</p>")
+    w('<table class="heat"><thead><tr><th>color</th>')
+    for s in KNOWN_SYMBOLS:
+        w(
+            f'<th class="num"><span class="sym-glyph">{esc(s)}</span> '
+            f'<span style="color:var(--text-tertiary);font-size:10px">'
+            f'{esc(SYMBOL_NAMES.get(s, ""))}</span></th>'
+        )
+    w("<th class=num>total</th></tr></thead><tbody>")
+    for c in color_rows:
+        row = agg["color_x_symbol"].get(c, {s: 0 for s in KNOWN_SYMBOLS})
+        row_max = max(row.get(s, 0) for s in KNOWN_SYMBOLS)
+        w(f'<tr><th>{color_swatch(c)}</th>')
+        row_total = 0
+        for s in KNOWN_SYMBOLS:
+            v = row.get(s, 0)
+            row_total += v
+            if v > 0:
+                w(f'<td class="num" style="{color_cell_style(v, row_max)}">{v}</td>')
+            else:
+                w('<td class="num"></td>')
+        w(f'<td class="num">{row_total}</td></tr>')
     w("</tbody></table>")
 
     # Cost-source mix
