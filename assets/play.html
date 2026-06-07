@@ -115,7 +115,10 @@
   <span id="save-status" style="color:#888; font-size: 0.7rem;"></span>
 </div>
 <div id="saved-list" style="display:none; border:1px solid #333; padding:0.4rem; margin-bottom:0.5rem;"></div>
-<div id="decision-report" style="display:none; border:1px solid #333; padding:0.6rem; margin-bottom:0.5rem; font-size:0.75rem;"></div>
+<!-- H7-Elm Stage 4: the decision-report panel is rendered by Elm
+     (see Main.elm's viewDecisionPanel) — it appears at the top of
+     Elm's view tree, above the LOG, when the user clicks the
+     Decision report button. -->
 
 <div class="meta" id="meta"></div>
 
@@ -910,125 +913,10 @@ function recordDecision(action) {
   dbAppendDecision(record).catch(() => { /* IDB failure non-fatal */ });
 }
 
-// In-page decision-report renderer. Reads the IndexedDB records the
-// `recordDecision` / `recordGameSummary` calls have been appending,
-// computes the same aggregations the standalone Python script does,
-// returns HTML for the inline panel. Same data, zero context switch:
-// click the button, see the table, no terminal, no file.
-function renderDecisionReport(records) {
-  if (!records || records.length === 0) {
-    return '<div style="color:#888;">No decisions recorded yet — play a game to populate.</div>';
-  }
-  // Group by gameId — one bucket per game with its prompts + (maybe)
-  // its summary record.
-  const games = new Map();
-  for (const r of records) {
-    const gid = r.gameId;
-    if (!gid) continue;
-    if (!games.has(gid)) games.set(gid, { prompts: [], summary: null });
-    const g = games.get(gid);
-    if (r.type === 'prompt') g.prompts.push(r);
-    else if (r.type === 'summary') g.summary = r;
-  }
-
-  let nGames = games.size;
-  let nGamesWithSummary = 0;
-  let nPrompts = 0;
-  let nUctPrompts = 0;
-  let nAgree = 0, nDisagree = 0;
-  let agreeWins = 0, agreeLosses = 0;
-  let disagreeWins = 0, disagreeLosses = 0;
-  // Per-card counters. iid format is "A:0001:blue-monkey" — card name
-  // is the suffix after the last colon.
-  const perCard = new Map();
-  function bumpCard(card, field) {
-    if (!perCard.has(card)) {
-      perCard.set(card, {
-        uct_recommended: 0,
-        human_picked: 0,
-        wins: 0,
-        decided_games: 0,
-      });
-    }
-    perCard.get(card)[field]++;
-  }
-
-  for (const [, g] of games) {
-    if (g.summary) nGamesWithSummary++;
-    const winner = g.summary ? g.summary.winner : null;
-    const humanWon = winner === 'A';
-    for (const p of g.prompts) {
-      nPrompts++;
-      if (p.uct) {
-        nUctPrompts++;
-        if (p.agreement === true) {
-          nAgree++;
-          if (winner != null) (humanWon ? agreeWins++ : agreeLosses++);
-        } else if (p.agreement === false) {
-          nDisagree++;
-          if (winner != null) (humanWon ? disagreeWins++ : disagreeLosses++);
-        }
-        if (p.uct.chosen) {
-          const card = String(p.uct.chosen).split(':').pop();
-          bumpCard(card, 'uct_recommended');
-        }
-      }
-      const ha = p.human_action;
-      if (ha && ha.kind === 'PlayCard' && ha.iid) {
-        const card = String(ha.iid).split(':').pop();
-        bumpCard(card, 'human_picked');
-        if (winner != null) {
-          perCard.get(card).decided_games++;
-          if (humanWon) perCard.get(card).wins++;
-        }
-      }
-    }
-  }
-
-  const pct = (n, d) => (d === 0 ? '—' : `${(100 * n / d).toFixed(1)}%`);
-  const agreeRate = pct(agreeWins, agreeWins + agreeLosses);
-  const disagreeRate = pct(disagreeWins, disagreeWins + disagreeLosses);
-  const rows = [...perCard.entries()]
-    .sort((a, b) => (b[1].uct_recommended + b[1].human_picked) - (a[1].uct_recommended + a[1].human_picked))
-    .map(([card, s]) => `<tr>
-        <td>${card}</td>
-        <td>${s.uct_recommended}</td>
-        <td>${s.human_picked}</td>
-        <td>${s.wins}/${s.decided_games}</td>
-        <td>${pct(s.wins, s.decided_games)}</td>
-      </tr>`)
-    .join('');
-
-  return `
-    <div style="display:flex; justify-content:space-between; align-items:baseline;">
-      <h2 style="font-size:0.8rem; margin:0 0 0.4rem; color:#6cf; font-weight:normal;">tsot · decision report</h2>
-      <span style="color:#666; font-size:0.65rem;">${records.length} record(s) · ${nGames} game(s)</span>
-    </div>
-    <div style="display:grid; grid-template-columns: auto auto; gap:0.4rem 1.5rem; margin-bottom:0.6rem;">
-      <span>games (any data)</span><span style="color:#fc6;">${nGames}</span>
-      <span>games with recorded winner</span><span style="color:#fc6;">${nGamesWithSummary}</span>
-      <span>prompts logged</span><span style="color:#fc6;">${nPrompts}</span>
-      <span>prompts with UCT belief</span><span style="color:#fc6;">${nUctPrompts}</span>
-      <span>UCT-human agreed / disagreed</span><span style="color:#fc6;">${nAgree} / ${nDisagree}</span>
-      <span>win-rate when human agreed with UCT</span><span style="color:#fc6;">${agreeRate}</span>
-      <span>win-rate when human disagreed with UCT</span><span style="color:#fc6;">${disagreeRate}</span>
-    </div>
-    <table style="border-collapse:collapse; width:100%;">
-      <tr style="color:#888;">
-        <th style="text-align:left; border:1px solid #333; padding:0.2rem 0.4rem;">card</th>
-        <th style="text-align:left; border:1px solid #333; padding:0.2rem 0.4rem;">UCT chose</th>
-        <th style="text-align:left; border:1px solid #333; padding:0.2rem 0.4rem;">human picked</th>
-        <th style="text-align:left; border:1px solid #333; padding:0.2rem 0.4rem;">wins/games (human picked)</th>
-        <th style="text-align:left; border:1px solid #333; padding:0.2rem 0.4rem;">win-rate</th>
-      </tr>
-      ${rows || '<tr><td colspan=5 style="border:1px solid #333; padding:0.2rem 0.4rem; color:#888;">no card-level data yet</td></tr>'}
-    </table>
-    <div style="color:#666; font-size:0.65rem; margin-top:0.4rem;">
-      Win attribution is coarse — the game's winner is credited to every prompt in the game.
-      A finer per-prompt attribution requires replay.
-    </div>
-  `;
-}
+// H7-Elm Stage 4: the inline `renderDecisionReport` aggregator +
+// HTML template was here. It moved into Main.elm (functions
+// `aggregate` + `viewDecisionReport`); js-bridge.js does the IDB
+// read and hands the records to Elm via the `decisionLogIn` port.
 
 function recordGameSummary(view) {
   if (!state.gameId) return;
@@ -1727,25 +1615,12 @@ async function dbAppendDecision(record) {
   });
 }
 
-async function dbGetAllDecisions() {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(DECISION_STORE, 'readonly');
-    const req = tx.objectStore(DECISION_STORE).getAll();
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function dbClearDecisions() {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(DECISION_STORE, 'readwrite');
-    const req = tx.objectStore(DECISION_STORE).clear();
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
+// H7-Elm Stage 4: `dbGetAllDecisions` + `dbClearDecisions` moved
+// into assets/js-bridge.js (as `tsotDbGetAllDecisions` /
+// `tsotDbClearDecisions`) — read-side IDB ownership goes to the
+// Elm port boundary; the write side (`dbAppendDecision`, called by
+// `recordDecision` + `recordGameSummary`) stays here for now and
+// will move when the prompt-recording flow itself ports to Elm.
 
 function setSaveStatus(msg) {
   document.getElementById('save-status').textContent = msg;
@@ -1902,49 +1777,21 @@ function wireSaveControls() {
     withInlineError('test_panic', async () => {
       await workerCall('test_panic', {});
     });
-  document.getElementById('btn-show-report').onclick = withInlineError(
-    'decision_report',
-    async () => {
-      const panel = document.getElementById('decision-report');
-      if (panel.style.display !== 'none') {
-        panel.style.display = 'none';
-        return;
-      }
-      const records = await dbGetAllDecisions();
-      panel.innerHTML = renderDecisionReport(records);
-      panel.style.display = '';
-    },
-  );
+  // H7-Elm Stage 4: the three decision-report click handlers route
+  // through js-bridge.js shims. Decision report toggles via Elm
+  // state (clicking again hides the panel); Export + Clear stay JS
+  // — they don't change Elm state, just IDB + #save-status text.
+  document.getElementById('btn-show-report').onclick =
+    withInlineError('decision_report', async () => {
+      window.tsotDecisionReport();
+    });
   document.getElementById('btn-export-decisions').onclick =
     withInlineError('export_decisions', async () => {
-      const records = await dbGetAllDecisions();
-      if (!records || records.length === 0) {
-        setSaveStatus('no decisions yet');
-        return;
-      }
-      // JSONL export still available for offline / cross-machine
-      // analysis via tools/decision-report.py — but the inline
-      // report is the primary surface for everyday use.
-      const jsonl = records.map(r => JSON.stringify(r)).join('\n') + '\n';
-      const blob = new Blob([jsonl], { type: 'application/x-ndjson' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `tsot-decisions-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      setSaveStatus(`exported ${records.length} record(s)`);
+      await window.tsotDecisionExport();
     });
   document.getElementById('btn-clear-decisions').onclick =
     withInlineError('clear_decisions', async () => {
-      const records = await dbGetAllDecisions();
-      const n = records ? records.length : 0;
-      if (n === 0) { setSaveStatus('no decisions to clear'); return; }
-      if (!confirm(`Delete all ${n} decision-log record(s)?`)) return;
-      await dbClearDecisions();
-      setSaveStatus(`cleared ${n} record(s)`);
+      await window.tsotDecisionClear();
     });
 }
 

@@ -1,50 +1,62 @@
 port module Main exposing (main)
 
-{-| H7-Elm Stage 3 — the dev-tool LOG panel is now rendered by Elm.
+{-| H7-Elm Stage 4 — the decision-report panel is rendered by Elm.
 
-Elm owns:
+The dev-tool records, per human prompt, a snapshot of {what UCT
+preferred, what the human chose, whether they agreed}; on game end,
+a summary record carries the winner. The "Decision report" button
+reads every record back from `IndexedDB.decision_log`, aggregates
+agreement rates and per-card UCT-vs-human win counts, and renders
+the table inline. Stage 4 moves the panel + aggregator from inline
+JS into Elm and introduces:
 
-  - the LOG container (`<div id="elm-log">`) inside the existing
-    `.zone` wrapper at the LOG slot in play.html;
-  - the rendering of every entry — plain text lines and styled error
-    blocks (header, meta, breadcrumb trail, JS stack, raw stderr,
-    aborted-module footer).
+  - the first **outbound** port (Elm → JS): `decisionFetchOut`.
+    The dev tool's first proof that Elm can issue commands, not
+    just receive events. Stages 1-3 only validated the inbound
+    direction.
+  - the first **IndexedDB** access from Elm. js-bridge.js owns the
+    DB-open helper + the read-path queries; play.html still owns the
+    write path (`recordDecision` calls `dbAppendDecision` inline).
+    During the transition both sides open the same `tsot` v2 DB with
+    the same `saves` + `decision_log` stores — no schema drift can
+    occur because both sites agree on the upgrade.
 
-JS still owns:
+Three buttons still live in `play.html`'s `<div id="save-controls">`
+(they share the bar with Save/Load/Test-panic which haven't been
+ported yet). Their `onclick` handlers route through three JS shims
+exposed by `assets/js-bridge.js`:
 
-  - parsing of TraceEvent variants (the `fmtTraceEvent` formatter
-    stays in play.html and pre-formats trace entries into strings
-    before pushing them to Elm);
-  - the inline-error-near-button path (`renderErrorAt` + the original
-    `buildErrorBlock`), which is a separate concern from the LOG;
-  - the build-info footer source value (`window.__TSOT_BUILD__`).
+    window.tsotDecisionReport()   → app.ports.decisionReportClickedIn
+    window.tsotDecisionExport()   → IDB read + Blob download (no Elm)
+    window.tsotDecisionClear()    → IDB clear + save-status (no Elm)
 
-Two inbound ports carry events into Elm:
+Export + Clear are intentionally bypassing Elm — they don't change
+visible Elm state (the panel only re-fetches on Report click), so
+routing them through Elm would add ports with no benefit. Save-status
+text writes to the existing `<span id="save-status">` directly via
+DOM — that span will move to Elm in a later Stage when the rest of
+the save controls port.
 
-    logTextIn  : (String -> msg) -> Sub msg
-    logErrorIn : (D.Value -> msg) -> Sub msg
+Panel state machine (`DecisionPanel`):
 
-The matching JS shims live in `assets/js-bridge.js`:
+    DecisionHidden       — initial state, also the toggled-off state.
+    DecisionLoading      — outbound port fired, waiting for records.
+    DecisionShown agg    — records arrived + aggregated, panel rendered.
+    DecisionError msg    — decoder failed; surface the error in-panel.
 
-    window.tsotLogPushText(line)
-    window.tsotLogPushError(formatted)
-
-Auto-scroll: after each log entry lands, `update` returns a Cmd that
-sets the LOG container's vertical viewport to a large value; the DOM
-clamps to actual scroll height — same UX as the original
-`logEl.scrollTop = logEl.scrollHeight` behavior.
-
-Errors-as-first-class: an error event carries source, message,
-location, ffi_call, at_us, breadcrumb (pre-formatted strings), JS
-stack, raw stderr; every field that's present is rendered. Nothing
-collapsed, nothing truncated.
+Toggle behavior: clicking Decision report cycles `Hidden → Loading
+→ Shown`; clicking again from `Shown` (or `Error`) returns to
+`Hidden`. The in-Elm Close button on the panel itself also returns
+to `Hidden`.
 
 -}
 
 import Browser
 import Browser.Dom
-import Html exposing (Html, div, pre, span, text)
+import Dict exposing (Dict)
+import Html exposing (Html, button, div, h2, pre, span, table, td, text, th, tr)
 import Html.Attributes exposing (class, id, style)
+import Html.Events exposing (onClick)
 import Json.Decode as D
 import Task
 
@@ -60,6 +72,15 @@ port logTextIn : (String -> msg) -> Sub msg
 
 
 port logErrorIn : (D.Value -> msg) -> Sub msg
+
+
+port decisionReportClickedIn : (() -> msg) -> Sub msg
+
+
+port decisionLogIn : (D.Value -> msg) -> Sub msg
+
+
+port decisionFetchOut : () -> Cmd msg
 
 
 
@@ -96,16 +117,66 @@ type LogEntry
     | ErrorEntry ErrorEvent
 
 
-type alias Model =
-    { build : BuildState
-    , log : List LogEntry
+type DecisionRecord
+    = PromptRec PromptDetails
+    | SummaryRec SummaryDetails
+    | UnknownRec
+
+
+type alias PromptDetails =
+    { gameId : String
+    , hasUct : Bool
+    , uctChosen : Maybe String
+    , agreement : Maybe Bool
+    , humanCard : Maybe String
     }
 
 
-{-| Stable id for the LOG scroll container. JS bridge could also call
-`document.getElementById(logContainerId)` if it ever needs to peek; we
-keep it as a constant so the Elm view + the auto-scroll Task agree.
--}
+type alias SummaryDetails =
+    { gameId : String
+    , winner : Maybe String
+    }
+
+
+type alias PerCardRow =
+    { card : String
+    , uctRecommended : Int
+    , humanPicked : Int
+    , wins : Int
+    , decidedGames : Int
+    }
+
+
+type alias DecisionAggregation =
+    { totalRecords : Int
+    , nGames : Int
+    , nGamesWithSummary : Int
+    , nPrompts : Int
+    , nUctPrompts : Int
+    , nAgree : Int
+    , nDisagree : Int
+    , agreeWins : Int
+    , agreeLosses : Int
+    , disagreeWins : Int
+    , disagreeLosses : Int
+    , perCard : List PerCardRow
+    }
+
+
+type DecisionPanel
+    = DecisionHidden
+    | DecisionLoading
+    | DecisionShown DecisionAggregation
+    | DecisionError String
+
+
+type alias Model =
+    { build : BuildState
+    , log : List LogEntry
+    , decisionPanel : DecisionPanel
+    }
+
+
 logContainerId : String
 logContainerId =
     "elm-log"
@@ -119,6 +190,9 @@ type Msg
     = BuildInfoReceived D.Value
     | LogTextReceived String
     | LogErrorReceived D.Value
+    | DecisionReportClicked
+    | DecisionLogReceived D.Value
+    | DecisionPanelClosed
     | NoOp
 
 
@@ -128,7 +202,12 @@ type Msg
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { build = AwaitingPort, log = [] }, Cmd.none )
+    ( { build = AwaitingPort
+      , log = []
+      , decisionPanel = DecisionHidden
+      }
+    , Cmd.none
+    )
 
 
 
@@ -147,22 +226,14 @@ update msg model =
                     ( { model | build = NoBuildInfo }, Cmd.none )
 
         LogTextReceived line ->
-            ( { model | log = model.log ++ [ TextLine line ] }
-            , scrollLogToBottom
-            )
+            ( { model | log = model.log ++ [ TextLine line ] }, scrollLogToBottom )
 
         LogErrorReceived value ->
             case D.decodeValue decodeErrorEvent value of
                 Ok ev ->
-                    ( { model | log = model.log ++ [ ErrorEntry ev ] }
-                    , scrollLogToBottom
-                    )
+                    ( { model | log = model.log ++ [ ErrorEntry ev ] }, scrollLogToBottom )
 
                 Err err ->
-                    -- An error envelope that doesn't decode is itself
-                    -- information worth showing. Surface the decode
-                    -- failure as a TextLine so the developer sees
-                    -- something landed.
                     ( { model
                         | log =
                             model.log
@@ -171,17 +242,38 @@ update msg model =
                     , scrollLogToBottom
                     )
 
+        DecisionReportClicked ->
+            case model.decisionPanel of
+                DecisionShown _ ->
+                    ( { model | decisionPanel = DecisionHidden }, Cmd.none )
+
+                DecisionError _ ->
+                    ( { model | decisionPanel = DecisionHidden }, Cmd.none )
+
+                _ ->
+                    ( { model | decisionPanel = DecisionLoading }, decisionFetchOut () )
+
+        DecisionLogReceived value ->
+            case D.decodeValue (D.list decodeDecisionRecord) value of
+                Ok records ->
+                    ( { model | decisionPanel = DecisionShown (aggregate records) }
+                    , Cmd.none
+                    )
+
+                Err err ->
+                    ( { model | decisionPanel = DecisionError (D.errorToString err) }
+                    , Cmd.none
+                    )
+
+        DecisionPanelClosed ->
+            ( { model | decisionPanel = DecisionHidden }, Cmd.none )
+
         NoOp ->
             ( model, Cmd.none )
 
 
 scrollLogToBottom : Cmd Msg
 scrollLogToBottom =
-    -- Setting viewport y to a large value; the DOM clamps to actual
-    -- scroll height, same effect as `el.scrollTop = el.scrollHeight`.
-    -- Wrapped in Task.attempt because Browser.Dom.setViewportOf
-    -- returns a Task that fails if the element isn't mounted yet —
-    -- ignored either way.
     Browser.Dom.setViewportOf logContainerId 0 1000000
         |> Task.attempt (\_ -> NoOp)
 
@@ -211,9 +303,367 @@ decodeErrorEvent =
         (optionalField "raw_stderr" D.string)
 
 
+decodeDecisionRecord : D.Decoder DecisionRecord
+decodeDecisionRecord =
+    D.oneOf
+        [ D.field "type" D.string
+            |> D.andThen
+                (\t ->
+                    case t of
+                        "prompt" ->
+                            D.map PromptRec decodePromptDetails
+
+                        "summary" ->
+                            D.map SummaryRec decodeSummaryDetails
+
+                        _ ->
+                            D.succeed UnknownRec
+                )
+        , D.succeed UnknownRec
+        ]
+
+
+decodePromptDetails : D.Decoder PromptDetails
+decodePromptDetails =
+    D.map5 PromptDetails
+        (D.field "gameId" D.string)
+        (D.oneOf
+            [ D.field "uct" (D.succeed True)
+            , D.succeed False
+            ]
+        )
+        (D.maybe (D.at [ "uct", "chosen" ] D.string)
+            |> D.map (Maybe.map cardSuffixFromIid)
+        )
+        (optionalField "agreement" D.bool)
+        (optionalField "human_action" decodeHumanCardFromAction)
+
+
+{-| The original JS only counts `human_action.iid` when
+`human_action.kind === 'PlayCard'`. Decoder mirrors that — it fails
+quietly on any other shape, leaving `humanCard = Nothing`.
+-}
+decodeHumanCardFromAction : D.Decoder String
+decodeHumanCardFromAction =
+    D.field "kind" D.string
+        |> D.andThen
+            (\k ->
+                if k == "PlayCard" then
+                    D.field "iid" D.string |> D.map cardSuffixFromIid
+
+                else
+                    D.fail "not a PlayCard"
+            )
+
+
+decodeSummaryDetails : D.Decoder SummaryDetails
+decodeSummaryDetails =
+    D.map2 SummaryDetails
+        (D.field "gameId" D.string)
+        (optionalField "winner" D.string)
+
+
 optionalField : String -> D.Decoder a -> D.Decoder (Maybe a)
 optionalField field decoder =
     D.maybe (D.field field decoder)
+
+
+{-| iid format is `A:0001:blue-monkey` — the card identifier is the
+suffix after the final colon. Mirrors the JS `String(iid).split(':').pop()`.
+-}
+cardSuffixFromIid : String -> String
+cardSuffixFromIid iid =
+    case List.reverse (String.split ":" iid) of
+        last :: _ ->
+            last
+
+        [] ->
+            iid
+
+
+
+-- AGGREGATION
+
+
+type alias GameBucket =
+    { prompts : List PromptDetails
+    , summary : Maybe SummaryDetails
+    }
+
+
+emptyBucket : GameBucket
+emptyBucket =
+    { prompts = [], summary = Nothing }
+
+
+bucketByGame : List DecisionRecord -> Dict String GameBucket
+bucketByGame records =
+    List.foldl addToBucket Dict.empty records
+
+
+addToBucket : DecisionRecord -> Dict String GameBucket -> Dict String GameBucket
+addToBucket rec dict =
+    case rec of
+        PromptRec details ->
+            Dict.update details.gameId
+                (\maybeBucket ->
+                    let
+                        b =
+                            Maybe.withDefault emptyBucket maybeBucket
+                    in
+                    Just { b | prompts = b.prompts ++ [ details ] }
+                )
+                dict
+
+        SummaryRec details ->
+            Dict.update details.gameId
+                (\maybeBucket ->
+                    let
+                        b =
+                            Maybe.withDefault emptyBucket maybeBucket
+                    in
+                    Just { b | summary = Just details }
+                )
+                dict
+
+        UnknownRec ->
+            dict
+
+
+type alias PerCardCounters =
+    { uctRecommended : Int
+    , humanPicked : Int
+    , wins : Int
+    , decidedGames : Int
+    }
+
+
+emptyCounters : PerCardCounters
+emptyCounters =
+    { uctRecommended = 0, humanPicked = 0, wins = 0, decidedGames = 0 }
+
+
+type alias Acc =
+    { nGames : Int
+    , nGamesWithSummary : Int
+    , nPrompts : Int
+    , nUctPrompts : Int
+    , nAgree : Int
+    , nDisagree : Int
+    , agreeWins : Int
+    , agreeLosses : Int
+    , disagreeWins : Int
+    , disagreeLosses : Int
+    , perCard : Dict String PerCardCounters
+    }
+
+
+emptyAcc : Acc
+emptyAcc =
+    { nGames = 0
+    , nGamesWithSummary = 0
+    , nPrompts = 0
+    , nUctPrompts = 0
+    , nAgree = 0
+    , nDisagree = 0
+    , agreeWins = 0
+    , agreeLosses = 0
+    , disagreeWins = 0
+    , disagreeLosses = 0
+    , perCard = Dict.empty
+    }
+
+
+aggregate : List DecisionRecord -> DecisionAggregation
+aggregate records =
+    let
+        total =
+            List.length records
+
+        buckets =
+            bucketByGame records
+
+        acc =
+            Dict.foldl foldBucket emptyAcc buckets
+    in
+    { totalRecords = total
+    , nGames = acc.nGames
+    , nGamesWithSummary = acc.nGamesWithSummary
+    , nPrompts = acc.nPrompts
+    , nUctPrompts = acc.nUctPrompts
+    , nAgree = acc.nAgree
+    , nDisagree = acc.nDisagree
+    , agreeWins = acc.agreeWins
+    , agreeLosses = acc.agreeLosses
+    , disagreeWins = acc.disagreeWins
+    , disagreeLosses = acc.disagreeLosses
+    , perCard = sortedPerCard acc.perCard
+    }
+
+
+foldBucket : String -> GameBucket -> Acc -> Acc
+foldBucket _ bucket acc0 =
+    let
+        winner =
+            Maybe.andThen .winner bucket.summary
+
+        humanWon =
+            winner == Just "A"
+
+        decided =
+            winner /= Nothing
+
+        hasSummary =
+            case bucket.summary of
+                Just _ ->
+                    True
+
+                Nothing ->
+                    False
+
+        accGameCount =
+            { acc0
+                | nGames = acc0.nGames + 1
+                , nGamesWithSummary = acc0.nGamesWithSummary + boolToInt hasSummary
+            }
+    in
+    List.foldl (foldPrompt humanWon decided) accGameCount bucket.prompts
+
+
+foldPrompt : Bool -> Bool -> PromptDetails -> Acc -> Acc
+foldPrompt humanWon decided prompt acc =
+    let
+        acc1 =
+            { acc | nPrompts = acc.nPrompts + 1 }
+
+        acc2 =
+            if prompt.hasUct then
+                { acc1 | nUctPrompts = acc1.nUctPrompts + 1 }
+
+            else
+                acc1
+
+        acc3 =
+            case ( prompt.hasUct, prompt.agreement ) of
+                ( True, Just True ) ->
+                    { acc2
+                        | nAgree = acc2.nAgree + 1
+                        , agreeWins = acc2.agreeWins + boolToInt (decided && humanWon)
+                        , agreeLosses = acc2.agreeLosses + boolToInt (decided && not humanWon)
+                    }
+
+                ( True, Just False ) ->
+                    { acc2
+                        | nDisagree = acc2.nDisagree + 1
+                        , disagreeWins = acc2.disagreeWins + boolToInt (decided && humanWon)
+                        , disagreeLosses = acc2.disagreeLosses + boolToInt (decided && not humanWon)
+                    }
+
+                _ ->
+                    acc2
+
+        acc4 =
+            case prompt.uctChosen of
+                Just card ->
+                    { acc3 | perCard = bumpUctRecommended card acc3.perCard }
+
+                Nothing ->
+                    acc3
+
+        acc5 =
+            case prompt.humanCard of
+                Just card ->
+                    let
+                        afterHuman =
+                            bumpHumanPicked card acc4.perCard
+
+                        afterDecided =
+                            if decided then
+                                bumpDecided card humanWon afterHuman
+
+                            else
+                                afterHuman
+                    in
+                    { acc4 | perCard = afterDecided }
+
+                Nothing ->
+                    acc4
+    in
+    acc5
+
+
+boolToInt : Bool -> Int
+boolToInt b =
+    if b then
+        1
+
+    else
+        0
+
+
+bumpUctRecommended : String -> Dict String PerCardCounters -> Dict String PerCardCounters
+bumpUctRecommended card dict =
+    Dict.update card
+        (\maybeRow ->
+            let
+                row =
+                    Maybe.withDefault emptyCounters maybeRow
+            in
+            Just { row | uctRecommended = row.uctRecommended + 1 }
+        )
+        dict
+
+
+bumpHumanPicked : String -> Dict String PerCardCounters -> Dict String PerCardCounters
+bumpHumanPicked card dict =
+    Dict.update card
+        (\maybeRow ->
+            let
+                row =
+                    Maybe.withDefault emptyCounters maybeRow
+            in
+            Just { row | humanPicked = row.humanPicked + 1 }
+        )
+        dict
+
+
+bumpDecided : String -> Bool -> Dict String PerCardCounters -> Dict String PerCardCounters
+bumpDecided card humanWon dict =
+    Dict.update card
+        (\maybeRow ->
+            let
+                row =
+                    Maybe.withDefault emptyCounters maybeRow
+            in
+            Just
+                { row
+                    | decidedGames = row.decidedGames + 1
+                    , wins =
+                        row.wins
+                            + (if humanWon then
+                                1
+
+                               else
+                                0
+                              )
+                }
+        )
+        dict
+
+
+sortedPerCard : Dict String PerCardCounters -> List PerCardRow
+sortedPerCard dict =
+    Dict.toList dict
+        |> List.map
+            (\( card, c ) ->
+                { card = card
+                , uctRecommended = c.uctRecommended
+                , humanPicked = c.humanPicked
+                , wins = c.wins
+                , decidedGames = c.decidedGames
+                }
+            )
+        |> List.sortBy (\r -> negate (r.uctRecommended + r.humanPicked))
 
 
 
@@ -226,6 +676,8 @@ subscriptions _ =
         [ buildInfoIn BuildInfoReceived
         , logTextIn LogTextReceived
         , logErrorIn LogErrorReceived
+        , decisionReportClickedIn (\_ -> DecisionReportClicked)
+        , decisionLogIn DecisionLogReceived
         ]
 
 
@@ -236,7 +688,8 @@ subscriptions _ =
 view : Model -> Html Msg
 view model =
     div []
-        [ viewLog model.log
+        [ viewDecisionPanel model.decisionPanel
+        , viewLog model.log
         , viewBuildFooter model.build
         ]
 
@@ -259,10 +712,6 @@ viewEntry : LogEntry -> Html Msg
 viewEntry entry =
     case entry of
         TextLine line ->
-            -- Newline preserved so consecutive TextLines stack vertically
-            -- inside the <pre> the same way the original
-            -- `logEl.appendChild(document.createTextNode(line + '\n'))`
-            -- behaved.
             text (line ++ "\n")
 
         ErrorEntry ev ->
@@ -299,7 +748,6 @@ formatErrorMeta ev =
 
 formatMillis : Float -> String
 formatMillis us =
-    -- Match the original `(at_us / 1000).toFixed(1)` formatting.
     let
         ms =
             us / 1000
@@ -409,6 +857,169 @@ footerDiv children =
         , style "z-index" "1000"
         ]
         children
+
+
+viewDecisionPanel : DecisionPanel -> Html Msg
+viewDecisionPanel panel =
+    case panel of
+        DecisionHidden ->
+            text ""
+
+        DecisionLoading ->
+            decisionPanelDiv [ text "Loading decision log…" ]
+
+        DecisionShown agg ->
+            decisionPanelDiv (viewDecisionReport agg)
+
+        DecisionError err ->
+            decisionPanelDiv
+                [ div [ style "color" "#f88" ]
+                    [ text ("Failed to decode decision log: " ++ err) ]
+                , decisionCloseButton
+                ]
+
+
+decisionPanelDiv : List (Html Msg) -> Html Msg
+decisionPanelDiv children =
+    div
+        [ id "decision-report"
+        , style "border" "1px solid #333"
+        , style "padding" "0.6rem"
+        , style "margin-bottom" "0.5rem"
+        , style "font-size" "0.75rem"
+        ]
+        children
+
+
+decisionCloseButton : Html Msg
+decisionCloseButton =
+    div [ style "margin-top" "0.4rem" ]
+        [ button [ onClick DecisionPanelClosed ] [ text "Close" ] ]
+
+
+viewDecisionReport : DecisionAggregation -> List (Html Msg)
+viewDecisionReport agg =
+    if agg.totalRecords == 0 then
+        [ div [ style "color" "#888" ]
+            [ text "No decisions recorded yet — play a game to populate." ]
+        , decisionCloseButton
+        ]
+
+    else
+        [ viewDecisionHeader agg
+        , viewDecisionStatsGrid agg
+        , viewPerCardTable agg.perCard
+        , decisionCloseButton
+        ]
+
+
+viewDecisionHeader : DecisionAggregation -> Html Msg
+viewDecisionHeader agg =
+    div
+        [ style "display" "flex"
+        , style "justify-content" "space-between"
+        , style "align-items" "baseline"
+        ]
+        [ h2
+            [ style "font-size" "0.8rem"
+            , style "margin" "0 0 0.4rem"
+            , style "color" "#6cf"
+            , style "font-weight" "normal"
+            ]
+            [ text "tsot · decision report" ]
+        , span [ style "color" "#666", style "font-size" "0.65rem" ]
+            [ text
+                (String.fromInt agg.totalRecords
+                    ++ " record(s) · "
+                    ++ String.fromInt agg.nGames
+                    ++ " game(s)"
+                )
+            ]
+        ]
+
+
+viewDecisionStatsGrid : DecisionAggregation -> Html Msg
+viewDecisionStatsGrid agg =
+    div
+        [ style "display" "grid"
+        , style "grid-template-columns" "auto auto"
+        , style "gap" "0.4rem 1.5rem"
+        , style "margin-bottom" "0.6rem"
+        ]
+        (statsRow "games (any data)" (String.fromInt agg.nGames)
+            ++ statsRow "games with recorded winner" (String.fromInt agg.nGamesWithSummary)
+            ++ statsRow "prompts logged" (String.fromInt agg.nPrompts)
+            ++ statsRow "prompts with UCT belief" (String.fromInt agg.nUctPrompts)
+            ++ statsRow "UCT-human agreed / disagreed"
+                (String.fromInt agg.nAgree ++ " / " ++ String.fromInt agg.nDisagree)
+            ++ statsRow "win-rate when human agreed with UCT"
+                (formatPct agg.agreeWins (agg.agreeWins + agg.agreeLosses))
+            ++ statsRow "win-rate when human disagreed with UCT"
+                (formatPct agg.disagreeWins (agg.disagreeWins + agg.disagreeLosses))
+        )
+
+
+statsRow : String -> String -> List (Html Msg)
+statsRow label value =
+    [ span [] [ text label ]
+    , span [ style "color" "#fc6" ] [ text value ]
+    ]
+
+
+formatPct : Int -> Int -> String
+formatPct n d =
+    if d == 0 then
+        "—"
+
+    else
+        let
+            ratio =
+                100 * toFloat n / toFloat d
+
+            rounded =
+                toFloat (round (ratio * 10)) / 10
+        in
+        String.fromFloat rounded ++ "%"
+
+
+viewPerCardTable : List PerCardRow -> Html Msg
+viewPerCardTable rows =
+    table [ style "border-collapse" "collapse", style "width" "100%" ]
+        (perCardHeaderRow :: List.map viewPerCardRow rows)
+
+
+perCardHeaderRow : Html Msg
+perCardHeaderRow =
+    tr [ style "color" "#888" ]
+        [ headerCell "card"
+        , headerCell "UCT chose"
+        , headerCell "human picked"
+        , headerCell "wins/games (human picked)"
+        , headerCell "win-rate"
+        ]
+
+
+headerCell : String -> Html Msg
+headerCell label =
+    th
+        [ style "text-align" "left"
+        , style "border" "1px solid #333"
+        , style "padding" "0.2rem 0.4rem"
+        ]
+        [ text label ]
+
+
+viewPerCardRow : PerCardRow -> Html Msg
+viewPerCardRow row =
+    tr []
+        [ td [ style "padding" "0.2rem 0.4rem" ] [ text row.card ]
+        , td [ style "padding" "0.2rem 0.4rem" ] [ text (String.fromInt row.uctRecommended) ]
+        , td [ style "padding" "0.2rem 0.4rem" ] [ text (String.fromInt row.humanPicked) ]
+        , td [ style "padding" "0.2rem 0.4rem" ]
+            [ text (String.fromInt row.wins ++ "/" ++ String.fromInt row.decidedGames) ]
+        , td [ style "padding" "0.2rem 0.4rem" ]
+            [ text (formatPct row.wins row.decidedGames) ]
+        ]
 
 
 

@@ -5,9 +5,68 @@
 //
 // H7-Elm Stage 2: `buildInfoIn` port carries `window.__TSOT_BUILD__`.
 // H7-Elm Stage 3: `logTextIn` + `logErrorIn` ports carry every LOG
-// event (text lines + structured error blocks). The inline JS in
-// play.html still pre-formats trace events into strings before
-// pushing — the formatter lives there, not in Elm.
+// event (text lines + structured error blocks).
+// H7-Elm Stage 4: decision-report panel + first outbound port.
+//   - `decisionFetchOut` (Elm → JS): Elm asks for the decision log
+//     records. JS opens IDB, reads `decision_log`, sends back via
+//     `decisionLogIn`.
+//   - `decisionReportClickedIn` (JS → Elm): play.html button click
+//     forwards the click; Elm decides toggle vs fetch.
+//   - `window.tsotDecisionReport / Export / Clear`: shims that
+//     play.html's three button `onclick` handlers call.
+//
+// IDB schema during the transition: this file and play.html both
+// open `tsot` v2 with `saves` + `decision_log` stores. The schema is
+// duplicated until a later Stage consolidates ownership; both sides
+// agree on the upgrade so no schema drift can occur.
+
+const TSOT_DB_NAME = 'tsot';
+const TSOT_DB_VERSION = 2;
+const TSOT_SAVES_STORE = 'saves';
+const TSOT_DECISION_STORE = 'decision_log';
+
+function tsotOpenDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(TSOT_DB_NAME, TSOT_DB_VERSION);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(TSOT_SAVES_STORE)) {
+        db.createObjectStore(TSOT_SAVES_STORE, { keyPath: 'id', autoIncrement: true });
+      }
+      if (!db.objectStoreNames.contains(TSOT_DECISION_STORE)) {
+        db.createObjectStore(TSOT_DECISION_STORE, { keyPath: 'id', autoIncrement: true });
+      }
+    };
+  });
+}
+
+async function tsotDbGetAllDecisions() {
+  const db = await tsotOpenDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(TSOT_DECISION_STORE, 'readonly');
+    const req = tx.objectStore(TSOT_DECISION_STORE).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function tsotDbClearDecisions() {
+  const db = await tsotOpenDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(TSOT_DECISION_STORE, 'readwrite');
+    const req = tx.objectStore(TSOT_DECISION_STORE).clear();
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function tsotSetSaveStatus(msg) {
+  const el = document.getElementById('save-status');
+  if (el) el.textContent = msg;
+}
+
 (function () {
   var node = document.getElementById('elm-root');
   if (!node) {
@@ -47,9 +106,79 @@
     };
   } else {
     console.error('js-bridge: log ports missing — Main.elm port wiring drift?');
-    // Fall back to no-ops so callers don't TypeError; the LOG just
-    // stays empty instead of crashing the whole inline script.
     window.tsotLogPushText = function () {};
     window.tsotLogPushError = function () {};
   }
+
+  // Decision-report bridge. Elm owns the panel state machine + the
+  // aggregation + the render. JS owns the IDB read and pushes records
+  // back through `decisionLogIn`. Export + Clear bypass Elm — they
+  // operate on IDB + DOM (#save-status) only; no Elm state changes.
+  if (
+    app && app.ports
+    && app.ports.decisionFetchOut
+    && app.ports.decisionLogIn
+    && app.ports.decisionReportClickedIn
+  ) {
+    app.ports.decisionFetchOut.subscribe(async function () {
+      try {
+        const records = await tsotDbGetAllDecisions();
+        app.ports.decisionLogIn.send(records);
+      } catch (e) {
+        // Surface the error inside the decision panel by sending a
+        // single record with a known-bogus shape — the Elm decoder
+        // falls through to DecisionError, which renders the message.
+        app.ports.decisionLogIn.send([{ __decode_error: String(e) }]);
+        console.error('decisionFetchOut: IDB read failed', e);
+      }
+    });
+
+    window.tsotDecisionReport = function () {
+      app.ports.decisionReportClickedIn.send(null);
+    };
+  } else {
+    console.error('js-bridge: decision-report ports missing — Main.elm port wiring drift?');
+    window.tsotDecisionReport = function () {};
+  }
+
+  window.tsotDecisionExport = async function () {
+    try {
+      const records = await tsotDbGetAllDecisions();
+      if (!records || records.length === 0) {
+        tsotSetSaveStatus('no decisions yet');
+        return;
+      }
+      const jsonl = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
+      const blob = new Blob([jsonl], { type: 'application/x-ndjson' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `tsot-decisions-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      tsotSetSaveStatus(`exported ${records.length} record(s)`);
+    } catch (e) {
+      console.error('tsotDecisionExport failed', e);
+      tsotSetSaveStatus('export failed: ' + String(e));
+    }
+  };
+
+  window.tsotDecisionClear = async function () {
+    try {
+      const records = await tsotDbGetAllDecisions();
+      const n = records ? records.length : 0;
+      if (n === 0) {
+        tsotSetSaveStatus('no decisions to clear');
+        return;
+      }
+      if (!confirm(`Delete all ${n} decision-log record(s)?`)) return;
+      await tsotDbClearDecisions();
+      tsotSetSaveStatus(`cleared ${n} record(s)`);
+    } catch (e) {
+      console.error('tsotDecisionClear failed', e);
+      tsotSetSaveStatus('clear failed: ' + String(e));
+    }
+  };
 })();
