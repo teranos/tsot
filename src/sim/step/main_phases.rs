@@ -255,6 +255,18 @@ impl StepEngine {
             crate::sim::instrument::tee_log(&mut self.log, t);
         }
 
+        // Defense against state drift introduced by inner search
+        // mutating state and rolling back imperfectly: re-validate the
+        // chosen iid against the CURRENT state before proceeding to
+        // build/play_card. Picker may have seen a different state at
+        // its root enumeration (e.g., UCT rollouts modify state and
+        // restore via journal — any imperfect rollback leaves a
+        // mismatch). If the cast is no longer affordable here, drop
+        // it and pass.
+        let pick = pick.filter(|iid| {
+            self.state.player(active).hand.contains(iid)
+                && crate::sim::ai::can_pay_instant_cost(&self.state, active, iid)
+        });
         let Some(picked) = pick else {
             // No more plays this turn; advance into the pre-combat
             // activation pass (S9), then combat.

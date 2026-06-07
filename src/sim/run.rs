@@ -695,6 +695,15 @@ pub fn run_game_continue(
                     }
                 }
             };
+            // See parallel comment in sim/step/main_phases.rs: when the
+            // pick came from an inner search (UCT/MCTS) that mutated
+            // state and rolled back imperfectly, the chosen iid may
+            // no longer be affordable in the current state. Re-validate
+            // before committing to build/play_card.
+            let pick = pick.filter(|iid| {
+                state.player(active).hand.contains(iid)
+                    && super::ai::can_pay_instant_cost(state, active, iid)
+            });
             let Some(picked) = pick else {
                 break;
             };
