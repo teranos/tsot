@@ -41,6 +41,13 @@ pub const GAUNTLET_MASTER_SEED: u64 = 0xEA_C8;
 pub struct FitnessBreakdown {
     pub total: f64,
     pub per_opponent: Vec<f64>,
+    /// Per-game observability: how many of the games this breakdown
+    /// covers tripped at least one `[play_card-ERR]` (or related
+    /// failure tag) during play. The EA was previously blind to this —
+    /// a genome could win by exploiting a picker/resolver bug and the
+    /// score wouldn't tell us. Drained from
+    /// [`instrument::FAILURE_SINK`](crate::sim::instrument) per game.
+    pub failed_games_total: u32,
 }
 
 /// Build the 7 variant-anchored gauntlet decks. Each variant gets one
@@ -77,9 +84,9 @@ pub fn fitness(
     gauntlet: &[Vec<Card>],
     n_per_side: u32,
     base_seed: u64,
-    opponent_ai: &AiKind,
+    ai: &AiKind,
 ) -> Result<f64, GenomeError> {
-    fitness_breakdown(registry, genome, gauntlet, n_per_side, base_seed, opponent_ai)
+    fitness_breakdown(registry, genome, gauntlet, n_per_side, base_seed, ai)
         .map(|b| b.total)
 }
 
@@ -94,25 +101,36 @@ pub fn fitness_breakdown(
     gauntlet: &[Vec<Card>],
     n_per_side: u32,
     base_seed: u64,
-    opponent_ai: &AiKind,
+    ai: &AiKind,
 ) -> Result<FitnessBreakdown, GenomeError> {
     let deck_g = to_deck(registry.as_ref(), genome)?;
+    // Discard any failure-sink entries that pre-date this evaluation —
+    // they belong to whatever the worker thread ran before us. Drain
+    // BEFORE the empty-gauntlet early-return so the cleanup happens
+    // unconditionally; otherwise pre-existing entries would survive
+    // an empty-input call and bleed into the next genome's score.
+    let _ = crate::sim::instrument::drain_failures();
     if gauntlet.is_empty() || n_per_side == 0 {
         return Ok(FitnessBreakdown {
             total: 0.0,
             per_opponent: vec![0.0; gauntlet.len()],
+            failed_games_total: 0,
         });
     }
     let mut rng = StdRng::seed_from_u64(base_seed);
     let mut total_wins = 0u32;
     let mut total_games = 0u32;
+    let mut failed_games_total = 0u32;
     let mut per_opponent = Vec::with_capacity(gauntlet.len());
-    // The CANDIDATE genome always plays Heuristic so it's
-    // compatible with the rest of the project's Heuristic-by-default
-    // tooling. The OPPONENT plays `opponent_ai`. When opponent_ai =
-    // Mcts, candidate decks have to beat strong play to score well.
-    let ais_candidate_a = [AiKind::Heuristic, opponent_ai.clone()];
-    let ais_candidate_b = [opponent_ai.clone(), AiKind::Heuristic];
+    // Both seats play the SAME `ai`. Make evolve = strongest-vs-
+    // strongest by default (UCT-vs-UCT) so the fitness signal
+    // measures real-deck-vs-real-deck quality, not "does the
+    // candidate's deck win when the candidate is dumb." The
+    // earlier asymmetric Heuristic-vs-X shape biased every score
+    // toward decks that exploit Heuristic-side mistakes — fine for
+    // a smoke test, misleading for evolution.
+    let ais_a = [ai.clone(), ai.clone()];
+    let ais_b = [ai.clone(), ai.clone()];
     for opp in gauntlet {
         let mut opp_wins = 0u32;
         let mut opp_games = 0u32;
@@ -131,7 +149,10 @@ pub fn fitness_breakdown(
             let state = GameState::new(deck_g_a, deck_opp_a);
             let mut game_rng = StdRng::seed_from_u64(rng.gen());
             let mut log: Vec<String> = Vec::new();
-            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_candidate_a);
+            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_a);
+            if !crate::sim::instrument::drain_failures().is_empty() {
+                failed_games_total += 1;
+            }
             if stats.winner == PlayerId::A {
                 opp_wins += 1;
             }
@@ -146,7 +167,10 @@ pub fn fitness_breakdown(
             let state = GameState::new(deck_opp_b, deck_g_b);
             let mut game_rng = StdRng::seed_from_u64(rng.gen());
             let mut log = Vec::new();
-            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_candidate_b);
+            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_b);
+            if !crate::sim::instrument::drain_failures().is_empty() {
+                failed_games_total += 1;
+            }
             if stats.winner == PlayerId::B {
                 opp_wins += 1;
             }
@@ -159,6 +183,7 @@ pub fn fitness_breakdown(
     Ok(FitnessBreakdown {
         total: total_wins as f64 / total_games as f64,
         per_opponent,
+        failed_games_total,
     })
 }
 
@@ -277,6 +302,58 @@ mod tests {
             "total {} != mean(per_opponent) {mean}",
             b.total,
         );
+    }
+
+    // fitness_breakdown must drain pre-existing entries from the
+    // per-thread FAILURE_SINK before running its games — otherwise
+    // failures from whatever the worker thread evaluated previously
+    // would be miscredited to this genome. The EA worker thread
+    // previously leaked these unbounded across thousands of fitness
+    // evaluations.
+    //
+    // Uses empty gauntlet so we exercise the drain logic without
+    // running any games (which would convolve real engine failures
+    // with the cleanup we're testing). The drain runs BEFORE the
+    // empty-gauntlet early-return for exactly this reason.
+    #[test]
+    fn fitness_breakdown_drains_pre_existing_failure_sink_entries() {
+        let reg = load_registry();
+        crate::sim::instrument::push_failure("pre-existing entry".to_string());
+        crate::sim::instrument::push_failure("another pre-existing entry".to_string());
+        let breakdown =
+            fitness_breakdown(&reg, &[], &[], 0, 0xC0DE, &AiKind::Heuristic).unwrap();
+        let leftover = crate::sim::instrument::drain_failures();
+        assert!(
+            leftover.is_empty(),
+            "fitness_breakdown left failure-sink entries behind: {leftover:?}"
+        );
+        assert_eq!(
+            breakdown.failed_games_total, 0,
+            "pre-existing entries must never be credited to this run"
+        );
+    }
+
+    // failed_games_total is bounded by the number of games actually
+    // run. A heuristic-vs-heuristic Ra match with n_per_side=1 plays
+    // exactly 2 × gauntlet.len() games — failed_games_total can never
+    // exceed that.
+    #[test]
+    fn fitness_breakdown_failed_games_total_bounded_by_total_games() {
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+        let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
+        let breakdown =
+            fitness_breakdown(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Heuristic).unwrap();
+        let total_games = (gauntlet.len() as u32) * 2; // 2 per opponent at n_per_side=1
+        assert!(
+            breakdown.failed_games_total <= total_games,
+            "failed_games_total {} > total_games {total_games}",
+            breakdown.failed_games_total,
+        );
+        // And after the call the sink is drained (no leak across calls).
+        let leftover = crate::sim::instrument::drain_failures();
+        assert!(leftover.is_empty(), "post-call sink not empty: {leftover:?}");
     }
 
     #[test]

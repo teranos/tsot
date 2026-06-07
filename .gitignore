@@ -1,5 +1,6 @@
 node_modules/
 dist/
+assets/src/elm-stuff/
 .DS_Store
 /target
 __pycache__/

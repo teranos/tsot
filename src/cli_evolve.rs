@@ -22,8 +22,10 @@ pub struct EvolveArgs {
     #[arg(long, default_value_t = 30)]
     pub gens: usize,
     /// Games per side per fitness evaluation. Total per eval =
-    /// 2 × gauntlet_size × n. EA.md's measured recommendation is 10.
-    #[arg(long, default_value_t = 10)]
+    /// 2 × gauntlet_size × n. Dropped from 10 to 5 to keep daily-
+    /// driver UCT-vs-UCT runs in the ~30-minute window (each game
+    /// is ~50× more expensive than the old Heuristic baseline).
+    #[arg(long, default_value_t = 5)]
     pub n: u32,
     /// Master seed for every random decision in the run. Accepts
     /// decimal (`60104`) or hex (`0xEAC8`).
@@ -59,11 +61,16 @@ pub struct EvolveArgs {
     #[arg(long = "plateau-eps", default_value_t = 0.010)]
     pub plateau_eps: f64,
     /// AI driving the GAUNTLET-OPPONENT side during fitness eval.
-    /// `heuristic` (default): identical to pre-step-8 EA. `mcts`:
-    /// opponents play MCTS — evolved decks must beat strong play to
-    /// score high. ~16× slower per fitness eval. Candidate side
-    /// always plays Heuristic regardless.
-    #[arg(long = "opponent-ai", default_value = "heuristic")]
+    /// AI used by **both** seats of every fitness mirror — candidate
+    /// and opponent. `uct` (default) makes fitness measure "this deck
+    /// played by UCT vs gauntlet decks played by UCT," which is the
+    /// signal the EA actually wants. `heuristic` is faster but the
+    /// score becomes "does this deck win when both players are dumb"
+    /// — useful for smoke tests, not for steering evolution. `mcts`
+    /// is similar to `uct` with a different search shape. (Flag
+    /// retains its historical `opponent-ai` name; both seats now
+    /// share the choice.)
+    #[arg(long = "opponent-ai", default_value = "uct")]
     pub opponent_ai: String,
     /// MCTS rollouts per candidate when `--opponent-ai mcts`. Higher
     /// = stronger opponent, linearly slower.
@@ -78,11 +85,13 @@ pub struct EvolveArgs {
     /// expensive.
     #[arg(long = "opponent-mcts-depth", default_value_t = 1)]
     pub opponent_mcts_depth: u32,
-    /// UCT iterations per pick when `--opponent-ai uct`. 50 ≈
-    /// one-ply MCTS at rollouts=5/max-cands=10 in compute budget.
-    /// UCT measured to beat one-ply MCTS 100% at matched budget on
-    /// mirror-match baseline decks — strongest opponent currently.
-    #[arg(long = "opponent-uct-iterations", default_value_t = 50)]
+    /// UCT iterations per pick when `--opponent-ai uct` (default).
+    /// Dropped from 50 to 30 to keep daily-driver UCT-vs-UCT evolve
+    /// runs in the ~30-minute window. 50 is the budget at which UCT
+    /// was measured to beat one-ply MCTS 100% on mirror-match baseline
+    /// decks; 30 gives up some search depth for ~40% less per-pick
+    /// cost while staying well above the noise floor.
+    #[arg(long = "opponent-uct-iterations", default_value_t = 30)]
     pub opponent_uct_iterations: u32,
     /// UCT exploration constant when `--opponent-ai uct`. `sqrt(2)`
     /// is classical. Lower = exploit current best more, higher =

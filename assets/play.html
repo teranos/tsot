@@ -88,6 +88,12 @@
 </style>
 </head>
 <body>
+<!-- H7-Elm Stage 1: mount point for the Elm app (Browser.element).
+     The Elm app's `view` currently just renders a fixed-position pill
+     in the bottom-left so the developer can see the bundle loaded.
+     `assets/js-bridge.js` boots it; ports get added as Elm modules
+     declare them. -->
+<div id="elm-root"></div>
 <h1>tsot — play</h1>
 
 <div id="prompt">Loading...</div>
@@ -206,6 +212,13 @@
      rendered as a fixed-position bottom-right footer so the developer
      knows WHICH build they're running without leaving the dev tool. -->
 <script src="build-info.js" onerror="window.__TSOT_BUILD__=null"></script>
+<!-- H7-Elm Stage 1: Elm bundle + the JS bridge that boots it. Loaded
+     BEFORE the inline dev-tool script below so the Elm app paints its
+     "Elm: ready" pill at the same time the rest of the page hydrates.
+     Order matters: bundle.js defines `Elm.Main`, js-bridge.js calls
+     `Elm.Main.init`. -->
+<script src="bundle.js"></script>
+<script src="js-bridge.js"></script>
 <div id="build-footer" style="position: fixed; bottom: 0; right: 0; padding: 0.15rem 0.5rem; background: rgba(20,20,28,0.85); border-top-left-radius: 4px; color: #555; font-size: 0.65rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; z-index: 1000;"></div>
 <script>
 (function renderBuildFooter() {

@@ -53,7 +53,7 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts wasm wasm-serve wasm-dev wasm-dev-serve clean-wasm
+.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts assets wasm wasm-serve wasm-dev wasm-dev-serve clean-wasm
 
 help:
 	@echo ""
@@ -238,8 +238,25 @@ WASM_TARGET    := wasm32-unknown-emscripten
 WASM_OUT       := target/$(WASM_TARGET)/release
 WASM_OUT_DEV   := target/$(WASM_TARGET)/debug
 WASM_DIST      := dist
+ELM_SRC        := assets/src
 
-wasm:
+# H7-Elm Stage 1. Compiles the Elm dev-tool sources under `assets/src/`
+# into a single `dist/bundle.js`. `wasm` and `wasm-dev` depend on this
+# so the dist/ output always carries the Elm bundle alongside the wasm
+# artifacts. The bridge file `assets/js-bridge.js` boots the Elm app
+# into `<div id="elm-root">` in play.html; both files get copied into
+# dist/ by the wasm targets below.
+assets:
+	@command -v elm >/dev/null 2>&1 || { \
+		echo "error: elm not on PATH."; \
+		echo "       Nix users: re-enter the dev shell — flake.nix now provides elmPackages.elm."; \
+		echo "         \`exit && nix develop\`"; \
+		exit 1; \
+	}
+	@mkdir -p $(WASM_DIST)
+	cd $(ELM_SRC) && elm make Main.elm --output=$(CURDIR)/$(WASM_DIST)/bundle.js
+
+wasm: assets
 	@command -v emcc >/dev/null 2>&1 || { \
 		echo "error: emcc not on PATH."; \
 		echo "       Nix users: re-enter the dev shell — flake.nix now provides emscripten."; \
@@ -253,6 +270,7 @@ wasm:
 	cp $(WASM_OUT)/tsot_wasm.wasm $(WASM_DIST)/tsot_wasm.wasm
 	cp assets/play.html $(WASM_DIST)/index.html
 	cp assets/tsot-worker.js $(WASM_DIST)/tsot-worker.js
+	cp assets/js-bridge.js $(WASM_DIST)/js-bridge.js
 	@# Build-info footer: the page reads window.__TSOT_BUILD__ and
 	@# renders it faintly in the bottom-right. Tells the developer
 	@# WHICH build they're running without leaving the dev tool.
@@ -293,7 +311,7 @@ wasm-serve: wasm
 # per cargo's documented precedence, so we duplicate the production link-
 # args list and append `-g`. If we ever change the production link-args,
 # keep these two lists in sync.
-wasm-dev:
+wasm-dev: assets
 	@command -v emcc >/dev/null 2>&1 || { \
 		echo "error: emcc not on PATH."; \
 		echo "       Nix users: re-enter the dev shell — flake.nix now provides emscripten."; \
@@ -309,6 +327,7 @@ wasm-dev:
 	cp $(WASM_OUT_DEV)/tsot_wasm.wasm $(WASM_DIST)/tsot_wasm.wasm
 	cp assets/play.html $(WASM_DIST)/index.html
 	cp assets/tsot-worker.js $(WASM_DIST)/tsot-worker.js
+	cp assets/js-bridge.js $(WASM_DIST)/js-bridge.js
 	@printf 'window.__TSOT_BUILD__=%s;\n' '{"profile":"dev","builtAt":"$(shell date -u +%Y-%m-%dT%H:%M:%SZ)","commit":"$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)"}' > $(WASM_DIST)/build-info.js
 	@echo ""
 	@echo "wasm-dev bundle (with -g symbol names) staged in $(WASM_DIST)/"
