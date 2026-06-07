@@ -11,6 +11,7 @@
 pub mod ai;
 #[cfg(test)]
 mod ai_trace_tests;
+pub mod confseq;
 pub mod deck_presets;
 pub mod deck_token;
 pub mod diversity;
