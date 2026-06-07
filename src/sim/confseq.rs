@@ -234,6 +234,66 @@ impl BettingCs {
     }
 }
 
+/// Why a [`evaluate_until`] run stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// The interval reached the requested half-width.
+    PrecisionReached,
+    /// The observation budget (`max_obs`) was exhausted first.
+    BudgetExhausted,
+}
+
+/// Outcome of a precision-targeted streaming evaluation.
+#[derive(Debug, Clone)]
+pub struct SeqEvalResult {
+    pub cs: BettingCs,
+    pub stop_reason: StopReason,
+}
+
+impl SeqEvalResult {
+    /// Point estimate of the mean.
+    pub fn estimate(&self) -> f64 {
+        self.cs.point_estimate()
+    }
+    /// Anytime-valid interval at the stopping time.
+    pub fn interval(&self) -> (f64, f64) {
+        self.cs.interval()
+    }
+    /// Number of observations consumed.
+    pub fn n(&self) -> u64 {
+        self.cs.n()
+    }
+}
+
+/// Stream observations from `next` into a fresh [`BettingCs`] until the
+/// interval is at least `target_half_width` precise (`width/2 ≤ target`)
+/// or `max_obs` observations have been consumed — whichever comes first.
+///
+/// This is the engine behind a precision-targeted re-evaluation: a caller
+/// supplies a closure that produces one `[0,1]` outcome per call (e.g. a
+/// single game's win indicator) and gets back an estimate with an
+/// anytime-valid interval plus the reason it stopped. Because `next` is
+/// called in a fixed order and the CS update is deterministic, the result
+/// is fully determined by the outcome sequence — the stop point does not
+/// perturb earlier draws.
+pub fn evaluate_until<F: FnMut() -> f64>(
+    alpha: f64,
+    target_half_width: f64,
+    max_obs: u64,
+    mut next: F,
+) -> SeqEvalResult {
+    let mut cs = BettingCs::new(alpha);
+    let mut stop_reason = StopReason::BudgetExhausted;
+    while cs.n() < max_obs {
+        cs.update(next());
+        if cs.width() / 2.0 <= target_half_width {
+            stop_reason = StopReason::PrecisionReached;
+            break;
+        }
+    }
+    SeqEvalResult { cs, stop_reason }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +414,65 @@ mod tests {
         let cs = BettingCs::new(0.05);
         // No data: interval is [0,1], straddles both band edges.
         assert_eq!(cs.band_decision(0.5, 0.05), BandDecision::Continue);
+    }
+
+    #[test]
+    fn evaluate_until_stops_on_precision_before_budget() {
+        let mut rng = StdRng::seed_from_u64(0x5EED);
+        let res = evaluate_until(0.05, 0.15, 100_000, || {
+            if rng.gen::<f64>() < 0.5 {
+                1.0
+            } else {
+                0.0
+            }
+        });
+        assert_eq!(res.stop_reason, StopReason::PrecisionReached);
+        assert!(res.cs.width() / 2.0 <= 0.15 + 1e-9, "half-width {}", res.cs.width() / 2.0);
+        assert!(res.n() < 100_000, "should stop well before budget, n={}", res.n());
+    }
+
+    #[test]
+    fn evaluate_until_respects_budget_when_precision_unreachable() {
+        let mut rng = StdRng::seed_from_u64(0x5EED);
+        // An impossibly tight target the budget can't fund.
+        let res = evaluate_until(0.05, 0.0001, 30, || {
+            if rng.gen::<f64>() < 0.5 {
+                1.0
+            } else {
+                0.0
+            }
+        });
+        assert_eq!(res.stop_reason, StopReason::BudgetExhausted);
+        assert_eq!(res.n(), 30);
+    }
+
+    #[test]
+    fn evaluate_until_is_determined_by_the_outcome_sequence() {
+        let seq = {
+            let mut rng = StdRng::seed_from_u64(99);
+            bernoulli_stream(&mut rng, 0.4, 500)
+        };
+        let run = || {
+            let mut i = 0usize;
+            evaluate_until(0.05, 0.02, 500, || {
+                let x = seq[i];
+                i += 1;
+                x
+            })
+        };
+        let a = run();
+        let b = run();
+        assert_eq!(a.interval(), b.interval());
+        assert_eq!(a.n(), b.n());
+        assert_eq!(a.stop_reason, b.stop_reason);
+    }
+
+    #[test]
+    fn evaluate_until_zero_budget_yields_no_observations() {
+        let res = evaluate_until(0.05, 0.01, 0, || 1.0);
+        assert_eq!(res.n(), 0);
+        assert_eq!(res.stop_reason, StopReason::BudgetExhausted);
+        let (lo, hi) = res.interval();
+        assert!(lo <= 1e-9 && hi >= 1.0 - 1e-9, "no data → full interval");
     }
 }

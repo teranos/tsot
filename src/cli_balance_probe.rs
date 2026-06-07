@@ -38,12 +38,17 @@ use std::path::PathBuf;
 use clap::Parser;
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+
 use tsot::card::{Card, CardRegistry};
+use tsot::game::{GameState, PlayerId};
 
 use crate::parse_u64_hex_or_dec;
 use crate::report_style;
 use tsot::sim::evolved_deck::EvolvedDeck;
-use tsot::sim::{run_evolve, EvolveConfig};
+use tsot::sim::genome::{shuffle_deck, to_deck};
+use tsot::sim::{confseq, run_evolve, run_game_with_ai, AiKind, EvolveConfig};
 
 #[derive(Parser)]
 pub struct BalanceProbeArgs {
@@ -108,6 +113,25 @@ pub struct BalanceProbeArgs {
     /// classical.
     #[arg(long = "opponent-uct-c", default_value_t = std::f64::consts::SQRT_2)]
     pub opponent_uct_c: f64,
+    /// Champion re-evaluation budget (games) for the anytime-valid
+    /// confidence interval on the reported win-rate. The EA finds a
+    /// strong deck cheaply at low `n`; this re-plays that exact deck
+    /// against the full gauntlet, streams each game into a betting
+    /// confidence sequence, and stops when the interval reaches
+    /// `--ci-half-width` or this budget — whichever first. The EA
+    /// ceiling is a point estimate at tiny sample size; this is the
+    /// honest interval to report. `0` disables the re-eval. Uses the
+    /// same `--opponent-ai` as the EA. (Adds up to this many games per
+    /// version — keep modest for daily-fast runs.)
+    #[arg(long = "ci-max-games", default_value_t = 100)]
+    pub ci_max_games: u64,
+    /// Target half-width for the champion CI (e.g. `0.03` = ±3 points).
+    /// The re-eval stops early once the interval is at least this tight.
+    #[arg(long = "ci-half-width", default_value_t = 0.03)]
+    pub ci_half_width: f64,
+    /// Mis-coverage level for the champion CI (`0.05` = 95% confidence).
+    #[arg(long = "ci-alpha", default_value_t = 0.05)]
+    pub ci_alpha: f64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -129,6 +153,139 @@ struct ProbeResult {
     final_pop_card_presence: BTreeMap<String, f64>,
     best_fitness_curve: Vec<f64>,
     mean_fitness_curve: Vec<f64>,
+    /// Anytime-valid confidence interval from re-evaluating the champion
+    /// deck against the full gauntlet. `None` when the re-eval is
+    /// disabled (`--ci-max-games 0`) or the champion can't be
+    /// materialized. This is the honest reported number — the EA's
+    /// `final_best_fitness` is a point estimate at `n_per_side` games.
+    ci: Option<CiSummary>,
+}
+
+/// Anytime-valid confidence interval on a champion deck's win-rate vs the
+/// gauntlet, with the metadata needed to read it honestly.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CiSummary {
+    /// Mis-coverage level (`0.05` = 95% confidence).
+    alpha: f64,
+    /// Requested precision (interval half-width) the re-eval aimed for.
+    target_half_width: f64,
+    /// Games actually played (≤ budget; fewer if precision hit early).
+    games: u64,
+    /// Win-rate point estimate.
+    estimate: f64,
+    /// Interval lower bound.
+    lo: f64,
+    /// Interval upper bound.
+    hi: f64,
+    /// True if the interval reached `target_half_width`; false if the
+    /// game budget ran out first (interval is wider than requested).
+    precision_reached: bool,
+}
+
+impl CiSummary {
+    fn half_width(&self) -> f64 {
+        (self.hi - self.lo) / 2.0
+    }
+
+    /// Where the interval sits relative to an even (`0.5`) match against
+    /// the gauntlet — the only "verdict" the absolute re-eval supports.
+    fn vs_even(&self) -> &'static str {
+        if self.lo > 0.5 {
+            "beats gauntlet"
+        } else if self.hi < 0.5 {
+            "loses to gauntlet"
+        } else {
+            "spans 0.5"
+        }
+    }
+}
+
+/// Re-evaluate a champion genome against the full gauntlet, streaming one
+/// game at a time into an anytime-valid confidence sequence and stopping
+/// when the interval reaches `half_width` precision or `max_games` is
+/// exhausted. Opponents are interleaved (one game each per round) and the
+/// candidate alternates seats every round so first-mover bias cancels.
+/// Deterministic in `reeval_seed`: games are produced in a fixed order
+/// with seeds drawn sequentially, so the stop point never perturbs
+/// earlier games.
+#[allow(clippy::too_many_arguments)] // CI knobs read clearer flat than boxed
+fn reeval_champion_ci(
+    registry: &std::sync::Arc<CardRegistry>,
+    genome: &[String],
+    gauntlet: &[Vec<Card>],
+    opponent_ai: &AiKind,
+    alpha: f64,
+    half_width: f64,
+    max_games: u64,
+    reeval_seed: u64,
+) -> Option<CiSummary> {
+    if max_games == 0 || gauntlet.is_empty() {
+        return None;
+    }
+    let deck_g = match to_deck(registry.as_ref(), genome) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("  ! CI re-eval skipped (genome unmaterializable): {e}");
+            return None;
+        }
+    };
+    let n_opp = gauntlet.len();
+    // Candidate plays Heuristic, opponent plays `opponent_ai` — mirrors
+    // `fitness_breakdown` so the re-eval measures the same thing the EA
+    // selected on, just at higher sample size.
+    let ais_a = [AiKind::Heuristic, opponent_ai.clone()];
+    let ais_b = [opponent_ai.clone(), AiKind::Heuristic];
+    let mut rng = StdRng::seed_from_u64(reeval_seed);
+    let mut k = 0usize;
+    let res = confseq::evaluate_until(alpha, half_width, max_games, || {
+        let opp = &gauntlet[k % n_opp];
+        let candidate_is_a = (k / n_opp).is_multiple_of(2);
+        k += 1;
+        // Draw all three seeds up front, in a fixed order, so the game
+        // stream is replayable regardless of where the CS stops.
+        let s_cand: u64 = rng.gen();
+        let s_opp: u64 = rng.gen();
+        let g_seed: u64 = rng.gen();
+        let mut shuf_cand = StdRng::seed_from_u64(s_cand);
+        let mut shuf_opp = StdRng::seed_from_u64(s_opp);
+        let mut game_rng = StdRng::seed_from_u64(g_seed);
+        let mut log: Vec<String> = Vec::new();
+        if candidate_is_a {
+            let mut d_cand = deck_g.clone();
+            let mut d_opp = opp.clone();
+            shuffle_deck(&mut d_cand, &mut shuf_cand);
+            shuffle_deck(&mut d_opp, &mut shuf_opp);
+            let state = GameState::new(d_cand, d_opp);
+            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_a);
+            if stats.winner == PlayerId::A {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            let mut d_opp = opp.clone();
+            let mut d_cand = deck_g.clone();
+            shuffle_deck(&mut d_opp, &mut shuf_cand);
+            shuffle_deck(&mut d_cand, &mut shuf_opp);
+            let state = GameState::new(d_opp, d_cand);
+            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_b);
+            if stats.winner == PlayerId::B {
+                1.0
+            } else {
+                0.0
+            }
+        }
+    });
+    let (lo, hi) = res.interval();
+    Some(CiSummary {
+        alpha,
+        target_half_width: half_width,
+        games: res.n(),
+        estimate: res.estimate(),
+        lo,
+        hi,
+        precision_reached: res.stop_reason == confseq::StopReason::PrecisionReached,
+    })
 }
 
 fn load_baselines(registry: &CardRegistry, dir: &str) -> (Vec<Vec<Card>>, Vec<String>) {
@@ -202,8 +359,8 @@ fn probe_one_card(
     card: &Card,
 ) -> ProbeResult {
     let opponent_ai = match args.opponent_ai.to_ascii_lowercase().as_str() {
-        "heuristic" => tsot::sim::AiKind::Heuristic,
-        "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
+        "heuristic" => AiKind::Heuristic,
+        "uct" => AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
             exploration_c: args.opponent_uct_c,
             ..Default::default()
@@ -229,7 +386,7 @@ fn probe_one_card(
         pinned_card_id: Some(card.id.clone()),
         pinned_count: args.pinned_count.min(3),
         diversity_alpha: 0.0,
-        opponent_ai,
+        opponent_ai: opponent_ai.clone(),
     };
 
     // For pin to work, the pinned card MUST be available to genomes.
@@ -291,6 +448,33 @@ fn probe_one_card(
     let mean_curve = result.per_gen_mean_fitness.clone();
     let gens_run = result.best_per_generation.len().saturating_sub(1);
 
+    // Honest interval on the champion: the EA's ceiling is a point
+    // estimate at `n_per_side` games; re-play the winning deck at higher
+    // sample size and report an anytime-valid confidence interval.
+    let ci = reeval_champion_ci(
+        registry,
+        &final_best.0,
+        gauntlet,
+        &opponent_ai,
+        args.ci_alpha,
+        args.ci_half_width,
+        args.ci_max_games,
+        args.seed.wrapping_add(0xC15E_ED01),
+    );
+    if let Some(c) = &ci {
+        let stop = if c.precision_reached { "precision" } else { "budget" };
+        println!(
+            "  [{card_id_for_log}] CI re-eval: {} games → {:.3} ±{:.3} [{:.3}, {:.3}] ({}, {})",
+            c.games,
+            c.estimate,
+            c.half_width(),
+            c.lo,
+            c.hi,
+            stop,
+            c.vs_even(),
+        );
+    }
+
     ProbeResult {
         card_id: card.id.clone(),
         variant_of: card.variant_of.clone(),
@@ -306,6 +490,7 @@ fn probe_one_card(
         final_pop_card_presence: presence,
         best_fitness_curve: best_curve,
         mean_fitness_curve: mean_curve,
+        ci,
     }
 }
 
@@ -429,6 +614,12 @@ fn build_comparison_html(
                     .variant-card h3 { margin: 0 0 0.4em; color: var(--text-emphasis); font-size: 14px; }
                     .variant-card .stats { display: flex; gap: 16px; font-size: 12px; margin-bottom: 8px; }
                     .variant-card .stats b { color: var(--text-emphasis); }
+                    .variant-card .ci { font-size: 13px; margin: 0 0 8px; padding: 4px 8px;
+                                        background: var(--bg); border: 1px solid var(--border-soft);
+                                        border-left: 3px solid var(--accent); }
+                    .variant-card .ci b { color: var(--text-emphasis); font-size: 15px; }
+                    .variant-card .ci .ci-bounds { color: var(--text-secondary); }
+                    .variant-card .ci .ci-meta { color: var(--text-tertiary); font-size: 11px; }
                     .winner { border-left-color: #60c870; }
                     .winner h3::after { content: \" — strongest\"; color: #60c870; font-size: 11px; }
                     .variant-hero { background: var(--bg); border: 1px solid var(--border-soft);
@@ -459,10 +650,18 @@ fn build_comparison_html(
 
                 p.note {
                     "Each variant runs an EA with itself pinned to "
-                    (args.pinned_count) " copies in every genome. The reported "
-                    "fitness is the ceiling the EA reaches when forced to build "
-                    "around that variant. Higher ceiling = stronger variant. The "
-                    "co-occurring cards show the archetype each variant slots into. "
+                    (args.pinned_count) " copies in every genome; the EA finds a "
+                    "strong deck around that variant (the " b { "best fitness" }
+                    " ceiling — a point estimate at " (args.n) " games/side). The "
+                    b { "win-rate (re-eval)" } " line is the honest number: the "
+                    "champion deck is replayed against the full gauntlet, each game "
+                    "streamed into a betting confidence sequence that is "
+                    b { "valid no matter when you stop" } " — so the ± interval can "
+                    "be read directly and two variants are only distinguishable when "
+                    "their intervals don't overlap. A trailing "
+                    code { "*" } " (console) or “budget hit” (here) means the game "
+                    "budget ran out before the target precision; widen "
+                    code { "--ci-max-games" } " for a tighter interval. "
                     "Add variants by declaring `variants = { [key] = { overrides } }` "
                     "in the card's .lua file."
                 }
@@ -484,6 +683,23 @@ fn build_comparison_html(
                                     div { "best fitness: " b { (format!("{:.3}", r.final_best_fitness)) } }
                                     div { "mean fitness: " b { (format!("{:.3}", r.final_mean_fitness)) } }
                                     div { "gens run: " b { (r.generations_run) } "/" (r.pop_size) }
+                                }
+                                @if let Some(c) = &r.ci {
+                                    div.ci {
+                                        "win-rate (re-eval): "
+                                        b { (format!("{:.3}", c.estimate)) }
+                                        " ±" (format!("{:.3}", c.half_width()))
+                                        " "
+                                        span.ci-bounds { "[" (format!("{:.3}", c.lo)) ", " (format!("{:.3}", c.hi)) "]" }
+                                        " "
+                                        span.ci-meta {
+                                            (format!("{}% CI · {} games · {} · ",
+                                                ((1.0 - c.alpha) * 100.0).round() as i64,
+                                                c.games,
+                                                if c.precision_reached { "precision reached" } else { "budget hit" }))
+                                            (c.vs_even())
+                                        }
+                                    }
                                 }
                                 div {
                                     b { "Top final deck — co-occurring cards (count × card):" }
@@ -624,11 +840,23 @@ pub fn run_balance_probe(
                 .collect();
             coocc.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
             let top: Vec<String> = coocc.iter().take(5).map(|(id, n)| format!("{n}×{id}")).collect();
+            let ci_col = match &r.ci {
+                Some(c) => format!(
+                    "CI={:.3} ±{:.3} [{:.3},{:.3}] n={}{}",
+                    c.estimate,
+                    c.half_width(),
+                    c.lo,
+                    c.hi,
+                    c.games,
+                    if c.precision_reached { "" } else { "*" },
+                ),
+                None => "CI=off".to_string(),
+            };
             println!(
-                "  {:<width$}  best={:.3}  mean={:.3}  | top: {}",
+                "  {:<width$}  best={:.3}  {}  | top: {}",
                 r.card_id,
                 r.final_best_fitness,
-                r.final_mean_fitness,
+                ci_col,
                 top.join(", "),
                 width = name_width,
             );
