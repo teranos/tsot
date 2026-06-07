@@ -111,6 +111,52 @@ function tsotSetSaveStatus(msg) {
   if (el) el.textContent = msg;
 }
 
+// Per-item action handler for the `saved_item_action` idb op. Reads
+// the save record, dispatches to Load (delegates to play.html via
+// window.tsotLoadSaveJson — it mutates live game state we haven't
+// ported yet), Download (transient Blob + a.click), or Delete
+// (confirm + IDB delete + push refreshed list back through savedListIn).
+async function tsotHandleSavedItemAction(action, id, savedListInPort) {
+  const rec = await tsotDbGetSaveById(id);
+  if (!rec) {
+    tsotSetSaveStatus('save ' + id + ' not found');
+    return;
+  }
+  switch (action) {
+    case 'load':
+      await window.tsotLoadSaveJson(rec.json);
+      return;
+    case 'download': {
+      const blob = new Blob([rec.json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = rec.name.replace(/[^a-z0-9_-]+/gi, '_') + '.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      return;
+    }
+    case 'delete': {
+      if (!confirm('Delete "' + rec.name + '"?')) {
+        // User cancelled — re-send the same list so Elm exits its
+        // `SavedLoading` state (the click moved it there before the
+        // confirm dialog fired).
+        const records = await tsotDbGetAllSaves();
+        savedListInPort.send({ items: tsotSavesToMetadataList(records) });
+        return;
+      }
+      await tsotDbDeleteSave(id);
+      const records = await tsotDbGetAllSaves();
+      savedListInPort.send({ items: tsotSavesToMetadataList(records) });
+      return;
+    }
+    default:
+      throw new Error('unknown saved_item_action: ' + String(action));
+  }
+}
+
 // Errors are sacred. The js-bridge IIFE has multiple sequential blocks
 // (Elm.Main.init, port subscribers, window.tsot* shim definitions); a
 // throw at line N silently kills every block after it, and the failure
@@ -198,242 +244,139 @@ function tsotShowBridgeFailure(stage, err) {
     window.tsotLogPushError = function () {};
   }
 
-  stage = 'decision-report bridge';
-  // Decision-report bridge. Elm owns the panel state machine + the
-  // aggregation + the render. JS handles the IDB ops (read for the
-  // report, read+download for export, confirm+clear for clear).
-  // H7-Elm Stage 6: the report/export/clear buttons moved into Elm's
-  // view, so the click signals come in as outbound port commands now
-  // (decisionFetchOut, decisionExportOut, decisionClearOut) rather
-  // than through window.tsot* shims fired by play.html onclicks.
-  if (
-    app && app.ports
-    && app.ports.decisionFetchOut
-    && app.ports.decisionLogIn
-    && app.ports.decisionExportOut
-    && app.ports.decisionClearOut
-  ) {
-    app.ports.decisionFetchOut.subscribe(async function () {
-      try {
-        const records = await tsotDbGetAllDecisions();
-        app.ports.decisionLogIn.send(records);
-      } catch (e) {
-        app.ports.decisionLogIn.send([{ __decode_error: String(e) }]);
-        console.error('decisionFetchOut: IDB read failed', e);
-      }
-    });
-
-    app.ports.decisionExportOut.subscribe(async function () {
-      try {
-        const records = await tsotDbGetAllDecisions();
-        if (!records || records.length === 0) {
-          tsotSetSaveStatus('no decisions yet');
-          return;
-        }
-        const jsonl = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
-        const blob = new Blob([jsonl], { type: 'application/x-ndjson' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `tsot-decisions-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        tsotSetSaveStatus(`exported ${records.length} record(s)`);
-      } catch (e) {
-        console.error('decisionExportOut failed', e);
-        tsotSetSaveStatus('export failed: ' + String(e));
-      }
-    });
-
-    app.ports.decisionClearOut.subscribe(async function () {
-      try {
-        const records = await tsotDbGetAllDecisions();
-        const n = records ? records.length : 0;
-        if (n === 0) {
-          tsotSetSaveStatus('no decisions to clear');
-          return;
-        }
-        if (!confirm(`Delete all ${n} decision-log record(s)?`)) return;
-        await tsotDbClearDecisions();
-        tsotSetSaveStatus(`cleared ${n} record(s)`);
-      } catch (e) {
-        console.error('decisionClearOut failed', e);
-        tsotSetSaveStatus('clear failed: ' + String(e));
-      }
-    });
-  } else {
-    console.error('js-bridge: decision-report ports missing — Main.elm port wiring drift?');
+  stage = 'workerCmdOut dispatcher';
+  // Stage 9 bridge collapse: one outbound port for every worker-bound
+  // action. Elm sends a string cmd; this dispatcher routes to the
+  // existing window.tsot* helpers in play.html. Unknown cmds throw
+  // and surface in the red fault-surface banner (see
+  // tsotShowBridgeFailure) — silent degradation no longer possible.
+  if (!(app && app.ports && app.ports.workerCmdOut)) {
+    throw new Error('workerCmdOut port missing — Main.elm wiring drift');
   }
-
-  stage = 'saved-list bridge';
-  // Saved-list bridge (Stage 5). Elm owns the panel state machine +
-  // rendering; JS owns the IDB ops + the per-item Load/Delete/Download
-  // actions because they reach back into play.html's live game state
-  // (`loadSaveJson` mutates `state.phase`, `state.current`, kicks the
-  // render loop) which hasn't been ported to Elm.
-  if (
-    app && app.ports
-    && app.ports.savedListFetchOut
-    && app.ports.savedItemActionOut
-    && app.ports.savedListIn
-  ) {
-    app.ports.savedListFetchOut.subscribe(async function () {
-      try {
-        const records = await tsotDbGetAllSaves();
-        app.ports.savedListIn.send({ items: tsotSavesToMetadataList(records) });
-      } catch (e) {
-        app.ports.savedListIn.send({ error: String(e) });
-        console.error('savedListFetchOut: IDB read failed', e);
+  app.ports.workerCmdOut.subscribe(async function (cmd) {
+    try {
+      switch (cmd) {
+        case 'save_game':
+          await window.tsotSaveGame();
+          break;
+        case 'download':
+          await window.tsotDownloadGame();
+          break;
+        case 'load_from_file': {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = 'application/json';
+          input.style.display = 'none';
+          input.onchange = async function (ev) {
+            const file = ev.target.files && ev.target.files[0];
+            try {
+              if (file) {
+                const text = await file.text();
+                await window.tsotLoadSaveJson(text);
+              }
+            } catch (e) {
+              tsotShowBridgeFailure('workerCmd:load_from_file', e);
+            } finally {
+              if (input.parentNode) input.parentNode.removeChild(input);
+            }
+          };
+          document.body.appendChild(input);
+          input.click();
+          break;
+        }
+        case 'test_panic':
+          await window.tsotTestPanic();
+          break;
+        default:
+          throw new Error('unknown worker cmd: ' + String(cmd));
       }
-    });
+    } catch (e) {
+      tsotShowBridgeFailure('workerCmd:' + String(cmd), e);
+    }
+  });
 
-    app.ports.savedItemActionOut.subscribe(async function (payload) {
-      const action = payload && payload.action;
-      const id = payload && payload.id;
-      try {
-        switch (action) {
-          case 'load': {
-            const rec = await tsotDbGetSaveById(id);
-            if (!rec) {
-              tsotSetSaveStatus(`save ${id} not found`);
-              return;
-            }
-            if (typeof window.tsotLoadSaveJson !== 'function') {
-              console.error('window.tsotLoadSaveJson missing — play.html wiring drift?');
-              return;
-            }
-            await window.tsotLoadSaveJson(rec.json);
+  stage = 'idbReqOut dispatcher';
+  // Stage 9 bridge collapse: one outbound port for every IDB-bound
+  // action. Elm sends `{op, payload}`; this dispatcher routes by op.
+  // Unknown ops throw and surface in the red fault-surface banner.
+  if (!(app && app.ports && app.ports.idbReqOut
+        && app.ports.decisionLogIn && app.ports.savedListIn)) {
+    throw new Error('idbReqOut / decisionLogIn / savedListIn port missing — Main.elm wiring drift');
+  }
+  app.ports.idbReqOut.subscribe(async function (envelope) {
+    const op = envelope && envelope.op;
+    const payload = envelope && envelope.payload;
+    try {
+      switch (op) {
+        case 'decision_get_all': {
+          const records = await tsotDbGetAllDecisions();
+          app.ports.decisionLogIn.send(records);
+          break;
+        }
+        case 'decision_export': {
+          const records = await tsotDbGetAllDecisions();
+          if (!records || records.length === 0) {
+            tsotSetSaveStatus('no decisions yet');
             break;
           }
-          case 'download': {
-            const rec = await tsotDbGetSaveById(id);
-            if (!rec) {
-              tsotSetSaveStatus(`save ${id} not found`);
-              return;
-            }
-            const blob = new Blob([rec.json], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = rec.name.replace(/[^a-z0-9_-]+/gi, '_') + '.json';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+          const jsonl = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
+          const blob = new Blob([jsonl], { type: 'application/x-ndjson' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `tsot-decisions-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          tsotSetSaveStatus(`exported ${records.length} record(s)`);
+          break;
+        }
+        case 'decision_clear': {
+          const records = await tsotDbGetAllDecisions();
+          const n = records ? records.length : 0;
+          if (n === 0) {
+            tsotSetSaveStatus('no decisions to clear');
             break;
           }
-          case 'delete': {
-            const rec = await tsotDbGetSaveById(id);
-            if (!rec) {
-              tsotSetSaveStatus(`save ${id} not found`);
-              return;
-            }
-            if (!confirm(`Delete "${rec.name}"?`)) {
-              // User cancelled — re-send the same list so Elm exits
-              // its Loading state (the click moved it there before
-              // the confirm dialog).
-              const records = await tsotDbGetAllSaves();
-              app.ports.savedListIn.send({ items: tsotSavesToMetadataList(records) });
-              return;
-            }
-            await tsotDbDeleteSave(id);
-            const records = await tsotDbGetAllSaves();
-            app.ports.savedListIn.send({ items: tsotSavesToMetadataList(records) });
-            break;
-          }
-          default:
-            console.error('savedItemActionOut: unknown action', action);
+          if (!confirm(`Delete all ${n} decision-log record(s)?`)) break;
+          await tsotDbClearDecisions();
+          tsotSetSaveStatus(`cleared ${n} record(s)`);
+          break;
         }
-      } catch (e) {
-        console.error('savedItemActionOut failed', action, e);
-        tsotSetSaveStatus(`${action} failed: ${String(e)}`);
-      }
-    });
-
-    // Push a fresh saves list to Elm. Used after a successful Save —
-    // if the panel happens to be open it refreshes in place; if
-    // hidden, Elm ignores the update (see `SavedListReceived`).
-    window.tsotSavedListRefresh = async function () {
-      try {
-        const records = await tsotDbGetAllSaves();
-        app.ports.savedListIn.send({ items: tsotSavesToMetadataList(records) });
-      } catch (e) {
-        console.error('tsotSavedListRefresh failed', e);
-      }
-    };
-  } else {
-    console.error('js-bridge: saved-list ports missing — Main.elm port wiring drift?');
-    window.tsotSavedListRefresh = function () {};
-  }
-
-  // H7-Elm Stage 6: save-controls bar moved into Elm. Each of the four
-  // remaining JS-owned actions (Save / Download / Load file / Test
-  // panic) becomes an outbound port; play.html exposes a
-  // `window.tsot*` shim for each (Save/Download/TestPanic reach back
-  // into the live game state, Load file is fully owned by js-bridge
-  // via a transient `<input type=file>` whose onchange calls
-  // `window.tsotLoadSaveJson` exposed by play.html in Stage 5).
-  if (
-    app && app.ports
-    && app.ports.saveGameOut
-    && app.ports.downloadGameOut
-    && app.ports.loadFromFileOut
-    && app.ports.testPanicOut
-  ) {
-    app.ports.saveGameOut.subscribe(async function () {
-      if (typeof window.tsotSaveGame !== 'function') {
-        console.error('window.tsotSaveGame missing — play.html wiring drift?');
-        return;
-      }
-      await window.tsotSaveGame();
-    });
-    app.ports.downloadGameOut.subscribe(async function () {
-      if (typeof window.tsotDownloadGame !== 'function') {
-        console.error('window.tsotDownloadGame missing — play.html wiring drift?');
-        return;
-      }
-      await window.tsotDownloadGame();
-    });
-    app.ports.loadFromFileOut.subscribe(function () {
-      // Transient file input — created on demand, clicked, disposed.
-      // play.html no longer carries the hidden `<input id="file-input">`
-      // since this is the only consumer.
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'application/json';
-      input.style.display = 'none';
-      input.onchange = async function (ev) {
-        const file = ev.target.files && ev.target.files[0];
-        if (file) {
-          try {
-            const text = await file.text();
-            if (typeof window.tsotLoadSaveJson === 'function') {
-              await window.tsotLoadSaveJson(text);
-            } else {
-              console.error('window.tsotLoadSaveJson missing — play.html wiring drift?');
-            }
-          } catch (e) {
-            console.error('loadFromFileOut failed', e);
-            tsotSetSaveStatus('load file failed: ' + String(e));
-          }
+        case 'saved_get_all': {
+          const records = await tsotDbGetAllSaves();
+          app.ports.savedListIn.send({ items: tsotSavesToMetadataList(records) });
+          break;
         }
-        if (input.parentNode) input.parentNode.removeChild(input);
-      };
-      document.body.appendChild(input);
-      input.click();
-    });
-    app.ports.testPanicOut.subscribe(async function () {
-      if (typeof window.tsotTestPanic !== 'function') {
-        console.error('window.tsotTestPanic missing — play.html wiring drift?');
-        return;
+        case 'saved_item_action': {
+          await tsotHandleSavedItemAction(
+            payload && payload.action,
+            payload && payload.id,
+            app.ports.savedListIn
+          );
+          break;
+        }
+        default:
+          throw new Error('unknown idb op: ' + String(op));
       }
-      await window.tsotTestPanic();
-    });
-  } else {
-    console.error('js-bridge: save-controls ports missing — Main.elm port wiring drift?');
-  }
+    } catch (e) {
+      tsotShowBridgeFailure('idbReq:' + String(op), e);
+    }
+  });
+
+  // Push a fresh saves list to Elm. Used by play.html's onSaveClick
+  // after a successful Save — if the panel happens to be open it
+  // refreshes in place; if hidden, Elm ignores the update (see
+  // `SavedListReceived`).
+  window.tsotSavedListRefresh = async function () {
+    try {
+      const records = await tsotDbGetAllSaves();
+      app.ports.savedListIn.send({ items: tsotSavesToMetadataList(records) });
+    } catch (e) {
+      tsotShowBridgeFailure('tsotSavedListRefresh', e);
+    }
+  };
 
   stage = 'tsotSetSaveStatus / tsotSetPhase shims';
   // tsotSetSaveStatus + tsotSetPhase — exposed to play.html so the

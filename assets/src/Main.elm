@@ -58,6 +58,7 @@ import Html exposing (Html, button, div, h2, pre, span, table, td, text, th, tr)
 import Html.Attributes exposing (class, id, style)
 import Html.Events exposing (onClick)
 import Json.Decode as D
+import Json.Encode as E
 import Task
 
 
@@ -77,22 +78,7 @@ port logErrorIn : (D.Value -> msg) -> Sub msg
 port decisionLogIn : (D.Value -> msg) -> Sub msg
 
 
-port decisionFetchOut : () -> Cmd msg
-
-
-port decisionExportOut : () -> Cmd msg
-
-
-port decisionClearOut : () -> Cmd msg
-
-
 port savedListIn : (D.Value -> msg) -> Sub msg
-
-
-port savedListFetchOut : () -> Cmd msg
-
-
-port savedItemActionOut : { action : String, id : Int } -> Cmd msg
 
 
 port saveStatusIn : (String -> msg) -> Sub msg
@@ -101,16 +87,21 @@ port saveStatusIn : (String -> msg) -> Sub msg
 port gamePhaseIn : (String -> msg) -> Sub msg
 
 
-port saveGameOut : () -> Cmd msg
+{-| One outbound port for every worker-bound action. Carries a string
+cmd (`"save_game"` / `"download"` / `"load_from_file"` / `"test_panic"`).
+js-bridge dispatches by string; unknown cmds throw and surface via the
+fault-surface diagnostic.
+-}
+port workerCmdOut : String -> Cmd msg
 
 
-port downloadGameOut : () -> Cmd msg
-
-
-port loadFromFileOut : () -> Cmd msg
-
-
-port testPanicOut : () -> Cmd msg
+{-| One outbound port for every IDB-bound action. Carries an
+`{op, payload}` envelope. Per-feature ports collapsed here:
+`decision_get_all` / `decision_export` / `decision_clear` /
+`saved_get_all` / `saved_item_action` (the last carries
+`{action, id}` in its payload).
+-}
+port idbReqOut : { op : String, payload : E.Value } -> Cmd msg
 
 
 
@@ -281,6 +272,11 @@ init _ =
     )
 
 
+savedItemPayload : String -> Int -> E.Value
+savedItemPayload action id =
+    E.object [ ( "action", E.string action ), ( "id", E.int id ) ]
+
+
 parseGamePhase : String -> GamePhase
 parseGamePhase s =
     case s of
@@ -338,7 +334,9 @@ update msg model =
                     ( { model | decisionPanel = DecisionHidden }, Cmd.none )
 
                 _ ->
-                    ( { model | decisionPanel = DecisionLoading }, decisionFetchOut () )
+                    ( { model | decisionPanel = DecisionLoading }
+                    , idbReqOut { op = "decision_get_all", payload = E.null }
+                    )
 
         DecisionLogReceived value ->
             case D.decodeValue (D.list decodeDecisionRecord) value of
@@ -353,10 +351,10 @@ update msg model =
                     )
 
         DecisionExportClicked ->
-            ( model, decisionExportOut () )
+            ( model, idbReqOut { op = "decision_export", payload = E.null } )
 
         DecisionClearClicked ->
-            ( model, decisionClearOut () )
+            ( model, idbReqOut { op = "decision_clear", payload = E.null } )
 
         DecisionPanelClosed ->
             ( { model | decisionPanel = DecisionHidden }, Cmd.none )
@@ -370,7 +368,9 @@ update msg model =
                     ( { model | savedList = SavedHidden }, Cmd.none )
 
                 _ ->
-                    ( { model | savedList = SavedLoading }, savedListFetchOut () )
+                    ( { model | savedList = SavedLoading }
+                    , idbReqOut { op = "saved_get_all", payload = E.null }
+                    )
 
         SavedListReceived value ->
             -- A refresh push from JS (after a Save or Delete) arrives
@@ -398,33 +398,33 @@ update msg model =
             -- (still in play.html) which mutates game state + renders.
             -- Elm doesn't track that side; the panel stays Shown so
             -- the user can pick a different save if loading fails.
-            ( model, savedItemActionOut { action = "load", id = id } )
+            ( model, idbReqOut { op = "saved_item_action", payload = savedItemPayload "load" id } )
 
         SavedItemDownload id ->
-            ( model, savedItemActionOut { action = "download", id = id } )
+            ( model, idbReqOut { op = "saved_item_action", payload = savedItemPayload "download" id } )
 
         SavedItemDelete id ->
             -- JS asks confirm(), then deletes, then sends the fresh list
             -- back via savedListIn. Elm transitions to Loading so the
             -- user sees the panel is updating.
             ( { model | savedList = SavedLoading }
-            , savedItemActionOut { action = "delete", id = id }
+            , idbReqOut { op = "saved_item_action", payload = savedItemPayload "delete" id }
             )
 
         SavedListClosed ->
             ( { model | savedList = SavedHidden }, Cmd.none )
 
         SaveClicked ->
-            ( model, saveGameOut () )
+            ( model, workerCmdOut "save_game" )
 
         DownloadClicked ->
-            ( model, downloadGameOut () )
+            ( model, workerCmdOut "download" )
 
         LoadFromFileClicked ->
-            ( model, loadFromFileOut () )
+            ( model, workerCmdOut "load_from_file" )
 
         TestPanicClicked ->
-            ( model, testPanicOut () )
+            ( model, workerCmdOut "test_panic" )
 
         SaveStatusReceived msgText ->
             ( { model | saveStatus = msgText }, Cmd.none )
