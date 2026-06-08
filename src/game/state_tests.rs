@@ -1300,3 +1300,42 @@ fn sum_and_scaled_modifier_compose_offset_plus_per_face_contribution() {
     // Printed 1/1 + modifier (0.0, -1.0) → 1.0/0.0.
     assert_eq!(s.effective_stats(&host), (1.0, 0.0));
 }
+
+#[test]
+fn pending_main_phase_returns_flush_on_main1_entry() {
+    // Card sits in A's exile; queue it for next-main-phase return.
+    // Stepping into Main1 must move it from exile to A's board and
+    // clear the queue.
+    let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+    let iid = s.a.hand[0].clone();
+    s.a.hand.retain(|i| i != &iid);
+    s.a.exile.push(iid.clone());
+    s.pending_main_phase_returns.push(iid.clone());
+    assert_eq!(s.phase, Phase::Untap);
+    s.next_phase(None); // Untap → Draw
+    s.next_phase(None); // Draw  → Main1
+    assert_eq!(s.phase, Phase::Main1);
+    assert!(s.a.board.contains(&iid), "queued card must return to owner's board");
+    assert!(!s.a.exile.contains(&iid), "queued card must leave exile");
+    assert!(s.pending_main_phase_returns.is_empty(), "queue must clear after flush");
+}
+
+#[test]
+fn pending_main_phase_returns_flush_on_main2_entry() {
+    // Same but starting after Main1 — phase advances through Main1
+    // (no queued items) → Combat → Main2 (flushes).
+    let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+    let iid = s.a.hand[0].clone();
+    s.a.hand.retain(|i| i != &iid);
+    s.a.exile.push(iid.clone());
+    s.next_phase(None); // Untap → Draw
+    s.next_phase(None); // Draw  → Main1
+    // Queue AFTER Main1 entry so the first flush doesn't catch it.
+    s.pending_main_phase_returns.push(iid.clone());
+    s.next_phase(None); // Main1 → Combat
+    s.next_phase(None); // Combat → Main2
+    assert_eq!(s.phase, Phase::Main2);
+    assert!(s.a.board.contains(&iid), "queued card must return on Main2 entry");
+    assert!(!s.a.exile.contains(&iid));
+    assert!(s.pending_main_phase_returns.is_empty());
+}

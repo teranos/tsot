@@ -53,6 +53,41 @@ impl GameState {
             }
         };
         self.set_phase(next);
+        // Cryogenic Chamber-style "return at next main phase": at the
+        // start of either Main1 or Main2 (whichever begins first after
+        // a schedule_return_at_next_main call), flush every queued
+        // iid from wherever it currently sits back to its owner's
+        // BOARD. Idempotent — the queue clears after flushing.
+        if matches!(next, Phase::Main1 | Phase::Main2)
+            && !self.pending_main_phase_returns.is_empty()
+        {
+            use super::state::{PlayerId, Zone};
+            let queue = std::mem::take(&mut self.pending_main_phase_returns);
+            for iid in queue {
+                let Some(inst) = self.card_pool.get(&iid) else { continue; };
+                let owner = inst.owner;
+                // Remove from the non-board zone where the card lives.
+                // The Chamber's flow puts it in EXILE (via P.8 cascade
+                // after on_die), but we cover Hand / Deck / Graveyard
+                // too so any future scheduler shape keeps working.
+                let zones = [Zone::Exile, Zone::Graveyard, Zone::Hand, Zone::Deck];
+                for pid in [PlayerId::A, PlayerId::B] {
+                    for zone in zones {
+                        let present = match zone {
+                            Zone::Hand => self.player(pid).hand.contains(&iid),
+                            Zone::Deck => self.player(pid).deck.contains(&iid),
+                            Zone::Graveyard => self.player(pid).graveyard.contains(&iid),
+                            Zone::Exile => self.player(pid).exile.contains(&iid),
+                            Zone::Board => false,
+                        };
+                        if present {
+                            self.remove_from_zone(&iid, pid, zone);
+                        }
+                    }
+                }
+                self.player_mut(owner).board.push(iid);
+            }
+        }
         // O2: Phase advance event. Emitted regardless of whether the
         // phase value actually differs (the End → Untap transition
         // also flips turn counter, which is a useful observation

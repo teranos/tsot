@@ -707,6 +707,25 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.schedule_return_at_next_main(iid) — queue `iid` for
+        // return to its owner's BOARD at the start of the next main
+        // phase (Main1 OR Main2 of any player's turn, whichever comes
+        // first). Used by Cryogenic Chamber's on_die to thaw the held
+        // creature later in the game. Silent no-op if `iid` isn't in
+        // the card pool.
+        let cell_ret = &$cell;
+        game.set(
+            "schedule_return_at_next_main",
+            $scope.create_function_mut(move |_, iid: String| -> Result<()> {
+                let mut s = cell_ret.borrow_mut();
+                if !s.card_pool.contains_key(&iid) {
+                    return Ok(());
+                }
+                s.pending_main_phase_returns.push(iid);
+                Ok(())
+            })?,
+        )?;
+
         let cell_atk_q = &$cell;
         game.set(
             "creature_attacked_this_turn",
@@ -1534,6 +1553,95 @@ mod suppress_tests {
         // Attach suppressor; activation_count drops to 0.
         s.add_attached(&host, &mutation);
         assert_eq!(s.activation_count(&host), 0, "suppressed host has no activations");
+    }
+
+    #[test]
+    fn chamber_on_die_schedules_attached_for_next_main_phase_return() {
+        use crate::card::load_card;
+        use crate::card::CardType;
+        use crate::choice::RandomOracle;
+        use rand::SeedableRng;
+        use std::path::Path;
+
+        let lua = Lua::new();
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let chamber_iid = s.a.hand[0].clone();
+        let victim_iid = s.b.hand[0].clone();
+
+        // Install loaded chamber.
+        let chamber_cards =
+            load_card(&lua, Path::new("cards/cryogenic-chamber.lua")).expect("load chamber");
+        let chamber_card = chamber_cards
+            .into_iter()
+            .find(|c| c.id == "cryogenic-chamber")
+            .unwrap();
+        s.card_pool.get_mut(&chamber_iid).unwrap().card = chamber_card;
+        s.card_pool.get_mut(&victim_iid).unwrap().card.kind = CardType::Creature;
+        s.a.hand.retain(|i| i != &chamber_iid);
+        s.b.hand.retain(|i| i != &victim_iid);
+        s.a.board.push(chamber_iid.clone());
+        // Simulate the prior ETB: victim is in chamber's attached list.
+        s.add_attached(&chamber_iid, &victim_iid);
+
+        // Fire on_die directly on the chamber (no oracle prompts needed).
+        let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
+        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &chamber_iid);
+
+        assert!(
+            s.pending_main_phase_returns.contains(&victim_iid),
+            "victim must be queued for next-main-phase return"
+        );
+    }
+
+    #[test]
+    fn chamber_etb_handler_attaches_chosen_creature_to_chamber() {
+        use crate::card::load_card;
+        use crate::card::CardType;
+        use crate::choice::{ScriptedAnswer, ScriptedOracle};
+        use std::path::Path;
+
+        let lua = Lua::new();
+        let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let chamber_iid = s.a.hand[0].clone();
+        let victim_iid = s.b.hand[0].clone();
+        let distractor_iid = s.a.hand[1].clone();
+
+        // Replace chamber_iid's card with the loaded chamber Card. The
+        // chamber's on_enter_board handler is expected to pick a board
+        // creature (via game.choose_card) and game.attach(self, target).
+        let chamber_cards =
+            load_card(&lua, Path::new("cards/cryogenic-chamber.lua")).expect("load chamber");
+        let chamber_card = chamber_cards
+            .into_iter()
+            .find(|c| c.id == "cryogenic-chamber")
+            .unwrap();
+        s.card_pool.get_mut(&chamber_iid).unwrap().card = chamber_card;
+        // Mark the two non-chamber cards as creatures so they're
+        // eligible targets.
+        s.card_pool.get_mut(&victim_iid).unwrap().card.kind = CardType::Creature;
+        s.card_pool.get_mut(&distractor_iid).unwrap().card.kind = CardType::Creature;
+        // Put chamber + creatures on board.
+        s.a.hand.retain(|i| i != &chamber_iid && i != &distractor_iid);
+        s.b.hand.retain(|i| i != &victim_iid);
+        s.a.board.push(chamber_iid.clone());
+        s.a.board.push(distractor_iid.clone());
+        s.b.board.push(victim_iid.clone());
+
+        // Oracle picks the opponent's creature (victim).
+        let mut oracle = ScriptedOracle::new(vec![ScriptedAnswer::Card(Some(victim_iid.clone()))]);
+        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnEnterBoard, &chamber_iid);
+
+        let chamber_inst = s.card_pool.get(&chamber_iid).unwrap();
+        assert!(
+            chamber_inst.attached.contains(&victim_iid),
+            "chamber must hold the chosen victim in its attached list"
+        );
+        assert!(
+            !s.b.board.contains(&victim_iid),
+            "victim must be removed from opponent's board"
+        );
+        // Distractor is unaffected.
+        assert!(s.a.board.contains(&distractor_iid));
     }
 
     #[test]

@@ -1226,6 +1226,30 @@ mod tests {
     }
 
     #[test]
+    fn cryogenic_chamber_card_loads_with_full_shape() {
+        let lua = Lua::new();
+        let path = Path::new("cards/cryogenic-chamber.lua");
+        let cards = load_card(&lua, path).expect("load cryogenic-chamber");
+        let card = cards.iter().find(|c| c.id == "cryogenic-chamber").unwrap();
+        let mut colors_sorted = card.colors.clone();
+        colors_sorted.sort();
+        assert_eq!(colors_sorted, vec!["azure", "white"]);
+        assert!(matches!(card.kind, crate::card::CardType::Artifact));
+        assert_eq!(card.cost.len(), 1);
+        let cost0 = &card.cost[0];
+        assert_eq!(cost0.amount, 1);
+        assert!(matches!(cost0.source, crate::card::CostSource::Graveyard));
+        use crate::card::Slot;
+        let actual: std::collections::BTreeSet<Slot> = card.holes.iter().copied().collect();
+        let expected: std::collections::BTreeSet<Slot> = [
+            Slot::L, Slot::R, Slot::T, Slot::TR, Slot::B, Slot::BL,
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn missense_mutation_card_loads_with_full_shape() {
         let lua = Lua::new();
         let path = Path::new("cards/missense-mutation.lua");

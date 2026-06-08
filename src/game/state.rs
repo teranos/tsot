@@ -301,6 +301,16 @@ pub struct GameState {
     /// the queue is empty.
     #[serde(default)]
     pub extra_turns_pending: Vec<PlayerId>,
+    /// Cards scheduled to return to their owner's BOARD at the start
+    /// of the next main phase that begins — either Main1 OR Main2 of
+    /// any player's turn, whichever comes first. Pushed by
+    /// `game.schedule_return_at_next_main(iid)` from a handler
+    /// (Cryogenic Chamber's on_die uses this to thaw its held
+    /// creature). Flushed by the turn loop when entering Main1 OR
+    /// Main2: each queued iid moves from whatever zone it currently
+    /// lives in to its owner's board, then the queue clears.
+    #[serde(default)]
+    pub pending_main_phase_returns: Vec<InstanceId>,
 }
 
 impl GameState {
@@ -332,6 +342,7 @@ impl GameState {
             current_activation_x: None,
             current_cast_payments: None,
             extra_turns_pending: Vec::new(),
+            pending_main_phase_returns: Vec::new(),
         }
     }
 
