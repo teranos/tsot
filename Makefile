@@ -238,7 +238,7 @@ WASM_TARGET    := wasm32-unknown-emscripten
 WASM_OUT       := target/$(WASM_TARGET)/release
 WASM_OUT_DEV   := target/$(WASM_TARGET)/debug
 WASM_DIST      := dist
-ELM_SRC        := assets/src
+ELM_SRC        := assets
 
 # H7-Elm Stage 1. Compiles the Elm dev-tool sources under `assets/src/`
 # into a single `dist/bundle.js`. `wasm` and `wasm-dev` depend on this
@@ -254,7 +254,7 @@ assets:
 		exit 1; \
 	}
 	@mkdir -p $(WASM_DIST)
-	cd $(ELM_SRC) && elm make Main.elm --output=$(CURDIR)/$(WASM_DIST)/bundle.js
+	cd $(ELM_SRC) && elm make src/Main.elm --output=$(CURDIR)/$(WASM_DIST)/bundle.js
 	@# H7-Elm Stage 7: also copy the JS bridge + play.html into dist/
 	@# so `make assets` is a complete frontend refresh — running
 	@# `make wasm-dev-serve` after edits-only-to-Elm-or-JS-bridge no

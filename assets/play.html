@@ -812,50 +812,19 @@ function _renderInner(s) {
     } else {
       setPrompt(`Combat — click creatures to attack with (${eligible.size} eligible), then confirm.`);
     }
-    // Wave 2: attacker selection clicks pending Wave 4. Attack
-    // would send the empty set; only No-attack reliably advances.
-    if (eligible.size > 0) {
-      const confirm = document.createElement('button');
-      confirm.textContent = `Attack (${state.selectedAttackers.size})`;
-      confirm.onclick = () => sendAction({ kind: 'Attackers', iids: [...state.selectedAttackers] }).then(render);
-      buttons.appendChild(confirm);
-    }
-    const skip = document.createElement('button');
-    skip.textContent = eligible.size === 0 ? 'End combat' : 'No attack';
-    skip.className = 'danger';
-    skip.onclick = () => sendAction({ kind: 'Attackers', iids: [] }).then(render);
-    buttons.appendChild(skip);
+    // Wave 4: attacker-toggle clicks + Attack/No-attack buttons all Elm.
   } else if (prompt.kind === 'PickBlocks') {
-    const eligibleBlockers = new Set(prompt.eligible_blockers);
-    if (eligibleBlockers.size === 0) {
+    if ((prompt.eligible_blockers || []).length === 0) {
       setPrompt(`Combat — incoming: ${prompt.attackers.map(a => labelFor(view, a)).join(', ')}. No eligible blockers (your creatures are all tapped, sick-from-attack, or restricted).`);
-    } else if (state.blockerPickFor !== null) {
-      const stagedName = labelFor(view, state.blockerPickFor);
-      setPrompt(`Combat — ${stagedName} staged as blocker. Now click an attacker (orange border) to assign. Click the staged blocker again to cancel. Click an assigned blocker to unassign.`);
     } else {
-      setPrompt(`Combat — incoming: ${prompt.attackers.map(a => labelFor(view, a)).join(', ')}. Click one of your highlighted creatures to stage as blocker; then click the attacker. Multiple blockers may share one attacker.`);
+      setPrompt(`Combat — incoming: ${prompt.attackers.map(a => labelFor(view, a)).join(', ')}. Click one of your highlighted creatures to stage as blocker; then click an attacker. Multiple blockers may share one attacker.`);
     }
-    // Wave 2: blocker stage/assign clicks pending Wave 4. No-blocks works.
-    const pairs = Object.entries(state.selectedBlocks);
-    const confirm = document.createElement('button');
-    confirm.textContent = `Confirm blocks (${pairs.length})`;
-    confirm.onclick = () => {
-      sendAction({ kind: 'Blocks', pairs }).then(r => {
-        state.selectedBlocks = {};
-        state.blockerPickFor = null;
-        render(r);
-      });
-    };
-    buttons.appendChild(confirm);
-    const skip = document.createElement('button');
-    skip.textContent = 'No blocks';
-    skip.className = 'danger';
-    skip.onclick = () => {
-      state.selectedBlocks = {};
-      state.blockerPickFor = null;
-      sendAction({ kind: 'Blocks', pairs: [] }).then(render);
-    };
-    buttons.appendChild(skip);
+    // Wave 4: stage-hint when a blocker is staged is carried by the
+    // "… click an attacker" overlay on the staged card itself (in
+    // Elm's pickBlocksOpts) rather than the prompt-text. Keeps the
+    // JS-side prompt-text static so no Elm-state peek is needed.
+    // Blocker-stage / attacker-target clicks + Confirm/No-blocks
+    // buttons all Elm.
   } else if (prompt.kind === 'ChooseCard') {
     const host = prompt.host;
     const hostCard = host ? findCardsByIids(view, [host])[0] : null;

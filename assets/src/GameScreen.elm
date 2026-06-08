@@ -5,6 +5,7 @@ module GameScreen exposing
     , ChooseCardData
     , ChooseIntData
     , ChoosePlayerData
+    , CombatSelection
     , GameOverData
     , PickAttackersData
     , PickBlocksData
@@ -14,11 +15,16 @@ module GameScreen exposing
     , SpectateData
     , UctCandidate
     , UctPreview
+    , assignAttackerToStaged
+    , clickBlocker
     , decodeCardView
     , decodePrompt
     , decodeUctPreview
     , defaultCardOpts
+    , emptyCombatSelection
     , promptKindKey
+    , resetCombatSelection
+    , toggleAttacker
     , viewCard
     , viewPromptButtons
     )
@@ -43,10 +49,12 @@ Msgs in at the use site.
 
 -}
 
+import Dict exposing (Dict)
 import Html exposing (Html, button, div, input, span, text)
 import Html.Attributes as A exposing (class, style)
 import Html.Events as E
 import Json.Decode as D
+import Set exposing (Set)
 
 
 
@@ -177,6 +185,92 @@ type alias UctPreview =
     , promptKey : String
     , inFlight : Bool
     }
+
+
+
+-- COMBAT SELECTION STATE
+
+
+{-| Local interaction state for PickAttackers + PickBlocks. Held in
+`Main.Model.combat` and mutated by the click handlers; reset to empty
+after a Confirm/No-* action fires and on prompt-kind transitions out
+of combat. Pure helpers below — exhaustively pinned by
+`tests/CombatSelectionTest.elm`.
+
+`attackers`     — iids the player has toggled on in PickAttackers
+`blocks`        — blocker iid → attacker iid (the engine's pairs shape)
+`blockerPickFor`— blocker staged in PickBlocks awaiting an attacker click
+
+-}
+type alias CombatSelection =
+    { attackers : Set String
+    , blocks : Dict String String
+    , blockerPickFor : Maybe String
+    }
+
+
+emptyCombatSelection : CombatSelection
+emptyCombatSelection =
+    { attackers = Set.empty
+    , blocks = Dict.empty
+    , blockerPickFor = Nothing
+    }
+
+
+toggleAttacker : String -> CombatSelection -> CombatSelection
+toggleAttacker iid s =
+    if Set.member iid s.attackers then
+        { s | attackers = Set.remove iid s.attackers }
+
+    else
+        { s | attackers = Set.insert iid s.attackers }
+
+
+{-| Click on one of your eligible blockers during PickBlocks. Three
+modes:
+
+  - same iid as `blockerPickFor`: unstage (cancel the in-flight stage)
+  - iid is a key in `blocks`: unassign (free the blocker for re-use)
+  - otherwise: stage this blocker (next click on an attacker assigns)
+
+If a *different* blocker was already staged, this re-stages to the
+new one — matches the "click another eligible blocker before picking
+an attacker" feel without leaving the player wondering why the old
+stage is gone.
+
+-}
+clickBlocker : String -> CombatSelection -> CombatSelection
+clickBlocker iid s =
+    if s.blockerPickFor == Just iid then
+        { s | blockerPickFor = Nothing }
+
+    else if Dict.member iid s.blocks then
+        { s | blocks = Dict.remove iid s.blocks }
+
+    else
+        { s | blockerPickFor = Just iid }
+
+
+{-| Click on an attacker on the opponent's board during PickBlocks.
+Only meaningful when a blocker is staged — assigns and clears the
+stage so the player can immediately stage another blocker.
+-}
+assignAttackerToStaged : String -> CombatSelection -> CombatSelection
+assignAttackerToStaged atkIid s =
+    case s.blockerPickFor of
+        Just blkIid ->
+            { s
+                | blocks = Dict.insert blkIid atkIid s.blocks
+                , blockerPickFor = Nothing
+            }
+
+        Nothing ->
+            s
+
+
+resetCombatSelection : CombatSelection -> CombatSelection
+resetCombatSelection _ =
+    emptyCombatSelection
 
 
 
@@ -662,11 +756,15 @@ type alias PromptButtonsConfig msg =
     , onIntConfirm : Int -> msg
     , onPass : msg
     , onSkipChoiceCard : msg
+    , onConfirmAttackers : msg
+    , onNoAttack : msg
+    , onConfirmBlocks : msg
+    , onNoBlocks : msg
     }
 
 
-viewPromptButtons : PromptButtonsConfig msg -> String -> Prompt -> Html msg
-viewPromptButtons cfg chooseIntDraft prompt =
+viewPromptButtons : PromptButtonsConfig msg -> String -> CombatSelection -> Prompt -> Html msg
+viewPromptButtons cfg chooseIntDraft combat prompt =
     div [ A.id "elm-prompt-buttons", style "margin-top" "0.5rem" ]
         (case prompt of
             ConfirmPrompt _ ->
@@ -726,6 +824,43 @@ viewPromptButtons cfg chooseIntDraft prompt =
 
                 else
                     []
+
+            PickAttackersPrompt data ->
+                let
+                    eligibleCount =
+                        List.length data.eligible
+
+                    attackBtn =
+                        if eligibleCount > 0 then
+                            [ button
+                                [ E.onClick cfg.onConfirmAttackers ]
+                                [ text ("Attack (" ++ String.fromInt (Set.size combat.attackers) ++ ")") ]
+                            ]
+
+                        else
+                            []
+
+                    skipLabel =
+                        if eligibleCount == 0 then
+                            "End combat"
+
+                        else
+                            "No attack"
+                in
+                attackBtn
+                    ++ [ button
+                            [ class "danger", E.onClick cfg.onNoAttack ]
+                            [ text skipLabel ]
+                       ]
+
+            PickBlocksPrompt _ ->
+                [ button
+                    [ E.onClick cfg.onConfirmBlocks ]
+                    [ text ("Confirm blocks (" ++ String.fromInt (Dict.size combat.blocks) ++ ")") ]
+                , button
+                    [ class "danger", E.onClick cfg.onNoBlocks ]
+                    [ text "No blocks" ]
+                ]
 
             _ ->
                 []

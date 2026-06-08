@@ -2,6 +2,79 @@
 // Platform surface the Elm app can't touch directly via ports — the
 // wasm Worker handle, IndexedDB, SharedArrayBuffer atomic writes, file
 // download, prompt/confirm, setInterval.
+
+// ============================================================
+// Global error sinks. Anything that escapes a try/catch + any
+// rejected Promise that has no .catch lands in the LOG panel.
+// Without these, fire-and-forget patterns (e.g. the failed
+// `i` screenshot's `navigator.clipboard.write([...])`) swallow
+// errors silently. Registered at module top so a failure inside
+// the IIFE below still gets surfaced.
+//
+// `tsotLogPushText` may not exist yet at module-eval time, so each
+// listener guards on it; once the Elm ports + shim are wired, the
+// guards pass and every subsequent error lands in the LOG.
+// ============================================================
+window.addEventListener('error', function (ev) {
+  const msg = ev.error
+    ? (ev.error.message || String(ev.error))
+    : (ev.message || 'window.onerror with no detail');
+  const where = ev.filename ? ' at ' + ev.filename + ':' + ev.lineno : '';
+  if (window.tsotLogPushText) window.tsotLogPushText('[js error] ' + msg + where);
+});
+window.addEventListener('unhandledrejection', function (ev) {
+  const r = ev.reason;
+  const msg = (r && r.message) ? r.message : String(r);
+  if (window.tsotLogPushText) window.tsotLogPushText('[js promise rejected] ' + msg);
+});
+
+// Console bridge — warn + error get mirrored into the LOG so library
+// diagnostics (e.g. html2canvas) aren't invisible. Original methods
+// keep firing so DevTools still receives them when used. Skipping
+// console.log to avoid noise; .info also skipped.
+['warn', 'error'].forEach(function (level) {
+  const original = console[level].bind(console);
+  console[level] = function () {
+    original.apply(null, arguments);
+    if (!window.tsotLogPushText) return;
+    try {
+      const parts = [];
+      for (let i = 0; i < arguments.length; i++) {
+        const a = arguments[i];
+        parts.push(typeof a === 'string' ? a : (a && a.stack) ? a.stack : JSON.stringify(a));
+      }
+      window.tsotLogPushText('[console.' + level + '] ' + parts.join(' '));
+    } catch (_) { /* serialization failure — drop to avoid feedback loop */ }
+  };
+});
+
+// Clipboard inspector — press `v` to dump the current OS clipboard's
+// available MIME types + sizes into the LOG. Triages "did the write
+// reach the OS" without leaving the page. Reads via the async
+// Clipboard API; requires the same secure-context + transient
+// activation as writes. Fires its own unhandledrejection on failure,
+// which lands in the LOG via the listener above.
+addEventListener('keydown', function (e) {
+  if (e.key !== 'v' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (/INPUT|TEXTAREA|SELECT/.test((document.activeElement && document.activeElement.tagName) || '')) return;
+  navigator.clipboard.read().then(function (items) {
+    if (!items.length) {
+      window.tsotLogPushText && window.tsotLogPushText('[clipboard] empty');
+      return;
+    }
+    items.forEach(function (item, i) {
+      const types = item.types.join(', ');
+      window.tsotLogPushText && window.tsotLogPushText('[clipboard] item ' + i + ': ' + types);
+      // Probe each type to log the actual byte count.
+      item.types.forEach(function (t) {
+        item.getType(t).then(function (blob) {
+          window.tsotLogPushText && window.tsotLogPushText('[clipboard]   ' + t + ' = ' + blob.size + ' bytes');
+        });
+      });
+    });
+  });
+});
+
 //
 // H7-Elm Stage 2: `buildInfoIn` port carries `window.__TSOT_BUILD__`.
 // H7-Elm Stage 3: `logTextIn` + `logErrorIn` ports carry every LOG

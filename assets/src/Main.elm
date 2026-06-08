@@ -56,6 +56,7 @@ import Browser.Dom
 import BuildFooter
 import Dict exposing (Dict)
 import GameScreen
+import Set
 import Html exposing (Html, button, div, h2, pre, span, table, td, text, th, tr)
 import Html.Attributes exposing (class, id, style)
 import Html.Events exposing (onClick)
@@ -331,6 +332,7 @@ type alias Model =
     , prompt : GameScreen.Prompt
     , chooseIntDraft : String
     , uctPreview : Maybe GameScreen.UctPreview
+    , combat : GameScreen.CombatSelection
     }
 
 
@@ -397,6 +399,13 @@ type Msg
     | PassClicked
     | TargetCardClicked String
     | SkipChoiceCardClicked
+    | AttackerToggled String
+    | BlockerClicked String
+    | AttackerTargetedForBlock String
+    | ConfirmAttackersClicked
+    | NoAttackClicked
+    | ConfirmBlocksClicked
+    | NoBlocksClicked
     | NoOp
 
 
@@ -427,6 +436,7 @@ init _ =
       , prompt = GameScreen.LoadingPrompt
       , chooseIntDraft = ""
       , uctPreview = Nothing
+      , combat = GameScreen.emptyCombatSelection
       }
     , Cmd.none
     )
@@ -725,11 +735,19 @@ update msg model =
 
                         _ ->
                             ""
+
+                newCombat =
+                    if isCombatPrompt newPrompt then
+                        model.combat
+
+                    else
+                        GameScreen.emptyCombatSelection
             in
             ( { model
                 | gameState = Just value
                 , prompt = newPrompt
                 , chooseIntDraft = newDraft
+                , combat = newCombat
               }
             , Cmd.none
             )
@@ -896,8 +914,82 @@ update msg model =
                 )
             )
 
+        AttackerToggled iid ->
+            ( { model | combat = GameScreen.toggleAttacker iid model.combat }, Cmd.none )
+
+        BlockerClicked iid ->
+            ( { model | combat = GameScreen.clickBlocker iid model.combat }, Cmd.none )
+
+        AttackerTargetedForBlock iid ->
+            ( { model | combat = GameScreen.assignAttackerToStaged iid model.combat }, Cmd.none )
+
+        ConfirmAttackersClicked ->
+            ( { model | combat = GameScreen.emptyCombatSelection }
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "Attackers" )
+                    , ( "iids", E.list E.string (Set.toList model.combat.attackers) )
+                    ]
+                )
+            )
+
+        NoAttackClicked ->
+            ( { model | combat = GameScreen.emptyCombatSelection }
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "Attackers" )
+                    , ( "iids", E.list E.string [] )
+                    ]
+                )
+            )
+
+        ConfirmBlocksClicked ->
+            ( { model | combat = GameScreen.emptyCombatSelection }
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "Blocks" )
+                    , ( "pairs", encodeBlocksPairs model.combat.blocks )
+                    ]
+                )
+            )
+
+        NoBlocksClicked ->
+            ( { model | combat = GameScreen.emptyCombatSelection }
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "Blocks" )
+                    , ( "pairs", E.list identity [] )
+                    ]
+                )
+            )
+
         NoOp ->
             ( model, Cmd.none )
+
+
+{-| The engine accepts pairs as `[[blockerIid, attackerIid], ...]`.
+-}
+encodeBlocksPairs : Dict String String -> E.Value
+encodeBlocksPairs blocks =
+    blocks
+        |> Dict.toList
+        |> E.list
+            (\( blkIid, atkIid ) ->
+                E.list E.string [ blkIid, atkIid ]
+            )
+
+
+isCombatPrompt : GameScreen.Prompt -> Bool
+isCombatPrompt p =
+    case p of
+        GameScreen.PickAttackersPrompt _ ->
+            True
+
+        GameScreen.PickBlocksPrompt _ ->
+            True
+
+        _ ->
+            False
 
 
 applyAction : E.Value -> Cmd Msg
@@ -1578,9 +1670,9 @@ viewGameScreen model =
                     Nothing
 
         elmButtons =
-            GameScreen.viewPromptButtons gameScreenButtonsConfig model.chooseIntDraft model.prompt
+            GameScreen.viewPromptButtons gameScreenButtonsConfig model.chooseIntDraft model.combat model.prompt
     in
-    renderGameScreen active model.prompt slice elmButtons
+    renderGameScreen active model.prompt model.combat slice elmButtons
 
 
 gameScreenButtonsConfig : GameScreen.PromptButtonsConfig Msg
@@ -1592,6 +1684,10 @@ gameScreenButtonsConfig =
     , onIntConfirm = IntChoiceConfirmClicked
     , onPass = PassClicked
     , onSkipChoiceCard = SkipChoiceCardClicked
+    , onConfirmAttackers = ConfirmAttackersClicked
+    , onNoAttack = NoAttackClicked
+    , onConfirmBlocks = ConfirmBlocksClicked
+    , onNoBlocks = NoBlocksClicked
     }
 
 
@@ -1606,8 +1702,8 @@ IDs would be absent at boot and the load-save sync `render()` would
 hit "oppBoard is null" before Elm's first paint. Counts + deck-tops
 fall back to placeholders when no `gameState` slice has landed.
 -}
-renderGameScreen : Bool -> GameScreen.Prompt -> Maybe GameViewSlice -> Html Msg -> Html Msg
-renderGameScreen active prompt maybeSlice elmButtons =
+renderGameScreen : Bool -> GameScreen.Prompt -> GameScreen.CombatSelection -> Maybe GameViewSlice -> Html Msg -> Html Msg
+renderGameScreen active prompt combat maybeSlice elmButtons =
     let
         oppCounts =
             Maybe.map (oppCountsText << .opp) maybeSlice |> Maybe.withDefault ""
@@ -1635,19 +1731,19 @@ renderGameScreen active prompt maybeSlice elmButtons =
                 "none"
 
         oppBoardCards =
-            zoneCardsForPrompt OppBoard prompt (Maybe.map (.board << .opp) maybeSlice)
+            zoneCardsForPrompt OppBoard prompt combat maybeSlice (Maybe.map (.board << .opp) maybeSlice)
 
         oppGraveyardCards =
-            zoneCardsForPrompt OppGraveyard prompt (Maybe.map (.graveyard << .opp) maybeSlice)
+            zoneCardsForPrompt OppGraveyard prompt combat maybeSlice (Maybe.map (.graveyard << .opp) maybeSlice)
 
         yourBoardCards =
-            zoneCardsForPrompt YourBoard prompt (Maybe.map (.board << .you) maybeSlice)
+            zoneCardsForPrompt YourBoard prompt combat maybeSlice (Maybe.map (.board << .you) maybeSlice)
 
         yourGraveyardCards =
-            zoneCardsForPrompt YourGraveyard prompt (Maybe.map (.graveyard << .you) maybeSlice)
+            zoneCardsForPrompt YourGraveyard prompt combat maybeSlice (Maybe.map (.graveyard << .you) maybeSlice)
 
         yourHandCards =
-            zoneCardsForPrompt YourHand prompt (Maybe.map (.hand << .you) maybeSlice)
+            zoneCardsForPrompt YourHand prompt combat maybeSlice (Maybe.map (.hand << .you) maybeSlice)
     in
     div [ id "game-screen", style "display" displayStyle ]
         [ div [ class "row" ]
@@ -1722,8 +1818,8 @@ type ZonePos
     | YourHand
 
 
-zoneCardsForPrompt : ZonePos -> GameScreen.Prompt -> Maybe (List GameScreen.CardView) -> List (Html Msg)
-zoneCardsForPrompt zone prompt maybeCards =
+zoneCardsForPrompt : ZonePos -> GameScreen.Prompt -> GameScreen.CombatSelection -> Maybe GameViewSlice -> Maybe (List GameScreen.CardView) -> List (Html Msg)
+zoneCardsForPrompt zone prompt combat maybeSlice maybeCards =
     case maybeCards of
         Nothing ->
             []
@@ -1744,7 +1840,7 @@ zoneCardsForPrompt zone prompt maybeCards =
                         _ ->
                             Dict.empty
             in
-            List.map (\c -> GameScreen.viewCard (cardOptsForZone zone prompt actsByIid c) c) cards
+            List.map (\c -> GameScreen.viewCard (cardOptsForZone zone prompt combat maybeSlice actsByIid c) c) cards
 
 
 {-| Per-card opts: starts from the zone's baseline (graveyards dim;
@@ -1753,8 +1849,8 @@ ChooseCard's overlay (pool clickability / host badge / non-pool dim)
 takes precedence over the baseline because the engine guarantees the
 prompt restricts the player to those pool members during this turn.
 -}
-cardOptsForZone : ZonePos -> GameScreen.Prompt -> Dict String (List GameScreen.Activation) -> GameScreen.CardView -> GameScreen.CardOpts Msg
-cardOptsForZone zone prompt actsByIid c =
+cardOptsForZone : ZonePos -> GameScreen.Prompt -> GameScreen.CombatSelection -> Maybe GameViewSlice -> Dict String (List GameScreen.Activation) -> GameScreen.CardView -> GameScreen.CardOpts Msg
+cardOptsForZone zone prompt combat maybeSlice actsByIid c =
     let
         defaults =
             GameScreen.defaultCardOpts
@@ -1798,8 +1894,169 @@ cardOptsForZone zone prompt actsByIid c =
                 _ ->
                     base
 
+        GameScreen.PickAttackersPrompt data ->
+            case zone of
+                YourBoard ->
+                    if List.member c.iid data.eligible then
+                        { base
+                            | clickable = Just AttackerToggled
+                            , selected = Set.member c.iid combat.attackers
+                        }
+
+                    else
+                        base
+
+                _ ->
+                    base
+
+        GameScreen.PickBlocksPrompt data ->
+            pickBlocksOpts data combat maybeSlice zone c base
+
         _ ->
             base
+
+
+{-| PickBlocks card opts. Three zones interact:
+
+  - YourBoard: eligible blockers are clickable (stage / unstage /
+    unassign), assigned blockers show the "→ blocks <attacker>"
+    overlay, staged blocker shows "… click an attacker".
+  - OppBoard: attacker iids get an orange border (#fa4). When a
+    blocker is staged, all attackers become clickable targets;
+    attackers with assigned blockers show "← blocked by …".
+
+-}
+pickBlocksOpts :
+    GameScreen.PickBlocksData
+    -> GameScreen.CombatSelection
+    -> Maybe GameViewSlice
+    -> ZonePos
+    -> GameScreen.CardView
+    -> GameScreen.CardOpts Msg
+    -> GameScreen.CardOpts Msg
+pickBlocksOpts data combat maybeSlice zone c base =
+    case zone of
+        YourBoard ->
+            let
+                isEligibleBlocker =
+                    List.member c.iid data.eligibleBlockers
+
+                assignedTo =
+                    Dict.get c.iid combat.blocks
+
+                isStaged =
+                    combat.blockerPickFor == Just c.iid
+            in
+            { base
+                | clickable =
+                    if isEligibleBlocker then
+                        Just BlockerClicked
+
+                    else
+                        Nothing
+                , selected = isStaged || assignedTo /= Nothing
+                , overlays =
+                    case assignedTo of
+                        Just atkIid ->
+                            [ blockerAssignmentLabel
+                                ("\u{2192} blocks " ++ labelForIid maybeSlice atkIid)
+                                "#6cf"
+                            ]
+
+                        Nothing ->
+                            if isStaged then
+                                [ blockerAssignmentLabel "\u{2026} click an attacker" "#fa4" ]
+
+                            else
+                                []
+            }
+
+        OppBoard ->
+            let
+                isAttacker =
+                    List.member c.iid data.attackers
+
+                isClickableTarget =
+                    isAttacker && combat.blockerPickFor /= Nothing
+
+                blockersHere =
+                    combat.blocks
+                        |> Dict.toList
+                        |> List.filterMap
+                            (\( blkIid, atkIid ) ->
+                                if atkIid == c.iid then
+                                    Just blkIid
+
+                                else
+                                    Nothing
+                            )
+            in
+            { base
+                | clickable =
+                    if isClickableTarget then
+                        Just AttackerTargetedForBlock
+
+                    else
+                        Nothing
+                , borderColor =
+                    if isAttacker then
+                        Just "#fa4"
+
+                    else
+                        Nothing
+                , overlays =
+                    if List.isEmpty blockersHere then
+                        []
+
+                    else
+                        [ blockerAssignmentLabel
+                            ("\u{2190} blocked by "
+                                ++ String.join ", " (List.map (labelForIid maybeSlice) blockersHere)
+                            )
+                            "#6cf"
+                        ]
+            }
+
+        _ ->
+            base
+
+
+blockerAssignmentLabel : String -> String -> Html Msg
+blockerAssignmentLabel txt color =
+    div
+        [ style "color" color
+        , style "font-size" "0.6rem"
+        , style "margin-top" "0.2rem"
+        ]
+        [ text txt ]
+
+
+{-| Find a card's display name for the "→ blocks X" / "← blocked by X"
+overlays. Searches every visible zone of both players for the iid;
+falls back to the raw iid suffix when not found (shouldn't happen
+mid-PickBlocks but stays safe).
+-}
+labelForIid : Maybe GameViewSlice -> String -> String
+labelForIid maybeSlice iid =
+    case maybeSlice of
+        Nothing ->
+            cardSuffixFromIid iid
+
+        Just slice ->
+            let
+                allCards =
+                    slice.you.board
+                        ++ slice.you.hand
+                        ++ slice.you.graveyard
+                        ++ slice.opp.board
+                        ++ slice.opp.graveyard
+            in
+            case List.filter (\c -> c.iid == iid) allCards of
+                c :: _ ->
+                    c.name
+
+                [] ->
+                    cardSuffixFromIid iid
 
 
 chooseCardOpts : GameScreen.ChooseCardData -> GameScreen.CardView -> GameScreen.CardOpts Msg

@@ -90,26 +90,27 @@ generic envelope forwarding.
   - [x] ~~**11h**: deck-top displays (back-of-card colors+symbols).
     `renderDeckTop` + 4 call sites deleted; `viewDeckTop` is the sole
     renderer.~~
-  - [ ] **11i–11o (single lift):** `cardEl` + all four card zones +
-    `#buttons` + every prompt-kind branch + UCT preview + casting
-    banner land together as one atomic change. Originally planned as
-    seven separable substages; the split-attempt analysis showed they
-    can't be cleanly separated — every prompt-kind branch
+  - [x] ~~**11i–11o (single lift):**~~ `cardEl` + four card zones +
+    `#buttons` + every prompt-kind branch + UCT preview port wiring +
+    casting banner — landed across 5 sub-waves into `GameScreen.elm`.
+    Originally planned as seven separable substages; cleavage analysis
+    proved they can't be split — every prompt-kind branch
     (`PickAttackers` / `PickBlocks` / `ChooseCard` / etc.) re-fills
-    the SAME card containers (opp-board, graveyards, your-board, your-
-    hand) with prompt-specific click handlers, so the "read-only zone
-    ports" can't precede the prompt-kind ports. The work landing
-    together: port `cardEl` to a Card primitive in Elm
-    (reusable, polymorphic-msg signature like SpectatorBar's `Config`),
-    decode `CardView` from JSON, port UCT preview state via a new port
-    (`uctPreviewIn`), port interactive state (`selectedAttackers`,
-    `selectedBlocks`, `blockerPickFor`, `gameOverRecorded`) into
-    `Model`, ~10 new `Msg` variants per prompt-kind branch, view
-    functions per zone + prompt-kind, drop the entire JS
-    `_renderInner` card-rendering + dispatch chain (~365 lines). Big,
-    high-risk; lands as its own module `GameScreen.elm` once a few
-    more easy module splits have validated the split pattern at
-    smaller scope.
+    the SAME card containers with prompt-specific click handlers, so
+    "read-only zones first" was impossible. Waves landed as:
+    Wave 0 (foundation — types, decoders, `viewCard` primitive),
+    Wave 1 (Confirm / ChoosePlayer / ChooseInt buttons via the new
+    `#elm-prompt-buttons` sibling of JS-owned `#buttons`),
+    Wave 2 (all 5 card containers Elm-rendered read-only via
+    `viewCard`; ~280 lines of JS `appendChild(cardEl)` deleted),
+    Wave 3+5 combined (PickCard hand+board interactivity + Pass
+    button + ChooseCard pool/host targeting + Skip button; promoted
+    Wave 5 from last to second-last because hand-payment casts were
+    blocked without it), Wave 4 (PickAttackers + PickBlocks click
+    handlers + the staging-dance state machine, the first work
+    landed test-first via the new `elm-test` infrastructure).
+    UCT preview rendering (Wave 5 in the original plan) — port
+    wired but kickoff still JS; tagged separately under stage 13.
 
 - [x] ~~**12: Spectator bar.**~~
   ~~First module split out of `Main` — `SpectatorBar.elm` owns Model
@@ -157,6 +158,28 @@ Splits to date (LOC moved out of `Main` shown):
   scroll-to-bottom Cmd targets the same id.
 - [x] ~~**BuildFooter.elm**~~ — ~77 lines. Tiny; sets the precedent
   that even small islands earn a file once Main pushes past ~2k LOC.
+- [x] ~~**GameScreen.elm**~~ — ~900 lines. Game-screen render path
+  (CardView + Activation + Prompt ADT + UctCandidate / UctPreview +
+  CardOpts primitive + viewCard + viewPromptButtons + CombatSelection
+  state machine + decoders for every prompt variant). Largest module
+  to date; landed as the host for the chunk B big lift rather than
+  as a Main extraction.
+
+## Tests
+
+CLAUDE.md mandates "Strict TDD required". `elm-test` is wired
+(`assets/elm.json` + `assets/tests/` + `flake.nix` provides
+`elmPackages.elm-test`). `make assets` build green AND `elm-test`
+green is the bar before any commit. Current suites:
+
+- [x] ~~**GameScreenTest.elm**~~ — 12 tests: `decodeCardView` full
+  shape, every `decodePrompt` variant, `viewCard` DOM-class behavior
+  under different `CardOpts`.
+- [x] ~~**CombatSelectionTest.elm**~~ — 12 tests pinning the
+  PickAttackers + PickBlocks state machine: `toggleAttacker`,
+  `clickBlocker` (stage / unstage / unassign / re-stage),
+  `assignAttackerToStaged` (assignment + clearing + gang-block),
+  `resetCombatSelection`. Failing-test-first then implementation.
 
 Remaining easy splits (rough order):
 

@@ -62,14 +62,12 @@
             # single source of truth — no separate emsdk install.
             emscripten
             python3
-            # WASM_PLAN.md H7-Elm Stage 1: `make assets` runs
-            # `elm make Main.elm --output=dist/bundle.js`. The dev tool
-            # UI is being ported from inline JS in `assets/play.html`
-            # into Elm modules under `assets/src/`. Only `elm` is needed
-            # for the build itself; elm-test / elm-format will be added
-            # in Stage 2 alongside the first decoder + the first ported
-            # screen.
+            # `make assets` runs `elm make Main.elm --output=dist/bundle.js`.
+            # elm-test runs unit tests under `assets/tests/` — required
+            # by CLAUDE.md's "Strict TDD required" line; decoder + update
+            # + view-shape tests for the Elm migration modules.
             elmPackages.elm
+            elmPackages.elm-test
           ];
 
           # nixpkgs' emscripten ships with a read-only $NIX_STORE-side
