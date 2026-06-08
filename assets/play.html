@@ -776,81 +776,16 @@ function _renderInner(s) {
   const buttons = document.getElementById('buttons');
   buttons.innerHTML = '';
 
-  if (prompt.kind === 'Spectate') {
-    const ap = String(prompt.active_player || '').toUpperCase();
-    const endTag = (prompt.at_end && prompt.winner)
-      ? ` · GAME OVER · ${String(prompt.winner).toUpperCase()} wins`
-      : '';
-    setPrompt(`Spectating · turn ${prompt.turn} · ${prompt.phase} · ${ap} acts${endTag}`);
-    return;
-  }
-
+  // Stage 13: prompt-text per kind is Elm-derived now — promptToText
+  // in GameScreen.elm runs inside GameStateReceived's update branch
+  // and matches the JS strings byte-exactly (44 elm-test assertions
+  // pin them). The only thing JS still does on GameOver is fire the
+  // decision-log side effect; everything else returns.
   if (prompt.kind === 'GameOver') {
-    const w = prompt.winner ? prompt.winner.toLowerCase() : null;
-    const youWon = w === view.viewer;
-    setPrompt(`Game over. Winner: ${w ? w.toUpperCase() : 'draw'} ${youWon ? '(you win)' : (w ? '(you lose)' : '')}`);
-    // Decision log: one summary record per game.
     if (!state.gameOverRecorded) {
       state.gameOverRecorded = true;
       recordGameSummary({ winner: prompt.winner, turn: view.turn });
     }
-    return;
-  }
-
-  if (prompt.kind === 'PickCard') {
-    const acts = prompt.activations || [];
-    const parts = [];
-    parts.push(`${prompt.candidates.length} card(s) in hand affordable`);
-    if (acts.length > 0) parts.push(`${acts.length} ability/abilities ready to activate`);
-    setPrompt(`Your main phase — ${parts.join(' · ')}. Click a hand card to play, click a board ability to activate, or pass.`);
-    // Wave 3: hand-candidate clicks + board-activation clicks
-    // + Pass button all rendered by Elm now.
-  } else if (prompt.kind === 'PickAttackers') {
-    const eligible = new Set(prompt.eligible);
-    if (eligible.size === 0) {
-      setPrompt(`Combat — no creatures can attack this turn.`);
-    } else {
-      setPrompt(`Combat — click creatures to attack with (${eligible.size} eligible), then confirm.`);
-    }
-    // Wave 4: attacker-toggle clicks + Attack/No-attack buttons all Elm.
-  } else if (prompt.kind === 'PickBlocks') {
-    if ((prompt.eligible_blockers || []).length === 0) {
-      setPrompt(`Combat — incoming: ${prompt.attackers.map(a => labelFor(view, a)).join(', ')}. No eligible blockers (your creatures are all tapped, sick-from-attack, or restricted).`);
-    } else {
-      setPrompt(`Combat — incoming: ${prompt.attackers.map(a => labelFor(view, a)).join(', ')}. Click one of your highlighted creatures to stage as blocker; then click an attacker. Multiple blockers may share one attacker.`);
-    }
-    // Wave 4: stage-hint when a blocker is staged is carried by the
-    // "… click an attacker" overlay on the staged card itself (in
-    // Elm's pickBlocksOpts) rather than the prompt-text. Keeps the
-    // JS-side prompt-text static so no Elm-state peek is needed.
-    // Blocker-stage / attacker-target clicks + Confirm/No-blocks
-    // buttons all Elm.
-  } else if (prompt.kind === 'ChooseCard') {
-    const host = prompt.host;
-    const hostCard = host ? findCardsByIids(view, [host])[0] : null;
-    const isPayment = !!host;
-    const rawText = prompt.prompt || '';
-    let banner;
-    if (isPayment) {
-      const slot = (rawText.match(/slot (\d+)/i) || [])[1];
-      banner = `CASTING ${hostCard ? hostCard.name : 'a card'} — pick a hand card to pay${slot ? ` (slot ${slot})` : ''}.`;
-    } else {
-      banner = `Choose a target — ${rawText}.`;
-    }
-    setPrompt(banner + (prompt.optional ? ' — may skip' : ''));
-    // Wave 5: pool clickability + casting-host badge + optional Skip
-    // all rendered by Elm via zoneCardsForPrompt + viewPromptButtons.
-  } else if (prompt.kind === 'Confirm') {
-    setPrompt(prompt.prompt || 'Confirm?');
-    // Wave 1: Yes/No buttons rendered by Elm via #elm-prompt-buttons.
-  } else if (prompt.kind === 'ChoosePlayer') {
-    setPrompt(prompt.prompt || 'Choose a player.');
-    // Wave 1: candidate + optional-Skip buttons rendered by Elm.
-  } else if (prompt.kind === 'ChooseInt') {
-    setPrompt(`${prompt.prompt || 'Choose a number.'} (${prompt.min}–${prompt.max})`);
-    // Wave 1: number input + Confirm button rendered by Elm.
-  } else {
-    setPrompt('Unknown prompt: ' + JSON.stringify(prompt));
   }
 }
 
@@ -861,29 +796,10 @@ function _renderInner(s) {
 // + FireActivation (with the X-prompt routed through Elm's
 // ChooseInt instead of native browser prompt()).
 
-function findCardsByIids(view, iids) {
-  const out = [];
-  for (const iid of iids) {
-    for (const p of view.players) {
-      const candidates = [...p.board, ...(p.hand || []), ...(p.graveyard || []), ...(p.exile || [])];
-      const found = candidates.find(c => c.iid === iid);
-      if (found) { out.push(found); break; }
-    }
-  }
-  return out;
-}
-
-// Stage 11h: deck-top rendering moved into Elm's `viewDeckTop`.
-// `colorTag` + `symbolTag` are still used by `cardEl` so they stay.
-
-function labelFor(view, iid) {
-  for (const p of view.players) {
-    for (const c of p.board) if (c.iid === iid) return c.name;
-    for (const c of (p.hand || [])) if (c.iid === iid) return c.name;
-    for (const c of (p.graveyard || [])) if (c.iid === iid) return c.name;
-  }
-  return iid;
-}
+// Stage 13: findCardsByIids + labelFor deleted — both were used only
+// by the JS-side prompt-text construction (ChooseCard hostCard lookup,
+// PickBlocks attacker labels). Elm's GameScreen.promptToText + the
+// Main.labelForIid helper do the same lookups now.
 
 // ---------------- Save / Load ----------------
 

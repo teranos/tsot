@@ -742,12 +742,22 @@ update msg model =
 
                     else
                         GameScreen.emptyCombatSelection
+
+                maybeSlice =
+                    D.decodeValue decodeGameViewSlice value
+                        |> Result.toMaybe
+
+                newPromptText =
+                    GameScreen.promptToText
+                        (Maybe.map (promptCtxFromSlice maybeSlice) maybeSlice)
+                        newPrompt
             in
             ( { model
                 | gameState = Just value
                 , prompt = newPrompt
                 , chooseIntDraft = newDraft
                 , combat = newCombat
+                , promptText = newPromptText
               }
             , Cmd.none
             )
@@ -990,6 +1000,19 @@ isCombatPrompt p =
 
         _ ->
             False
+
+
+{-| Bridges the chunk-A `GameViewSlice` (viewer + you/opp records) into
+the `GameScreen.promptToText` context shape (viewer + iid→name
+function). `labelByIid` searches every visible zone of both players
+for a matching iid and returns the card name; missing iids fall back
+to the raw iid (a "should never happen" path).
+-}
+promptCtxFromSlice : Maybe GameViewSlice -> GameViewSlice -> { viewer : String, labelByIid : String -> String }
+promptCtxFromSlice _ slice =
+    { viewer = slice.viewer
+    , labelByIid = labelForIid (Just slice)
+    }
 
 
 applyAction : E.Value -> Cmd Msg

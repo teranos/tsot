@@ -161,16 +161,19 @@ fn card_to_entry(card: &Card) -> CardPoolEntry {
 /// Build the shipped presets. Order is fixed so the JS preset dropdown
 /// is stable across reloads.
 pub fn build_preset_decks(_playable: &[Card]) -> Vec<PresetDeck> {
+    // The first entry whose `id == "starter"` is what the deckbuilder
+    // auto-loads on page boot (see assets/play.html bootstrap).
+    // Per user request 2026-06-09: red is the default starter.
     vec![
         PresetDeck {
             id: "starter".to_string(),
-            name: "Blue Starter".to_string(),
-            cards: STARTER_DECK_IDS.iter().map(|s| s.to_string()).collect(),
-        },
-        PresetDeck {
-            id: "starter-red".to_string(),
             name: "Red Starter".to_string(),
             cards: RED_STARTER_DECK_IDS.iter().map(|s| s.to_string()).collect(),
+        },
+        PresetDeck {
+            id: "starter-blue".to_string(),
+            name: "Blue Starter".to_string(),
+            cards: STARTER_DECK_IDS.iter().map(|s| s.to_string()).collect(),
         },
     ]
 }

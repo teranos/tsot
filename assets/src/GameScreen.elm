@@ -23,6 +23,7 @@ module GameScreen exposing
     , defaultCardOpts
     , emptyCombatSelection
     , promptKindKey
+    , promptToText
     , resetCombatSelection
     , toggleAttacker
     , viewCard
@@ -80,6 +81,24 @@ type alias CardView =
     , tapped : Bool
     , summoningSick : Bool
     , damage : Float
+    , power : Float
+    , toughness : Float
+    , attached : List AttachedView
+    }
+
+
+{-| Mutations / equipment / attach-cards riding on a host creature.
+The engine's `CardView` is recursive (`attached: Vec<CardView>`), but
+Elm forbids recursive type aliases for records. Flatten one level —
+visualising more than one level of attached is unusual in the corpus.
+-}
+type alias AttachedView =
+    { iid : String
+    , name : String
+    , kind : String
+    , colors : List String
+    , symbols : List String
+    , abilities : List String
     , power : Float
     , toughness : Float
     }
@@ -274,6 +293,172 @@ resetCombatSelection _ =
 
 
 
+-- PROMPT-BAR TEXT
+
+
+{-| Per-prompt-kind bar text, matching the JS-side `setPrompt(...)`
+calls in `_renderInner` byte-exactly so the migration doesn't surprise
+the user. The `ctx` carries viewer + iid→name labels for the few
+variants that need them (GameOver, PickBlocks, ChooseCard host).
+Test-pinned in `tests/PromptTextTest.elm`.
+
+-}
+promptToText :
+    Maybe { viewer : String, labelByIid : String -> String }
+    -> Prompt
+    -> String
+promptToText maybeCtx p =
+    case p of
+        LoadingPrompt ->
+            "Loading\u{2026}"
+
+        ConfirmPrompt text ->
+            text
+
+        ChoosePlayerPrompt data ->
+            data.text
+
+        ChooseIntPrompt data ->
+            data.text
+                ++ " ("
+                ++ String.fromInt data.min
+                ++ "\u{2013}"
+                ++ String.fromInt data.max
+                ++ ")"
+
+        SpectatePrompt data ->
+            let
+                ap =
+                    String.toUpper data.activePlayer
+
+                endTag =
+                    case ( data.atEnd, data.winner ) of
+                        ( True, Just w ) ->
+                            " \u{00B7} GAME OVER \u{00B7} " ++ String.toUpper w ++ " wins"
+
+                        _ ->
+                            ""
+            in
+            "Spectating \u{00B7} turn "
+                ++ String.fromInt data.turn
+                ++ " \u{00B7} "
+                ++ data.phase
+                ++ " \u{00B7} "
+                ++ ap
+                ++ " acts"
+                ++ endTag
+
+        GameOverPrompt data ->
+            let
+                viewer =
+                    maybeCtx |> Maybe.map .viewer |> Maybe.withDefault ""
+
+                youWon =
+                    case data.winner of
+                        Just w ->
+                            String.toLower w == viewer
+
+                        Nothing ->
+                            False
+
+                winnerText =
+                    case data.winner of
+                        Just w ->
+                            String.toUpper w
+
+                        Nothing ->
+                            "draw"
+
+                outcomeSuffix =
+                    case data.winner of
+                        Just _ ->
+                            if youWon then
+                                "(you win)"
+
+                            else
+                                "(you lose)"
+
+                        Nothing ->
+                            ""
+            in
+            "Game over. Winner: " ++ winnerText ++ " " ++ outcomeSuffix
+
+        PickCardPrompt data ->
+            let
+                candPart =
+                    String.fromInt (List.length data.candidates) ++ " card(s) in hand affordable"
+
+                actPart =
+                    if List.isEmpty data.activations then
+                        []
+
+                    else
+                        [ String.fromInt (List.length data.activations) ++ " ability/abilities ready to activate" ]
+
+                parts =
+                    candPart :: actPart
+            in
+            "Your main phase \u{2014} "
+                ++ String.join " \u{00B7} " parts
+                ++ ". Click a hand card to play, click a board ability to activate, or pass."
+
+        PickAttackersPrompt data ->
+            if List.isEmpty data.eligible then
+                "Combat \u{2014} no creatures can attack this turn."
+
+            else
+                "Combat \u{2014} click creatures to attack with ("
+                    ++ String.fromInt (List.length data.eligible)
+                    ++ " eligible), then confirm."
+
+        PickBlocksPrompt data ->
+            let
+                label =
+                    maybeCtx
+                        |> Maybe.map .labelByIid
+                        |> Maybe.withDefault identity
+
+                incoming =
+                    data.attackers
+                        |> List.map label
+                        |> String.join ", "
+            in
+            if List.isEmpty data.eligibleBlockers then
+                "Combat \u{2014} incoming: "
+                    ++ incoming
+                    ++ ". No eligible blockers (your creatures are all tapped, sick-from-attack, or restricted)."
+
+            else
+                "Combat \u{2014} incoming: "
+                    ++ incoming
+                    ++ ". Click one of your highlighted creatures to stage as blocker; then click an attacker. Multiple blockers may share one attacker."
+
+        ChooseCardPrompt data ->
+            let
+                label =
+                    maybeCtx
+                        |> Maybe.map .labelByIid
+                        |> Maybe.withDefault identity
+
+                base =
+                    case data.host of
+                        Just hostIid ->
+                            "CASTING " ++ label hostIid ++ " \u{2014} " ++ data.text ++ "."
+
+                        Nothing ->
+                            "Choose a target \u{2014} " ++ data.text ++ "."
+
+                maySkip =
+                    if data.optional then
+                        " \u{2014} may skip"
+
+                    else
+                        ""
+            in
+            base ++ maySkip
+
+
+
 -- CARD OPTS
 
 
@@ -327,6 +512,27 @@ decodeCardView =
         |> required "tapped" D.bool
         |> required "summoning_sick" D.bool
         |> required "damage" D.float
+        |> required "power" D.float
+        |> required "toughness" D.float
+        |> optionalList "attached" decodeAttached
+
+
+optionalList : String -> D.Decoder a -> D.Decoder (List a -> b) -> D.Decoder b
+optionalList field aDec fDec =
+    D.map2 (\f a -> f a)
+        fDec
+        (D.oneOf [ D.field field (D.list aDec), D.succeed [] ])
+
+
+decodeAttached : D.Decoder AttachedView
+decodeAttached =
+    D.succeed AttachedView
+        |> required "iid" D.string
+        |> required "name" D.string
+        |> required "kind" D.string
+        |> required "colors" (D.list D.string)
+        |> required "symbols" (D.list D.string)
+        |> required "abilities" (D.list D.string)
         |> required "power" D.float
         |> required "toughness" D.float
 
@@ -575,8 +781,54 @@ viewCard opts card =
             ++ [ viewCardHead card ]
             ++ viewCardMeta card
             ++ viewCardAbilities card.abilities
+            ++ viewAttachedSection card.attached
             ++ opts.overlays
         )
+
+
+viewAttachedSection : List AttachedView -> List (Html msg)
+viewAttachedSection attached =
+    if List.isEmpty attached then
+        []
+
+    else
+        [ div
+            [ style "margin-top" "0.3rem"
+            , style "padding-top" "0.25rem"
+            , style "border-top" "1px dashed #444"
+            ]
+            (List.map viewAttachedCard attached)
+        ]
+
+
+viewAttachedCard : AttachedView -> Html msg
+viewAttachedCard a =
+    let
+        statsTag =
+            if a.kind == "Creature" then
+                " (" ++ formatNumber a.power ++ "/" ++ formatNumber a.toughness ++ ")"
+
+            else
+                ""
+    in
+    div
+        [ style "font-size" "0.65rem"
+        , style "color" "#bbb"
+        , style "padding" "0.1rem 0"
+        ]
+        [ div [ style "display" "flex", style "gap" "0.3rem", style "align-items" "center", style "flex-wrap" "wrap" ]
+            (span [ style "color" "#888" ] [ text "\u{21B3} " ]
+                :: span [ style "font-weight" "bold", style "color" "#ddd" ] [ text (a.name ++ statsTag) ]
+                :: List.map colorTag a.colors
+                ++ List.map symbolTag a.symbols
+            )
+        , if List.isEmpty a.abilities then
+            text ""
+
+          else
+            div [ style "color" "#999", style "margin-top" "0.1rem" ]
+                (List.map (\s -> div [] [ text s ]) a.abilities)
+        ]
 
 
 viewUctBadge : Maybe UctCandidate -> List (Html msg)

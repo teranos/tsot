@@ -18,7 +18,7 @@ element id.
 
 -}
 
-import Html exposing (Html, div, pre, text)
+import Html exposing (Html, div, pre, span, text)
 import Html.Attributes exposing (class, id, style)
 import Json.Decode as D
 
@@ -79,7 +79,11 @@ viewEntry : Entry -> Html msg
 viewEntry entry =
     case entry of
         TextLine line ->
-            text (line ++ "\n")
+            if String.contains "ERR:" line then
+                span [ style "color" "#f88" ] [ text (line ++ "\n") ]
+
+            else
+                text (line ++ "\n")
 
         ErrorEntry ev ->
             viewErrorBlock ev

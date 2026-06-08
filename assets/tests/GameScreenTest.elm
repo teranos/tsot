@@ -67,8 +67,63 @@ suite =
                                 , \card -> Expect.within (Expect.Absolute 0.001) card.damage 0
                                 , \card -> Expect.within (Expect.Absolute 0.001) card.power 2
                                 , \card -> Expect.within (Expect.Absolute 0.001) card.toughness 3
+                                , \card -> Expect.equal card.attached []
                                 ]
                                 c
+
+                        Err err ->
+                            Expect.fail (D.errorToString err)
+            , test "attached field decodes name + colors of each attached card" <|
+                \_ ->
+                    let
+                        nested =
+                            E.object
+                                [ ( "iid", E.string "A:0010:rider" )
+                                , ( "id", E.string "rider" )
+                                , ( "name", E.string "Rider" )
+                                , ( "kind", E.string "Mutation" )
+                                , ( "colors", E.list E.string [ "red" ] )
+                                , ( "symbols", E.list E.string [] )
+                                , ( "subtypes", E.list E.string [] )
+                                , ( "cost", E.string "" )
+                                , ( "effective_cost", E.string "" )
+                                , ( "abilities", E.list E.string [] )
+                                , ( "tapped", E.bool False )
+                                , ( "summoning_sick", E.bool False )
+                                , ( "damage", E.float 0 )
+                                , ( "power", E.float 0 )
+                                , ( "toughness", E.float 0 )
+                                , ( "attached", E.list identity [] )
+                                ]
+
+                        host =
+                            E.object
+                                [ ( "iid", E.string "A:0001:host" )
+                                , ( "id", E.string "host" )
+                                , ( "name", E.string "Host" )
+                                , ( "kind", E.string "Creature" )
+                                , ( "colors", E.list E.string [ "blue" ] )
+                                , ( "symbols", E.list E.string [] )
+                                , ( "subtypes", E.list E.string [] )
+                                , ( "cost", E.string "1H" )
+                                , ( "effective_cost", E.string "1H" )
+                                , ( "abilities", E.list E.string [] )
+                                , ( "tapped", E.bool False )
+                                , ( "summoning_sick", E.bool False )
+                                , ( "damage", E.float 0 )
+                                , ( "power", E.float 2 )
+                                , ( "toughness", E.float 2 )
+                                , ( "attached", E.list identity [ nested ] )
+                                ]
+                    in
+                    case D.decodeValue decodeCardView host of
+                        Ok h ->
+                            Expect.all
+                                [ \c -> List.length c.attached |> Expect.equal 1
+                                , \c -> List.map .name c.attached |> Expect.equal [ "Rider" ]
+                                , \c -> List.map .colors c.attached |> Expect.equal [ [ "red" ] ]
+                                ]
+                                h
 
                         Err err ->
                             Expect.fail (D.errorToString err)
@@ -253,4 +308,5 @@ sampleCreature =
     , damage = 0
     , power = 2
     , toughness = 3
+    , attached = []
     }
