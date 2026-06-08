@@ -112,6 +112,16 @@ JS-rendered until later 11 substages.
 port gameMetaIn : (D.Value -> msg) -> Sub msg
 
 
+{-| Stage 11c — the `#prompt` line at the top of the page. Set from
+~12 sites in play.html (game state via `_renderInner`, bootstrap
+stage markers + watchdog, error paths in onSaveClick / loadSaveJson /
+startGameFromDeckbuilder / startSpectate). Carries a plain String;
+the previous styled-span variant of the Spectate prompt loses its
+color until prompts gain a richer envelope.
+-}
+port promptTextIn : (String -> msg) -> Sub msg
+
+
 {-| One outbound port for every IDB-bound action. Carries an
 `{op, payload}` envelope. Per-feature ports collapsed here:
 `decision_get_all` / `decision_export` / `decision_clear` /
@@ -275,6 +285,7 @@ type alias Model =
     , poolFilterColor : String
     , poolFilterKind : String
     , gameMeta : Maybe GameMeta
+    , promptText : String
     }
 
 
@@ -321,6 +332,7 @@ type Msg
     | StartGameClicked
     | StartSpectateClicked
     | GameMetaReceived D.Value
+    | PromptTextReceived String
     | NoOp
 
 
@@ -345,6 +357,7 @@ init _ =
       , poolFilterColor = ""
       , poolFilterKind = ""
       , gameMeta = Nothing
+      , promptText = "Loading\u{2026}"
       }
     , Cmd.none
     )
@@ -622,6 +635,9 @@ update msg model =
 
                 Err _ ->
                     ( model, Cmd.none )
+
+        PromptTextReceived text ->
+            ( { model | promptText = text }, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )
@@ -1133,6 +1149,7 @@ subscriptions _ =
         , gamePhaseIn GamePhaseReceived
         , bootDataIn BootDataReceived
         , gameMetaIn GameMetaReceived
+        , promptTextIn PromptTextReceived
         ]
 
 
@@ -1145,12 +1162,25 @@ view model =
     div []
         [ viewSaveControls model
         , viewDeckbuilder model
+        , viewPromptText model.promptText
         , viewGameMeta model.gameMeta
         , viewSavedListPanel model.savedList
         , viewDecisionPanel model.decisionPanel
         , viewLog model.log
         , viewBuildFooter model.build
         ]
+
+
+viewPromptText : String -> Html Msg
+viewPromptText txt =
+    div
+        [ id "prompt"
+        , style "padding" "0.5rem"
+        , style "background" "#1a2030"
+        , style "border" "1px solid #335"
+        , style "margin-bottom" "0.75rem"
+        ]
+        [ text txt ]
 
 
 viewGameMeta : Maybe GameMeta -> Html Msg

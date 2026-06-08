@@ -637,14 +637,23 @@ function tsotShowBridgeFailure(stage, err) {
   };
 
   stage = 'gameMetaIn shim';
-  // Stage 11a: meta line from play.html's _renderInner. Same data
-  // the JS-side #meta div still shows; viewGameMeta in Elm renders a
-  // duplicate above the LOG until 11b removes the JS copy.
+  // Stage 11a/b: meta line from play.html's _renderInner.
   if (!app.ports.gameMetaIn) {
     throw new Error('gameMetaIn port missing — Main.elm wiring drift');
   }
   window.tsotPushGameMeta = function (envelope) {
     app.ports.gameMetaIn.send(envelope);
+  };
+
+  stage = 'promptTextIn shim';
+  // Stage 11c: #prompt line. Every play.html setPrompt(text) call
+  // routes here. Elm's viewPromptText is the sole renderer; the
+  // original <div id="prompt">Loading...</div> is gone.
+  if (!app.ports.promptTextIn) {
+    throw new Error('promptTextIn port missing — Main.elm wiring drift');
+  }
+  window.tsotSetPrompt = function (text) {
+    app.ports.promptTextIn.send(String(text));
   };
 
   // Push a fresh saves list to Elm. Used by play.html's onSaveClick

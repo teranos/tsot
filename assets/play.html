@@ -90,7 +90,9 @@
 <body>
 <h1>tsot — play</h1>
 
-<div id="prompt">Loading...</div>
+<!-- Stage 11c: #prompt moved into Elm. Main.elm's viewPromptText
+     renders the prompt line into its view tree (above the LOG zone).
+     Default text is "Loading…" set in init. -->
 
 <!-- Save / load controls. Visible in both phases; Save + Download
      are disabled until a game is in progress. Saves persist to
@@ -876,7 +878,7 @@ function _renderInner(s) {
   const prompt = s.prompt || { kind: 'Loading' };
   const view = s.state;
   if (!view || !view.players) {
-    document.getElementById('prompt').textContent = JSON.stringify(s);
+    setPrompt(JSON.stringify(s));
     return;
   }
   // Remove any prior casting-banner before re-rendering.
@@ -927,17 +929,20 @@ function _renderInner(s) {
   yourHand.innerHTML = '';
   const buttons = document.getElementById('buttons');
   buttons.innerHTML = '';
-  const promptEl = document.getElementById('prompt');
 
   if (prompt.kind === 'Spectate') {
     // Spectate render: read-only view of the snapshot. No clickable
     // hand cards, no Pass button, no UCT preview. Header reflects
     // the snapshot's turn/phase + winner if at end-of-game.
+    // Stage 11c: the previous innerHTML write embedded a styled
+    // `<span style="color:#cf6;">Spectating</span>` span; viewPromptText
+    // is plain-text-only so the color hint is dropped until a richer
+    // prompt envelope shape lands later.
     const ap = String(prompt.active_player || '').toUpperCase();
     const endTag = (prompt.at_end && prompt.winner)
       ? ` · GAME OVER · ${String(prompt.winner).toUpperCase()} wins`
       : '';
-    promptEl.innerHTML = `<span style="color:#cf6;">Spectating</span> · turn ${prompt.turn} · ${prompt.phase} · ${ap} acts${endTag}`;
+    setPrompt(`Spectating · turn ${prompt.turn} · ${prompt.phase} · ${ap} acts${endTag}`);
     // Render both sides un-clickable. Reuses cardEl with clickable=false.
     opp.board.forEach(c => oppBoard.appendChild(cardEl(c)));
     (opp.graveyard || []).forEach(c => oppGy.appendChild(cardEl(c)));
@@ -952,7 +957,7 @@ function _renderInner(s) {
   if (prompt.kind === 'GameOver') {
     const w = prompt.winner ? prompt.winner.toLowerCase() : null;
     const youWon = w === view.viewer;
-    promptEl.innerHTML = `<span class="game-over">Game over. Winner: ${w ? w.toUpperCase() : 'draw'} ${youWon ? '(you win)' : (w ? '(you lose)' : '')}</span>`;
+    setPrompt(`Game over. Winner: ${w ? w.toUpperCase() : 'draw'} ${youWon ? '(you win)' : (w ? '(you lose)' : '')}`);
     you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
     you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
     // Decision log: one summary record per game, ties all the
@@ -971,7 +976,7 @@ function _renderInner(s) {
     const parts = [];
     parts.push(`${prompt.candidates.length} card(s) in hand affordable`);
     if (acts.length > 0) parts.push(`${acts.length} ability/abilities ready to activate`);
-    promptEl.innerHTML = `Your main phase — ${parts.join(' · ')}. Click a hand card to play, click a board ability to activate, or pass.${uctStatusHtml()}`;
+    setPrompt(`Your main phase — ${parts.join(' · ')}. Click a hand card to play, click a board ability to activate, or pass.`);
     const candidateSet = new Set(prompt.candidates);
     you.hand.forEach(c => {
       yourHand.appendChild(cardEl(c, {
@@ -1012,9 +1017,9 @@ function _renderInner(s) {
   } else if (prompt.kind === 'PickAttackers') {
     const eligible = new Set(prompt.eligible);
     if (eligible.size === 0) {
-      promptEl.innerHTML = `Combat — <span style="color:#888;">no creatures can attack this turn</span>.`;
+      setPrompt(`Combat — no creatures can attack this turn.`);
     } else {
-      promptEl.textContent = `Combat — click creatures to attack with (${eligible.size} eligible), then confirm.`;
+      setPrompt(`Combat — click creatures to attack with (${eligible.size} eligible), then confirm.`);
     }
     you.board.forEach(c => {
       yourBoard.appendChild(cardEl(c, {
@@ -1042,12 +1047,12 @@ function _renderInner(s) {
   } else if (prompt.kind === 'PickBlocks') {
     const eligibleBlockers = new Set(prompt.eligible_blockers);
     if (eligibleBlockers.size === 0) {
-      promptEl.innerHTML = `Combat — incoming: <b>${prompt.attackers.map(a => labelFor(view, a)).join(', ')}</b>. <span style="color:#f88;">No eligible blockers (your creatures are all tapped, sick-from-attack, or restricted).</span>`;
+      setPrompt(`Combat — incoming: ${prompt.attackers.map(a => labelFor(view, a)).join(', ')}. No eligible blockers (your creatures are all tapped, sick-from-attack, or restricted).`);
     } else if (state.blockerPickFor !== null) {
       const stagedName = labelFor(view, state.blockerPickFor);
-      promptEl.innerHTML = `Combat — <b style="color:#6cf;">${stagedName}</b> staged as blocker. <span style="color:#fa4;">Now click an attacker (orange border) to assign.</span> Click the staged blocker again to cancel. Click an assigned blocker to unassign.`;
+      setPrompt(`Combat — ${stagedName} staged as blocker. Now click an attacker (orange border) to assign. Click the staged blocker again to cancel. Click an assigned blocker to unassign.`);
     } else {
-      promptEl.innerHTML = `Combat — incoming: <b>${prompt.attackers.map(a => labelFor(view, a)).join(', ')}</b>. Click one of your highlighted creatures to stage as blocker; then click the attacker. Multiple blockers may share one attacker.`;
+      setPrompt(`Combat — incoming: ${prompt.attackers.map(a => labelFor(view, a)).join(', ')}. Click one of your highlighted creatures to stage as blocker; then click the attacker. Multiple blockers may share one attacker.`);
     }
 
     // Index assignments by attacker for the per-attacker labels.
@@ -1154,7 +1159,7 @@ function _renderInner(s) {
     } else {
       banner = `<b style="color:#6cf;">Choose a target</b> — ${rawText}.`;
     }
-    promptEl.innerHTML = banner + (prompt.optional ? ' <span style="color:#888;">— may skip</span>' : '');
+    setPrompt(banner + (prompt.optional ? ' — may skip' : ''));
 
     // Helper: render a card list into a zone container, marking
     // pool members clickable and dimming non-pool entries. The
@@ -1197,7 +1202,7 @@ function _renderInner(s) {
       buttons.appendChild(skip);
     }
   } else if (prompt.kind === 'Confirm') {
-    promptEl.innerHTML = `<b>${prompt.prompt || 'Confirm?'}</b>`;
+    setPrompt(prompt.prompt || 'Confirm?');
     you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
     you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
     const yes = document.createElement('button');
@@ -1210,7 +1215,7 @@ function _renderInner(s) {
     no.onclick = () => sendAction({ kind: 'ChoiceConfirm', yes: false }).then(render);
     buttons.appendChild(no);
   } else if (prompt.kind === 'ChoosePlayer') {
-    promptEl.innerHTML = `<b>${prompt.prompt || 'Choose a player.'}</b>`;
+    setPrompt(prompt.prompt || 'Choose a player.');
     you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
     you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
     prompt.candidates.forEach(pid => {
@@ -1226,7 +1231,7 @@ function _renderInner(s) {
       buttons.appendChild(skip);
     }
   } else if (prompt.kind === 'ChooseInt') {
-    promptEl.innerHTML = `<b>${prompt.prompt || 'Choose a number.'}</b> (${prompt.min}–${prompt.max})`;
+    setPrompt(`${prompt.prompt || 'Choose a number.'} (${prompt.min}–${prompt.max})`);
     you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
     you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
     const input = document.createElement('input');
@@ -1241,7 +1246,7 @@ function _renderInner(s) {
     confirm.onclick = () => sendAction({ kind: 'ChoiceInt', value: parseInt(input.value, 10) || prompt.min }).then(render);
     buttons.appendChild(confirm);
   } else {
-    promptEl.textContent = 'Unknown prompt: ' + JSON.stringify(prompt);
+    setPrompt('Unknown prompt: ' + JSON.stringify(prompt));
   }
 }
 
@@ -1370,6 +1375,14 @@ async function dbAppendDecision(record) {
 // Elm port boundary; the write side (`dbAppendDecision`, called by
 // `recordDecision` + `recordGameSummary`) stays here for now and
 // will move when the prompt-recording flow itself ports to Elm.
+
+// Stage 11c: #prompt is Elm-rendered. Every prior
+// `document.getElementById('prompt').textContent = X` site now calls
+// setPrompt(X); the port shim in js-bridge forwards through
+// promptTextIn so viewPromptText paints it.
+function setPrompt(text) {
+  if (window.tsotSetPrompt) window.tsotSetPrompt(text);
+}
 
 function setSaveStatus(msg) {
   // H7-Elm Stage 6: #save-status is rendered by Elm. Forward to the
@@ -1506,7 +1519,7 @@ window.tsotStartSpectate = async function (payload) {
   state.preview = null;      // no preview in spectate mode
   document.getElementById('game-screen').style.display = '';
   document.getElementById('spectator-bar').style.display = '';
-  document.getElementById('prompt').textContent = 'Running game… (both AIs play to completion)';
+  setPrompt('Running game… (both AIs play to completion)');
   const args = {
     seed: Math.floor(Math.random() * 0xFFFFFFFF),
     deck_a_ids: state.deck.slice(),
@@ -1540,8 +1553,7 @@ window.tsotStartSpectate = async function (payload) {
     slider.value = '0';
     spectateRenderCurrent();
   } catch (e) {
-    document.getElementById('prompt').textContent =
-      'Spectate failed: ' + (e?.message || e);
+    setPrompt('Spectate failed: ' + (e?.message || e));
   }
 }
 
@@ -1624,10 +1636,9 @@ function spectateExit() {
   document.getElementById('spectator-bar').style.display = 'none';
   document.getElementById('game-screen').style.display = 'none';
   // Stage 10: Elm's viewDeckbuilder re-renders itself when gamePhase
-  // transitions back to Deckbuilding. The prompt copy is restored here
-  // since play.html owns #prompt until a later stage.
-  document.getElementById('prompt').textContent =
-    'Pre-game — build your deck. Click cards on the left to add; click [-] to remove. Mirror match: your opponent uses the same deck.';
+  // transitions back to Deckbuilding. Stage 11c: the prompt copy
+  // routes through setPrompt → Elm's viewPromptText.
+  setPrompt('Pre-game — build your deck. Click cards on the left to add; click [-] to remove. Mirror match: your opponent uses the same deck.');
 }
 
 function wireSpectatorBar() {
@@ -1672,14 +1683,13 @@ window.tsotStartGameFromDeckbuilder = async function (payload) {
   state.gameId = freshGameId();
   state.gameOverRecorded = false;
   document.getElementById('game-screen').style.display = '';
-  document.getElementById('prompt').textContent = 'Starting game…';
+  setPrompt('Starting game…');
   try {
     const initial = await fetchState();
     state.current = { state: initial.state, prompt: initial };
     render(state.current);
   } catch (e) {
-    document.getElementById('prompt').textContent =
-      'Engine error: ' + (e && e.message ? e.message : e);
+    setPrompt('Engine error: ' + (e && e.message ? e.message : e));
   }
 };
 
@@ -1691,8 +1701,7 @@ window.tsotStartGameFromDeckbuilder = async function (payload) {
   // exceeds a threshold so the developer doesn't read "Loading" as
   // "stuck forever."
   const setBootStage = (s) => {
-    const el = document.getElementById('prompt');
-    if (el) el.textContent = s;
+    setPrompt(s);
     window.tsotLogPushText && window.tsotLogPushText('[bootstrap] ' + s);
   };
 
@@ -1703,9 +1712,9 @@ window.tsotStartGameFromDeckbuilder = async function (payload) {
   const armWatchdog = (label, ms) => {
     if (bootWatchdog) clearTimeout(bootWatchdog);
     bootWatchdog = setTimeout(() => {
-      const el = document.getElementById('prompt');
-      if (el) el.textContent = '[bootstrap stuck > ' + ms + 'ms at: ' + label + ']';
-      window.tsotLogPushText && window.tsotLogPushText('[bootstrap stuck > ' + ms + 'ms at: ' + label + ']');
+      const msg = '[bootstrap stuck > ' + ms + 'ms at: ' + label + ']';
+      setPrompt(msg);
+      window.tsotLogPushText && window.tsotLogPushText(msg);
     }, ms);
   };
   const disarmWatchdog = () => {
@@ -1722,8 +1731,7 @@ window.tsotStartGameFromDeckbuilder = async function (payload) {
     setBootStage('Bootstrap: worker ready, requesting card pool');
   } catch (e) {
     disarmWatchdog();
-    document.getElementById('prompt').textContent =
-      'Failed to load wasm worker: ' + (e && e.message ? e.message : e);
+    setPrompt('Failed to load wasm worker: ' + (e && e.message ? e.message : e));
     return;
   }
   try {
@@ -1741,12 +1749,10 @@ window.tsotStartGameFromDeckbuilder = async function (payload) {
     const starter = presets.find(p => p.id === 'starter') || presets[0];
     state.deck = starter ? starter.cards.slice() : [];
     window.tsotBootData({ cardPool, presets });
-    document.getElementById('prompt').textContent =
-      'Pre-game — build your deck. Click cards on the left to add; click [-] to remove. Mirror match: your opponent uses the same deck.';
+    setPrompt('Pre-game — build your deck. Click cards on the left to add; click [-] to remove. Mirror match: your opponent uses the same deck.');
   } catch (e) {
     disarmWatchdog();
-    document.getElementById('prompt').textContent =
-      'Failed to load deckbuilder data: ' + (e && e.message ? e.message : e);
+    setPrompt('Failed to load deckbuilder data: ' + (e && e.message ? e.message : e));
   }
 })();
 </script>
