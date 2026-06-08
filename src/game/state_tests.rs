@@ -303,6 +303,8 @@ fn make_anthem_source(s: &mut GameState, iid: &InstanceId, subtype: &str, dx: i3
         granted_activated: None,
         granted_colors: Vec::new(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
 }
 
@@ -376,6 +378,8 @@ fn attached_host_scope_grants_keyword_to_host() {
         granted_activated: None,
         granted_colors: Vec::new(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
     // Move host + bystander to board.
     s.a.hand.retain(|i| i != &bird && i != &host && i != &bystander);
@@ -414,6 +418,8 @@ fn attached_host_scope_does_not_grant_when_unattached() {
         granted_activated: None,
         granted_colors: Vec::new(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
     s.a.hand.retain(|i| i != &bird && i != &target);
     s.a.board.push(bird);
@@ -447,6 +453,8 @@ fn condition_gate_blocks_static_until_graveyard_threshold() {
         granted_activated: None,
         granted_colors: Vec::new(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
     s.a.hand.retain(|i| i != &source && i != &target);
     s.a.board.push(source);
@@ -494,6 +502,8 @@ fn condition_non_creatures_counts_only_non_creature_kinds() {
         granted_activated: None,
         granted_colors: Vec::new(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
     s.a.hand.retain(|i| i != &wizard);
     s.a.board.push(wizard.clone());
@@ -543,6 +553,8 @@ fn source_only_scope_targets_only_the_source() {
         granted_activated: None,
         granted_colors: Vec::new(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
     s.a.hand.retain(|i| i != &wizard && i != &other);
     s.a.board.push(wizard.clone());
@@ -582,6 +594,8 @@ fn restriction_cannot_attack_propagates_to_opponent_insects() {
         granted_activated: None,
         granted_colors: Vec::new(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
     s.b.hand.retain(|i| i != &plant && i != &own_insect);
     s.a.hand.retain(|i| i != &opp_insect);
@@ -627,6 +641,8 @@ fn restriction_cannot_attack_blocks_declare_attacker() {
         granted_activated: None,
         granted_colors: Vec::new(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
     s.b.hand.retain(|i| i != &plant);
     s.a.hand.retain(|i| i != &attacker);
@@ -671,6 +687,8 @@ fn affects_has_keyword_filters_by_intrinsic_or_static_grant() {
         granted_activated: None,
         granted_colors: Vec::new(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
     s.b.hand.retain(|i| i != &source);
     s.a.hand.retain(|i| i != &flyer && i != &grounder);
@@ -743,6 +761,8 @@ fn make_glow_granter(s: &mut GameState, iid: &InstanceId, granted: &[&str]) {
         granted_activated: None,
         granted_colors: granted.iter().map(|s| s.to_string()).collect(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
 }
 
@@ -919,6 +939,8 @@ fn deck_top_symbol_matches_attached_condition_grants_modifier() {
         granted_activated: None,
         granted_colors: Vec::new(),
 granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
     });
     // Attach a card with symbol "alpha".
     s.card_pool.get_mut(&attached).unwrap().card.symbols = vec!["alpha".to_string()];
@@ -965,4 +987,184 @@ fn effective_top_of_deck_symbols_walks_through_transparent_per_v8() {
         s.effective_top_of_deck_symbols(PlayerId::A),
         vec!["alpha".to_string()],
     );
+}
+
+#[test]
+fn host_loses_colors_true_when_attached_mutation_declares_colorless() {
+    // Nonsense Mutation shape: attached_host-scope static with
+    // `makes_host_colorless = true` causes the host to lose its color
+    // identity. Bystander on the board (no attached suppressor) is
+    // unaffected.
+    let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+    let mutation = s.a.hand[0].clone();
+    let host = s.a.hand[1].clone();
+    let bystander = s.a.hand[2].clone();
+    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+        affects: crate::card::StaticAffects {
+            subtypes: vec![],
+            colors: vec![],
+            controller: None,
+            exclude_self: false,
+            scope: crate::card::StaticScope::AttachedHost,
+            kind: None,
+            has_keyword: None,
+        },
+        modifier_x: crate::card::ModifierValue::Fixed(0),
+        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_keyword: None,
+        condition: None,
+        restrictions: Vec::new(),
+        cost_modifiers: Vec::new(),
+        granted_activated: None,
+        granted_colors: Vec::new(),
+        granted_face: Vec::new(),
+        makes_host_colorless: true,
+        suppresses_host_abilities: false,
+    });
+    s.a.hand.retain(|i| i != &mutation && i != &host && i != &bystander);
+    s.a.board.push(host.clone());
+    s.a.board.push(bystander.clone());
+    s.add_attached(&host, &mutation);
+
+    assert!(s.host_loses_colors(&host), "host with attached colorless mutation must lose colors");
+    assert!(!s.host_loses_colors(&bystander), "bystander has no attached suppressor");
+}
+
+#[test]
+fn effective_colors_returns_empty_when_host_loses_colors() {
+    // Host with printed `colors = ["red"]` plus an attached colorless
+    // mutation → effective_colors evaporates the identity entirely.
+    let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+    let mutation = s.a.hand[0].clone();
+    let host = s.a.hand[1].clone();
+    s.card_pool.get_mut(&host).unwrap().card.colors = vec!["red".into()];
+    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+        affects: crate::card::StaticAffects {
+            subtypes: vec![],
+            colors: vec![],
+            controller: None,
+            exclude_self: false,
+            scope: crate::card::StaticScope::AttachedHost,
+            kind: None,
+            has_keyword: None,
+        },
+        modifier_x: crate::card::ModifierValue::Fixed(0),
+        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_keyword: None,
+        condition: None,
+        restrictions: Vec::new(),
+        cost_modifiers: Vec::new(),
+        granted_activated: None,
+        granted_colors: Vec::new(),
+        granted_face: Vec::new(),
+        makes_host_colorless: true,
+        suppresses_host_abilities: false,
+    });
+    s.a.hand.retain(|i| i != &mutation && i != &host);
+    s.a.board.push(host.clone());
+    s.add_attached(&host, &mutation);
+
+    assert_eq!(s.effective_colors(&host), Vec::<String>::new());
+}
+
+#[test]
+fn host_loses_abilities_true_when_attached_mutation_declares_suppression() {
+    let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+    let mutation = s.a.hand[0].clone();
+    let host = s.a.hand[1].clone();
+    let bystander = s.a.hand[2].clone();
+    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+        affects: crate::card::StaticAffects {
+            subtypes: vec![],
+            colors: vec![],
+            controller: None,
+            exclude_self: false,
+            scope: crate::card::StaticScope::AttachedHost,
+            kind: None,
+            has_keyword: None,
+        },
+        modifier_x: crate::card::ModifierValue::Fixed(0),
+        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_keyword: None,
+        condition: None,
+        restrictions: Vec::new(),
+        cost_modifiers: Vec::new(),
+        granted_activated: None,
+        granted_colors: Vec::new(),
+        granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: true,
+    });
+    s.a.hand.retain(|i| i != &mutation && i != &host && i != &bystander);
+    s.a.board.push(host.clone());
+    s.a.board.push(bystander.clone());
+    s.add_attached(&host, &mutation);
+
+    assert!(s.host_loses_abilities(&host));
+    assert!(!s.host_loses_abilities(&bystander));
+}
+
+#[test]
+fn hosts_own_static_stops_applying_when_suppressed() {
+    // Host has a self-boosting static (SourceOnly scope, +2/+2 on
+    // itself). Without suppression, effective_stats reflects the boost.
+    // With an attached suppressor mutation, the host's own static is
+    // dropped from static iteration → stats fall back to printed.
+    let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+    let mutation = s.a.hand[0].clone();
+    let host = s.a.hand[1].clone();
+    // Host self-static: +2/+2 via SourceOnly scope.
+    s.card_pool.get_mut(&host).unwrap().card.static_def = Some(crate::card::StaticDef {
+        affects: crate::card::StaticAffects {
+            subtypes: vec![],
+            colors: vec![],
+            controller: None,
+            exclude_self: false,
+            scope: crate::card::StaticScope::SourceOnly,
+            kind: None,
+            has_keyword: None,
+        },
+        modifier_x: crate::card::ModifierValue::Fixed(2),
+        modifier_y: crate::card::ModifierValue::Fixed(2),
+        modifier_keyword: None,
+        condition: None,
+        restrictions: Vec::new(),
+        cost_modifiers: Vec::new(),
+        granted_activated: None,
+        granted_colors: Vec::new(),
+        granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
+    });
+    // Suppressor mutation: AttachedHost + suppresses_host_abilities.
+    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+        affects: crate::card::StaticAffects {
+            subtypes: vec![],
+            colors: vec![],
+            controller: None,
+            exclude_self: false,
+            scope: crate::card::StaticScope::AttachedHost,
+            kind: None,
+            has_keyword: None,
+        },
+        modifier_x: crate::card::ModifierValue::Fixed(0),
+        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_keyword: None,
+        condition: None,
+        restrictions: Vec::new(),
+        cost_modifiers: Vec::new(),
+        granted_activated: None,
+        granted_colors: Vec::new(),
+        granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: true,
+    });
+    s.a.hand.retain(|i| i != &mutation && i != &host);
+    s.a.board.push(host.clone());
+    // Sanity: with no suppressor attached, the self-static fires → 3/3
+    // (printed 1/1 + self-boost 2/2). Attach the suppressor → drops to
+    // printed.
+    assert_eq!(s.effective_stats(&host), (3.0, 3.0), "pre-attach baseline");
+    s.add_attached(&host, &mutation);
+    assert_eq!(s.effective_stats(&host), (1.0, 1.0), "host's own static must stop applying when suppressed");
 }

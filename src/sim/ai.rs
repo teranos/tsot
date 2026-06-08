@@ -1201,6 +1201,8 @@ mod tests {
                 granted_activated: None,
                 granted_colors: Vec::new(),
                 granted_face: Vec::new(),
+                makes_host_colorless: false,
+                suppresses_host_abilities: false,
             });
         }
         // Reducer goes to BOARD so its static fires.

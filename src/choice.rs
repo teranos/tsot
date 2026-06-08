@@ -1035,6 +1035,8 @@ mod tests {
             granted_activated: None,
             granted_colors: vec![],
 granted_face: Vec::new(),
+            makes_host_colorless: false,
+            suppresses_host_abilities: false,
         });
     }
 

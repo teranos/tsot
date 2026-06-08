@@ -396,7 +396,7 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
             )))
         }
     };
-    let (modifier_x, modifier_y, modifier_keyword, granted_colors, granted_face) =
+    let (modifier_x, modifier_y, modifier_keyword, granted_colors, granted_face, makes_host_colorless, suppresses_host_abilities) =
         match static_t.get::<Value>("modifier")? {
             Value::Nil => (
                 ModifierValue::Fixed(0),
@@ -404,6 +404,8 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
                 None,
                 Vec::new(),
                 Vec::new(),
+                false,
+                false,
             ),
             Value::Table(m) => {
                 let x = read_modifier_value(m.get::<Value>("x")?)?;
@@ -441,7 +443,11 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
                     }
                     None => Vec::new(),
                 };
-                (x, y, keyword, colors, face)
+                let colorless = m.get::<Option<bool>>("colorless")?.unwrap_or(false);
+                let suppresses = m
+                    .get::<Option<bool>>("suppresses_abilities")?
+                    .unwrap_or(false);
+                (x, y, keyword, colors, face, colorless, suppresses)
             }
             other => {
                 return Err(mlua::Error::runtime(format!(
@@ -527,6 +533,8 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
         granted_activated,
         granted_colors,
         granted_face,
+        makes_host_colorless,
+        suppresses_host_abilities,
     }))
 }
 
@@ -1188,6 +1196,45 @@ mod tests {
         std::fs::remove_file(&path).ok();
         std::fs::remove_dir(&tmp).ok();
         card
+    }
+
+    #[test]
+    fn nonsense_mutation_card_loads_with_full_shape() {
+        let lua = Lua::new();
+        let path = Path::new("cards/nonsense-mutation.lua");
+        let cards = load_card(&lua, path).expect("load nonsense-mutation");
+        let card = cards.iter().find(|c| c.id == "nonsense-mutation").unwrap();
+        assert_eq!(card.colors, vec!["purple"]);
+        assert_eq!(card.kind, crate::card::CardType::Mutation);
+        // 1 graveyard + 2 mill.
+        assert_eq!(card.cost.len(), 2);
+        let def = card.static_def.as_ref().expect("static_def present");
+        assert!(matches!(def.affects.scope, crate::card::StaticScope::AttachedHost));
+        assert_eq!(def.modifier_x, crate::card::ModifierValue::Fixed(1));
+        assert_eq!(def.modifier_y, crate::card::ModifierValue::Fixed(-1));
+        assert!(def.makes_host_colorless);
+        assert!(def.suppresses_host_abilities);
+    }
+
+    #[test]
+    fn static_modifier_colorless_and_suppresses_abilities_load() {
+        let card = load_card_from_lua(r#"
+            return {
+                id = "under-test",
+                type = "mutation",
+                static = {
+                    affects = { scope = "attached_host" },
+                    modifier = {
+                        x = 1, y = -1,
+                        colorless = true,
+                        suppresses_abilities = true,
+                    },
+                },
+            }
+        "#);
+        let def = card.static_def.expect("static_def present");
+        assert!(def.makes_host_colorless, "modifier.colorless = true → makes_host_colorless");
+        assert!(def.suppresses_host_abilities, "modifier.suppresses_abilities = true → suppresses_host_abilities");
     }
 
     #[test]

@@ -1419,6 +1419,14 @@ impl GameState {
                     .map(|i| i.card.static_def.is_some())
                     .unwrap_or(false)
             })
+            // Subtractive: if this iid's own abilities are suppressed
+            // by an attached suppressor (Nonsense Mutation-style), drop
+            // its static contribution. The suppressor itself is a
+            // separate iid in the host's attached list; its
+            // `host_loses_abilities` walks ITS OWN attached list (which
+            // is usually empty), so it isn't its own suppressor and
+            // passes through.
+            .filter(move |iid| !self.host_loses_abilities(iid))
     }
 
     /// Phase 2: true if any on-board static source grants `keyword` to the
@@ -1454,7 +1462,63 @@ impl GameState {
             .unwrap_or(false)
     }
 
+    /// Subtractive: true iff some attached card on `target_iid` carries
+    /// a static with `makes_host_colorless` whose `affects` predicate
+    /// matches `target_iid`. The walk is over the target's attached
+    /// list directly (not `static_source_iids`) because the suppressor
+    /// is, by construction, attached to the target.
+    pub fn host_loses_colors(&self, target_iid: &InstanceId) -> bool {
+        let Some(target) = self.card_pool.get(target_iid) else {
+            return false;
+        };
+        for attached_iid in &target.attached {
+            let Some(attached) = self.card_pool.get(attached_iid) else {
+                continue;
+            };
+            let Some(def) = attached.card.static_def.as_ref() else {
+                continue;
+            };
+            if !def.makes_host_colorless {
+                continue;
+            }
+            if self.static_def_if_matches(attached_iid, target_iid).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Subtractive: true iff some attached card on `target_iid` carries
+    /// a static with `suppresses_host_abilities` whose `affects`
+    /// predicate matches `target_iid`. Same walk shape as
+    /// `host_loses_colors`.
+    pub fn host_loses_abilities(&self, target_iid: &InstanceId) -> bool {
+        let Some(target) = self.card_pool.get(target_iid) else {
+            return false;
+        };
+        for attached_iid in &target.attached {
+            let Some(attached) = self.card_pool.get(attached_iid) else {
+                continue;
+            };
+            let Some(def) = attached.card.static_def.as_ref() else {
+                continue;
+            };
+            if !def.suppresses_host_abilities {
+                continue;
+            }
+            if self.static_def_if_matches(attached_iid, target_iid).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn effective_colors(&self, iid: &InstanceId) -> Vec<String> {
+        // Subtractive: Nonsense Mutation-style suppression returns an
+        // empty identity, ignoring printed colors AND any granted ones.
+        if self.host_loses_colors(iid) {
+            return Vec::new();
+        }
         let mut out: Vec<String> = Vec::new();
         if let Some(inst) = self.card_pool.get(iid) {
             for c in &inst.card.colors {
@@ -1537,6 +1601,14 @@ impl GameState {
     /// any granted by matching static abilities. Used by the sim AI's
     /// activation pass and by `activation_at` for index resolution.
     pub fn activation_count(&self, iid: &InstanceId) -> usize {
+        // Subtractive: Nonsense Mutation-style suppression evaporates
+        // both printed and granted activations. Per the design: "if an
+        // attached card gives abilities and nonsense strips abilities,
+        // nonsense wins" — so granted_activated from another attached
+        // card (e.g. a jewel) is also gone.
+        if self.host_loses_abilities(iid) {
+            return 0;
+        }
         let printed = self
             .card_pool
             .get(iid)

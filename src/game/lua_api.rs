@@ -1271,6 +1271,14 @@ pub(crate) fn fire_self_only(
     event: EventName,
     source: &InstanceId,
 ) {
+    // Subtractive: Nonsense Mutation-style suppression evaporates the
+    // host's own handlers. The suppressor itself is a separate iid
+    // (in the host's attached list); it isn't its own host, so
+    // host_loses_abilities returns false for it and its handlers
+    // continue to fire.
+    if state.host_loses_abilities(source) {
+        return;
+    }
     let Some(inst) = state.card_pool.get(source) else {
         return;
     };
@@ -1433,5 +1441,128 @@ pub(crate) fn fire_with_partner(
     match result {
         Ok(()) => credit_fire(state, event, owner),
         Err(e) => eprintln!("[lua] {} handler for {card_id} failed: {e}", event.lua_key()),
+    }
+}
+
+#[cfg(test)]
+mod suppress_tests {
+    use super::*;
+    use crate::card::{EventName, StaticAffects, StaticDef, StaticScope, ModifierValue};
+    use crate::choice::RandomOracle;
+    use crate::game::test_helpers::deck_of;
+    use rand::SeedableRng;
+
+    /// Install an on_die handler that draws a card for the source's
+    /// owner. Used to detect whether fire_self_only ran (hand grew) or
+    /// was skipped (hand unchanged).
+    fn install_draw_handler(lua: &Lua, state: &mut GameState, iid: &InstanceId) {
+        let handler: mlua::Function = lua
+            .load("return function(game, self) game.draw(self.owner, 1) end")
+            .eval()
+            .unwrap();
+        state
+            .card_pool
+            .get_mut(iid)
+            .unwrap()
+            .card
+            .handlers
+            .insert(EventName::OnDie, handler);
+    }
+
+    fn make_suppressor_static() -> StaticDef {
+        StaticDef {
+            affects: StaticAffects {
+                subtypes: vec![],
+                colors: vec![],
+                controller: None,
+                exclude_self: false,
+                scope: StaticScope::AttachedHost,
+                kind: None,
+                has_keyword: None,
+            },
+            modifier_x: ModifierValue::Fixed(0),
+            modifier_y: ModifierValue::Fixed(0),
+            modifier_keyword: None,
+            condition: None,
+            restrictions: Vec::new(),
+            cost_modifiers: Vec::new(),
+            granted_activated: None,
+            granted_colors: Vec::new(),
+            granted_face: Vec::new(),
+            makes_host_colorless: false,
+            suppresses_host_abilities: true,
+        }
+    }
+
+    fn install_noop_activation(lua: &Lua, state: &mut GameState, iid: &InstanceId) {
+        use crate::card::{ActivatedAbility, Timing};
+        let effect: mlua::Function = lua
+            .load("return function(game, self) end")
+            .eval()
+            .unwrap();
+        state
+            .card_pool
+            .get_mut(iid)
+            .unwrap()
+            .card
+            .activated
+            .push(ActivatedAbility {
+                cost_tap: true,
+                cost_components: Vec::new(),
+                text: String::new(),
+                timing: Timing::Instant,
+                validate: None,
+                target: None,
+                effect,
+            });
+    }
+
+    #[test]
+    fn activation_count_zero_when_host_abilities_suppressed() {
+        let lua = Lua::new();
+        let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+        let mutation = s.a.hand[0].clone();
+        let host = s.a.hand[1].clone();
+        install_noop_activation(&lua, &mut s, &host);
+        s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(make_suppressor_static());
+        s.a.hand.retain(|i| i != &mutation && i != &host);
+        s.a.board.push(host.clone());
+
+        // Sanity: host's printed activated ability is counted.
+        assert_eq!(s.activation_count(&host), 1, "baseline: printed activated counts");
+
+        // Attach suppressor; activation_count drops to 0.
+        s.add_attached(&host, &mutation);
+        assert_eq!(s.activation_count(&host), 0, "suppressed host has no activations");
+    }
+
+    #[test]
+    fn fire_self_only_skips_handler_when_host_abilities_suppressed() {
+        let lua = Lua::new();
+        let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+        let mutation = s.a.hand[0].clone();
+        let host = s.a.hand[1].clone();
+        install_draw_handler(&lua, &mut s, &host);
+        s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(make_suppressor_static());
+        s.a.hand.retain(|i| i != &mutation && i != &host);
+        s.a.board.push(host.clone());
+
+        // Sanity: with no suppressor attached, firing the handler grows
+        // the hand by 1 (the draw inside the handler).
+        let hand_before = s.a.hand.len();
+        let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
+        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &host);
+        assert_eq!(s.a.hand.len(), hand_before + 1, "baseline: handler must fire and draw");
+
+        // Attach suppressor; fire again. Hand must NOT grow.
+        s.add_attached(&host, &mutation);
+        let hand_with_suppressor = s.a.hand.len();
+        let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
+        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &host);
+        assert_eq!(
+            s.a.hand.len(),
+            hand_with_suppressor,
+            "suppressed host's handler must not fire"
+        );
     }
 }

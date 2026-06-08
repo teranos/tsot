@@ -373,6 +373,18 @@ pub struct StaticDef {
     /// no face grant.
     #[serde(default)]
     pub granted_face: Vec<String>,
+    /// Subtractive: while this static is active on the target, the
+    /// target's effective color identity is empty. Read by
+    /// `GameState::host_loses_colors`. Nonsense Mutation uses this.
+    #[serde(default)]
+    pub makes_host_colorless: bool,
+    /// Subtractive: while this static is active on the target, the
+    /// target's own abilities (printed + granted) are suppressed —
+    /// its static_def stops applying, its handlers don't fire, its
+    /// activated abilities can't be initiated. Read by
+    /// `GameState::host_loses_abilities`. Nonsense Mutation uses this.
+    #[serde(default)]
+    pub suppresses_host_abilities: bool,
 }
 
 /// Phase 3.5 cost reduction component on a static ability. Applied during

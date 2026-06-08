@@ -3126,6 +3126,8 @@ fn zero_y_creature_dies_per_c15_after_attached_detached_as_cost() {
             granted_activated: None,
             granted_colors: vec![],
 granted_face: Vec::new(),
+            makes_host_colorless: false,
+            suppresses_host_abilities: false,
         });
     }
     let _ = s.remove_from_zone(&attached, PlayerId::A, Zone::Hand);
