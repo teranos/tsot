@@ -285,7 +285,90 @@ pub(crate) fn build_pattern_b_choices(
                 }
             }
         }
-        let max_x = caps.into_iter().min().unwrap_or(0).min(10) as i32;
+        let mut max_x = caps.into_iter().min().unwrap_or(0).min(10) as i32;
+        // P.12a anchor-feasibility cap on X. When the cast has a
+        // GRAVEYARD cost component AND non-empty colors AND no
+        // color-matching anchor exists in the player's graveyard,
+        // the engine refuses any cast that ends up with
+        // graveyard_needed > 0 at apply time (play.rs:467
+        // NoGraveyardPaymentForColor). Without this cap, build picks
+        // X higher than the substitution coverage can fully drain
+        // (witnessed on read-the-embers: X-hand + X-graveyard + X-mill,
+        // red; with a red jewel on board the picker treats is_x as 1
+        // and credits jewel covering both 1-hand + 1-gy → playable,
+        // but build then picks X=2 and at X=2 the jewel saturates on
+        // hand, gy_needed stays at 2, anchor check fires). Simulate
+        // the engine's coverage for each X candidate and pick the
+        // largest X where post-coverage gy_needed = 0.
+        if !gy_anchor_possible && has_gy_cost && !cast_colors_lc.is_empty() {
+            let is_x_hand_count: usize = cost
+                .iter()
+                .filter(|c| c.is_x && matches!(c.source, CostSource::Hand))
+                .count();
+            let is_x_gy_count: usize = cost
+                .iter()
+                .filter(|c| c.is_x && matches!(c.source, CostSource::Graveyard))
+                .count();
+            // Determine substitution shape (matches engine's branch
+            // selection at play.rs:285). Crystal covers HAND only;
+            // jewel covers up to 2 mixed (hand drained first); symbol
+            // covers 1 mixed (hand-or-gy, hand drained first); none.
+            #[derive(Copy, Clone)]
+            enum Sub {
+                None,
+                Crystal,
+                Jewel,
+                Symbol,
+            }
+            let sub = if let Some(sub_iid) = state.find_jewel_tap_candidate(active, picked) {
+                let is_crystal = state
+                    .card_pool
+                    .get(&sub_iid)
+                    .map(|i| {
+                        i.card
+                            .subtypes
+                            .iter()
+                            .any(|s| s.eq_ignore_ascii_case("crystal"))
+                    })
+                    .unwrap_or(false);
+                if is_crystal {
+                    Sub::Crystal
+                } else {
+                    Sub::Jewel
+                }
+            } else if state.find_symbol_tap_candidate(active).is_some() {
+                Sub::Symbol
+            } else {
+                Sub::None
+            };
+            let mut anchor_x: i32 = 0;
+            for try_x in 0..=max_x {
+                let hand_n = is_x_hand_count * try_x as usize;
+                let gy_n = is_x_gy_count * try_x as usize;
+                let post_gy: usize = match sub {
+                    Sub::Jewel => {
+                        let take_h = hand_n.min(2);
+                        let budget = 2 - take_h;
+                        let take_g = gy_n.min(budget);
+                        gy_n - take_g
+                    }
+                    Sub::Symbol => {
+                        if hand_n > 0 {
+                            gy_n
+                        } else {
+                            gy_n.saturating_sub(1)
+                        }
+                    }
+                    Sub::Crystal | Sub::None => gy_n,
+                };
+                if post_gy == 0 {
+                    anchor_x = try_x;
+                } else {
+                    break;
+                }
+            }
+            max_x = max_x.min(anchor_x);
+        }
         if max_x < 1 {
             return BuildChoiceResult::UnaffordableX { picked_is_creature };
         }
@@ -1788,6 +1871,120 @@ mod tests {
             accepted,
             "build_pattern_b_choices must accept hydra-shape X-hand with a Symbol on board (P.24e)",
         );
+    }
+
+    // P.12a anchor-feasibility cap on X. read-the-embers shape:
+    // X-hand + X-graveyard red spell. With a same-color jewel on
+    // board and NO red card in the player's graveyard (no anchor),
+    // build's X-cap used to pick X higher than the jewel could
+    // fully drain — at X=2 the jewel saturates on hand and gy_need
+    // stays at 2, engine fires NoGraveyardPaymentForColor. The
+    // anchor-feasibility cap bounds max_x to the largest X where
+    // post-coverage gy_need = 0 (X=1 with a jewel on this shape;
+    // jewel covers 1 hand + 1 gy).
+    #[test]
+    fn build_pattern_b_choices_x_cap_respects_p12a_anchor_when_no_anchor_in_gy() {
+        use crate::card::{CardType, CostComponent, CostSource};
+        use crate::choice::RandomOracle;
+        use rand::SeedableRng;
+        let registry = std::sync::Arc::new(
+            CardRegistry::load(std::path::Path::new("cards")).unwrap(),
+        );
+        let _ = registry;
+        let card_fn = |id: &str| -> crate::card::Card {
+            crate::card::Card {
+                id: id.to_string(),
+                name: String::new(),
+                colors: Vec::new(),
+                kind: CardType::Creature,
+                timing: None,
+                subtypes: Vec::new(),
+                cannot_block_subtypes: Vec::new(),
+                can_block_subtypes: Vec::new(),
+                symbols: Vec::new(),
+                frame: None,
+                holes: Vec::new(),
+                symbol_slots: std::collections::BTreeMap::new(),
+                color_slots: std::collections::BTreeMap::new(),
+                face: Vec::new(),
+                cost: Vec::new(),
+                abilities: Vec::new(),
+                flavor: String::new(),
+                stats: Some(crate::card::Stats { x: 1.0, y: 1.0 }),
+                static_def: None,
+                handlers: std::collections::BTreeMap::new(),
+                activated: Vec::new(),
+                gy_hand_substitute: false,
+                allow_x_zero: false,
+                target: None,
+                is_variant: false,
+                variant_of: None,
+            }
+        };
+        let deck_a: Vec<_> = (0..60).map(|i| card_fn(&format!("a-{i}"))).collect();
+        let deck_b: Vec<_> = (0..60).map(|i| card_fn(&format!("b-{i}"))).collect();
+        let mut s = GameState::new(deck_a, deck_b);
+        let active = PlayerId::A;
+        // Cast: X-hand + X-graveyard red spell (read-the-embers shape).
+        let cast = s.player(active).hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&cast).unwrap();
+            inst.card.kind = CardType::Spell;
+            inst.card.colors = vec!["red".to_string()];
+            inst.card.cost = vec![
+                CostComponent {
+                    amount: 0,
+                    source: CostSource::Hand,
+                    is_x: true,
+                    kind: None,
+                },
+                CostComponent {
+                    amount: 0,
+                    source: CostSource::Graveyard,
+                    is_x: true,
+                    kind: None,
+                },
+            ];
+        }
+        // Grab all iids BEFORE moving anything so indexes are stable.
+        let jewel = s.player(active).hand[1].clone();
+        let red_hand_a = s.player(active).hand[2].clone();
+        let red_hand_b = s.player(active).hand[3].clone();
+        let gy_seed_a = s.player(active).hand[4].clone();
+        // Red jewel on A's board → substitution_coverage = 2.
+        {
+            let j = s.card_pool.get_mut(&jewel).unwrap();
+            j.card.kind = CardType::Artifact;
+            j.card.subtypes = vec!["jewel".to_string()];
+            j.card.colors = vec!["red".to_string()];
+        }
+        s.player_mut(active).hand.retain(|x| x != &jewel);
+        s.player_mut(active).board.push(jewel.clone());
+        s.card_pool.get_mut(&jewel).unwrap().tapped = false;
+        // Identity-matching hand cards so the picker doesn't refuse at
+        // the hand-identity gate (we're testing the X-cap, not identity).
+        s.card_pool.get_mut(&red_hand_a).unwrap().card.colors = vec!["red".to_string()];
+        s.card_pool.get_mut(&red_hand_b).unwrap().card.colors = vec!["red".to_string()];
+        // Seed graveyard with a non-red card (no anchor possible).
+        s.card_pool.get_mut(&gy_seed_a).unwrap().card.colors = vec!["blue".to_string()];
+        s.player_mut(active).hand.retain(|x| x != &gy_seed_a);
+        s.player_mut(active).graveyard.push(gy_seed_a);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0xC0DE);
+        let mut oracle = RandomOracle::new(&mut rng);
+        let result = build_pattern_b_choices(&mut s, active, &cast, &mut oracle);
+        match result {
+            BuildChoiceResult::Choices(choices) => {
+                let x = choices.x_value.unwrap_or(0);
+                assert!(
+                    x <= 1,
+                    "build must bound X to at most 1 (jewel covers 1 hand + 1 gy) when no anchor exists in graveyard; got X={x}",
+                );
+            }
+            BuildChoiceResult::UnaffordableX { .. } => {
+                // Also acceptable — if build determines no X works.
+            }
+            _ => panic!("unexpected build result variant"),
+        }
     }
 
     /// Strongest journal-rollback invariant: open the replay journal at
