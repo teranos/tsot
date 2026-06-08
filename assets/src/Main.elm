@@ -53,12 +53,14 @@ to `Hidden`.
 
 import Browser
 import Browser.Dom
+import BuildFooter
 import Dict exposing (Dict)
 import Html exposing (Html, button, div, h2, pre, span, table, td, text, th, tr)
 import Html.Attributes exposing (class, id, style)
 import Html.Events exposing (onClick)
 import Json.Decode as D
 import Json.Encode as E
+import LogPanel
 import SpectatorBar
 import Task
 
@@ -157,34 +159,8 @@ port idbReqOut : { op : String, payload : E.Value } -> Cmd msg
 -- MODEL
 
 
-type alias BuildInfo =
-    { profile : String
-    , builtAt : String
-    , commit : String
-    }
-
-
-type BuildState
-    = AwaitingPort
-    | NoBuildInfo
-    | HasBuildInfo BuildInfo
-
-
-type alias ErrorEvent =
-    { source : String
-    , message : String
-    , location : Maybe String
-    , ffiCall : Maybe String
-    , atUs : Maybe Float
-    , breadcrumb : List String
-    , jsStack : Maybe String
-    , rawStderr : Maybe String
-    }
-
-
-type LogEntry
-    = TextLine String
-    | ErrorEntry ErrorEvent
+-- BuildInfo / BuildState moved to BuildFooter.elm
+-- ErrorEvent / LogEntry moved to LogPanel.elm
 
 
 type DecisionRecord
@@ -319,8 +295,8 @@ type alias GameViewSlice =
 
 
 type alias Model =
-    { build : BuildState
-    , log : List LogEntry
+    { build : BuildFooter.State
+    , log : List LogPanel.Entry
     , decisionPanel : DecisionPanel
     , savedList : SavedListState
     , saveStatus : String
@@ -340,9 +316,7 @@ type alias Model =
     }
 
 
-logContainerId : String
-logContainerId =
-    "elm-log"
+-- logContainerId moved to LogPanel.containerId
 
 
 
@@ -403,7 +377,7 @@ type Msg
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { build = AwaitingPort
+    ( { build = BuildFooter.AwaitingPort
       , log = []
       , decisionPanel = DecisionHidden
       , savedList = SavedHidden
@@ -455,26 +429,26 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         BuildInfoReceived value ->
-            case D.decodeValue decodeBuildInfo value of
+            case D.decodeValue BuildFooter.decode value of
                 Ok info ->
-                    ( { model | build = HasBuildInfo info }, Cmd.none )
+                    ( { model | build = BuildFooter.HasBuildInfo info }, Cmd.none )
 
                 Err _ ->
-                    ( { model | build = NoBuildInfo }, Cmd.none )
+                    ( { model | build = BuildFooter.NoBuildInfo }, Cmd.none )
 
         LogTextReceived line ->
-            ( { model | log = model.log ++ [ TextLine line ] }, scrollLogToBottom )
+            ( { model | log = model.log ++ [ LogPanel.TextLine line ] }, scrollLogToBottom )
 
         LogErrorReceived value ->
-            case D.decodeValue decodeErrorEvent value of
+            case D.decodeValue LogPanel.decodeError value of
                 Ok ev ->
-                    ( { model | log = model.log ++ [ ErrorEntry ev ] }, scrollLogToBottom )
+                    ( { model | log = model.log ++ [ LogPanel.ErrorEntry ev ] }, scrollLogToBottom )
 
                 Err err ->
                     ( { model
                         | log =
                             model.log
-                                ++ [ TextLine ("[log decode failed] " ++ D.errorToString err) ]
+                                ++ [ LogPanel.TextLine ("[log decode failed] " ++ D.errorToString err) ]
                       }
                     , scrollLogToBottom
                     )
@@ -787,7 +761,7 @@ removeFirst target list =
 
 scrollLogToBottom : Cmd Msg
 scrollLogToBottom =
-    Browser.Dom.setViewportOf logContainerId 0 1000000
+    Browser.Dom.setViewportOf LogPanel.containerId 0 1000000
         |> Task.attempt (\_ -> NoOp)
 
 
@@ -795,25 +769,8 @@ scrollLogToBottom =
 -- DECODERS
 
 
-decodeBuildInfo : D.Decoder BuildInfo
-decodeBuildInfo =
-    D.map3 BuildInfo
-        (D.field "profile" D.string)
-        (D.field "builtAt" D.string)
-        (D.field "commit" D.string)
-
-
-decodeErrorEvent : D.Decoder ErrorEvent
-decodeErrorEvent =
-    D.map8 ErrorEvent
-        (optionalField "source" D.string |> D.map (Maybe.withDefault "error"))
-        (optionalField "message" D.string |> D.map (Maybe.withDefault "(no message)"))
-        (optionalField "location" D.string)
-        (optionalField "ffi_call" D.string)
-        (optionalField "at_us" D.float)
-        (optionalField "breadcrumb" (D.list D.string) |> D.map (Maybe.withDefault []))
-        (optionalField "js_stack" D.string)
-        (optionalField "raw_stderr" D.string)
+-- decodeBuildInfo moved to BuildFooter.decode
+-- decodeErrorEvent moved to LogPanel.decodeError
 
 
 decodeDecisionRecord : D.Decoder DecisionRecord
@@ -1354,8 +1311,8 @@ view model =
         , viewGameScreen model
         , viewSavedListPanel model.savedList
         , viewDecisionPanel model.decisionPanel
-        , viewLog model.log
-        , viewBuildFooter model.build
+        , LogPanel.view model.log
+        , BuildFooter.view model.build
         ]
 
 
@@ -1430,35 +1387,32 @@ viewGameScreen model =
     let
         active =
             model.gamePhase == Playing || model.gamePhase == Spectating
+
+        slice =
+            case model.gameState of
+                Just value ->
+                    D.decodeValue decodeGameViewSlice value
+                        |> Result.toMaybe
+
+                Nothing ->
+                    Nothing
     in
-    if active then
-        let
-            slice =
-                case model.gameState of
-                    Just value ->
-                        D.decodeValue decodeGameViewSlice value
-                            |> Result.toMaybe
-
-                    Nothing ->
-                        Nothing
-        in
-        renderGameScreen slice
-
-    else
-        text ""
+    renderGameScreen active slice
 
 
-{-| Render the scaffold unconditionally on the phase. The card
-containers' IDs must exist in the DOM the instant the phase flips to
-Playing/Spectating — `_renderInner` runs synchronously after `setPhase`
-and immediately does `document.getElementById('opp-board-cards').innerHTML = ''`.
-If we gated on `gameState` too, Elm's vdom→DOM patch (next animation
-frame) wouldn't have happened by the time JS reaches that line, and
-the appendChild path crashes with "oppBoard is null". Counts +
-deck-tops fall back to placeholders when no slice has landed.
+{-| Render the scaffold UNCONDITIONALLY — visibility toggles via inline
+`display:none` when not Playing/Spectating. The card-container IDs
+(`opp-board-cards`, etc.) must exist in the DOM from Elm's first
+render, because `_renderInner` is called synchronously after
+`setPhase(...)` in the load-save flow (and the start-game / spectate
+paths only get away with it because they have an `await` between).
+If `viewGameScreen` returned `text ""` for non-active phases, those
+IDs would be absent at boot and the load-save sync `render()` would
+hit "oppBoard is null" before Elm's first paint. Counts + deck-tops
+fall back to placeholders when no `gameState` slice has landed.
 -}
-renderGameScreen : Maybe GameViewSlice -> Html Msg
-renderGameScreen maybeSlice =
+renderGameScreen : Bool -> Maybe GameViewSlice -> Html Msg
+renderGameScreen active maybeSlice =
     let
         oppCounts =
             Maybe.map (oppCountsText << .opp) maybeSlice |> Maybe.withDefault ""
@@ -1477,8 +1431,15 @@ renderGameScreen maybeSlice =
 
         yourDeckTop =
             Maybe.map (viewDeckTop << .deckTop << .you) maybeSlice |> Maybe.withDefault (text "")
+
+        displayStyle =
+            if active then
+                ""
+
+            else
+                "none"
     in
-    div [ id "game-screen" ]
+    div [ id "game-screen", style "display" displayStyle ]
         [ div [ class "row" ]
             [ div [ class "zone opponent", style "flex" "2" ]
                 [ h2 []
@@ -2055,169 +2016,7 @@ viewSaveControls model =
         ]
 
 
-viewLog : List LogEntry -> Html Msg
-viewLog entries =
-    pre
-        [ id logContainerId
-        , style "max-height" "24rem"
-        , style "overflow-y" "auto"
-        , style "font-size" "0.75rem"
-        , style "color" "#aaa"
-        , style "white-space" "pre"
-        , style "margin" "0"
-        ]
-        (List.map viewEntry entries)
-
-
-viewEntry : LogEntry -> Html Msg
-viewEntry entry =
-    case entry of
-        TextLine line ->
-            text (line ++ "\n")
-
-        ErrorEntry ev ->
-            viewErrorBlock ev
-
-
-viewErrorBlock : ErrorEvent -> Html Msg
-viewErrorBlock ev =
-    div [ class "log-error" ]
-        ([ div [ class "log-error-header" ]
-            [ text ("[" ++ String.toUpper ev.source ++ "] " ++ ev.message) ]
-         , div [ class "log-error-meta" ]
-            [ text (formatErrorMeta ev) ]
-         ]
-            ++ viewBreadcrumb ev.breadcrumb
-            ++ viewJsStack ev.jsStack
-            ++ viewRawStderr ev.rawStderr
-            ++ viewAbortFooter ev.source
-        )
-
-
-formatErrorMeta : ErrorEvent -> String
-formatErrorMeta ev =
-    let
-        parts =
-            List.filterMap identity
-                [ Maybe.map (\l -> "at " ++ l) ev.location
-                , Maybe.map (\c -> "inside FFI " ++ c) ev.ffiCall
-                , Maybe.map (\us -> "t=" ++ formatMillis us ++ "ms") ev.atUs
-                ]
-    in
-    String.join "  ·  " parts
-
-
-formatMillis : Float -> String
-formatMillis us =
-    let
-        ms =
-            us / 1000
-
-        rounded =
-            toFloat (round (ms * 10)) / 10
-    in
-    String.fromFloat rounded
-
-
-viewBreadcrumb : List String -> List (Html Msg)
-viewBreadcrumb crumbs =
-    if List.isEmpty crumbs then
-        []
-
-    else
-        div [ class "log-error-trail" ]
-            [ text
-                ("--- last "
-                    ++ String.fromInt (List.length crumbs)
-                    ++ " trace events before failure ---"
-                )
-            ]
-            :: List.map
-                (\line -> div [ class "log-error-trail-line" ] [ text line ])
-                crumbs
-
-
-viewJsStack : Maybe String -> List (Html Msg)
-viewJsStack maybeStack =
-    case maybeStack of
-        Nothing ->
-            []
-
-        Just stack ->
-            [ div [ class "log-error-trail" ] [ text "--- JS exception stack ---" ]
-            , div
-                [ class "log-error-trail-line"
-                , style "white-space" "pre-wrap"
-                ]
-                [ text stack ]
-            ]
-
-
-viewRawStderr : Maybe String -> List (Html Msg)
-viewRawStderr maybeStderr =
-    case maybeStderr of
-        Nothing ->
-            []
-
-        Just stderrText ->
-            [ div [ class "log-error-trail" ] [ text "--- raw stderr from wasm ---" ]
-            , div
-                [ class "log-error-trail-line"
-                , style "white-space" "pre-wrap"
-                ]
-                [ text stderrText ]
-            ]
-
-
-viewAbortFooter : String -> List (Html Msg)
-viewAbortFooter source =
-    if source == "rust-panic" || source == "wasm-trap" then
-        [ div [ class "log-error-meta" ]
-            [ text "wasm module aborted after this point — reload the page to continue" ]
-        ]
-
-    else
-        []
-
-
-viewBuildFooter : BuildState -> Html Msg
-viewBuildFooter state =
-    case state of
-        AwaitingPort ->
-            text ""
-
-        NoBuildInfo ->
-            footerDiv [ text "tsot · build info unavailable" ]
-
-        HasBuildInfo info ->
-            footerDiv
-                [ text
-                    ("tsot · "
-                        ++ info.profile
-                        ++ " · built "
-                        ++ info.builtAt
-                        ++ " · "
-                        ++ info.commit
-                    )
-                ]
-
-
-footerDiv : List (Html msg) -> Html msg
-footerDiv children =
-    div
-        [ style "position" "fixed"
-        , style "bottom" "0"
-        , style "right" "0"
-        , style "padding" "0.15rem 0.5rem"
-        , style "background" "rgba(20,20,28,0.85)"
-        , style "border-top-left-radius" "4px"
-        , style "color" "#555"
-        , style "font-size" "0.65rem"
-        , style "font-family" "ui-monospace, SFMono-Regular, Menlo, monospace"
-        , style "pointer-events" "none"
-        , style "z-index" "1000"
-        ]
-        children
+-- viewLog + viewBuildFooter + their helpers moved to LogPanel / BuildFooter.
 
 
 viewSavedListPanel : SavedListState -> Html Msg
