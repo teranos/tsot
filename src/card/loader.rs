@@ -399,8 +399,8 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
     let (modifier_x, modifier_y, modifier_keyword, granted_colors, granted_face, makes_host_colorless, suppresses_host_abilities) =
         match static_t.get::<Value>("modifier")? {
             Value::Nil => (
-                ModifierValue::Fixed(0),
-                ModifierValue::Fixed(0),
+                ModifierValue::Fixed(0.0),
+                ModifierValue::Fixed(0.0),
                 None,
                 Vec::new(),
                 Vec::new(),
@@ -638,9 +638,33 @@ fn parse_one_activated_entry(item: Table) -> mlua::Result<ActivatedAbility> {
 /// - String "attached:<color>" → `AttachedCountByColor(color)` (fallback)
 fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
     match v {
-        Value::Nil => Ok(ModifierValue::Fixed(0)),
-        Value::Integer(n) => Ok(ModifierValue::Fixed(n as i32)),
-        Value::Number(n) => Ok(ModifierValue::Fixed(n as i32)),
+        Value::Nil => Ok(ModifierValue::Fixed(0.0)),
+        Value::Integer(n) => Ok(ModifierValue::Fixed(n as f32)),
+        Value::Number(n) => Ok(ModifierValue::Fixed(n as f32)),
+        Value::Table(t) => {
+            // Two shapes:
+            //   1. Scaled form: `{scale = -0.25, count = "board:face:shiny"}`
+            //      → Scaled(scale, inner). Detected by the presence of
+            //      string key `scale`.
+            //   2. Sum form: array of values `{-0.5, {scale=-0.25, count=...}}`
+            //      → Sum([Fixed(-0.5), Scaled(-0.25, ...)]).
+            if let Ok(Some(scale)) = t.get::<Option<f32>>("scale") {
+                let count_val: Value = t.get("count")?;
+                let inner = read_modifier_value(count_val)?;
+                return Ok(ModifierValue::Scaled(scale, Box::new(inner)));
+            }
+            // Sequence form → Sum.
+            let mut parts: Vec<ModifierValue> = Vec::new();
+            for item in t.sequence_values::<Value>() {
+                parts.push(read_modifier_value(item?)?);
+            }
+            if parts.is_empty() {
+                return Err(mlua::Error::runtime(
+                    "modifier value table must have `scale`+`count` keys or a non-empty sequence",
+                ));
+            }
+            Ok(ModifierValue::Sum(parts))
+        }
         Value::String(s) => {
             let raw = s.to_str()?.to_string();
             let lower = raw.to_ascii_lowercase().replace(' ', "");
@@ -649,6 +673,9 @@ fn read_modifier_value(v: Value) -> mlua::Result<ModifierValue> {
             }
             if lower == "board" {
                 return Ok(ModifierValue::BoardCount);
+            }
+            if let Some(face) = lower.strip_prefix("board:face:") {
+                return Ok(ModifierValue::BoardCountByFace(face.to_string()));
             }
             if lower == "board_types" {
                 return Ok(ModifierValue::BoardTypeCount);
@@ -1199,6 +1226,83 @@ mod tests {
     }
 
     #[test]
+    fn missense_mutation_card_loads_with_full_shape() {
+        let lua = Lua::new();
+        let path = Path::new("cards/missense-mutation.lua");
+        let cards = load_card(&lua, path).expect("load missense-mutation");
+        let card = cards.iter().find(|c| c.id == "missense-mutation").unwrap();
+        assert_eq!(card.colors, vec!["cyan"]);
+        assert_eq!(card.kind, crate::card::CardType::Mutation);
+        assert_eq!(card.cost.len(), 2);
+        let def = card.static_def.as_ref().expect("static_def present");
+        assert!(matches!(def.affects.scope, crate::card::StaticScope::AttachedHost));
+        use crate::card::ModifierValue;
+        // X = +1 per shiny board card.
+        assert_eq!(
+            def.modifier_x,
+            ModifierValue::Sum(vec![
+                ModifierValue::Fixed(0.0),
+                ModifierValue::Scaled(1.0, Box::new(ModifierValue::BoardCountByFace("shiny".into()))),
+            ])
+        );
+        // Y = -0.5 + (-0.25 × shiny board count).
+        assert_eq!(
+            def.modifier_y,
+            ModifierValue::Sum(vec![
+                ModifierValue::Fixed(-0.5),
+                ModifierValue::Scaled(-0.25, Box::new(ModifierValue::BoardCountByFace("shiny".into()))),
+            ])
+        );
+        // Becomes cyan: grant cyan to the host.
+        assert!(def.granted_colors.iter().any(|c| c == "cyan"));
+    }
+
+    #[test]
+    fn modifier_sum_and_scaled_table_form_parses_to_sum_scaled() {
+        // Lua side: `y = { -0.5, {scale = -0.25, count = "board:face:shiny"} }`
+        // The sequence form is a Sum. Each entry is either a scalar
+        // (Fixed) or a table with `scale` + `count` (Scaled).
+        let card = load_card_from_lua(r#"
+            return {
+                id = "under-test",
+                type = "mutation",
+                static = {
+                    affects = { scope = "attached_host" },
+                    modifier = {
+                        x = 0,
+                        y = { -0.5, {scale = -0.25, count = "board:face:shiny"} },
+                    },
+                },
+            }
+        "#);
+        let def = card.static_def.expect("static_def present");
+        use crate::card::ModifierValue;
+        assert_eq!(
+            def.modifier_y,
+            ModifierValue::Sum(vec![
+                ModifierValue::Fixed(-0.5),
+                ModifierValue::Scaled(-0.25, Box::new(ModifierValue::BoardCountByFace("shiny".into()))),
+            ])
+        );
+    }
+
+    #[test]
+    fn modifier_descriptor_board_face_parses_to_board_count_by_face() {
+        let card = load_card_from_lua(r#"
+            return {
+                id = "under-test",
+                type = "mutation",
+                static = {
+                    affects = { scope = "attached_host" },
+                    modifier = { x = "board:face:shiny", y = 0 },
+                },
+            }
+        "#);
+        let def = card.static_def.expect("static_def present");
+        assert_eq!(def.modifier_x, crate::card::ModifierValue::BoardCountByFace("shiny".into()));
+    }
+
+    #[test]
     fn nonsense_mutation_card_loads_with_full_shape() {
         let lua = Lua::new();
         let path = Path::new("cards/nonsense-mutation.lua");
@@ -1210,8 +1314,8 @@ mod tests {
         assert_eq!(card.cost.len(), 2);
         let def = card.static_def.as_ref().expect("static_def present");
         assert!(matches!(def.affects.scope, crate::card::StaticScope::AttachedHost));
-        assert_eq!(def.modifier_x, crate::card::ModifierValue::Fixed(1));
-        assert_eq!(def.modifier_y, crate::card::ModifierValue::Fixed(-1));
+        assert_eq!(def.modifier_x, crate::card::ModifierValue::Fixed(1.0));
+        assert_eq!(def.modifier_y, crate::card::ModifierValue::Fixed(-1.0));
         assert!(def.makes_host_colorless);
         assert!(def.suppresses_host_abilities);
     }

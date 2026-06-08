@@ -281,7 +281,7 @@ fn legal_counter_targets_returns_chain_cards_in_order() {
     assert_eq!(s.legal_counter_targets(), vec![a_card, b_card]);
 }
 
-fn make_anthem_source(s: &mut GameState, iid: &InstanceId, subtype: &str, dx: i32, dy: i32) {
+fn make_anthem_source(s: &mut GameState, iid: &InstanceId, subtype: &str, dx: f32, dy: f32) {
     let inst = s.card_pool.get_mut(iid).unwrap();
     inst.card.subtypes.push(subtype.to_string());
     inst.card.static_def = Some(crate::card::StaticDef {
@@ -318,7 +318,7 @@ fn anthem_applies_to_matching_subtype_on_board() {
     s.card_pool.get_mut(&target).unwrap().card.subtypes = vec!["human".into()];
     s.card_pool.get_mut(&unrelated).unwrap().card.subtypes = vec!["goblin".into()];
     // anthem source is a human anthem.
-    make_anthem_source(&mut s, &anthem, "human", 1, 1);
+    make_anthem_source(&mut s, &anthem, "human", 1.0, 1.0);
     // Put all three on A's board.
     s.a.hand.retain(|i| i != &anthem && i != &target && i != &unrelated);
     s.a.board.push(anthem.clone());
@@ -338,7 +338,7 @@ fn anthem_removed_when_source_leaves_board() {
     let anthem = s.a.hand[0].clone();
     let target = s.a.hand[1].clone();
     s.card_pool.get_mut(&target).unwrap().card.subtypes = vec!["human".into()];
-    make_anthem_source(&mut s, &anthem, "human", 1, 1);
+    make_anthem_source(&mut s, &anthem, "human", 1.0, 1.0);
     s.a.hand.retain(|i| i != &anthem && i != &target);
     s.a.board.push(anthem.clone());
     s.a.board.push(target.clone());
@@ -369,8 +369,8 @@ fn attached_host_scope_grants_keyword_to_host() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: Some("flying".into()),
         condition: None,
         restrictions: Vec::new(),
@@ -409,8 +409,8 @@ fn attached_host_scope_does_not_grant_when_unattached() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: Some("flying".into()),
         condition: None,
         restrictions: Vec::new(),
@@ -444,8 +444,8 @@ fn condition_gate_blocks_static_until_graveyard_threshold() {
             kind: Some(crate::card::CardType::Creature),
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(1),
-        modifier_y: crate::card::ModifierValue::Fixed(1),
+        modifier_x: crate::card::ModifierValue::Fixed(1.0),
+        modifier_y: crate::card::ModifierValue::Fixed(1.0),
         modifier_keyword: Some("flying".into()),
         condition: Some(crate::card::StaticCondition::OwnerGraveyardSize { min: 5 }),
         restrictions: Vec::new(),
@@ -493,8 +493,8 @@ fn condition_non_creatures_counts_only_non_creature_kinds() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: Some("flying".into()),
         condition: Some(crate::card::StaticCondition::OwnerGraveyardNonCreatures { min: 4 }),
         restrictions: Vec::new(),
@@ -544,8 +544,8 @@ fn source_only_scope_targets_only_the_source() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: Some("flying".into()),
         condition: None,
         restrictions: Vec::new(),
@@ -582,8 +582,8 @@ fn restriction_cannot_attack_propagates_to_opponent_insects() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: None,
         condition: None,
         restrictions: vec![
@@ -632,8 +632,8 @@ fn restriction_cannot_attack_blocks_declare_attacker() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: None,
         condition: None,
         restrictions: vec![crate::card::Restriction::CannotAttack],
@@ -678,8 +678,8 @@ fn affects_has_keyword_filters_by_intrinsic_or_static_grant() {
             kind: Some(crate::card::CardType::Creature),
             has_keyword: Some("flying".into()),
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: None,
         condition: None,
         restrictions: vec![crate::card::Restriction::CannotAttack],
@@ -708,8 +708,8 @@ fn two_anthems_stack() {
     let anthem_b = s.a.hand[1].clone();
     let target = s.a.hand[2].clone();
     s.card_pool.get_mut(&target).unwrap().card.subtypes = vec!["human".into()];
-    make_anthem_source(&mut s, &anthem_a, "human", 1, 1);
-    make_anthem_source(&mut s, &anthem_b, "human", 2, 0);
+    make_anthem_source(&mut s, &anthem_a, "human", 1.0, 1.0);
+    make_anthem_source(&mut s, &anthem_b, "human", 2.0, 0.0);
     s.a.hand.retain(|i| i != &anthem_a && i != &anthem_b && i != &target);
     s.a.board.push(anthem_a);
     s.a.board.push(anthem_b);
@@ -728,7 +728,7 @@ fn opponent_controlled_anthem_does_not_affect_owner_filtered() {
     let b_anthem = s.b.hand[0].clone();
     let a_human = s.a.hand[0].clone();
     s.card_pool.get_mut(&a_human).unwrap().card.subtypes = vec!["human".into()];
-    make_anthem_source(&mut s, &b_anthem, "human", 1, 1);
+    make_anthem_source(&mut s, &b_anthem, "human", 1.0, 1.0);
     s.b.hand.retain(|i| i != &b_anthem);
     s.a.hand.retain(|i| i != &a_human);
     s.b.board.push(b_anthem);
@@ -752,8 +752,8 @@ fn make_glow_granter(s: &mut GameState, iid: &InstanceId, granted: &[&str]) {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: None,
         condition: None,
         restrictions: Vec::new(),
@@ -930,8 +930,8 @@ fn deck_top_symbol_matches_attached_condition_grants_modifier() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(3),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(3.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: None,
         condition: Some(crate::card::StaticCondition::DeckTopSymbolMatchesAttached),
         restrictions: Vec::new(),
@@ -1009,8 +1009,8 @@ fn host_loses_colors_true_when_attached_mutation_declares_colorless() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: None,
         condition: None,
         restrictions: Vec::new(),
@@ -1048,8 +1048,8 @@ fn effective_colors_returns_empty_when_host_loses_colors() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: None,
         condition: None,
         restrictions: Vec::new(),
@@ -1083,8 +1083,8 @@ fn host_loses_abilities_true_when_attached_mutation_declares_suppression() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: None,
         condition: None,
         restrictions: Vec::new(),
@@ -1124,8 +1124,8 @@ fn hosts_own_static_stops_applying_when_suppressed() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(2),
-        modifier_y: crate::card::ModifierValue::Fixed(2),
+        modifier_x: crate::card::ModifierValue::Fixed(2.0),
+        modifier_y: crate::card::ModifierValue::Fixed(2.0),
         modifier_keyword: None,
         condition: None,
         restrictions: Vec::new(),
@@ -1147,8 +1147,8 @@ fn hosts_own_static_stops_applying_when_suppressed() {
             kind: None,
             has_keyword: None,
         },
-        modifier_x: crate::card::ModifierValue::Fixed(0),
-        modifier_y: crate::card::ModifierValue::Fixed(0),
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
         modifier_keyword: None,
         condition: None,
         restrictions: Vec::new(),
@@ -1167,4 +1167,136 @@ fn hosts_own_static_stops_applying_when_suppressed() {
     assert_eq!(s.effective_stats(&host), (3.0, 3.0), "pre-attach baseline");
     s.add_attached(&host, &mutation);
     assert_eq!(s.effective_stats(&host), (1.0, 1.0), "host's own static must stop applying when suppressed");
+}
+
+#[test]
+fn modifier_value_fixed_carries_fractional_value() {
+    // Attached-host mutation with y = -0.5. Host's printed stats are
+    // 1/1; with the mutation attached, effective_stats must reflect
+    // 1.0 / 0.5 — not 1.0 / 1.0 (truncation to 0).
+    let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
+    let mutation = s.a.hand[0].clone();
+    let host = s.a.hand[1].clone();
+    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+        affects: crate::card::StaticAffects {
+            subtypes: vec![],
+            colors: vec![],
+            controller: None,
+            exclude_self: false,
+            scope: crate::card::StaticScope::AttachedHost,
+            kind: None,
+            has_keyword: None,
+        },
+        modifier_x: crate::card::ModifierValue::Fixed(0.0),
+        modifier_y: crate::card::ModifierValue::Fixed(-0.5),
+        modifier_keyword: None,
+        condition: None,
+        restrictions: Vec::new(),
+        cost_modifiers: Vec::new(),
+        granted_activated: None,
+        granted_colors: Vec::new(),
+        granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
+    });
+    s.a.hand.retain(|i| i != &mutation && i != &host);
+    s.a.board.push(host.clone());
+    s.add_attached(&host, &mutation);
+    assert_eq!(s.effective_stats(&host), (1.0, 0.5));
+}
+
+#[test]
+fn board_count_by_face_modifier_counts_shiny_board_cards() {
+    // Host on board with an attached-host mutation whose modifier_x =
+    // BoardCountByFace("shiny"). Add three shiny cards to the board
+    // (mix of own + opponent); assert host gets +3 to X.
+    let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+    let mutation = s.a.hand[0].clone();
+    let host = s.a.hand[1].clone();
+    let shiny_a1 = s.a.hand[2].clone();
+    let shiny_a2 = s.a.hand[3].clone();
+    let shiny_b = s.b.hand[0].clone();
+    // Tag three cards as shiny on `face`.
+    for iid in [&shiny_a1, &shiny_a2, &shiny_b] {
+        s.card_pool.get_mut(iid).unwrap().card.face = vec!["shiny".into()];
+    }
+    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+        affects: crate::card::StaticAffects {
+            subtypes: vec![],
+            colors: vec![],
+            controller: None,
+            exclude_self: false,
+            scope: crate::card::StaticScope::AttachedHost,
+            kind: None,
+            has_keyword: None,
+        },
+        modifier_x: crate::card::ModifierValue::BoardCountByFace("shiny".into()),
+        modifier_y: crate::card::ModifierValue::Fixed(0.0),
+        modifier_keyword: None,
+        condition: None,
+        restrictions: Vec::new(),
+        cost_modifiers: Vec::new(),
+        granted_activated: None,
+        granted_colors: Vec::new(),
+        granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
+    });
+    s.a.hand.retain(|i| i != &mutation && i != &host && i != &shiny_a1 && i != &shiny_a2);
+    s.b.hand.retain(|i| i != &shiny_b);
+    s.a.board.push(host.clone());
+    s.a.board.push(shiny_a1);
+    s.a.board.push(shiny_a2);
+    s.b.board.push(shiny_b);
+    s.add_attached(&host, &mutation);
+    // Printed 1/1 + (BoardCountByFace("shiny") = 3) → 4/1.
+    assert_eq!(s.effective_stats(&host), (4.0, 1.0));
+}
+
+#[test]
+fn sum_and_scaled_modifier_compose_offset_plus_per_face_contribution() {
+    // Missense Mutation Y-axis shape: -0.5 base + (-0.25 × shiny_count).
+    // With 2 shiny board cards: -0.5 + -0.5 = -1.0. Host's printed Y is
+    // 1.0, so effective Y = 0.0.
+    let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+    let mutation = s.a.hand[0].clone();
+    let host = s.a.hand[1].clone();
+    let shiny1 = s.a.hand[2].clone();
+    let shiny2 = s.a.hand[3].clone();
+    for iid in [&shiny1, &shiny2] {
+        s.card_pool.get_mut(iid).unwrap().card.face = vec!["shiny".into()];
+    }
+    use crate::card::ModifierValue;
+    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+        affects: crate::card::StaticAffects {
+            subtypes: vec![],
+            colors: vec![],
+            controller: None,
+            exclude_self: false,
+            scope: crate::card::StaticScope::AttachedHost,
+            kind: None,
+            has_keyword: None,
+        },
+        modifier_x: ModifierValue::Fixed(0.0),
+        modifier_y: ModifierValue::Sum(vec![
+            ModifierValue::Fixed(-0.5),
+            ModifierValue::Scaled(-0.25, Box::new(ModifierValue::BoardCountByFace("shiny".into()))),
+        ]),
+        modifier_keyword: None,
+        condition: None,
+        restrictions: Vec::new(),
+        cost_modifiers: Vec::new(),
+        granted_activated: None,
+        granted_colors: Vec::new(),
+        granted_face: Vec::new(),
+        makes_host_colorless: false,
+        suppresses_host_abilities: false,
+    });
+    s.a.hand.retain(|i| i != &mutation && i != &host && i != &shiny1 && i != &shiny2);
+    s.a.board.push(host.clone());
+    s.a.board.push(shiny1);
+    s.a.board.push(shiny2);
+    s.add_attached(&host, &mutation);
+    // Printed 1/1 + modifier (0.0, -1.0) → 1.0/0.0.
+    assert_eq!(s.effective_stats(&host), (1.0, 0.0));
 }

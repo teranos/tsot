@@ -184,8 +184,8 @@ pub fn play_priority_score(state: &GameState, iid: &InstanceId) -> i32 {
         if !def.cost_modifiers.is_empty() {
             s += 50;
         }
-        let stat_active = !matches!(def.modifier_x, crate::ModifierValue::Fixed(0))
-            || !matches!(def.modifier_y, crate::ModifierValue::Fixed(0));
+        let stat_active = !matches!(def.modifier_x, crate::ModifierValue::Fixed(n) if n == 0.0)
+            || !matches!(def.modifier_y, crate::ModifierValue::Fixed(n) if n == 0.0);
         if stat_active || def.modifier_keyword.is_some() {
             s += 20;
         }
@@ -1189,8 +1189,8 @@ mod tests {
                     kind: Some(CardType::Spell),
                     ..Default::default()
                 },
-                modifier_x: ModifierValue::Fixed(0),
-                modifier_y: ModifierValue::Fixed(0),
+                modifier_x: ModifierValue::Fixed(0.0),
+                modifier_y: ModifierValue::Fixed(0.0),
                 modifier_keyword: None,
                 condition: None,
                 restrictions: Vec::new(),

@@ -1161,7 +1161,7 @@ impl GameState {
         mv: &crate::card::ModifierValue,
     ) -> f32 {
         match mv {
-            crate::card::ModifierValue::Fixed(n) => *n as f32,
+            crate::card::ModifierValue::Fixed(n) => *n,
             crate::card::ModifierValue::AttachedCount => source.attached.len() as f32,
             crate::card::ModifierValue::AttachedCountByColor(color) => {
                 let needle = color.to_ascii_lowercase();
@@ -1197,6 +1197,27 @@ impl GameState {
             crate::card::ModifierValue::BoardCount => {
                 // RULES C.16: count each BOARD card as 1; attached do not contribute.
                 (self.a.board.len() + self.b.board.len()) as f32
+            }
+            crate::card::ModifierValue::BoardCountByFace(face) => {
+                let needle = face.to_ascii_lowercase();
+                self.a
+                    .board
+                    .iter()
+                    .chain(self.b.board.iter())
+                    .filter(|iid| {
+                        self.card_pool
+                            .get(*iid)
+                            .map(|i| i.card.face.iter().any(|f| f.to_ascii_lowercase() == needle))
+                            .unwrap_or(false)
+                    })
+                    .count() as f32
+            }
+            crate::card::ModifierValue::Sum(parts) => parts
+                .iter()
+                .map(|mv| self.resolve_modifier_value(source, mv))
+                .sum(),
+            crate::card::ModifierValue::Scaled(multiplier, inner) => {
+                multiplier * self.resolve_modifier_value(source, inner)
             }
             crate::card::ModifierValue::HandCount => {
                 (self.a.hand.len() + self.b.hand.len()) as f32

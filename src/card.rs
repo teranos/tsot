@@ -405,9 +405,9 @@ pub struct CostModifier {
 /// short string descriptor. `"attached"` maps to `AttachedCount`;
 /// `"attached:blue"` maps to `AttachedCountByColor("blue")`;
 /// `"attached:type:mutation"` maps to `AttachedCountByKind(Mutation)`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ModifierValue {
-    Fixed(i32),
+    Fixed(f32),
     /// Count of cards in the source's `attached` list.
     AttachedCount,
     /// Count of attached cards whose `colors` contains the given lowercase color.
@@ -424,6 +424,21 @@ pub enum ModifierValue {
     /// Used by Primal Toad's "+X/+Y where X is the number of cards in
     /// play." Parsed from `"board"` in card .lua files.
     BoardCount,
+    /// Count of BOARD cards (across both players) whose `face` contains
+    /// the given lowercase face attribute. Used by Missense Mutation
+    /// (`+1/-0.25 per shiny card on the board`). Parsed from
+    /// `"board:face:shiny"` etc. in card .lua files.
+    BoardCountByFace(String),
+    /// Sum of nested values. Used to compose a constant offset with one
+    /// or more per-X scaled contributions in a single modifier slot.
+    /// Missense Mutation Y: `Sum([Fixed(-0.5), Scaled(-0.25,
+    /// BoardCountByFace("shiny"))])` → `-0.5 + (-0.25 × shiny_count)`.
+    Sum(Vec<ModifierValue>),
+    /// Multiplier × inner value. Lets a non-integer multiplier (e.g.
+    /// -0.25) scale any other ModifierValue. Mirrors the existing
+    /// AttachedCountScaled(i32) pattern but generalized to f32 and to
+    /// any inner expression.
+    Scaled(f32, Box<ModifierValue>),
     /// Count of cards in both players' HAND zones. Parsed from `"hands"`.
     HandCount,
     /// Count of distinct card *types* (CardType, subtypes excluded) across
@@ -435,7 +450,7 @@ pub enum ModifierValue {
 
 impl Default for ModifierValue {
     fn default() -> Self {
-        ModifierValue::Fixed(0)
+        ModifierValue::Fixed(0.0)
     }
 }
 
