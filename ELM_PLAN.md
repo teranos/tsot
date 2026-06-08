@@ -35,10 +35,9 @@ generic envelope forwarding.
   `gamePhaseIn` carries `state.phase` transitions so Save/Download
   disable themselves when not playing.~~
 
-- [ ] **7: Deckbuilder.**
-  Pool browser, filters, deck list, preset dropdown, AI picker,
-  Start + Spectate buttons. **First attempt failed and was reverted**
-  (see note below); blocked on stages 8 + 9; retry as stage 10.
+- [x] ~~**7: Deckbuilder.**~~
+  ~~First attempt failed and was reverted; landed as stage 10 on the
+  collapsed bridge. See note below.~~
 
 - [x] ~~**8: Fault-surface diagnostic.**~~
   ~~Wrap the js-bridge IIFE in `try/catch` with per-block `stage`
@@ -56,10 +55,46 @@ generic envelope forwarding.
   in Elm. workerCmdOut extended to `{cmd, payload}` envelope; one
   `bootDataIn` inbound port for the startup card-pool + presets push.~~
 
-- [ ] **11: Game-screen render.**
-  Biggest remaining island. `_renderInner` + `cardEl` + every
-  prompt-kind branch port into Elm; `state.current` moves into the
-  Model.
+- [~] **11: Game-screen render.** Biggest remaining island. Split
+  into substages because each piece is independently verifiable and
+  the visual relocation needed a layout fix mid-stream.
+
+  - [x] ~~**11a**: meta line via `gameMetaIn` (parallel with the JS-
+    rendered `#meta` to verify the port).~~
+  - [x] ~~**11b**: drop the JS meta render — Elm is the sole renderer.~~
+  - [x] ~~**11c**: `#prompt` line via `promptTextIn`. The 24
+    `document.getElementById('prompt').textContent = …` sites all
+    route through a single `setPrompt(text)` helper.~~
+  - [x] ~~**11d**: `gameStateIn` carries the full `{state, prompt}`
+    envelope on every `_renderInner` call. Stored raw as `Model.gameState
+    : Maybe D.Value` — no top-level decoder; subsequent substages
+    pull slices out at the view site.~~
+  - [x] ~~**11e**: move `<div id="elm-root">` above the JS-controlled
+    `#game-screen`. Page-level Elm chunks now render in their natural
+    top-of-page position; inside-`#game-screen` items still displaced
+    until 11f.~~
+  - [ ] **11f**: scaffolding port — Elm renders the `#game-screen`
+    zone wrappers (rows, zones, headers, empty `.cards` containers).
+    Container IDs preserved so JS `appendChild` still works. Unblocks
+    11g–11l rendering in their natural in-place locations.
+  - [ ] **11g**: per-player counts (`opp-counts`, `opp-gy-count`,
+    `your-gy-count`, `your-hand-counts`) rendered into zone headers
+    from `Model.gameState`.
+  - [ ] **11h**: deck-top displays (the back-of-card colors+symbols
+    widgets for both players).
+  - [ ] **11i**: opponent board (read-only — requires `cardEl`
+    ported to Elm).
+  - [ ] **11j**: opponent + your graveyards (uses `cardEl`).
+  - [ ] **11k**: your board (still read-only render; click handlers
+    arrive in 11n).
+  - [ ] **11l**: your hand (read-only render).
+  - [ ] **11m**: `#buttons` div (Pass / Confirm / Cancel) — click
+    handlers fire FFI actions through `workerCmdOut`.
+  - [ ] **11n**: prompt-kind branches — PickCard / PickAttackers /
+    PickBlocks / ChooseCard / Confirm / ChoosePlayer / ChooseInt /
+    GameOver / Spectate / Activations / Main2Pick. Click semantics
+    + state for each. Probably split further.
+  - [ ] **11o**: UCT preview status + casting banner.
 
 - [ ] **12: Spectator bar.**
   Scrubber + play/pause/step + speed dropdown + Exit. `setInterval`
