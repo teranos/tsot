@@ -130,32 +130,13 @@
      .pool / .deck-row CSS in <style> above keeps matching since Elm
      mounts the same id. -->
 
-<!-- Spectator bar: scrubber + play/pause/step controls. Only visible
-     while `state.phase === 'spectating'`. Reads from state.spectate
-     (snapshots array + index + interval handle). The actual game-
-     state rendering reuses the same Elm-rendered #game-screen scaffold
-     (id-stable card containers `_renderInner` appendChilds into). -->
-<div id="spectator-bar" style="display:none; padding:0.4rem 0.6rem; background:#1c1c24; border:1px solid #333; margin-bottom:0.5rem;">
-  <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-    <button id="spec-back-end">⏮</button>
-    <button id="spec-step-back">◀</button>
-    <button id="spec-play">⏵</button>
-    <button id="spec-step-fwd">▶</button>
-    <button id="spec-fwd-end">⏭</button>
-    <span id="spec-readout" style="color:#888; font-size:0.75rem; margin-left:0.5rem; min-width:18rem;"></span>
-    <label style="color:#888; font-size:0.7rem; margin-left:auto;">
-      speed
-      <select id="spec-speed" style="background:#1c1c20; color:#ddd; border:1px solid #444; padding:0.15rem 0.3rem; font-family:inherit;">
-        <option value="200">fast (200ms)</option>
-        <option value="500" selected>normal (500ms)</option>
-        <option value="1000">slow (1s)</option>
-        <option value="2000">very slow (2s)</option>
-      </select>
-    </label>
-    <button id="spec-exit" class="danger">Exit spectate</button>
-  </div>
-  <input id="spec-slider" type="range" min="0" max="0" value="0" style="width:100%; margin-top:0.4rem;" />
-</div>
+<!-- Stage 12: spectator bar moved into Elm's SpectatorBar module —
+     the bar's DOM (scrubber + play/pause/step/back-end/fwd-end/speed
+     dropdown + Exit) is rendered by Elm, gated on
+     Model.spectatorBar.active. JS still owns the snapshots array +
+     setInterval handle (state.spectate); each mutation pushes a
+     projection to Elm via window.tsotPushSpectatorState({active,
+     index, total, playing, msPerStep, winner, snapshot}). -->
 
 <!-- Stage 11f/g/h: the `#game-screen` scaffold + per-player counts +
      deck-top backs moved into Main.elm's `viewGameScreen`. Card
@@ -1456,12 +1437,17 @@ window.tsotStartSpectate = async function (payload) {
   state.deck = deckIds.slice();
   state.specAiA = (payload && payload.aiA) || state.specAiA;
   state.specAiB = (payload && payload.aiB) || state.specAiB;
+  // Stage 12: Elm's SpectatorBar.Model owns msPerStep; payload carries
+  // the dropdown's current value (default 500) so JS-side state.spectate
+  // gets seeded without reading a now-gone #spec-speed DOM element.
+  const msPerStep = (payload && Number.isFinite(payload.msPerStep)) ? payload.msPerStep : 500;
   setPhase('spectating');
   state.gameId = null;       // spectated games aren't in the human decision log
   state.gameOverRecorded = false;
   state.preview = null;      // no preview in spectate mode
   // Stage 11f: Elm's viewGameScreen shows itself on gamePhase=Spectating.
-  document.getElementById('spectator-bar').style.display = '';
+  // Stage 12: Elm's SpectatorBar shows itself on the active=true push
+  //          fired by pushSpectatorState() in spectateRenderCurrent.
   setPrompt('Running game… (both AIs play to completion)');
   const args = {
     seed: Math.floor(Math.random() * 0xFFFFFFFF),
@@ -1487,13 +1473,8 @@ window.tsotStartSpectate = async function (payload) {
       index: 0,
       playing: false,
       intervalId: null,
-      msPerStep: parseInt(document.getElementById('spec-speed').value, 10) || 500,
+      msPerStep,
     };
-    // Initialize the slider range to match snapshot count.
-    const slider = document.getElementById('spec-slider');
-    slider.min = '0';
-    slider.max = String(Math.max(0, state.spectate.snapshots.length - 1));
-    slider.value = '0';
     spectateRenderCurrent();
   } catch (e) {
     setPrompt('Spectate failed: ' + (e?.message || e));
@@ -1520,20 +1501,37 @@ function spectateRenderCurrent() {
     },
   };
   render(state.current);
-  // Sync slider + readout.
-  const slider = document.getElementById('spec-slider');
-  if (slider && parseInt(slider.value, 10) !== sp.index) slider.value = String(sp.index);
-  const readout = document.getElementById('spec-readout');
-  if (readout) {
-    const w = sp.winner ? sp.winner.toUpperCase() : null;
-    const endTag = (sp.index === sp.snapshots.length - 1 && w)
-      ? `  · GAME OVER · ${w} wins`
-      : '';
-    readout.textContent = `snapshot ${sp.index + 1}/${sp.snapshots.length}  · turn ${snap.turn} · ${snap.phase} · ${String(snap.active_player).toUpperCase()} acts${endTag}`;
+  // Stage 12: push the projection Elm's SpectatorBar needs; it owns
+  // the scrubber + readout + play/pause label render now.
+  pushSpectatorState();
+}
+
+function pushSpectatorState() {
+  const sp = state.spectate;
+  if (!sp) {
+    window.tsotPushSpectatorState({
+      active: false,
+      index: 0,
+      total: 0,
+      playing: false,
+      msPerStep: 500,
+      winner: null,
+      snapshot: null,
+    });
+    return;
   }
-  // Play/pause label.
-  const playBtn = document.getElementById('spec-play');
-  if (playBtn) playBtn.textContent = sp.playing ? '⏸' : '⏵';
+  const snap = sp.snapshots[sp.index] || null;
+  window.tsotPushSpectatorState({
+    active: true,
+    index: sp.index,
+    total: sp.snapshots.length,
+    playing: !!sp.playing,
+    msPerStep: sp.msPerStep,
+    winner: sp.winner || null,
+    snapshot: snap
+      ? { turn: snap.turn, phase: snap.phase, activePlayer: String(snap.active_player) }
+      : null,
+  });
 }
 
 function spectateSeek(i) {
@@ -1576,7 +1574,8 @@ function spectateExit() {
   if (state.spectate) spectatePause();
   state.spectate = null;
   setPhase('deckbuilding');
-  document.getElementById('spectator-bar').style.display = 'none';
+  // Stage 12: Elm's SpectatorBar hides itself on the active=false push.
+  pushSpectatorState();
   // Stage 11f: Elm's viewGameScreen hides itself on gamePhase=Deckbuilding.
   // Stage 10: Elm's viewDeckbuilder re-renders itself when gamePhase
   // transitions back to Deckbuilding. Stage 11c: the prompt copy
@@ -1584,32 +1583,28 @@ function spectateExit() {
   setPrompt('Pre-game — build your deck. Click cards on the left to add; click [-] to remove. Mirror match: your opponent uses the same deck.');
 }
 
-function wireSpectatorBar() {
-  const $ = (id) => document.getElementById(id);
-  $('spec-back-end').onclick = () => spectateSeek(0);
-  $('spec-step-back').onclick = () => spectateStep(-1);
-  $('spec-step-fwd').onclick = () => spectateStep(1);
-  $('spec-fwd-end').onclick = () => {
-    if (state.spectate) spectateSeek(state.spectate.snapshots.length - 1);
-  };
-  $('spec-play').onclick = () => {
-    const sp = state.spectate;
-    if (!sp) return;
-    if (sp.playing) spectatePause(); else spectatePlay();
-  };
-  $('spec-slider').oninput = (ev) => {
-    const i = parseInt(ev.target.value, 10);
-    if (!Number.isNaN(i)) spectateSeek(i);
-  };
-  $('spec-speed').onchange = (ev) => {
-    const sp = state.spectate;
-    if (!sp) return;
-    sp.msPerStep = parseInt(ev.target.value, 10) || 500;
-    // If currently playing, restart the interval with the new pace.
-    if (sp.playing) { spectatePause(); spectatePlay(); }
-  };
-  $('spec-exit').onclick = spectateExit;
-}
+// Stage 12: Elm's SpectatorBar fires workerCmdOut envelopes
+// (spec_seek / spec_step / spec_play / spec_pause / spec_fwd_end /
+// spec_set_speed / spec_exit). js-bridge dispatches each to the
+// shims below; these mutate state.spectate and push the updated
+// projection back to Elm via pushSpectatorState. The previous
+// wireSpectatorBar function + the eight #spec-* onclick handlers
+// are gone — Elm owns every click surface in the bar now.
+window.tsotSpecSeek = (i) => spectateSeek(i);
+window.tsotSpecStep = (delta) => spectateStep(delta);
+window.tsotSpecPlay = () => { if (state.spectate && !state.spectate.playing) spectatePlay(); };
+window.tsotSpecPause = () => { if (state.spectate && state.spectate.playing) spectatePause(); };
+window.tsotSpecFwdEnd = () => {
+  if (state.spectate) spectateSeek(state.spectate.snapshots.length - 1);
+};
+window.tsotSpecSetSpeed = (ms) => {
+  const sp = state.spectate;
+  if (!sp) return;
+  sp.msPerStep = parseInt(ms, 10) || 500;
+  if (sp.playing) { spectatePause(); spectatePlay(); }
+  pushSpectatorState();
+};
+window.tsotSpecExit = spectateExit;
 
 // ============================================
 
@@ -1648,8 +1643,8 @@ window.tsotStartGameFromDeckbuilder = async function (payload) {
     window.tsotLogPushText && window.tsotLogPushText('[bootstrap] ' + s);
   };
 
-  setBootStage('Bootstrap: wireSpectatorBar');
-  wireSpectatorBar();
+  // Stage 12: wireSpectatorBar gone — Elm's SpectatorBar owns every
+  // click in the bar; this bootstrap step doesn't exist anymore.
 
   let bootWatchdog = null;
   const armWatchdog = (label, ms) => {

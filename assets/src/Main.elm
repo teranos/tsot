@@ -59,6 +59,7 @@ import Html.Attributes exposing (class, id, style)
 import Html.Events exposing (onClick)
 import Json.Decode as D
 import Json.Encode as E
+import SpectatorBar
 import Task
 
 
@@ -131,6 +132,16 @@ Elm, available to every future view function without adding another
 port per feature.
 -}
 port gameStateIn : (D.Value -> msg) -> Sub msg
+
+
+{-| Stage 12 — spectator bar state push. JS-side `state.spectate`
+(snapshots + index + interval handle + speed) is the source of truth;
+this port carries the projection Elm needs to render the bar (active,
+index, total, playing, msPerStep, winner, current snapshot's
+turn/phase/activePlayer). Pushed on every spectator state change:
+seek / step / play tick / pause / speed change / exit.
+-}
+port spectatorStateIn : (D.Value -> msg) -> Sub msg
 
 
 {-| One outbound port for every IDB-bound action. Carries an
@@ -325,6 +336,7 @@ type alias Model =
     , gameMeta : Maybe GameMeta
     , promptText : String
     , gameState : Maybe D.Value
+    , spectatorBar : SpectatorBar.Model
     }
 
 
@@ -373,6 +385,15 @@ type Msg
     | GameMetaReceived D.Value
     | PromptTextReceived String
     | GameStateReceived D.Value
+    | SpectatorStateReceived D.Value
+    | SpecBackEndClicked
+    | SpecStepBackClicked
+    | SpecPlayPauseClicked
+    | SpecStepFwdClicked
+    | SpecFwdEndClicked
+    | SpecSliderChanged String
+    | SpecSpeedChanged String
+    | SpecExitClicked
     | NoOp
 
 
@@ -399,6 +420,7 @@ init _ =
       , gameMeta = Nothing
       , promptText = "Loading\u{2026}"
       , gameState = Nothing
+      , spectatorBar = SpectatorBar.init
       }
     , Cmd.none
     )
@@ -665,6 +687,7 @@ update msg model =
                             [ ( "deckIds", E.list E.string model.deck )
                             , ( "aiA", E.string model.specAiA )
                             , ( "aiB", E.string model.specAiB )
+                            , ( "msPerStep", E.int model.spectatorBar.msPerStep )
                             ]
                     }
                 )
@@ -683,8 +706,69 @@ update msg model =
         GameStateReceived value ->
             ( { model | gameState = Just value }, Cmd.none )
 
+        SpectatorStateReceived value ->
+            case D.decodeValue SpectatorBar.decode value of
+                Ok bar ->
+                    ( { model | spectatorBar = bar }, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        SpecBackEndClicked ->
+            ( model, sendSpecCmd "spec_seek" (E.object [ ( "index", E.int 0 ) ]) )
+
+        SpecStepBackClicked ->
+            ( model, sendSpecCmd "spec_step" (E.object [ ( "delta", E.int -1 ) ]) )
+
+        SpecPlayPauseClicked ->
+            let
+                cmd =
+                    if model.spectatorBar.playing then
+                        "spec_pause"
+
+                    else
+                        "spec_play"
+            in
+            ( model, sendSpecCmd cmd E.null )
+
+        SpecStepFwdClicked ->
+            ( model, sendSpecCmd "spec_step" (E.object [ ( "delta", E.int 1 ) ]) )
+
+        SpecFwdEndClicked ->
+            ( model, sendSpecCmd "spec_fwd_end" E.null )
+
+        SpecSliderChanged str ->
+            case String.toInt str of
+                Just i ->
+                    ( model, sendSpecCmd "spec_seek" (E.object [ ( "index", E.int i ) ]) )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        SpecSpeedChanged str ->
+            case String.toInt str of
+                Just ms ->
+                    let
+                        bar =
+                            model.spectatorBar
+                    in
+                    ( { model | spectatorBar = { bar | msPerStep = ms } }
+                    , sendSpecCmd "spec_set_speed" (E.object [ ( "ms", E.int ms ) ])
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        SpecExitClicked ->
+            ( model, sendSpecCmd "spec_exit" E.null )
+
         NoOp ->
             ( model, Cmd.none )
+
+
+sendSpecCmd : String -> E.Value -> Cmd Msg
+sendSpecCmd cmd payload =
+    workerCmdOut { cmd = cmd, payload = payload }
 
 
 removeFirst : a -> List a -> List a
@@ -1251,6 +1335,7 @@ subscriptions _ =
         , gameMetaIn GameMetaReceived
         , promptTextIn PromptTextReceived
         , gameStateIn GameStateReceived
+        , spectatorStateIn SpectatorStateReceived
         ]
 
 
@@ -1263,6 +1348,7 @@ view model =
     div []
         [ viewSaveControls model
         , viewDeckbuilder model
+        , SpectatorBar.view spectatorBarConfig model.spectatorBar
         , viewPromptText model.promptText
         , viewGameMeta model.gameMeta
         , viewGameScreen model
@@ -1271,6 +1357,19 @@ view model =
         , viewLog model.log
         , viewBuildFooter model.build
         ]
+
+
+spectatorBarConfig : SpectatorBar.Config Msg
+spectatorBarConfig =
+    { onBackEnd = SpecBackEndClicked
+    , onStepBack = SpecStepBackClicked
+    , onPlayPause = SpecPlayPauseClicked
+    , onStepFwd = SpecStepFwdClicked
+    , onFwdEnd = SpecFwdEndClicked
+    , onSliderChange = SpecSliderChanged
+    , onSpeedChange = SpecSpeedChanged
+    , onExit = SpecExitClicked
+    }
 
 
 viewPromptText : String -> Html Msg
@@ -1332,35 +1431,66 @@ viewGameScreen model =
         active =
             model.gamePhase == Playing || model.gamePhase == Spectating
     in
-    case ( active, model.gameState ) of
-        ( True, Just value ) ->
-            case D.decodeValue decodeGameViewSlice value of
-                Ok slice ->
-                    renderGameScreen slice
+    if active then
+        let
+            slice =
+                case model.gameState of
+                    Just value ->
+                        D.decodeValue decodeGameViewSlice value
+                            |> Result.toMaybe
 
-                Err _ ->
-                    text ""
+                    Nothing ->
+                        Nothing
+        in
+        renderGameScreen slice
 
-        _ ->
-            text ""
+    else
+        text ""
 
 
-renderGameScreen : GameViewSlice -> Html Msg
-renderGameScreen slice =
+{-| Render the scaffold unconditionally on the phase. The card
+containers' IDs must exist in the DOM the instant the phase flips to
+Playing/Spectating — `_renderInner` runs synchronously after `setPhase`
+and immediately does `document.getElementById('opp-board-cards').innerHTML = ''`.
+If we gated on `gameState` too, Elm's vdom→DOM patch (next animation
+frame) wouldn't have happened by the time JS reaches that line, and
+the appendChild path crashes with "oppBoard is null". Counts +
+deck-tops fall back to placeholders when no slice has landed.
+-}
+renderGameScreen : Maybe GameViewSlice -> Html Msg
+renderGameScreen maybeSlice =
+    let
+        oppCounts =
+            Maybe.map (oppCountsText << .opp) maybeSlice |> Maybe.withDefault ""
+
+        oppGy =
+            Maybe.map (String.fromInt << .graveyardCount << .opp) maybeSlice |> Maybe.withDefault ""
+
+        yourGy =
+            Maybe.map (String.fromInt << .graveyardCount << .you) maybeSlice |> Maybe.withDefault ""
+
+        yourHand =
+            Maybe.map (yourHandCountsText << .you) maybeSlice |> Maybe.withDefault ""
+
+        oppDeckTop =
+            Maybe.map (viewDeckTop << .deckTop << .opp) maybeSlice |> Maybe.withDefault (text "")
+
+        yourDeckTop =
+            Maybe.map (viewDeckTop << .deckTop << .you) maybeSlice |> Maybe.withDefault (text "")
+    in
     div [ id "game-screen" ]
         [ div [ class "row" ]
             [ div [ class "zone opponent", style "flex" "2" ]
                 [ h2 []
                     [ text "Opponent "
-                    , span [ class "counts", id "opp-counts" ] [ text (oppCountsText slice.opp) ]
+                    , span [ class "counts", id "opp-counts" ] [ text oppCounts ]
                     ]
                 , div [ class "cards", id "opp-board-cards" ] []
                 ]
             , div [ class "zone", style "flex" "1" ]
                 [ h2 []
                     [ text "Opp graveyard "
-                    , span [ class "counts", id "opp-gy-count" ]
-                        [ text (String.fromInt slice.opp.graveyardCount) ]
+                    , span [ class "counts", id "opp-gy-count" ] [ text oppGy ]
                     ]
                 , div [ class "cards", id "opp-graveyard-cards" ] []
                 ]
@@ -1373,8 +1503,7 @@ renderGameScreen slice =
             , div [ class "zone", style "flex" "1" ]
                 [ h2 []
                     [ text "Your graveyard "
-                    , span [ class "counts", id "your-gy-count" ]
-                        [ text (String.fromInt slice.you.graveyardCount) ]
+                    , span [ class "counts", id "your-gy-count" ] [ text yourGy ]
                     ]
                 , div [ class "cards", id "your-graveyard-cards" ] []
                 ]
@@ -1383,8 +1512,7 @@ renderGameScreen slice =
             [ div [ class "zone" ]
                 [ h2 []
                     [ text "Your hand "
-                    , span [ class "counts", id "your-hand-counts" ]
-                        [ text (yourHandCountsText slice.you) ]
+                    , span [ class "counts", id "your-hand-counts" ] [ text yourHand ]
                     ]
                 , div [ class "cards", id "your-hand-cards" ] []
                 ]
@@ -1392,11 +1520,11 @@ renderGameScreen slice =
         , div [ class "row" ]
             [ div [ class "zone", style "flex" "0 0 14rem" ]
                 [ h2 [] [ text "Opp deck top" ]
-                , div [ class "cards", id "opp-deck-top" ] [ viewDeckTop slice.opp.deckTop ]
+                , div [ class "cards", id "opp-deck-top" ] [ oppDeckTop ]
                 ]
             , div [ class "zone", style "flex" "0 0 14rem" ]
                 [ h2 [] [ text "Your deck top" ]
-                , div [ class "cards", id "your-deck-top" ] [ viewDeckTop slice.you.deckTop ]
+                , div [ class "cards", id "your-deck-top" ] [ yourDeckTop ]
                 ]
             ]
         , div [ id "buttons" ] []

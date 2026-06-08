@@ -73,15 +73,23 @@ generic envelope forwarding.
     `#game-screen`. Page-level Elm chunks now render in their natural
     top-of-page position; inside-`#game-screen` items still displaced
     until 11f.~~
-  - [ ] **11f**: scaffolding port — Elm renders the `#game-screen`
+  - [x] ~~**11f**: scaffolding port — Elm renders the `#game-screen`
     zone wrappers (rows, zones, headers, empty `.cards` containers).
-    Container IDs preserved so JS `appendChild` still works. Unblocks
-    11g–11l rendering in their natural in-place locations.
-  - [ ] **11g**: per-player counts (`opp-counts`, `opp-gy-count`,
-    `your-gy-count`, `your-hand-counts`) rendered into zone headers
-    from `Model.gameState`.
-  - [ ] **11h**: deck-top displays (the back-of-card colors+symbols
-    widgets for both players).
+    Container IDs preserved so JS `appendChild` still works. Scaffold
+    renders unconditionally on `gamePhase` = Playing/Spectating (the
+    gameState gate caused a timing race — `_renderInner` ran
+    synchronously after `setPhase`+`await` and reached for
+    `opp-board-cards` before Elm's first paint with `Just gameState`;
+    fix was to drop the gate, counts/deck-tops fall back to
+    placeholders when no slice has landed). The three `style.display
+    = …` toggles in load/spectate/start are gone.~~
+  - [x] ~~**11g**: per-player counts rendered from `Model.gameState`
+    (opp-counts `deck:N hand:N ex:N`, opp-gy-count, your-gy-count,
+    your-hand-counts `deck:N ex:N`). The four `_renderInner`
+    textContent writes are gone.~~
+  - [x] ~~**11h**: deck-top displays (back-of-card colors+symbols).
+    `renderDeckTop` + 4 call sites deleted; `viewDeckTop` is the sole
+    renderer.~~
   - [ ] **11i**: opponent board (read-only — requires `cardEl`
     ported to Elm).
   - [ ] **11j**: opponent + your graveyards (uses `cardEl`).
@@ -96,10 +104,19 @@ generic envelope forwarding.
     + state for each. Probably split further.
   - [ ] **11o**: UCT preview status + casting banner.
 
-- [ ] **12: Spectator bar.**
-  Scrubber + play/pause/step + speed dropdown + Exit. `setInterval`
-  becomes a `Browser.Events` subscription; auto-game snapshot
-  timeline decodes into Elm.
+- [x] ~~**12: Spectator bar.**~~
+  ~~First module split out of `Main` — `SpectatorBar.elm` owns Model
+  + Snapshot + Config-record + view + decoder. Pattern: Msg
+  constructors live in Main (passed via `Config msg`), no sub-update,
+  state stays in `Model.spectatorBar`. Bar visible only when
+  `active=true`. JS still owns the snapshots array + `setInterval`
+  handle; on every state change (seek/step/play tick/pause/speed/exit)
+  JS pushes a `{active, index, total, playing, msPerStep, winner,
+  snapshot}` projection via the new `spectatorStateIn` port. The seven
+  clicks each fire a `workerCmdOut` envelope with a `spec_*` cmd; the
+  bridge dispatches to `window.tsotSpec*` shims. The previous
+  `<div id="spectator-bar">` DOM + `wireSpectatorBar` + the eight
+  `getElementById('spec-*').onclick=…` wirings are gone.~~
 
 - [ ] **13: workerCall + state to Elm.**
   Remaining inline-JS infra (`workerCall`, render loop, `recordDecision`

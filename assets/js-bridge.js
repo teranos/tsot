@@ -545,6 +545,27 @@ function tsotShowBridgeFailure(stage, err) {
         case 'start_spectate':
           await window.tsotStartSpectate(payload);
           break;
+        case 'spec_seek':
+          window.tsotSpecSeek(payload && payload.index);
+          break;
+        case 'spec_step':
+          window.tsotSpecStep(payload && payload.delta);
+          break;
+        case 'spec_play':
+          window.tsotSpecPlay();
+          break;
+        case 'spec_pause':
+          window.tsotSpecPause();
+          break;
+        case 'spec_fwd_end':
+          window.tsotSpecFwdEnd();
+          break;
+        case 'spec_set_speed':
+          window.tsotSpecSetSpeed(payload && payload.ms);
+          break;
+        case 'spec_exit':
+          window.tsotSpecExit();
+          break;
         default:
           throw new Error('unknown worker cmd: ' + String(cmd));
       }
@@ -666,6 +687,20 @@ function tsotShowBridgeFailure(stage, err) {
   }
   window.tsotPushGameState = function (envelope) {
     app.ports.gameStateIn.send(envelope);
+  };
+
+  stage = 'tsotPushSpectatorState shim';
+  // Stage 12 — spectator bar projection push. play.html's
+  // spectateRenderCurrent / spectateExit / start-spectate path call
+  // this with `{active, index, total, playing, msPerStep, winner,
+  // snapshot:{turn,phase,activePlayer}|null}`. Elm's SpectatorBar
+  // module is the sole renderer; the previous getElementById writes
+  // on #spec-slider / #spec-readout / #spec-play are gone.
+  if (!app.ports.spectatorStateIn) {
+    throw new Error('spectatorStateIn port missing — Main.elm wiring drift');
+  }
+  window.tsotPushSpectatorState = function (envelope) {
+    app.ports.spectatorStateIn.send(envelope);
   };
 
   // Push a fresh saves list to Elm. Used by play.html's onSaveClick
