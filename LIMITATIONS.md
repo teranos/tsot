@@ -9,6 +9,10 @@
 - **Phase-entry triggers** — `on_turn_end`, `on_upkeep`, `on_untap_step`. Coupled with the delayed-trigger registry; usually wired together.
 - **Delayed-trigger registry** — handlers can't queue future triggers. Required by slow-recall (recurring exile return), attach-shuffler (delayed bounce), bitter-dawn's effect 2 (next-turn sacrifice).
 
+## lua
+
+- **Lua coroutine yield on choice-pending oracle doesn't suspend the handler.** `game.confirm` / `game.choose_card` / `game.choose_player` / `game.choose_int` from inside a Lua handler return `ChoicePending` to the Lua wrapper, but the wrapper does not yield the Lua coroutine + park it for resumption — it surfaces the pending status as a value, which the handler then treats as an error. Observed live as Fireball's `on_play` running `game.confirm("aim at opponent? (no = burn a creature)")` and erroring with `ERR: lua game.confirm: oracle returned ChoicePending` instead of suspending and reaching the UI. Affects every Lua-driven choice — Fireball (confirm + choose_card), goblin-conspirator (confirm + choose_card), flesh-eating-plant (confirm + choose_card), jellyfish (choose_card), every other card whose Lua handler calls a Phase 2 `game.choose_*` / `game.confirm`. LUA.md Phase 1 status marks these as `[x]` but only the call surface + Pending return are wired; the asyncify-style suspend (analogous to the StepEngine cursors that handle engine-driven, non-Lua Confirm/ChoosePlayer/ChooseInt prompts via tasks S7+S8) hasn't been ported to the mlua coroutine path. Fix lives at the `build_game_table!` macro / per-method wrapper in `src/game/lua_api.rs`: when the oracle returns Pending, the wrapper must call `coroutine.yield(pending)` on the Lua thread, the engine must record the pending handler + its coroutine, the UI prompt fires and the user answers, then the engine resumes the coroutine via `coroutine.resume(thread, answer)`. Until then, every Lua-driven `game.confirm` / `game.choose_*` card silently errors out of its handler.
+
 ## costs
 
 - **SELF / SelfExile** (P.5) — played card itself → EXILE on resolution. Originally on opponent-draw (currently a HAND substitute).

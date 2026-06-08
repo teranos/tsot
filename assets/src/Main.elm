@@ -55,6 +55,7 @@ import Browser
 import Browser.Dom
 import BuildFooter
 import Dict exposing (Dict)
+import GameScreen
 import Html exposing (Html, button, div, h2, pre, span, table, td, text, th, tr)
 import Html.Attributes exposing (class, id, style)
 import Html.Events exposing (onClick)
@@ -144,6 +145,16 @@ turn/phase/activePlayer). Pushed on every spectator state change:
 seek / step / play tick / pause / speed change / exit.
 -}
 port spectatorStateIn : (D.Value -> msg) -> Sub msg
+
+
+{-| Chunk B/C Wave 0 — UCT preview push from the worker. JS owns the
+preview kickoff (cancellation + worker round-trip + stale-promise
+guard), but the result envelope `{candidates, chosen,
+iterations_completed, prompt_key, in_flight}` is pushed here so Elm
+can decorate `viewCard` with badges + the recommended-pick outline.
+Wired in Wave 0 but consumed by Wave 5 (UCT preview + casting banner).
+-}
+port uctPreviewIn : (D.Value -> msg) -> Sub msg
 
 
 {-| One outbound port for every IDB-bound action. Carries an
@@ -267,12 +278,16 @@ type alias GameMeta =
     }
 
 
-{-| Counts + deck-top back for one player, decoded out of
+{-| Counts + cards + deck-top back for one player, decoded out of
 `Model.gameState.state.players[i]`. Hand-count is opponent-only in the
-UI (the viewer sees their own hand directly).
+UI (the viewer sees their own hand directly). Card lists default to
+empty when absent (opp.hand is filtered server-side, etc.).
 -}
 type alias PlayerCounts =
     { side : String
+    , board : List GameScreen.CardView
+    , hand : List GameScreen.CardView
+    , graveyard : List GameScreen.CardView
     , deckCount : Int
     , handCount : Int
     , exileCount : Int
@@ -313,6 +328,9 @@ type alias Model =
     , promptText : String
     , gameState : Maybe D.Value
     , spectatorBar : SpectatorBar.Model
+    , prompt : GameScreen.Prompt
+    , chooseIntDraft : String
+    , uctPreview : Maybe GameScreen.UctPreview
     }
 
 
@@ -368,6 +386,12 @@ type Msg
     | SpecSliderChanged String
     | SpecSpeedChanged String
     | SpecExitClicked
+    | UctPreviewReceived D.Value
+    | ConfirmYesClicked
+    | ConfirmNoClicked
+    | PlayerChoiceClicked (Maybe String)
+    | IntChoiceInputChanged String
+    | IntChoiceConfirmClicked Int
     | NoOp
 
 
@@ -395,6 +419,9 @@ init _ =
       , promptText = "Loading\u{2026}"
       , gameState = Nothing
       , spectatorBar = SpectatorBar.init
+      , prompt = GameScreen.LoadingPrompt
+      , chooseIntDraft = ""
+      , uctPreview = Nothing
       }
     , Cmd.none
     )
@@ -678,7 +705,29 @@ update msg model =
             ( { model | promptText = text }, Cmd.none )
 
         GameStateReceived value ->
-            ( { model | gameState = Just value }, Cmd.none )
+            let
+                newPrompt =
+                    D.decodeValue (D.field "prompt" GameScreen.decodePrompt) value
+                        |> Result.withDefault GameScreen.LoadingPrompt
+
+                newDraft =
+                    case ( model.prompt, newPrompt ) of
+                        ( GameScreen.ChooseIntPrompt _, GameScreen.ChooseIntPrompt _ ) ->
+                            model.chooseIntDraft
+
+                        ( _, GameScreen.ChooseIntPrompt data ) ->
+                            String.fromInt data.min
+
+                        _ ->
+                            ""
+            in
+            ( { model
+                | gameState = Just value
+                , prompt = newPrompt
+                , chooseIntDraft = newDraft
+              }
+            , Cmd.none
+            )
 
         SpectatorStateReceived value ->
             case D.decodeValue SpectatorBar.decode value of
@@ -736,8 +785,70 @@ update msg model =
         SpecExitClicked ->
             ( model, sendSpecCmd "spec_exit" E.null )
 
+        UctPreviewReceived value ->
+            ( { model | uctPreview = D.decodeValue GameScreen.decodeUctPreview value |> Result.toMaybe }
+            , Cmd.none
+            )
+
+        ConfirmYesClicked ->
+            ( model
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "ChoiceConfirm" )
+                    , ( "yes", E.bool True )
+                    ]
+                )
+            )
+
+        ConfirmNoClicked ->
+            ( model
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "ChoiceConfirm" )
+                    , ( "yes", E.bool False )
+                    ]
+                )
+            )
+
+        PlayerChoiceClicked maybePid ->
+            let
+                playerField =
+                    case maybePid of
+                        Just pid ->
+                            E.string pid
+
+                        Nothing ->
+                            E.null
+            in
+            ( model
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "ChoicePlayer" )
+                    , ( "player", playerField )
+                    ]
+                )
+            )
+
+        IntChoiceInputChanged str ->
+            ( { model | chooseIntDraft = str }, Cmd.none )
+
+        IntChoiceConfirmClicked v ->
+            ( model
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "ChoiceInt" )
+                    , ( "value", E.int v )
+                    ]
+                )
+            )
+
         NoOp ->
             ( model, Cmd.none )
+
+
+applyAction : E.Value -> Cmd Msg
+applyAction action =
+    workerCmdOut { cmd = "apply_action", payload = action }
 
 
 sendSpecCmd : String -> E.Value -> Cmd Msg
@@ -942,11 +1053,25 @@ decodePlayerCounts : D.Decoder PlayerCounts
 decodePlayerCounts =
     D.succeed PlayerCounts
         |> required "side" D.string
+        |> listOf "board" GameScreen.decodeCardView
+        |> listOf "hand" GameScreen.decodeCardView
+        |> listOf "graveyard" GameScreen.decodeCardView
         |> required "deck_count" D.int
         |> required "hand_count" D.int
         |> required "exile_count" D.int
         |> required "graveyard_count" D.int
         |> optional "deck_top" decodeDeckBack
+
+
+{-| Pipeline-style decoder slot for a list field with an empty-list
+fallback if the field is absent — used for opp.hand which the engine
+filters out server-side rather than emitting `[]`.
+-}
+listOf : String -> D.Decoder a -> D.Decoder (List a -> b) -> D.Decoder b
+listOf field aDec fDec =
+    D.map2 (\f a -> f a)
+        fDec
+        (D.oneOf [ D.field field (D.list aDec), D.succeed [] ])
 
 
 {-| `deck_top` is `Option<CardView>` engine-side; null when the deck
@@ -1293,6 +1418,7 @@ subscriptions _ =
         , promptTextIn PromptTextReceived
         , gameStateIn GameStateReceived
         , spectatorStateIn SpectatorStateReceived
+        , uctPreviewIn UctPreviewReceived
         ]
 
 
@@ -1396,8 +1522,21 @@ viewGameScreen model =
 
                 Nothing ->
                     Nothing
+
+        elmButtons =
+            GameScreen.viewPromptButtons gameScreenButtonsConfig model.chooseIntDraft model.prompt
     in
-    renderGameScreen active slice
+    renderGameScreen active slice elmButtons
+
+
+gameScreenButtonsConfig : GameScreen.PromptButtonsConfig Msg
+gameScreenButtonsConfig =
+    { onConfirmYes = ConfirmYesClicked
+    , onConfirmNo = ConfirmNoClicked
+    , onPlayerChoice = PlayerChoiceClicked
+    , onIntInput = IntChoiceInputChanged
+    , onIntConfirm = IntChoiceConfirmClicked
+    }
 
 
 {-| Render the scaffold UNCONDITIONALLY — visibility toggles via inline
@@ -1411,8 +1550,8 @@ IDs would be absent at boot and the load-save sync `render()` would
 hit "oppBoard is null" before Elm's first paint. Counts + deck-tops
 fall back to placeholders when no `gameState` slice has landed.
 -}
-renderGameScreen : Bool -> Maybe GameViewSlice -> Html Msg
-renderGameScreen active maybeSlice =
+renderGameScreen : Bool -> Maybe GameViewSlice -> Html Msg -> Html Msg
+renderGameScreen active maybeSlice elmButtons =
     let
         oppCounts =
             Maybe.map (oppCountsText << .opp) maybeSlice |> Maybe.withDefault ""
@@ -1438,6 +1577,21 @@ renderGameScreen active maybeSlice =
 
             else
                 "none"
+
+        oppBoardCards =
+            zoneCards GameScreen.defaultCardOpts (Maybe.map (.board << .opp) maybeSlice)
+
+        oppGraveyardCards =
+            zoneCards { defaultDimOpts | dim = True } (Maybe.map (.graveyard << .opp) maybeSlice)
+
+        yourBoardCards =
+            zoneCards GameScreen.defaultCardOpts (Maybe.map (.board << .you) maybeSlice)
+
+        yourGraveyardCards =
+            zoneCards { defaultDimOpts | dim = True } (Maybe.map (.graveyard << .you) maybeSlice)
+
+        yourHandCards =
+            zoneCards GameScreen.defaultCardOpts (Maybe.map (.hand << .you) maybeSlice)
     in
     div [ id "game-screen", style "display" displayStyle ]
         [ div [ class "row" ]
@@ -1446,27 +1600,27 @@ renderGameScreen active maybeSlice =
                     [ text "Opponent "
                     , span [ class "counts", id "opp-counts" ] [ text oppCounts ]
                     ]
-                , div [ class "cards", id "opp-board-cards" ] []
+                , div [ class "cards", id "opp-board-cards" ] oppBoardCards
                 ]
             , div [ class "zone", style "flex" "1" ]
                 [ h2 []
                     [ text "Opp graveyard "
                     , span [ class "counts", id "opp-gy-count" ] [ text oppGy ]
                     ]
-                , div [ class "cards", id "opp-graveyard-cards" ] []
+                , div [ class "cards", id "opp-graveyard-cards" ] oppGraveyardCards
                 ]
             ]
         , div [ class "row" ]
             [ div [ class "zone", style "flex" "2" ]
                 [ h2 [] [ text "You" ]
-                , div [ class "cards", id "your-board-cards" ] []
+                , div [ class "cards", id "your-board-cards" ] yourBoardCards
                 ]
             , div [ class "zone", style "flex" "1" ]
                 [ h2 []
                     [ text "Your graveyard "
                     , span [ class "counts", id "your-gy-count" ] [ text yourGy ]
                     ]
-                , div [ class "cards", id "your-graveyard-cards" ] []
+                , div [ class "cards", id "your-graveyard-cards" ] yourGraveyardCards
                 ]
             ]
         , div [ class "row" ]
@@ -1475,7 +1629,7 @@ renderGameScreen active maybeSlice =
                     [ text "Your hand "
                     , span [ class "counts", id "your-hand-counts" ] [ text yourHand ]
                     ]
-                , div [ class "cards", id "your-hand-cards" ] []
+                , div [ class "cards", id "your-hand-cards" ] yourHandCards
                 ]
             ]
         , div [ class "row" ]
@@ -1489,7 +1643,32 @@ renderGameScreen active maybeSlice =
                 ]
             ]
         , div [ id "buttons" ] []
+        , elmButtons
         ]
+
+
+defaultDimOpts : GameScreen.CardOpts Msg
+defaultDimOpts =
+    GameScreen.defaultCardOpts
+
+
+{-| Wave 2 — render a card-container's children. `Nothing` = slice
+not yet decoded → empty (JS used to leave the container empty in this
+state too). `Just []` → "empty" italic note. `Just cards` → one
+`viewCard` per card with the given opts. Click handlers stay
+`Nothing` in Wave 2; waves 3+ inject prompt-kind-specific opts.
+-}
+zoneCards : GameScreen.CardOpts Msg -> Maybe (List GameScreen.CardView) -> List (Html Msg)
+zoneCards opts maybeCards =
+    case maybeCards of
+        Nothing ->
+            []
+
+        Just [] ->
+            [ span [ class "empty-note" ] [ text "empty" ] ]
+
+        Just cards ->
+            List.map (GameScreen.viewCard opts) cards
 
 
 oppCountsText : PlayerCounts -> String

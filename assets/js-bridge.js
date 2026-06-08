@@ -566,6 +566,9 @@ function tsotShowBridgeFailure(stage, err) {
         case 'spec_exit':
           window.tsotSpecExit();
           break;
+        case 'apply_action':
+          await window.tsotApplyAction(payload);
+          break;
         default:
           throw new Error('unknown worker cmd: ' + String(cmd));
       }
@@ -687,6 +690,19 @@ function tsotShowBridgeFailure(stage, err) {
   }
   window.tsotPushGameState = function (envelope) {
     app.ports.gameStateIn.send(envelope);
+  };
+
+  stage = 'tsotPushUctPreview shim';
+  // Chunk B/C Wave 0 — UCT preview push. The JS-side preview kickoff
+  // in play.html (maybeFireUctPreview) still owns cancellation +
+  // worker round-trip + stale-promise guard; when it lands, the
+  // result envelope flows here. Wave 5 consumes it for card-badge
+  // rendering.
+  if (!app.ports.uctPreviewIn) {
+    throw new Error('uctPreviewIn port missing — Main.elm wiring drift');
+  }
+  window.tsotPushUctPreview = function (envelope) {
+    app.ports.uctPreviewIn.send(envelope);
   };
 
   stage = 'tsotPushSpectatorState shim';

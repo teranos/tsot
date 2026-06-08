@@ -629,77 +629,10 @@ function recordGameSummary(view) {
   dbAppendDecision(record).catch(() => { /* IDB failure non-fatal */ });
 }
 
-function colorTag(c) {
-  const code = (c || '').toLowerCase();
-  return `<span class="color-${code}">${code}</span>`;
-}
-
-function symbolTag(s) {
-  return `<span class="symbol">${s}</span>`;
-}
-
-function cardEl(card, opts = {}) {
-  const { clickable = false, selected = false, onClick = null, dim = false } = opts;
-  const div = document.createElement('div');
-  let cls = 'card';
-  if (clickable) cls += ' clickable';
-  if (selected) cls += ' selected';
-  if (card.tapped) cls += ' tapped';
-  if (card.summoning_sick) cls += ' sick';
-  // UCT preview badge + recommendation border (slice 3+4). If a
-  // preview has landed for the current prompt, mark the AI's pick
-  // visually and stamp every other candidate with its win-rate.
-  let previewCand = null;
-  if (state.preview && !state.preview.inFlight && Array.isArray(state.preview.candidates)) {
-    previewCand = state.preview.candidates.find(c => c.iid === card.iid) || null;
-    if (state.preview.chosen === card.iid) cls += ' uct-recommended';
-  }
-  div.className = cls;
-  if (dim) div.style.opacity = '0.6';
-  if (previewCand) {
-    const badge = document.createElement('div');
-    badge.className = 'uct-badge';
-    const pct = Math.round((previewCand.win_rate || 0) * 100);
-    badge.textContent = `UCT ${pct}%`;
-    badge.title = `UCT visits=${previewCand.visits} wins=${(previewCand.wins || 0).toFixed(1)}`;
-    div.appendChild(badge);
-  }
-
-  const head = document.createElement('div');
-  head.className = 'head';
-  // Show effective cost (post-reduction). When it differs from the
-  // printed cost, show both: `1G ⟵ 2G` (effective ⟵ printed).
-  const printed = card.cost || '';
-  const effective = card.effective_cost || printed;
-  const costHtml = (printed === effective)
-    ? `<span class="cost">${printed}</span>`
-    : `<span class="cost">${effective}</span><span class="cost" style="color:#666; text-decoration:line-through; margin-left:0.3rem;">${printed}</span>`;
-  head.innerHTML = `<span class="name">${card.name}</span>${costHtml}`;
-  div.appendChild(head);
-
-  const metaParts = [];
-  if (card.kind === 'Creature') metaParts.push(`<span class="stats">${card.power}/${card.toughness - (card.damage || 0)}${card.damage ? ` (-${card.damage})` : ''}</span>`);
-  if (card.colors && card.colors.length) metaParts.push(card.colors.map(colorTag).join(''));
-  if (card.symbols && card.symbols.length) metaParts.push(card.symbols.map(symbolTag).join(''));
-  if (card.subtypes && card.subtypes.length) metaParts.push(`<span style="color:#888;">${card.subtypes.join('·')}</span>`);
-  if (metaParts.length) {
-    const m = document.createElement('div');
-    m.className = 'meta-line';
-    m.innerHTML = metaParts.join(' ');
-    div.appendChild(m);
-  }
-
-  if (card.abilities && card.abilities.length) {
-    const a = document.createElement('div');
-    a.className = 'abilities';
-    a.innerHTML = card.abilities.map(s => `<div>${s}</div>`).join('');
-    div.appendChild(a);
-  }
-
-  div.title = card.iid + (card.summoning_sick ? '  (summoning sick)' : '');
-  if (clickable && onClick) div.onclick = () => onClick(card.iid);
-  return div;
-}
+// Wave 2: cardEl + colorTag + symbolTag deleted — Elm's
+// GameScreen.viewCard / colorTagEl / symbolTagEl own this render
+// path now. UCT-preview-badge-on-card logic moves with it (Wave 5
+// will wire the uctPreviewIn port through CardOpts.uctBadge).
 
 function render(s) {
   // O5+: render() is the single per-click DOM-rebuild path. We
@@ -721,23 +654,9 @@ function render(s) {
   maybeFireUctPreview(s);
 }
 
-// Inline UCT status appended to the prompt-bar text. Shows
-// "thinking…" while the search is mid-flight and "UCT: <card>
-// (XX%)" once it lands. Returned as HTML so the caller can
-// concat it into the existing prompt innerHTML.
-function uctStatusHtml() {
-  if (!state.preview) return '';
-  if (state.preview.inFlight) {
-    return ` <span class="uct-thinking">· UCT thinking…</span>`;
-  }
-  if (state.preview.chosen) {
-    const pick = (state.preview.candidates || []).find(c => c.iid === state.preview.chosen);
-    if (!pick) return '';
-    const pct = Math.round((pick.win_rate || 0) * 100);
-    return ` <span class="uct-thinking">· UCT picks ${pick.iid.split(':').pop()} @ ${pct}% (${state.preview.iterations_completed} iters)</span>`;
-  }
-  return '';
-}
+// Wave 2: uctStatusHtml deleted — it had no remaining callers
+// after the Stage 11c prompt port; the UCT preview status moves
+// into Elm in Wave 5 (uctPreviewIn → CardOpts.uctBadge per card).
 
 // Stale-promise guard for UCT preview: every new preview kickoff
 // bumps this counter; only the most recent fire's result is allowed
@@ -844,51 +763,25 @@ function _renderInner(s) {
     viewer: view.viewer,
   });
 
-  // Opponent board (rendered fresh each call so prompt-specific click handlers work).
-  const oppBoard = document.getElementById('opp-board-cards');
-  oppBoard.innerHTML = '';
-  if (opp.board.length === 0) oppBoard.innerHTML = '<span class="empty-note">empty</span>';
-  else opp.board.forEach(c => oppBoard.appendChild(cardEl(c)));
-
-  // Opponent graveyard (always visible).
-  const oppGy = document.getElementById('opp-graveyard-cards');
-  oppGy.innerHTML = '';
-  if (opp.graveyard.length === 0) oppGy.innerHTML = '<span class="empty-note">empty</span>';
-  else opp.graveyard.forEach(c => oppGy.appendChild(cardEl(c, { dim: true })));
-
-  // Your graveyard.
-  const yourGy = document.getElementById('your-graveyard-cards');
-  yourGy.innerHTML = '';
-  if (you.graveyard.length === 0) yourGy.innerHTML = '<span class="empty-note">empty</span>';
-  else you.graveyard.forEach(c => yourGy.appendChild(cardEl(c, { dim: true })));
-
-  const yourBoard = document.getElementById('your-board-cards');
-  yourBoard.innerHTML = '';
-  const yourHand = document.getElementById('your-hand-cards');
-  yourHand.innerHTML = '';
+  // Wave 2: all five card containers (opp/your board, opp/your
+  // graveyard, your hand) are Elm-rendered via viewCard. JS no
+  // longer touches them — no innerHTML, no appendChild, no inline
+  // overlays. Until Waves 3+ port the click handlers, the cards
+  // render read-only; interactive prompt-kinds (PickCard /
+  // PickAttackers / PickBlocks / ChooseCard) keep their buttons
+  // here but the per-card click surface is dormant. Pass /
+  // No-attack / No-blocks / Skip still work for advancing the game.
+  // Confirm / ChoosePlayer / ChooseInt buttons live in Elm's
+  // #elm-prompt-buttons (Wave 1).
   const buttons = document.getElementById('buttons');
   buttons.innerHTML = '';
 
   if (prompt.kind === 'Spectate') {
-    // Spectate render: read-only view of the snapshot. No clickable
-    // hand cards, no Pass button, no UCT preview. Header reflects
-    // the snapshot's turn/phase + winner if at end-of-game.
-    // Stage 11c: the previous innerHTML write embedded a styled
-    // `<span style="color:#cf6;">Spectating</span>` span; viewPromptText
-    // is plain-text-only so the color hint is dropped until a richer
-    // prompt envelope shape lands later.
     const ap = String(prompt.active_player || '').toUpperCase();
     const endTag = (prompt.at_end && prompt.winner)
       ? ` · GAME OVER · ${String(prompt.winner).toUpperCase()} wins`
       : '';
     setPrompt(`Spectating · turn ${prompt.turn} · ${prompt.phase} · ${ap} acts${endTag}`);
-    // Render both sides un-clickable. Reuses cardEl with clickable=false.
-    opp.board.forEach(c => oppBoard.appendChild(cardEl(c)));
-    (opp.graveyard || []).forEach(c => oppGy.appendChild(cardEl(c)));
-    you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
-    (you.graveyard || []).forEach(c => yourGy.appendChild(cardEl(c)));
-    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
-    // Stage 11h: opp/your deck-top are Elm-owned now (viewDeckTop).
     return;
   }
 
@@ -896,12 +789,7 @@ function _renderInner(s) {
     const w = prompt.winner ? prompt.winner.toLowerCase() : null;
     const youWon = w === view.viewer;
     setPrompt(`Game over. Winner: ${w ? w.toUpperCase() : 'draw'} ${youWon ? '(you win)' : (w ? '(you lose)' : '')}`);
-    you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
-    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
-    // Decision log: one summary record per game, ties all the
-    // per-prompt records under this gameId together with the
-    // eventual winner. Guard against multiple renders of the same
-    // GameOver prompt (re-renders trigger if state.preview updates).
+    // Decision log: one summary record per game.
     if (!state.gameOverRecorded) {
       state.gameOverRecorded = true;
       recordGameSummary({ winner: prompt.winner, turn: view.turn });
@@ -915,39 +803,7 @@ function _renderInner(s) {
     parts.push(`${prompt.candidates.length} card(s) in hand affordable`);
     if (acts.length > 0) parts.push(`${acts.length} ability/abilities ready to activate`);
     setPrompt(`Your main phase — ${parts.join(' · ')}. Click a hand card to play, click a board ability to activate, or pass.`);
-    const candidateSet = new Set(prompt.candidates);
-    you.hand.forEach(c => {
-      yourHand.appendChild(cardEl(c, {
-        clickable: candidateSet.has(c.iid),
-        onClick: iid => sendAction({ kind: 'PlayCard', iid }).then(render),
-      }));
-    });
-    // Board cards: group activations by iid. Each card with one or
-    // more activatable abilities becomes a clickable group; clicking
-    // shows the ability list (or fires directly if there's exactly
-    // one).
-    const actsByIid = {};
-    acts.forEach(a => { (actsByIid[a.iid] = actsByIid[a.iid] || []).push(a); });
-    you.board.forEach(c => {
-      const cardActs = actsByIid[c.iid] || [];
-      if (cardActs.length === 0) {
-        yourBoard.appendChild(cardEl(c));
-        return;
-      }
-      const el = cardEl(c, {
-        clickable: true,
-        onClick: () => activateAbility(c, cardActs),
-      });
-      // Inline ability list shown under the card.
-      cardActs.forEach(a => {
-        const row = document.createElement('div');
-        row.style.cssText = 'color:#6cf; font-size:0.65rem; margin-top:0.2rem; padding:0.15rem 0.3rem; background:#1a2030; border:1px solid #234; cursor:pointer;';
-        row.textContent = `▶ [${a.ability_index}] ${a.text.length > 60 ? a.text.slice(0, 57) + '…' : a.text}${a.needs_x ? ' (X)' : ''}`;
-        row.onclick = (ev) => { ev.stopPropagation(); fireActivation(a); };
-        el.appendChild(row);
-      });
-      yourBoard.appendChild(el);
-    });
+    // Wave 2: hand + activation clicks pending Wave 3 port. Pass works.
     const pass = document.createElement('button');
     pass.textContent = 'Pass';
     pass.onclick = () => sendAction({ kind: 'Pass' }).then(render);
@@ -959,18 +815,8 @@ function _renderInner(s) {
     } else {
       setPrompt(`Combat — click creatures to attack with (${eligible.size} eligible), then confirm.`);
     }
-    you.board.forEach(c => {
-      yourBoard.appendChild(cardEl(c, {
-        clickable: eligible.has(c.iid),
-        selected: state.selectedAttackers.has(c.iid),
-        onClick: iid => {
-          if (state.selectedAttackers.has(iid)) state.selectedAttackers.delete(iid);
-          else state.selectedAttackers.add(iid);
-          render(state.current);
-        },
-      }));
-    });
-    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
+    // Wave 2: attacker selection clicks pending Wave 4. Attack
+    // would send the empty set; only No-attack reliably advances.
     if (eligible.size > 0) {
       const confirm = document.createElement('button');
       confirm.textContent = `Attack (${state.selectedAttackers.size})`;
@@ -992,73 +838,7 @@ function _renderInner(s) {
     } else {
       setPrompt(`Combat — incoming: ${prompt.attackers.map(a => labelFor(view, a)).join(', ')}. Click one of your highlighted creatures to stage as blocker; then click the attacker. Multiple blockers may share one attacker.`);
     }
-
-    // Index assignments by attacker for the per-attacker labels.
-    const blockersByAttacker = {};
-    for (const [blkIid, atkIid] of Object.entries(state.selectedBlocks)) {
-      if (!blockersByAttacker[atkIid]) blockersByAttacker[atkIid] = [];
-      blockersByAttacker[atkIid].push(blkIid);
-    }
-
-    you.board.forEach(c => {
-      const isBlocker = eligibleBlockers.has(c.iid);
-      const assignedTo = state.selectedBlocks[c.iid];
-      const isStaged = state.blockerPickFor === c.iid;
-      const el = cardEl(c, {
-        clickable: isBlocker,
-        selected: !!assignedTo || isStaged,
-        onClick: iid => {
-          // Three click semantics:
-          //   staged + click same  → unstage
-          //   assigned + click     → unassign
-          //   anything else        → stage this blocker
-          if (state.blockerPickFor === iid) { state.blockerPickFor = null; render(state.current); return; }
-          if (state.selectedBlocks[iid]) { delete state.selectedBlocks[iid]; render(state.current); return; }
-          state.blockerPickFor = iid;
-          render(state.current);
-        },
-      });
-      if (assignedTo) {
-        const label = document.createElement('div');
-        label.style.cssText = 'color:#6cf; font-size:0.6rem; margin-top:0.2rem;';
-        label.textContent = `→ blocks ${labelFor(view, assignedTo)}`;
-        el.appendChild(label);
-      } else if (isStaged) {
-        const label = document.createElement('div');
-        label.style.cssText = 'color:#fa4; font-size:0.6rem; margin-top:0.2rem;';
-        label.textContent = '… click an attacker';
-        el.appendChild(label);
-      }
-      yourBoard.appendChild(el);
-    });
-    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
-
-    // Re-render opp board with click handlers on attackers + per-attacker block list.
-    oppBoard.innerHTML = '';
-    opp.board.forEach(c => {
-      const isAtk = prompt.attackers.includes(c.iid);
-      const isTarget = isAtk && state.blockerPickFor !== null;
-      const el = cardEl(c, {
-        clickable: isTarget,
-        onClick: iid => {
-          if (state.blockerPickFor) {
-            state.selectedBlocks[state.blockerPickFor] = iid;
-            state.blockerPickFor = null;
-            render(state.current);
-          }
-        },
-      });
-      if (isAtk) el.style.borderColor = '#fa4';
-      const blockers = blockersByAttacker[c.iid] || [];
-      if (blockers.length > 0) {
-        const label = document.createElement('div');
-        label.style.cssText = 'color:#6cf; font-size:0.6rem; margin-top:0.2rem;';
-        label.textContent = `← blocked by ${blockers.map(b => labelFor(view, b)).join(', ')}`;
-        el.appendChild(label);
-      }
-      oppBoard.appendChild(el);
-    });
-
+    // Wave 2: blocker stage/assign clicks pending Wave 4. No-blocks works.
     const pairs = Object.entries(state.selectedBlocks);
     const confirm = document.createElement('button');
     confirm.textContent = `Confirm blocks (${pairs.length})`;
@@ -1080,12 +860,6 @@ function _renderInner(s) {
     };
     buttons.appendChild(skip);
   } else if (prompt.kind === 'ChooseCard') {
-    // Pool iids live in whatever zone the engine drew them from —
-    // opp board for "kill target opposing creature", your hand for
-    // hand-payment, your graveyard for recur, etc. Find each iid in
-    // its actual zone and mark it clickable there; don't relocate
-    // cards into yourHand.
-    const poolSet = new Set(prompt.pool);
     const host = prompt.host;
     const hostCard = host ? findCardsByIids(view, [host])[0] : null;
     const isPayment = !!host;
@@ -1093,46 +867,13 @@ function _renderInner(s) {
     let banner;
     if (isPayment) {
       const slot = (rawText.match(/slot (\d+)/i) || [])[1];
-      banner = `<b style="color:#fa4;">CASTING ${hostCard ? hostCard.name : 'a card'}</b> — pick a hand card to pay${slot ? ` (slot ${slot})` : ''}.`;
+      banner = `CASTING ${hostCard ? hostCard.name : 'a card'} — pick a hand card to pay${slot ? ` (slot ${slot})` : ''}.`;
     } else {
-      banner = `<b style="color:#6cf;">Choose a target</b> — ${rawText}.`;
+      banner = `Choose a target — ${rawText}.`;
     }
     setPrompt(banner + (prompt.optional ? ' — may skip' : ''));
-
-    // Helper: render a card list into a zone container, marking
-    // pool members clickable and dimming non-pool entries. The
-    // currently-casting host card (if any) keeps its in-hand slot
-    // with a "CASTING" marker badge — no duplicate banner.
-    const onPick = iid => sendAction({ kind: 'ChoiceCard', iid }).then(render);
-    const renderZoneWithPool = (containerEl, cards) => {
-      containerEl.innerHTML = '';
-      if (cards.length === 0) { containerEl.innerHTML = '<span class="empty-note">empty</span>'; return; }
-      cards.forEach(c => {
-        const isHost = host && c.iid === host;
-        const inPool = poolSet.has(c.iid);
-        const el = cardEl(c, {
-          clickable: inPool,
-          onClick: inPool ? onPick : null,
-          dim: !inPool && !isHost,
-        });
-        if (isHost) {
-          el.style.borderColor = '#fa4';
-          el.style.borderStyle = 'dashed';
-          const badge = document.createElement('div');
-          badge.style.cssText = 'color:#fa4; font-size:0.6rem; text-transform:uppercase; letter-spacing:0.06em; margin-top:0.25rem;';
-          badge.textContent = '◆ casting';
-          el.appendChild(badge);
-        }
-        containerEl.appendChild(el);
-      });
-    };
-
-    renderZoneWithPool(yourHand, you.hand);
-    renderZoneWithPool(yourBoard, you.board);
-    renderZoneWithPool(oppBoard, opp.board);
-    renderZoneWithPool(document.getElementById('your-graveyard-cards'), you.graveyard);
-    renderZoneWithPool(document.getElementById('opp-graveyard-cards'), opp.graveyard);
-
+    // Wave 2: pool clickability + casting-host border pending Wave 5.
+    // Skip still advances when prompt.optional.
     if (prompt.optional) {
       const skip = document.createElement('button');
       skip.textContent = 'Skip';
@@ -1141,69 +882,24 @@ function _renderInner(s) {
     }
   } else if (prompt.kind === 'Confirm') {
     setPrompt(prompt.prompt || 'Confirm?');
-    you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
-    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
-    const yes = document.createElement('button');
-    yes.textContent = 'Yes';
-    yes.onclick = () => sendAction({ kind: 'ChoiceConfirm', yes: true }).then(render);
-    buttons.appendChild(yes);
-    const no = document.createElement('button');
-    no.textContent = 'No';
-    no.className = 'danger';
-    no.onclick = () => sendAction({ kind: 'ChoiceConfirm', yes: false }).then(render);
-    buttons.appendChild(no);
+    // Wave 1: Yes/No buttons rendered by Elm via #elm-prompt-buttons.
   } else if (prompt.kind === 'ChoosePlayer') {
     setPrompt(prompt.prompt || 'Choose a player.');
-    you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
-    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
-    prompt.candidates.forEach(pid => {
-      const b = document.createElement('button');
-      b.textContent = pid;
-      b.onclick = () => sendAction({ kind: 'ChoicePlayer', player: pid }).then(render);
-      buttons.appendChild(b);
-    });
-    if (prompt.optional) {
-      const skip = document.createElement('button');
-      skip.textContent = 'Skip';
-      skip.onclick = () => sendAction({ kind: 'ChoicePlayer', player: null }).then(render);
-      buttons.appendChild(skip);
-    }
+    // Wave 1: candidate + optional-Skip buttons rendered by Elm.
   } else if (prompt.kind === 'ChooseInt') {
     setPrompt(`${prompt.prompt || 'Choose a number.'} (${prompt.min}–${prompt.max})`);
-    you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
-    you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.min = prompt.min;
-    input.max = prompt.max;
-    input.value = prompt.min;
-    input.style.cssText = 'background:#234; color:#ddd; border:1px solid #4af; padding:0.3rem; font-family:inherit; width:5rem; margin-right:0.5rem;';
-    buttons.appendChild(input);
-    const confirm = document.createElement('button');
-    confirm.textContent = 'Confirm';
-    confirm.onclick = () => sendAction({ kind: 'ChoiceInt', value: parseInt(input.value, 10) || prompt.min }).then(render);
-    buttons.appendChild(confirm);
+    // Wave 1: number input + Confirm button rendered by Elm.
   } else {
     setPrompt('Unknown prompt: ' + JSON.stringify(prompt));
   }
 }
 
-function activateAbility(card, cardActs) {
-  if (cardActs.length === 1) { fireActivation(cardActs[0]); return; }
-  // Multiple activations on one card — for now, fire the first.
-  // TODO: pop a chooser when more than one is ready.
-  fireActivation(cardActs[0]);
-}
-
-function fireActivation(a) {
-  let x = null;
-  if (a.needs_x) {
-    const v = parseInt(prompt(`Choose X for "${a.text}" (>=1):`, '1'), 10);
-    if (!Number.isFinite(v) || v < 1) return;
-    x = v;
-  }
-  sendAction({ kind: 'Activate', iid: a.iid, ability_index: a.ability_index, x }).then(render);
-}
+// Wave 2: activateAbility + fireActivation deleted — they were
+// only called from PickCard's per-card click handlers (now dormant
+// pending Wave 3). When Wave 3 ports PickCard, both move into the
+// PickCard branch's Elm-side Msg handlers as ActivateAbilityClicked
+// + FireActivation (with the X-prompt routed through Elm's
+// ChooseInt instead of native browser prompt()).
 
 function findCardsByIids(view, iids) {
   const out = [];
@@ -1605,6 +1301,15 @@ window.tsotSpecSetSpeed = (ms) => {
   pushSpectatorState();
 };
 window.tsotSpecExit = spectateExit;
+
+// Chunk B/C Wave 1 — Elm's prompt-button clicks (Confirm Yes/No,
+// ChoosePlayer A/B/Skip, ChooseInt Confirm) fire workerCmdOut
+// {cmd:"apply_action", payload: action}; the bridge dispatches here.
+// Action shape mirrors what sendAction already accepts — same FFI
+// surface, just routed through Elm.
+window.tsotApplyAction = async function (action) {
+  await sendAction(action).then(render);
+};
 
 // ============================================
 
