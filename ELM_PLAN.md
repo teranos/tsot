@@ -90,19 +90,26 @@ generic envelope forwarding.
   - [x] ~~**11h**: deck-top displays (back-of-card colors+symbols).
     `renderDeckTop` + 4 call sites deleted; `viewDeckTop` is the sole
     renderer.~~
-  - [ ] **11i**: opponent board (read-only — requires `cardEl`
-    ported to Elm).
-  - [ ] **11j**: opponent + your graveyards (uses `cardEl`).
-  - [ ] **11k**: your board (still read-only render; click handlers
-    arrive in 11n).
-  - [ ] **11l**: your hand (read-only render).
-  - [ ] **11m**: `#buttons` div (Pass / Confirm / Cancel) — click
-    handlers fire FFI actions through `workerCmdOut`.
-  - [ ] **11n**: prompt-kind branches — PickCard / PickAttackers /
-    PickBlocks / ChooseCard / Confirm / ChoosePlayer / ChooseInt /
-    GameOver / Spectate / Activations / Main2Pick. Click semantics
-    + state for each. Probably split further.
-  - [ ] **11o**: UCT preview status + casting banner.
+  - [ ] **11i–11o (single lift):** `cardEl` + all four card zones +
+    `#buttons` + every prompt-kind branch + UCT preview + casting
+    banner land together as one atomic change. Originally planned as
+    seven separable substages; the split-attempt analysis showed they
+    can't be cleanly separated — every prompt-kind branch
+    (`PickAttackers` / `PickBlocks` / `ChooseCard` / etc.) re-fills
+    the SAME card containers (opp-board, graveyards, your-board, your-
+    hand) with prompt-specific click handlers, so the "read-only zone
+    ports" can't precede the prompt-kind ports. The work landing
+    together: port `cardEl` to a Card primitive in Elm
+    (reusable, polymorphic-msg signature like SpectatorBar's `Config`),
+    decode `CardView` from JSON, port UCT preview state via a new port
+    (`uctPreviewIn`), port interactive state (`selectedAttackers`,
+    `selectedBlocks`, `blockerPickFor`, `gameOverRecorded`) into
+    `Model`, ~10 new `Msg` variants per prompt-kind branch, view
+    functions per zone + prompt-kind, drop the entire JS
+    `_renderInner` card-rendering + dispatch chain (~365 lines). Big,
+    high-risk; lands as its own module `GameScreen.elm` once a few
+    more easy module splits have validated the split pattern at
+    smaller scope.
 
 - [x] ~~**12: Spectator bar.**~~
   ~~First module split out of `Main` — `SpectatorBar.elm` owns Model
@@ -127,6 +134,44 @@ generic envelope forwarding.
   After 13, JS-side state mirrors and transitional `window.tsot*`
   helpers have no callers. Delete them and verify the tool runs on
   Elm + the thin bridge alone.
+
+## Module splits (parallel track)
+
+`Main.elm` is the single source of `Model` + `Msg` + `update` + ports
++ subscriptions. Render-only modules get extracted as they become big
+enough to be worth their own file; the pattern is consistent:
+
+- Module owns: types it renders, decoders for its inbound port
+  envelopes, view function(s), any module-local helpers.
+- Module is Msg-agnostic; click handlers take a `Config msg`
+  constructor record that `Main` provides with its concrete `Msg`.
+- State lives in `Main.Model` as a field of the module's type.
+- Port wiring + Msg dispatch + `update` branches all stay in `Main`.
+
+Splits to date (LOC moved out of `Main` shown):
+
+- [x] ~~**SpectatorBar.elm**~~ — ~236 lines. First split; established
+  the `Config msg` pattern.
+- [x] ~~**LogPanel.elm**~~ — ~186 lines. Pure render of LOG entries
+  (text + error blocks); exports `containerId` so Main's
+  scroll-to-bottom Cmd targets the same id.
+- [x] ~~**BuildFooter.elm**~~ — ~77 lines. Tiny; sets the precedent
+  that even small islands earn a file once Main pushes past ~2k LOC.
+
+Remaining easy splits (rough order):
+
+- [ ] **SavedListPanel.elm** — ~100 lines. Self-contained state
+  machine + per-row Load/Download/Delete buttons.
+- [ ] **SaveControls.elm** — ~120 lines. Top button bar (Save /
+  Download / Load file / Test panic / Load saved… / Decision report /
+  Export / Clear) + save-status span.
+- [ ] **DecisionPanel.elm** — ~250 lines. Aggregator + table render;
+  largest of the easy splits.
+- [ ] **Deckbuilder.elm** — ~400 lines. Biggest standalone island;
+  pool + filters + deck + preset + AI pickers + Start/Spectate.
+  Lands once the smaller splits validate the pattern under load.
+- [ ] **GameScreen.elm** — chunk 11i–11o lands as a new module from
+  the start rather than landing in Main and being split later.
 
 ## Note on stage 7
 
