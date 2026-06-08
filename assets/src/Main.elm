@@ -1212,7 +1212,7 @@ viewPoolGrid model =
         , style "display" "flex"
         , style "flex-wrap" "wrap"
         , style "gap" "0.3rem"
-        , style "max-height" "32rem"
+        , style "max-height" "calc(100vh - 16rem)"
         , style "overflow-y" "auto"
         ]
         (List.map viewPoolCard visible)
