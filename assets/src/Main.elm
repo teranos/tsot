@@ -122,6 +122,17 @@ color until prompts gain a richer envelope.
 port promptTextIn : (String -> msg) -> Sub msg
 
 
+{-| Stage 11d — the full `{state, prompt}` envelope that _renderInner
+receives on every render. Stored raw as `D.Value` for now; subsequent
+11 substages add decoders + view functions for specific slices (board,
+hand, deck-top, buttons, prompt variants) as they need them. No
+visible render today — the win is architectural: state arrives in
+Elm, available to every future view function without adding another
+port per feature.
+-}
+port gameStateIn : (D.Value -> msg) -> Sub msg
+
+
 {-| One outbound port for every IDB-bound action. Carries an
 `{op, payload}` envelope. Per-feature ports collapsed here:
 `decision_get_all` / `decision_export` / `decision_clear` /
@@ -286,6 +297,7 @@ type alias Model =
     , poolFilterKind : String
     , gameMeta : Maybe GameMeta
     , promptText : String
+    , gameState : Maybe D.Value
     }
 
 
@@ -333,6 +345,7 @@ type Msg
     | StartSpectateClicked
     | GameMetaReceived D.Value
     | PromptTextReceived String
+    | GameStateReceived D.Value
     | NoOp
 
 
@@ -358,6 +371,7 @@ init _ =
       , poolFilterKind = ""
       , gameMeta = Nothing
       , promptText = "Loading\u{2026}"
+      , gameState = Nothing
       }
     , Cmd.none
     )
@@ -638,6 +652,9 @@ update msg model =
 
         PromptTextReceived text ->
             ( { model | promptText = text }, Cmd.none )
+
+        GameStateReceived value ->
+            ( { model | gameState = Just value }, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )
@@ -1150,6 +1167,7 @@ subscriptions _ =
         , bootDataIn BootDataReceived
         , gameMetaIn GameMetaReceived
         , promptTextIn PromptTextReceived
+        , gameStateIn GameStateReceived
         ]
 
 

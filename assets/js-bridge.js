@@ -656,6 +656,18 @@ function tsotShowBridgeFailure(stage, err) {
     app.ports.promptTextIn.send(String(text));
   };
 
+  stage = 'gameStateIn shim';
+  // Stage 11d: full {state, prompt} envelope pushed from
+  // play.html's _renderInner on every render. Stored raw as
+  // Model.gameState — no decoder yet, subsequent substages decode
+  // slices as they need them.
+  if (!app.ports.gameStateIn) {
+    throw new Error('gameStateIn port missing — Main.elm wiring drift');
+  }
+  window.tsotPushGameState = function (envelope) {
+    app.ports.gameStateIn.send(envelope);
+  };
+
   // Push a fresh saves list to Elm. Used by play.html's onSaveClick
   // after a successful Save — if the panel happens to be open it
   // refreshes in place; if hidden, Elm ignores the update (see

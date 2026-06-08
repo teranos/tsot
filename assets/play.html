@@ -875,6 +875,10 @@ function maybeFireUctPreview(s) {
 
 function _renderInner(s) {
   state.current = s;
+  // Stage 11d: push the full envelope to Elm. Subsequent 11
+  // substages decode slices for view functions; for now Elm just
+  // stores Model.gameState = Just value.
+  window.tsotPushGameState(s);
   const prompt = s.prompt || { kind: 'Loading' };
   const view = s.state;
   if (!view || !view.players) {
