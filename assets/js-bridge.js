@@ -111,6 +111,256 @@ function tsotSetSaveStatus(msg) {
   if (el) el.textContent = msg;
 }
 
+// ============================================================
+// LOG + inline-error infrastructure (moved from play.html).
+// These are top-level function declarations on global scope so
+// existing call sites in play.html (worker message handler,
+// fetchState's parseEnvelope chain, the bootstrap, withInlineError)
+// keep working without rewrite. Errors are sacred — every path
+// converges on the same `buildErrorBlock` DOM shape so an FFI
+// failure looks identical whether it lands in the LOG (via the
+// logErrorIn port) or inline next to the failing button (via
+// renderErrorAt).
+// ============================================================
+
+// Mid-flight live UCT iteration event — arrives from worker's
+// tsot_emit_iteration_event while the FFI call is still blocked.
+// Rendered with a distinct `[live UctIter]` prefix so it's visually
+// distinguishable from the post-envelope `[UctIter]` lines emitted
+// by appendTrace once the call returns.
+function appendLiveUctIter(line) {
+  let formatted;
+  try {
+    const ev = JSON.parse(line);
+    formatted = `[live UctIter] iter=${ev.iter}/${ev.total}  ${(ev.duration_us / 1000).toFixed(1)}ms  turns=${ev.rollout_turns} plays=${ev.rollout_plays} atks=${ev.rollout_attacks} deaths=${ev.rollout_deaths} fires=${ev.rollout_handler_fires}`;
+  } catch (_) {
+    formatted = `[live UctIter] ${line}`;
+  }
+  window.tsotLogPushText(formatted);
+}
+
+// Build a styled `.log-error` block from a `TraceEvent::Error`
+// envelope. Same DOM regardless of where it will be inserted —
+// callers decide the anchor: appendErrorEvent puts it in the LOG;
+// renderErrorAt puts it right next to the button that failed.
+// Errors are first-class observability events — same shape, full
+// context (source, FFI call, message, location, breadcrumb),
+// never collapsed, never truncated.
+function buildErrorBlock(ev) {
+  const block = document.createElement('div');
+  block.className = 'log-error';
+  const source = ev.source || 'error';
+  const header = document.createElement('div');
+  header.className = 'log-error-header';
+  header.textContent = `[${source.toUpperCase()}] ${ev.message || '(no message)'}`;
+  block.appendChild(header);
+  const sub = document.createElement('div');
+  sub.className = 'log-error-meta';
+  const parts = [];
+  if (ev.location) parts.push(`at ${ev.location}`);
+  if (ev.ffi_call) parts.push(`inside FFI ${ev.ffi_call}`);
+  if (typeof ev.at_us === 'number') parts.push(`t=${(ev.at_us / 1000).toFixed(1)}ms`);
+  sub.textContent = parts.join('  ·  ');
+  block.appendChild(sub);
+  const trail = ev.recent_trace || [];
+  if (trail.length) {
+    const breadcrumb = document.createElement('div');
+    breadcrumb.className = 'log-error-trail';
+    breadcrumb.textContent = `--- last ${trail.length} trace events before failure ---`;
+    block.appendChild(breadcrumb);
+    for (const inner of trail) {
+      const line2 = document.createElement('div');
+      line2.className = 'log-error-trail-line';
+      try { line2.textContent = fmtTraceEvent(inner); }
+      catch (_) { line2.textContent = JSON.stringify(inner); }
+      block.appendChild(line2);
+    }
+  }
+  if (ev.js_stack) {
+    const stackLabel = document.createElement('div');
+    stackLabel.className = 'log-error-trail';
+    stackLabel.textContent = '--- JS exception stack ---';
+    block.appendChild(stackLabel);
+    const stackPre = document.createElement('div');
+    stackPre.className = 'log-error-trail-line';
+    stackPre.style.whiteSpace = 'pre-wrap';
+    stackPre.textContent = ev.js_stack;
+    block.appendChild(stackPre);
+  }
+  if (ev.raw_stderr) {
+    const stderrLabel = document.createElement('div');
+    stderrLabel.className = 'log-error-trail';
+    stderrLabel.textContent = '--- raw stderr from wasm ---';
+    block.appendChild(stderrLabel);
+    const stderrPre = document.createElement('div');
+    stderrPre.className = 'log-error-trail-line';
+    stderrPre.style.whiteSpace = 'pre-wrap';
+    stderrPre.textContent = ev.raw_stderr;
+    block.appendChild(stderrPre);
+  }
+  if (source === 'rust-panic' || source === 'wasm-trap') {
+    const footer = document.createElement('div');
+    footer.className = 'log-error-meta';
+    footer.textContent = 'wasm module aborted after this point — reload the page to continue';
+    block.appendChild(footer);
+  }
+  return block;
+}
+
+// Append the error block to the LOG (the audit trail). Pre-formats
+// the recent_trace breadcrumb via fmtTraceEvent here (the formatter
+// is in this same file), then pushes a structured envelope through
+// the logErrorIn port. Elm rebuilds the styled .log-error block from
+// the same fields — the `renderErrorAt` inline-error-next-to-button
+// path uses `buildErrorBlock` directly so the DOM is the same shape.
+function appendErrorEvent(ev) {
+  const formatted = {
+    source: ev.source || 'error',
+    message: ev.message || '(no message)',
+    location: ev.location || null,
+    ffi_call: ev.ffi_call || null,
+    at_us: typeof ev.at_us === 'number' ? ev.at_us : null,
+    breadcrumb: (ev.recent_trace || []).map((inner) => {
+      try { return fmtTraceEvent(inner); }
+      catch (_) { return JSON.stringify(inner); }
+    }),
+    js_stack: ev.js_stack || null,
+    raw_stderr: ev.raw_stderr || null,
+  };
+  window.tsotLogPushError(formatted);
+}
+
+// Display the error block immediately after `anchor` (the button or
+// row that triggered the action). Replaces any previous inline
+// error attached to the same anchor so the surface stays current.
+function renderErrorAt(anchor, ev) {
+  if (!anchor || !anchor.parentNode) return;
+  if (anchor._inlineError && anchor._inlineError.parentNode) {
+    anchor._inlineError.parentNode.removeChild(anchor._inlineError);
+  }
+  const block = buildErrorBlock(ev);
+  block.classList.add('log-error-inline');
+  anchor._inlineError = block;
+  anchor.parentNode.insertBefore(block, anchor.nextSibling);
+}
+
+function clearInlineErrorAt(anchor) {
+  if (!anchor) return;
+  if (anchor._inlineError && anchor._inlineError.parentNode) {
+    anchor._inlineError.parentNode.removeChild(anchor._inlineError);
+  }
+  anchor._inlineError = null;
+}
+
+// Build a `TraceEvent::Error`-shaped envelope from a JS-side
+// exception. Used by every onclick that wraps an FFI call so we
+// can flow JS-caught errors through the same renderer as Rust ones.
+function jsErrorEnvelope(label, e) {
+  return {
+    kind: 'Error',
+    at_us: 0,
+    source: 'js',
+    ffi_call: label,
+    message: (e && e.message) ? e.message : String(e),
+    location: null,
+    recent_trace: [],
+  };
+}
+
+// Append a batch of log lines through the logTextIn port. Used by
+// fetchState's parseEnvelope to flush engine.log into the LOG panel.
+function appendLog(lines) {
+  if (!lines || lines.length === 0) return;
+  for (const line of lines) {
+    window.tsotLogPushText(line);
+  }
+}
+
+// Format one TraceEvent as a single rendered line. Δms is `at_us /
+// 1000` from the bus's session origin (set in Rust by
+// `trace::enable(true)` on the first FFI call). The category prefix
+// lets the reader scan the stream; the payload after is formatted
+// per-variant.
+function fmtTraceEvent(ev) {
+  const t = (ev.at_us / 1000).toFixed(1).padStart(8);
+  switch (ev.kind) {
+    case 'Step':
+      return `[${t}ms Step]      ${ev.from}  ->  ${ev.to}  (${(ev.duration_us / 1000).toFixed(2)}ms)  -> ${ev.result}`;
+    case 'Cursor':
+      return `[${t}ms Cursor]    ${ev.from}  ->  ${ev.to}`;
+    case 'Phase':
+      return `[${t}ms Phase]     turn=${ev.turn} ${ev.from}  ->  ${ev.to}`;
+    case 'Mutation':
+      return `[${t}ms Mutation]  ${JSON.stringify(ev.entry)}`;
+    case 'Count':
+      return `[${t}ms Count]     ${ev.key}[${ev.player}] ${ev.before}  ->  ${ev.after}`;
+    case 'Oracle':
+      return `[${t}ms Oracle]    ${ev.call}(asker=${ev.asker})  ->  ${ev.answer}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    case 'Play':
+      return `[${t}ms Play]      ${ev.iid}  ->  ${ev.outcome}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    case 'Winner':
+      return `[${t}ms Winner]    ${ev.who} wins  (cause: ${ev.cause})`;
+    case 'Ffi':
+      return `[${t}ms Ffi]       ${ev.span}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    case 'AiPick': {
+      const top = (ev.candidates || []).slice(0, 6)
+        .map(c => `${c.iid}=${c.score}`)
+        .join(', ');
+      const more = (ev.candidates || []).length > 6 ? ` +${ev.candidates.length - 6} more` : '';
+      return `[${t}ms AiPick]    ${ev.ai}  candidates=[${top}${more}]  -> ${ev.chosen || '(none)'}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    }
+    case 'AttackerSelection': {
+      const elig = (ev.eligible || []).join(',');
+      const chosen = (ev.chosen || []).join(',');
+      return `[${t}ms Attackers] ${ev.player}: eligible=[${elig}]  chosen=[${chosen}]  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    }
+    case 'BlockerSelection': {
+      const atks = (ev.attackers || []).join(',');
+      const pairs = (ev.assignments || []).map(p => `${p[0]}->${p[1]}`).join(', ');
+      return `[${t}ms Blockers]  ${ev.defender}: attackers=[${atks}]  blocks=[${pairs}]  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    }
+    case 'Handler': {
+      const partner = ev.partner ? ` partner=${ev.partner}` : '';
+      const err = ev.error ? `  ERR: ${ev.error}` : '';
+      return `[${t}ms Handler]   ${ev.event}  source=${ev.source}${partner}  (${(ev.duration_us / 1000).toFixed(2)}ms)${err}`;
+    }
+    case 'UctIteration': {
+      const path = (ev.path || []).join(' -> ');
+      return `[${t}ms UctIter]   iter=${ev.iter}/${ev.total}  ${(ev.duration_us / 1000).toFixed(1)}ms  turns=${ev.rollout_turns} plays=${ev.rollout_plays} atks=${ev.rollout_attacks} deaths=${ev.rollout_deaths} fires=${ev.rollout_handler_fires}  winner=${ev.winner}  path=[${path}]`;
+    }
+    default:
+      return `[${t}ms ${ev.kind || '?'}] ${JSON.stringify(ev)}`;
+  }
+}
+
+// Append a TraceEvent array as formatted lines into the LOG panel.
+// Trace + log share the panel; Error events get the full styled
+// block via appendErrorEvent so they're impossible to miss when
+// scrolling.
+function appendTrace(events) {
+  if (!events || events.length === 0) return;
+  for (const ev of events) {
+    if (ev && ev.kind === 'Error') {
+      appendErrorEvent(ev);
+      continue;
+    }
+    window.tsotLogPushText(fmtTraceEvent(ev));
+  }
+}
+
+// JS-side observability summary line. The wasm-side trace stops at
+// FFI exit; everything between Rust returning and the next FFI call
+// is JS / DOM / browser work. parseEnvelope brackets each phase with
+// `performance.now()` and emits one summary line per click into the
+// LOG panel.
+function jsPushSummary(label, breakdown) {
+  const parts = Object.entries(breakdown)
+    .filter(([_, v]) => v !== undefined)
+    .map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(1) + 'ms' : v}`)
+    .join(' ');
+  window.tsotLogPushText(`[js summary] ${label}: ${parts}`);
+}
+
 // Per-item action handler for the `saved_item_action` idb op. Reads
 // the save record, dispatches to Load (delegates to play.html via
 // window.tsotLoadSaveJson — it mutates live game state we haven't
