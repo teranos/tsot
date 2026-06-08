@@ -113,7 +113,9 @@
      Main.elm's viewSavedListPanel) — it appears above the
      decision-report panel when the user clicks "Load saved…". -->
 
-<div class="meta" id="meta"></div>
+<!-- Stage 11b: #meta moved into Elm. Main.elm's viewGameMeta renders
+     the `turn N · phase X · active A · you are B` line into its view
+     tree (above the LOG zone) when Model.gameMeta is Just. -->
 
 <!-- Deckbuilder: shown pre-game while state.phase === 'deckbuilding'.
      Hidden once the user clicks Start; the game-screen below takes over. -->
@@ -884,18 +886,14 @@ function _renderInner(s) {
   const you = view.players.find(p => p.side === view.viewer);
   const opp = view.players.find(p => p.side !== view.viewer);
 
-  document.getElementById('meta').textContent = `turn ${view.turn} · phase ${view.phase} · active ${view.active_player.toUpperCase()} · you are ${view.viewer.toUpperCase()}`;
-  // Stage 11a: also push to Elm so viewGameMeta renders the same
-  // line above the LOG. Both render the same data; the JS copy stays
-  // until 11b removes it.
-  if (window.tsotPushGameMeta) {
-    window.tsotPushGameMeta({
-      turn: view.turn,
-      phase: view.phase,
-      activePlayer: view.active_player,
-      viewer: view.viewer,
-    });
-  }
+  // Stage 11b: Elm's viewGameMeta is the sole meta renderer now.
+  // The original #meta div is gone; this push is the only path.
+  window.tsotPushGameMeta({
+    turn: view.turn,
+    phase: view.phase,
+    activePlayer: view.active_player,
+    viewer: view.viewer,
+  });
   document.getElementById('opp-counts').textContent = `deck:${opp.deck_count} hand:${opp.hand_count} ex:${opp.exile_count}`;
   document.getElementById('opp-gy-count').textContent = opp.graveyard_count;
   document.getElementById('your-gy-count').textContent = you.graveyard_count;
