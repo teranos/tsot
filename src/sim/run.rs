@@ -189,8 +189,20 @@ pub(crate) fn build_pattern_b_choices(
         // 1 (HAND or GRAVEYARD); crystal covers 1 HAND. For the X-cap
         // we use the HAND-side coverage only; the GY side is moot for
         // an X-hand-cost cast that has no GRAVEYARD component.
-        let substitution_coverage = if state.find_jewel_tap_candidate(active, picked).is_some() {
-            2
+        let substitution_coverage = if let Some(sub_iid) =
+            state.find_jewel_tap_candidate(active, picked)
+        {
+            // find_jewel_tap_candidate returns either a JEWEL (2-mixed)
+            // or a CRYSTAL (1 HAND only). For the X-hand cap we only
+            // care about the HAND-side coverage; crystal still covers
+            // 1 HAND slot. Both differentiate the same way the engine
+            // does at play.rs:285.
+            let is_crystal = state
+                .card_pool
+                .get(&sub_iid)
+                .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                .unwrap_or(false);
+            if is_crystal { 1 } else { 2 }
         } else if state.find_symbol_tap_candidate(active).is_some() {
             1
         } else {
@@ -333,14 +345,25 @@ pub(crate) fn build_pattern_b_choices(
         // / gy_hand_payment_ids / graveyard_payment_ids so build
         // mirrors the engine's apply site at game/play.rs.
         if hand_needed > 0 || gy_needed > 0 {
-            if let Some(jewel) = state.find_jewel_tap_candidate(active, picked) {
-                choices.jewel_tap = Some(jewel);
-                let mut budget: usize = 2;
-                let take_h = hand_needed.min(budget);
-                hand_needed -= take_h;
-                budget -= take_h;
-                let take_g = gy_needed.min(budget);
-                gy_needed -= take_g;
+            if let Some(sub) = state.find_jewel_tap_candidate(active, picked) {
+                let is_crystal = state
+                    .card_pool
+                    .get(&sub)
+                    .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                    .unwrap_or(false);
+                choices.jewel_tap = Some(sub);
+                if is_crystal {
+                    if hand_needed > 0 {
+                        hand_needed = hand_needed.saturating_sub(1);
+                    }
+                } else {
+                    let mut budget: usize = 2;
+                    let take_h = hand_needed.min(budget);
+                    hand_needed -= take_h;
+                    budget -= take_h;
+                    let take_g = gy_needed.min(budget);
+                    gy_needed -= take_g;
+                }
             } else if let Some(symbol) = state.find_symbol_tap_candidate(active) {
                 choices.jewel_tap = Some(symbol);
                 if hand_needed > 0 {
@@ -387,20 +410,32 @@ pub(crate) fn build_pattern_b_choices(
         let gy_red = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
         let mut gy_needed = raw_gy_needed.saturating_sub(gy_red);
         // P.24a (rewritten): jewel covers up to 2 components mixed
-        // HAND/GRAVEYARD. Drain HAND first then GRAVEYARD, mirroring
-        // the engine's apply site at game/play.rs.
+        // HAND/GRAVEYARD. Crystal (P.24b) covers exactly 1 HAND.
+        // Differentiate by subtype to match engine's apply site at
+        // play.rs:285. Drain HAND first then GRAVEYARD.
         if hand_needed > 0 || gy_needed > 0 {
-            if let Some(jewel) = state.find_jewel_tap_candidate(active, picked) {
-                choices.jewel_tap = Some(jewel);
-                let mut budget: usize = 2;
-                let take_h = hand_needed.min(budget);
-                hand_needed -= take_h;
-                budget -= take_h;
-                let take_g = gy_needed.min(budget);
-                gy_needed -= take_g;
+            if let Some(sub) = state.find_jewel_tap_candidate(active, picked) {
+                let is_crystal = state
+                    .card_pool
+                    .get(&sub)
+                    .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                    .unwrap_or(false);
+                choices.jewel_tap = Some(sub);
+                if is_crystal {
+                    if hand_needed > 0 {
+                        hand_needed = hand_needed.saturating_sub(1);
+                    }
+                } else {
+                    let mut budget: usize = 2;
+                    let take_h = hand_needed.min(budget);
+                    hand_needed -= take_h;
+                    budget -= take_h;
+                    let take_g = gy_needed.min(budget);
+                    gy_needed -= take_g;
+                }
             } else if let Some(symbol) = state.find_symbol_tap_candidate(active) {
                 // P.24e: single-component HAND-or-GY substitution
-                // when no jewel takes the slot.
+                // when no jewel/crystal takes the slot.
                 choices.jewel_tap = Some(symbol);
                 if hand_needed > 0 {
                     hand_needed -= 1;
@@ -452,17 +487,31 @@ pub(crate) fn build_pattern_b_choices(
             .sum();
         let gy_red = state.cost_reduction(picked, CostSource::Graveyard).max(0) as usize;
         let mut gy_needed = raw_gy_needed.saturating_sub(gy_red);
-        // P.24a (rewritten) + P.24e: jewel covers up to 2 components
-        // mixed HAND/GRAVEYARD; Symbol covers 1 when no jewel applies.
+        // P.24a (rewritten) + P.24b (crystal: 1 HAND) + P.24e (Symbol).
+        // Differentiate jewel vs crystal by subtype — engine treats
+        // them differently at play.rs:285 and a picker/builder that
+        // doesn't will produce NoGraveyardPaymentForColor on cards
+        // like witch-bat (1-hand + 1-gy) against a same-color crystal.
         if hand_needed > 0 || gy_needed > 0 {
-            if let Some(jewel) = state.find_jewel_tap_candidate(active, picked) {
-                choices.jewel_tap = Some(jewel);
-                let mut budget: usize = 2;
-                let take_h = hand_needed.min(budget);
-                hand_needed -= take_h;
-                budget -= take_h;
-                let take_g = gy_needed.min(budget);
-                gy_needed -= take_g;
+            if let Some(sub) = state.find_jewel_tap_candidate(active, picked) {
+                let is_crystal = state
+                    .card_pool
+                    .get(&sub)
+                    .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                    .unwrap_or(false);
+                choices.jewel_tap = Some(sub);
+                if is_crystal {
+                    if hand_needed > 0 {
+                        hand_needed = hand_needed.saturating_sub(1);
+                    }
+                } else {
+                    let mut budget: usize = 2;
+                    let take_h = hand_needed.min(budget);
+                    hand_needed -= take_h;
+                    budget -= take_h;
+                    let take_g = gy_needed.min(budget);
+                    gy_needed -= take_g;
+                }
             } else if let Some(symbol) = state.find_symbol_tap_candidate(active) {
                 choices.jewel_tap = Some(symbol);
                 if hand_needed > 0 {

@@ -296,26 +296,50 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     // shape and refused casts the resolver would accept (2-hand
     // creatures + 1 jewel, 1-hand + 1-gy + 1 jewel, etc.), surfaced
     // as picker/build asymmetry inside UCT rollouts.
-    if (hand_need > 0 || gy_need > 0)
-        && state.find_jewel_tap_candidate(player, iid).is_some()
-    {
-        let mut budget: usize = 2;
-        let take_h = hand_need.min(budget);
-        hand_need -= take_h;
-        budget -= take_h;
-        let take_g = gy_need.min(budget);
-        gy_need -= take_g;
+    if let Some(sub_iid) = state.find_jewel_tap_candidate(player, iid) {
+        // `find_jewel_tap_candidate` is overloaded: it returns either a
+        // JEWEL (P.24a — covers up to 2 HAND-and/or-GRAVEYARD components)
+        // OR a CRYSTAL (P.24b — covers exactly 1 HAND component, no
+        // graveyard). Differentiating by subtype matches the engine's
+        // apply site at game/play.rs:285. Without this, witch-bat
+        // (1-hand + 1-gy purple creature) cast against a same-color
+        // crystal on board had the picker crediting 2-mixed coverage
+        // (gy_need → 0, P.12a anchor check skipped) while the engine
+        // processed crystal as 1-hand-only (gy_need stayed at 1,
+        // anchor check fired, NoGraveyardPaymentForColor 20K times
+        // in a 200-game curve-sample run).
+        let is_crystal = state
+            .card_pool
+            .get(&sub_iid)
+            .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+            .unwrap_or(false);
+        if hand_need > 0 || gy_need > 0 {
+            if is_crystal {
+                // P.24b: crystal covers exactly 1 HAND component.
+                if hand_need > 0 {
+                    hand_need = hand_need.saturating_sub(1);
+                }
+            } else {
+                // P.24a: jewel covers up to 2 mixed HAND/GRAVEYARD.
+                let mut budget: usize = 2;
+                let take_h = hand_need.min(budget);
+                hand_need -= take_h;
+                budget -= take_h;
+                let take_g = gy_need.min(budget);
+                gy_need -= take_g;
+            }
+        }
     } else if (hand_need > 0 || gy_need > 0)
         && state.find_symbol_tap_candidate(player).is_some()
     {
         // P.24e: an untapped Symbol on the controller's BOARD
         // substitutes for exactly ONE component (HAND or GRAVEYARD),
         // no color requirement. P.24c caps a cast at one substitution
-        // mechanism — credited only when no jewel took the slot.
+        // mechanism — credited only when no jewel/crystal took the slot.
         if hand_need > 0 {
-            hand_need -= 1;
+            hand_need = hand_need.saturating_sub(1);
         } else {
-            gy_need -= 1;
+            gy_need = gy_need.saturating_sub(1);
         }
     }
     let p = state.player(player);
