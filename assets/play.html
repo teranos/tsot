@@ -125,17 +125,16 @@
      the `turn N · phase X · active A · you are B` line into its view
      tree (above the LOG zone) when Model.gameMeta is Just. -->
 
-<!-- Deckbuilder: shown pre-game while state.phase === 'deckbuilding'.
-     Hidden once the user clicks Start; the game-screen below takes over. -->
-<!-- Stage 10: deckbuilder is rendered by Elm. Main.elm's
-     viewDeckbuilder mounts the same id="deckbuilder" so the existing
-     #deckbuilder .pool / .deck-row CSS in <style> above keeps
-     matching — but only when gamePhase == Deckbuilding. -->
+<!-- Stage 10: deckbuilder is rendered by Elm (viewDeckbuilder), shown
+     only when gamePhase == Deckbuilding; the existing #deckbuilder
+     .pool / .deck-row CSS in <style> above keeps matching since Elm
+     mounts the same id. -->
 
 <!-- Spectator bar: scrubber + play/pause/step controls. Only visible
      while `state.phase === 'spectating'`. Reads from state.spectate
-     (snapshots array + index + interval handle). The actual game
-     state rendering reuses the same #game-screen DOM below. -->
+     (snapshots array + index + interval handle). The actual game-
+     state rendering reuses the same Elm-rendered #game-screen scaffold
+     (id-stable card containers `_renderInner` appendChilds into). -->
 <div id="spectator-bar" style="display:none; padding:0.4rem 0.6rem; background:#1c1c24; border:1px solid #333; margin-bottom:0.5rem;">
   <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
     <button id="spec-back-end">⏮</button>
@@ -158,52 +157,15 @@
   <input id="spec-slider" type="range" min="0" max="0" value="0" style="width:100%; margin-top:0.4rem;" />
 </div>
 
-<!-- Game screen: hidden until the user finishes the deckbuilder. The
-     existing render() targets these IDs directly, so toggling the
-     container's display preserves all interactions. -->
-<div id="game-screen" style="display:none;">
-  <div class="row">
-    <div class="zone opponent" style="flex: 2;">
-      <h2>Opponent <span class="counts" id="opp-counts"></span></h2>
-      <div class="cards" id="opp-board-cards"></div>
-    </div>
-    <div class="zone" style="flex: 1;">
-      <h2>Opp graveyard <span class="counts" id="opp-gy-count"></span></h2>
-      <div class="cards" id="opp-graveyard-cards"></div>
-    </div>
-  </div>
+<!-- Stage 11f/g/h: the `#game-screen` scaffold + per-player counts +
+     deck-top backs moved into Main.elm's `viewGameScreen`. Card
+     containers (opp/your board, opp/your graveyard, your-hand) keep
+     their stable IDs so `_renderInner` can still `appendChild` cards
+     into them — Elm renders them empty and its vdom doesn't touch the
+     JS-injected children. `#buttons` likewise still JS-managed until
+     11m/11n. Visibility is no longer JS-toggled: Elm shows the screen
+     only when `Model.gamePhase` is Playing or Spectating. -->
 
-  <div class="row">
-    <div class="zone" style="flex: 2;">
-      <h2>You</h2>
-      <div class="cards" id="your-board-cards"></div>
-    </div>
-    <div class="zone" style="flex: 1;">
-      <h2>Your graveyard <span class="counts" id="your-gy-count"></span></h2>
-      <div class="cards" id="your-graveyard-cards"></div>
-    </div>
-  </div>
-
-  <div class="row">
-    <div class="zone">
-      <h2>Your hand <span class="counts" id="your-hand-counts"></span></h2>
-      <div class="cards" id="your-hand-cards"></div>
-    </div>
-  </div>
-
-  <div class="row">
-    <div class="zone" style="flex: 0 0 14rem;">
-      <h2>Opp deck top</h2>
-      <div class="cards" id="opp-deck-top"></div>
-    </div>
-    <div class="zone" style="flex: 0 0 14rem;">
-      <h2>Your deck top</h2>
-      <div class="cards" id="your-deck-top"></div>
-    </div>
-  </div>
-
-  <div id="buttons"></div>
-</div>
 
 <!-- Stage 11e: the LOG zone wrapper + the second elm-root that lived
      here are gone. Elm's mount moved up to right after the <h1>. -->
@@ -888,18 +850,18 @@ function _renderInner(s) {
   const you = view.players.find(p => p.side === view.viewer);
   const opp = view.players.find(p => p.side !== view.viewer);
 
-  // Stage 11b: Elm's viewGameMeta is the sole meta renderer now.
-  // The original #meta div is gone; this push is the only path.
+  // Stage 11b: Elm's viewGameMeta is the sole meta renderer.
+  // Stage 11g: per-player count spans (opp-counts, opp-gy-count,
+  // your-gy-count, your-hand-counts) are rendered by Elm out of the
+  // gameStateIn envelope — the previous four direct writes are gone.
+  // Stage 11h: deck-top backs likewise rendered by Elm's
+  // viewDeckTop — the previous `renderDeckTop` calls are gone.
   window.tsotPushGameMeta({
     turn: view.turn,
     phase: view.phase,
     activePlayer: view.active_player,
     viewer: view.viewer,
   });
-  document.getElementById('opp-counts').textContent = `deck:${opp.deck_count} hand:${opp.hand_count} ex:${opp.exile_count}`;
-  document.getElementById('opp-gy-count').textContent = opp.graveyard_count;
-  document.getElementById('your-gy-count').textContent = you.graveyard_count;
-  document.getElementById('your-hand-counts').textContent = `deck:${you.deck_count} ex:${you.exile_count}`;
 
   // Opponent board (rendered fresh each call so prompt-specific click handlers work).
   const oppBoard = document.getElementById('opp-board-cards');
@@ -918,10 +880,6 @@ function _renderInner(s) {
   yourGy.innerHTML = '';
   if (you.graveyard.length === 0) yourGy.innerHTML = '<span class="empty-note">empty</span>';
   else you.graveyard.forEach(c => yourGy.appendChild(cardEl(c, { dim: true })));
-
-  // Deck tops — public to both sides.
-  renderDeckTop('your-deck-top', you.deck_top);
-  renderDeckTop('opp-deck-top', opp.deck_top);
 
   const yourBoard = document.getElementById('your-board-cards');
   yourBoard.innerHTML = '';
@@ -949,8 +907,7 @@ function _renderInner(s) {
     you.board.forEach(c => yourBoard.appendChild(cardEl(c)));
     (you.graveyard || []).forEach(c => yourGy.appendChild(cardEl(c)));
     you.hand.forEach(c => yourHand.appendChild(cardEl(c)));
-    renderDeckTop('opp-deck-top', opp.deck_top);
-    renderDeckTop('your-deck-top', you.deck_top);
+    // Stage 11h: opp/your deck-top are Elm-owned now (viewDeckTop).
     return;
   }
 
@@ -1279,21 +1236,8 @@ function findCardsByIids(view, iids) {
   return out;
 }
 
-function renderDeckTop(elementId, deckTop) {
-  const el = document.getElementById(elementId);
-  el.innerHTML = '';
-  if (!deckTop) { el.innerHTML = '<span class="empty-note">empty</span>'; return; }
-  // Per RULES: deck top is publicly visible but only as the BACK of the
-  // card — color + symbol only, no name / cost / abilities / stats. The
-  // identity stays unknown until drawn.
-  const back = document.createElement('div');
-  back.className = 'card';
-  back.style.cssText = 'background:#0d0d12; border-color:#333; opacity:0.85;';
-  const colorRow = (deckTop.colors || []).map(colorTag).join('');
-  const symRow = (deckTop.symbols || []).map(symbolTag).join('');
-  back.innerHTML = `<div style="color:#888; font-size:0.65rem;">(back)</div><div class="meta-line">${colorRow} ${symRow}</div>`;
-  el.appendChild(back);
-}
+// Stage 11h: deck-top rendering moved into Elm's `viewDeckTop`.
+// `colorTag` + `symbolTag` are still used by `cardEl` so they stay.
 
 function labelFor(view, iid) {
   for (const p of view.players) {
@@ -1445,8 +1389,7 @@ async function loadSaveJson(saveJson) {
   };
   const rawEnvelope = await workerCall('load_game', { loadArgs });
   setPhase('playing');
-  // Stage 10: deckbuilder hides itself when gamePhase != Deckbuilding.
-  document.getElementById('game-screen').style.display = '';
+  // Stage 11f: Elm's viewGameScreen shows itself on gamePhase=Playing.
   // H7-Elm Stage 5: the saved-list panel is Elm-owned. After a
   // successful load we want it closed in case the user opened it to
   // pick this save; Elm hides it via window.tsotSavedListToggle if
@@ -1517,7 +1460,7 @@ window.tsotStartSpectate = async function (payload) {
   state.gameId = null;       // spectated games aren't in the human decision log
   state.gameOverRecorded = false;
   state.preview = null;      // no preview in spectate mode
-  document.getElementById('game-screen').style.display = '';
+  // Stage 11f: Elm's viewGameScreen shows itself on gamePhase=Spectating.
   document.getElementById('spectator-bar').style.display = '';
   setPrompt('Running game… (both AIs play to completion)');
   const args = {
@@ -1634,7 +1577,7 @@ function spectateExit() {
   state.spectate = null;
   setPhase('deckbuilding');
   document.getElementById('spectator-bar').style.display = 'none';
-  document.getElementById('game-screen').style.display = 'none';
+  // Stage 11f: Elm's viewGameScreen hides itself on gamePhase=Deckbuilding.
   // Stage 10: Elm's viewDeckbuilder re-renders itself when gamePhase
   // transitions back to Deckbuilding. Stage 11c: the prompt copy
   // routes through setPrompt → Elm's viewPromptText.
@@ -1682,7 +1625,7 @@ window.tsotStartGameFromDeckbuilder = async function (payload) {
   setPhase('playing');
   state.gameId = freshGameId();
   state.gameOverRecorded = false;
-  document.getElementById('game-screen').style.display = '';
+  // Stage 11f: Elm's viewGameScreen shows itself on gamePhase=Playing.
   setPrompt('Starting game…');
   try {
     const initial = await fetchState();

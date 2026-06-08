@@ -280,6 +280,33 @@ type alias GameMeta =
     }
 
 
+{-| Counts + deck-top back for one player, decoded out of
+`Model.gameState.state.players[i]`. Hand-count is opponent-only in the
+UI (the viewer sees their own hand directly).
+-}
+type alias PlayerCounts =
+    { side : String
+    , deckCount : Int
+    , handCount : Int
+    , exileCount : Int
+    , graveyardCount : Int
+    , deckTop : Maybe DeckBack
+    }
+
+
+type alias DeckBack =
+    { colors : List String
+    , symbols : List String
+    }
+
+
+type alias GameViewSlice =
+    { viewer : String
+    , you : PlayerCounts
+    , opp : PlayerCounts
+    }
+
+
 type alias Model =
     { build : BuildState
     , log : List LogEntry
@@ -837,6 +864,62 @@ decodeGameMeta =
         (D.field "viewer" D.string)
 
 
+{-| Pulls the slice the 11f/g/h render path needs out of the raw
+`{state, prompt}` envelope stored in `Model.gameState`. Reads
+`state.viewer` + `state.players[]`, splits into `you` / `opp`.
+Fails if the player list isn't exactly two entries or neither side
+matches the viewer — both indicate a malformed envelope.
+-}
+decodeGameViewSlice : D.Decoder GameViewSlice
+decodeGameViewSlice =
+    D.field "state"
+        (D.map2 Tuple.pair
+            (D.field "viewer" D.string)
+            (D.field "players" (D.list decodePlayerCounts))
+            |> D.andThen viewSliceFromPlayers
+        )
+
+
+viewSliceFromPlayers : ( String, List PlayerCounts ) -> D.Decoder GameViewSlice
+viewSliceFromPlayers ( viewer, players ) =
+    case players of
+        [ a, b ] ->
+            if a.side == viewer then
+                D.succeed { viewer = viewer, you = a, opp = b }
+
+            else if b.side == viewer then
+                D.succeed { viewer = viewer, you = b, opp = a }
+
+            else
+                D.fail ("viewer " ++ viewer ++ " did not match any player side")
+
+        _ ->
+            D.fail "expected exactly two players"
+
+
+decodePlayerCounts : D.Decoder PlayerCounts
+decodePlayerCounts =
+    D.succeed PlayerCounts
+        |> required "side" D.string
+        |> required "deck_count" D.int
+        |> required "hand_count" D.int
+        |> required "exile_count" D.int
+        |> required "graveyard_count" D.int
+        |> optional "deck_top" decodeDeckBack
+
+
+{-| `deck_top` is `Option<CardView>` engine-side; null when the deck
+is empty. Requiring both fields lets the outer `optional "deck_top"`
+turn a null into `Nothing` (since the inner decode fails on null).
+CardView always emits `colors` + `symbols` as arrays, possibly empty.
+-}
+decodeDeckBack : D.Decoder DeckBack
+decodeDeckBack =
+    D.map2 DeckBack
+        (D.field "colors" (D.list D.string))
+        (D.field "symbols" (D.list D.string))
+
+
 required : String -> D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
 required field aDec fDec =
     D.map2 (\f a -> f a) fDec (D.field field aDec)
@@ -1182,6 +1265,7 @@ view model =
         , viewDeckbuilder model
         , viewPromptText model.promptText
         , viewGameMeta model.gameMeta
+        , viewGameScreen model
         , viewSavedListPanel model.savedList
         , viewDecisionPanel model.decisionPanel
         , viewLog model.log
@@ -1225,6 +1309,152 @@ viewGameMeta maybeMeta =
                         ++ String.toUpper m.viewer
                     )
                 ]
+
+
+{-| Stage 11f/g/h — render the `#game-screen` zone scaffold + per-player
+counts + deck-top backs. Card containers (`opp-board-cards`,
+`opp-graveyard-cards`, `your-board-cards`, `your-graveyard-cards`,
+`your-hand-cards`) are deliberately Elm-empty: play.html's `_renderInner`
+still `appendChild`s into them by id. Elm's vdom diff never touches
+their JS-injected children as long as vdom always sees `[]` here.
+
+`#buttons` likewise stays JS-managed for now (Pass / Confirm / Cancel
++ prompt-kind branches arrive in 11m / 11n).
+
+Hidden unless gamePhase is Playing or Spectating (so the deckbuilder
+flow doesn't see an empty scaffold). Decode failure (malformed
+envelope) returns nothing — the meta line + log will already have
+surfaced the underlying problem.
+-}
+viewGameScreen : Model -> Html Msg
+viewGameScreen model =
+    let
+        active =
+            model.gamePhase == Playing || model.gamePhase == Spectating
+    in
+    case ( active, model.gameState ) of
+        ( True, Just value ) ->
+            case D.decodeValue decodeGameViewSlice value of
+                Ok slice ->
+                    renderGameScreen slice
+
+                Err _ ->
+                    text ""
+
+        _ ->
+            text ""
+
+
+renderGameScreen : GameViewSlice -> Html Msg
+renderGameScreen slice =
+    div [ id "game-screen" ]
+        [ div [ class "row" ]
+            [ div [ class "zone opponent", style "flex" "2" ]
+                [ h2 []
+                    [ text "Opponent "
+                    , span [ class "counts", id "opp-counts" ] [ text (oppCountsText slice.opp) ]
+                    ]
+                , div [ class "cards", id "opp-board-cards" ] []
+                ]
+            , div [ class "zone", style "flex" "1" ]
+                [ h2 []
+                    [ text "Opp graveyard "
+                    , span [ class "counts", id "opp-gy-count" ]
+                        [ text (String.fromInt slice.opp.graveyardCount) ]
+                    ]
+                , div [ class "cards", id "opp-graveyard-cards" ] []
+                ]
+            ]
+        , div [ class "row" ]
+            [ div [ class "zone", style "flex" "2" ]
+                [ h2 [] [ text "You" ]
+                , div [ class "cards", id "your-board-cards" ] []
+                ]
+            , div [ class "zone", style "flex" "1" ]
+                [ h2 []
+                    [ text "Your graveyard "
+                    , span [ class "counts", id "your-gy-count" ]
+                        [ text (String.fromInt slice.you.graveyardCount) ]
+                    ]
+                , div [ class "cards", id "your-graveyard-cards" ] []
+                ]
+            ]
+        , div [ class "row" ]
+            [ div [ class "zone" ]
+                [ h2 []
+                    [ text "Your hand "
+                    , span [ class "counts", id "your-hand-counts" ]
+                        [ text (yourHandCountsText slice.you) ]
+                    ]
+                , div [ class "cards", id "your-hand-cards" ] []
+                ]
+            ]
+        , div [ class "row" ]
+            [ div [ class "zone", style "flex" "0 0 14rem" ]
+                [ h2 [] [ text "Opp deck top" ]
+                , div [ class "cards", id "opp-deck-top" ] [ viewDeckTop slice.opp.deckTop ]
+                ]
+            , div [ class "zone", style "flex" "0 0 14rem" ]
+                [ h2 [] [ text "Your deck top" ]
+                , div [ class "cards", id "your-deck-top" ] [ viewDeckTop slice.you.deckTop ]
+                ]
+            ]
+        , div [ id "buttons" ] []
+        ]
+
+
+oppCountsText : PlayerCounts -> String
+oppCountsText p =
+    "deck:"
+        ++ String.fromInt p.deckCount
+        ++ " hand:"
+        ++ String.fromInt p.handCount
+        ++ " ex:"
+        ++ String.fromInt p.exileCount
+
+
+yourHandCountsText : PlayerCounts -> String
+yourHandCountsText p =
+    "deck:" ++ String.fromInt p.deckCount ++ " ex:" ++ String.fromInt p.exileCount
+
+
+{-| Back-of-card display: only color+symbol identity is public per RULES.
+Matches the JS `renderDeckTop` shape — same classes/inline styles so the
+existing CSS picks it up.
+-}
+viewDeckTop : Maybe DeckBack -> Html Msg
+viewDeckTop maybeBack =
+    case maybeBack of
+        Nothing ->
+            span [ class "empty-note" ] [ text "empty" ]
+
+        Just back ->
+            div
+                [ class "card"
+                , style "background" "#0d0d12"
+                , style "border-color" "#333"
+                , style "opacity" "0.85"
+                ]
+                [ div [ style "color" "#888", style "font-size" "0.65rem" ] [ text "(back)" ]
+                , div [ class "meta-line" ]
+                    (List.map colorTagEl back.colors
+                        ++ (text " " :: List.map symbolTagEl back.symbols)
+                    )
+                ]
+
+
+colorTagEl : String -> Html Msg
+colorTagEl c =
+    let
+        code =
+            String.toLower c
+    in
+    span [ class ("color-" ++ code) ] [ text code ]
+
+
+symbolTagEl : String -> Html Msg
+symbolTagEl s =
+    span [ class "symbol" ] [ text s ]
 
 
 viewDeckbuilder : Model -> Html Msg
