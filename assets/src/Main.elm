@@ -104,6 +104,14 @@ Sent once on page load. Carries `{cardPool : [...], presets : [...]}`.
 port bootDataIn : (D.Value -> msg) -> Sub msg
 
 
+{-| Stage 11a — game-screen meta line (`turn N · phase X · active A ·
+you are B`). play.html's `_renderInner` pushes the four fields here
+after each FFI envelope; the rest of the game-screen DOM stays
+JS-rendered until later 11 substages.
+-}
+port gameMetaIn : (D.Value -> msg) -> Sub msg
+
+
 {-| One outbound port for every IDB-bound action. Carries an
 `{op, payload}` envelope. Per-feature ports collapsed here:
 `decision_get_all` / `decision_export` / `decision_clear` /
@@ -243,6 +251,14 @@ type alias PresetDeck =
     }
 
 
+type alias GameMeta =
+    { turn : Int
+    , phase : String
+    , activePlayer : String
+    , viewer : String
+    }
+
+
 type alias Model =
     { build : BuildState
     , log : List LogEntry
@@ -258,6 +274,7 @@ type alias Model =
     , specAiB : String
     , poolFilterColor : String
     , poolFilterKind : String
+    , gameMeta : Maybe GameMeta
     }
 
 
@@ -303,6 +320,7 @@ type Msg
     | PoolFilterKindChanged String
     | StartGameClicked
     | StartSpectateClicked
+    | GameMetaReceived D.Value
     | NoOp
 
 
@@ -326,6 +344,7 @@ init _ =
       , specAiB = "uct"
       , poolFilterColor = ""
       , poolFilterKind = ""
+      , gameMeta = Nothing
       }
     , Cmd.none
     )
@@ -596,6 +615,14 @@ update msg model =
                     }
                 )
 
+        GameMetaReceived value ->
+            case D.decodeValue decodeGameMeta value of
+                Ok meta ->
+                    ( { model | gameMeta = Just meta }, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
         NoOp ->
             ( model, Cmd.none )
 
@@ -766,6 +793,15 @@ decodePresetDeck =
         (D.field "id" D.string)
         (D.field "name" D.string)
         (D.field "cards" (D.list D.string))
+
+
+decodeGameMeta : D.Decoder GameMeta
+decodeGameMeta =
+    D.map4 GameMeta
+        (D.field "turn" D.int)
+        (D.field "phase" D.string)
+        (D.field "activePlayer" D.string)
+        (D.field "viewer" D.string)
 
 
 required : String -> D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
@@ -1096,6 +1132,7 @@ subscriptions _ =
         , saveStatusIn SaveStatusReceived
         , gamePhaseIn GamePhaseReceived
         , bootDataIn BootDataReceived
+        , gameMetaIn GameMetaReceived
         ]
 
 
@@ -1108,11 +1145,38 @@ view model =
     div []
         [ viewSaveControls model
         , viewDeckbuilder model
+        , viewGameMeta model.gameMeta
         , viewSavedListPanel model.savedList
         , viewDecisionPanel model.decisionPanel
         , viewLog model.log
         , viewBuildFooter model.build
         ]
+
+
+viewGameMeta : Maybe GameMeta -> Html Msg
+viewGameMeta maybeMeta =
+    case maybeMeta of
+        Nothing ->
+            text ""
+
+        Just m ->
+            div
+                [ class "meta"
+                , style "color" "#888"
+                , style "font-size" "0.75rem"
+                , style "margin-bottom" "0.5rem"
+                ]
+                [ text
+                    ("turn "
+                        ++ String.fromInt m.turn
+                        ++ " · phase "
+                        ++ m.phase
+                        ++ " · active "
+                        ++ String.toUpper m.activePlayer
+                        ++ " · you are "
+                        ++ String.toUpper m.viewer
+                    )
+                ]
 
 
 viewDeckbuilder : Model -> Html Msg

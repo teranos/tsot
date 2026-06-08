@@ -636,6 +636,17 @@ function tsotShowBridgeFailure(stage, err) {
     app.ports.bootDataIn.send(data);
   };
 
+  stage = 'gameMetaIn shim';
+  // Stage 11a: meta line from play.html's _renderInner. Same data
+  // the JS-side #meta div still shows; viewGameMeta in Elm renders a
+  // duplicate above the LOG until 11b removes the JS copy.
+  if (!app.ports.gameMetaIn) {
+    throw new Error('gameMetaIn port missing — Main.elm wiring drift');
+  }
+  window.tsotPushGameMeta = function (envelope) {
+    app.ports.gameMetaIn.send(envelope);
+  };
+
   // Push a fresh saves list to Elm. Used by play.html's onSaveClick
   // after a successful Save — if the panel happens to be open it
   // refreshes in place; if hidden, Elm ignores the update (see

@@ -885,6 +885,17 @@ function _renderInner(s) {
   const opp = view.players.find(p => p.side !== view.viewer);
 
   document.getElementById('meta').textContent = `turn ${view.turn} · phase ${view.phase} · active ${view.active_player.toUpperCase()} · you are ${view.viewer.toUpperCase()}`;
+  // Stage 11a: also push to Elm so viewGameMeta renders the same
+  // line above the LOG. Both render the same data; the JS copy stays
+  // until 11b removes it.
+  if (window.tsotPushGameMeta) {
+    window.tsotPushGameMeta({
+      turn: view.turn,
+      phase: view.phase,
+      activePlayer: view.active_player,
+      viewer: view.viewer,
+    });
+  }
   document.getElementById('opp-counts').textContent = `deck:${opp.deck_count} hand:${opp.hand_count} ex:${opp.exile_count}`;
   document.getElementById('opp-gy-count').textContent = opp.graveyard_count;
   document.getElementById('your-gy-count').textContent = you.graveyard_count;
