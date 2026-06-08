@@ -392,6 +392,11 @@ type Msg
     | PlayerChoiceClicked (Maybe String)
     | IntChoiceInputChanged String
     | IntChoiceConfirmClicked Int
+    | HandCardClicked String
+    | BoardActivationClicked GameScreen.Activation
+    | PassClicked
+    | TargetCardClicked String
+    | SkipChoiceCardClicked
     | NoOp
 
 
@@ -838,6 +843,55 @@ update msg model =
                 (E.object
                     [ ( "kind", E.string "ChoiceInt" )
                     , ( "value", E.int v )
+                    ]
+                )
+            )
+
+        HandCardClicked iid ->
+            ( model
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "PlayCard" )
+                    , ( "iid", E.string iid )
+                    ]
+                )
+            )
+
+        BoardActivationClicked act ->
+            ( model
+            , workerCmdOut
+                { cmd = "activate_ability"
+                , payload =
+                    E.object
+                        [ ( "iid", E.string act.iid )
+                        , ( "ability_index", E.int act.abilityIndex )
+                        , ( "needs_x", E.bool act.needsX )
+                        , ( "text", E.string act.text )
+                        ]
+                }
+            )
+
+        PassClicked ->
+            ( model
+            , applyAction (E.object [ ( "kind", E.string "Pass" ) ])
+            )
+
+        TargetCardClicked iid ->
+            ( model
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "ChoiceCard" )
+                    , ( "iid", E.string iid )
+                    ]
+                )
+            )
+
+        SkipChoiceCardClicked ->
+            ( model
+            , applyAction
+                (E.object
+                    [ ( "kind", E.string "ChoiceCard" )
+                    , ( "iid", E.null )
                     ]
                 )
             )
@@ -1526,7 +1580,7 @@ viewGameScreen model =
         elmButtons =
             GameScreen.viewPromptButtons gameScreenButtonsConfig model.chooseIntDraft model.prompt
     in
-    renderGameScreen active slice elmButtons
+    renderGameScreen active model.prompt slice elmButtons
 
 
 gameScreenButtonsConfig : GameScreen.PromptButtonsConfig Msg
@@ -1536,6 +1590,8 @@ gameScreenButtonsConfig =
     , onPlayerChoice = PlayerChoiceClicked
     , onIntInput = IntChoiceInputChanged
     , onIntConfirm = IntChoiceConfirmClicked
+    , onPass = PassClicked
+    , onSkipChoiceCard = SkipChoiceCardClicked
     }
 
 
@@ -1550,8 +1606,8 @@ IDs would be absent at boot and the load-save sync `render()` would
 hit "oppBoard is null" before Elm's first paint. Counts + deck-tops
 fall back to placeholders when no `gameState` slice has landed.
 -}
-renderGameScreen : Bool -> Maybe GameViewSlice -> Html Msg -> Html Msg
-renderGameScreen active maybeSlice elmButtons =
+renderGameScreen : Bool -> GameScreen.Prompt -> Maybe GameViewSlice -> Html Msg -> Html Msg
+renderGameScreen active prompt maybeSlice elmButtons =
     let
         oppCounts =
             Maybe.map (oppCountsText << .opp) maybeSlice |> Maybe.withDefault ""
@@ -1579,19 +1635,19 @@ renderGameScreen active maybeSlice elmButtons =
                 "none"
 
         oppBoardCards =
-            zoneCards GameScreen.defaultCardOpts (Maybe.map (.board << .opp) maybeSlice)
+            zoneCardsForPrompt OppBoard prompt (Maybe.map (.board << .opp) maybeSlice)
 
         oppGraveyardCards =
-            zoneCards { defaultDimOpts | dim = True } (Maybe.map (.graveyard << .opp) maybeSlice)
+            zoneCardsForPrompt OppGraveyard prompt (Maybe.map (.graveyard << .opp) maybeSlice)
 
         yourBoardCards =
-            zoneCards GameScreen.defaultCardOpts (Maybe.map (.board << .you) maybeSlice)
+            zoneCardsForPrompt YourBoard prompt (Maybe.map (.board << .you) maybeSlice)
 
         yourGraveyardCards =
-            zoneCards { defaultDimOpts | dim = True } (Maybe.map (.graveyard << .you) maybeSlice)
+            zoneCardsForPrompt YourGraveyard prompt (Maybe.map (.graveyard << .you) maybeSlice)
 
         yourHandCards =
-            zoneCards GameScreen.defaultCardOpts (Maybe.map (.hand << .you) maybeSlice)
+            zoneCardsForPrompt YourHand prompt (Maybe.map (.hand << .you) maybeSlice)
     in
     div [ id "game-screen", style "display" displayStyle ]
         [ div [ class "row" ]
@@ -1647,19 +1703,27 @@ renderGameScreen active maybeSlice elmButtons =
         ]
 
 
-defaultDimOpts : GameScreen.CardOpts Msg
-defaultDimOpts =
-    GameScreen.defaultCardOpts
+-- Wave 5: defaultDimOpts + zoneCards retired — zoneCardsForPrompt is
+-- the sole zone renderer, deriving dim/clickable/overlays from
+-- (ZonePos × Prompt × CardView).
 
 
-{-| Wave 2 — render a card-container's children. `Nothing` = slice
-not yet decoded → empty (JS used to leave the container empty in this
-state too). `Just []` → "empty" italic note. `Just cards` → one
-`viewCard` per card with the given opts. Click handlers stay
-`Nothing` in Wave 2; waves 3+ inject prompt-kind-specific opts.
+{-| Five game-screen card containers. Used by `zoneCardsForPrompt` to
+dispatch per-prompt-kind `CardOpts` (e.g., graveyards default to
+`dim = True`; ChooseCard's pool clickability applies to all 5; PickCard's
+hand candidates only apply to YourHand; PickCard's board activations
+only apply to YourBoard).
 -}
-zoneCards : GameScreen.CardOpts Msg -> Maybe (List GameScreen.CardView) -> List (Html Msg)
-zoneCards opts maybeCards =
+type ZonePos
+    = OppBoard
+    | OppGraveyard
+    | YourBoard
+    | YourGraveyard
+    | YourHand
+
+
+zoneCardsForPrompt : ZonePos -> GameScreen.Prompt -> Maybe (List GameScreen.CardView) -> List (Html Msg)
+zoneCardsForPrompt zone prompt maybeCards =
     case maybeCards of
         Nothing ->
             []
@@ -1668,7 +1732,143 @@ zoneCards opts maybeCards =
             [ span [ class "empty-note" ] [ text "empty" ] ]
 
         Just cards ->
-            List.map (GameScreen.viewCard opts) cards
+            let
+                actsByIid =
+                    case prompt of
+                        GameScreen.PickCardPrompt data ->
+                            List.foldl
+                                (\a acc -> Dict.update a.iid (Maybe.withDefault [] >> (::) a >> Just) acc)
+                                Dict.empty
+                                data.activations
+
+                        _ ->
+                            Dict.empty
+            in
+            List.map (\c -> GameScreen.viewCard (cardOptsForZone zone prompt actsByIid c) c) cards
+
+
+{-| Per-card opts: starts from the zone's baseline (graveyards dim;
+others not), then layers any prompt-kind-specific decoration on top.
+ChooseCard's overlay (pool clickability / host badge / non-pool dim)
+takes precedence over the baseline because the engine guarantees the
+prompt restricts the player to those pool members during this turn.
+-}
+cardOptsForZone : ZonePos -> GameScreen.Prompt -> Dict String (List GameScreen.Activation) -> GameScreen.CardView -> GameScreen.CardOpts Msg
+cardOptsForZone zone prompt actsByIid c =
+    let
+        defaults =
+            GameScreen.defaultCardOpts
+
+        baseDim =
+            zone == OppGraveyard || zone == YourGraveyard
+
+        base =
+            { defaults | dim = baseDim }
+    in
+    case prompt of
+        GameScreen.ChooseCardPrompt data ->
+            chooseCardOpts data c
+
+        GameScreen.PickCardPrompt data ->
+            case zone of
+                YourHand ->
+                    if List.member c.iid data.candidates then
+                        { base | clickable = Just HandCardClicked }
+
+                    else
+                        base
+
+                YourBoard ->
+                    let
+                        acts =
+                            Dict.get c.iid actsByIid
+                                |> Maybe.withDefault []
+                                |> List.reverse
+                    in
+                    case acts of
+                        [] ->
+                            base
+
+                        first :: _ ->
+                            { base
+                                | clickable = Just (\_ -> BoardActivationClicked first)
+                                , overlays = List.map activationRow acts
+                            }
+
+                _ ->
+                    base
+
+        _ ->
+            base
+
+
+chooseCardOpts : GameScreen.ChooseCardData -> GameScreen.CardView -> GameScreen.CardOpts Msg
+chooseCardOpts data c =
+    let
+        defaults =
+            GameScreen.defaultCardOpts
+
+        inPool =
+            List.member c.iid data.pool
+
+        isHost =
+            data.host == Just c.iid
+    in
+    if isHost then
+        { defaults
+            | borderColor = Just "#fa4"
+            , borderStyle = Just "dashed"
+            , overlays = [ castingBadge ]
+        }
+
+    else if inPool then
+        { defaults | clickable = Just TargetCardClicked }
+
+    else
+        { defaults | dim = True }
+
+
+castingBadge : Html Msg
+castingBadge =
+    div
+        [ style "color" "#fa4"
+        , style "font-size" "0.6rem"
+        , style "text-transform" "uppercase"
+        , style "letter-spacing" "0.06em"
+        , style "margin-top" "0.25rem"
+        ]
+        [ text "\u{25C6} casting" ]
+
+
+activationRow : GameScreen.Activation -> Html Msg
+activationRow a =
+    let
+        rawText =
+            if String.length a.text > 60 then
+                String.left 57 a.text ++ "\u{2026}"
+
+            else
+                a.text
+
+        suffix =
+            if a.needsX then
+                " (X)"
+
+            else
+                ""
+    in
+    div
+        [ style "color" "#6cf"
+        , style "font-size" "0.65rem"
+        , style "margin-top" "0.2rem"
+        , style "padding" "0.15rem 0.3rem"
+        , style "background" "#1a2030"
+        , style "border" "1px solid #234"
+        , style "cursor" "pointer"
+        , Html.Events.stopPropagationOn "click"
+            (D.succeed ( BoardActivationClicked a, True ))
+        ]
+        [ text ("\u{25B6} [" ++ String.fromInt a.abilityIndex ++ "] " ++ rawText ++ suffix) ]
 
 
 oppCountsText : PlayerCounts -> String

@@ -660,6 +660,8 @@ type alias PromptButtonsConfig msg =
     , onPlayerChoice : Maybe String -> msg
     , onIntInput : String -> msg
     , onIntConfirm : Int -> msg
+    , onPass : msg
+    , onSkipChoiceCard : msg
     }
 
 
@@ -714,6 +716,16 @@ viewPromptButtons cfg chooseIntDraft prompt =
                     [ E.onClick (cfg.onIntConfirm parsed) ]
                     [ text "Confirm" ]
                 ]
+
+            PickCardPrompt _ ->
+                [ button [ E.onClick cfg.onPass ] [ text "Pass" ] ]
+
+            ChooseCardPrompt data ->
+                if data.optional then
+                    [ button [ E.onClick cfg.onSkipChoiceCard ] [ text "Skip" ] ]
+
+                else
+                    []
 
             _ ->
                 []

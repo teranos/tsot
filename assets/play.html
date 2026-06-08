@@ -803,11 +803,8 @@ function _renderInner(s) {
     parts.push(`${prompt.candidates.length} card(s) in hand affordable`);
     if (acts.length > 0) parts.push(`${acts.length} ability/abilities ready to activate`);
     setPrompt(`Your main phase — ${parts.join(' · ')}. Click a hand card to play, click a board ability to activate, or pass.`);
-    // Wave 2: hand + activation clicks pending Wave 3 port. Pass works.
-    const pass = document.createElement('button');
-    pass.textContent = 'Pass';
-    pass.onclick = () => sendAction({ kind: 'Pass' }).then(render);
-    buttons.appendChild(pass);
+    // Wave 3: hand-candidate clicks + board-activation clicks
+    // + Pass button all rendered by Elm now.
   } else if (prompt.kind === 'PickAttackers') {
     const eligible = new Set(prompt.eligible);
     if (eligible.size === 0) {
@@ -872,14 +869,8 @@ function _renderInner(s) {
       banner = `Choose a target — ${rawText}.`;
     }
     setPrompt(banner + (prompt.optional ? ' — may skip' : ''));
-    // Wave 2: pool clickability + casting-host border pending Wave 5.
-    // Skip still advances when prompt.optional.
-    if (prompt.optional) {
-      const skip = document.createElement('button');
-      skip.textContent = 'Skip';
-      skip.onclick = () => sendAction({ kind: 'ChoiceCard', iid: null }).then(render);
-      buttons.appendChild(skip);
-    }
+    // Wave 5: pool clickability + casting-host badge + optional Skip
+    // all rendered by Elm via zoneCardsForPrompt + viewPromptButtons.
   } else if (prompt.kind === 'Confirm') {
     setPrompt(prompt.prompt || 'Confirm?');
     // Wave 1: Yes/No buttons rendered by Elm via #elm-prompt-buttons.
@@ -1309,6 +1300,26 @@ window.tsotSpecExit = spectateExit;
 // surface, just routed through Elm.
 window.tsotApplyAction = async function (action) {
   await sendAction(action).then(render);
+};
+
+// Wave 3 — Elm's PickCard board-activation click fires
+// workerCmdOut { cmd:"activate_ability", payload:{iid, ability_index,
+// needs_x, text} }. JS handles the synchronous native prompt() for
+// X-cost activations because Elm has no equivalent; cancelling the
+// prompt aborts the action (matches the old fireActivation behaviour).
+window.tsotActivateAbility = async function (payload) {
+  let x = null;
+  if (payload && payload.needs_x) {
+    const v = parseInt(prompt(`Choose X for "${payload.text}" (>=1):`, '1'), 10);
+    if (!Number.isFinite(v) || v < 1) return;
+    x = v;
+  }
+  await sendAction({
+    kind: 'Activate',
+    iid: payload.iid,
+    ability_index: payload.ability_index,
+    x,
+  }).then(render);
 };
 
 // ============================================

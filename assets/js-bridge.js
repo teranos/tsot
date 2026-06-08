@@ -569,6 +569,9 @@ function tsotShowBridgeFailure(stage, err) {
         case 'apply_action':
           await window.tsotApplyAction(payload);
           break;
+        case 'activate_ability':
+          await window.tsotActivateAbility(payload);
+          break;
         default:
           throw new Error('unknown worker cmd: ' + String(cmd));
       }
