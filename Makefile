@@ -53,7 +53,7 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts assets wasm wasm-serve wasm-dev wasm-dev-serve clean-wasm
+.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts assets wasm wasm-serve wasm-dev wasm-dev-serve clean-wasm art
 
 help:
 	@echo ""
@@ -77,6 +77,9 @@ help:
 	@echo "  make pool                pool + archetypes dashboard → card-pool.html (chains curve-sample; POOL_NO_CURVE=1 to skip, POOL_NO_ARCHETYPES=1 to skip cluster section)"
 	@echo "  make probe [CARD_ID...]  side-by-side compare a card's declared variants (auto-discover if no id)"
 	@echo "  make probe-long [...]    same as probe but pop=30 gens=15 n=30 (~3min/variant, σ≈0.025)"
+	@echo "  make art                 generate art for one random card without art yet → gen_art/{id}_W_H.png"
+	@echo "                           defaults match ~/sd-cpp/ install; throttled to keep machine usable"
+	@echo "                           override: SD_BIN / SD_MODEL / SD_THREADS / SD_VRAM_RESERVE / SD_FAST=1"
 	@echo ""
 	@echo "WASM browser play:"
 	@echo "  make wasm                build the wasm bundle + stage dist/ (needs emcc on PATH)"
@@ -386,3 +389,12 @@ ifneq (,$(filter probe probe-long,$(MAKECMDGOALS)))
 $(PROBE_CARD_GOALS):
 	@:
 endif
+
+# `make art` — one random card without art gets a generated piece, dropped
+# into gen_art/{id}_W_H.png. Picks a card, reads its .lua metadata via the
+# same lua5.4 driver pattern as cards-report.py, builds a prompt, shells
+# out to stable-diffusion.cpp's `sd` binary, then carves slot-grid holes
+# via `magick` if the card declares any. Re-run to fill more cards.
+art:
+	@mkdir -p gen_art
+	@python3 tools/gen_art.py

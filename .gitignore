@@ -24,3 +24,9 @@ balance-probe-*.json
 balance-probe-report.html
 archetypes-report.html
 card-curve.json
+
+# `make art` output — generated card art (one png per card)
+gen_art/
+
+# Image assets used by gen_art (third-party icons, etc.)
+assets/icons/
