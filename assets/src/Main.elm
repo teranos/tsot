@@ -54,6 +54,7 @@ to `Hidden`.
 import Browser
 import Browser.Dom
 import BuildFooter
+import Card
 import Dict exposing (Dict)
 import GameScreen
 import Set
@@ -286,9 +287,9 @@ empty when absent (opp.hand is filtered server-side, etc.).
 -}
 type alias PlayerCounts =
     { side : String
-    , board : List GameScreen.CardView
-    , hand : List GameScreen.CardView
-    , graveyard : List GameScreen.CardView
+    , board : List Card.Card
+    , hand : List Card.Card
+    , graveyard : List Card.Card
     , deckCount : Int
     , handCount : Int
     , exileCount : Int
@@ -333,6 +334,7 @@ type alias Model =
     , chooseIntDraft : String
     , uctPreview : Maybe GameScreen.UctPreview
     , combat : GameScreen.CombatSelection
+    , actionInFlight : Bool
     }
 
 
@@ -437,6 +439,7 @@ init _ =
       , chooseIntDraft = ""
       , uctPreview = Nothing
       , combat = GameScreen.emptyCombatSelection
+      , actionInFlight = False
       }
     , Cmd.none
     )
@@ -758,6 +761,7 @@ update msg model =
                 , chooseIntDraft = newDraft
                 , combat = newCombat
                 , promptText = newPromptText
+                , actionInFlight = False
               }
             , Cmd.none
             )
@@ -824,24 +828,20 @@ update msg model =
             )
 
         ConfirmYesClicked ->
-            ( model
-            , applyAction
+            fireAction model
                 (E.object
                     [ ( "kind", E.string "ChoiceConfirm" )
                     , ( "yes", E.bool True )
                     ]
                 )
-            )
 
         ConfirmNoClicked ->
-            ( model
-            , applyAction
+            fireAction model
                 (E.object
                     [ ( "kind", E.string "ChoiceConfirm" )
                     , ( "yes", E.bool False )
                     ]
                 )
-            )
 
         PlayerChoiceClicked maybePid ->
             let
@@ -853,76 +853,60 @@ update msg model =
                         Nothing ->
                             E.null
             in
-            ( model
-            , applyAction
+            fireAction model
                 (E.object
                     [ ( "kind", E.string "ChoicePlayer" )
                     , ( "player", playerField )
                     ]
                 )
-            )
 
         IntChoiceInputChanged str ->
             ( { model | chooseIntDraft = str }, Cmd.none )
 
         IntChoiceConfirmClicked v ->
-            ( model
-            , applyAction
+            fireAction model
                 (E.object
                     [ ( "kind", E.string "ChoiceInt" )
                     , ( "value", E.int v )
                     ]
                 )
-            )
 
         HandCardClicked iid ->
-            ( model
-            , applyAction
+            fireAction model
                 (E.object
                     [ ( "kind", E.string "PlayCard" )
                     , ( "iid", E.string iid )
                     ]
                 )
-            )
 
         BoardActivationClicked act ->
-            ( model
-            , workerCmdOut
-                { cmd = "activate_ability"
-                , payload =
-                    E.object
-                        [ ( "iid", E.string act.iid )
-                        , ( "ability_index", E.int act.abilityIndex )
-                        , ( "needs_x", E.bool act.needsX )
-                        , ( "text", E.string act.text )
-                        ]
-                }
-            )
+            fireActivate model
+                (E.object
+                    [ ( "iid", E.string act.iid )
+                    , ( "ability_index", E.int act.abilityIndex )
+                    , ( "needs_x", E.bool act.needsX )
+                    , ( "text", E.string act.text )
+                    ]
+                )
 
         PassClicked ->
-            ( model
-            , applyAction (E.object [ ( "kind", E.string "Pass" ) ])
-            )
+            fireAction model (E.object [ ( "kind", E.string "Pass" ) ])
 
         TargetCardClicked iid ->
-            ( model
-            , applyAction
+            fireAction model
                 (E.object
                     [ ( "kind", E.string "ChoiceCard" )
                     , ( "iid", E.string iid )
                     ]
                 )
-            )
 
         SkipChoiceCardClicked ->
-            ( model
-            , applyAction
+            fireAction model
                 (E.object
                     [ ( "kind", E.string "ChoiceCard" )
                     , ( "iid", E.null )
                     ]
                 )
-            )
 
         AttackerToggled iid ->
             ( { model | combat = GameScreen.toggleAttacker iid model.combat }, Cmd.none )
@@ -934,44 +918,36 @@ update msg model =
             ( { model | combat = GameScreen.assignAttackerToStaged iid model.combat }, Cmd.none )
 
         ConfirmAttackersClicked ->
-            ( { model | combat = GameScreen.emptyCombatSelection }
-            , applyAction
+            fireAction { model | combat = GameScreen.emptyCombatSelection }
                 (E.object
                     [ ( "kind", E.string "Attackers" )
                     , ( "iids", E.list E.string (Set.toList model.combat.attackers) )
                     ]
                 )
-            )
 
         NoAttackClicked ->
-            ( { model | combat = GameScreen.emptyCombatSelection }
-            , applyAction
+            fireAction { model | combat = GameScreen.emptyCombatSelection }
                 (E.object
                     [ ( "kind", E.string "Attackers" )
                     , ( "iids", E.list E.string [] )
                     ]
                 )
-            )
 
         ConfirmBlocksClicked ->
-            ( { model | combat = GameScreen.emptyCombatSelection }
-            , applyAction
+            fireAction { model | combat = GameScreen.emptyCombatSelection }
                 (E.object
                     [ ( "kind", E.string "Blocks" )
                     , ( "pairs", encodeBlocksPairs model.combat.blocks )
                     ]
                 )
-            )
 
         NoBlocksClicked ->
-            ( { model | combat = GameScreen.emptyCombatSelection }
-            , applyAction
+            fireAction { model | combat = GameScreen.emptyCombatSelection }
                 (E.object
                     [ ( "kind", E.string "Blocks" )
                     , ( "pairs", E.list identity [] )
                     ]
                 )
-            )
 
         NoOp ->
             ( model, Cmd.none )
@@ -1018,6 +994,35 @@ promptCtxFromSlice _ slice =
 applyAction : E.Value -> Cmd Msg
 applyAction action =
     workerCmdOut { cmd = "apply_action", payload = action }
+
+
+{-| Fire an action with an in-flight guard. If a previous action's
+response hasn't landed yet (model.actionInFlight = True), the new
+action is silently dropped — prevents the double-click-pass during
+PickCard from queuing two Pass actions, the second of which the
+engine receives during DeclareBlockers and panics on. Cleared in
+GameStateReceived when the next state envelope arrives.
+-}
+fireAction : Model -> E.Value -> ( Model, Cmd Msg )
+fireAction model action =
+    if model.actionInFlight then
+        ( model, Cmd.none )
+
+    else
+        ( { model | actionInFlight = True }
+        , workerCmdOut { cmd = "apply_action", payload = action }
+        )
+
+
+fireActivate : Model -> E.Value -> ( Model, Cmd Msg )
+fireActivate model payload =
+    if model.actionInFlight then
+        ( model, Cmd.none )
+
+    else
+        ( { model | actionInFlight = True }
+        , workerCmdOut { cmd = "activate_ability", payload = payload }
+        )
 
 
 sendSpecCmd : String -> E.Value -> Cmd Msg
@@ -1222,9 +1227,9 @@ decodePlayerCounts : D.Decoder PlayerCounts
 decodePlayerCounts =
     D.succeed PlayerCounts
         |> required "side" D.string
-        |> listOf "board" GameScreen.decodeCardView
-        |> listOf "hand" GameScreen.decodeCardView
-        |> listOf "graveyard" GameScreen.decodeCardView
+        |> listOf "board" Card.decode
+        |> listOf "hand" Card.decode
+        |> listOf "graveyard" Card.decode
         |> required "deck_count" D.int
         |> required "hand_count" D.int
         |> required "exile_count" D.int
@@ -1768,16 +1773,43 @@ renderGameScreen active prompt combat maybeSlice elmButtons =
         yourHandCards =
             zoneCardsForPrompt YourHand prompt combat maybeSlice (Maybe.map (.hand << .you) maybeSlice)
     in
+    let
+        oppDeckCount =
+            Maybe.map (deckCountText << .opp) maybeSlice |> Maybe.withDefault ""
+
+        yourDeckCount =
+            Maybe.map (deckCountText << .you) maybeSlice |> Maybe.withDefault ""
+    in
+    -- Layout per user 2026-06-09: H1 D1 / B1 G1 / B2 G2 / H2 D2 —
+    -- left column has hand→board→board→hand top-to-bottom, right column
+    -- has deck→graveyard→graveyard→deck. Hand row's "hand" is the
+    -- card list itself (your side) or just the count box (opp side
+    -- since opp hand is hidden). Deck row's "deck" is the deck-top
+    -- back-of-card widget plus a `deck:N` count badge.
     div [ id "game-screen", style "display" displayStyle ]
         [ div [ class "row" ]
             [ div [ class "zone opponent", style "flex" "2" ]
                 [ h2 []
-                    [ text "Opponent "
+                    [ text "Opp hand "
                     , span [ class "counts", id "opp-counts" ] [ text oppCounts ]
                     ]
+                , div [ class "cards", style "color" "#666", style "font-style" "italic", style "font-size" "0.7rem" ]
+                    [ text "(hidden)" ]
+                ]
+            , div [ class "zone", style "flex" "0 0 14rem" ]
+                [ h2 []
+                    [ text "Opp deck "
+                    , span [ class "counts" ] [ text oppDeckCount ]
+                    ]
+                , div [ class "cards", id "opp-deck-top" ] [ oppDeckTop ]
+                ]
+            ]
+        , div [ class "row" ]
+            [ div [ class "zone opponent", style "flex" "2" ]
+                [ h2 [] [ text "Opp board" ]
                 , div [ class "cards", id "opp-board-cards" ] oppBoardCards
                 ]
-            , div [ class "zone", style "flex" "1" ]
+            , div [ class "zone", style "flex" "0 0 14rem" ]
                 [ h2 []
                     [ text "Opp graveyard "
                     , span [ class "counts", id "opp-gy-count" ] [ text oppGy ]
@@ -1787,10 +1819,10 @@ renderGameScreen active prompt combat maybeSlice elmButtons =
             ]
         , div [ class "row" ]
             [ div [ class "zone", style "flex" "2" ]
-                [ h2 [] [ text "You" ]
+                [ h2 [] [ text "Your board" ]
                 , div [ class "cards", id "your-board-cards" ] yourBoardCards
                 ]
-            , div [ class "zone", style "flex" "1" ]
+            , div [ class "zone", style "flex" "0 0 14rem" ]
                 [ h2 []
                     [ text "Your graveyard "
                     , span [ class "counts", id "your-gy-count" ] [ text yourGy ]
@@ -1799,21 +1831,18 @@ renderGameScreen active prompt combat maybeSlice elmButtons =
                 ]
             ]
         , div [ class "row" ]
-            [ div [ class "zone" ]
+            [ div [ class "zone", style "flex" "2" ]
                 [ h2 []
                     [ text "Your hand "
                     , span [ class "counts", id "your-hand-counts" ] [ text yourHand ]
                     ]
                 , div [ class "cards", id "your-hand-cards" ] yourHandCards
                 ]
-            ]
-        , div [ class "row" ]
-            [ div [ class "zone", style "flex" "0 0 14rem" ]
-                [ h2 [] [ text "Opp deck top" ]
-                , div [ class "cards", id "opp-deck-top" ] [ oppDeckTop ]
-                ]
             , div [ class "zone", style "flex" "0 0 14rem" ]
-                [ h2 [] [ text "Your deck top" ]
+                [ h2 []
+                    [ text "Your deck "
+                    , span [ class "counts" ] [ text yourDeckCount ]
+                    ]
                 , div [ class "cards", id "your-deck-top" ] [ yourDeckTop ]
                 ]
             ]
@@ -1841,7 +1870,7 @@ type ZonePos
     | YourHand
 
 
-zoneCardsForPrompt : ZonePos -> GameScreen.Prompt -> GameScreen.CombatSelection -> Maybe GameViewSlice -> Maybe (List GameScreen.CardView) -> List (Html Msg)
+zoneCardsForPrompt : ZonePos -> GameScreen.Prompt -> GameScreen.CombatSelection -> Maybe GameViewSlice -> Maybe (List Card.Card) -> List (Html Msg)
 zoneCardsForPrompt zone prompt combat maybeSlice maybeCards =
     case maybeCards of
         Nothing ->
@@ -1863,7 +1892,7 @@ zoneCardsForPrompt zone prompt combat maybeSlice maybeCards =
                         _ ->
                             Dict.empty
             in
-            List.map (\c -> GameScreen.viewCard (cardOptsForZone zone prompt combat maybeSlice actsByIid c) c) cards
+            List.map (\c -> Card.view (cardOptsForZone zone prompt combat maybeSlice actsByIid c) Card.FaceUp c) cards
 
 
 {-| Per-card opts: starts from the zone's baseline (graveyards dim;
@@ -1872,26 +1901,29 @@ ChooseCard's overlay (pool clickability / host badge / non-pool dim)
 takes precedence over the baseline because the engine guarantees the
 prompt restricts the player to those pool members during this turn.
 -}
-cardOptsForZone : ZonePos -> GameScreen.Prompt -> GameScreen.CombatSelection -> Maybe GameViewSlice -> Dict String (List GameScreen.Activation) -> GameScreen.CardView -> GameScreen.CardOpts Msg
-cardOptsForZone zone prompt combat maybeSlice actsByIid c =
+cardOptsForZone : ZonePos -> GameScreen.Prompt -> GameScreen.CombatSelection -> Maybe GameViewSlice -> Dict String (List GameScreen.Activation) -> Card.Card -> Card.Config Msg
+cardOptsForZone zone prompt combat maybeSlice actsByIid (Card.Card c) =
     let
         defaults =
-            GameScreen.defaultCardOpts
+            Card.defaultConfig
 
         baseDim =
             zone == OppGraveyard || zone == YourGraveyard
 
         base =
             { defaults | dim = baseDim }
+
+        cIid =
+            Maybe.withDefault "" c.iid
     in
     case prompt of
         GameScreen.ChooseCardPrompt data ->
-            chooseCardOpts data c
+            chooseCardOpts data (Card.Card c)
 
         GameScreen.PickCardPrompt data ->
             case zone of
                 YourHand ->
-                    if List.member c.iid data.candidates then
+                    if List.member cIid data.candidates then
                         { base | clickable = Just HandCardClicked }
 
                     else
@@ -1900,7 +1932,7 @@ cardOptsForZone zone prompt combat maybeSlice actsByIid c =
                 YourBoard ->
                     let
                         acts =
-                            Dict.get c.iid actsByIid
+                            Dict.get cIid actsByIid
                                 |> Maybe.withDefault []
                                 |> List.reverse
                     in
@@ -1920,10 +1952,10 @@ cardOptsForZone zone prompt combat maybeSlice actsByIid c =
         GameScreen.PickAttackersPrompt data ->
             case zone of
                 YourBoard ->
-                    if List.member c.iid data.eligible then
+                    if List.member cIid data.eligible then
                         { base
                             | clickable = Just AttackerToggled
-                            , selected = Set.member c.iid combat.attackers
+                            , selected = Set.member cIid combat.attackers
                         }
 
                     else
@@ -1933,7 +1965,7 @@ cardOptsForZone zone prompt combat maybeSlice actsByIid c =
                     base
 
         GameScreen.PickBlocksPrompt data ->
-            pickBlocksOpts data combat maybeSlice zone c base
+            pickBlocksOpts data combat maybeSlice zone (Card.Card c) base
 
         _ ->
             base
@@ -1954,21 +1986,25 @@ pickBlocksOpts :
     -> GameScreen.CombatSelection
     -> Maybe GameViewSlice
     -> ZonePos
-    -> GameScreen.CardView
-    -> GameScreen.CardOpts Msg
-    -> GameScreen.CardOpts Msg
-pickBlocksOpts data combat maybeSlice zone c base =
+    -> Card.Card
+    -> Card.Config Msg
+    -> Card.Config Msg
+pickBlocksOpts data combat maybeSlice zone (Card.Card c) base =
+    let
+        cIid =
+            Maybe.withDefault "" c.iid
+    in
     case zone of
         YourBoard ->
             let
                 isEligibleBlocker =
-                    List.member c.iid data.eligibleBlockers
+                    List.member cIid data.eligibleBlockers
 
                 assignedTo =
-                    Dict.get c.iid combat.blocks
+                    Dict.get cIid combat.blocks
 
                 isStaged =
-                    combat.blockerPickFor == Just c.iid
+                    combat.blockerPickFor == Just cIid
             in
             { base
                 | clickable =
@@ -1997,7 +2033,7 @@ pickBlocksOpts data combat maybeSlice zone c base =
         OppBoard ->
             let
                 isAttacker =
-                    List.member c.iid data.attackers
+                    List.member cIid data.attackers
 
                 isClickableTarget =
                     isAttacker && combat.blockerPickFor /= Nothing
@@ -2007,7 +2043,7 @@ pickBlocksOpts data combat maybeSlice zone c base =
                         |> Dict.toList
                         |> List.filterMap
                             (\( blkIid, atkIid ) ->
-                                if atkIid == c.iid then
+                                if atkIid == cIid then
                                     Just blkIid
 
                                 else
@@ -2074,25 +2110,28 @@ labelForIid maybeSlice iid =
                         ++ slice.opp.board
                         ++ slice.opp.graveyard
             in
-            case List.filter (\c -> c.iid == iid) allCards of
-                c :: _ ->
+            case List.filter (\(Card.Card c) -> c.iid == Just iid) allCards of
+                (Card.Card c) :: _ ->
                     c.name
 
                 [] ->
                     cardSuffixFromIid iid
 
 
-chooseCardOpts : GameScreen.ChooseCardData -> GameScreen.CardView -> GameScreen.CardOpts Msg
-chooseCardOpts data c =
+chooseCardOpts : GameScreen.ChooseCardData -> Card.Card -> Card.Config Msg
+chooseCardOpts data (Card.Card c) =
     let
         defaults =
-            GameScreen.defaultCardOpts
+            Card.defaultConfig
+
+        cIid =
+            Maybe.withDefault "" c.iid
 
         inPool =
-            List.member c.iid data.pool
+            List.member cIid data.pool
 
         isHost =
-            data.host == Just c.iid
+            data.host == Just cIid
     in
     if isHost then
         { defaults
@@ -2151,19 +2190,23 @@ activationRow a =
         [ text ("\u{25B6} [" ++ String.fromInt a.abilityIndex ++ "] " ++ rawText ++ suffix) ]
 
 
+{-| Opponent's hand-count + exile-count (deck-count moved to the
+deck-top widget per user layout 2026-06-09). -}
 oppCountsText : PlayerCounts -> String
 oppCountsText p =
-    "deck:"
-        ++ String.fromInt p.deckCount
-        ++ " hand:"
-        ++ String.fromInt p.handCount
-        ++ " ex:"
-        ++ String.fromInt p.exileCount
+    "hand:" ++ String.fromInt p.handCount ++ " ex:" ++ String.fromInt p.exileCount
 
 
 yourHandCountsText : PlayerCounts -> String
 yourHandCountsText p =
-    "deck:" ++ String.fromInt p.deckCount ++ " ex:" ++ String.fromInt p.exileCount
+    "ex:" ++ String.fromInt p.exileCount
+
+
+{-| Deck-zone header text: shows the deck size. Lives next to the
+deck-top widget now (used to be in the hand-counts zone). -}
+deckCountText : PlayerCounts -> String
+deckCountText p =
+    "deck:" ++ String.fromInt p.deckCount
 
 
 {-| Back-of-card display: only color+symbol identity is public per RULES.

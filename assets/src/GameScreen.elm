@@ -1,7 +1,5 @@
 module GameScreen exposing
     ( Activation
-    , CardOpts
-    , CardView
     , ChooseCardData
     , ChooseIntData
     , ChoosePlayerData
@@ -17,16 +15,13 @@ module GameScreen exposing
     , UctPreview
     , assignAttackerToStaged
     , clickBlocker
-    , decodeCardView
     , decodePrompt
     , decodeUctPreview
-    , defaultCardOpts
     , emptyCombatSelection
     , promptKindKey
     , promptToText
     , resetCombatSelection
     , toggleAttacker
-    , viewCard
     , viewPromptButtons
     )
 
@@ -62,46 +57,8 @@ import Set exposing (Set)
 -- TYPES
 
 
-{-| Mirrors `tsot::sim::snapshot::CardView` on the wire. `effective_cost`
-differs from `cost` only when a static cost-reduction (Modern LCD Clock
-etc.) applies at cast time; `cardEl` shows both with a strike-through
-when they differ.
--}
-type alias CardView =
-    { iid : String
-    , id : String
-    , name : String
-    , kind : String
-    , colors : List String
-    , symbols : List String
-    , subtypes : List String
-    , cost : String
-    , effectiveCost : String
-    , abilities : List String
-    , tapped : Bool
-    , summoningSick : Bool
-    , damage : Float
-    , power : Float
-    , toughness : Float
-    , attached : List AttachedView
-    }
-
-
-{-| Mutations / equipment / attach-cards riding on a host creature.
-The engine's `CardView` is recursive (`attached: Vec<CardView>`), but
-Elm forbids recursive type aliases for records. Flatten one level —
-visualising more than one level of attached is unusual in the corpus.
--}
-type alias AttachedView =
-    { iid : String
-    , name : String
-    , kind : String
-    , colors : List String
-    , symbols : List String
-    , abilities : List String
-    , power : Float
-    , toughness : Float
-    }
+-- CardView + AttachedView consolidated into Card.elm
+-- (`Card.Card` / `Card.CardData`) 2026-06-09. Decoder is `Card.decode`.
 
 
 type alias Activation =
@@ -459,82 +416,13 @@ promptToText maybeCtx p =
 
 
 
--- CARD OPTS
-
-
-type alias CardOpts msg =
-    { clickable : Maybe (String -> msg)
-    , selected : Bool
-    , dim : Bool
-    , uctBadge : Maybe UctCandidate
-    , uctChosen : Bool
-    , borderColor : Maybe String
-    , borderStyle : Maybe String
-    , overlays : List (Html msg)
-    }
-
-
-defaultCardOpts : CardOpts msg
-defaultCardOpts =
-    { clickable = Nothing
-    , selected = False
-    , dim = False
-    , uctBadge = Nothing
-    , uctChosen = False
-    , borderColor = Nothing
-    , borderStyle = Nothing
-    , overlays = []
-    }
-
+-- CardOpts + defaultCardOpts + decodeCardView + optionalList +
+-- decodeAttached + the `required` pipeline helper consolidated into
+-- Card.elm 2026-06-09. `Card.Config` is the new opts type;
+-- `Card.decode` is the new decoder.
 
 
 -- DECODERS
-
-
-required : String -> D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
-required field aDec fDec =
-    D.map2 (\f a -> f a) fDec (D.field field aDec)
-
-
-decodeCardView : D.Decoder CardView
-decodeCardView =
-    D.succeed CardView
-        |> required "iid" D.string
-        |> required "id" D.string
-        |> required "name" D.string
-        |> required "kind" D.string
-        |> required "colors" (D.list D.string)
-        |> required "symbols" (D.list D.string)
-        |> required "subtypes" (D.list D.string)
-        |> required "cost" D.string
-        |> required "effective_cost" D.string
-        |> required "abilities" (D.list D.string)
-        |> required "tapped" D.bool
-        |> required "summoning_sick" D.bool
-        |> required "damage" D.float
-        |> required "power" D.float
-        |> required "toughness" D.float
-        |> optionalList "attached" decodeAttached
-
-
-optionalList : String -> D.Decoder a -> D.Decoder (List a -> b) -> D.Decoder b
-optionalList field aDec fDec =
-    D.map2 (\f a -> f a)
-        fDec
-        (D.oneOf [ D.field field (D.list aDec), D.succeed [] ])
-
-
-decodeAttached : D.Decoder AttachedView
-decodeAttached =
-    D.succeed AttachedView
-        |> required "iid" D.string
-        |> required "name" D.string
-        |> required "kind" D.string
-        |> required "colors" (D.list D.string)
-        |> required "symbols" (D.list D.string)
-        |> required "abilities" (D.list D.string)
-        |> required "power" D.float
-        |> required "toughness" D.float
 
 
 decodeActivation : D.Decoder Activation
@@ -704,289 +592,15 @@ promptKindKey p =
 
 
 
--- CARD PRIMITIVE
+-- Card primitive (viewCard, CardView, CardOpts, all the supporting
+-- helpers — viewCardHead / viewCardMeta / viewCardAbilities / colorTag
+-- / symbolTag / formatNumber / titleTextFor / viewUctBadge) consolidated
+-- into Card.elm 2026-06-09. This module no longer renders cards; it
+-- only owns Prompt / CombatSelection / UctPreview types and the
+-- prompt-bar text + buttons.
 
 
-{-| Port of the JS `cardEl(card, opts)` function. Mirrors the same DOM
-shape so the existing CSS rules in `play.html`'s `<style>` block
-(`.card`, `.head`, `.cost`, `.name`, `.stats`, `.color-X`, `.symbol`,
-`.meta-line`, `.abilities`, `.clickable`, `.selected`, `.tapped`,
-`.sick`, `.uct-recommended`, `.uct-badge`) keep matching unchanged.
-
-`opts.clickable = Just toMsg` wires a click handler that fires
-`toMsg iid` and adds the `.clickable` class. `opts.uctBadge` adds a
-UCT preview win-rate badge in the top-right; `opts.uctChosen` flags
-the card as UCT's recommendation. `opts.overlays` is a list of extra
-Html appended after the meta-line + abilities (used for the per-card
-labels JS added inline — "→ blocks X", "… click an attacker",
-ability rows under cards in PickCard activations, "◆ casting" host
-badge).
-
--}
-viewCard : CardOpts msg -> CardView -> Html msg
-viewCard opts card =
-    let
-        flag : Bool -> String -> String
-        flag b name =
-            if b then
-                name
-
-            else
-                ""
-
-        classes =
-            String.join " " <|
-                List.filter (not << String.isEmpty)
-                    [ "card"
-                    , flag (opts.clickable /= Nothing) "clickable"
-                    , flag opts.selected "selected"
-                    , flag card.tapped "tapped"
-                    , flag card.summoningSick "sick"
-                    , flag opts.uctChosen "uct-recommended"
-                    ]
-
-        styleAttrs =
-            List.filterMap identity
-                [ if opts.dim then
-                    Just (style "opacity" "0.6")
-
-                  else
-                    Nothing
-                , Maybe.map (style "border-color") opts.borderColor
-                , Maybe.map (style "border-style") opts.borderStyle
-                ]
-
-        titleAttr =
-            A.title
-                (card.iid
-                    ++ (if card.summoningSick then
-                            "  (summoning sick)"
-
-                        else
-                            ""
-                       )
-                )
-
-        clickAttrs =
-            case opts.clickable of
-                Just toMsg ->
-                    [ E.onClick (toMsg card.iid) ]
-
-                Nothing ->
-                    []
-    in
-    div
-        (class classes :: titleAttr :: styleAttrs ++ clickAttrs)
-        (viewUctBadge opts.uctBadge
-            ++ [ viewCardHead card ]
-            ++ viewCardMeta card
-            ++ viewCardAbilities card.abilities
-            ++ viewAttachedSection card.attached
-            ++ opts.overlays
-        )
-
-
-viewAttachedSection : List AttachedView -> List (Html msg)
-viewAttachedSection attached =
-    if List.isEmpty attached then
-        []
-
-    else
-        [ div
-            [ style "margin-top" "0.3rem"
-            , style "padding-top" "0.25rem"
-            , style "border-top" "1px dashed #444"
-            ]
-            (List.map viewAttachedCard attached)
-        ]
-
-
-viewAttachedCard : AttachedView -> Html msg
-viewAttachedCard a =
-    let
-        statsTag =
-            if a.kind == "Creature" then
-                " (" ++ formatNumber a.power ++ "/" ++ formatNumber a.toughness ++ ")"
-
-            else
-                ""
-    in
-    div
-        [ style "font-size" "0.65rem"
-        , style "color" "#bbb"
-        , style "padding" "0.1rem 0"
-        ]
-        [ div [ style "display" "flex", style "gap" "0.3rem", style "align-items" "center", style "flex-wrap" "wrap" ]
-            (span [ style "color" "#888" ] [ text "\u{21B3} " ]
-                :: span [ style "font-weight" "bold", style "color" "#ddd" ] [ text (a.name ++ statsTag) ]
-                :: List.map colorTag a.colors
-                ++ List.map symbolTag a.symbols
-            )
-        , if List.isEmpty a.abilities then
-            text ""
-
-          else
-            div [ style "color" "#999", style "margin-top" "0.1rem" ]
-                (List.map (\s -> div [] [ text s ]) a.abilities)
-        ]
-
-
-viewUctBadge : Maybe UctCandidate -> List (Html msg)
-viewUctBadge maybeCand =
-    case maybeCand of
-        Nothing ->
-            []
-
-        Just cand ->
-            let
-                pct =
-                    String.fromInt (round (cand.winRate * 100))
-
-                winsStr =
-                    formatNumber (toFloat (round (cand.wins * 10)) / 10)
-            in
-            [ div
-                [ class "uct-badge"
-                , A.title
-                    ("UCT visits="
-                        ++ String.fromInt cand.visits
-                        ++ " wins="
-                        ++ winsStr
-                    )
-                ]
-                [ text ("UCT " ++ pct ++ "%") ]
-            ]
-
-
-viewCardHead : CardView -> Html msg
-viewCardHead card =
-    let
-        printed =
-            card.cost
-
-        effective =
-            if String.isEmpty card.effectiveCost then
-                printed
-
-            else
-                card.effectiveCost
-
-        costSpans =
-            if printed == effective then
-                [ span [ class "cost" ] [ text printed ] ]
-
-            else
-                [ span [ class "cost" ] [ text effective ]
-                , span
-                    [ class "cost"
-                    , style "color" "#666"
-                    , style "text-decoration" "line-through"
-                    , style "margin-left" "0.3rem"
-                    ]
-                    [ text printed ]
-                ]
-    in
-    div [ class "head" ]
-        (span [ class "name" ] [ text card.name ] :: costSpans)
-
-
-viewCardMeta : CardView -> List (Html msg)
-viewCardMeta card =
-    let
-        statsPart =
-            if card.kind == "Creature" then
-                let
-                    effT =
-                        card.toughness - card.damage
-
-                    base =
-                        formatNumber card.power ++ "/" ++ formatNumber effT
-
-                    dmgTag =
-                        if card.damage > 0 then
-                            " (-" ++ formatNumber card.damage ++ ")"
-
-                        else
-                            ""
-                in
-                [ span [ class "stats" ] [ text (base ++ dmgTag) ] ]
-
-            else
-                []
-
-        colorParts =
-            List.map colorTag card.colors
-
-        symbolParts =
-            List.map symbolTag card.symbols
-
-        subtypeParts =
-            if List.isEmpty card.subtypes then
-                []
-
-            else
-                [ span [ style "color" "#888" ] [ text (String.join "·" card.subtypes) ] ]
-
-        groups =
-            List.filter (not << List.isEmpty)
-                [ statsPart
-                , colorParts
-                , symbolParts
-                , subtypeParts
-                ]
-
-        joined =
-            groups
-                |> List.intersperse [ text " " ]
-                |> List.concat
-    in
-    if List.isEmpty joined then
-        []
-
-    else
-        [ div [ class "meta-line" ] joined ]
-
-
-viewCardAbilities : List String -> List (Html msg)
-viewCardAbilities abilities =
-    if List.isEmpty abilities then
-        []
-
-    else
-        [ div [ class "abilities" ]
-            (List.map (\a -> div [] [ text a ]) abilities)
-        ]
-
-
-colorTag : String -> Html msg
-colorTag c =
-    let
-        code =
-            String.toLower c
-    in
-    span [ class ("color-" ++ code) ] [ text code ]
-
-
-symbolTag : String -> Html msg
-symbolTag s =
-    span [ class "symbol" ] [ text s ]
-
-
-{-| Render whole-numbered Floats without a trailing `.0` — power/toughness
-in CardView are wire-typed Float but visually expected as integers
-when they happen to be whole. Damage same.
--}
-formatNumber : Float -> String
-formatNumber n =
-    if n == toFloat (floor n) then
-        String.fromInt (floor n)
-
-    else
-        String.fromFloat n
-
-
-
--- WAVE 1: BUTTONS FOR SIMPLE PROMPTS
+-- PROMPT-BAR BUTTONS
 
 
 {-| Wave 1 scope: render the buttons + number-input for Confirm /
