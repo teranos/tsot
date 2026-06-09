@@ -9,39 +9,15 @@
   .row { display: flex; gap: 1rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
   .zone { border: 1px solid #333; padding: 0.5rem; min-width: 8rem; flex: 1; }
   .zone h2 { font-size: 0.7rem; margin: 0 0 0.4rem 0; color: #888; font-weight: normal; text-transform: uppercase; letter-spacing: 0.05em; }
-  .cards { display: flex; flex-wrap: wrap; gap: 0.25rem; }
-  .card {
-    display: flex; flex-direction: column;
-    padding: 0.35rem 0.5rem;
-    background: #1c1c20; border: 1px solid #444;
-    border-radius: 4px;
-    min-width: 8.5rem; max-width: 11rem;
-    /* SLOTS.md grid is 5 rows × 3 cols → cards are 3:5 portrait. */
-    aspect-ratio: 3 / 5;
-    font-size: 0.7rem;
-    position: relative;
-  }
-  .card.clickable { cursor: pointer; border-color: #4af; }
-  .card.clickable:hover { background: #234; }
-  .card.selected { background: #2a3a4f; border-color: #6cf; }
-  .card.tapped { opacity: 0.5; transform: rotate(6deg); }
-  .card.sick { border-style: dashed; }
+  /* The card primitive's CSS lives in Card.elm (Card.styles); it
+     owns .card + .head + .cost + .meta-line + .symbol + .color-* +
+     .stats + .abilities + state variants. What lives here is just
+     the caller-side surface: container layout for the in-game zone
+     (.cards) and the opponent-zone contextual tint. The .pool-grid
+     + .pool-card decorations live further down with the deckbuilder. */
+  .cards { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: flex-start; }
   .opponent .card { background: #221818; border-color: #533; }
   .opponent .card.clickable { border-color: #f88; }
-  .head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.4rem; }
-  .name { font-weight: bold; color: #eee; }
-  .cost { color: #fc6; font-size: 0.65rem; }
-  .meta-line { color: #888; font-size: 0.65rem; display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.1rem; }
-  .symbol { color: #6cf; }
-  .color-w { color: #ddd; }
-  .color-u { color: #4af; }
-  .color-b { color: #b6f; }
-  .color-r { color: #f66; }
-  .color-g { color: #6f6; }
-  .color-c { color: #aaa; }
-  .stats { color: #fc6; font-weight: bold; }
-  .abilities { color: #bbb; font-size: 0.65rem; margin-top: 0.2rem; line-height: 1.25; max-height: 4rem; overflow: hidden; }
-  .abilities li { margin-left: 0.7rem; }
   .counts { color: #888; font-size: 0.7rem; margin-left: 0.5rem; }
   #prompt { padding: 0.5rem; background: #1a2030; border: 1px solid #335; margin-bottom: 0.75rem; }
   #buttons { margin-top: 0.5rem; }
@@ -53,10 +29,9 @@
   .empty-note { color: #666; font-style: italic; font-size: 0.7rem; }
   .meta { color: #888; font-size: 0.75rem; margin-bottom: 0.5rem; }
   .deck-top { color: #6cf; }
-  /* UCT preview badge + recommendation border. Pure visual; the
-     engine doesn't see these — the human still picks freely. */
-  .card.uct-recommended { border-color: #6f9; box-shadow: 0 0 0 1px rgba(102, 255, 153, 0.4) inset; }
-  .uct-badge { position: absolute; top: 2px; right: 4px; color: #6f9; font-size: 0.6rem; font-weight: bold; pointer-events: none; }
+  /* .card.uct-recommended + .uct-badge live in Card.elm's styles
+     (they decorate the card itself). .uct-thinking is the spectator
+     status text outside the card, so it stays here. */
   .uct-thinking { color: #6f9; font-size: 0.7rem; margin-left: 0.5rem; }
   /* Error block: errors-as-first-class. Distinct red treatment so a
      captured failure (Rust panic, FFI Err, worker exception) is
@@ -73,15 +48,11 @@
   #deckbuilder h2 { font-size: 0.7rem; margin: 0 0 0.4rem 0; color: #888; font-weight: normal; text-transform: uppercase; letter-spacing: 0.05em; }
   #deckbuilder .filters { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
   #deckbuilder .filters select { background: #1c1c20; color: #ddd; border: 1px solid #444; padding: 0.2rem 0.4rem; font-family: inherit; font-size: 0.7rem; }
-  #deckbuilder .pool-grid { display: flex; flex-wrap: wrap; gap: 0.3rem; max-height: calc(100vh - 16rem); overflow-y: auto; }
+  #deckbuilder .pool-grid { display: flex; flex-wrap: wrap; gap: 0.3rem; max-height: calc(100vh - 16rem); overflow-y: auto; align-items: flex-start; }
   /* Pool cards: same look as in-game cards, with a + badge in the corner. */
   #deckbuilder .pool-card { position: relative; cursor: pointer; }
   #deckbuilder .pool-card:hover { background: #234; }
   #deckbuilder .pool-card::after { content: '+'; position: absolute; top: 2px; right: 4px; color: #6f9; font-size: 0.9rem; font-weight: bold; }
-  #deckbuilder .deck-row { display: flex; align-items: center; justify-content: space-between; padding: 0.2rem 0.4rem; border-bottom: 1px solid #222; font-size: 0.75rem; }
-  #deckbuilder .deck-row .qty { color: #fc6; min-width: 2.5rem; }
-  #deckbuilder .deck-row .name { color: #eee; flex: 1; margin-left: 0.4rem; }
-  #deckbuilder .deck-row button { padding: 0.1rem 0.4rem; font-size: 0.7rem; }
   #deckbuilder .deck-controls { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem; }
   #deckbuilder .deck-controls label { color: #888; font-size: 0.7rem; display: flex; align-items: center; gap: 0.4rem; }
   #deckbuilder .deck-controls select { background: #1c1c20; color: #ddd; border: 1px solid #444; padding: 0.2rem 0.4rem; font-family: inherit; font-size: 0.7rem; flex: 1; }

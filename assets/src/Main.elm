@@ -1595,7 +1595,12 @@ subscriptions _ =
 view : Model -> Html Msg
 view model =
     div []
-        [ viewSaveControls model
+        [ -- The card primitive owns its own CSS — mount once at top.
+          -- Container layout (.cards/.pool-grid), contextual overrides
+          -- (.opponent .card), and caller-specific decorations stay in
+          -- play.html's <style>; card-internal rules live in Card.elm.
+          Card.styles
+        , viewSaveControls model
         , viewDeckbuilder model
         , SpectatorBar.view spectatorBarConfig model.spectatorBar
         , viewPromptText model.promptText

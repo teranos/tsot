@@ -13,6 +13,7 @@ module Card exposing
     , kindFromString
     , slotKey
     , slotSpiralOrder
+    , styles
     , view
     )
 
@@ -138,7 +139,7 @@ converter changes — the primitive already accommodates the shape.
 
 -}
 
-import Html exposing (Html, button, div, span, text)
+import Html exposing (Html, div, node, span, text)
 import Html.Attributes as A exposing (class, style)
 import Html.Events as E
 import Json.Decode as D
@@ -482,6 +483,69 @@ view cfg mode (Card d) =
 
         Back ->
             viewBack cfg d
+
+
+{-| All card-internal CSS — the visual contract of the primitive.
+Returns a `<style>` element that Main mounts once at the top of the
+page. Card.elm owns the class names AND their rules in one place;
+classes-in-Elm / rules-in-stylesheet split is gone.
+
+Scope: ONLY rules that describe the card itself or its sub-pieces
+(`.card`, `.head`, `.name`, `.cost`, `.meta-line`, `.symbol`,
+`.color-*`, `.stats`, `.abilities`, `.card.clickable/.selected/.tapped/.sick/.uct-recommended`,
+`.uct-badge`, `.card-back`). Container layout (`.cards`, `.pool-grid`),
+contextual overrides (`.opponent .card`), and caller-specific
+decorations (`.pool-card::after` `+` badge) stay with their callers
+in play.html — they're not part of the card's visual contract,
+they're how the caller arranges or annotates cards in a surface.
+
+Width is a single value (was 8.5–11rem range — flex would grow each
+row's cards differently, and aspect-ratio: 3/5 then propagated that
+into different heights). One width + aspect-ratio → every card is
+identical w×h.
+-}
+styles : Html msg
+styles =
+    node "style" [] [ text cardCss ]
+
+
+cardCss : String
+cardCss =
+    """
+    .card {
+      display: flex; flex-direction: column;
+      padding: 0.35rem 0.5rem;
+      background: #1c1c20; border: 1px solid #444;
+      border-radius: 4px;
+      width: 9rem;
+      aspect-ratio: 3 / 5;
+      font-size: 0.7rem;
+      position: relative;
+      flex: 0 0 auto;
+    }
+    .card.clickable { cursor: pointer; border-color: #4af; }
+    .card.clickable:hover { background: #234; }
+    .card.selected { background: #2a3a4f; border-color: #6cf; }
+    .card.tapped { opacity: 0.5; transform: rotate(6deg); }
+    .card.sick { border-style: dashed; }
+    .card-back { /* Back-of-card: symbols-only per RULES C.1. No color, no name. */ }
+    .head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.4rem; }
+    .name { font-weight: bold; color: #eee; }
+    .cost { color: #fc6; font-size: 0.65rem; }
+    .meta-line { color: #888; font-size: 0.65rem; display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.1rem; }
+    .symbol { color: #6cf; }
+    .color-w { color: #ddd; }
+    .color-u { color: #4af; }
+    .color-b { color: #b6f; }
+    .color-r { color: #f66; }
+    .color-g { color: #6f6; }
+    .color-c { color: #aaa; }
+    .stats { color: #fc6; font-weight: bold; }
+    .abilities { color: #bbb; font-size: 0.65rem; margin-top: 0.2rem; line-height: 1.25; max-height: 4rem; overflow: hidden; }
+    .abilities li { margin-left: 0.7rem; }
+    .card.uct-recommended { border-color: #6f9; box-shadow: 0 0 0 1px rgba(102, 255, 153, 0.4) inset; }
+    .uct-badge { position: absolute; top: 2px; right: 4px; color: #6f9; font-size: 0.6rem; font-weight: bold; pointer-events: none; }
+    """
 
 
 {-| Full front render (V.4 / V.5 / V.6). All face-side fields surface
