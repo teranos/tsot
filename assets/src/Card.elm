@@ -3,12 +3,12 @@ module Card exposing
     , CardData
     , Config
     , Kind(..)
-    , RenderMode(..)
     , Slot(..)
     , SlotSymbol
     , Timing(..)
     , decode
     , defaultConfig
+    , faceDownConfig
     , isAttachedZone
     , kindFromString
     , slotKey
@@ -303,32 +303,21 @@ type Timing
     | Sorcery
 
 
-{-| Two render modes per RULES C.3 ("A card has two display states:
-face-up and face-down"). No further taxonomy — pool tiles are
-`Front` in a smaller CSS container, deck-list rows are text outside
-the card primitive, patience-style attached strips are `Back`
-clipped by container overflow. The card itself is two modes.
-
-  - `Front` — color (per C.5), name, cost, abilities, p/t, subtypes,
-    every face-side property visible.
-  - `Back` — ONLY symbols at slot positions (per C.1, SLOTS.md).
-    Never color, never name, never anything else. Per V.1 the
-    top-of-deck back is publicly visible (which is the symbols);
-    per V.7 + P.17 attached cards are face-down (back visible to
-    both, face only to controller per P.18).
--}
-type RenderMode
-    = Front
-    | Back
-
-
 {-| Polymorphic msg config — caller in Main / GameScreen wires in
 their concrete Msg. Mirrors SpectatorBar.Config / LogPanel pattern.
+
+Per CARD.md Axiom: a card is ONE DOM element across its lifetime.
+There is no `RenderMode = Front | Back` dispatch — the same render
+function always emits the full face-up DOM, with `.face-down` class
+controlling visual state. CSS hides face-only children when
+face-down; `:hover` (scoped to attached-rows) reverts. RULES C.3 is
+two display STATES of the same card, not two renders.
 -}
 type alias Config msg =
     { clickable : Maybe (String -> msg)
     , selected : Bool
     , dim : Bool
+    , faceDown : Bool
     , uctBadge : Maybe { winRate : Float, visits : Int, wins : Float }
     , uctChosen : Bool
     , borderColor : Maybe String
@@ -342,12 +331,24 @@ defaultConfig =
     { clickable = Nothing
     , selected = False
     , dim = False
+    , faceDown = False
     , uctBadge = Nothing
     , uctChosen = False
     , borderColor = Nothing
     , borderStyle = Nothing
     , overlays = []
     }
+
+
+{-| Convenience: defaultConfig with `faceDown = True`. Used by
+deck-top zones, the attached strip's internal helper, and anywhere
+else a caller wants the face-down visual state without unpacking
+the record. Per CARD.md Axiom this is just a state flag — same DOM
+element, same `view` function.
+-}
+faceDownConfig : Config msg
+faceDownConfig =
+    { defaultConfig | faceDown = True }
 
 
 {-| ATTACHED zone test for the few callsites that need it (e.g., the
@@ -475,14 +476,35 @@ defaultSymbolsToSlots glyphs =
 -- VIEW
 
 
-view : Config msg -> RenderMode -> Card -> Html msg
-view cfg mode (Card d) =
-    case mode of
-        Front ->
-            viewFront cfg d
+{-| Entry point per CARD.md Axiom: ONE DOM element per card iid. The
+function emits the full face-up DOM always; `cfg.faceDown=True` adds
+a `.face-down` class that flips visual state via CSS (front-only
+children get `display:none`). Hover-flip on attached cards lives in
+CSS scoped to `.attached-row:hover` — same element, never a popover
+or a second card node. Hosts with attached children render with an
+in-place strip; the strip is OUTSIDE the host's `.card` but inside
+the `.card-host` wrapper (same flex column).
+-}
+view : Config msg -> Card -> Html msg
+view cfg (Card d) =
+    if List.isEmpty d.attached then
+        viewSingle cfg d
 
-        Back ->
-            viewBack cfg d
+    else
+        div [ class "card-host" ]
+            [ viewSingle cfg d
+            , div [ class "attached-strip" ]
+                (List.map viewAttachedRow d.attached)
+            ]
+
+
+viewAttachedRow : Card -> Html msg
+viewAttachedRow (Card d) =
+    -- ONE element per attached iid. `.attached-row` clips to a thin
+    -- visible strip; `:hover` on the row pops it out + reveals face
+    -- via CSS on the same element. No second DOM node.
+    div [ class "attached-row" ]
+        [ viewSingle faceDownConfig d ]
 
 
 {-| All card-internal CSS — the visual contract of the primitive.
@@ -528,7 +550,6 @@ cardCss =
     .card.selected { background: #2a3a4f; border-color: #6cf; }
     .card.tapped { opacity: 0.5; transform: rotate(6deg); }
     .card.sick { border-style: dashed; }
-    .card-back { /* Back-of-card: symbols-only per RULES C.1. No color, no name. */ }
     .head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.4rem; }
     .name { font-weight: bold; color: #eee; }
     .cost { color: #fc6; font-size: 0.65rem; }
@@ -545,14 +566,62 @@ cardCss =
     .abilities li { margin-left: 0.7rem; }
     .card.uct-recommended { border-color: #6f9; box-shadow: 0 0 0 1px rgba(102, 255, 153, 0.4) inset; }
     .uct-badge { position: absolute; top: 2px; right: 4px; color: #6f9; font-size: 0.6rem; font-weight: bold; pointer-events: none; }
+
+    /* Face-down state — per CARD.md Axiom: same DOM element, different
+       visual state. Hide head, abilities, and every meta-line child
+       that isn't a .symbol (stats / color tags / subtypes). Per RULES
+       C.1 the back shows ONLY symbols. The .face-down rules apply
+       wherever the card sits — deck-top, attached strip, future
+       face-down hand cards. */
+    .card.face-down .head,
+    .card.face-down .abilities,
+    .card.face-down .meta-line > :not(.symbol) { display: none; }
+
+    /* Attached-card strip below the host (Phase 4 / Slice 1). Same
+       DOM element as a normal card — just rendered with faceDown=True
+       and wrapped in an .attached-row that clips to a 1.8rem strip
+       (so visually you see the top edge of a card-back tucked under
+       the host). On `.attached-row:hover` the row's overflow becomes
+       visible AND the descendant `.card.face-down`'s display:none
+       rules are reverted — the SAME element flips to face-up, in
+       place. No popover, no second .card, no degenerated tooltip
+       representation. Z-index lifts on hover so the revealed face
+       overlays sibling rows below.
+
+       Note: the `.attached-row > .card` width/aspect-ratio still
+       resolves to 9rem × 15rem; the row clip makes only the top
+       1.8rem visible by default. The bottom 13.2rem is the
+       "tucked-behind" portion that emerges on hover. */
+    .card-host { display: flex; flex-direction: column; flex: 0 0 auto; }
+    .attached-strip { display: flex; flex-direction: column; width: 9rem; margin-top: 0.15rem; }
+    .attached-row {
+      position: relative; width: 9rem; height: 1.8rem;
+      overflow: hidden;
+      margin-top: -1px;
+    }
+    .attached-row:first-child { margin-top: 0; }
+    .attached-row:hover { overflow: visible; z-index: 100; }
+    .attached-row:hover .card.face-down .head,
+    .attached-row:hover .card.face-down .abilities,
+    .attached-row:hover .card.face-down .meta-line > :not(.symbol) { display: revert; }
     """
 
 
-{-| Full front render (V.4 / V.5 / V.6). All face-side fields surface
-including color (per C.5).
+{-| Single render path per CARD.md Axiom. Always emits the full
+face-up DOM (head + meta + abilities + uct-badge + overlays). The
+`.face-down` class is the only visual differentiator between states:
+CSS hides head + abilities + non-symbol meta children when face-down,
+and `.attached-row:hover` reverts those rules so the card flips back
+to face-up — same element, no second node, no popover. C.1 (back =
+symbols only) and C.5 (front carries color) are enforced via the
+CSS, not via separate render branches.
+
+`viewBackSymbols`-style symbols-only rendering doesn't exist anymore
+— the meta-line carries everything; CSS picks which children to show
+based on `.face-down`.
 -}
-viewFront : Config msg -> CardData -> Html msg
-viewFront cfg d =
+viewSingle : Config msg -> CardData -> Html msg
+viewSingle cfg d =
     let
         flag b name =
             if b then
@@ -570,6 +639,7 @@ viewFront cfg d =
                     , flag d.tapped "tapped"
                     , flag d.summoningSick "sick"
                     , flag cfg.uctChosen "uct-recommended"
+                    , flag cfg.faceDown "face-down"
                     ]
 
         styleAttrs =
@@ -592,9 +662,15 @@ viewFront cfg d =
 
                 Nothing ->
                     []
+
+        iidAttr =
+            -- Per CARD.md Axiom Slice 2/3: stable per-card identity.
+            -- Falls back to `id` when iid is Nothing (deckbuilder).
+            A.attribute "data-iid" (Maybe.withDefault d.id d.iid)
     in
     div
         ([ class classes
+         , iidAttr
          , A.title (titleTextFor d)
          ]
             ++ styleAttrs
@@ -606,31 +682,6 @@ viewFront cfg d =
             ++ viewAbilities d.abilities
             ++ cfg.overlays
         )
-
-
-{-| Back-only render. Per C.1 ONLY symbols are visible on the back —
-no color, no name, no cost, no abilities, no stats. Color lives on
-the front side (front-only per RULES). Per C.17b a Symbol card's
-back fills the central 3×3 with its glyph (deferred until engine
-ships per-slot symbol positions — current default is spiral-out
-fill from C). Per C.13 transparent-frame cards have no symbols on
-the back at all (rendered empty here pending per-slot holes).
--}
-viewBack : Config msg -> CardData -> Html msg
-viewBack cfg d =
-    div
-        [ class "card card-back"
-        , A.title (d.id ++ "  (face-down)")
-        ]
-        [ viewBackSymbols d ]
-
-
--- viewBackStrip / viewCompactRowMin DELETED 2026-06-09 per user:
--- "a compact list is harmful because it hides information", "always
--- need to see the full card", "front or back". Two modes only — the
--- card primitive ALWAYS renders the full card, never a compressed
--- strip or row variant. Container sizing / patience-stack overlap
--- is the caller's CSS responsibility, not a render-mode of the card.
 
 
 
@@ -735,12 +786,6 @@ viewAbilities abilities =
         [ div [ class "abilities" ]
             (List.map (\a -> div [] [ text a ]) abilities)
         ]
-
-
-viewBackSymbols : CardData -> Html msg
-viewBackSymbols d =
-    div [ class "meta-line" ]
-        (List.map (\s -> span [ class "symbol" ] [ text s.glyph ]) d.symbols)
 
 
 viewUctBadge : Maybe { winRate : Float, visits : Int, wins : Float } -> List (Html msg)

@@ -1745,13 +1745,13 @@ renderGameScreen active prompt combat maybeSlice elmButtons =
         oppDeckTop =
             maybeSlice
                 |> Maybe.andThen (.deckTop << .opp)
-                |> Maybe.map (Card.view Card.defaultConfig Card.Back)
+                |> Maybe.map (Card.view Card.faceDownConfig)
                 |> Maybe.withDefault (text "")
 
         yourDeckTop =
             maybeSlice
                 |> Maybe.andThen (.deckTop << .you)
-                |> Maybe.map (Card.view Card.defaultConfig Card.Back)
+                |> Maybe.map (Card.view Card.faceDownConfig)
                 |> Maybe.withDefault (text "")
 
         displayStyle =
@@ -1895,7 +1895,7 @@ zoneCardsForPrompt zone prompt combat maybeSlice maybeCards =
                         _ ->
                             Dict.empty
             in
-            List.map (\c -> Card.view (cardOptsForZone zone prompt combat maybeSlice actsByIid c) Card.Front c) cards
+            List.map (\c -> Card.view (cardOptsForZone zone prompt combat maybeSlice actsByIid c) c) cards
 
 
 {-| Per-card opts: starts from the zone's baseline (graveyards dim;
@@ -2335,7 +2335,7 @@ poolMatchesFilters model entry =
 
 viewPoolCard : CardPoolEntry -> Html Msg
 viewPoolCard entry =
-    Card.view (poolCardConfig entry) Card.Front (poolEntryToCard entry)
+    Card.view (poolCardConfig entry) (poolEntryToCard entry)
 
 
 poolCardConfig : CardPoolEntry -> Card.Config Msg
@@ -2515,7 +2515,7 @@ viewDeckRows model =
 
 viewDeckRow : Int -> CardPoolEntry -> Html Msg
 viewDeckRow qty entry =
-    Card.view (deckRowConfig qty entry) Card.Front (poolEntryToCard entry)
+    Card.view (deckRowConfig qty entry) (poolEntryToCard entry)
 
 
 deckRowConfig : Int -> CardPoolEntry -> Card.Config Msg
