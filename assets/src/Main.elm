@@ -2330,94 +2330,71 @@ poolMatchesFilters model entry =
 
 viewPoolCard : CardPoolEntry -> Html Msg
 viewPoolCard entry =
-    div
-        [ class "card pool-card"
-        , Html.Attributes.title entry.id
-        , onClick (PoolCardClicked entry.id)
-        ]
-        ([ div [ class "head" ]
-            [ span [ class "name" ] [ text entry.name ]
-            , span [ class "cost" ] [ text entry.costText ]
-            ]
-         ]
-            ++ viewCardMetaLine entry
-            ++ viewCardAbilities entry.abilities
-        )
+    Card.view (poolCardConfig entry) Card.Front (poolEntryToCard entry)
 
 
-viewCardMetaLine : CardPoolEntry -> List (Html Msg)
-viewCardMetaLine entry =
+poolCardConfig : CardPoolEntry -> Card.Config Msg
+poolCardConfig _ =
     let
-        statsHtml =
-            case ( entry.kind, entry.power, entry.toughness ) of
-                ( "Creature", Just p, Just t ) ->
-                    [ span [ class "stats" ]
-                        [ text (formatStat p ++ "/" ++ formatStat t) ]
-                    ]
-
-                _ ->
-                    []
-
-        colorTags =
-            List.map colorTag entry.colors
-
-        symTags =
-            List.map symbolTag entry.symbols
-
-        subtypeSpan =
-            if List.isEmpty entry.subtypes then
-                []
-
-            else
-                [ span [ style "color" "#888" ]
-                    [ text (String.join "·" entry.subtypes) ]
-                ]
-
-        parts =
-            statsHtml ++ colorTags ++ symTags ++ subtypeSpan
+        base =
+            Card.defaultConfig
     in
-    if List.isEmpty parts then
-        []
-
-    else
-        [ div
-            [ class "meta-line"
-            , style "display" "flex"
-            , style "gap" "0.4rem"
-            , style "flex-wrap" "wrap"
-            ]
-            parts
-        ]
+    { base | clickable = Just PoolCardClicked }
 
 
-formatStat : Float -> String
-formatStat f =
-    if toFloat (round f) == f then
-        String.fromInt (round f)
+{-| Bridge a deckbuilder pool entry into the unified `Card`. Phase 3
+of card consolidation — the deckbuilder previously had its own
+ad-hoc render (`viewPoolCard` + `viewCardMetaLine` + `colorTag` etc.)
+that drifted from the in-game render. Now both surfaces route through
+`Card.view Card.Front`.
 
-    else
-        String.fromFloat f
+Pool entries lack the in-game-only fields (`iid`, `tapped`,
+`summoning_sick`, `damage`, `effective_cost`, `attached`); they default
+to the values a fresh-printed card would have. Power/toughness default
+to 0 when the kind is non-Creature — `Card.viewMeta` only emits the
+stats line when `kind == Creature`, so the 0/0 default never renders
+for non-creatures.
+
+Symbols default to the SLOTS.md spiral-out order (same fallback as
+`Card.decode`). When the engine emits per-slot positions on the pool
+wire shape, only this converter changes.
+-}
+poolEntryToCard : CardPoolEntry -> Card.Card
+poolEntryToCard e =
+    Card.Card
+        { iid = Nothing
+        , id = e.id
+        , name = e.name
+        , kind = Card.kindFromString e.kind
+        , colors = e.colors
+        , symbols = List.map2 Card.SlotSymbol Card.slotSpiralOrder e.symbols
+        , subtypes = e.subtypes
+        , printedCost = e.costText
+        , effectiveCost = e.costText
+        , abilities = e.abilities
+        , timing = Maybe.andThen parsePoolTiming e.timing
+        , transparentFrame = False
+        , holes = []
+        , printedPower = Maybe.withDefault 0 e.power
+        , printedToughness = Maybe.withDefault 0 e.toughness
+        , tapped = False
+        , summoningSick = False
+        , damage = 0
+        , attached = []
+        }
 
 
-colorTag : String -> Html Msg
-colorTag c =
-    span [ class ("color-" ++ String.left 1 (String.toLower c)) ] [ text c ]
+parsePoolTiming : String -> Maybe Card.Timing
+parsePoolTiming s =
+    case String.toLower s of
+        "instant" ->
+            Just Card.Instant
 
+        "sorcery" ->
+            Just Card.Sorcery
 
-symbolTag : String -> Html Msg
-symbolTag s =
-    span [ class "symbol" ] [ text s ]
-
-
-viewCardAbilities : List String -> List (Html Msg)
-viewCardAbilities abilities =
-    if List.isEmpty abilities then
-        []
-
-    else
-        [ div [ class "abilities" ]
-            (List.map (\s -> div [] [ text s ]) abilities)
-        ]
+        _ ->
+            Nothing
 
 
 viewDeckbuilderDeck : Model -> Html Msg
@@ -2486,18 +2463,26 @@ viewDeckControls model =
         ]
 
 
+{-| Render the current deck as a vertical column of full `Card.Front`
+renders, each with qty + remove overlay. Per user 2026-06-09 — "always
+need to see the full card", "a compact list is harmful because it
+hides information" — so the deck list shows the same primitive as the
+pool, not a compact pill row. Ids without a matching pool entry are
+dropped (stale deck on a freshly-loaded pool).
+-}
 viewDeckRows : Model -> Html Msg
 viewDeckRows model =
     let
         counts =
             countById model.deck
 
-        nameOf id =
+        entryFor id =
             model.cardPool
                 |> List.filter (\e -> e.id == id)
                 |> List.head
-                |> Maybe.map .name
-                |> Maybe.withDefault id
+
+        nameOf id =
+            entryFor id |> Maybe.map .name |> Maybe.withDefault id
 
         sorted =
             counts
@@ -2510,36 +2495,55 @@ viewDeckRows model =
                             compare (nameOf ida) (nameOf idb)
                     )
     in
-    div [] (List.map (\( id, qty ) -> viewDeckRow (nameOf id) id qty) sorted)
-
-
-viewDeckRow : String -> String -> Int -> Html Msg
-viewDeckRow displayName cardId qty =
     div
-        [ class "deck-row"
-        , style "display" "flex"
-        , style "align-items" "center"
-        , style "justify-content" "space-between"
-        , style "padding" "0.2rem 0.4rem"
-        , style "border-bottom" "1px solid #222"
-        , style "font-size" "0.75rem"
+        [ style "display" "flex"
+        , style "flex-direction" "column"
+        , style "gap" "0.3rem"
         ]
-        [ span [ class "qty", style "color" "#fc6", style "min-width" "2.5rem" ]
-            [ text (String.fromInt qty ++ "\u{00D7}") ]
-        , span
-            [ class "name"
-            , style "color" "#eee"
-            , style "flex" "1"
-            , style "margin-left" "0.4rem"
+        (List.filterMap
+            (\( id, qty ) ->
+                entryFor id |> Maybe.map (viewDeckRow qty)
+            )
+            sorted
+        )
+
+
+viewDeckRow : Int -> CardPoolEntry -> Html Msg
+viewDeckRow qty entry =
+    Card.view (deckRowConfig qty entry) Card.Front (poolEntryToCard entry)
+
+
+deckRowConfig : Int -> CardPoolEntry -> Card.Config Msg
+deckRowConfig qty entry =
+    let
+        base =
+            Card.defaultConfig
+    in
+    { base
+        | overlays =
+            [ div
+                [ class "deck-row-controls"
+                , style "display" "flex"
+                , style "align-items" "center"
+                , style "justify-content" "space-between"
+                , style "gap" "0.4rem"
+                , style "margin-top" "0.3rem"
+                ]
+                [ span
+                    [ class "qty"
+                    , style "color" "#fc6"
+                    , style "font-size" "0.75rem"
+                    ]
+                    [ text (String.fromInt qty ++ "\u{00D7}") ]
+                , button
+                    [ onClick (DeckRowRemove entry.id)
+                    , style "padding" "0.1rem 0.4rem"
+                    , style "font-size" "0.7rem"
+                    ]
+                    [ text "-" ]
+                ]
             ]
-            [ text displayName ]
-        , button
-            [ onClick (DeckRowRemove cardId)
-            , style "padding" "0.1rem 0.4rem"
-            , style "font-size" "0.7rem"
-            ]
-            [ text "-" ]
-        ]
+    }
 
 
 countById : List String -> List ( String, Int )

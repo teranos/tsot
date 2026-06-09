@@ -45,22 +45,22 @@ harmful — every Card render shows the whole card.
         + `CardOpts` + `decodeCardView`. PlayerCounts.board/hand/
         graveyard thread `List Card` through. Done in commit a2306ca.
 
-  - [ ] **Phase 2 — Wire `Card.view Card.Back` into deck-top zones.**
-        Replace `Main.viewDeckTop` + `DeckBack`. Each deck-top zone
-        renders a `Card` in `Back` mode (symbols at slot positions,
-        NO COLOR per C.1). Engine already emits `deck_top: Option<CardView>`
-        full shape — `Card.decode` reads it directly.
+  - [x] ~~**Phase 2 — Wire `Card.view Card.Back` into deck-top zones.**~~
+        Replaced `Main.viewDeckTop` + `DeckBack` + the back-side
+        color tags (C.1 violation in the old impl). Done in commit
+        25022fd.
 
-  - [ ] **Phase 3 — Wire `Card.view Card.Front` into the deckbuilder.**
-        Replace `Main.viewPoolCard` + `viewDeckRow` renders with full
+  - [x] ~~**Phase 3 — Wire `Card.view Card.Front` into the deckbuilder.**~~
+        Replaced `Main.viewPoolCard` + `viewDeckRow` with full
         `Card.view Card.Front`. Deckbuilder shows the full card every
         time, not a compact pill or row — per user, "always need to
         see the full card", "a compact list is harmful because it
         hides information". The deckbuilder layout (grid for pool,
         list+count for deck) is container CSS, not a render-mode
-        decomposition. Add `fromPoolEntry : CardPoolEntry -> Card`
-        converter to bridge the deckbuilder's wire shape (no iid, no
-        tapped, Maybe power/toughness) into the unified Card type.
+        decomposition. `Main.poolEntryToCard` bridges the deckbuilder
+        envelope (no iid, no tapped, Maybe power/toughness) into Card;
+        `Card.viewFront`'s click fallback uses `id` when `iid` is
+        Nothing so pool clicks still fire.
 
   - [ ] **Phase 4 — Patience-style attached stack.** Render each
         entry in `CardData.attached` as `Card.view Card.Back`
@@ -520,11 +520,13 @@ viewFront cfg d =
                 ]
 
         clickAttrs =
-            case ( cfg.clickable, d.iid ) of
-                ( Just toMsg, Just iid ) ->
-                    [ E.onClick (toMsg iid) ]
+            case cfg.clickable of
+                Just toMsg ->
+                    -- iid for in-game instances; fall back to card-id
+                    -- for deckbuilder pool entries (no instance yet).
+                    [ E.onClick (toMsg (Maybe.withDefault d.id d.iid)) ]
 
-                _ ->
+                Nothing ->
                     []
     in
     div
