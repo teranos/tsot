@@ -294,14 +294,13 @@ type alias PlayerCounts =
     , handCount : Int
     , exileCount : Int
     , graveyardCount : Int
-    , deckTop : Maybe DeckBack
+    , deckTop : Maybe Card.Card
     }
 
 
-type alias DeckBack =
-    { colors : List String
-    , symbols : List String
-    }
+-- DeckBack type consolidated into Card.Card 2026-06-09. The deck-top
+-- widget renders via Card.view Card.Back (symbols-only, no color
+-- per C.1).
 
 
 type alias GameViewSlice =
@@ -1234,7 +1233,7 @@ decodePlayerCounts =
         |> required "hand_count" D.int
         |> required "exile_count" D.int
         |> required "graveyard_count" D.int
-        |> optional "deck_top" decodeDeckBack
+        |> optional "deck_top" Card.decode
 
 
 {-| Pipeline-style decoder slot for a list field with an empty-list
@@ -1248,16 +1247,9 @@ listOf field aDec fDec =
         (D.oneOf [ D.field field (D.list aDec), D.succeed [] ])
 
 
-{-| `deck_top` is `Option<CardView>` engine-side; null when the deck
-is empty. Requiring both fields lets the outer `optional "deck_top"`
-turn a null into `Nothing` (since the inner decode fails on null).
-CardView always emits `colors` + `symbols` as arrays, possibly empty.
--}
-decodeDeckBack : D.Decoder DeckBack
-decodeDeckBack =
-    D.map2 DeckBack
-        (D.field "colors" (D.list D.string))
-        (D.field "symbols" (D.list D.string))
+-- decodeDeckBack consolidated into Card.decode 2026-06-09. The
+-- `optional "deck_top" Card.decode` above now produces a Maybe Card.Card
+-- directly; null deck_top remains Nothing.
 
 
 required : String -> D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
@@ -1746,10 +1738,16 @@ renderGameScreen active prompt combat maybeSlice elmButtons =
             Maybe.map (yourHandCountsText << .you) maybeSlice |> Maybe.withDefault ""
 
         oppDeckTop =
-            Maybe.map (viewDeckTop << .deckTop << .opp) maybeSlice |> Maybe.withDefault (text "")
+            maybeSlice
+                |> Maybe.andThen (.deckTop << .opp)
+                |> Maybe.map (Card.view Card.defaultConfig Card.Back)
+                |> Maybe.withDefault (text "")
 
         yourDeckTop =
-            Maybe.map (viewDeckTop << .deckTop << .you) maybeSlice |> Maybe.withDefault (text "")
+            maybeSlice
+                |> Maybe.andThen (.deckTop << .you)
+                |> Maybe.map (Card.view Card.defaultConfig Card.Back)
+                |> Maybe.withDefault (text "")
 
         displayStyle =
             if active then
@@ -1892,7 +1890,7 @@ zoneCardsForPrompt zone prompt combat maybeSlice maybeCards =
                         _ ->
                             Dict.empty
             in
-            List.map (\c -> Card.view (cardOptsForZone zone prompt combat maybeSlice actsByIid c) Card.FaceUp c) cards
+            List.map (\c -> Card.view (cardOptsForZone zone prompt combat maybeSlice actsByIid c) Card.Front c) cards
 
 
 {-| Per-card opts: starts from the zone's baseline (graveyards dim;
@@ -2209,43 +2207,10 @@ deckCountText p =
     "deck:" ++ String.fromInt p.deckCount
 
 
-{-| Back-of-card display: only color+symbol identity is public per RULES.
-Matches the JS `renderDeckTop` shape — same classes/inline styles so the
-existing CSS picks it up.
--}
-viewDeckTop : Maybe DeckBack -> Html Msg
-viewDeckTop maybeBack =
-    case maybeBack of
-        Nothing ->
-            span [ class "empty-note" ] [ text "empty" ]
-
-        Just back ->
-            div
-                [ class "card"
-                , style "background" "#0d0d12"
-                , style "border-color" "#333"
-                , style "opacity" "0.85"
-                ]
-                [ div [ style "color" "#888", style "font-size" "0.65rem" ] [ text "(back)" ]
-                , div [ class "meta-line" ]
-                    (List.map colorTagEl back.colors
-                        ++ (text " " :: List.map symbolTagEl back.symbols)
-                    )
-                ]
-
-
-colorTagEl : String -> Html Msg
-colorTagEl c =
-    let
-        code =
-            String.toLower c
-    in
-    span [ class ("color-" ++ code) ] [ text code ]
-
-
-symbolTagEl : String -> Html Msg
-symbolTagEl s =
-    span [ class "symbol" ] [ text s ]
+-- viewDeckTop / colorTagEl / symbolTagEl removed 2026-06-09. Deck-top
+-- now renders via `Card.view Card.defaultConfig Card.Back` (see
+-- renderGameScreen). The old impl also painted color tags on the back
+-- — that's gone per RULES C.1 (back shows symbols only).
 
 
 viewDeckbuilder : Model -> Html Msg

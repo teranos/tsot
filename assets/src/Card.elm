@@ -33,50 +33,57 @@ silently skipped two of them. This module consolidates them into one
 primitive. Phased plan, update by crossing through (`~~line~~`) when
 done.
 
-  - [~] **Phase 1 — Wire `view FaceUp` into the in-game render path.**
-        Replace `GameScreen.viewCard` + `GameScreen.CardView` (in
-        `src/Main.elm`'s `zoneCardsForPrompt` + `cardOptsForZone` +
-        `viewSliceFromPlayers`). Drop `GameScreen.CardView` from
-        `PlayerCounts.board/hand/graveyard`; thread `List Card` through
-        instead. `Card.elm` exists + decoder tested; the actual wire-
-        up is the unfinished half of this phase.
+Two render modes only — `Front` and `Back` per RULES C.3 ("A card
+has two display states: face-up and face-down"). The card primitive
+ALWAYS renders the full card; "pool tile", "compact list row", and
+"patience back strip" are NOT separate render modes — they're the
+caller's container CSS. A compact row hides information, which is
+harmful — every Card render shows the whole card.
 
-  - [ ] **Phase 2 — Wire `view FaceDownBack` into deck-top zones.**
-        Replace `Main.viewDeckTop` + the `DeckBack` type. Each
-        deck-top zone (opp + your) renders a `Card` in
-        `FaceDownBack` mode built from just the colors + symbols
-        the engine ships in `PlayerView.deck_top`.
+  - [x] ~~**Phase 1 — Wire `Card.view Card.Front` into the in-game
+        render path.**~~ Replaced `GameScreen.viewCard` + `CardView`
+        + `CardOpts` + `decodeCardView`. PlayerCounts.board/hand/
+        graveyard thread `List Card` through. Done in commit a2306ca.
 
-  - [ ] **Phase 3 — Wire `PoolTile` + `CompactRow` modes into the
-        deckbuilder.** Replace `Main.viewPoolCard` + `viewDeckRow`
-        renders. Add a `fromPoolEntry : CardPoolEntry -> Card`
-        converter so the deckbuilder's wire shape (no iid, no tapped,
-        Maybe power/toughness) maps into the same Card type. Specialize
-        `PoolTile` (grid tile, smaller than FaceUp) and `CompactRow`
-        (name + cost + count + remove-button) renders; currently both
-        fall through to FaceUp / minimal-row placeholders.
+  - [ ] **Phase 2 — Wire `Card.view Card.Back` into deck-top zones.**
+        Replace `Main.viewDeckTop` + `DeckBack`. Each deck-top zone
+        renders a `Card` in `Back` mode (symbols at slot positions,
+        NO COLOR per C.1). Engine already emits `deck_top: Option<CardView>`
+        full shape — `Card.decode` reads it directly.
 
-  - [ ] **Phase 4 — Patience-style attached stack inside `FaceUp`.**
-        Render each entry in `CardData.attached` as a `BackStrip`
-        positioned behind the host with negative-margin overlap, so
-        only the back's top strip peeks down (Solitaire-tableau
-        style). Hover any strip → expand to `FaceUp` tooltip. Per
-        the dev-tool design call, both players can hover-look (a
-        relaxation of strict P.18 controller-only). Strip content per
-        C.1: color + symbols only; never name / abilities / stats.
+  - [ ] **Phase 3 — Wire `Card.view Card.Front` into the deckbuilder.**
+        Replace `Main.viewPoolCard` + `viewDeckRow` renders with full
+        `Card.view Card.Front`. Deckbuilder shows the full card every
+        time, not a compact pill or row — per user, "always need to
+        see the full card", "a compact list is harmful because it
+        hides information". The deckbuilder layout (grid for pool,
+        list+count for deck) is container CSS, not a render-mode
+        decomposition. Add `fromPoolEntry : CardPoolEntry -> Card`
+        converter to bridge the deckbuilder's wire shape (no iid, no
+        tapped, Maybe power/toughness) into the unified Card type.
 
-  - [ ] **Phase 5 — SLOTS-driven per-slot symbols + holes.** When
-        the engine ships per-slot symbol positions (and holes —
-        engine has them already per the user, SLOTS.md status is
-        outdated on this point and needs verification against
-        `src/sim/snapshot.rs` + the loader before this phase can
-        land), switch `Card.decode` from `defaultSymbolsToSlots`
-        (spiral-out fallback) to reading the wire positions
-        directly. Add holes rendering on `FaceDownBack` +
-        `BackStrip` — transparent windows in the back per SLOTS.md
-        see-through rules (V.8 + the SLOTS.md per-slot generalization).
-        Symbol cards (C.17b) render their glyph filling the central
-        3×3 of the SLOTS grid.
+  - [ ] **Phase 4 — Patience-style attached stack.** Render each
+        entry in `CardData.attached` as `Card.view Card.Back`
+        positioned behind the host with negative-margin overlap and
+        container overflow clipping (so only the top strip is
+        visible). Hover any back → expand to `Card.view Card.Front`
+        tooltip (per the dev-tool relaxation: both players hover-look,
+        not strict P.18 controller-only). The "strip peek" is parent
+        CSS — the card itself is rendered as full Back, the container
+        clips.
+
+  - [ ] **Phase 5 — SLOTS-driven per-slot symbols + holes (engine
+        wire format verification required first).** Per the user
+        2026-06-09, the engine HAS per-slot symbol positions and
+        holes; SLOTS.md's "Status: design only" line is outdated.
+        Verify the wire format in `src/sim/snapshot.rs` + `src/card.rs`
+        + the loader, then switch `Card.decode` from
+        `defaultSymbolsToSlots` (spiral-out fallback) to reading the
+        wire positions directly. Render symbols at their actual slot
+        positions on the 5×3 grid (CSS grid in `Back` mode). Symbol
+        cards (C.17b) get their glyph filling the central 3×3. Holes
+        render as transparent windows; see-through reveals from below
+        per V.8 + the SLOTS.md per-slot generalization.
 
 
 ## What's intentionally NOT in this primitive
@@ -295,16 +302,23 @@ type Timing
     | Sorcery
 
 
-{-| Render mode determines which fields surface and how. Per RULES'
-visibility rules — `FaceDownBack` and `BackStrip` MUST only render
-the back (color + symbols per C.1, P.17, V.7), never the face.
+{-| Two render modes per RULES C.3 ("A card has two display states:
+face-up and face-down"). No further taxonomy — pool tiles are
+`Front` in a smaller CSS container, deck-list rows are text outside
+the card primitive, patience-style attached strips are `Back`
+clipped by container overflow. The card itself is two modes.
+
+  - `Front` — color (per C.5), name, cost, abilities, p/t, subtypes,
+    every face-side property visible.
+  - `Back` — ONLY symbols at slot positions (per C.1, SLOTS.md).
+    Never color, never name, never anything else. Per V.1 the
+    top-of-deck back is publicly visible (which is the symbols);
+    per V.7 + P.17 attached cards are face-down (back visible to
+    both, face only to controller per P.18).
 -}
 type RenderMode
-    = FaceUp
-    | FaceDownBack
-    | PoolTile
-    | CompactRow
-    | BackStrip
+    = Front
+    | Back
 
 
 {-| Polymorphic msg config — caller in Main / GameScreen wires in
@@ -463,28 +477,18 @@ defaultSymbolsToSlots glyphs =
 view : Config msg -> RenderMode -> Card -> Html msg
 view cfg mode (Card d) =
     case mode of
-        FaceUp ->
-            viewFaceUp cfg d
+        Front ->
+            viewFront cfg d
 
-        FaceDownBack ->
-            viewFaceDownBack cfg d
-
-        BackStrip ->
-            viewBackStrip cfg d
-
-        PoolTile ->
-            -- Phase 3 will specialize; fall back to FaceUp until then.
-            viewFaceUp cfg d
-
-        CompactRow ->
-            -- Phase 3 will specialize; minimal row render for now.
-            viewCompactRowMin cfg d
+        Back ->
+            viewBack cfg d
 
 
-{-| Full-face render (V.4 / V.5 / V.6). All fields surface.
+{-| Full front render (V.4 / V.5 / V.6). All face-side fields surface
+including color (per C.5).
 -}
-viewFaceUp : Config msg -> CardData -> Html msg
-viewFaceUp cfg d =
+viewFront : Config msg -> CardData -> Html msg
+viewFront cfg d =
     let
         flag b name =
             if b then
@@ -538,53 +542,29 @@ viewFaceUp cfg d =
         )
 
 
-{-| Back-only render (P.17 ATTACHED / V.1 deck-top / V.3 opp hand).
-Per C.1 only color + symbols are visible. No name, no cost, no
-abilities, no stats. Per C.17b a Symbol card's back fills the central
-3×3 with its glyph — handled here by checking kind.
+{-| Back-only render. Per C.1 ONLY symbols are visible on the back —
+no color, no name, no cost, no abilities, no stats. Color lives on
+the front side (front-only per RULES). Per C.17b a Symbol card's
+back fills the central 3×3 with its glyph (deferred until engine
+ships per-slot symbol positions — current default is spiral-out
+fill from C). Per C.13 transparent-frame cards have no symbols on
+the back at all (rendered empty here pending per-slot holes).
 -}
-viewFaceDownBack : Config msg -> CardData -> Html msg
-viewFaceDownBack cfg d =
+viewBack : Config msg -> CardData -> Html msg
+viewBack cfg d =
     div
         [ class "card card-back"
         , A.title (d.id ++ "  (face-down)")
         ]
-        [ div [ style "font-size" "0.55rem", style "color" "#888" ]
-            [ text "(back)" ]
-        , viewBackSymbols d
-        ]
+        [ viewBackSymbols d ]
 
 
-{-| Compressed top-strip of a face-down back. Used for the patience-
-style attached stack peek (phase 4 wires it up).
--}
-viewBackStrip : Config msg -> CardData -> Html msg
-viewBackStrip cfg d =
-    div
-        [ class "card-back-strip"
-        , style "height" "1.2rem"
-        , style "display" "flex"
-        , style "align-items" "center"
-        , style "gap" "0.25rem"
-        , style "padding" "0 0.3rem"
-        , style "font-size" "0.55rem"
-        ]
-        (span [ style "color" "#888" ] [ text "(back)" ]
-            :: List.map (\s -> span [ class "symbol" ] [ text s.glyph ]) d.symbols
-        )
-
-
-viewCompactRowMin : Config msg -> CardData -> Html msg
-viewCompactRowMin cfg d =
-    div
-        [ style "display" "flex"
-        , style "gap" "0.5rem"
-        , style "align-items" "baseline"
-        , style "padding" "0.2rem 0.4rem"
-        ]
-        [ span [ style "font-weight" "bold", style "color" "#ddd" ] [ text d.name ]
-        , span [ class "cost", style "color" "#fc6", style "font-size" "0.65rem" ] [ text d.printedCost ]
-        ]
+-- viewBackStrip / viewCompactRowMin DELETED 2026-06-09 per user:
+-- "a compact list is harmful because it hides information", "always
+-- need to see the full card", "front or back". Two modes only — the
+-- card primitive ALWAYS renders the full card, never a compressed
+-- strip or row variant. Container sizing / patience-stack overlap
+-- is the caller's CSS responsibility, not a render-mode of the card.
 
 
 
@@ -694,14 +674,7 @@ viewAbilities abilities =
 viewBackSymbols : CardData -> Html msg
 viewBackSymbols d =
     div [ class "meta-line" ]
-        (List.map colorTag d.colors
-            ++ (if List.isEmpty d.symbols then
-                    []
-
-                else
-                    text " " :: List.map (\s -> span [ class "symbol" ] [ text s.glyph ]) d.symbols
-               )
-        )
+        (List.map (\s -> span [ class "symbol" ] [ text s.glyph ]) d.symbols)
 
 
 viewUctBadge : Maybe { winRate : Float, visits : Int, wins : Float } -> List (Html msg)
