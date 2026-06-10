@@ -39,10 +39,10 @@ Phase 1 spec is structurally complete. All six events are wired and firing in th
 - [x] `game.print(msg)` — debug; writes `[card] {msg}` to stderr
 - [x] `game.add_status(card_id, kind, duration)` — currently only `"skip_untap"` kind; accumulates with any existing entry of the same kind
 - [x] `game.discard(player_id, n)` — deterministic front-of-hand pending choice API; bumps the same `action_counts["discard"]` as U.10 engine discards
-- [x] `game.choose_card(pool, opts)` — Phase 2 choice: pick one iid from a pool with `{filter, optional, prompt}`
-- [x] `game.confirm(prompt)` — Phase 2 yes/no for "may" abilities
-- [x] `game.choose_player({exclude, optional, prompt}) → "a"|"b"|nil` — Phase 2
-- [x] `game.choose_int(min, max, prompt) → int` — Phase 2; foundation for variable-X costs
+- [~] `game.choose_card(pool, opts)` — Phase 2 choice: pick one iid from a pool with `{filter, optional, prompt}`. **Call surface only.** The wrapper returns `ChoicePending` as a value instead of yielding the Lua coroutine, so every handler that calls this errors out at the call site (`ERR: lua game.choose_card: oracle returned ChoicePending`). See LIMITATIONS.md `## lua` — needs the asyncify-style suspend in `build_game_table!` at `src/game/lua_api.rs`.
+- [~] `game.confirm(prompt)` — same call-surface-only status as `choose_card`. See LIMITATIONS.md `## lua`.
+- [~] `game.choose_player({exclude, optional, prompt}) → "a"|"b"|nil` — same.
+- [~] `game.choose_int(min, max, prompt) → int` — same; foundation for variable-X costs.
 
 **Cards with active handlers:**
 - `tantrum-imp` — `on_blocked_by`: damage blocker 1, mill defender 1 to exile

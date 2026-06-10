@@ -14,8 +14,10 @@ Env (all optional — defaults match the install at ~/sd-cpp/):
     SD_LORA_DIR  directory containing the LoRA file (default: dirname of SD_MODEL)
 
     Throttle knobs — defaults keep the machine usable while sd runs.
-    SD_THREADS         CPU threads sd-cli may use (default: 4 — leaves ~half the cores for the OS)
-    SD_VRAM_RESERVE    GiB of VRAM to keep free for the system (default: 2.0)
+    SD_THREADS         CPU threads sd-cli may use (default: 2 — leaves most cores for the OS)
+    SD_VRAM_RESERVE    GiB of VRAM to keep free for the system (default: 3.0)
+    SD_TAESD           path to taesd_decoder.safetensors (auto-detected at ~/sd-cpp/models/)
+                       Cuts VAE decode from ~8s to ~1s with small quality drop on details.
     SD_FAST=1          disable throttling: use all cores, no VRAM reservation (faster, machine unusable)
 
 Output: gen_art/{id}_{W}_{H}.png
@@ -40,6 +42,7 @@ HEIGHT = 640
 # Override with SD_BIN / SD_MODEL env vars if you've installed elsewhere.
 DEFAULT_SD_BIN = str(Path.home() / "sd-cpp" / "stable-diffusion.cpp" / "build" / "bin" / "sd-cli")
 DEFAULT_SD_MODEL = str(Path.home() / "sd-cpp" / "models" / "v1-5-pruned-emaonly.safetensors")
+DEFAULT_SD_TAESD = str(Path.home() / "sd-cpp" / "models" / "taesd_decoder.safetensors")
 
 
 def bleed_dimensions(target_w: int, target_h: int, bleed_pct: int) -> tuple[int, int, int, int]:
@@ -780,8 +783,8 @@ def main() -> int:
     # Throttle by default so the machine stays responsive during generation.
     # SD_FAST=1 to override (faster but unusable).
     if os.environ.get("SD_FAST", "0") == "0":
-        threads = os.environ.get("SD_THREADS", "4")
-        vram_reserve = os.environ.get("SD_VRAM_RESERVE", "2.0")
+        threads = os.environ.get("SD_THREADS", "2")
+        vram_reserve = os.environ.get("SD_VRAM_RESERVE", "3.0")
         sd_args += [
             "-t", str(threads),
             # Negative max-vram = auto-detect and KEEP this many GiB free.
@@ -790,6 +793,13 @@ def main() -> int:
             # safetensors weights (probed 2026-06-09). Don't add it back.
         ]
         print(f"  throttled: -t {threads}, --max-vram -{vram_reserve} (SD_FAST=1 to disable)")
+
+    # TAESD — tiny autoencoder for fast VAE decode (~8s → ~1s). Auto-enabled
+    # when the file is present. SD_TAESD overrides the path.
+    sd_taesd = os.environ.get("SD_TAESD") or DEFAULT_SD_TAESD
+    if Path(sd_taesd).exists():
+        sd_args += ["--taesd", sd_taesd]
+        print(f"  taesd: {sd_taesd}")
 
     subprocess.run(sd_args, check=True)
 

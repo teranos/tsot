@@ -68,9 +68,13 @@ The match is **per-slot exact**: a hole at `C` reveals only symbols at `C` on th
 - **V.8** (deck-top transparent reveals next): generalized to per-slot reveals through any hole-bearing card.
 - **V.9** (glow visibility through non-transparent stack): glow is a separate surface treatment, no slot involvement; its visibility rule stands as written when we re-frame "non-transparent" → "non-hole-bearing at the relevant slots".
 
-## Status
+## Status (2026-06-10)
 
-Design only. No engine, schema, or loader support yet. Existing transparent cards stay on `frame = "transparent"` (whole-card hole) until the per-slot system lands. Migration plan deferred until the slot data shape ships in `Card`.
+**Schema + loader: shipped.** `Card` carries `symbols: Vec<String>` (flat array form, backwards-compatible), `symbol_slots: BTreeMap<Slot, String>` (opt-in per-slot map), `color_slots: BTreeMap<Slot, String>`, and `holes: Vec<Slot>` (see `src/card.rs` ~599–646). The Lua loader parses both forms: array `symbols = {"X", "Y"}` falls back to spiral-from-`C` via `Slot::SPIRAL`, and slot-form `symbols = { C = "X", T = "Y" }` populates `symbol_slots` directly. `holes = {"TL", "C"}` parses into `Vec<Slot>`. See `src/card/loader.rs` ~747–928. Existing transparent cards still use `frame = "transparent"` (whole-card hole, single-slot-`C` shim) until callers migrate.
+
+**Engine rules reading per-slot data: not yet wired.** No engine site reads `symbol_slots`, `color_slots`, or `holes` for the see-through reveal walk (V.8 generalization in this doc). The per-slot reveal engine is the next slice.
+
+**Wire (snapshot.rs `CardView`): does not yet emit per-slot data.** Only `symbols: Vec<String>` is serialized; `holes`, `symbol_slots`, `color_slots` are missing from the UI snapshot. The dev-tool falls back to spiral-out positioning. Surfacing the per-slot wire shape unblocks Card-axiom Phase 5 (5×3 CSS-grid back-render in Card.elm).
 
 ## Open questions
 

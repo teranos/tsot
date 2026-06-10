@@ -1,46 +1,63 @@
 
 The Symbols of Teranos: ax = ⋈, ix = ⨳, am = ≡, pulse = ꩜, sem = ⊨
 
-Collectible Card Game
+WASM - Collectible Card Game
 
-Your role: write the code the user asks for.
-Their requests stem from intuition about the game. 
-When they ask something, do it. 
+**A commit is verified code** — the developer has tested it and confirmed it matches intent. Uncommitted changes in the working tree ARE the running code. Never use commit history to determine what is or isn't running. We develop and test on the same machine as where you are running, you do not need to commit in order to get the changes to me, we test here, and if its good, only then we commit.
 
-Write cards in lua cards/.
+The only development flow that works for the user is: Talk, discuss, refine, suggest, proof, specify/define, develop, build+run, test, verify, hand-off, ...
 
-Use probe when you need to measure something.
-Don't push probe results at the user. Don't ask them whether to
-probe. Don't probe a single new card — there's nothing to compare.
+After hand-off the cycle starts again, hand-off means you have done everything you can do where you dont need the user's input or testing of verification. User verification happens after your verification, during the hand-off. After which we repeat the cycle or deem it commit worthy.
 
-When the user wants to compare alternative versions of a card (cost,
-stats, effect magnitude), add a `variants = { [key] = { overrides } }`
-block to the card's .lua — never duplicate the file. The loader
-emits one card per variant; `make probe` picks them up side-by-side.
+---
 
-See @LUA.md and @RULES.md. Sim AI + game-runner internals
-in @src/sim/README.md.
+Strict TDD hard-requirement.
+Meaning; write a failing test FIRST,
+capture the intent and then continue with planned development.
 
-Strict TDD required. Meaning, write a failing test FIRST, capture the intent and then continue with planned development.
+---
 
-**KNOW** the developer is always running the latest version of TSOT. If there is an issue, it is in the code.
-
-Never:
-- Ask if the developer has rebuilt/restarted
-- Suggest running build commands
-- Remind about rebuild steps 
-- Imply the running binary might be stale
-
-**A commit is verified code** — the developer has tested it and confirmed it matches intent. Uncommitted changes in the working tree ARE the running code. Never use commit history to determine what is or isn't running.
-
+Given that this project is still in it's early development:
 **Errors are sacred** — first-class citizens, never collapsed,
-dropped, or suppressed. They land in the LOG panel with every other
-engine event.
+dropped, swallowed or suppressed.
+
+This is a hard hard-requirement:
+Errors land in front of the user,
+contextually in points of interaction,
+so the developer/user knows what to do next.
+
+If an error is not visible or surfaced, drop everything you do,
+and make sure we see the error FIRST before continuing with anything else.
+
+**KNOW** the developer is always running the latest version of TSOT.
+If there is an issue, it is in the code.
+
+- Never ask if the developer has rebuilt/restarted
+- Never suggest running build commands
+- Do not remind about rebuild steps, it's poor DX anyways
+
+---
 
 When running long jobs (probes, EA, builds, `cargo test`): write to a
 file the user can tail, never `| tail -N` or `| head -N` the live
 stream. Truncating the output is optimizing your own legibility at the
 cost of the user's visibility into the run.
+
+The @Makefile is for fast daily driver developer convenience,
+no parameters, just: `make the_thing`
+
+---
+
+Write cards in .lua, see: cards/
+
+You can compare alternative versions of a card (cost, stats, effect magnitude),
+`make probe` recognises `variants = { [key] = { overrides } }` blocks on cards.
+
+Don't push probe results at the user. Don't ask them whether to
+probe. Don't probe a single new card — there's nothing to compare.
+
+See @LUA.md and @RULES.md. Sim AI + game-runner internals
+in @src/sim/README.md.
 
 Balance, power level, "premium cost", card-economy ratios, win-conditions,
 archetype viability — not chat answers. You have no playtest data and no

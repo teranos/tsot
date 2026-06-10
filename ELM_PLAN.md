@@ -55,9 +55,9 @@ generic envelope forwarding.
   in Elm. workerCmdOut extended to `{cmd, payload}` envelope; one
   `bootDataIn` inbound port for the startup card-pool + presets push.~~
 
-- [~] **11: Game-screen render.** Biggest remaining island. Split
+- [x] ~~**11: Game-screen render.** Biggest remaining island. Split
   into substages because each piece is independently verifiable and
-  the visual relocation needed a layout fix mid-stream.
+  the visual relocation needed a layout fix mid-stream.~~
 
   - [x] ~~**11a**: meta line via `gameMetaIn` (parallel with the JS-
     rendered `#meta` to verify the port).~~
@@ -158,12 +158,21 @@ Splits to date (LOC moved out of `Main` shown):
   scroll-to-bottom Cmd targets the same id.
 - [x] ~~**BuildFooter.elm**~~ — ~77 lines. Tiny; sets the precedent
   that even small islands earn a file once Main pushes past ~2k LOC.
-- [x] ~~**GameScreen.elm**~~ — ~900 lines. Game-screen render path
-  (CardView + Activation + Prompt ADT + UctCandidate / UctPreview +
-  CardOpts primitive + viewCard + viewPromptButtons + CombatSelection
-  state machine + decoders for every prompt variant). Largest module
-  to date; landed as the host for the chunk B big lift rather than
-  as a Main extraction.
+- [x] ~~**GameScreen.elm**~~ — initially ~900 lines (CardView +
+  Activation + Prompt ADT + UctCandidate / UctPreview + CardOpts
+  primitive + viewCard + viewPromptButtons + CombatSelection state
+  machine + decoders for every prompt variant). Trimmed to ~733
+  lines when card consolidation extracted CardView/CardOpts/viewCard
+  into `Card.elm`; what remains is `Prompt` + `CombatSelection` +
+  `UctPreview` + `promptToText` + `viewPromptButtons`.
+- [x] ~~**Card.elm**~~ — single source of truth for the in-game card
+  primitive. `Card` (sum-type wrapper around `CardData` to break the
+  recursive-record-type-alias prohibition), `Config msg` polymorphic
+  options, `view`, `Card.styles` (the `<style>` block; CSS rules for
+  `.card` + state variants + `.face-down` + attached strip live with
+  the module per the "owns its visual contract" decision). `Card.key`
+  is the iid-or-id identity used by Slice 2's `Html.Keyed`
+  containers. Roadmap to one-DOM-per-card lifetime in `CARD.md`.
 
 ## Tests
 
@@ -172,14 +181,26 @@ CLAUDE.md mandates "Strict TDD required". `elm-test` is wired
 `elmPackages.elm-test`). `make assets` build green AND `elm-test`
 green is the bar before any commit. Current suites:
 
-- [x] ~~**GameScreenTest.elm**~~ — 12 tests: `decodeCardView` full
-  shape, every `decodePrompt` variant, `viewCard` DOM-class behavior
-  under different `CardOpts`.
+- [x] ~~**GameScreenTest.elm**~~ — trimmed to `decodePrompt` variants
+  + `promptKindKey` after `decodeCardView` + `viewCard` migrated into
+  `CardTest.elm` during card consolidation. Surviving tests pin the
+  prompt-decoder discriminator.
 - [x] ~~**CombatSelectionTest.elm**~~ — 12 tests pinning the
   PickAttackers + PickBlocks state machine: `toggleAttacker`,
   `clickBlocker` (stage / unstage / unassign / re-stage),
   `assignAttackerToStaged` (assignment + clearing + gang-block),
   `resetCombatSelection`. Failing-test-first then implementation.
+- [x] ~~**CardTest.elm**~~ — Card.decode against the engine CardView
+  wire shape (full record + recursive nested `attached` via `D.lazy`),
+  Kind parsing, Slot serialization (`slotKey`), spiral-out default
+  slot fill (SLOTS.md).
+- [x] ~~**PromptTextTest.elm**~~ — pins `GameScreen.promptToText`
+  byte-exact against the JS-side `setPrompt()` strings; every variant
+  covered including the typographically-tricky cases (en-dash for
+  ChooseInt range, em-dash for prompt separators, middot for paths,
+  `(you win)/(you lose)/draw` suffix logic on GameOver, casting-host
+  split on ChooseCard, ` — may skip` tail, PickBlocks attacker-label
+  list via the labelByIid resolver).
 
 Remaining easy splits (rough order):
 
@@ -193,8 +214,9 @@ Remaining easy splits (rough order):
 - [ ] **Deckbuilder.elm** — ~400 lines. Biggest standalone island;
   pool + filters + deck + preset + AI pickers + Start/Spectate.
   Lands once the smaller splits validate the pattern under load.
-- [ ] **GameScreen.elm** — chunk 11i–11o lands as a new module from
-  the start rather than landing in Main and being split later.
+
+(`GameScreen.elm` already landed — see done-list above.
+`Card.elm` extracted for the consolidation track per CARD.md.)
 
 ## Note on stage 7
 
