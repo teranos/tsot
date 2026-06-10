@@ -196,7 +196,9 @@ impl GameState {
         // remains visible via `game.x_value()` (set above before the
         // validate hook).
         if let Some(c) = ctx {
-            lua_api::fire_activated(c.lua, self, c.oracle(), iid, handler);
+            // TODO(lua-yield): ActivateError doesn't carry ChoicePending.
+            // Lift when an activated ability needs to yield mid-resolution.
+            let _ = lua_api::fire_activated(c.lua, self, c.oracle(), iid, handler);
         }
 
         self.current_activation_x = prior_x;

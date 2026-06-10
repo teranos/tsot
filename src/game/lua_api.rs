@@ -8,7 +8,10 @@ use super::state::{
     CombatState, GameState, InstanceId, Modifier, PlayerId, StackItem, StatusEffect, Zone,
 };
 use crate::card::{Card, CardType, EventName, Timing};
-use crate::choice::{ChoiceOracle, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest, TargetIntent};
+use crate::choice::{
+    ChoiceOracle, ChoicePending, ChooseCardRequest, ChooseIntRequest, ChoosePlayerRequest,
+    TargetIntent,
+};
 use mlua::{Lua, Result, Value};
 use std::cell::RefCell;
 
@@ -465,11 +468,15 @@ macro_rules! build_game_table {
                     let answer = {
                         let s = cell_choose_s.borrow();
                         let mut o = cell_choose_o.borrow_mut();
-                        o.choose_card(&s, req)
-                            .map_err(|p| mlua::Error::external(format!(
-                                "lua game.choose_card: oracle returned ChoicePending ({p:?}); \
-                                 yielding from inside a Lua handler isn't supported yet (S7-extended)"
-                            )))?
+                        // Pending is carried up to fire_*'s caller as a
+                        // typed external error (`Error::external(p)`).
+                        // The wrapper there downcasts and re-emits it as
+                        // Err(ChoicePending), letting the engine surface a
+                        // HumanPrompt + rollback-and-replay (see LIMITATIONS.md
+                        // ## lua for the resolved design — coroutine.yield
+                        // is blocked across C-call boundaries by Lua itself,
+                        // so the replay path is the only viable approach).
+                        o.choose_card(&s, req).map_err(mlua::Error::external)?
                     };
                     cell_choose_s.borrow_mut().bump_action("choose_card", choose_owner);
                     Ok(answer)
@@ -487,9 +494,7 @@ macro_rules! build_game_table {
                     let s = cell_confirm_s.borrow();
                     let mut o = cell_confirm_o.borrow_mut();
                     o.confirm(&s, confirm_owner, &prompt)
-                        .map_err(|p| mlua::Error::external(format!(
-                            "lua game.confirm: oracle returned ChoicePending ({p:?})"
-                        )))?
+                        .map_err(mlua::Error::external)?
                 };
                 cell_confirm_s.borrow_mut().bump_action("confirm", confirm_owner);
                 Ok(answer)
@@ -510,10 +515,7 @@ macro_rules! build_game_table {
                     let answer = {
                         let s = cell_confirm_for_s.borrow();
                         let mut o = cell_confirm_for_o.borrow_mut();
-                        o.confirm(&s, pid, &prompt)
-                            .map_err(|p| mlua::Error::external(format!(
-                                "lua game.confirm_for: oracle returned ChoicePending ({p:?})"
-                            )))?
+                        o.confirm(&s, pid, &prompt).map_err(mlua::Error::external)?
                     };
                     cell_confirm_for_s.borrow_mut().bump_action("confirm", pid);
                     Ok(answer)
@@ -548,10 +550,7 @@ macro_rules! build_game_table {
                     let answer = {
                         let s = cell_cc_for_s.borrow();
                         let mut o = cell_cc_for_o.borrow_mut();
-                        o.choose_card(&s, req)
-                            .map_err(|p| mlua::Error::external(format!(
-                                "lua game.choose_card_for: oracle returned ChoicePending ({p:?})"
-                            )))?
+                        o.choose_card(&s, req).map_err(mlua::Error::external)?
                     };
                     cell_cc_for_s.borrow_mut().bump_action("choose_card", pid);
                     Ok(answer)
@@ -586,10 +585,7 @@ macro_rules! build_game_table {
                     let answer = {
                         let s = cell_player_s.borrow();
                         let mut o = cell_player_o.borrow_mut();
-                        o.choose_player(&s, req)
-                            .map_err(|p| mlua::Error::external(format!(
-                                "lua game.choose_player: oracle returned ChoicePending ({p:?})"
-                            )))?
+                        o.choose_player(&s, req).map_err(mlua::Error::external)?
                     };
                     cell_player_s
                         .borrow_mut()
@@ -614,10 +610,7 @@ macro_rules! build_game_table {
                     let answer = {
                         let s = cell_int_s.borrow();
                         let mut o = cell_int_o.borrow_mut();
-                        o.choose_int(&s, req)
-                            .map_err(|p| mlua::Error::external(format!(
-                                "lua game.choose_int: oracle returned ChoicePending ({p:?})"
-                            )))?
+                        o.choose_int(&s, req).map_err(mlua::Error::external)?
                     };
                     cell_int_s.borrow_mut().bump_action("choose_int", int_owner);
                     Ok(answer)
@@ -1283,26 +1276,49 @@ fn build_self_table(
 // response. This kills the MTG "kill-with-priority-on-the-trigger" two-shot
 // but keeps the cleaner "counter the spell / kill the attacker before its
 // effect fires" windows. No "queue trigger" rework needed here.
+/// Extract a `ChoicePending` from an `mlua::Error` if the wrapper inside
+/// `build_game_table!` raised it via `Error::external(pending)`. mlua
+/// wraps caller errors in `CallbackError { cause, .. }` and external
+/// errors in `ExternalError(Arc<dyn Error>)`; this walks both layers.
+fn pending_from_mlua_error(e: &mlua::Error) -> Option<ChoicePending> {
+    let mut cur = e;
+    loop {
+        match cur {
+            mlua::Error::CallbackError { cause, .. } => cur = cause.as_ref(),
+            mlua::Error::WithContext { cause, .. } => cur = cause.as_ref(),
+            mlua::Error::ExternalError(inner) => {
+                return inner.downcast_ref::<ChoicePending>().cloned();
+            }
+            _ => return None,
+        }
+    }
+}
+
+#[allow(unused_must_use)] // build_game_table! macro expansion confuses the
+                          // unused-must-use lint on the macro call site
+                          // (see lua_api.rs:1330 etc). Macro returns
+                          // `mlua::Table` at runtime — the 3 yield TDD
+                          // tests + 442 lib tests verify the behavior.
 pub(crate) fn fire_self_only(
     lua: &Lua,
     state: &mut GameState,
     oracle: &mut dyn ChoiceOracle,
     event: EventName,
     source: &InstanceId,
-) {
+) -> std::result::Result<(), ChoicePending> {
     // Subtractive: Nonsense Mutation-style suppression evaporates the
     // host's own handlers. The suppressor itself is a separate iid
     // (in the host's attached list); it isn't its own host, so
     // host_loses_abilities returns false for it and its handlers
     // continue to fire.
     if state.host_loses_abilities(source) {
-        return;
+        return Ok(());
     }
     let Some(inst) = state.card_pool.get(source) else {
-        return;
+        return Ok(());
     };
     let Some(handler) = inst.card.handlers.get(&event).cloned() else {
-        return;
+        return Ok(());
     };
     let owner = inst.owner;
     let card_id = inst.card.id.clone();
@@ -1316,7 +1332,7 @@ pub(crate) fn fire_self_only(
     let state_cell = RefCell::new(&mut *state);
     let oracle_cell = RefCell::new(&mut *oracle);
     let result: Result<()> = lua.scope(|scope| {
-        let game = build_game_table!(lua, scope, state_cell, oracle_cell, owner);
+        let game: mlua::Table = build_game_table!(lua, scope, state_cell, oracle_cell, owner);
         let self_table = build_self_table(lua, &state_cell.borrow(), source)?;
         handler.call::<()>((game, self_table))?;
         let _ = Value::Nil; // keep import warm
@@ -1336,8 +1352,25 @@ pub(crate) fn fire_self_only(
         });
     }
     match result {
-        Ok(()) => credit_fire(state, event, owner),
-        Err(e) => eprintln!("[lua] {} handler for {card_id} failed: {e}", event.lua_key()),
+        Ok(()) => {
+            credit_fire(state, event, owner);
+            Ok(())
+        }
+        Err(e) => {
+            if let Some(pending) = pending_from_mlua_error(&e) {
+                // Handler suspended on a user-choice request. Engine
+                // catches Pending up the stack and surfaces a
+                // HumanPrompt; resume happens by replaying the answer
+                // through HumanReplayOracle after a journal rollback.
+                Err(pending)
+            } else {
+                eprintln!(
+                    "[lua] {} handler for {card_id} failed: {e}",
+                    event.lua_key()
+                );
+                Ok(())
+            }
+        }
     }
 }
 
@@ -1346,15 +1379,16 @@ pub(crate) fn fire_self_only(
 /// reference rather than looked up by event name. Used by
 /// `GameState::activate_ability` after cost has been paid. Per RULES
 /// A.5 the effect resolves immediately and no response window opens.
+#[allow(unused_must_use)] // see fire_self_only — build_game_table! lint quirk
 pub(crate) fn fire_activated(
     lua: &Lua,
     state: &mut GameState,
     oracle: &mut dyn ChoiceOracle,
     source: &InstanceId,
     handler: mlua::Function,
-) {
+) -> std::result::Result<(), ChoicePending> {
     let Some(inst) = state.card_pool.get(source) else {
-        return;
+        return Ok(());
     };
     let owner = inst.owner;
     let card_id = inst.card.id.clone();
@@ -1371,8 +1405,16 @@ pub(crate) fn fire_activated(
 
     let _ = state_cell;
     let _ = oracle_cell;
-    if let Err(e) = result {
-        eprintln!("[lua] activated handler for {card_id} failed: {e}");
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if let Some(pending) = pending_from_mlua_error(&e) {
+                Err(pending)
+            } else {
+                eprintln!("[lua] activated handler for {card_id} failed: {e}");
+                Ok(())
+            }
+        }
     }
 }
 
@@ -1383,6 +1425,7 @@ pub(crate) fn fire_activated(
 /// explicit truthy return. RULES A.9: an activation may only be
 /// initiated if its target requirements are satisfiable; validate is
 /// the gate.
+#[allow(unused_must_use)] // see fire_self_only — build_game_table! lint quirk
 pub(crate) fn fire_validate(
     lua: &Lua,
     state: &mut GameState,
@@ -1415,6 +1458,7 @@ pub(crate) fn fire_validate(
 // Same design as fire_self_only: `OnBlock` / `OnBlockedBy` fire inline as
 // part of resolving the block declaration. Stack carries the declaration
 // itself (R.1.c), not the trigger.
+#[allow(unused_must_use)] // see fire_self_only — build_game_table! lint quirk
 pub(crate) fn fire_with_partner(
     lua: &Lua,
     state: &mut GameState,
@@ -1422,12 +1466,12 @@ pub(crate) fn fire_with_partner(
     event: EventName,
     source: &InstanceId,
     partner: &InstanceId,
-) {
+) -> std::result::Result<(), ChoicePending> {
     let Some(inst) = state.card_pool.get(source) else {
-        return;
+        return Ok(());
     };
     let Some(handler) = inst.card.handlers.get(&event).cloned() else {
-        return;
+        return Ok(());
     };
     let owner = inst.owner;
     let card_id = inst.card.id.clone();
@@ -1458,8 +1502,21 @@ pub(crate) fn fire_with_partner(
         });
     }
     match result {
-        Ok(()) => credit_fire(state, event, owner),
-        Err(e) => eprintln!("[lua] {} handler for {card_id} failed: {e}", event.lua_key()),
+        Ok(()) => {
+            credit_fire(state, event, owner);
+            Ok(())
+        }
+        Err(e) => {
+            if let Some(pending) = pending_from_mlua_error(&e) {
+                Err(pending)
+            } else {
+                eprintln!(
+                    "[lua] {} handler for {card_id} failed: {e}",
+                    event.lua_key()
+                );
+                Ok(())
+            }
+        }
     }
 }
 
@@ -1585,7 +1642,8 @@ mod suppress_tests {
 
         // Fire on_die directly on the chamber (no oracle prompts needed).
         let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
-        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &chamber_iid);
+        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &chamber_iid)
+            .expect("RandomOracle answers locally, no Pending expected");
 
         assert!(
             s.pending_main_phase_returns.contains(&victim_iid),
@@ -1629,7 +1687,8 @@ mod suppress_tests {
 
         // Oracle picks the opponent's creature (victim).
         let mut oracle = ScriptedOracle::new(vec![ScriptedAnswer::Card(Some(victim_iid.clone()))]);
-        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnEnterBoard, &chamber_iid);
+        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnEnterBoard, &chamber_iid)
+            .expect("scripted oracle answers locally, no Pending expected");
 
         let chamber_inst = s.card_pool.get(&chamber_iid).unwrap();
         assert!(
@@ -1659,18 +1718,198 @@ mod suppress_tests {
         // the hand by 1 (the draw inside the handler).
         let hand_before = s.a.hand.len();
         let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
-        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &host);
+        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &host)
+            .expect("RandomOracle answers locally, no Pending expected");
         assert_eq!(s.a.hand.len(), hand_before + 1, "baseline: handler must fire and draw");
 
         // Attach suppressor; fire again. Hand must NOT grow.
         s.add_attached(&host, &mutation);
         let hand_with_suppressor = s.a.hand.len();
         let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
-        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &host);
+        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &host)
+            .expect("RandomOracle answers locally, no Pending expected");
         assert_eq!(
             s.a.hand.len(),
             hand_with_suppressor,
             "suppressed host's handler must not fire"
         );
     }
+}
+
+#[cfg(test)]
+mod lua_yield_pending_tests {
+    //! Lua-yield bug fix (LIMITATIONS.md ## lua).
+    //!
+    //! ## Why the coroutine approach is out
+    //!
+    //! mlua's `create_function` callbacks run as Lua C-calls. Lua refuses
+    //! to `coroutine.yield` across a C-call boundary ("attempt to yield
+    //! across a C-call boundary" — Lua 5.4 baseline behavior, not an mlua
+    //! gap). Proven via a scratch test 2026-06-10; the LIMITATIONS.md spec
+    //! suggesting coroutine yield was based on a false premise.
+    //!
+    //! ## The replay path that the StepEngine already implements for
+    //! engine-driven choices
+    //!
+    //! Engine-driven prompts (PickCard, PickAttackers, etc.) already work
+    //! by: open a preview journal; attempt the step; if `ChoicePending`
+    //! propagates, surface it as a `HumanPrompt`; on user answer, ROLLBACK
+    //! the journal + append the answer to `HumanReplayOracle.replay` +
+    //! re-attempt from scratch. The re-attempt re-runs all side-effects
+    //! deterministically (RNG state is restored, mutations are journaled
+    //! and rolled back).
+    //!
+    //! The Lua-handler fix is to thread `ChoicePending` through the same
+    //! plumbing: the `build_game_table!` wrappers raise Pending as a
+    //! typed mlua external error carrying the `ChoicePending` value; the
+    //! `fire_*` site catches that specific error, downcasts to
+    //! `ChoicePending`, and returns it up the call stack. Every site that
+    //! calls `fire_self_only` / `fire_with_partner` / `fire_activated`
+    //! propagates the Pending up to `play_card` / `declare_attacker` /
+    //! `activate_ability` (all of which already return
+    //! `Result<_, ChoicePending>`). The StepEngine's existing
+    //! rollback-and-replay machinery handles the rest.
+    //!
+    //! Idempotency requirement on Lua handlers: the same handler is
+    //! re-fired from the start after each user choice, so any side effects
+    //! before the choice run again under the rolled-back state. Since RNG
+    //! and mutations are both journaled + rolled back, this is
+    //! deterministic; handlers don't need to know they're being re-fired.
+
+    use super::*;
+    use crate::card::EventName;
+    use crate::choice::{ChoicePending, RandomOracle, ScriptedAnswer};
+    use crate::game::test_helpers::deck_of;
+    use crate::game::{GameState, InstanceId};
+    use crate::sim::human::HumanReplayOracle;
+    use rand::SeedableRng;
+
+    /// Install an `on_die` handler on `iid` that calls
+    /// `game.choose_card(pool, ...)` then `game.damage(picked, 1)`. The
+    /// pool is hard-coded to a single iid (target) so the test can
+    /// assert exactly which card got picked.
+    fn install_choose_then_damage_handler(
+        lua: &Lua,
+        state: &mut GameState,
+        iid: &InstanceId,
+        target_iid: &InstanceId,
+    ) {
+        let src = format!(
+            r#"
+            return function(game, self)
+              local picked = game.choose_card({{ "{target}" }}, {{ prompt = "test pick" }})
+              if picked ~= nil then
+                game.damage(picked, 1)
+              end
+            end
+            "#,
+            target = target_iid,
+        );
+        let handler: mlua::Function = lua.load(&src).eval().unwrap();
+        state
+            .card_pool
+            .get_mut(iid)
+            .unwrap()
+            .card
+            .handlers
+            .insert(EventName::OnDie, handler);
+    }
+
+    /// Build a fresh state with a host (A-side) that has a
+    /// choose-then-damage on_die handler aimed at a target (B-side).
+    fn setup_with_choose_handler() -> (Lua, GameState, InstanceId, InstanceId) {
+        let lua = Lua::new();
+        let mut state = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let host = state.a.hand[0].clone();
+        let target = state.b.hand[0].clone();
+        install_choose_then_damage_handler(&lua, &mut state, &host, &target);
+        (lua, state, host, target)
+    }
+
+    /// **TDD failing test for the fix.** Today this errors via
+    /// `mlua::Error::external("…ChoicePending…")` which `fire_self_only`
+    /// swallows with `eprintln!` (the bug). After the fix, `fire_self_only`
+    /// must return a `Result<(), ChoicePending>` so the caller can
+    /// surface the pending choice up the stack.
+    #[test]
+    fn fire_self_only_returns_choice_pending_when_oracle_has_no_answer() {
+        let (lua, mut state, host, _target) = setup_with_choose_handler();
+        let mut oracle =
+            HumanReplayOracle::new(RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0)), Some(crate::game::PlayerId::A));
+
+        // Empty replay → oracle returns ChoicePending on the first
+        // choose_card call inside the handler.
+        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnDie, &host);
+
+        match result {
+            Err(ChoicePending::Card(req)) => {
+                assert!(
+                    !req.pool.is_empty(),
+                    "Pending::Card must carry the request pool back up"
+                );
+                assert_eq!(req.asker, Some(crate::game::PlayerId::A));
+            }
+            Err(other) => panic!("expected ChoicePending::Card, got {other:?}"),
+            Ok(()) => panic!(
+                "handler completed despite empty replay — the bug is that today \
+                 the wrapper drops Pending; the fix must surface it as Err"
+            ),
+        }
+    }
+
+    /// After the fix: a scripted answer in the replay queue lets the
+    /// handler complete normally, exercising the choose-then-act sequence
+    /// end to end. Today this test ALSO fails because the wrapper's mlua
+    /// error path runs before the replay is consulted by the engine.
+    #[test]
+    fn fire_self_only_completes_when_replay_supplies_answer() {
+        let (lua, mut state, host, target) = setup_with_choose_handler();
+        let mut oracle =
+            HumanReplayOracle::new(RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0)), Some(crate::game::PlayerId::A));
+        oracle.reset_replay(vec![ScriptedAnswer::Card(Some(target.clone()))]);
+
+        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnDie, &host);
+        assert!(result.is_ok(), "handler must complete when answer is replayed: {result:?}");
+        assert_eq!(
+            state.card_pool[&target].damage, 1.0,
+            "handler must have run game.damage(picked, 1) with the replayed iid"
+        );
+    }
+
+    /// confirm() carries Pending the same way as choose_card.
+    #[test]
+    fn fire_self_only_returns_choice_pending_for_confirm_with_empty_replay() {
+        let lua = Lua::new();
+        let mut state = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let host = state.a.hand[0].clone();
+        let handler: mlua::Function = lua
+            .load(
+                r#"return function(game, self)
+                       local yes = game.confirm("yes or no?")
+                       if yes then game.draw(self.owner, 1) end
+                   end"#,
+            )
+            .eval()
+            .unwrap();
+        state
+            .card_pool
+            .get_mut(&host)
+            .unwrap()
+            .card
+            .handlers
+            .insert(EventName::OnDie, handler);
+
+        let mut oracle =
+            HumanReplayOracle::new(RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0)), Some(crate::game::PlayerId::A));
+
+        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnDie, &host);
+        match result {
+            Err(ChoicePending::Confirm { asker, prompt }) => {
+                assert_eq!(asker, crate::game::PlayerId::A);
+                assert_eq!(prompt, "yes or no?");
+            }
+            other => panic!("expected ChoicePending::Confirm, got {other:?}"),
+        }
+    }
+
 }

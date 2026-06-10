@@ -103,6 +103,45 @@ pub const STARTER_DECK_IDS: &[&str] = &[
     "blue-scientist", "blue-scientist",
 ];
 
+/// Lua-yield test deck (2026-06-10). Built to exercise the resolved
+/// LIMITATIONS.md ## lua bug end-to-end: every cast of a yielding
+/// card (read-the-embers / fireball / portable-bolt / signal-goblin
+/// on_attack) should now surface a `HumanPrompt::ChooseCard` and
+/// resume on user answer instead of erroring silently.
+///
+/// Composition: a Red base for cost payments, then high counts of the
+/// three on_play yielders + signal-goblin (whose on_attack also calls
+/// `game.choose_card`). 50 cards.
+pub const YIELD_TEST_DECK_IDS: &[&str] = &[
+    // Hand-source bedrock — `clear-red` is the cheap pitch for the
+    // 1H components on every red spell.
+    "clear-red", "clear-red", "clear-red", "clear-red", "clear-red",
+    "clear-red", "clear-red", "clear-red", "clear-red", "clear-red",
+    "clear-red", "clear-red", "clear-red",
+    // Red symbol cards — graveyard fodder for X-cost graveyard slots
+    // (read-the-embers needs them).
+    "red-ax-symbol", "red-ax-symbol",
+    "red-ix-symbol", "red-ix-symbol",
+    "red-am-symbol", "red-am-symbol",
+    "red-pulse-symbol", "red-pulse-symbol",
+    "red-sem-symbol", "red-sem-symbol",
+    "red-jewel", "red-jewel",
+    // The yield-test triggers — extra copies so they show up early.
+    "read-the-embers", "read-the-embers", "read-the-embers",
+    "fireball", "fireball", "fireball",
+    "portable-bolt", "portable-bolt", "portable-bolt",
+    // signal-goblin's on_attack ALSO calls `game.choose_card` — extra
+    // test coverage of the combat-side path.
+    "signal-goblin", "signal-goblin",
+    // Creatures to attack with (gives signal-goblin a stage), plus
+    // pool members so the yielders have targets.
+    "ember-bat", "ember-bat", "ember-bat", "ember-bat",
+    "cinder-wurm", "cinder-wurm", "cinder-wurm",
+    "goblin-warchief", "goblin-warchief",
+    "sparkle", "sparkle",
+    "haste-human", "haste-human", "haste-human",
+];
+
 /// Red counterpart of [`STARTER_DECK_IDS`]. Direct color swaps for
 /// every monkey / clear / symbol / jewel; the remaining slots are
 /// filled with user-specified red cards.
@@ -164,6 +203,8 @@ pub fn build_preset_decks(_playable: &[Card]) -> Vec<PresetDeck> {
     // The first entry whose `id == "starter"` is what the deckbuilder
     // auto-loads on page boot (see assets/play.html bootstrap).
     // Per user request 2026-06-09: red is the default starter.
+    // Yield Test added 2026-06-10 to exercise the resolved Lua-yield
+    // bug (LIMITATIONS.md ## lua) end-to-end.
     vec![
         PresetDeck {
             id: "starter".to_string(),
@@ -174,6 +215,11 @@ pub fn build_preset_decks(_playable: &[Card]) -> Vec<PresetDeck> {
             id: "starter-blue".to_string(),
             name: "Blue Starter".to_string(),
             cards: STARTER_DECK_IDS.iter().map(|s| s.to_string()).collect(),
+        },
+        PresetDeck {
+            id: "yield-test".to_string(),
+            name: "Yield Test (Red)".to_string(),
+            cards: YIELD_TEST_DECK_IDS.iter().map(|s| s.to_string()).collect(),
         },
     ]
 }
@@ -251,13 +297,36 @@ mod tests {
     // ----- PresetDeck --------------------------------------------
 
     #[test]
-    fn preset_decks_returns_blue_and_red_starter() {
+    fn preset_decks_returns_red_blue_and_yield_test() {
+        // Order pinned 2026-06-09 / 2026-06-10:
+        //   [0] "starter" (Red Starter — deckbuilder default on boot)
+        //   [1] "starter-blue" (Blue Starter)
+        //   [2] "yield-test" (Yield Test — exercises the Lua-yield bug fix)
         let reg = registry();
         let pool = playable_pool(reg.cards());
         let presets = build_preset_decks(&pool);
-        assert_eq!(presets.len(), 2, "Blue Starter + Red Starter = 2 presets");
+        assert_eq!(presets.len(), 3);
         assert_eq!(presets[0].id, "starter");
-        assert_eq!(presets[1].id, "starter-red");
+        assert_eq!(presets[0].name, "Red Starter");
+        assert_eq!(presets[1].id, "starter-blue");
+        assert_eq!(presets[1].name, "Blue Starter");
+        assert_eq!(presets[2].id, "yield-test");
+        assert_eq!(presets[2].name, "Yield Test (Red)");
+    }
+
+    #[test]
+    fn preset_decks_red_starter_is_50_cards_byte_for_byte() {
+        let reg = registry();
+        let pool = playable_pool(reg.cards());
+        let presets = build_preset_decks(&pool);
+        assert_eq!(presets[0].cards.len(), 50);
+        assert_eq!(
+            presets[0].cards,
+            RED_STARTER_DECK_IDS
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -265,9 +334,9 @@ mod tests {
         let reg = registry();
         let pool = playable_pool(reg.cards());
         let presets = build_preset_decks(&pool);
-        assert_eq!(presets[0].cards.len(), 50);
+        assert_eq!(presets[1].cards.len(), 50);
         assert_eq!(
-            presets[0].cards,
+            presets[1].cards,
             STARTER_DECK_IDS
                 .iter()
                 .map(|s| s.to_string())
@@ -276,14 +345,14 @@ mod tests {
     }
 
     #[test]
-    fn preset_decks_red_starter_is_50_cards_byte_for_byte() {
+    fn preset_decks_yield_test_is_50_cards_byte_for_byte() {
         let reg = registry();
         let pool = playable_pool(reg.cards());
         let presets = build_preset_decks(&pool);
-        assert_eq!(presets[1].cards.len(), 50);
+        assert_eq!(presets[2].cards.len(), 50);
         assert_eq!(
-            presets[1].cards,
-            RED_STARTER_DECK_IDS
+            presets[2].cards,
+            YIELD_TEST_DECK_IDS
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>()
@@ -295,7 +364,11 @@ mod tests {
         let reg = registry();
         let by_id: std::collections::BTreeSet<&str> =
             reg.cards().iter().map(|c| c.id.as_str()).collect();
-        for &id in STARTER_DECK_IDS.iter().chain(RED_STARTER_DECK_IDS.iter()) {
+        for &id in STARTER_DECK_IDS
+            .iter()
+            .chain(RED_STARTER_DECK_IDS.iter())
+            .chain(YIELD_TEST_DECK_IDS.iter())
+        {
             assert!(
                 by_id.contains(id),
                 "preset references unknown card id {id:?}"

@@ -162,7 +162,12 @@ impl GameState {
         let _ = self.drive_window_to_close(ctx.as_deref_mut());
 
         if let Some(c) = ctx {
-            lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker);
+            // TODO(lua-yield): if a Lua on_attack handler calls
+            // game.choose_* / game.confirm against a human oracle, the
+            // Pending is dropped here (CombatError doesn't yet carry
+            // ChoicePending). Battle Captain etc. don't yield today,
+            // so it's not blocking the corpus. Lift when needed.
+            let _ = lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker);
         }
 
         Ok(())
@@ -304,7 +309,10 @@ impl GameState {
         // Errors log and continue per LUA.md Q #3.
         let mut ctx = ctx;
         if let Some(c) = ctx.as_mut() {
-            lua_api::fire_with_partner(
+            // TODO(lua-yield): see attack-side note. CombatError doesn't
+            // yet carry ChoicePending; on_blocked_by handlers can't suspend
+            // a human-choice yield from here without a CombatError variant.
+            let _ = lua_api::fire_with_partner(
                 c.lua,
                 self,
                 c.oracle(),
@@ -314,7 +322,7 @@ impl GameState {
             );
         }
         if let Some(c) = ctx.as_mut() {
-            lua_api::fire_with_partner(
+            let _ = lua_api::fire_with_partner(
                 c.lua,
                 self,
                 c.oracle(),
@@ -430,7 +438,8 @@ impl GameState {
                 .map(|i| i.attached.clone())
                 .unwrap_or_default();
             if let Some(c) = ctx.as_deref_mut() {
-                lua_api::fire_self_only(
+                // TODO(lua-yield): CombatError doesn't carry ChoicePending.
+                let _ = lua_api::fire_self_only(
                     c.lua,
                     self,
                     c.oracle(),
@@ -440,7 +449,7 @@ impl GameState {
             }
             for aid in &attached {
                 if let Some(c) = ctx.as_deref_mut() {
-                    lua_api::fire_self_only(
+                    let _ = lua_api::fire_self_only(
                         c.lua,
                         self,
                         c.oracle(),
@@ -485,7 +494,11 @@ impl GameState {
             // attached cards via game.move; P.8 (auto-exile of leftover
             // attached) is still TODO and will run after handlers when wired.
             if let Some(c) = ctx.as_mut() {
-                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid);
+                // TODO(lua-yield): on_die handlers like flesh-eating-plant
+                // can yield via game.choose_card / game.confirm. The fix
+                // there is a CombatError::ChoicePending variant + threading
+                // through confirm_blocks. Today: swallowed.
+                let _ = lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid);
                 // Broadcast OnCreatureDies to every BOARD watcher (both
                 // sides). The dying card already left BOARD above, so
                 // it's naturally excluded from the snapshot.
@@ -497,7 +510,7 @@ impl GameState {
                     .cloned()
                     .collect();
                 for watcher in &watchers {
-                    lua_api::fire_with_partner(
+                    let _ = lua_api::fire_with_partner(
                         c.lua,
                         self,
                         c.oracle(),

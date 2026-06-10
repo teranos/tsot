@@ -113,7 +113,10 @@ impl GameState {
                         .get(iid)
                         .map(|i| i.attached.clone())
                         .unwrap_or_default();
-                    lua_api::fire_self_only(
+                    // TODO(lua-yield): turn-begin triggers run inside
+                    // `next_phase` which returns (). Pending swallowed
+                    // until next_phase grows a Result type.
+                    let _ = lua_api::fire_self_only(
                         c.lua,
                         self,
                         c.oracle(),
@@ -121,7 +124,7 @@ impl GameState {
                         iid,
                     );
                     for aid in &attached {
-                        lua_api::fire_self_only(
+                        let _ = lua_api::fire_self_only(
                             c.lua,
                             self,
                             c.oracle(),

@@ -86,7 +86,7 @@ pub enum ResponseAction {
 /// A choose-card prompt with the pool and options. All call sites now pass
 /// `state` to the oracle separately, so the oracle reads controllers /
 /// stats / handlers itself — no parallel metadata vecs on the request.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChooseCardRequest {
     pub pool: Vec<InstanceId>,
     /// The owner of the handler issuing the choice. None when the caller
@@ -107,7 +107,7 @@ pub struct ChooseCardRequest {
 /// A choose-player prompt. For 1v1 this is usually trivial (the active
 /// player vs. the opponent), but the surface exists for cards that
 /// explicitly say "target player" and for future multi-player.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChoosePlayerRequest {
     pub exclude: Vec<PlayerId>,
     pub optional: bool,
@@ -116,7 +116,7 @@ pub struct ChoosePlayerRequest {
 
 /// A choose-int prompt. Used for variable-X costs and X-value handler
 /// choices (e.g., "deal X damage; choose X").
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChooseIntRequest {
     pub min: i32,
     pub max: i32,
@@ -129,13 +129,32 @@ pub struct ChooseIntRequest {
 /// oracles never produce this (they answer locally); only
 /// `HumanReplayOracle` does, and only when its pre-loaded answer queue
 /// is exhausted while the asker is the human side.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChoicePending {
     Card(ChooseCardRequest),
     Confirm { asker: PlayerId, prompt: String },
     Player(ChoosePlayerRequest),
     Int(ChooseIntRequest),
 }
+
+impl std::fmt::Display for ChoicePending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Used by `mlua::Error::external(ChoicePending)` to carry the
+        // typed pending value through a Lua handler call. The string
+        // form lands in the engine LOG only if `downcast_ref` misses
+        // (which would be a bug in the lua-yield plumbing).
+        match self {
+            ChoicePending::Card(req) => write!(f, "ChoicePending::Card({req:?})"),
+            ChoicePending::Confirm { asker, prompt } => {
+                write!(f, "ChoicePending::Confirm(asker={asker:?}, prompt={prompt:?})")
+            }
+            ChoicePending::Player(req) => write!(f, "ChoicePending::Player({req:?})"),
+            ChoicePending::Int(req) => write!(f, "ChoicePending::Int({req:?})"),
+        }
+    }
+}
+
+impl std::error::Error for ChoicePending {}
 
 /// Oracle trait — implementors answer choice questions on behalf of a
 /// player. All choice methods receive `&GameState` so the oracle can

@@ -380,6 +380,34 @@ impl StepEngine {
             .unwrap_or(0) as u64;
         bump_preview_attempt(&mut self.stats, active, preview_size.max(preview_size_before));
 
+        // Lua-yield bug fix (LIMITATIONS.md ## lua): when a Lua handler
+        // fired during play_card (on_play, on_enter_board, on_attached_as_cost,
+        // sac-cost on_die) called game.choose_card / game.confirm /
+        // game.choose_player / game.choose_int against an empty
+        // HumanReplayOracle, fire_*'s typed Err(ChoicePending) bubbles up
+        // as PlayError::ChoicePending. Route through the existing
+        // rollback-and-replay machinery: roll back the preview journal,
+        // re-enter the resolving cursor (so the next step() picks up
+        // mid-cast with the human's answer appended to the replay),
+        // surface the prompt via pending_to_prompt. Same shape as the
+        // BuildChoiceResult::Pending arm above; the difference is the
+        // Pending originated INSIDE the handler call rather than during
+        // choice-building before play_card.
+        if let Err(crate::game::PlayError::ChoicePending(pending)) = &result {
+            let pending = pending.clone();
+            if let Some(journal) = self.state.journal.take() {
+                journal.rollback(&mut self.state);
+            }
+            bump_preview_rollback(&mut self.stats, active);
+            self.set_cursor(EngineCursor::PatternBResolving {
+                picked: picked.clone(),
+                history: Vec::new(),
+                played_creature_before: played_creature,
+            });
+            let prompt = pending_to_prompt(&self.state, pending);
+            return StepResult::NeedHuman(Box::new(prompt));
+        }
+
         if result.is_ok() && !suicide {
             if let Some(mut preview) = self.state.journal.take() {
                 if let Some(replay) = self.state.replay_journal.as_mut() {

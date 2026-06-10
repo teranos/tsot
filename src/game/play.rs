@@ -843,7 +843,8 @@ impl GameState {
         }
         if let Some(c) = ctx.as_mut() {
             for sid in &sac_ids {
-                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, sid);
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, sid)
+                    .map_err(PlayError::ChoicePending)?;
                 // OnCreatureDies broadcast to BOARD watchers (excludes
                 // the dying card — already moved to GRAVEYARD above).
                 let watchers: Vec<InstanceId> = self
@@ -861,7 +862,8 @@ impl GameState {
                         EventName::OnCreatureDies,
                         watcher,
                         sid,
-                    );
+                    )
+                    .map_err(PlayError::ChoicePending)?;
                 }
             }
         }
@@ -1138,7 +1140,8 @@ impl GameState {
             }
             self.add_to_zone(instance, player, Zone::Exile);
             if let Some(c) = ctx.as_mut() {
-                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance)
+                    .map_err(PlayError::ChoicePending)?;
             }
             self.current_cast_payments = None;
             return Ok(());
@@ -1228,7 +1231,8 @@ impl GameState {
                         EventName::OnAttachedAsCost,
                         hid,
                         instance,
-                    );
+                    )
+                    .map_err(PlayError::ChoicePending)?;
                 }
             }
         }
@@ -1237,14 +1241,16 @@ impl GameState {
         // was stashed on GameState by `play_card` before this resolver
         // ran, so handlers can read `game.payment_ids()` here.
         if let Some(c) = ctx.as_mut() {
-            lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance);
+            lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance)
+                .map_err(PlayError::ChoicePending)?;
         }
         self.current_cast_payments = None;
 
         // OnEnterBoard: BOARD-placed casts only.
         if is_board_placed {
             if let Some(c) = ctx.as_mut() {
-                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnEnterBoard, instance);
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnEnterBoard, instance)
+                    .map_err(PlayError::ChoicePending)?;
             }
         }
 
@@ -1289,7 +1295,20 @@ impl GameState {
                 .unwrap_or(self.active_player);
             let _ = self.move_card(iid, owner, Zone::Board, Zone::Graveyard);
             if let Some(c) = ctx.as_mut() {
-                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid);
+                // cleanup_zero_y_deaths returns () — can't propagate
+                // Pending via `?`. Swallow with a log; the wider engine
+                // sees the death (graveyard move already committed) but
+                // not the handler's pending user-choice request.
+                // TODO(lua-yield): convert this fn to Result<(),
+                // ChoicePending> so death triggers from continuous
+                // checks can suspend like in-play triggers.
+                let _ = lua_api::fire_self_only(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    EventName::OnDie,
+                    iid,
+                );
                 // OnCreatureDies broadcast to BOARD watchers (excludes
                 // the dying card — already moved to GRAVEYARD above).
                 let watchers: Vec<InstanceId> = self
@@ -1300,7 +1319,7 @@ impl GameState {
                     .cloned()
                     .collect();
                 for watcher in &watchers {
-                    lua_api::fire_with_partner(
+                    let _ = lua_api::fire_with_partner(
                         c.lua,
                         self,
                         c.oracle(),

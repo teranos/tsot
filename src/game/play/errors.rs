@@ -94,6 +94,16 @@ pub struct PlayChoices {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayError {
+    /// A Lua handler fired during play (e.g. `on_play`, `on_enter_board`,
+    /// or a death-triggered `on_die` cascading from this cast) called
+    /// `game.choose_card` / `game.confirm` / `game.choose_player` /
+    /// `game.choose_int` with an oracle that needs the human to answer.
+    /// The wrapper raises `Error::external(ChoicePending)`; `fire_*`
+    /// downcasts; play_card lifts via `?` and propagates here. The
+    /// StepEngine catches this variant, rolls back the preview journal,
+    /// surfaces a `HumanPrompt::Choose*`, and re-fires play_card after
+    /// the user's answer is appended to `HumanReplayOracle.replay`.
+    ChoicePending(crate::choice::ChoicePending),
     GameOver,
     NotInHand,
     /// Card type not currently routable by `play_card`. Today: Creature,
