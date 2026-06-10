@@ -10,6 +10,7 @@ module Card exposing
     , defaultConfig
     , faceDownConfig
     , isAttachedZone
+    , key
     , kindFromString
     , slotKey
     , slotSpiralOrder
@@ -142,6 +143,7 @@ converter changes — the primitive already accommodates the shape.
 import Html exposing (Html, div, node, span, text)
 import Html.Attributes as A exposing (class, style)
 import Html.Events as E
+import Html.Keyed as Keyed
 import Json.Decode as D
 
 
@@ -361,6 +363,23 @@ isAttachedZone (Card d) =
     not (List.isEmpty d.attached)
 
 
+{-| Stable per-card identity for Html.Keyed (Slice 2 of CARD.md
+Axiom): a card's iid uniquely identifies it across renders, so a
+keyed container preserves the same DOM node when the card stays
+in the zone (even if it reorders). Pool entries have no iid; fall
+back to the card-id (still unique within the pool/deck contexts
+they appear in).
+
+Slice 2 closes intra-zone reorder destruction. Cross-zone
+reparenting still destroys the node — Elm's vDOM has no
+cross-parent identity. Slice 3 (single #card-pool top-level
+container) is what closes that.
+-}
+key : Card -> String
+key (Card d) =
+    Maybe.withDefault d.id d.iid
+
+
 
 -- DECODER FROM ENGINE WIRE SHAPE (CardView in snapshot.rs)
 
@@ -493,16 +512,24 @@ view cfg (Card d) =
     else
         div [ class "card-host" ]
             [ viewSingle cfg d
-            , div [ class "attached-strip" ]
-                (List.map viewAttachedRow d.attached)
+            , Keyed.node "div"
+                [ class "attached-strip" ]
+                (List.map keyedAttachedRow d.attached)
             ]
+
+
+keyedAttachedRow : Card -> ( String, Html msg )
+keyedAttachedRow card =
+    ( key card, viewAttachedRow card )
 
 
 viewAttachedRow : Card -> Html msg
 viewAttachedRow (Card d) =
     -- ONE element per attached iid. `.attached-row` clips to a thin
     -- visible strip; `:hover` on the row pops it out + reveals face
-    -- via CSS on the same element. No second DOM node.
+    -- via CSS on the same element. No second DOM node. Slice 2 of
+    -- the Axiom roadmap keys the parent .attached-strip on iid so
+    -- the row itself is identity-preserved across renders too.
     div [ class "attached-row" ]
         [ viewSingle faceDownConfig d ]
 

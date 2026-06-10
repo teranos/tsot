@@ -61,6 +61,7 @@ import Set
 import Html exposing (Html, button, div, h2, pre, span, table, td, text, th, tr)
 import Html.Attributes exposing (class, id, style)
 import Html.Events exposing (onClick)
+import Html.Keyed as Keyed
 import Json.Decode as D
 import Json.Encode as E
 import LogPanel
@@ -1810,27 +1811,27 @@ renderGameScreen active prompt combat maybeSlice elmButtons =
         , div [ class "row" ]
             [ div [ class "zone opponent", style "flex" "2" ]
                 [ h2 [] [ text "Opp board" ]
-                , div [ class "cards", id "opp-board-cards" ] oppBoardCards
+                , Keyed.node "div" [ class "cards", id "opp-board-cards" ] oppBoardCards
                 ]
             , div [ class "zone", style "flex" "0 0 14rem" ]
                 [ h2 []
                     [ text "Opp graveyard "
                     , span [ class "counts", id "opp-gy-count" ] [ text oppGy ]
                     ]
-                , div [ class "cards", id "opp-graveyard-cards" ] oppGraveyardCards
+                , Keyed.node "div" [ class "cards", id "opp-graveyard-cards" ] oppGraveyardCards
                 ]
             ]
         , div [ class "row" ]
             [ div [ class "zone", style "flex" "2" ]
                 [ h2 [] [ text "Your board" ]
-                , div [ class "cards", id "your-board-cards" ] yourBoardCards
+                , Keyed.node "div" [ class "cards", id "your-board-cards" ] yourBoardCards
                 ]
             , div [ class "zone", style "flex" "0 0 14rem" ]
                 [ h2 []
                     [ text "Your graveyard "
                     , span [ class "counts", id "your-gy-count" ] [ text yourGy ]
                     ]
-                , div [ class "cards", id "your-graveyard-cards" ] yourGraveyardCards
+                , Keyed.node "div" [ class "cards", id "your-graveyard-cards" ] yourGraveyardCards
                 ]
             ]
         , div [ class "row" ]
@@ -1839,7 +1840,7 @@ renderGameScreen active prompt combat maybeSlice elmButtons =
                     [ text "Your hand "
                     , span [ class "counts", id "your-hand-counts" ] [ text yourHand ]
                     ]
-                , div [ class "cards", id "your-hand-cards" ] yourHandCards
+                , Keyed.node "div" [ class "cards", id "your-hand-cards" ] yourHandCards
                 ]
             , div [ class "zone", style "flex" "0 0 14rem" ]
                 [ h2 []
@@ -1873,14 +1874,20 @@ type ZonePos
     | YourHand
 
 
-zoneCardsForPrompt : ZonePos -> GameScreen.Prompt -> GameScreen.CombatSelection -> Maybe GameViewSlice -> Maybe (List Card.Card) -> List (Html Msg)
+{-| Per CARD.md Axiom Slice 2: returns keyed `(iid, html)` pairs so
+the in-game zone containers can use `Html.Keyed.node` — intra-zone
+reorderings (e.g. tap order, combat staging) preserve DOM identity.
+The empty-state placeholder keeps a stable `"empty"` key so the
+vDOM diffs it correctly when the zone goes from empty to populated.
+-}
+zoneCardsForPrompt : ZonePos -> GameScreen.Prompt -> GameScreen.CombatSelection -> Maybe GameViewSlice -> Maybe (List Card.Card) -> List ( String, Html Msg )
 zoneCardsForPrompt zone prompt combat maybeSlice maybeCards =
     case maybeCards of
         Nothing ->
             []
 
         Just [] ->
-            [ span [ class "empty-note" ] [ text "empty" ] ]
+            [ ( "empty", span [ class "empty-note" ] [ text "empty" ] ) ]
 
         Just cards ->
             let
@@ -1895,7 +1902,13 @@ zoneCardsForPrompt zone prompt combat maybeSlice maybeCards =
                         _ ->
                             Dict.empty
             in
-            List.map (\c -> Card.view (cardOptsForZone zone prompt combat maybeSlice actsByIid c) c) cards
+            List.map
+                (\c ->
+                    ( Card.key c
+                    , Card.view (cardOptsForZone zone prompt combat maybeSlice actsByIid c) c
+                    )
+                )
+                cards
 
 
 {-| Per-card opts: starts from the zone's baseline (graveyards dim;
@@ -2310,7 +2323,7 @@ viewPoolGrid model =
         visible =
             List.filter (poolMatchesFilters model) model.cardPool
     in
-    div
+    Keyed.node "div"
         [ class "pool-grid"
         , style "display" "flex"
         , style "flex-wrap" "wrap"
@@ -2318,7 +2331,7 @@ viewPoolGrid model =
         , style "max-height" "calc(100vh - 16rem)"
         , style "overflow-y" "auto"
         ]
-        (List.map viewPoolCard visible)
+        (List.map (\e -> ( e.id, viewPoolCard e )) visible)
 
 
 poolMatchesFilters : Model -> CardPoolEntry -> Bool
@@ -2500,14 +2513,14 @@ viewDeckRows model =
                             compare (nameOf ida) (nameOf idb)
                     )
     in
-    div
+    Keyed.node "div"
         [ style "display" "flex"
         , style "flex-direction" "column"
         , style "gap" "0.3rem"
         ]
         (List.filterMap
             (\( id, qty ) ->
-                entryFor id |> Maybe.map (viewDeckRow qty)
+                entryFor id |> Maybe.map (\entry -> ( entry.id, viewDeckRow qty entry ))
             )
             sorted
         )
