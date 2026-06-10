@@ -53,7 +53,7 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts assets wasm wasm-serve wasm-dev wasm-dev-serve clean-wasm art
+.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts assets wasm wasm-serve wasm-dev wasm-dev-serve clean-wasm art art-forever
 
 help:
 	@echo ""
@@ -80,6 +80,7 @@ help:
 	@echo "  make art                 generate art for one random card without art yet → gen_art/{id}_W_H.png"
 	@echo "                           defaults match ~/sd-cpp/ install; throttled to keep machine usable"
 	@echo "                           override: SD_BIN / SD_MODEL / SD_THREADS / SD_VRAM_RESERVE / SD_FAST=1"
+	@echo "  make art-forever         loop \`make art\` forever (Ctrl-C to stop)"
 	@echo ""
 	@echo "WASM browser play:"
 	@echo "  make wasm                build the wasm bundle + stage dist/ (needs emcc on PATH)"
@@ -412,3 +413,7 @@ art:
 	 SD_TINT=$${SD_TINT:-25} \
 	 SD_TEXT=$${SD_TEXT:-1} \
 	 python3 tools/gen_art.py
+
+# Loop `make art` forever. Ctrl-C to stop.
+art-forever:
+	@while true; do $(MAKE) art; done
