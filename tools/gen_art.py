@@ -524,15 +524,106 @@ def format_stats(card: dict) -> str:
 # ---------------------------------------------------------------------
 
 TOP_BANNER_H = 60
-BOTTOM_BANNER_H = 130
 BANNER_ALPHA = 0.85
 NAME_POINTSIZE = 22
 COST_POINTSIZE = 14
 TYPE_POINTSIZE = 18
 ABILITIES_POINTSIZE = 14
 STATS_POINTSIZE = 24
+SYMBOL_POINTSIZE = 30
+SYMBOL_LEFT_PAD = 6
+SYMBOL_TOP_PAD = 6
+SYMBOL_GAP = 4
+WATERMARK_POINTSIZE = 110
+WATERMARK_ALPHA = 0.18
+WATERMARK_RATE = 0.30
 FONT_BOLD = "Helvetica-Bold"
 FONT_REG = "Helvetica"
+
+
+# Per SLOTS.md, the default spiral order when a card declares symbols as an
+# array (not slot-keyed). The first array element lands at slot C.
+SLOT_SPIRAL = ["C", "U", "UR", "R", "DR", "D", "DL", "L", "UL",
+               "TL", "T", "TR", "BR", "B", "BL"]
+
+
+def c_slot_symbol(card: dict) -> str | None:
+    """Return the symbol glyph at slot C, or None if the card has no C-slot symbol."""
+    if card.get("symbol"):
+        return card["symbol"]
+    raw = card.get("symbols")
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw.get("C")
+    if isinstance(raw, list) and len(raw) > 0:
+        return raw[0]
+    return None
+
+
+def card_symbols_list(card: dict) -> list[str]:
+    """All symbols on a card in column order (C first, then surrounding slots)."""
+    if card.get("symbol"):
+        return [card["symbol"]]
+    raw = card.get("symbols")
+    if not raw:
+        return []
+    if isinstance(raw, dict):
+        return [raw[slot] for slot in SLOT_SPIRAL if slot in raw]
+    if isinstance(raw, list):
+        return list(raw)
+    return []
+
+
+def card_uses_watermark_variant(card_id: str, has_c_symbol: bool,
+                                 rate: float = WATERMARK_RATE) -> bool:
+    """Deterministic per-card decision: should this card render with the
+    watermark variant instead of the symbol column? Hash the id so the same
+    card always lands the same side of the random cut. Requires a C-slot
+    symbol — without one there's nothing to watermark with."""
+    if not has_c_symbol:
+        return False
+    h = hashlib.sha256(f"watermark:{card_id}".encode()).digest()
+    val = int.from_bytes(h[:8], "big") / float(1 << 64)
+    return val < rate
+
+
+def symbol_composite_args(sym: str, x: int, y: int, pointsize: int) -> list[str]:
+    """Build the magick args to composite ONE symbol glyph onto the art.
+    Bold weight via FONT_BOLD + larger pointsize, screen blend for art
+    integration. No -stroke — stroke would leak into subsequent text
+    annotations and break title/type uniformity across the corpus."""
+    return [
+        "(",
+        "-background", "none", "-fill", "white",
+        "-font", FONT_BOLD, "-pointsize", str(pointsize),
+        f"label:{sym}",
+        ")",
+        "-gravity", "northwest", "-geometry", f"+{x}+{y}",
+        "-compose", "Screen", "-composite",
+        "-compose", "Over",
+    ]
+
+
+def compute_bottom_banner_h(type_line: str, abilities_image_height: int,
+                             has_stats: bool) -> int:
+    """Height of the bottom banner that fits its content tightly."""
+    BOT_PAD = 10
+    TOP_PAD = 8
+    GAP = 8
+    TYPE_H = 22
+    STATS_MIN = 38
+    h = BOT_PAD
+    if abilities_image_height > 0:
+        h += abilities_image_height
+    if abilities_image_height > 0 and type_line:
+        h += GAP
+    if type_line:
+        h += TYPE_H
+    h += TOP_PAD
+    if has_stats:
+        h = max(h, STATS_MIN)
+    return h
 
 
 def render_cost_strip(tokens: list[tuple[str, str]], font: str,
@@ -584,63 +675,111 @@ def overlay_text(png_path: str, card: dict) -> None:
     abilities_text = ". ".join(a.rstrip(".") for a in abilities if a) + ("." if abilities else "")
     stats = format_stats(card)
 
+    symbols = card_symbols_list(card)
+    c_sym = c_slot_symbol(card)
+    use_watermark = card_uses_watermark_variant(card.get("id", ""), c_sym is not None)
+
+    # Pre-render abilities to a temp file so we can measure its height and
+    # size the bottom banner to fit. -trim removes the transparent margin
+    # caption: leaves around the text.
+    abilities_strip = None
+    abilities_h = 0
+    if abilities_text:
+        wrap_w = WIDTH - 70
+        abilities_strip = f"/tmp/abilities-{os.getpid()}.png"
+        subprocess.run([
+            "magick",
+            "-background", "none", "-fill", fg, "-font", FONT_REG,
+            "-pointsize", str(ABILITIES_POINTSIZE),
+            "-size", f"{wrap_w}x200",
+            f"caption:{abilities_text}",
+            "-trim", "+repage",
+            abilities_strip,
+        ], check=True)
+        abilities_h = int(subprocess.check_output(
+            ["magick", "identify", "-format", "%h", abilities_strip],
+            text=True,
+        ).strip())
+
+    bottom_banner_h = compute_bottom_banner_h(type_line, abilities_h, bool(stats))
+
     cmd = [
         "magick", png_path,
         # Top banner — solid themed color
         "(", "-size", f"{WIDTH}x{TOP_BANNER_H}", f"xc:{bg_rgba}", ")",
         "-gravity", "north", "-composite",
-        # Bottom banner — solid themed color
-        "(", "-size", f"{WIDTH}x{BOTTOM_BANNER_H}", f"xc:{bg_rgba}", ")",
+        # Bottom banner — dynamic height, fits content
+        "(", "-size", f"{WIDTH}x{bottom_banner_h}", f"xc:{bg_rgba}", ")",
         "-gravity", "south", "-composite",
-        # Card name (top)
-        "-gravity", "north", "-font", FONT_BOLD,
-        "-pointsize", str(NAME_POINTSIZE), "-fill", fg,
-        "-annotate", "+0+8", name,
     ]
 
-    # Cost line: render text+icon tokens to a strip, composite under the name.
+    # Watermark variant: large faded C-slot symbol behind the rules text.
+    # Composited BEFORE the text so text sits on top of it.
+    if use_watermark and c_sym:
+        wm_y = max(4, (bottom_banner_h - WATERMARK_POINTSIZE) // 2)
+        cmd += [
+            "(",
+            "-background", "none", "-fill", fg, "-font", FONT_BOLD,
+            "-pointsize", str(WATERMARK_POINTSIZE),
+            f"label:{c_sym}",
+            "-alpha", "set",
+            "-channel", "A", "-evaluate", "Multiply", str(WATERMARK_ALPHA), "+channel",
+            ")",
+            "-gravity", "south", "-geometry", f"+0+{wm_y}", "-composite",
+        ]
+
+    # Symbol column: stack symbols down the left edge, bold + screen blend.
+    # No stroke — that would leak into subsequent text annotations.
+    elif symbols:
+        y = SYMBOL_TOP_PAD
+        for sym in symbols:
+            cmd += symbol_composite_args(sym, SYMBOL_LEFT_PAD, y, SYMBOL_POINTSIZE)
+            y += SYMBOL_POINTSIZE + SYMBOL_GAP
+
+    # Name top-left, left-aligned. NOT bold — FONT_REG so title looks the
+    # same across every card in the corpus (symbol-bearing or not).
+    name_x = (SYMBOL_LEFT_PAD + SYMBOL_POINTSIZE + 6) if (symbols and not use_watermark) else 10
+    cmd += [
+        "-gravity", "northwest", "-font", FONT_REG,
+        "-pointsize", str(NAME_POINTSIZE), "-fill", fg,
+        "-annotate", f"+{name_x}+12", name,
+    ]
+
+    # Cost top-right. Cost text is NOT bold — uniform with title and type.
     if cost_raw:
         tokens = cost_tokens(cost_raw)
         strip_path = f"/tmp/cost-strip-{os.getpid()}.png"
-        if render_cost_strip(tokens, FONT_BOLD, COST_POINTSIZE, fg,
+        if render_cost_strip(tokens, FONT_REG, COST_POINTSIZE, fg,
                              COST_POINTSIZE + 4, strip_path):
             cmd += [
                 "(", strip_path, ")",
-                "-gravity", "north", "-geometry", "+0+34", "-composite",
+                "-gravity", "northeast", "-geometry", "+10+14", "-composite",
             ]
 
+    # Type line: bottom-left aligned, NOT bold (FONT_REG, uniform with title).
     if type_line:
+        BOT_PAD = 10
+        GAP = 8 if abilities_h > 0 else 0
+        type_y = BOT_PAD + abilities_h + GAP + 4  # +4 = descender clearance
         cmd += [
-            "-gravity", "south", "-font", FONT_BOLD,
+            "-gravity", "southwest", "-font", FONT_REG,
             "-pointsize", str(TYPE_POINTSIZE), "-fill", fg,
-            "-annotate", "+0+102", type_line,
+            "-annotate", f"+10+{type_y}", type_line,
         ]
 
-    if abilities_text:
-        # caption: auto-wraps. Width is narrower so the stats badge in the
-        # bottom-right has clear space; height sized to fit short ability text.
-        wrap_w = WIDTH - 70
-        wrap_h = 80
+    # Abilities image composited at bottom-left of card.
+    if abilities_strip:
         cmd += [
-            "(",
-            "-background", "none", "-fill", fg, "-font", FONT_REG,
-            "-pointsize", str(ABILITIES_POINTSIZE),
-            "-size", f"{wrap_w}x{wrap_h}",
-            f"caption:{abilities_text}",
-            ")",
-            "-gravity", "south", "-geometry", "-30+8", "-composite",
+            "(", abilities_strip, ")",
+            "-gravity", "southwest", "-geometry", "+10+10", "-composite",
         ]
 
+    # Stats badge bottom-right — NOT bold, no stroke. Uniform with title/type.
     if stats:
-        # Stroke makes the badge readable even when it lands on top of
-        # the wrapped abilities text below it.
-        stroke = "black" if fg in ("white",) else "white"
         cmd += [
-            "-gravity", "southeast", "-font", FONT_BOLD,
+            "-gravity", "southeast", "-font", FONT_REG,
             "-pointsize", str(STATS_POINTSIZE), "-fill", fg,
-            "-stroke", stroke, "-strokewidth", "1",
             "-annotate", "+8+6", stats,
-            "-stroke", "none",
         ]
 
     cmd += [png_path]
@@ -693,8 +832,9 @@ def tint_to_card_color(png_path: str, colors: list[str], strength: int) -> None:
 # the interior, the frame is ours.
 # ---------------------------------------------------------------------
 
-FRAME_RADIUS = 10           # corner rounding radius in pixels
-FRAME_BORDER = 2            # visible border thickness
+FRAME_RADIUS = 14           # corner rounding radius — sized to keep curve
+                            # visible past the 4px border (14-4=10px of curve)
+FRAME_BORDER = 4            # visible border thickness (doubled from 2)
 FRAME_COLOR = "#0a0a0a"     # near-black
 
 def apply_card_frame(png_path: str) -> None:

@@ -288,22 +288,47 @@ class TextSizeTests(unittest.TestCase):
         # User wanted ability text bigger than the previous 10pt.
         self.assertGreaterEqual(gen_art.ABILITIES_POINTSIZE, 14)
 
-    def test_bottom_banner_is_tight(self):
-        # User: "less large, more in line with the amount of text on a card."
-        # Previous 180 was too tall; cap at 140.
-        self.assertLessEqual(gen_art.BOTTOM_BANNER_H, 140)
+    def test_bottom_banner_fits_no_abilities_no_stats(self):
+        # No content → very tight.
+        h = gen_art.compute_bottom_banner_h("", 0, has_stats=False)
+        self.assertLess(h, 30)
+
+    def test_bottom_banner_fits_type_only(self):
+        # Type line only — short banner, not the old fixed 130.
+        h = gen_art.compute_bottom_banner_h("instant", 0, has_stats=False)
+        self.assertGreater(h, 20)
+        self.assertLess(h, 60)
+
+    def test_bottom_banner_grows_with_abilities(self):
+        short = gen_art.compute_bottom_banner_h("creature — beast", 18, has_stats=False)
+        long = gen_art.compute_bottom_banner_h("creature — beast", 80, has_stats=False)
+        self.assertGreater(long, short)
+        # Difference matches the abilities-height delta exactly.
+        self.assertEqual(long - short, 62)
+
+    def test_bottom_banner_stats_minimum_when_otherwise_empty(self):
+        # Stats badge needs vertical room even when there's no type/abilities.
+        h_no_stats = gen_art.compute_bottom_banner_h("", 0, has_stats=False)
+        h_with_stats = gen_art.compute_bottom_banner_h("", 0, has_stats=True)
+        self.assertGreater(h_with_stats, h_no_stats)
+        self.assertGreaterEqual(h_with_stats, 36)
+
+    def test_bottom_banner_does_not_use_fixed_constant(self):
+        # The old fixed BOTTOM_BANNER_H is gone; banner sizing is dynamic.
+        self.assertFalse(hasattr(gen_art, "BOTTOM_BANNER_H"))
 
 
 class CardFrameTests(unittest.TestCase):
-    def test_radius_is_minor(self):
-        # User: "corners are slightly rounded (very minor rounding)."
-        self.assertLessEqual(gen_art.FRAME_RADIUS, 16)
+    def test_radius_supports_visible_curve_past_thicker_border(self):
+        # User: BOTH thicker border AND visibly rounded corners.
+        # The visible curve = FRAME_RADIUS - FRAME_BORDER. With the 4px border,
+        # we need at least 8px of visible curve to read as "rounded" at all.
+        self.assertGreaterEqual(gen_art.FRAME_RADIUS - gen_art.FRAME_BORDER, 8)
         self.assertGreater(gen_art.FRAME_RADIUS, 0)
 
-    def test_border_is_thin(self):
-        # User: "near black thin border."
-        self.assertLessEqual(gen_art.FRAME_BORDER, 4)
-        self.assertGreater(gen_art.FRAME_BORDER, 0)
+    def test_border_is_thicker(self):
+        # User: "the current thin dark black border, make it 2x larger"
+        self.assertGreaterEqual(gen_art.FRAME_BORDER, 4)
 
     def test_border_color_near_black(self):
         # Sanity-check the hex codes to "near black."
@@ -420,6 +445,93 @@ class TextThemeTests(unittest.TestCase):
             theme = gen_art.text_theme([c])
             self.assertIn("bg", theme)
             self.assertIn("fg", theme)
+
+
+class SymbolCompositeArgsTests(unittest.TestCase):
+    """Title and type-line text must look uniform across every card in the
+    corpus. The symbol column must not pull -stroke, -strokewidth, or any
+    other settings that could leak into the subsequent text annotations
+    and make title/type text on symbol-bearing cards render differently."""
+
+    def test_no_stroke_setting(self):
+        args = gen_art.symbol_composite_args("⋈", x=6, y=6, pointsize=30)
+        self.assertNotIn("-stroke", args)
+        self.assertNotIn("-strokewidth", args)
+
+    def test_includes_font_bold(self):
+        # The symbol is bold via font weight, not via stroke.
+        args = gen_art.symbol_composite_args("⋈", x=6, y=6, pointsize=30)
+        self.assertIn("-font", args)
+        self.assertIn(gen_art.FONT_BOLD, args)
+
+    def test_uses_screen_compose(self):
+        # Symbols blend with the art behind via screen compose.
+        args = gen_art.symbol_composite_args("⋈", x=6, y=6, pointsize=30)
+        self.assertIn("Screen", args)
+
+
+class SymbolHelperTests(unittest.TestCase):
+    def test_c_slot_symbol_from_singular_field(self):
+        card = {"id": "x", "symbol": "⋈"}
+        self.assertEqual(gen_art.c_slot_symbol(card), "⋈")
+
+    def test_c_slot_symbol_from_dict_form(self):
+        card = {"id": "x", "symbols": {"C": "꩜", "U": "≡"}}
+        self.assertEqual(gen_art.c_slot_symbol(card), "꩜")
+
+    def test_c_slot_symbol_from_array_first_is_C(self):
+        # Per SLOTS.md spiral, the first array element fills slot C.
+        card = {"id": "x", "symbols": ["⨳", "⋈"]}
+        self.assertEqual(gen_art.c_slot_symbol(card), "⨳")
+
+    def test_c_slot_symbol_none_when_missing(self):
+        self.assertIsNone(gen_art.c_slot_symbol({"id": "x"}))
+        self.assertIsNone(gen_art.c_slot_symbol({"id": "x", "symbols": []}))
+
+    def test_card_symbols_list_singular(self):
+        card = {"id": "x", "symbol": "⋈"}
+        self.assertEqual(gen_art.card_symbols_list(card), ["⋈"])
+
+    def test_card_symbols_list_dict_spiral_order(self):
+        # Dict form ordered C → U → UR → ... per SLOTS.md spiral.
+        card = {"id": "x", "symbols": {"U": "A", "C": "B", "UR": "C"}}
+        self.assertEqual(gen_art.card_symbols_list(card), ["B", "A", "C"])
+
+    def test_card_symbols_list_array_preserves_order(self):
+        card = {"id": "x", "symbols": ["A", "B", "C"]}
+        self.assertEqual(gen_art.card_symbols_list(card), ["A", "B", "C"])
+
+    def test_card_symbols_list_empty(self):
+        self.assertEqual(gen_art.card_symbols_list({}), [])
+        self.assertEqual(gen_art.card_symbols_list({"symbols": []}), [])
+
+
+class WatermarkVariantTests(unittest.TestCase):
+    def test_watermark_deterministic_per_card_id(self):
+        # Same id → same decision every call.
+        r1 = gen_art.card_uses_watermark_variant("tusker", True)
+        r2 = gen_art.card_uses_watermark_variant("tusker", True)
+        self.assertEqual(r1, r2)
+
+    def test_watermark_disabled_when_no_c_symbol(self):
+        # Without a C-slot symbol there's nothing to watermark with.
+        self.assertFalse(gen_art.card_uses_watermark_variant("tusker", False))
+        self.assertFalse(gen_art.card_uses_watermark_variant("midnight-raven", False))
+
+    def test_watermark_rate_roughly_30pct(self):
+        # Over many card ids, ~30% should land in the watermark bucket.
+        # 1000 synthetic ids, expect 200-400 watermarked (loose tolerance).
+        count = sum(
+            1 for i in range(1000)
+            if gen_art.card_uses_watermark_variant(f"card-{i}", True)
+        )
+        self.assertGreater(count, 200)
+        self.assertLess(count, 400)
+
+    def test_watermark_respects_custom_rate(self):
+        # rate=0 → never watermark; rate=1 → always (when C-symbol present).
+        self.assertFalse(gen_art.card_uses_watermark_variant("any", True, rate=0.0))
+        self.assertTrue(gen_art.card_uses_watermark_variant("any", True, rate=1.0))
 
 
 class CardSeedTests(unittest.TestCase):
