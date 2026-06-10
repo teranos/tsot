@@ -108,28 +108,53 @@ slice: without it, every failure beneath the dev tool's surface
 (engine emit, FFI return, port decode, click handler) can disappear
 between layers and the assistant has to *guess* instead of read.
 
-- [ ] **O0a: Audit + replace `Err _ ->` swallow patterns in Elm.**
+- [~] **O0a: Audit + replace `Err _ ->` swallow patterns in Elm.**
   Grep `assets/src/` for `Err _ ->`, `Result.withDefault`,
   `Maybe.withDefault` where the underlying value semantically carries
   failure (e.g. decoded port payloads). Each site: log via the
   existing `LogPanel.TextLine "ERR: <what> — <reason>"` pattern at
   minimum; surface contextually at the point of interaction where
   the failure originated (dropdown, prompt, button).
+  **Partial 2026-06-10 / 11**: 7 port-decode sites in `Main.elm`
+  migrated to `pushDecodeError` (typed `Error.Error` via the Error
+  primitive). See `ERROR.md` Slice 2 for the list. Foundational
+  pipeline (`errorIn` port, `Browser.Events.onClick` cursor capture,
+  surface anchoring via `viewSurfaceWithErrors`) shipped + Test
+  Panic verified end-to-end.
 
-- [ ] **O0b: Audit + replace silent catches in JS.**
+- [~] **O0b: Audit + replace silent catches in JS.**
   Grep `assets/*.{js,html}` for `try { ... } catch`, `.catch(`,
   `await`-without-error-handling. Each catch either re-throws to the
   fault surface (`js-bridge.js`'s LOG-push helper) or attaches enough
   context that the LOG line answers "what failed and why." No `catch
   (e) {}` without a LOG push.
+  **Partial 2026-06-11**: `tsotPushError` helper + `tsotErrorAppRef`
+  stash give every JS catch a typed surface through the
+  `errorIn` port. Migrated: `tsotShowBridgeFailure` (every
+  workerCmd/idbReq dispatcher throw), `withInlineError` (every
+  click-action — captures cursor anchor from MouseEvent),
+  `play.html` lines 192/325/607/626/722/1048/1227/1268/1289 (FFI
+  envelope parse, SharedArrayBuffer init, dbAppendDecision IDB
+  write, preview render, spectate, engine-start, wasm-worker-spawn,
+  deckbuilder-bootstrap). See `ERROR.md` Slice 3 for the full list.
+  Remaining: defense-in-depth catches (console safety, DOM injection
+  fallbacks) intentionally NOT routed — they're the floor that
+  fires when the pipeline itself is broken.
 
-- [ ] **O0c: Port-decode failures land contextually.**
+- [~] **O0c: Port-decode failures land contextually.**
   Every `port ...In : (D.Value -> msg) -> Sub msg` decoder failure
   becomes a typed `PortDecodeFailed { port, error }` Msg that surfaces
   in the LOG with the port name + raw payload sample, AND at the
   receiving UI surface (e.g. the deckbuilder dropdown shows "decode
   failed: <n> preset(s) rejected — <reason>"). No silent fallback to
   empty/default state.
+  **Partial 2026-06-11**: cursor-anchored overlay shipped — clicks
+  that fail surface as a classic-OS window AT the cursor (viewport-
+  aware corner flip; drag by titlebar; × close button). Surface-
+  anchored fallback for port-decode failures with no cursor renders
+  inside `viewSurfaceWithErrors` containers. The deckbuilder
+  dropdown's specific named-region inline canary is gated on
+  `ERROR.md` Slice 4 (Rust-side errors field).
 
 ## Phase 1 — the bus + core engine narration
 

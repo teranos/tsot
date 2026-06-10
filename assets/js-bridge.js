@@ -524,8 +524,14 @@ function tsotShowBridgeFailure(stage, err) {
   } catch (_) { /* if even DOM injection fails, console.error already fired */ }
 }
 
-// Push a typed Error to the Elm Error pipeline. Sender for any
-// JS-side catch / FFI ok=false / future Rust-panic envelope shim.
+// Push a typed Error to the Elm Error pipeline. Accepts two shapes:
+//   1. A fully-formed typed Error (id, severity, context, title, why,
+//      at) — passed through as-is. Used by Rust-emitted envelopes
+//      (envelope.errors[]) which already match Error.elm's wire shape.
+//   2. A JS-side options bag (stage?, surface?, title?, why?,
+//      anchor?, severity?, raw?) — built into a typed Error here.
+//      Used by tsotShowBridgeFailure + withInlineError + the silent-
+//      drop swallow-replacement sites.
 // Per ERROR.md the wire shape matches `Error.elm`'s decoder
 // byte-for-byte: id, severity, context{surface,region?,anchor?},
 // title, why, trace?, raw?, at. Anchor omitted = Elm fills it
@@ -538,22 +544,30 @@ function tsotPushError(opts) {
     // red banner from tsotShowBridgeFailure is already up.
     return;
   }
-  var counter = ++tsotErrorCounter;
-  var envelope = {
-    id: 'err-js-' + Date.now() + '-' + counter,
-    severity: opts && opts.severity ? String(opts.severity) : 'error',
-    context: {
-      surface: opts && opts.surface ? String(opts.surface) : 'bridge',
-    },
-    title: opts && opts.title ? String(opts.title) : '(no title)',
-    why: opts && opts.why ? String(opts.why) : '(no why)',
-    at: new Date().toISOString(),
-  };
-  if (opts && opts.region) envelope.context.region = String(opts.region);
-  if (opts && opts.stage) envelope.context.region = String(opts.stage);
-  if (opts && opts.anchor) envelope.context.anchor = opts.anchor;
-  if (opts && opts.trace) envelope.trace = opts.trace;
-  if (opts && opts.raw) envelope.raw = String(opts.raw);
+  var envelope;
+  if (opts && opts.context && typeof opts.context.surface === 'string'
+      && typeof opts.id === 'string' && typeof opts.severity === 'string') {
+    // Already a typed Error (shape 1). Pass through unchanged so the
+    // Rust-emitted id + context survive the wire trip.
+    envelope = opts;
+  } else {
+    var counter = ++tsotErrorCounter;
+    envelope = {
+      id: 'err-js-' + Date.now() + '-' + counter,
+      severity: opts && opts.severity ? String(opts.severity) : 'error',
+      context: {
+        surface: opts && opts.surface ? String(opts.surface) : 'bridge',
+      },
+      title: opts && opts.title ? String(opts.title) : '(no title)',
+      why: opts && opts.why ? String(opts.why) : '(no why)',
+      at: new Date().toISOString(),
+    };
+    if (opts && opts.region) envelope.context.region = String(opts.region);
+    if (opts && opts.stage) envelope.context.region = String(opts.stage);
+    if (opts && opts.anchor) envelope.context.anchor = opts.anchor;
+    if (opts && opts.trace) envelope.trace = opts.trace;
+    if (opts && opts.raw) envelope.raw = String(opts.raw);
+  }
   try {
     tsotErrorAppRef.ports.errorIn.send(envelope);
   } catch (e) {

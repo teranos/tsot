@@ -189,9 +189,16 @@ function bootWorker() {
           try {
             sharedHeapI32 = new Int32Array(m.sharedHeap);
             cancelFlagOffset = m.cancelFlagOffset;
-          } catch (_) {
+          } catch (e) {
             sharedHeapI32 = null;
             cancelFlagOffset = null;
+            try { tsotPushError({
+              stage: 'shared-heap-init',
+              surface: 'bridge',
+              severity: 'warn',
+              title: 'SharedArrayBuffer init failed — UCT cancel disabled',
+              why: String(e && e.message || e),
+            }); } catch (_) {}
           }
         }
         wasmWorker.removeEventListener('message', initHandler);
@@ -322,10 +329,32 @@ function pumpFfiQueue() {
     resolve: (raw) => {
       pendingFfi = null;
       let env;
-      try { env = JSON.parse(raw); } catch (_) { env = null; }
+      let parseErr = null;
+      try { env = JSON.parse(raw); } catch (pe) { env = null; parseErr = pe; }
+      if (parseErr) {
+        try { tsotPushError({
+          stage: 'ffi-envelope-parse',
+          surface: 'bridge',
+          severity: 'error',
+          title: 'FFI envelope JSON.parse failed',
+          why: String(parseErr && parseErr.message || parseErr),
+          raw: typeof raw === 'string' ? raw.slice(0, 512) : null,
+        }); } catch (_) {}
+      }
       if (env && env.ok === false) {
         const trace = env.trace || [];
         appendTrace(trace);
+        // ERROR.md Slice 4: Rust err_envelope pushes typed Errors
+        // into envelope.errors. Forward through tsotPushError so
+        // they reach the cursor-anchored overlay just like the
+        // ok:true path. The string `env.error` legacy field is
+        // still wrapped into an errorEvent below for the existing
+        // withInlineError pipeline (belt-and-suspenders).
+        if (Array.isArray(env.errors)) {
+          for (const e of env.errors) {
+            try { tsotPushError(e); } catch (_) {}
+          }
+        }
         const errEvent =
           trace.find((e) => e && e.kind === 'Error') || {
             kind: 'Error',
@@ -484,6 +513,18 @@ function parseEnvelope(out) {
   const t_appendLog = performance.now();
   appendTrace(env.trace);
   const t_appendTrace = performance.now();
+  // ERROR.md Slice 4: Rust pushes typed Errors into the envelope's
+  // `errors` array. Forward each through the sacred-error pipeline
+  // (`tsotPushError`) so the overlay anchors at the cursor (or
+  // surface fallback when there's no in-flight click). The Rust-
+  // emitted Error's wire shape is byte-compatible with Error.elm's
+  // decoder, so no transformation is needed — just hand it to the
+  // helper which posts to the `errorIn` port.
+  if (Array.isArray(env.errors)) {
+    for (const e of env.errors) {
+      try { tsotPushError(e); } catch (_) {}
+    }
+  }
   return {
     prompt: env.prompt,
     measurements: {
@@ -492,6 +533,7 @@ function parseEnvelope(out) {
       appendTrace: t_appendTrace - t_appendLog,
       trace_n: env.trace ? env.trace.length : 0,
       log_n: env.log ? env.log.length : 0,
+      errors_n: env.errors ? env.errors.length : 0,
     },
   };
 }
@@ -604,7 +646,18 @@ function recordDecision(action) {
     agreement,
     ts: new Date().toISOString(),
   };
-  dbAppendDecision(record).catch(() => { /* IDB failure non-fatal */ });
+  dbAppendDecision(record).catch((e) => {
+    // IDB write failure for the decision log. Non-fatal for the
+    // game in progress, but per ERROR.md axiom never silent —
+    // surface as warn-level so the developer sees the data loss.
+    try { tsotPushError({
+      stage: 'idb-append-decision',
+      surface: 'bridge',
+      severity: 'warn',
+      title: 'IDB append (decision log) failed',
+      why: String(e && e.message || e),
+    }); } catch (_) {}
+  });
 }
 
 // H7-Elm Stage 4: the inline `renderDecisionReport` aggregator +
@@ -623,7 +676,18 @@ function recordGameSummary(view) {
     deck: state.deck ? state.deck.slice() : null,
     ts: new Date().toISOString(),
   };
-  dbAppendDecision(record).catch(() => { /* IDB failure non-fatal */ });
+  dbAppendDecision(record).catch((e) => {
+    // IDB write failure for the decision log. Non-fatal for the
+    // game in progress, but per ERROR.md axiom never silent —
+    // surface as warn-level so the developer sees the data loss.
+    try { tsotPushError({
+      stage: 'idb-append-decision',
+      surface: 'bridge',
+      severity: 'warn',
+      title: 'IDB append (decision log) failed',
+      why: String(e && e.message || e),
+    }); } catch (_) {}
+  });
 }
 
 // Wave 2: cardEl + colorTag + symbolTag deleted — Elm's
@@ -721,9 +785,17 @@ function maybeFireUctPreview(s) {
       }
     } catch (e) {
       if (gen === _previewGeneration) state.preview = null;
-      // Preview failure is non-fatal — the error already flowed
-      // through workerCall's appendTrace path on the {ok:false}
-      // route, or through appendErrorEvent on a reject.
+      // Preview failure is non-fatal — but per ERROR.md axiom even
+      // non-fatal failures surface. The {ok:false} path already
+      // pushed via workerCall, so this catches everything else
+      // (render exception, preview-state mutation drift, etc.).
+      try { tsotPushError({
+        stage: 'preview-uct',
+        surface: 'bridge',
+        severity: 'warn',
+        title: 'UCT preview failed (non-fatal)',
+        why: String(e && e.message || e),
+      }); } catch (_) {}
     }
   })();
 }
@@ -1047,6 +1119,13 @@ window.tsotStartSpectate = async function (payload) {
     spectateRenderCurrent();
   } catch (e) {
     setPrompt('Spectate failed: ' + (e?.message || e));
+    try { tsotPushError({
+      stage: 'spectate',
+      surface: 'spectator-bar',
+      severity: 'error',
+      title: 'Spectate failed',
+      why: String(e && e.message || e),
+    }); } catch (_) {}
   }
 }
 
@@ -1226,6 +1305,13 @@ window.tsotStartGameFromDeckbuilder = async function (payload) {
     render(state.current);
   } catch (e) {
     setPrompt('Engine error: ' + (e && e.message ? e.message : e));
+    try { tsotPushError({
+      stage: 'engine-start',
+      surface: 'prompt',
+      severity: 'error',
+      title: 'Engine start failed',
+      why: String(e && e.message || e),
+    }); } catch (_) {}
   }
 };
 
@@ -1268,6 +1354,13 @@ window.tsotStartGameFromDeckbuilder = async function (payload) {
   } catch (e) {
     disarmWatchdog();
     setPrompt('Failed to load wasm worker: ' + (e && e.message ? e.message : e));
+    try { tsotPushError({
+      stage: 'wasm-worker-spawn',
+      surface: 'prompt',
+      severity: 'panic',
+      title: 'Failed to load wasm worker',
+      why: String(e && e.message || e),
+    }); } catch (_) {}
     return;
   }
   try {
@@ -1289,6 +1382,13 @@ window.tsotStartGameFromDeckbuilder = async function (payload) {
   } catch (e) {
     disarmWatchdog();
     setPrompt('Failed to load deckbuilder data: ' + (e && e.message ? e.message : e));
+    try { tsotPushError({
+      stage: 'deckbuilder-bootstrap',
+      surface: 'deckbuilder',
+      severity: 'error',
+      title: 'Failed to load deckbuilder data',
+      why: String(e && e.message || e),
+    }); } catch (_) {}
   }
 })();
 </script>

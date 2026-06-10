@@ -286,6 +286,12 @@ type alias ViewConfig msg =
     , onDragStart : String -> DragOffset -> msg
     , position : Maybe Anchor
     , viewport : { w : Float, h : Float }
+    , -- Optional build watermark. Per developer mental model the
+      -- error window should carry build/commit info as a tiny
+      -- minifooter so it's immediately obvious WHICH build
+      -- produced the failure. `Nothing` = no footer (build info
+      -- not yet loaded). String is rendered verbatim.
+      buildLabel : Maybe String
     }
 
 
@@ -353,7 +359,23 @@ view cfg e =
                 :: viewTrace e.trace
                 ++ viewRaw e.raw
             )
+        , viewBuildFooter cfg.buildLabel
         ]
+
+
+{-| Tiny build/commit minifooter so the developer immediately knows
+which build produced the failure. Per the developer mental model:
+errors are sacred, and "what build was running" is a sacred bit of
+context every error carries with it.
+-}
+viewBuildFooter : Maybe String -> Html msg
+viewBuildFooter maybeLabel =
+    case maybeLabel of
+        Just label ->
+            div [ class "tsot-error-buildfooter" ] [ text label ]
+
+        Nothing ->
+            text ""
 
 
 {-| Decide which corner of the box the cursor sits on so the box
@@ -691,6 +713,22 @@ errorCss =
     .tsot-error--panic .tsot-error-title { color: #f8f; }
 
     .tsot-error-why { color: #ddd; }
+
+    /* Build/commit watermark — tiny muted footer at the bottom
+       edge so every error carries the build context that produced
+       it. Per ERROR.md developer mental model. */
+    .tsot-error-buildfooter {
+      padding: 0.15rem 0.7rem 0.25rem;
+      color: #555;
+      font-size: 0.6rem;
+      line-height: 1.2;
+      border-top: 1px solid #2a0c0c;
+      background: #1a0606;
+      user-select: text;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
     .tsot-error-trace {
       width: 100%;

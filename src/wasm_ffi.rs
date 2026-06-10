@@ -298,6 +298,7 @@ pub(crate) fn tsot_run_auto_game_impl(args_json: &str) -> Result<String, String>
 
     let log = std::mem::take(&mut engine.log);
     let trace_events = crate::trace::drain();
+    let errors = crate::error::drain();
     let envelope = serde_json::json!({
         "ok": true,
         "snapshots": snapshots,
@@ -305,6 +306,7 @@ pub(crate) fn tsot_run_auto_game_impl(args_json: &str) -> Result<String, String>
         "total_turns": engine.state.turn,
         "log": log,
         "trace": trace_events,
+        "errors": errors,
     });
     let json =
         serde_json::to_string(&envelope).map_err(|e| format!("auto_game: serialize: {e}"))?;
@@ -405,8 +407,13 @@ pub(crate) fn tsot_load_game_impl(args_json: &str) -> Result<String, String> {
         .map_err(|e| format!("load_game[drive_to_next_yield]: {e}"))?;
     let log = std::mem::take(&mut session.engine.log);
     let trace_events = crate::trace::drain();
-    let envelope =
-        serde_json::json!({ "prompt": prompt, "log": log, "trace": trace_events });
+    let errors = crate::error::drain();
+    let envelope = serde_json::json!({
+        "prompt": prompt,
+        "log": log,
+        "trace": trace_events,
+        "errors": errors,
+    });
     let envelope_json = serde_json::to_string(&envelope)
         .map_err(|e| format!("load_game[serialize envelope]: {e}"))?;
     install_session(session);
@@ -490,8 +497,13 @@ pub(crate) fn tsot_start_game_impl(args_json: &str) -> Result<String, String> {
     // after every yield so JS sees only the lines since the last call.
     let log = std::mem::take(&mut session.engine.log);
     let trace_events = crate::trace::drain();
-    let envelope =
-        serde_json::json!({ "prompt": prompt, "log": log, "trace": trace_events });
+    let errors = crate::error::drain();
+    let envelope = serde_json::json!({
+        "prompt": prompt,
+        "log": log,
+        "trace": trace_events,
+        "errors": errors,
+    });
     let envelope_json =
         serde_json::to_string(&envelope).map_err(|e| format!("serialize first prompt: {e}"))?;
     install_session(session);
@@ -521,8 +533,13 @@ pub(crate) fn tsot_apply_action_impl(action_json: &str) -> Result<String, String
     })
     .map_err(|e| e.to_string())??;
     let trace_events = crate::trace::drain();
-    let envelope =
-        serde_json::json!({ "prompt": prompt, "log": log, "trace": trace_events });
+    let errors = crate::error::drain();
+    let envelope = serde_json::json!({
+        "prompt": prompt,
+        "log": log,
+        "trace": trace_events,
+        "errors": errors,
+    });
     let json = serde_json::to_string(&envelope)
         .map_err(|e| format!("serialize next prompt: {e}"))?;
     crate::trace::clear_ffi_call_label();
@@ -616,14 +633,41 @@ fn drive_to_next_yield(
 // "error: …" prefixed strings, no silent suppression.
 pub(crate) fn err_envelope(stage: Option<&str>, message: &str) -> String {
     crate::trace::emit_error("rust-ffi", stage, message);
+    // Sacred-error pipeline (ERROR.md Slice 4): also push a typed
+    // Error so the JS-side dispatcher routes through tsotPushError
+    // and the overlay anchors at the click cursor.
+    let title = stage
+        .map(|s| format!("Rust FFI failed: {s}"))
+        .unwrap_or_else(|| "Rust FFI failed".to_string());
+    match stage {
+        Some(s) => {
+            crate::error::emit_region(
+                crate::error::Severity::Error,
+                "rust-ffi",
+                s,
+                title,
+                message.to_string(),
+            );
+        }
+        None => {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "rust-ffi",
+                title,
+                message.to_string(),
+            );
+        }
+    }
     let trace = crate::trace::drain();
+    let errors = crate::error::drain();
     serde_json::to_string(&serde_json::json!({
         "ok": false,
         "error": message,
         "trace": trace,
+        "errors": errors,
     }))
     .unwrap_or_else(|_| {
-        "{\"ok\":false,\"error\":\"<err_envelope serialize failed>\",\"trace\":[]}"
+        "{\"ok\":false,\"error\":\"<err_envelope serialize failed>\",\"trace\":[],\"errors\":[]}"
             .to_string()
     })
 }

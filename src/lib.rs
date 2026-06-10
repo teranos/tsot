@@ -8,6 +8,7 @@
 pub mod card;
 pub mod cast_routing;
 pub mod choice;
+pub mod error;
 pub mod game;
 pub mod replay;
 pub mod sim;

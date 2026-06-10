@@ -578,8 +578,26 @@ helper to get its own errors anchored locally.
 Empty case returns `text ""` so callers can unconditionally splice it
 in without conditional logic.
 -}
-viewErrorsForSurface : { w : Float, h : Float } -> String -> List Error.Error -> Html Msg
-viewErrorsForSurface viewport surface errors =
+errorBuildLabel : BuildFooter.State -> Maybe String
+errorBuildLabel state =
+    case state of
+        BuildFooter.HasBuildInfo info ->
+            Just (info.profile ++ " " ++ info.commit ++ " · " ++ info.builtAt)
+
+        BuildFooter.NoBuildInfo ->
+            Just "build info unavailable"
+
+        BuildFooter.AwaitingPort ->
+            Nothing
+
+
+viewErrorsForSurface :
+    { w : Float, h : Float }
+    -> Maybe String
+    -> String
+    -> List Error.Error
+    -> Html Msg
+viewErrorsForSurface viewport buildLabel surface errors =
     let
         matching =
             -- Surface anchoring is the FALLBACK case per ERROR.md
@@ -608,6 +626,7 @@ viewErrorsForSurface viewport surface errors =
                     , onDragStart = ErrorDragStarted
                     , position = Nothing
                     , viewport = viewport
+                    , buildLabel = buildLabel
                     }
                 )
                 matching
@@ -2007,15 +2026,15 @@ view model =
           -- module, same as Card.styles.
           Error.styles
         , viewSaveControls model
-        , viewSurfaceWithErrors model.viewport "deckbuilder" model.errors (viewDeckbuilder model)
-        , viewSurfaceWithErrors model.viewport "spectator-bar" model.errors (SpectatorBar.view spectatorBarConfig model.spectatorBar)
-        , viewSurfaceWithErrors model.viewport "prompt" model.errors (viewPromptText model.promptText)
-        , viewSurfaceWithErrors model.viewport "game-meta" model.errors (viewGameMeta model.gameMeta)
-        , viewSurfaceWithErrors model.viewport "game-screen" model.errors (viewGameScreen model)
+        , viewSurfaceWithErrors model.viewport (errorBuildLabel model.build) "deckbuilder" model.errors (viewDeckbuilder model)
+        , viewSurfaceWithErrors model.viewport (errorBuildLabel model.build) "spectator-bar" model.errors (SpectatorBar.view spectatorBarConfig model.spectatorBar)
+        , viewSurfaceWithErrors model.viewport (errorBuildLabel model.build) "prompt" model.errors (viewPromptText model.promptText)
+        , viewSurfaceWithErrors model.viewport (errorBuildLabel model.build) "game-meta" model.errors (viewGameMeta model.gameMeta)
+        , viewSurfaceWithErrors model.viewport (errorBuildLabel model.build) "game-screen" model.errors (viewGameScreen model)
         , viewSavedListPanel model.savedList
         , viewDecisionPanel model.decisionPanel
         , LogPanel.view model.log
-        , viewSurfaceWithErrors model.viewport "build-footer" model.errors (BuildFooter.view model.build)
+        , viewSurfaceWithErrors model.viewport (errorBuildLabel model.build) "build-footer" model.errors (BuildFooter.view model.build)
         , -- Cursor-anchored errors render at top level so their
           -- `position: fixed` style anchors AT the click point
           -- regardless of which surface DOM tree contains the
@@ -2046,6 +2065,7 @@ viewAnchoredErrors model =
                 , onDragStart = ErrorDragStarted
                 , position = Dict.get e.id model.errorPositions
                 , viewport = model.viewport
+                , buildLabel = errorBuildLabel model.build
                 }
                 e
             )
@@ -2062,11 +2082,17 @@ failures with no cursor position); click-driven errors carrying a
 cursor `Anchor` position themselves via `position: fixed` instead and
 ignore the surface container.
 -}
-viewSurfaceWithErrors : { w : Float, h : Float } -> String -> List Error.Error -> Html Msg -> Html Msg
-viewSurfaceWithErrors viewport surface errors child =
+viewSurfaceWithErrors :
+    { w : Float, h : Float }
+    -> Maybe String
+    -> String
+    -> List Error.Error
+    -> Html Msg
+    -> Html Msg
+viewSurfaceWithErrors viewport buildLabel surface errors child =
     div [ style "position" "relative" ]
         [ child
-        , viewErrorsForSurface viewport surface errors
+        , viewErrorsForSurface viewport buildLabel surface errors
         ]
 
 

@@ -174,19 +174,58 @@ shipped end-to-end (per CLAUDE.md commit standard).
   / game-screen / build-footer so each surface anchors its own
   errors locally per the visual contract (`position: relative` host,
   errors filtered by `context.surface`).
+  Also shipped 2026-06-11: `errorIn` port (typed JS→Elm Error
+  envelope), `Browser.Events.onClick` cursor capture into
+  `lastClickAnchor`, `ErrorReceived` Msg that fills anchor from
+  captured cursor when the sender didn't supply one. Errors that
+  fail to decode on the pipeline ITSELF route through the meta
+  error-pipeline surface (no irony-fatal silent drop).
 - [ ] Add an Elm-test that fails on new occurrences of `Err _ ->`
   in `assets/src/` (regex-based source scan inside elm-test) so the
-  axiom is enforced in CI.
+  axiom is enforced in CI. (Held — CI integration design needed;
+  pre-commit hook is the simpler alternative shape.)
 
 ### Slice 3 — the JS sweep (Phase O0b)
 
-- [ ] Audit `assets/*.{js,html}` for silent `catch` blocks, `.catch(() => {})`,
-  `await` without error handling, `postMessage` boundaries that drop
-  errors. Each catches into a typed `Error` envelope that flows through
-  the `errorOut` port (JS → Elm) and lands in the same render path.
-- [ ] The existing `js-bridge.js` panic-envelope shim becomes the
+- [~] Audit `assets/*.{js,html}` for silent `catch` blocks,
+  `.catch(() => {})`, `await` without error handling, `postMessage`
+  boundaries that drop errors. Each catches into a typed `Error`
+  envelope that flows through the `errorIn` port and lands in the
+  same render path.
+  **Partial 2026-06-11**: foundation + 7 sites migrated.
+  Foundation: `tsotPushError` helper in `js-bridge.js` constructs
+  the typed envelope and dispatches through `app.ports.errorIn`;
+  `tsotErrorAppRef` stash makes it reachable from module-scope.
+  Sites migrated:
+  - `tsotShowBridgeFailure` (every workerCmd dispatcher throw +
+    every idbReq dispatcher throw routes through it)
+  - `withInlineError` (every click action wrapped by it — Save,
+    Download, LoadFromFile, TestPanic, StartGame, StartSpectate)
+    captures cursor anchor from `MouseEvent.clientX/Y` and pushes
+    typed Error with that anchor so the overlay lands AT the click
+  - `play.html:325` FFI envelope JSON.parse failure (raw payload
+    sampled into the Error)
+  - `play.html:607,626` `dbAppendDecision(...).catch` IDB write
+    failures (warn-level, non-fatal but visible)
+  - `play.html:722` preview-UCT non-FFI render failure
+  - `play.html:1048` spectate failure
+  - `play.html:1227` engine-start failure
+  - `play.html:1268` wasm-worker-spawn failure (panic-level)
+  - `play.html:1289` deckbuilder-bootstrap failure
+  - `play.html:192` SharedArrayBuffer init failure (warn-level)
+  Remaining defense-in-depth catches (console safety nets, DOM
+  injection fallbacks) intentionally NOT routed — they're the floor
+  that fires when the pipeline itself is broken.
+- [~] The existing `js-bridge.js` panic-envelope shim becomes the
   prototype: every JS-side catch produces the same envelope shape,
-  not just panics.
+  not just panics. **Foundation shipped 2026-06-11** via
+  `tsotPushError` — single envelope shape, the same Error.elm
+  decoder accepts every JS-side push. Only the Test Panic path is
+  user-verified end-to-end (the canary). The 7 newly-migrated
+  catches in `play.html` (FFI parse / IDB append / preview /
+  spectate / engine-start / wasm-worker-spawn / deckbuilder /
+  SharedArrayBuffer) build clean but each path needs its own
+  verification under a real triggering failure.
 
 ### Slice 4 — the Rust + FFI side
 
@@ -204,15 +243,27 @@ shipped end-to-end (per CLAUDE.md commit standard).
 
 ### Slice 5 — contextual surfaces (Phase O0c)
 
-- [ ] Each Elm surface that can fail declares its context up front
+- [~] Each Elm surface that can fail declares its context up front
   (deckbuilder dropdown = `Context { surface = "deckbuilder", region = Just "preset-dropdown" }`).
   Failures attached to that context render inline at the surface,
   not just in LOG.
+  **Partial 2026-06-11**: cursor-anchored rendering is shipped —
+  click-driven failures spawn a classic-OS window with severity-
+  tinted titlebar + × close button + drag-by-titlebar AT the cursor
+  position. Viewport-aware corner flip (classic context-menu
+  behavior: cursor sits on whichever box corner has room) so the
+  box opens INTO the viewport. Surface-anchored fallback (port
+  decode failures with no cursor) renders inside the surface's
+  positioned container via `viewSurfaceWithErrors`. What's left:
+  the named-region inline canary for specific decoder failures
+  (next bullet).
 - [ ] The deckbuilder dropdown shows "decode failed: 1 preset rejected
   — <field>" inline as the canary case the original audit session
-  found.
+  found. Requires Slice 4 (Rust-side errors field on the
+  list_preset_decks envelope) to be most impactful — until then the
+  failure isn't surfaced by the Rust side at all.
 - [ ] The prompt bar shows handler errors inline when a Lua handler
-  emits an Error mid-cast.
+  emits an Error mid-cast. (Requires Slice 4.)
 
 ### Slice 6 — invariant + lifecycle parallel with CARD.md
 
