@@ -55,6 +55,7 @@ import Browser
 import Browser.Dom
 import BuildFooter
 import Card
+import Error
 import Dict exposing (Dict)
 import GameScreen
 import Set
@@ -335,6 +336,8 @@ type alias Model =
     , uctPreview : Maybe GameScreen.UctPreview
     , combat : GameScreen.CombatSelection
     , actionInFlight : Bool
+    , errors : List Error.Error
+    , nextErrorId : Int
     }
 
 
@@ -440,9 +443,89 @@ init _ =
       , uctPreview = Nothing
       , combat = GameScreen.emptyCombatSelection
       , actionInFlight = False
+      , errors = []
+      , nextErrorId = 0
       }
     , Cmd.none
     )
+
+
+{-| Convert a decode failure into a typed `Error.Error` and append it
+to `Model.errors`. The single canonical path for "a Port payload failed
+to decode" — per ERROR.md axiom no decode failure may be silently
+dropped (the failing payload either reaches the developer with full
+context, or the bug hides until something else surfaces it).
+
+`ctx.surface` + `ctx.region` tell the renderer WHERE to anchor the
+overlay (deckbuilder dropdown, prompt bar, etc.); the `title`
+summarizes what failed; `D.errorToString err` gives the JSON path +
+expected/got. The Error.id is a per-session monotonic counter so
+re-renders preserve identity (Html.Keyed groundwork for Slice 6).
+-}
+pushDecodeError : Error.Context -> String -> D.Error -> Model -> Model
+pushDecodeError ctx title decodeErr model =
+    let
+        newError : Error.Error
+        newError =
+            { id = "err-" ++ ctx.surface ++ "-" ++ String.fromInt model.nextErrorId
+            , severity = Error.LevelError
+            , context = ctx
+            , title = title
+            , why = D.errorToString decodeErr
+            , trace = []
+            , raw = Nothing
+            , at = ""
+            }
+    in
+    { model
+        | errors = model.errors ++ [ newError ]
+        , nextErrorId = model.nextErrorId + 1
+    }
+
+
+{-| Variant of `pushDecodeError` taking a pre-decoded `Result` and a
+surface name. Pushes an Error when the Result is `Err`; no-op when
+`Ok`. Use this at sites where a safe fallback ALREADY converts the
+Result to a value (`Result.withDefault`, `Result.toMaybe`) but the
+underlying failure should still surface — without this helper those
+sites used to be the canonical place to silently swallow.
+-}
+maybePushDecodeError : String -> String -> Result D.Error a -> Model -> Model
+maybePushDecodeError surface title result model =
+    case result of
+        Ok _ ->
+            model
+
+        Err err ->
+            pushDecodeError
+                { surface = surface, region = Nothing, anchor = Nothing }
+                title
+                err
+                model
+
+
+{-| Render the subset of `Model.errors` that originated at a given
+surface, stacked as overlays inside the caller's positioned container.
+Per ERROR.md § Visual contract the overlay anchors AT the originating
+surface, not in a global LOG drawer — so each surface's render
+wraps itself in a `position: relative` container and inserts this
+helper to get its own errors anchored locally.
+
+Empty case returns `text ""` so callers can unconditionally splice it
+in without conditional logic.
+-}
+viewErrorsForSurface : String -> List Error.Error -> Html msg
+viewErrorsForSurface surface errors =
+    let
+        matching =
+            List.filter (\e -> e.context.surface == surface) errors
+    in
+    if List.isEmpty matching then
+        text ""
+
+    else
+        div [ class "tsot-error-stack" ]
+            (List.map Error.view matching)
 
 
 savedItemPayload : String -> Int -> E.Value
@@ -478,8 +561,19 @@ update msg model =
                 Ok info ->
                     ( { model | build = BuildFooter.HasBuildInfo info }, Cmd.none )
 
-                Err _ ->
-                    ( { model | build = BuildFooter.NoBuildInfo }, Cmd.none )
+                Err err ->
+                    -- Build-info is decorative; if it doesn't decode the
+                    -- footer renders "no build info" rather than blocking
+                    -- the page. But silently swallowing the decode error
+                    -- violates the axiom — surface it so a drifting
+                    -- payload shape doesn't hide.
+                    ( pushDecodeError
+                        { surface = "build-footer", region = Nothing, anchor = Nothing }
+                        "buildInfoIn decode failed"
+                        err
+                        { model | build = BuildFooter.NoBuildInfo }
+                    , Cmd.none
+                    )
 
         LogTextReceived line ->
             ( { model | log = model.log ++ [ LogPanel.TextLine line ] }, scrollLogToBottom )
@@ -606,6 +700,32 @@ update msg model =
             ( { model | gamePhase = parseGamePhase phaseStr }, Cmd.none )
 
         BootDataReceived value ->
+            -- Diagnostic: surface the preset count the JS bridge actually
+            -- delivered, BEFORE decoding the rest. If this lands as "3"
+            -- and the dropdown still shows 2, the failure is downstream of
+            -- decodeBootData; if it lands as "2" the failure is upstream
+            -- (wasm or JS forwarding). The line goes to the LOG drawer
+            -- as a TextLine (not the Error overlay) because it's
+            -- informational, not an error.
+            let
+                presetCountFromJson =
+                    D.decodeValue
+                        (D.field "presets" (D.list (D.succeed ())))
+                        value
+                        |> Result.map List.length
+                        |> Result.withDefault -1
+
+                modelWithDiag =
+                    { model
+                        | log =
+                            model.log
+                                ++ [ LogPanel.TextLine
+                                        ("bootDataIn: presets array length = "
+                                            ++ String.fromInt presetCountFromJson
+                                        )
+                                   ]
+                    }
+            in
             case D.decodeValue decodeBootData value of
                 Ok boot ->
                     let
@@ -634,16 +754,30 @@ update msg model =
                             else
                                 model.deck
                     in
-                    ( { model
+                    ( { modelWithDiag
                         | cardPool = boot.cardPool
                         , presets = boot.presets
                         , deck = deck
                       }
-                    , Cmd.none
+                    , scrollLogToBottom
                     )
 
-                Err _ ->
-                    ( model, Cmd.none )
+                Err err ->
+                    -- CLAUDE.md "errors are sacred." Routes through the
+                    -- typed Error pipeline; ends up overlay-anchored
+                    -- at the deckbuilder surface (Slice 2 of ERROR.md)
+                    -- so a new preset failing to decode surfaces inline
+                    -- at the dropdown instead of as a silent phantom.
+                    ( pushDecodeError
+                        { surface = "deckbuilder"
+                        , region = Just "preset-dropdown"
+                        , anchor = Nothing
+                        }
+                        "bootDataIn decode failed"
+                        err
+                        modelWithDiag
+                    , scrollLogToBottom
+                    )
 
         PoolCardClicked cardId ->
             ( { model | deck = model.deck ++ [ cardId ] }, Cmd.none )
@@ -716,17 +850,30 @@ update msg model =
                 Ok meta ->
                     ( { model | gameMeta = Just meta }, Cmd.none )
 
-                Err _ ->
-                    ( model, Cmd.none )
+                Err err ->
+                    -- The meta line shows turn/phase/active-player. A
+                    -- decode failure means the line stops updating, which
+                    -- is silently destabilizing to a developer trying to
+                    -- reason about engine state. Surface inline at the
+                    -- meta row.
+                    ( pushDecodeError
+                        { surface = "game-meta", region = Nothing, anchor = Nothing }
+                        "gameMetaIn decode failed"
+                        err
+                        model
+                    , Cmd.none
+                    )
 
         PromptTextReceived text ->
             ( { model | promptText = text }, Cmd.none )
 
         GameStateReceived value ->
             let
-                newPrompt =
+                promptResult =
                     D.decodeValue (D.field "prompt" GameScreen.decodePrompt) value
-                        |> Result.withDefault GameScreen.LoadingPrompt
+
+                newPrompt =
+                    Result.withDefault GameScreen.LoadingPrompt promptResult
 
                 newDraft =
                     case ( model.prompt, newPrompt ) of
@@ -746,16 +893,32 @@ update msg model =
                     else
                         GameScreen.emptyCombatSelection
 
-                maybeSlice =
+                sliceResult =
                     D.decodeValue decodeGameViewSlice value
-                        |> Result.toMaybe
+
+                maybeSlice =
+                    Result.toMaybe sliceResult
 
                 newPromptText =
                     GameScreen.promptToText
                         (Maybe.map (promptCtxFromSlice maybeSlice) maybeSlice)
                         newPrompt
+
+                -- Surface decode failures even though we have safe
+                -- fallbacks (LoadingPrompt / no-slice). Per ERROR.md
+                -- the developer should see WHY the prompt or slice
+                -- didn't decode, instead of staring at "Loading..."
+                -- with no explanation.
+                modelWithErrors =
+                    model
+                        |> maybePushDecodeError "prompt"
+                            "gameStateIn .prompt decode failed"
+                            promptResult
+                        |> maybePushDecodeError "game-screen"
+                            "gameStateIn .state decode failed"
+                            sliceResult
             in
-            ( { model
+            ( { modelWithErrors
                 | gameState = Just value
                 , prompt = newPrompt
                 , chooseIntDraft = newDraft
@@ -771,8 +934,19 @@ update msg model =
                 Ok bar ->
                     ( { model | spectatorBar = bar }, Cmd.none )
 
-                Err _ ->
-                    ( model, Cmd.none )
+                Err err ->
+                    -- Spectator bar drops behind the live state if its
+                    -- port payload doesn't decode. The scrubber + speed
+                    -- + play/pause stop responding silently. Surface
+                    -- inline so the operator sees the cause instead of
+                    -- a frozen bar.
+                    ( pushDecodeError
+                        { surface = "spectator-bar", region = Nothing, anchor = Nothing }
+                        "spectatorStateIn decode failed"
+                        err
+                        model
+                    , Cmd.none
+                    )
 
         SpecBackEndClicked ->
             ( model, sendSpecCmd "spec_seek" (E.object [ ( "index", E.int 0 ) ]) )
@@ -823,7 +997,14 @@ update msg model =
             ( model, sendSpecCmd "spec_exit" E.null )
 
         UctPreviewReceived value ->
-            ( { model | uctPreview = D.decodeValue GameScreen.decodeUctPreview value |> Result.toMaybe }
+            let
+                uctResult =
+                    D.decodeValue GameScreen.decodeUctPreview value
+            in
+            ( maybePushDecodeError "game-screen"
+                "uctPreviewIn decode failed"
+                uctResult
+                { model | uctPreview = Result.toMaybe uctResult }
             , Cmd.none
             )
 
@@ -1601,16 +1782,35 @@ view model =
           -- (.opponent .card), and caller-specific decorations stay in
           -- play.html's <style>; card-internal rules live in Card.elm.
           Card.styles
+        , -- Error primitive's CSS — overlay + LOG-mirror styling.
+          -- Per ERROR.md the visual contract travels with the
+          -- module, same as Card.styles.
+          Error.styles
         , viewSaveControls model
-        , viewDeckbuilder model
-        , SpectatorBar.view spectatorBarConfig model.spectatorBar
-        , viewPromptText model.promptText
-        , viewGameMeta model.gameMeta
-        , viewGameScreen model
+        , viewSurfaceWithErrors "deckbuilder" model.errors (viewDeckbuilder model)
+        , viewSurfaceWithErrors "spectator-bar" model.errors (SpectatorBar.view spectatorBarConfig model.spectatorBar)
+        , viewSurfaceWithErrors "prompt" model.errors (viewPromptText model.promptText)
+        , viewSurfaceWithErrors "game-meta" model.errors (viewGameMeta model.gameMeta)
+        , viewSurfaceWithErrors "game-screen" model.errors (viewGameScreen model)
         , viewSavedListPanel model.savedList
         , viewDecisionPanel model.decisionPanel
         , LogPanel.view model.log
-        , BuildFooter.view model.build
+        , viewSurfaceWithErrors "build-footer" model.errors (BuildFooter.view model.build)
+        ]
+
+
+{-| Wrap a surface render in a `position: relative` container with
+its surface-anchored errors stacked alongside. Per ERROR.md § Visual
+contract this is the **fallback** anchoring (used by port-decode
+failures with no cursor position); click-driven errors carrying a
+cursor `Anchor` position themselves via `position: fixed` instead and
+ignore the surface container.
+-}
+viewSurfaceWithErrors : String -> List Error.Error -> Html Msg -> Html Msg
+viewSurfaceWithErrors surface errors child =
+    div [ style "position" "relative" ]
+        [ child
+        , viewErrorsForSurface surface errors
         ]
 
 
