@@ -24,6 +24,7 @@ Output: gen_art/{id}_{W}_{H}.png
 """
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import os
@@ -588,16 +589,40 @@ def card_uses_watermark_variant(card_id: str, has_c_symbol: bool,
     return val < rate
 
 
-def symbol_composite_args(sym: str, x: int, y: int, pointsize: int) -> list[str]:
-    """Build the magick args to composite ONE symbol glyph onto the art.
-    Bold weight via FONT_BOLD + larger pointsize, screen blend for art
-    integration. No -stroke — stroke would leak into subsequent text
-    annotations and break title/type uniformity across the corpus."""
+# Corpus symbol glyph → simple name. Pre-rendered PNGs live at
+# assets/icons/symbols/{name}.png (gitignored, regenerated on demand).
+# This bypasses ImageMagick's lack of font fallback inside `-font label:`
+# calls: the PNG is rendered once with a font that has the glyph, then
+# composited onto the card like any other icon.
+SYMBOL_GLYPH_TO_NAME = {
+    "⋈": "ax",
+    "⨳": "ix",
+    "≡": "am",
+    "꩜": "pulse",
+    "⊨": "sem",
+    "₿": "bitcoin",
+    "Ξ": "xi",
+}
+
+SYMBOLS_DIR = "assets/icons/symbols"
+
+
+def symbol_png_path(glyph: str) -> str | None:
+    """Return the PNG path for a known corpus symbol glyph, or None."""
+    name = SYMBOL_GLYPH_TO_NAME.get(glyph)
+    if name is None:
+        return None
+    return f"{SYMBOLS_DIR}/{name}.png"
+
+
+def symbol_composite_args(png_path: str, x: int, y: int, pointsize: int) -> list[str]:
+    """Build the magick args to composite ONE pre-rendered symbol PNG onto
+    the art. Resized to the target pointsize-equivalent height, screen-
+    blended for art integration. No -stroke — stroke would leak into
+    subsequent text annotations and break title/type uniformity."""
     return [
         "(",
-        "-background", "none", "-fill", "white",
-        "-font", FONT_BOLD, "-pointsize", str(pointsize),
-        f"label:{sym}",
+        png_path, "-resize", f"x{pointsize}",
         ")",
         "-gravity", "northwest", "-geometry", f"+{x}+{y}",
         "-compose", "Screen", "-composite",
@@ -728,13 +753,15 @@ def overlay_text(png_path: str, card: dict) -> None:
             "-gravity", "south", "-geometry", f"+0+{wm_y}", "-composite",
         ]
 
-    # Symbol column: stack symbols down the left edge, bold + screen blend.
-    # No stroke — that would leak into subsequent text annotations.
+    # Symbol column: stack pre-rendered symbol PNGs down the left edge,
+    # screen blend. Unknown glyphs (no mapping) are silently skipped.
     elif symbols:
         y = SYMBOL_TOP_PAD
         for sym in symbols:
-            cmd += symbol_composite_args(sym, SYMBOL_LEFT_PAD, y, SYMBOL_POINTSIZE)
-            y += SYMBOL_POINTSIZE + SYMBOL_GAP
+            png = symbol_png_path(sym)
+            if png and Path(png).exists():
+                cmd += symbol_composite_args(png, SYMBOL_LEFT_PAD, y, SYMBOL_POINTSIZE)
+                y += SYMBOL_POINTSIZE + SYMBOL_GAP
 
     # Name top-left, left-aligned. NOT bold — FONT_REG so title looks the
     # same across every card in the corpus (symbol-bearing or not).
@@ -823,6 +850,68 @@ def tint_to_card_color(png_path: str, colors: list[str], strength: int) -> None:
         "-modulate", "100,140,100",
         png_path,
     ], check=True)
+
+
+# ---------------------------------------------------------------------
+# PNG metadata — every generation tags the output with full provenance
+# so a card image is self-describing: card identity, generation params,
+# prompt text, pipeline commit, timestamp. Stored as PNG tEXt chunks.
+# ---------------------------------------------------------------------
+
+def git_short_hash() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def build_metadata(card: dict, seed: int, prompt: str, negative: str,
+                    sd_model: str, sd_lora: str, bleed_pct: int,
+                    tint_strength: int, watermark_active: bool,
+                    theme_bg: tuple[int, int, int]) -> dict[str, str]:
+    """Full provenance dict to embed as PNG tEXt chunks. Every value is
+    a string — magick -set property: needs strings."""
+    syms_raw = card.get("symbols")
+    if syms_raw is None and card.get("symbol"):
+        syms_raw = [card["symbol"]]
+    symbols_str = json.dumps(syms_raw or [], ensure_ascii=False)
+    return {
+        "tsot.card.id":              str(card.get("id", "")),
+        "tsot.card.name":            str(card.get("name", "")),
+        "tsot.card.type":            str(card.get("type", "")),
+        "tsot.card.subtypes":        ",".join(card.get("subtypes") or []),
+        "tsot.card.colors":          ",".join(card.get("colors") or []),
+        "tsot.card.symbols":         symbols_str,
+        "tsot.card.holes":           ",".join(card.get("holes") or []),
+        "tsot.gen.seed":             str(seed),
+        "tsot.gen.prompt":           prompt,
+        "tsot.gen.negative":         negative,
+        "tsot.gen.sd_model":         Path(sd_model).name,
+        "tsot.gen.sd_lora":          sd_lora,
+        "tsot.gen.steps":            "4",
+        "tsot.gen.sampler":          "lcm",
+        "tsot.gen.cfg_scale":        "1",
+        "tsot.gen.lora_apply_mode":  "at_runtime",
+        "tsot.post.bleed_pct":       str(bleed_pct),
+        "tsot.post.tint_strength":   str(tint_strength),
+        "tsot.post.watermark_active": str(watermark_active),
+        "tsot.post.theme_bg":        ",".join(str(c) for c in theme_bg),
+        "tsot.pipeline.git_commit":  git_short_hash(),
+        "tsot.timestamp":            datetime.datetime.now(datetime.timezone.utc)
+                                         .strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def apply_metadata(png_path: str, metadata: dict[str, str]) -> None:
+    """Write metadata properties into the PNG via magick -set property:."""
+    cmd = ["magick", png_path]
+    for key, value in metadata.items():
+        cmd += ["-set", f"property:{key}", value]
+    cmd += [png_path]
+    subprocess.run(cmd, check=True)
 
 
 # ---------------------------------------------------------------------
@@ -982,6 +1071,21 @@ def main() -> int:
     # Card frame is the LAST step so it sits on top of everything (banners,
     # holes, art) and the rounded corners cut every pixel uniformly.
     apply_card_frame(out)
+
+    # Embed full provenance into the PNG metadata.
+    theme = text_theme(target.get("colors") or [])
+    watermark_active = card_uses_watermark_variant(
+        target.get("id", ""),
+        c_slot_symbol(target) is not None,
+    )
+    metadata = build_metadata(
+        card=target, seed=seed, prompt=prompt, negative=negative,
+        sd_model=sd_model, sd_lora=sd_lora,
+        bleed_pct=bleed_pct, tint_strength=tint_strength,
+        watermark_active=watermark_active,
+        theme_bg=theme["bg"],
+    )
+    apply_metadata(out, metadata)
 
     print(f"✓ {out}")
     return 0

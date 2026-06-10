@@ -447,26 +447,103 @@ class TextThemeTests(unittest.TestCase):
             self.assertIn("fg", theme)
 
 
+class MetadataTests(unittest.TestCase):
+    def _kwargs(self):
+        return dict(
+            card={
+                "id": "tusker", "name": "Tusker", "type": "creature",
+                "colors": ["orange"], "subtypes": ["elephant"],
+                "symbols": ["⋈"], "holes": ["C"],
+            },
+            seed=42,
+            prompt="prompt text",
+            negative="negative text",
+            sd_model="/Users/s.b.vanhouten/sd-cpp/models/sd-v1-5.gguf",
+            sd_lora="lcm-lora-sdv1-5",
+            bleed_pct=10,
+            tint_strength=25,
+            watermark_active=False,
+            theme_bg=(240, 130, 30),
+        )
+
+    def test_card_identity(self):
+        m = gen_art.build_metadata(**self._kwargs())
+        self.assertEqual(m["tsot.card.id"], "tusker")
+        self.assertEqual(m["tsot.card.name"], "Tusker")
+        self.assertEqual(m["tsot.card.type"], "creature")
+        self.assertEqual(m["tsot.card.colors"], "orange")
+        self.assertEqual(m["tsot.card.subtypes"], "elephant")
+        self.assertIn("⋈", m["tsot.card.symbols"])
+        self.assertEqual(m["tsot.card.holes"], "C")
+
+    def test_generation_params(self):
+        m = gen_art.build_metadata(**self._kwargs())
+        self.assertEqual(m["tsot.gen.seed"], "42")
+        self.assertEqual(m["tsot.gen.prompt"], "prompt text")
+        self.assertEqual(m["tsot.gen.negative"], "negative text")
+        # Model is recorded as just the filename, not the full path.
+        self.assertEqual(m["tsot.gen.sd_model"], "sd-v1-5.gguf")
+        self.assertEqual(m["tsot.gen.sd_lora"], "lcm-lora-sdv1-5")
+        self.assertEqual(m["tsot.gen.steps"], "4")
+        self.assertEqual(m["tsot.gen.sampler"], "lcm")
+
+    def test_post_process_params(self):
+        m = gen_art.build_metadata(**self._kwargs())
+        self.assertEqual(m["tsot.post.bleed_pct"], "10")
+        self.assertEqual(m["tsot.post.tint_strength"], "25")
+        self.assertEqual(m["tsot.post.watermark_active"], "False")
+        self.assertEqual(m["tsot.post.theme_bg"], "240,130,30")
+
+    def test_pipeline_provenance(self):
+        m = gen_art.build_metadata(**self._kwargs())
+        self.assertIn("tsot.pipeline.git_commit", m)
+        self.assertIn("tsot.timestamp", m)
+        import re
+        self.assertRegex(m["tsot.timestamp"], r"^\d{4}-\d{2}-\d{2}T")
+
+    def test_all_values_are_strings(self):
+        # magick -set property: needs string values.
+        m = gen_art.build_metadata(**self._kwargs())
+        for k, v in m.items():
+            self.assertIsInstance(v, str, f"{k} is not a string: {type(v)}")
+
+
+class SymbolPngPathTests(unittest.TestCase):
+    def test_known_glyph_returns_named_path(self):
+        self.assertEqual(gen_art.symbol_png_path("⋈"), "assets/icons/symbols/ax.png")
+        self.assertEqual(gen_art.symbol_png_path("⨳"), "assets/icons/symbols/ix.png")
+        self.assertEqual(gen_art.symbol_png_path("≡"), "assets/icons/symbols/am.png")
+        self.assertEqual(gen_art.symbol_png_path("꩜"), "assets/icons/symbols/pulse.png")
+        self.assertEqual(gen_art.symbol_png_path("⊨"), "assets/icons/symbols/sem.png")
+        self.assertEqual(gen_art.symbol_png_path("₿"), "assets/icons/symbols/bitcoin.png")
+        self.assertEqual(gen_art.symbol_png_path("Ξ"), "assets/icons/symbols/xi.png")
+
+    def test_unknown_glyph_returns_none(self):
+        self.assertIsNone(gen_art.symbol_png_path("X"))
+        self.assertIsNone(gen_art.symbol_png_path(""))
+
+
 class SymbolCompositeArgsTests(unittest.TestCase):
     """Title and type-line text must look uniform across every card in the
-    corpus. The symbol column must not pull -stroke, -strokewidth, or any
-    other settings that could leak into the subsequent text annotations
-    and make title/type text on symbol-bearing cards render differently."""
+    corpus. The symbol column composite must not pull -stroke or any other
+    settings that could leak into the subsequent text annotations and make
+    title/type text on symbol-bearing cards render differently."""
 
     def test_no_stroke_setting(self):
-        args = gen_art.symbol_composite_args("⋈", x=6, y=6, pointsize=30)
+        args = gen_art.symbol_composite_args("/tmp/test.png", x=6, y=6, pointsize=30)
         self.assertNotIn("-stroke", args)
         self.assertNotIn("-strokewidth", args)
 
-    def test_includes_font_bold(self):
-        # The symbol is bold via font weight, not via stroke.
-        args = gen_art.symbol_composite_args("⋈", x=6, y=6, pointsize=30)
-        self.assertIn("-font", args)
-        self.assertIn(gen_art.FONT_BOLD, args)
+    def test_uses_png_file_not_label(self):
+        # Symbol now comes from a pre-rendered PNG, not -font label:GLYPH.
+        args = gen_art.symbol_composite_args("/tmp/test.png", x=6, y=6, pointsize=30)
+        self.assertNotIn("-font", args)
+        self.assertNotIn("label:", " ".join(args))
+        self.assertIn("/tmp/test.png", args)
 
     def test_uses_screen_compose(self):
         # Symbols blend with the art behind via screen compose.
-        args = gen_art.symbol_composite_args("⋈", x=6, y=6, pointsize=30)
+        args = gen_art.symbol_composite_args("/tmp/test.png", x=6, y=6, pointsize=30)
         self.assertIn("Screen", args)
 
 
