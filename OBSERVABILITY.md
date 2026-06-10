@@ -60,6 +60,77 @@ Architectural commitments:
 - Trace events serialize via serde so they travel across the FFI cheaply
   and can be persisted to disk / localStorage.
 
+## Cross-domain scope: errors are sacred on every side, not just engine
+
+OBSERVABILITY.md was originally written assuming engine = Rust and the
+UI is a passive consumer of `env.log` + `env.trace`. After a 2026-06-10
+audit session — during which the assistant repeatedly accused the
+developer of caching / not-refreshing / not-rebuilding instead of
+finding visible engine data to reason from — it's clear the doc needs
+to cover **every layer** the failure can hide in, not just the engine.
+
+The principle from `CLAUDE.md`: *errors are sacred, never collapsed,
+dropped, swallowed or suppressed; if an error is not visible or
+surfaced, drop everything you do, and make sure we see the error FIRST
+before continuing with anything else.*
+
+The phases below now cover three surfaces (engine, FFI, frontend) and
+the patterns that silently lose information on each:
+
+- **Engine (Rust)** — `let _ = result` on Results that aren't
+  bump_action-style void-by-design; `.ok()` discards;
+  `.unwrap_or_default()` on Results; `eprintln!` then continue without
+  the structured event bus; handler errors only logged to stderr.
+  Covered by Phases 1–4 and Phase 7 below.
+- **FFI bridge (`assets/tsot-worker.js`, `assets/js-bridge.js`,
+  `assets/play.html`)** — `try { ... } catch (e) { /* swallow */ }`,
+  `.catch(() => {})`, `.catch(console.log)` (still invisible in the
+  dev tool LOG), `await` failures that propagate up to a no-op handler,
+  `postMessage` errors that vanish on the worker boundary.
+- **Frontend (Elm: `assets/src/*.elm`)** — `Err _ -> (model, Cmd.none)`
+  branches that swallow decode failures; `Result.withDefault` on Result
+  types where a default is wrong; `Maybe.withDefault` on Maybes that
+  semantically carry "this failed";  ports that receive `D.Value` and
+  silently discard malformed payloads; click handlers that fire actions
+  without surfacing the outcome.
+
+Each layer needs both *emission* (the failure becomes a structured
+value) and *surface* (the value lands in front of the developer at the
+point of interaction, not just in a console only devtools open). The
+existing Phase 5 (UI surface) is the engine-side analog; the new
+Phase 0 below carries the Elm + JS equivalent so the doc has
+coverage end to end.
+
+## Phase 0 — Elm + JS silent-drop sweep
+
+The cheapest highest-leverage slice, because it unblocks every other
+slice: without it, every failure beneath the dev tool's surface
+(engine emit, FFI return, port decode, click handler) can disappear
+between layers and the assistant has to *guess* instead of read.
+
+- [ ] **O0a: Audit + replace `Err _ ->` swallow patterns in Elm.**
+  Grep `assets/src/` for `Err _ ->`, `Result.withDefault`,
+  `Maybe.withDefault` where the underlying value semantically carries
+  failure (e.g. decoded port payloads). Each site: log via the
+  existing `LogPanel.TextLine "ERR: <what> — <reason>"` pattern at
+  minimum; surface contextually at the point of interaction where
+  the failure originated (dropdown, prompt, button).
+
+- [ ] **O0b: Audit + replace silent catches in JS.**
+  Grep `assets/*.{js,html}` for `try { ... } catch`, `.catch(`,
+  `await`-without-error-handling. Each catch either re-throws to the
+  fault surface (`js-bridge.js`'s LOG-push helper) or attaches enough
+  context that the LOG line answers "what failed and why." No `catch
+  (e) {}` without a LOG push.
+
+- [ ] **O0c: Port-decode failures land contextually.**
+  Every `port ...In : (D.Value -> msg) -> Sub msg` decoder failure
+  becomes a typed `PortDecodeFailed { port, error }` Msg that surfaces
+  in the LOG with the port name + raw payload sample, AND at the
+  receiving UI surface (e.g. the deckbuilder dropdown shows "decode
+  failed: <n> preset(s) rejected — <reason>"). No silent fallback to
+  empty/default state.
+
 ## Phase 1 — the bus + core engine narration
 
 The infrastructure shipping alone is useless. Phase 1 ships the bus + the
@@ -81,23 +152,48 @@ outcomes, winner-set events, per-step timing.
   ~~advance (`state.next_phase`) becomes a `Phase` event.~~
   (Public `StepEngine::step` brackets a private `step_inner` with `Instant::now()` + `cursor_label` snapshots; emits `TraceEvent::Step{from,to,result,duration_us}`. 21 cursor assignments across `step/{mod,main_phases,combat}.rs` routed through new `StepEngine::set_cursor` helper that emits `TraceEvent::Cursor{from,to}` before assigning. `GameState::next_phase` emits `TraceEvent::Phase{turn,from,to}` after `set_phase`. 7 contract tests in `src/sim/step/trace_tests.rs`.)
 
-- [ ] **O3: Mutation + Count events.**
-  `Journal::push` also pushes a `Mutation` event into the engine
-  trace (needs a `&mut Vec<TraceEvent>` reference threaded in or a
-  thread-local). `state.bump_action` emits a `Count` event with
-  before/after.
+- [~] **O3: Mutation + Count events.** _Emission shipped 2026-06-10
+  audit_: `Journal::push` → `TraceEvent::Mutation` at
+  `src/game/journal.rs:168`; `state.bump_action` →
+  `TraceEvent::Count{before,after}` at `src/game/state.rs:1027`. Both
+  travel through the thread-local bus. **Marker stays open** until the
+  events are actually visible to the developer — i.e. until O5 lands.
+  Emitting into a void doesn't satisfy "errors are sacred."
 
-- [ ] **O4: Oracle + Play + Winner events.**
-  `HumanReplayOracle`'s `choose_*` methods emit `Oracle` events with
-  asker + request + answer + duration. `state.play_card` emits one
-  `Play` event summarizing iid + outcome + cost-paid + duration. Every
-  `state.winner = Some(…)` emits a `Winner` event with cause
-  (deckout, suicide, combat damage to player).
+- [~] **O4: Oracle + Play + Winner events.** _Partial 2026-06-10
+  audit_: `TraceEvent::Oracle` emitted from
+  `src/sim/human.rs:468` (HumanReplayOracle.choose_card / confirm /
+  choose_player / choose_int paths). **Play** and **Winner** variants
+  are defined on the enum but not verified at every emission site;
+  follow-up to grep `state.winner = Some(…)` + `play_card` and add
+  the missing emits. Same caveat as O3 — gated on O5 for visibility.
 
-- [ ] **O5: Minimal UI rendering.**
-  `play.html`'s LOG panel renders `env.trace` as one structured line
-  per event with category prefix + Δms timestamp. No filters yet —
-  raw stream. Verify the engine narrates a full turn end-to-end.
+- [~] **O5: Minimal UI rendering.** _Partial 2026-06-10 audit_:
+  shipped for **game-loop FFI calls** that return the `{prompt, log,
+  trace}` envelope. `parseEnvelope` in `assets/play.html:455`
+  routes `env.trace` into `appendTrace` in `assets/js-bridge.js:413`,
+  which formats each event via `fmtTraceEvent` (line 357 — handles
+  Step / Cursor / Phase / Mutation / Count / Oracle / Play / Winner
+  / Handler / AiPick / Combat / UctIteration / Ffi variants with
+  category prefix + Δms) and pushes the formatted line through
+  `tsotLogPushText` → `logTextIn` port → LogPanel.
+  **Gap**: non-envelope FFI calls (`tsot_list_preset_decks`,
+  `tsot_list_card_pool`, `tsot_save_game`, `tsot_load_game`) return
+  raw JSON, not `{prompt, log, trace}` — so no trace fires for
+  boot-time / IDB-bound paths. The preset-mystery audit session
+  2026-06-10 hit exactly this gap: build_preset_decks could be
+  emitting any number of entries and we'd have no visibility.
+  See O5b.
+
+- [ ] **O5b: Wrap non-envelope FFI calls in `{result, log, trace}`.**
+  Refactor `tsot_list_preset_decks` / `tsot_list_card_pool` /
+  `tsot_save_game` / `tsot_load_game` in `src/wasm_ffi.rs` to drain
+  the trace bus into an envelope around their JSON result. JS-side
+  worker dispatch + `play.html` adapter unwraps the `result` field
+  to keep the existing call sites' shape; the new `trace` field
+  flows through `appendTrace` for visibility. Until this lands, any
+  debugging session involving these calls is back to "guess at the
+  binary."
 
 ## Phase 2 — AI internals
 
