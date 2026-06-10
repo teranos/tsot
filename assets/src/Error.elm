@@ -1,10 +1,13 @@
 module Error exposing
     ( Anchor
     , Context
+    , DragOffset
     , Error
     , Severity(..)
+    , ViewConfig
     , clickAnchorDecoder
     , decode
+    , dragOffsetDecoder
     , key
     , styles
     , view
@@ -46,8 +49,9 @@ the failure without opening browser devtools:
 
 -}
 
-import Html exposing (Html, div, node, span, text)
+import Html exposing (Html, button, div, node, span, text)
 import Html.Attributes as A exposing (class)
+import Html.Events as E
 import Json.Decode as D
 
 
@@ -232,29 +236,106 @@ clickAnchorDecoder =
         (D.field "clientY" D.float)
 
 
+{-| Cursor position WITHIN the event target — the grab-offset for
+drag. `MouseEvent.offsetX/Y` reports the click coordinates relative
+to the target element's padding-edge. For a titlebar click, that's
+the cursor's position inside the titlebar, which (since the titlebar
+sits at the top of the box) is approximately the cursor's position
+inside the box.
+
+Used by `ErrorDragStarted` to capture the grab-offset directly from
+the DOM event — avoids having to know where the box actually
+rendered (which depends on the corner-flip logic).
+-}
+type alias DragOffset =
+    { offsetX : Float
+    , offsetY : Float
+    }
+
+
+dragOffsetDecoder : D.Decoder DragOffset
+dragOffsetDecoder =
+    D.map2 DragOffset
+        (D.field "offsetX" D.float)
+        (D.field "offsetY" D.float)
+
+
 
 -- VIEW ---------------------------------------------------------------
 
 
-{-| Canonical render — the terminal-style overlay anchored at the
-originating surface. Per `ERROR.md` § Visual contract:
+{-| Render config. Mirrors `Card.Config`'s polymorphic-msg pattern so
+the parent wires its concrete Msg in:
 
-  - Dark red background, monospace, severity ribbon on the left.
-  - Content order: `error: <title>` → `why: <reason>` →
-    `trace: <chain>` → dismiss affordance.
-  - The caller's CSS positions this absolute / fixed to the surface
-    (via `context.surface` + `context.region` data attributes that
-    selector-driven container CSS reads). The Error doesn't position
-    itself — placement is the caller's responsibility, render is the
-    Error's.
+  - `onDismiss errorId` — close button click
+  - `onDragStart errorId anchor` — titlebar mousedown captures the
+    cursor position so the parent can compute the drag offset
+  - `position` — when present, overrides `error.context.anchor`
+    (used to render the dragged position). When `Nothing`, the
+    renderer falls back to `error.context.anchor` (the cursor where
+    the failure occurred).
+  - `viewport` — used to decide which CORNER of the box the cursor
+    anchors to. Classic-OS context-menu behavior: open down-right
+    normally; flip to down-left when click is near the right edge,
+    up-right when near the bottom edge, up-left in the bottom-right
+    corner. The box itself is never shifted away from the cursor —
+    only the choice of which corner the cursor sits on.
 -}
-view : Error -> Html msg
-view e =
+type alias ViewConfig msg =
+    { onDismiss : String -> msg
+    , onDragStart : String -> DragOffset -> msg
+    , position : Maybe Anchor
+    , viewport : { w : Float, h : Float }
+    }
+
+
+{-| Canonical render — a classic-OS-style window overlay anchored at
+the failing interaction. Per `ERROR.md` § Visual contract:
+
+  - Titlebar at top, severity-tinted, with the failure label.
+  - Square close button (×) pinned to the upper-right corner.
+  - Titlebar is the drag handle (mousedown starts drag).
+  - Body: `error: <title>` → `why: <reason>` → `trace: <chain>`.
+  - Anchor: spawns AT the cursor where the failure originated. No
+    clamping; off-screen overflow recovered via drag.
+
+`onDismiss` wires the close button. `onDragStart` wires the titlebar
+mousedown for drag. Per ERROR.md Slice 6: dismissal is a state
+transition on the same DOM element, not destroy + reconstruct.
+-}
+view : ViewConfig msg -> Error -> Html msg
+view cfg e =
+    let
+        positionAttrs =
+            case cfg.position of
+                Just dragged ->
+                    -- User dragged the box; use the exact position
+                    -- they put it at. No flip — respect their choice.
+                    [ A.class "tsot-error-anchored"
+                    , A.style "left" (String.fromFloat dragged.x ++ "px")
+                    , A.style "top" (String.fromFloat dragged.y ++ "px")
+                    ]
+
+                Nothing ->
+                    case e.context.anchor of
+                        Just cursor ->
+                            cornerAnchorAttrs cursor cfg.viewport
+
+                        Nothing ->
+                            []
+    in
     div
         ([ class "tsot-error"
          , class ("tsot-error--" ++ severityClass e.severity)
          , A.attribute "data-error-id" e.id
          , A.attribute "data-surface" e.context.surface
+         , -- Clicks inside the overlay must NOT bubble to the global
+           -- `Browser.Events.onClick` cursor capture — otherwise
+           -- clicking inside the overlay would re-anchor the next
+           -- error to the click point inside this overlay. The empty
+           -- string id is a no-op in the parent's update (no live
+           -- Error has id "").
+           E.stopPropagationOn "click" (D.succeed ( cfg.onDismiss "", True ))
          ]
             ++ (case e.context.region of
                     Just r ->
@@ -263,17 +344,111 @@ view e =
                     Nothing ->
                         []
                )
-            ++ anchorAttrs e.context.anchor
+            ++ positionAttrs
         )
-        [ div [ class "tsot-error-ribbon" ] []
+        [ viewTitlebar cfg e
         , div [ class "tsot-error-body" ]
             (viewField "error:" e.title [ class "tsot-error-title" ]
                 :: viewField "why:" e.why [ class "tsot-error-why" ]
                 :: viewTrace e.trace
                 ++ viewRaw e.raw
-                ++ [ viewDismiss ]
             )
         ]
+
+
+{-| Decide which corner of the box the cursor sits on so the box
+opens INTO the viewport. Classic-OS context-menu behavior:
+
+  - Down-right (normal): cursor at the box's top-LEFT corner —
+    emit `left = cursor.x + 8; top = cursor.y + 8`.
+  - Down-left (cursor near right edge): cursor at top-RIGHT corner —
+    emit `right = viewport.w - cursor.x + 8; top = cursor.y + 8`.
+  - Up-right (cursor near bottom edge): cursor at bottom-LEFT corner —
+    emit `left = cursor.x + 8; bottom = viewport.h - cursor.y + 8`.
+  - Up-left (bottom-right corner of viewport): cursor at bottom-RIGHT
+    corner — emit `right = ...; bottom = ...`.
+
+`approxBoxW`/`approxBoxH` estimate the rendered size for the flip
+decision. The box itself sizes via `.tsot-error` CSS (`width: 28rem`,
+content-driven height). These constants match closely enough that
+the flip fires when the box WOULD overflow.
+
+The cursor is always on a corner of the box; the box never shifts
+AWAY from the cursor. Only the direction it opens changes.
+-}
+cornerAnchorAttrs :
+    Anchor
+    -> { w : Float, h : Float }
+    -> List (Html.Attribute msg)
+cornerAnchorAttrs cursor viewport =
+    let
+        approxBoxW =
+            -- .tsot-error width is 28rem at 16px root = 448px.
+            448
+
+        approxBoxH =
+            -- Conservative minimum so we flip when there's not
+            -- enough room for even a minimal box below the cursor.
+            -- Real boxes can be taller; user can drag if needed.
+            120
+
+        offset =
+            8
+
+        flipHorizontal =
+            cursor.x + offset + approxBoxW > viewport.w
+
+        flipVertical =
+            cursor.y + offset + approxBoxH > viewport.h
+
+        horizontalStyle =
+            if flipHorizontal then
+                A.style "right"
+                    (String.fromFloat (viewport.w - cursor.x + offset) ++ "px")
+
+            else
+                A.style "left" (String.fromFloat (cursor.x + offset) ++ "px")
+
+        verticalStyle =
+            if flipVertical then
+                A.style "bottom"
+                    (String.fromFloat (viewport.h - cursor.y + offset) ++ "px")
+
+            else
+                A.style "top" (String.fromFloat (cursor.y + offset) ++ "px")
+    in
+    [ A.class "tsot-error-anchored"
+    , horizontalStyle
+    , verticalStyle
+    ]
+
+
+{-| Classic-OS titlebar — severity-tinted bar across the top with the
+window label, a square × close button pinned to the upper-right
+corner, and the whole bar acting as the drag handle (mousedown
+starts drag). Close-button mousedown stops propagation so it
+doesn't also trigger a drag.
+-}
+viewTitlebar : ViewConfig msg -> Error -> Html msg
+viewTitlebar cfg e =
+    div
+        [ class "tsot-error-titlebar"
+        , E.on "mousedown" (D.map (cfg.onDragStart e.id) dragOffsetDecoder)
+        ]
+        [ span [ class "tsot-error-titlebar-label" ]
+            [ text (severityLabel e.severity ++ " — " ++ e.context.surface) ]
+        , button
+            [ class "tsot-error-titlebar-close"
+            , A.attribute "aria-label" "close"
+            , E.onClick (cfg.onDismiss e.id)
+            , -- Stop mousedown bubbling so the close button doesn't
+              -- ALSO start a drag on the titlebar behind it.
+              E.stopPropagationOn "mousedown" (D.succeed ( cfg.onDismiss "", True ))
+            ]
+            [ text "\u{00D7}" ]
+        ]
+
+
 
 
 viewField : String -> String -> List (Html.Attribute msg) -> Html msg
@@ -317,32 +492,8 @@ viewRaw raw =
             []
 
 
-viewDismiss : Html msg
-viewDismiss =
-    div [ class "tsot-error-dismiss" ] [ text "dismiss [esc]" ]
 
 
-{-| Per ERROR.md § Visual contract — primary anchor case is the
-cursor position captured at the failing interaction. When present we
-switch to `position: fixed` rooted in the viewport at the click point;
-when absent we fall back to the default `position: absolute` and let
-the caller's surface container position the overlay.
-
-Small offset (+8/+8 px) keeps the overlay from sitting *under* the
-cursor, which would leave the user dragging the pointer through their
-own diagnostic.
--}
-anchorAttrs : Maybe Anchor -> List (Html.Attribute msg)
-anchorAttrs maybeAnchor =
-    case maybeAnchor of
-        Just a ->
-            [ A.style "position" "fixed"
-            , A.style "left" (String.fromFloat (a.x + 8) ++ "px")
-            , A.style "top" (String.fromFloat (a.y + 8) ++ "px")
-            ]
-
-        Nothing ->
-            []
 
 
 {-| Stripped historical mirror for the LOG drawer. Same content but
@@ -415,14 +566,15 @@ errorCss : String
 errorCss =
     """
     /* --- Error overlay -------------------------------------------- */
-    /* Position is caller-anchored: the surface that owns this Error
-       wraps it in a container positioned relative + a child slot
-       that this overlay fills. Default `position: absolute` reads
-       from the nearest positioned ancestor; surfaces can override. */
+    /* Classic-OS-style window: titlebar + body. Anchor position is
+       caller-driven (position:absolute by default; the cursor-
+       anchored case overrides to position:fixed via inline style). */
     .tsot-error {
       position: absolute;
       z-index: 1000;
-      max-width: 32rem;
+      min-width: 18rem;
+      width: 28rem;
+      max-width: min(32rem, calc(100vw - 1rem));
       background: #2a0c0c;
       border: 1px solid #4a1414;
       border-radius: 4px;
@@ -432,26 +584,80 @@ errorCss =
       font-size: 0.75rem;
       line-height: 1.4;
       display: flex;
-      align-items: stretch;
+      flex-direction: column;
+      overflow: hidden;
     }
-    /* Severity ribbon — left edge stripe, full height. */
-    .tsot-error-ribbon {
-      width: 4px;
-      flex: 0 0 auto;
-      border-radius: 4px 0 0 4px;
+
+    /* Classic-OS titlebar — severity-tinted band across the top.
+       `position: relative` so the close-button's absolute corner
+       positioning anchors here. Cursor `move` signals the drag
+       affordance (titlebar is the drag handle). */
+    .tsot-error-titlebar {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.2rem 1.6rem 0.2rem 0.55rem;
+      border-bottom: 1px solid #4a1414;
+      user-select: none;
+      cursor: move;
     }
-    .tsot-error--info .tsot-error-ribbon { background: #88f; }
-    .tsot-error--warn .tsot-error-ribbon { background: #fc6; }
-    .tsot-error--error .tsot-error-ribbon { background: #f66; }
-    .tsot-error--panic .tsot-error-ribbon { background: #f0f; }
+    /* Cursor-anchored variant — position:fixed. The actual edge
+       (left vs right, top vs bottom) is set by Elm inline so the
+       cursor sits on whichever box corner has room. Classic-OS
+       context-menu behavior. */
+    .tsot-error-anchored {
+      position: fixed;
+    }
+
+    .tsot-error--info .tsot-error-titlebar { background: linear-gradient(#1a1a3a, #0e0e22); }
+    .tsot-error--warn .tsot-error-titlebar { background: linear-gradient(#3a2a0a, #1f1605); }
+    .tsot-error--error .tsot-error-titlebar { background: linear-gradient(#3a0a0a, #1f0505); }
+    .tsot-error--panic .tsot-error-titlebar { background: linear-gradient(#3a0a3a, #1f051f); }
+
+    .tsot-error-titlebar-label {
+      font-weight: bold;
+      font-size: 0.7rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .tsot-error--info .tsot-error-titlebar-label { color: #aaf; }
+    .tsot-error--warn .tsot-error-titlebar-label { color: #fc6; }
+    .tsot-error--error .tsot-error-titlebar-label { color: #f88; }
+    .tsot-error--panic .tsot-error-titlebar-label { color: #f8f; }
+
+    /* Square close button pinned to the upper-right corner of the
+       titlebar — classic-OS style, flush with the window frame. */
+    .tsot-error-titlebar-close {
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      width: 1.1rem;
+      height: 1.1rem;
+      padding: 0;
+      line-height: 1;
+      font-size: 0.85rem;
+      font-family: inherit;
+      color: #ddd;
+      background: #4a1414;
+      border: 1px solid #6a1c1c;
+      border-radius: 2px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .tsot-error-titlebar-close:hover { background: #6a1c1c; color: #fff; }
+    .tsot-error-titlebar-close:active { background: #2a0c0c; }
 
     .tsot-error-body {
-      flex: 1 1 auto;
-      padding: 0.6rem 0.8rem;
+      padding: 0.5rem 0.7rem;
       display: flex;
       flex-direction: column;
       gap: 0.35rem;
       overflow-x: auto;
+      max-height: 50vh;
+      overflow-y: auto;
     }
     .tsot-error-field {
       display: flex;
@@ -470,13 +676,15 @@ errorCss =
       min-width: 3.5rem;
       flex: 0 0 auto;
     }
+    /* Value text wraps at WORD boundaries (no `word-break:break-word`,
+       which forced one-char-per-line at the cursor-anchored width). */
     .tsot-error-value {
       color: #ddd;
       white-space: pre-wrap;
-      word-break: break-word;
+      overflow-wrap: break-word;
+      flex: 1 1 auto;
+      min-width: 0;
     }
-    /* The title takes the severity color so the eye finds the
-       failure summary first. */
     .tsot-error--info .tsot-error-title { color: #aaf; }
     .tsot-error--warn .tsot-error-title { color: #fc6; }
     .tsot-error--error .tsot-error-title { color: #f88; }
@@ -494,7 +702,7 @@ errorCss =
     }
     .tsot-error-trace-line {
       white-space: pre-wrap;
-      word-break: break-word;
+      overflow-wrap: break-word;
     }
     .tsot-error-raw {
       width: 100%;
@@ -506,16 +714,8 @@ errorCss =
       overflow-x: auto;
       font-size: 0.7rem;
       white-space: pre-wrap;
-      word-break: break-word;
+      overflow-wrap: break-word;
     }
-    .tsot-error-dismiss {
-      align-self: flex-end;
-      color: #666;
-      font-size: 0.65rem;
-      cursor: pointer;
-      user-select: none;
-    }
-    .tsot-error-dismiss:hover { color: #aaa; }
 
     /* --- LOG-mirror line (historical / drawer) -------------------- */
     .tsot-error-log-line {

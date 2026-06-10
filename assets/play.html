@@ -381,6 +381,14 @@ function withInlineError(label, fn) {
   return async function(ev) {
     const anchor = ev?.currentTarget || ev?.target || null;
     clearInlineErrorAt(anchor);
+    // Capture the cursor position from the click event so the typed
+    // Error pipeline (ERROR.md primary case) can anchor the overlay
+    // AT the cursor — not at the button's bounding box. clientX/Y
+    // come straight from the MouseEvent the browser delivered.
+    const cursor =
+      ev && typeof ev.clientX === 'number' && typeof ev.clientY === 'number'
+        ? { x: ev.clientX, y: ev.clientY }
+        : null;
     try {
       await fn(ev);
     } catch (e) {
@@ -392,6 +400,22 @@ function withInlineError(label, fn) {
         appendErrorEvent(env);
       }
       if (anchor) renderErrorAt(anchor, env);
+      // Sacred error pipeline (ERROR.md): route a typed Error to Elm
+      // anchored at the cursor of the click that triggered this
+      // failure. The legacy `renderErrorAt` above stays as a JS-side
+      // belt-and-suspenders during the migration.
+      try {
+        const title = (env && (env.summary || env.title)) || String(label);
+        const why = (env && (env.detail || env.message || env.stack)) || String(e);
+        tsotPushError({
+          stage: label,
+          surface: 'click-action',
+          title: title,
+          why: why,
+          anchor: cursor,
+          severity: 'error',
+        });
+      } catch (_) { /* tsotPushError is best-effort; the JS surface above is the floor */ }
     }
   };
 }

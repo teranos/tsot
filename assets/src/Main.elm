@@ -57,6 +57,7 @@ import BuildFooter
 import Card
 import Error
 import Dict exposing (Dict)
+import Browser.Events
 import GameScreen
 import Set
 import Html exposing (Html, button, div, h2, pre, span, table, td, text, th, tr)
@@ -168,6 +169,22 @@ port uctPreviewIn : (D.Value -> msg) -> Sub msg
 `{action, id}` in its payload).
 -}
 port idbReqOut : { op : String, payload : E.Value } -> Cmd msg
+
+
+{-| Inbound Error envelope from any non-Elm layer (JS catches, FFI
+ok=false, future Rust panics). Per ERROR.md the wire shape is the
+same `Error` record this module decodes via `Error.decode`. The
+sender (js-bridge.js's `tsotPushError` helper) constructs the
+envelope; this port routes it to `ErrorReceived` so the in-flight
+cursor anchor (captured by the global `Browser.Events.onClick` sub)
+can position the overlay AT the click that triggered the failure.
+
+CLAUDE.md axiom: errors are sacred; they must reach the developer at
+the point of interaction. This port is the JS→Elm half of the
+"errors propagated down to the user cursor where the error occurs"
+pipeline.
+-}
+port errorIn : (D.Value -> msg) -> Sub msg
 
 
 
@@ -338,6 +355,31 @@ type alias Model =
     , actionInFlight : Bool
     , errors : List Error.Error
     , nextErrorId : Int
+    , lastClickAnchor : Maybe Error.Anchor
+    , -- Per-Error position overrides set by drag. When an entry
+      -- exists for an errorId, the renderer uses it instead of the
+      -- original cursor anchor. Classic-OS window drag.
+      errorPositions : Dict String Error.Anchor
+    , errorDragging : Maybe ErrorDragState
+    , -- Viewport size from window.innerWidth/Height. Used by
+      -- Error.view to pick which corner the cursor anchors to so
+      -- the box opens INTO the viewport — like classic-OS context
+      -- menus that flip when they'd overflow. Updated via
+      -- Browser.Events.onResize.
+      viewport : { w : Float, h : Float }
+    }
+
+
+{-| Active drag state. `offsetX/Y` is the delta between the cursor
+position at mousedown and the error's top-left at that moment, so
+subsequent mousemove events compute the new top-left as
+`mouseX - offsetX, mouseY - offsetY` — the drag keeps the grab
+point pinned to the cursor.
+-}
+type alias ErrorDragState =
+    { errorId : String
+    , offsetX : Float
+    , offsetY : Float
     }
 
 
@@ -411,6 +453,13 @@ type Msg
     | NoAttackClicked
     | ConfirmBlocksClicked
     | NoBlocksClicked
+    | CursorClickCaptured Error.Anchor
+    | ErrorReceived D.Value
+    | ErrorDismissed String
+    | ErrorDragStarted String Error.DragOffset
+    | ErrorDragMoved Error.Anchor
+    | ErrorDragEnded
+    | ViewportResized Float Float
     | NoOp
 
 
@@ -418,8 +467,19 @@ type Msg
 -- INIT
 
 
-init : () -> ( Model, Cmd Msg )
-init _ =
+{-| Flags from JS at boot: initial viewport dimensions. Used by the
+Error.view corner-flip logic to pick which corner of the box the
+cursor anchors to so the box opens INTO the viewport instead of off
+the right/bottom edge.
+-}
+type alias Flags =
+    { viewportW : Float
+    , viewportH : Float
+    }
+
+
+init : Flags -> ( Model, Cmd Msg )
+init flags =
     ( { build = BuildFooter.AwaitingPort
       , log = []
       , decisionPanel = DecisionHidden
@@ -445,6 +505,10 @@ init _ =
       , actionInFlight = False
       , errors = []
       , nextErrorId = 0
+      , lastClickAnchor = Nothing
+      , errorPositions = Dict.empty
+      , errorDragging = Nothing
+      , viewport = { w = flags.viewportW, h = flags.viewportH }
       }
     , Cmd.none
     )
@@ -514,18 +578,40 @@ helper to get its own errors anchored locally.
 Empty case returns `text ""` so callers can unconditionally splice it
 in without conditional logic.
 -}
-viewErrorsForSurface : String -> List Error.Error -> Html msg
-viewErrorsForSurface surface errors =
+viewErrorsForSurface : { w : Float, h : Float } -> String -> List Error.Error -> Html Msg
+viewErrorsForSurface viewport surface errors =
     let
         matching =
-            List.filter (\e -> e.context.surface == surface) errors
+            -- Surface anchoring is the FALLBACK case per ERROR.md
+            -- (port-decode failures with no cursor). Click-driven
+            -- failures carry an anchor and render at top level via
+            -- `viewAnchoredErrors` — they're position: fixed at the
+            -- cursor so they'd overlap the surface anchor too if we
+            -- also rendered them here.
+            List.filter
+                (\e ->
+                    e.context.surface
+                        == surface
+                        && e.context.anchor
+                        == Nothing
+                )
+                errors
     in
     if List.isEmpty matching then
         text ""
 
     else
         div [ class "tsot-error-stack" ]
-            (List.map Error.view matching)
+            (List.map
+                (Error.view
+                    { onDismiss = ErrorDismissed
+                    , onDragStart = ErrorDragStarted
+                    , position = Nothing
+                    , viewport = viewport
+                    }
+                )
+                matching
+            )
 
 
 savedItemPayload : String -> Int -> E.Value
@@ -1129,6 +1215,115 @@ update msg model =
                     , ( "pairs", E.list identity [] )
                     ]
                 )
+
+        CursorClickCaptured anchor ->
+            -- Global click sub. Every click in the document refreshes
+            -- `lastClickAnchor` so the NEXT failure that lacks its own
+            -- anchor (FFI ok=false, bridge catch, Rust panic) lands AT
+            -- the click point. ERROR.md § Visual contract primary case:
+            -- "I click on something, it doesn't work, error right there
+            -- where my cursor is."
+            ( { model | lastClickAnchor = Just anchor }, Cmd.none )
+
+        ErrorReceived raw ->
+            -- Inbound typed Error from any non-Elm layer (js-bridge
+            -- catches, FFI ok=false envelopes, future Rust panics).
+            -- If the sender supplied an anchor, honor it; otherwise
+            -- fall back to `model.lastClickAnchor` so a click-driven
+            -- failure renders AT the cursor that triggered it.
+            case D.decodeValue Error.decode raw of
+                Ok decoded ->
+                    let
+                        anchored =
+                            case decoded.context.anchor of
+                                Just _ ->
+                                    decoded
+
+                                Nothing ->
+                                    let
+                                        oldCtx =
+                                            decoded.context
+                                    in
+                                    { decoded
+                                        | context =
+                                            { oldCtx | anchor = model.lastClickAnchor }
+                                    }
+                    in
+                    ( { model
+                        | errors = model.errors ++ [ anchored ]
+                        , nextErrorId = model.nextErrorId + 1
+                      }
+                    , Cmd.none
+                    )
+
+                Err err ->
+                    -- Per ERROR.md axiom: a decode failure on the
+                    -- Error pipeline itself must NOT be silently
+                    -- dropped — the irony would be fatal. Surface as
+                    -- a meta-error with the failing payload sampled.
+                    ( pushDecodeError
+                        { surface = "error-pipeline"
+                        , region = Just "errorIn"
+                        , anchor = model.lastClickAnchor
+                        }
+                        "errorIn decode failed"
+                        err
+                        model
+                    , Cmd.none
+                    )
+
+        ErrorDismissed errorId ->
+            ( { model
+                | errors = List.filter (\e -> e.id /= errorId) model.errors
+                , errorPositions = Dict.remove errorId model.errorPositions
+              }
+            , Cmd.none
+            )
+
+        ErrorDragStarted errorId offset ->
+            -- `offset` comes straight from `MouseEvent.offsetX/Y` —
+            -- the cursor's position WITHIN the titlebar at mousedown.
+            -- That equals the cursor's offset from the box's
+            -- top-left (titlebar sits flush at the top of the box).
+            -- No need to know where the box actually rendered —
+            -- which matters because the corner-flip logic means the
+            -- box may not be at `cursor.anchor + 8`.
+            ( { model
+                | errorDragging =
+                    Just
+                        { errorId = errorId
+                        , offsetX = offset.offsetX
+                        , offsetY = offset.offsetY
+                        }
+              }
+            , Cmd.none
+            )
+
+        ErrorDragMoved mousePos ->
+            case model.errorDragging of
+                Just drag ->
+                    let
+                        newPos : Error.Anchor
+                        newPos =
+                            { x = mousePos.x - drag.offsetX
+                            , y = mousePos.y - drag.offsetY
+                            }
+                    in
+                    ( { model
+                        | errorPositions =
+                            Dict.insert drag.errorId newPos model.errorPositions
+                      }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ErrorDragEnded ->
+            ( { model | errorDragging = Nothing }, Cmd.none )
+
+        ViewportResized w h ->
+            ( { model | viewport = { w = w, h = h } }, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )
@@ -1752,22 +1947,47 @@ sortedPerCard dict =
 
 
 subscriptions : Model -> Sub Msg
-subscriptions _ =
+subscriptions model =
+    let
+        dragSubs =
+            case model.errorDragging of
+                Just _ ->
+                    [ Browser.Events.onMouseMove
+                        (D.map ErrorDragMoved Error.clickAnchorDecoder)
+                    , Browser.Events.onMouseUp (D.succeed ErrorDragEnded)
+                    ]
+
+                Nothing ->
+                    []
+    in
     Sub.batch
-        [ buildInfoIn BuildInfoReceived
-        , logTextIn LogTextReceived
-        , logErrorIn LogErrorReceived
-        , decisionLogIn DecisionLogReceived
-        , savedListIn SavedListReceived
-        , saveStatusIn SaveStatusReceived
-        , gamePhaseIn GamePhaseReceived
-        , bootDataIn BootDataReceived
-        , gameMetaIn GameMetaReceived
-        , promptTextIn PromptTextReceived
-        , gameStateIn GameStateReceived
-        , spectatorStateIn SpectatorStateReceived
-        , uctPreviewIn UctPreviewReceived
-        ]
+        ([ buildInfoIn BuildInfoReceived
+         , logTextIn LogTextReceived
+         , logErrorIn LogErrorReceived
+         , decisionLogIn DecisionLogReceived
+         , savedListIn SavedListReceived
+         , saveStatusIn SaveStatusReceived
+         , gamePhaseIn GamePhaseReceived
+         , bootDataIn BootDataReceived
+         , gameMetaIn GameMetaReceived
+         , promptTextIn PromptTextReceived
+         , gameStateIn GameStateReceived
+         , spectatorStateIn SpectatorStateReceived
+         , uctPreviewIn UctPreviewReceived
+         , errorIn ErrorReceived
+         , -- Global click capture. Every click in the document
+           -- refreshes `model.lastClickAnchor` so any subsequent
+           -- failure (this click's, or a near-future one) anchors
+           -- the error overlay AT the cursor point. See
+           -- `CursorClickCaptured` in update.
+           Browser.Events.onClick (D.map CursorClickCaptured Error.clickAnchorDecoder)
+         , -- Track viewport size for Error.view's corner-flip
+           -- decision (open INTO the viewport when the cursor is
+           -- near the right/bottom edge).
+           Browser.Events.onResize (\w h -> ViewportResized (toFloat w) (toFloat h))
+         ]
+            ++ dragSubs
+        )
 
 
 
@@ -1787,16 +2007,52 @@ view model =
           -- module, same as Card.styles.
           Error.styles
         , viewSaveControls model
-        , viewSurfaceWithErrors "deckbuilder" model.errors (viewDeckbuilder model)
-        , viewSurfaceWithErrors "spectator-bar" model.errors (SpectatorBar.view spectatorBarConfig model.spectatorBar)
-        , viewSurfaceWithErrors "prompt" model.errors (viewPromptText model.promptText)
-        , viewSurfaceWithErrors "game-meta" model.errors (viewGameMeta model.gameMeta)
-        , viewSurfaceWithErrors "game-screen" model.errors (viewGameScreen model)
+        , viewSurfaceWithErrors model.viewport "deckbuilder" model.errors (viewDeckbuilder model)
+        , viewSurfaceWithErrors model.viewport "spectator-bar" model.errors (SpectatorBar.view spectatorBarConfig model.spectatorBar)
+        , viewSurfaceWithErrors model.viewport "prompt" model.errors (viewPromptText model.promptText)
+        , viewSurfaceWithErrors model.viewport "game-meta" model.errors (viewGameMeta model.gameMeta)
+        , viewSurfaceWithErrors model.viewport "game-screen" model.errors (viewGameScreen model)
         , viewSavedListPanel model.savedList
         , viewDecisionPanel model.decisionPanel
         , LogPanel.view model.log
-        , viewSurfaceWithErrors "build-footer" model.errors (BuildFooter.view model.build)
+        , viewSurfaceWithErrors model.viewport "build-footer" model.errors (BuildFooter.view model.build)
+        , -- Cursor-anchored errors render at top level so their
+          -- `position: fixed` style anchors AT the click point
+          -- regardless of which surface DOM tree contains the
+          -- triggering element. Per ERROR.md § Visual contract
+          -- primary case. Surface-anchored fallback errors render
+          -- inside `viewSurfaceWithErrors` above.
+          viewAnchoredErrors model
         ]
+
+
+{-| Render every error carrying a cursor `Anchor` as a top-level
+overlay. Position is `position: fixed` (set by `Error.view` via
+`anchorAttrs`), so the overlay floats at the captured cursor
+position regardless of where in the DOM tree the originating
+interaction lived. If the user has dragged the window, its position
+override in `model.errorPositions` wins over the original anchor.
+-}
+viewAnchoredErrors : Model -> Html Msg
+viewAnchoredErrors model =
+    let
+        anchored =
+            List.filter (\e -> e.context.anchor /= Nothing) model.errors
+
+        viewOne e =
+            ( Error.key e
+            , Error.view
+                { onDismiss = ErrorDismissed
+                , onDragStart = ErrorDragStarted
+                , position = Dict.get e.id model.errorPositions
+                , viewport = model.viewport
+                }
+                e
+            )
+    in
+    Keyed.node "div"
+        [ class "tsot-anchored-errors" ]
+        (List.map viewOne anchored)
 
 
 {-| Wrap a surface render in a `position: relative` container with
@@ -1806,11 +2062,11 @@ failures with no cursor position); click-driven errors carrying a
 cursor `Anchor` position themselves via `position: fixed` instead and
 ignore the surface container.
 -}
-viewSurfaceWithErrors : String -> List Error.Error -> Html Msg -> Html Msg
-viewSurfaceWithErrors surface errors child =
+viewSurfaceWithErrors : { w : Float, h : Float } -> String -> List Error.Error -> Html Msg -> Html Msg
+viewSurfaceWithErrors viewport surface errors child =
     div [ style "position" "relative" ]
         [ child
-        , viewErrorsForSurface surface errors
+        , viewErrorsForSurface viewport surface errors
         ]
 
 
@@ -3143,7 +3399,7 @@ viewPerCardRow row =
 -- MAIN
 
 
-main : Program () Model Msg
+main : Program Flags Model Msg
 main =
     Browser.element
         { init = init

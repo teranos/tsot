@@ -494,6 +494,11 @@ function tsotShowBridgeFailure(stage, err) {
     + (err && err.message ? err.message : String(err));
   var stack = err && err.stack ? String(err.stack) : '';
   try { console.error(msg, stack); } catch (_) { /* console may not exist */ }
+  // Sacred-error pipeline (ERROR.md § Visual contract primary case):
+  // route through the Elm Error pipeline so the overlay anchors at the
+  // cursor of the click that triggered this failure. The red banner
+  // below stays as defense-in-depth — works even if Elm itself crashed.
+  try { tsotPushError({ stage: stage, title: msg, why: stack || msg, severity: 'error', surface: 'bridge' }); } catch (_) {}
   try {
     if (document.getElementById('tsot-bridge-failure')) return;
     var banner = document.createElement('div');
@@ -519,6 +524,43 @@ function tsotShowBridgeFailure(stage, err) {
   } catch (_) { /* if even DOM injection fails, console.error already fired */ }
 }
 
+// Push a typed Error to the Elm Error pipeline. Sender for any
+// JS-side catch / FFI ok=false / future Rust-panic envelope shim.
+// Per ERROR.md the wire shape matches `Error.elm`'s decoder
+// byte-for-byte: id, severity, context{surface,region?,anchor?},
+// title, why, trace?, raw?, at. Anchor omitted = Elm fills it
+// from `model.lastClickAnchor` so the overlay lands at the cursor.
+var tsotErrorCounter = 0;
+var tsotErrorAppRef = null;
+function tsotPushError(opts) {
+  if (!tsotErrorAppRef || !tsotErrorAppRef.ports || !tsotErrorAppRef.ports.errorIn) {
+    // Elm not booted yet, or port wiring drift. Defense-in-depth: the
+    // red banner from tsotShowBridgeFailure is already up.
+    return;
+  }
+  var counter = ++tsotErrorCounter;
+  var envelope = {
+    id: 'err-js-' + Date.now() + '-' + counter,
+    severity: opts && opts.severity ? String(opts.severity) : 'error',
+    context: {
+      surface: opts && opts.surface ? String(opts.surface) : 'bridge',
+    },
+    title: opts && opts.title ? String(opts.title) : '(no title)',
+    why: opts && opts.why ? String(opts.why) : '(no why)',
+    at: new Date().toISOString(),
+  };
+  if (opts && opts.region) envelope.context.region = String(opts.region);
+  if (opts && opts.stage) envelope.context.region = String(opts.stage);
+  if (opts && opts.anchor) envelope.context.anchor = opts.anchor;
+  if (opts && opts.trace) envelope.trace = opts.trace;
+  if (opts && opts.raw) envelope.raw = String(opts.raw);
+  try {
+    tsotErrorAppRef.ports.errorIn.send(envelope);
+  } catch (e) {
+    try { console.error('[tsotPushError] errorIn send failed', e); } catch (_) {}
+  }
+}
+
 (function () {
   var stage = 'enter';
   try {
@@ -532,7 +574,21 @@ function tsotShowBridgeFailure(stage, err) {
     throw new Error('Elm.Main missing — did bundle.js load before js-bridge.js?');
   }
   stage = 'Elm.Main.init';
-  var app = Elm.Main.init({ node: node });
+  // Pass viewport flags so Error.view can pick which corner the
+  // cursor anchors to (open INTO the viewport when click is near
+  // the right/bottom edge — classic-OS context-menu behavior).
+  var app = Elm.Main.init({
+    node: node,
+    flags: {
+      viewportW: window.innerWidth,
+      viewportH: window.innerHeight,
+    },
+  });
+  // Stash the app handle so tsotPushError (defined above the IIFE
+  // for ordering reasons — tsotShowBridgeFailure calls it) can reach
+  // the errorIn port. Without this stash, the IIFE-local `app` is
+  // unreachable from the module-scope function.
+  tsotErrorAppRef = app;
 
   stage = 'buildInfo port';
   // Hand the build-info envelope to Elm. `window.__TSOT_BUILD__` is set
