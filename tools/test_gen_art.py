@@ -75,26 +75,52 @@ class BuildPromptTests(unittest.TestCase):
         self.assertIn("Tusker", prompt)
         self.assertIn("elephant", prompt)
 
-    def test_tusker_includes_orange_palette(self):
+    def test_tusker_uses_orange_style(self):
+        # Orange → Indian Mughal miniature painting. The style word is what
+        # makes each color visually distinct now; color enforcement moved to
+        # the post-process tint.
         prompt, _ = gen_art.build_prompt(self._tusker())
-        self.assertIn("ember", prompt.lower())
+        self.assertIn("mughal", prompt.lower())
 
-    def test_single_color_card_repeats_color_word(self):
-        # Color enforcement: the card's color word should appear multiple times
-        # in the prompt so SD's token-attention biases toward that hue.
+    def test_single_color_card_mentions_color_word_once(self):
+        # One mention is enough for SD to anchor; the tint locks the actual hue.
         prompt, _ = gen_art.build_prompt(self._tusker())
-        self.assertGreaterEqual(prompt.lower().count("orange"), 2)
+        self.assertGreaterEqual(prompt.lower().count("orange"), 1)
 
-    def test_colorless_card_uses_neutral_palette(self):
+    def test_red_card_uses_aztec_or_mexican_style(self):
+        card = {"id": "x", "name": "X", "type": "creature",
+                "colors": ["red"], "subtypes": ["thing"], "abilities": []}
+        prompt, _ = gen_art.build_prompt(card)
+        self.assertTrue("aztec" in prompt.lower() or "mexican" in prompt.lower())
+
+    def test_blue_card_uses_block_print_style(self):
+        card = {"id": "x", "name": "X", "type": "creature",
+                "colors": ["blue"], "subtypes": ["thing"], "abilities": []}
+        prompt, _ = gen_art.build_prompt(card)
+        self.assertIn("block print", prompt.lower())
+
+    def test_colorless_card_uses_cave_painting_style(self):
         card = {"id": "x", "name": "X", "type": "creature",
                 "colors": [], "subtypes": ["thing"], "abilities": []}
         prompt, _ = gen_art.build_prompt(card)
-        self.assertIn("achromatic", prompt.lower())
+        self.assertIn("cave painting", prompt.lower())
 
-    def test_every_prompt_has_style_suffix(self):
+    def test_multi_color_card_uses_first_colors_style(self):
+        card = {"id": "x", "name": "X", "type": "creature",
+                "colors": ["red", "green"], "subtypes": ["beast"],
+                "abilities": []}
+        prompt, _ = gen_art.build_prompt(card)
+        # First color (red) wins the style.
+        self.assertTrue("aztec" in prompt.lower() or "mexican" in prompt.lower())
+        # Both colors mentioned for the tint/anchor.
+        self.assertIn("red", prompt.lower())
+        self.assertIn("green", prompt.lower())
+
+    def test_every_prompt_has_composition_anchor(self):
+        # Even without the heavy fauvist/ink-splatter language, every prompt
+        # ends with the composition anchor so SD frames the subject.
         prompt, _ = gen_art.build_prompt(self._tusker())
-        # Style anchor that survived the fauvist/psychedelic/riso removal.
-        self.assertIn("ralph steadman", prompt.lower())
+        self.assertIn("subject centered", prompt.lower())
 
     def test_prompt_marks_full_bleed(self):
         # Pure "Trading Card Game" tokens bias SD into drawing a card frame

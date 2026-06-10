@@ -41,8 +41,11 @@ HEIGHT = 640
 # Local install paths produced by the one-time setup (see `make art` help text).
 # Override with SD_BIN / SD_MODEL env vars if you've installed elsewhere.
 DEFAULT_SD_BIN = str(Path.home() / "sd-cpp" / "stable-diffusion.cpp" / "build" / "bin" / "sd-cli")
-DEFAULT_SD_MODEL = str(Path.home() / "sd-cpp" / "models" / "v1-5-pruned-emaonly.safetensors")
-DEFAULT_SD_TAESD = str(Path.home() / "sd-cpp" / "models" / "taesd_decoder.safetensors")
+DEFAULT_SD_MODEL = str(Path.home() / "sd-cpp" / "models" / "v1-5-pruned-emaonly-q5_1.gguf")
+# Combined TAESD (encoder + decoder) — the decoder-only file from
+# madebyollin/taesd is missing tensors that stable-diffusion.cpp expects
+# (probed 2026-06-10). Use the diffusion_pytorch_model.safetensors version.
+DEFAULT_SD_TAESD = str(Path.home() / "sd-cpp" / "models" / "taesd.safetensors")
 
 
 def bleed_dimensions(target_w: int, target_h: int, bleed_pct: int) -> tuple[int, int, int, int]:
@@ -188,10 +191,10 @@ TCG_ANCHOR = (
     "subject bled to the corners"
 )
 
+# Lightened — the per-color COLOR_STYLE now carries the visual idiom, and
+# this just nudges SD on composition + against photorealism.
 STYLE_SUFFIX = (
-    "ralph steadman ink splatter, dripping ink and spray paint, no photorealism, "
-    "bold flat color planes broken by gestural marks, bleed and overprint, "
-    "hand-pulled feel, vertical portrait composition with subject centered"
+    "no photorealism, vertical portrait composition with subject centered"
 )
 
 TYPE_PHRASES = {
@@ -233,26 +236,28 @@ NEGATIVE = (
     "rectangular frame, drawn outline frame, art behind glass"
 )
 
-# Per-color style fragments. Each repeats the color word multiple times so
-# SD's token attention biases the whole image toward that hue, and uses
-# "dominant" / "monochromatic" cues to suppress off-color drift. The
-# post-process tint (tint_to_card_color) is a second layer of enforcement
-# in case SD still goes off-brief.
+# Per-color art tradition. The IDIOM carries the visual identity of each
+# color — instead of every card looking like a color-locked ink splatter,
+# red cards look like Aztec codex pages, blue cards like block prints,
+# white cards like Roman frescoes. Post-process tint (default 25%) then
+# locks the actual hue.
 COLOR_STYLE = {
-    "red":    "RED palette dominant, molten ember fire-glow, crimson and scarlet drips, RED ink wash throughout, RED monochromatic",
-    "blue":   "BLUE palette dominant, deep-water thought-lit cool, cobalt and ultramarine drips, BLUE ink wash throughout, BLUE monochromatic",
-    "black":  "BLACK palette dominant, shadow void-edged, ink-saturated midnight drips, BLACK throughout, BLACK monochromatic",
-    "white":  "WHITE palette dominant, bone-pale ritual-clean light, parchment and chalk tones, WHITE throughout, WHITE monochromatic",
-    "green":  "GREEN palette dominant, moss and bark, viridian and chlorophyll drips, GREEN ink wash throughout, GREEN monochromatic",
-    "pink":   "PINK palette dominant, soft-dissolved dawn-tint, magenta and rose drips, PINK ink wash throughout, PINK monochromatic",
-    "purple": "PURPLE palette dominant, iridescent bruise tones, violet and amethyst drips, PURPLE ink wash throughout, PURPLE monochromatic",
-    "azure":  "AZURE palette dominant, time-glass recursive crystal, cyan drips and bleeds, AZURE ink wash throughout, AZURE monochromatic",
-    "orange": "ORANGE palette dominant, ember-warm flesh-hot, ORANGE drips and bleeds, ORANGE ink wash throughout, ORANGE monochromatic",
-    "yellow": "YELLOW palette dominant, signal-bright sulfur and lemon, YELLOW drips and bleeds, YELLOW ink wash throughout, YELLOW monochromatic",
-    "brown":  "BROWN palette dominant, earth and rust, umber and sepia drips, BROWN ink wash throughout, BROWN monochromatic",
+    "red":    "Aztec codex page illumination, Mexican muralism in the style of Diego Rivera, bold flat warm tones",
+    "blue":   "linocut block print, bold carved lines, ink on paper, high contrast",
+    "green":  "woodcut print, German Expressionist black-line carving, bold gestural cuts",
+    "white":  "Roman fresco, ancient wall painting, weathered plaster, classical figures",
+    "black":  "gothic woodcut, Aubrey Beardsley ink illustration, high-contrast black and white",
+    "pink":   "art nouveau poster, Alphonse Mucha decorative illustration, flowing organic lines",
+    "purple": "psychedelic concert poster, 1960s op-art, swirling distortion",
+    "azure":  "cathedral stained glass window, leaded glass illumination, jewel-toned light",
+    "orange": "Indian Mughal miniature painting, ornate detail, gold-leaf embellishment",
+    "yellow": "medieval illuminated manuscript, gold-leaf illumination, decorated initial",
+    "brown":  "cave painting, ochre and umber on stone, primal handprints",
 }
 
-NEUTRAL_STYLE = "achromatic palette, ink-saturated grayscale, no color cast, monochrome"
+# Colorless cards (Scavenger Rat, Pale Apparition, the Clear cycle) get the
+# primal/unbranded look — fits the "no color identity" theme.
+NEUTRAL_STYLE = "cave painting, ochre and charcoal on stone, primitive primal mark-making"
 
 # RGB targets for the post-process tint. Saturated mid-luminance values so the
 # magick -tint operator (which biases mid-tones toward the fill) lands in the
@@ -337,10 +342,14 @@ def build_prompt(card: dict) -> tuple[str, str]:
 
     card_colors = card.get("colors") or []
     if card_colors:
-        for c in card_colors:
-            style = COLOR_STYLE.get(c)
-            if style:
-                parts.append(style)
+        # First color picks the visual idiom; all colors named once for the
+        # color anchor + downstream post-process tint.
+        primary = card_colors[0]
+        style = COLOR_STYLE.get(primary)
+        if style:
+            parts.append(style)
+        color_phrase = " and ".join(card_colors) + " tones"
+        parts.append(f"in {color_phrase}")
     else:
         parts.append(NEUTRAL_STYLE)
 
@@ -789,10 +798,16 @@ def main() -> int:
             "-t", str(threads),
             # Negative max-vram = auto-detect and KEEP this many GiB free.
             "--max-vram", f"-{vram_reserve}",
+            # Push CLIP + VAE to CPU so they don't compete with the display
+            # compositor for the GPU. Slower per-step but the desktop stays
+            # responsive. On Apple Silicon unified memory this only helps
+            # compute scheduling, not total memory pressure.
+            "--clip-on-cpu",
+            "--vae-on-cpu",
             # NOTE: --mmap segfaults the Metal LoRA at_runtime path on
             # safetensors weights (probed 2026-06-09). Don't add it back.
         ]
-        print(f"  throttled: -t {threads}, --max-vram -{vram_reserve} (SD_FAST=1 to disable)")
+        print(f"  throttled: -t {threads}, --max-vram -{vram_reserve}, CLIP+VAE on CPU (SD_FAST=1 to disable)")
 
     # TAESD — tiny autoencoder for fast VAE decode (~8s → ~1s). Auto-enabled
     # when the file is present. SD_TAESD overrides the path.
@@ -810,7 +825,7 @@ def main() -> int:
             f"{WIDTH}x{HEIGHT}+{crop_x}+{crop_y}", "+repage", out,
         ], check=True)
 
-    tint_strength = int(os.environ.get("SD_TINT", "40"))
+    tint_strength = int(os.environ.get("SD_TINT", "25"))
     if tint_strength > 0 and target.get("colors"):
         tint_to_card_color(out, target["colors"], tint_strength)
         print(f"  tinted toward {','.join(target['colors'])} @ {tint_strength}%")

@@ -395,6 +395,20 @@ endif
 # same lua5.4 driver pattern as cards-report.py, builds a prompt, shells
 # out to stable-diffusion.cpp's `sd` binary, then carves slot-grid holes
 # via `magick` if the card declares any. Re-run to fill more cards.
+#
+# Defaults below prioritize keeping the machine usable during generation
+# (~3-5 min per card on 8 GB M1) over generation speed. Any of these env
+# vars can be overridden on the command line: `SD_BLEED=15 make art`.
 art:
 	@mkdir -p gen_art
-	@python3 tools/gen_art.py
+	@# SD_BLEED — % to crop off each side after generating larger; 0 = generate at target size, SD self-draws frames; 15 = generate 30% larger and crop SD's self-frames off.
+	@# SD_THREADS — number of CPU cores sd-cli may use during generation (lower = OS keeps more cores).
+	@# SD_VRAM_RESERVE — GiB to keep free for the OS / display compositor (higher = less GPU contention, less sd-cli budget).
+	@# SD_TINT — strength of the post-process color tint, 0–100 (0 disables, 25 keeps SD's natural palette through, 100 monochrome).
+	@# SD_TEXT — whether to draw the themed text overlay on top of the art (1 yes, 0 raw art only).
+	@SD_BLEED=$${SD_BLEED:-10} \
+	 SD_THREADS=$${SD_THREADS:-1} \
+	 SD_VRAM_RESERVE=$${SD_VRAM_RESERVE:-4.0} \
+	 SD_TINT=$${SD_TINT:-25} \
+	 SD_TEXT=$${SD_TEXT:-1} \
+	 python3 tools/gen_art.py
