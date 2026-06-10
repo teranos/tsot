@@ -619,36 +619,128 @@ class CardSeedTests(unittest.TestCase):
         self.assertNotEqual(gen_art.card_seed("tusker"), gen_art.card_seed("glass-moth"))
 
 
-class PickTargetTests(unittest.TestCase):
+class NextOutputPathTests(unittest.TestCase):
+    """Never overwrite an existing PNG. First gen: {id}_{W}_{H}.png.
+    Subsequent gens: append the smallest integer ≥ 2 that doesn't collide."""
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp)
 
+    def test_first_time_uses_base_name(self):
+        p = gen_art.next_output_path(self.tmp, "tusker", 384, 640)
+        self.assertEqual(p, f"{self.tmp}/tusker_384_640.png")
+
+    def test_second_time_adds_2(self):
+        Path(self.tmp, "tusker_384_640.png").touch()
+        p = gen_art.next_output_path(self.tmp, "tusker", 384, 640)
+        self.assertEqual(p, f"{self.tmp}/tusker_384_640_2.png")
+
+    def test_third_time_adds_3(self):
+        Path(self.tmp, "tusker_384_640.png").touch()
+        Path(self.tmp, "tusker_384_640_2.png").touch()
+        p = gen_art.next_output_path(self.tmp, "tusker", 384, 640)
+        self.assertEqual(p, f"{self.tmp}/tusker_384_640_3.png")
+
+
+class StalenessTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.art = Path(self.tmp) / "art"
+        self.art.mkdir()
+        self.cards = Path(self.tmp) / "cards"
+        self.cards.mkdir()
+        self._orig_cards_dir = gen_art.CARDS_DIR
+        gen_art.CARDS_DIR = str(self.cards)
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.addCleanup(lambda: setattr(gen_art, "CARDS_DIR", self._orig_cards_dir))
+
+    def _lua(self, cid, mtime):
+        p = self.cards / f"{cid}.lua"
+        p.write_text("return {}")
+        os.utime(p, (mtime, mtime))
+
+    def _png(self, cid, mtime, w=384, h=640):
+        p = self.art / f"{cid}_{w}_{h}.png"
+        p.write_text("fake")
+        os.utime(p, (mtime, mtime))
+
+    def test_no_png_is_not_stale(self):
+        self._lua("a", mtime=200)
+        self.assertFalse(gen_art.is_stale("a", str(self.art)))
+
+    def test_lua_newer_than_png_is_stale(self):
+        self._lua("a", mtime=200)
+        self._png("a", mtime=100)
+        self.assertTrue(gen_art.is_stale("a", str(self.art)))
+
+    def test_png_newer_than_lua_is_not_stale(self):
+        self._lua("a", mtime=100)
+        self._png("a", mtime=200)
+        self.assertFalse(gen_art.is_stale("a", str(self.art)))
+
+    def test_no_lua_is_not_stale(self):
+        self._png("a", mtime=100)
+        self.assertFalse(gen_art.is_stale("a", str(self.art)))
+
+
+class PickTargetTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.art = Path(self.tmp) / "art"
+        self.art.mkdir()
+        self.cards = Path(self.tmp) / "cards"
+        self.cards.mkdir()
+        self._orig_cards_dir = gen_art.CARDS_DIR
+        gen_art.CARDS_DIR = str(self.cards)
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.addCleanup(lambda: setattr(gen_art, "CARDS_DIR", self._orig_cards_dir))
+
+    def _lua(self, cid, mtime=100):
+        p = self.cards / f"{cid}.lua"
+        p.write_text("return {}")
+        os.utime(p, (mtime, mtime))
+
+    def _png(self, cid, mtime=100, w=384, h=640):
+        p = self.art / f"{cid}_{w}_{h}.png"
+        p.write_text("fake")
+        os.utime(p, (mtime, mtime))
+
     def test_skips_transparent_frame(self):
-        cards = [
-            {"id": "a", "frame": "transparent"},
-            {"id": "b"},
-        ]
-        target = gen_art.pick_target(cards, self.tmp, seed=0)
+        cards = [{"id": "a", "frame": "transparent"}, {"id": "b"}]
+        target = gen_art.pick_target(cards, str(self.art), seed=0)
         self.assertEqual(target["id"], "b")
 
-    def test_skips_existing_art(self):
-        Path(self.tmp, "a_384_640.png").touch()
+    def test_picks_fresh_when_no_stale(self):
+        # 'a' has png, no lua (not stale). 'b' has no png (fresh).
+        self._png("a", mtime=100)
         cards = [{"id": "a"}, {"id": "b"}]
-        target = gen_art.pick_target(cards, self.tmp, seed=0)
+        target = gen_art.pick_target(cards, str(self.art), seed=0)
         self.assertEqual(target["id"], "b")
 
     def test_deterministic_with_seed(self):
         cards = [{"id": c} for c in ["a", "b", "c", "d", "e"]]
-        t1 = gen_art.pick_target(cards, self.tmp, seed=42)
-        t2 = gen_art.pick_target(cards, self.tmp, seed=42)
+        t1 = gen_art.pick_target(cards, str(self.art), seed=42)
+        t2 = gen_art.pick_target(cards, str(self.art), seed=42)
         self.assertEqual(t1["id"], t2["id"])
 
-    def test_none_when_all_done(self):
-        for cid in ("a", "b"):
-            Path(self.tmp, f"{cid}_384_640.png").touch()
-        self.assertIsNone(gen_art.pick_target(
-            [{"id": "a"}, {"id": "b"}], self.tmp, seed=0))
+    def test_stale_card_wins_over_fresh(self):
+        # 'a' is stale (lua newer than png), 'b' is fresh (no png).
+        # Stale must win even though fresh is normally picked.
+        self._lua("a", mtime=200)
+        self._png("a", mtime=100)
+        cards = [{"id": "a"}, {"id": "b"}]
+        target = gen_art.pick_target(cards, str(self.art), seed=0)
+        self.assertEqual(target["id"], "a")
+
+    def test_stale_card_wins_over_complete_corpus(self):
+        # Every card has a png; one is stale.
+        self._lua("a", mtime=100); self._png("a", mtime=200)  # not stale
+        self._lua("b", mtime=300); self._png("b", mtime=100)  # stale
+        self._lua("c", mtime=50); self._png("c", mtime=200)   # not stale
+        cards = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        target = gen_art.pick_target(cards, str(self.art), seed=0)
+        self.assertEqual(target["id"], "b")
 
 
 @unittest.skipUnless(shutil.which("lua5.4"), "lua5.4 not on PATH")

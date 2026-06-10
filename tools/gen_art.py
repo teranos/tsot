@@ -385,18 +385,108 @@ def build_prompt(card: dict) -> tuple[str, str]:
 # Target selection & seeding.
 # ---------------------------------------------------------------------
 
+def card_pngs(art_dir: str, card_id: str) -> list[Path]:
+    """All PNG files for a card in art_dir, sorted by name."""
+    return sorted(Path(art_dir).glob(f"{card_id}_*.png"))
+
+
+def latest_png(art_dir: str, card_id: str) -> Path | None:
+    pngs = card_pngs(art_dir, card_id)
+    if not pngs:
+        return None
+    return max(pngs, key=lambda p: p.stat().st_mtime)
+
+
+def next_output_path(art_dir: str, card_id: str, w: int, h: int) -> str:
+    """Next available output path. First gen: {id}_{W}_{H}.png. Subsequent:
+    {id}_{W}_{H}_{N}.png where N is the smallest integer ≥ 2 that doesn't
+    collide. Existing PNGs are never overwritten."""
+    base = Path(art_dir) / f"{card_id}_{w}_{h}.png"
+    if not base.exists():
+        return str(base)
+    n = 2
+    while True:
+        candidate = Path(art_dir) / f"{card_id}_{w}_{h}_{n}.png"
+        if not candidate.exists():
+            return str(candidate)
+        n += 1
+
+
+def card_lua_path(card_id: str) -> Path:
+    return Path(CARDS_DIR) / f"{card_id}.lua"
+
+
+def read_png_property(png_path: Path, key: str) -> str | None:
+    """Read a single PNG property via magick identify. Returns None if the
+    property is absent, the file isn't a real PNG, or magick errors."""
+    try:
+        result = subprocess.check_output(
+            ["magick", "identify", "-format", f"%[property:{key}]", str(png_path)],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        return result if result else None
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def is_stale(card_id: str, art_dir: str) -> bool:
+    """The card's .lua has been edited more recently than its latest PNG —
+    the image is out of date with the card definition."""
+    png = latest_png(art_dir, card_id)
+    if png is None:
+        return False
+    lua = card_lua_path(card_id)
+    if not lua.exists():
+        return False
+    return lua.stat().st_mtime > png.stat().st_mtime
+
+
 def pick_target(cards: list[dict], art_dir: str, seed: int) -> dict | None:
-    todo: list[dict] = []
+    """Priority order:
+    1. STALE: card .lua mtime > latest PNG mtime (image out of date).
+    2. FRESH: no PNG exists for this card yet.
+    3. NO_METADATA: latest PNG lacks tsot.* properties (pre-metadata commit).
+    4. OLDEST: latest PNG has the oldest tsot.timestamp.
+    Step 1 always wins, even over cards with no art yet."""
+    rng = random.Random(seed)
+
+    # Tier 1: stale (top priority — always)
+    stale = [c for c in cards
+             if c.get("frame") != "transparent"
+             and is_stale(c["id"], art_dir)]
+    if stale:
+        return rng.choice(sorted(stale, key=lambda c: c["id"]))
+
+    # Tier 2: no PNG yet
+    fresh = [c for c in cards
+             if c.get("frame") != "transparent"
+             and not card_pngs(art_dir, c["id"])]
+    if fresh:
+        return rng.choice(sorted(fresh, key=lambda c: c["id"]))
+
+    # Tier 3 / 4: corpus is complete. Walk the metadata.
+    no_meta: list[dict] = []
+    has_meta: list[tuple[str, dict]] = []
     for c in cards:
         if c.get("frame") == "transparent":
             continue
-        if list(Path(art_dir).glob(f"{c['id']}_*.png")):
+        png = latest_png(art_dir, c["id"])
+        if png is None:
             continue
-        todo.append(c)
-    if not todo:
-        return None
-    rng = random.Random(seed)
-    return rng.choice(sorted(todo, key=lambda c: c["id"]))
+        ts = read_png_property(png, "tsot.timestamp")
+        if ts is None:
+            no_meta.append(c)
+        else:
+            has_meta.append((ts, c))
+
+    if no_meta:
+        return rng.choice(sorted(no_meta, key=lambda c: c["id"]))
+
+    if has_meta:
+        has_meta.sort(key=lambda x: x[0])  # oldest first
+        return has_meta[0][1]
+
+    return None
 
 
 def card_seed(card_id: str) -> int:
@@ -991,7 +1081,7 @@ def main() -> int:
 
     prompt, negative = build_prompt(target)
     seed = card_seed(target["id"])
-    out = f"{ART_DIR}/{target['id']}_{WIDTH}_{HEIGHT}.png"
+    out = next_output_path(ART_DIR, target["id"], WIDTH, HEIGHT)
 
     # Append LCM LoRA so the 4-step / cfg-scale=1 sampling actually converges
     # on SD 1.5 base. Without it the output is noise.
