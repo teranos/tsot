@@ -1,0 +1,28 @@
+[package]
+name = "roam"
+version = "0.1.0"
+edition = "2021"
+default-run = "roam"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "roam"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.121"
+getrandom = { version = "=0.2.15", features = ["js"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+
+[profile.dev]
+panic = "abort"

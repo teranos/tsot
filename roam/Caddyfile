@@ -1,0 +1,15 @@
+{
+  auto_https off
+}
+
+:{$ROAM_SERVE_PORT:8083} {
+  # Disable caching so the browser always picks up a fresh wasm/JS/HTML
+  # after `make wasm`. Without this, Firefox/Chrome aggressively cache
+  # `roam_bg.wasm` and `js-bridge.js` and you see yesterday's code.
+  header Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+  header Pragma "no-cache"
+  header Expires "0"
+
+  root * dist
+  file_server
+}

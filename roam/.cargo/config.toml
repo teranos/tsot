@@ -1,0 +1,5 @@
+# wasm-bindgen handles the wasm ABI for wasm32-unknown-unknown; no
+# special link args needed. Build with:
+#   cargo build --target wasm32-unknown-unknown --release
+#   wasm-bindgen target/wasm32-unknown-unknown/release/roam.wasm \
+#     --target web --out-dir dist

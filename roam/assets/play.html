@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>roam</title>
+<style>
+  body { margin: 0; background: #111; color: #ddd; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+  #wrap { display: flex; gap: 1rem; padding: 0.75rem; align-items: flex-start; }
+  #game { display: flex; flex-direction: column; gap: 0.5rem; }
+  canvas { background: #1a1a1f; border: 1px solid #333; display: block; }
+  #status { color: #888; min-height: 1em; }
+  #info { display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-width: 24em; max-width: 40em; }
+  .panel { border: 1px solid #333; padding: 0.5rem; }
+  .panel h2 { font-size: 0.7rem; margin: 0 0 0.4rem 0; color: #888; font-weight: normal; text-transform: uppercase; letter-spacing: 0.05em; }
+  #self, #conns, #mesh { color: #ddd; font-size: 0.7rem; white-space: pre-wrap; word-break: break-all; line-height: 1.4; }
+  #log { color: #bbb; font-size: 0.7rem; max-height: 24em; overflow-y: auto; line-height: 1.3; margin: 0; }
+  #log .ev-connect { color: #6f9; }
+  #log .ev-disconnect { color: #f88; }
+  #log .ev-sub { color: #6cf; }
+  #log .ev-error { color: #f44; }
+  #log .ev-info { color: #aaa; }
+</style>
+</head>
+<body>
+<div id="clock" style="position: fixed; top: 4px; right: 8px; font-family: ui-monospace, Menlo, monospace; color: #888; font-size: 0.7rem; pointer-events: none; z-index: 100;"></div>
+<div id="root"></div>
+<script src="build-info.js"></script>
+<script src="elm.js"></script>
+<script>
+  // Mount Elm BEFORE js-bridge loads so the DOM ids js-bridge queries
+  // for (canvas#c, #status, #self, #conns, #mesh, #log) exist by the
+  // time the module body runs. Elm renders synchronously during init.
+  const b = window.__ROAM_BUILD__;
+  const buildLabel = b ? `${b.profile} ${b.commit} · ${b.builtAt}` : null;
+  const app = Elm.Roam.Main.init({
+    node: document.getElementById('root'),
+    flags: {
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+      buildLabel: buildLabel,
+    },
+  });
+  // js-bridge can call this to push a typed Error envelope into Elm.
+  window.roamPushError = function (envelope) {
+    app.ports.errorIn.send(envelope);
+  };
+</script>
+<script>
+  // Enable libp2p debug logs BEFORE any ESM import resolves. weald
+  // (libp2p's logger) reads from globalThis.process.env.DEBUG in
+  // browser mode (NOT localStorage.debug — weald is its own port).
+  try {
+    globalThis.process = globalThis.process || { env: {} };
+    globalThis.process.env = globalThis.process.env || {};
+    globalThis.process.env.DEBUG = 'libp2p:*';
+  } catch (e) {}
+
+  // Capture console calls BEFORE the bundle loads. weald grabs a
+  // direct reference: `const log = console.debug ?? console.log` at
+  // module-init time, so any patching done from the module body is
+  // ignored — weald keeps using the original. We pre-patch and push
+  // into a global buffer; js-bridge drains it into the visible log.
+  window.__roamConsoleBuf = [];
+  for (const m of ['log', 'debug', 'info', 'warn', 'error']) {
+    const orig = console[m].bind(console);
+    console[m] = function () {
+      orig.apply(null, arguments);
+      try {
+        window.__roamConsoleBuf.push({ m: m, t: Date.now(), args: Array.from(arguments) });
+        if (window.__roamConsoleBuf.length > 10000) window.__roamConsoleBuf.shift();
+      } catch (e) {}
+    };
+  }
+</script>
+<script type="module" src="js-bridge.js"></script>
+</body>
+</html>
