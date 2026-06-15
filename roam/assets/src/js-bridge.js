@@ -678,6 +678,34 @@ channel.addEventListener('messageerror', (e) =>
   logError('BroadcastChannel messageerror', e.data));
 
 // --- wasm loader + game loop ---
+// TSOT bridge probe: once both wasm modules are loaded, log the card
+// count so we know the cross-module call surface works. This is the
+// minimum proof that roam and TSOT are talking. Real usage (card
+// spawning, match handshake) builds on this same surface.
+Promise.resolve(window.tsotReady).then((tsot) => {
+  if (!tsot) {
+    logEvent('error', 'tsotReady resolved with no module');
+    return;
+  }
+  let json;
+  try {
+    json = tsot.ccall('tsot_list_card_pool', 'string', [], []);
+  } catch (err) {
+    logError('tsot_list_card_pool', err);
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(json);
+  } catch (err) {
+    const wrapped = new Error(`JSON.parse failed on tsot_list_card_pool response`, { cause: err });
+    wrapped.diagnostic = `raw response (first 500 chars): ${String(json).slice(0, 500)}`;
+    logError('tsot_list_card_pool JSON.parse', wrapped);
+    return;
+  }
+  logEvent('info', `tsot bridge ready: ${parsed.length} cards in pool`);
+}).catch((err) => logError('tsotReady', err));
+
 moduleP.then(() => {
   roam_init();
 

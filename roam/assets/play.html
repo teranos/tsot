@@ -26,6 +26,17 @@
 <div id="root"></div>
 <script src="build-info.js"></script>
 <script src="elm.js"></script>
+<script src="tsot_wasm.js"></script>
+<script>
+  // TSOT runs alongside roam as a second wasm module. The emscripten
+  // loader above defined `createTsotModule` globally; we kick its
+  // init here and expose a global promise js-bridge can await before
+  // calling into TSOT's FFI.
+  window.tsotReady = createTsotModule({}).then((m) => {
+    window.tsot = m;
+    return m;
+  });
+</script>
 <script>
   // Mount Elm BEFORE js-bridge loads so the DOM ids js-bridge queries
   // for (canvas#c, #status, #self, #conns, #mesh, #log) exist by the
