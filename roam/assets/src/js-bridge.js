@@ -145,7 +145,16 @@ window.addEventListener('mousedown', (e) => {
   __roamLastClickAnchor = { x: e.clientX, y: e.clientY };
 });
 
-function logError(where, err) {
+// `popover: false` opts out of the cursor-popover surface for failures
+// that are already being handled by a working retry subsystem with its
+// own visible status (bootstrap dials, redial driver). They still land
+// in the event log; they just don't drag the user's attention away from
+// what they were doing. The sacred-errors rule mandates visibility —
+// not that every error get the loudest channel. See `roam/CLAUDE.md`
+// "Errors are sacred" + parent CLAUDE.md "contextually in points of
+// interaction": when the redial-card IS the point of interaction for
+// retried network failures, the popover is a duplicate.
+function logError(where, err, { popover = true } = {}) {
   // Walk the full cause chain — no depth cap.
   let chain = err;
   const parts = [];
@@ -168,7 +177,7 @@ function logError(where, err) {
   // Historical log line — fallback timeline.
   logEvent('error', `${where}:\n  ${parts.join('\n  ')}${diag}\n  ${stack}`);
   // Sacred path — typed Error envelope through the axiom pipeline.
-  if (typeof window.roamPushError === 'function') {
+  if (popover && typeof window.roamPushError === 'function') {
     const titleErr = err && err.message ? err.message : String(err);
     window.roamPushError({
       id: nextJsErrId(),
@@ -533,7 +542,7 @@ try {
       },
       (err) => {
         const ms = (performance.now() - dialT0).toFixed(0);
-        logError(`relay dial settled (eventually) after ${ms}ms`, err);
+        logError(`relay dial settled (eventually) after ${ms}ms`, err, { popover: false });
       },
     );
     try {
@@ -549,7 +558,7 @@ try {
       logEvent('info', `dial wrapper threw for ${addrStr}: ${err.name}: ${err.message}`);
       const diag = await probeRelayHttp(addrStr);
       err.diagnostic = diag;
-      logError(`dial wrapper ${addrStr}`, err);
+      logError(`dial wrapper ${addrStr}`, err, { popover: false });
     }
   }
 
@@ -590,7 +599,7 @@ try {
       } catch (err) {
         state.delayMs = Math.min(state.delayMs * 2, REDIAL_MAX_MS);
         state.nextAt = now + state.delayMs;
-        logError(`redial ${peerId.slice(-12)} (next in ${state.delayMs}ms)`, err);
+        logError(`redial ${peerId.slice(-12)} (next in ${state.delayMs}ms)`, err, { popover: false });
       }
     }
   }, REDIAL_TICK_MS);
