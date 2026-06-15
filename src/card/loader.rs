@@ -38,10 +38,10 @@ fn parse_source(s: &str) -> Result<CostSource, String> {
     match s.to_ascii_lowercase().as_str() {
         "hand" => Ok(CostSource::Hand),
         "mill" => Ok(CostSource::Mill),
-        "graveyard" => Ok(CostSource::Graveyard),
-        "sacrifice" => Ok(CostSource::Sacrifice),
+        "graveyard" | "gy" => Ok(CostSource::Graveyard),
+        "sacrifice" | "sac" => Ok(CostSource::Sacrifice),
         "self" => Ok(CostSource::SelfExile),
-        "attached" => Ok(CostSource::Attached),
+        "attached" | "attach" => Ok(CostSource::Attached),
         other => Err(format!("unknown cost source: {other}")),
     }
 }
@@ -1048,6 +1048,22 @@ pub fn load_cards_embedded(lua: &Lua) -> mlua::Result<Vec<Card>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cost-source aliases — common short or typo forms accepted alongside
+    /// the canonical names so cards don't fail to load over a missing 'd'
+    /// or an abbreviation in the .lua file.
+    #[test]
+    fn parse_source_accepts_aliases() {
+        // attached / attach
+        assert_eq!(parse_source("attached").unwrap(), CostSource::Attached);
+        assert_eq!(parse_source("attach").unwrap(), CostSource::Attached);
+        // sacrifice / sac
+        assert_eq!(parse_source("sacrifice").unwrap(), CostSource::Sacrifice);
+        assert_eq!(parse_source("sac").unwrap(), CostSource::Sacrifice);
+        // graveyard / gy
+        assert_eq!(parse_source("graveyard").unwrap(), CostSource::Graveyard);
+        assert_eq!(parse_source("gy").unwrap(), CostSource::Graveyard);
+    }
 
     /// Pale Apparition is the spec card for fractional stats — see
     /// cards/pale-apparition.lua and RULES.md B.2 / B.7 / B.8. The
