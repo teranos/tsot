@@ -1,5 +1,7 @@
 # roam
 
+See @CANONICAL.md for the canonical-world axiom (how world transformations are routed by identity).
+
 What i want:
 
 - Let's not break the 2nd law of thermodynamics.
