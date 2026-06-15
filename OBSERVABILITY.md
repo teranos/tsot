@@ -210,15 +210,60 @@ outcomes, winner-set events, per-step timing.
   emitting any number of entries and we'd have no visibility.
   See O5b.
 
-- [ ] **O5b: Wrap non-envelope FFI calls in `{result, log, trace}`.**
+- [~] **O5b: Wrap non-envelope FFI calls in `{result, log, trace, errors}`.**
   Refactor `tsot_list_preset_decks` / `tsot_list_card_pool` /
   `tsot_save_game` / `tsot_load_game` in `src/wasm_ffi.rs` to drain
   the trace bus into an envelope around their JSON result. JS-side
   worker dispatch + `play.html` adapter unwraps the `result` field
   to keep the existing call sites' shape; the new `trace` field
-  flows through `appendTrace` for visibility. Until this lands, any
-  debugging session involving these calls is back to "guess at the
-  binary."
+  flows through `appendTrace` for visibility.
+  **Shipped 2026-06-11**: `wrap_result_envelope` helper +
+  `tsot_list_card_pool_impl` + `tsot_list_preset_decks_impl` +
+  `tsot_save_game_impl` rewrapped. The shape is now
+  `{ok, result, log, trace, errors}` matching the game-loop FFI's
+  error/trace coverage. `play.html::pumpFfiQueue` detects the new
+  shape (presence of `env.result`), forwards `errors[]` through
+  `tsotPushError`, `trace[]` through `appendTrace`, then resolves
+  with `JSON.stringify(env.result)` so the existing caller code
+  is unchanged. `tsot_load_game_impl` updated to accept either
+  raw SaveFile JSON or the wrapped envelope (extracts `result`).
+  3 wasm_ffi unit tests updated to assert the new envelope keys.
+  `tsot_load_game_impl` already returned an envelope; left as-is.
+  Coverage: now every FFI surface drains the error bus, closing
+  the preset-mystery class of bugs that started this whole arc.
+
+## Structured trace, phase 2 — remaining stringly-typed fields
+
+2026-06-15: `TraceEvent::Play.outcome` and `TraceEvent::Handler.outcome`
+migrated from `String` to typed `OutcomeRepr { Ok | Suspend | Err }`
+because the legacy shape misclassified `ChoicePending` (a normal
+suspend that becomes a `HumanPrompt`) as `err:`, making Fireball
+casts read as crashes in the LOG. Bumped `TRACE_FORMAT_VERSION` to 2.
+
+Other `String` fields on `TraceEvent` are also enums-flattened-to-
+strings, but none of them are currently misclassifying truth the way
+`outcome` was. Migrating them without a current bug driving each one
+would be busywork. Deferred until a real ambiguity surfaces. Sites:
+
+- `Step.from`, `Step.to`, `Cursor.from`, `Cursor.to` — `EngineCursor`
+  `Debug` rendered as text. Match the renderer-side label, no semantic
+  ambiguity.
+- `Step.result` — three values: `"Continue"` / `"NeedHuman"` / `"Done"`.
+  Could be an enum; renderer reads as string today.
+- `Phase.from`, `Phase.to` — `Phase` `Debug`. Unambiguous.
+- `Oracle.call`, `Oracle.answer` — names + answer summary, free-form
+  string today.
+- `Winner.cause` — free-form label from the mutation site.
+- `Ffi.span` — FFI call label.
+- `AiPick.ai` — AI kind name.
+- `Error.source` — `"rust-panic"` | `"rust-ffi"` | `"js"` | `"worker"`
+  | `"wasm-trap"`. Closest to wanting an enum because renderers
+  branch on it; not yet causing misclassification.
+- `Handler.event` — Lua event name. Already constrained by `EventName::lua_key()`.
+
+When the next "wait, the trace lied" moment hits, that variant becomes
+the next migration; until then this list documents the known
+stringly-typed cases so future audits don't have to re-discover them.
 
 ## Phase 2 — AI internals
 

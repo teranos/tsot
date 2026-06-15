@@ -369,8 +369,20 @@ function fmtTraceEvent(ev) {
       return `[${t}ms Count]     ${ev.key}[${ev.player}] ${ev.before}  ->  ${ev.after}`;
     case 'Oracle':
       return `[${t}ms Oracle]    ${ev.call}(asker=${ev.asker})  ->  ${ev.answer}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
-    case 'Play':
-      return `[${t}ms Play]      ${ev.iid}  ->  ${ev.outcome}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    case 'Play': {
+      // Outcome is the Rust-side PlayOutcome enum, serialized as
+      // {Ok} | {Suspend: pending_repr} | {Err: err_repr}. Schema
+      // change lives in trace.rs; string-matching on "ChoicePending"
+      // was the previous band-aid.
+      const oc = ev.outcome || {};
+      let label;
+      if (typeof oc === 'string') label = oc; // legacy/unknown variants
+      else if (oc.Ok !== undefined) label = 'Ok';
+      else if (oc.Suspend !== undefined) label = `suspend:${oc.Suspend}`;
+      else if (oc.Err !== undefined) label = `err:${oc.Err}`;
+      else label = JSON.stringify(oc);
+      return `[${t}ms Play]      ${ev.iid}  ->  ${label}  (${(ev.duration_us / 1000).toFixed(2)}ms)`;
+    }
     case 'Winner':
       return `[${t}ms Winner]    ${ev.who} wins  (cause: ${ev.cause})`;
     case 'Ffi':
@@ -394,8 +406,16 @@ function fmtTraceEvent(ev) {
     }
     case 'Handler': {
       const partner = ev.partner ? ` partner=${ev.partner}` : '';
-      const err = ev.error ? `  ERR: ${ev.error}` : '';
-      return `[${t}ms Handler]   ${ev.event}  source=${ev.source}${partner}  (${(ev.duration_us / 1000).toFixed(2)}ms)${err}`;
+      // Outcome is a tagged enum: {Ok} | {Suspend: pending_repr}
+      // | {Err: err_repr}. Schema lives in trace.rs. The legacy
+      // `error: String?` shape is gone — string-matching on
+      // "ChoicePending" prefixes was a JS-side band-aid; the
+      // structural fix is the Rust-side enum.
+      const oc = ev.outcome || {};
+      let tail = '';
+      if (oc.Suspend !== undefined) tail = `  SUSPEND: ${oc.Suspend}`;
+      else if (oc.Err !== undefined) tail = `  ERR: ${oc.Err}`;
+      return `[${t}ms Handler]   ${ev.event}  source=${ev.source}${partner}  (${(ev.duration_us / 1000).toFixed(2)}ms)${tail}`;
     }
     case 'UctIteration': {
       const path = (ev.path || []).join(' -> ');

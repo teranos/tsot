@@ -1294,6 +1294,25 @@ fn pending_from_mlua_error(e: &mlua::Error) -> Option<ChoicePending> {
     }
 }
 
+/// Map a Lua handler-call result to a [`crate::trace::OutcomeRepr`]
+/// for `TraceEvent::Handler`. ChoicePending is a Suspend (engine
+/// catches and yields a HumanPrompt); everything else that isn't Ok
+/// is an Err (real Lua crash — typo, nil deref, etc).
+fn handler_outcome_from_lua_result(
+    r: &mlua::Result<()>,
+) -> crate::trace::OutcomeRepr {
+    match r {
+        Ok(()) => crate::trace::OutcomeRepr::Ok,
+        Err(e) => {
+            if let Some(pending) = pending_from_mlua_error(e) {
+                crate::trace::OutcomeRepr::Suspend(format!("{pending:?}"))
+            } else {
+                crate::trace::OutcomeRepr::Err(e.to_string())
+            }
+        }
+    }
+}
+
 #[allow(unused_must_use)] // build_game_table! macro expansion confuses the
                           // unused-must-use lint on the macro call site
                           // (see lua_api.rs:1330 etc). Macro returns
@@ -1335,12 +1354,9 @@ pub(crate) fn fire_self_only(
         let game: mlua::Table = build_game_table!(lua, scope, state_cell, oracle_cell, owner);
         let self_table = build_self_table(lua, &state_cell.borrow(), source)?;
         handler.call::<()>((game, self_table))?;
-        let _ = Value::Nil; // keep import warm
         Ok(())
     });
 
-    let _ = state_cell;
-    let _ = oracle_cell;
     if let Some(t0) = t0 {
         crate::trace::push(crate::trace::TraceEvent::Handler {
             at_us: crate::trace::now_us(),
@@ -1348,7 +1364,7 @@ pub(crate) fn fire_self_only(
             source: source.clone(),
             partner: None,
             duration_us: t0.elapsed().as_micros() as u64,
-            error: result.as_ref().err().map(|e| e.to_string()),
+            outcome: handler_outcome_from_lua_result(&result),
         });
     }
     match result {
@@ -1364,10 +1380,20 @@ pub(crate) fn fire_self_only(
                 // through HumanReplayOracle after a journal rollback.
                 Err(pending)
             } else {
-                eprintln!(
-                    "[lua] {} handler for {card_id} failed: {e}",
-                    event.lua_key()
+                let event_key = event.lua_key();
+                // ERROR.md sweep: lua handler failure was eprintln-
+                // and-continue → invisible from the dev tool. Now
+                // also pushes a typed Error so the failure surfaces
+                // at the next FFI yield with full context (which
+                // card, which event, the Lua error message).
+                crate::error::emit_region(
+                    crate::error::Severity::Error,
+                    "lua-handler",
+                    event_key,
+                    format!("Lua {event_key} handler for {card_id} failed"),
+                    format!("{e}"),
                 );
+                eprintln!("[lua] {event_key} handler for {card_id} failed: {e}");
                 Ok(())
             }
         }
@@ -1399,18 +1425,22 @@ pub(crate) fn fire_activated(
         let game = build_game_table!(lua, scope, state_cell, oracle_cell, owner);
         let self_table = build_self_table(lua, &state_cell.borrow(), source)?;
         handler.call::<()>((game, self_table))?;
-        let _ = Value::Nil;
         Ok(())
     });
 
-    let _ = state_cell;
-    let _ = oracle_cell;
     match result {
         Ok(()) => Ok(()),
         Err(e) => {
             if let Some(pending) = pending_from_mlua_error(&e) {
                 Err(pending)
             } else {
+                crate::error::emit_region(
+                    crate::error::Severity::Error,
+                    "lua-handler",
+                    "activated",
+                    format!("Lua activated handler for {card_id} failed"),
+                    format!("{e}"),
+                );
                 eprintln!("[lua] activated handler for {card_id} failed: {e}");
                 Ok(())
             }
@@ -1489,8 +1519,6 @@ pub(crate) fn fire_with_partner(
         Ok(())
     });
 
-    let _ = state_cell;
-    let _ = oracle_cell;
     if let Some(t0) = t0 {
         crate::trace::push(crate::trace::TraceEvent::Handler {
             at_us: crate::trace::now_us(),
@@ -1498,7 +1526,7 @@ pub(crate) fn fire_with_partner(
             source: source.clone(),
             partner: Some(partner.clone()),
             duration_us: t0.elapsed().as_micros() as u64,
-            error: result.as_ref().err().map(|e| e.to_string()),
+            outcome: handler_outcome_from_lua_result(&result),
         });
     }
     match result {
@@ -1510,10 +1538,15 @@ pub(crate) fn fire_with_partner(
             if let Some(pending) = pending_from_mlua_error(&e) {
                 Err(pending)
             } else {
-                eprintln!(
-                    "[lua] {} handler for {card_id} failed: {e}",
-                    event.lua_key()
+                let event_key = event.lua_key();
+                crate::error::emit_region(
+                    crate::error::Severity::Error,
+                    "lua-handler",
+                    event_key,
+                    format!("Lua {event_key} handler for {card_id} (partner) failed"),
+                    format!("{e}"),
                 );
+                eprintln!("[lua] {event_key} handler for {card_id} failed: {e}");
                 Ok(())
             }
         }

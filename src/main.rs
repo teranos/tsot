@@ -109,7 +109,7 @@ fn main() -> mlua::Result<()> {
         sorcery_count,
     );
 
-    match cli.command {
+    let result: mlua::Result<()> = match cli.command {
         Some(Command::Evolve(args)) => cli_evolve::run_ea(&registry, &playable_pool, &args),
         Some(Command::ChampionsReport(args)) => {
             cli_champions_report::run_champions_report(&registry, &playable_pool, &args)
@@ -136,5 +136,15 @@ fn main() -> mlua::Result<()> {
             eprintln!("no subcommand specified. run with --help to see the available commands.");
             std::process::exit(2);
         }
+    };
+    // Timeout halt is a process-level regression tripwire — when set,
+    // the sim hit > TIMEOUT_HALT_THRESHOLD spins and any further
+    // results are suspect. Library code latches the reason; main()
+    // exits. Per CLAUDE.md errors-sacred: print it before exiting,
+    // never swallow.
+    if let Some(reason) = tsot::game::take_halt_reason() {
+        eprintln!("{reason}");
+        std::process::exit(2);
     }
+    result
 }

@@ -30,36 +30,114 @@ use std::sync::Arc;
 use crate::sim::human::{HumanAction, HumanInterface, HumanPrompt};
 use crate::sim::step::{StepEngine, StepResult};
 
-/// Deckbuilder FFI: serialized card pool. JSON shape:
+/// Wrap a raw FFI result value in the standard envelope shape
+/// `{ok, result, log, trace, errors}` so EVERY call drains the
+/// observability bus + sacred-error buffer back to JS — even
+/// "one-shot" calls that historically returned bare JSON. Per
+/// OBS O5b + ERROR Slice 4: without this, any error pushed inside
+/// `build_preset_decks` / `build_card_pool_entries` / save / load
+/// goes into the void, which is the canonical preset-mystery
+/// failure mode that this whole arc exists to prevent.
+fn wrap_result_envelope(result: serde_json::Value) -> Result<String, String> {
+    let trace = crate::trace::drain();
+    let errors = crate::error::drain();
+    serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "result": result,
+        "log": [],
+        "trace": trace,
+        "errors": errors,
+    }))
+    .map_err(|e| format!("wrap_result_envelope serialize: {e}"))
+}
+
+/// Deckbuilder FFI: serialized card pool, wrapped in envelope.
+/// `result` field is a JSON array of card-pool entries:
 /// `[{id, name, kind, cost_text, colors, symbols, subtypes, power,
 /// toughness, timing, abilities}, …]`. Stable across the session;
-/// JS calls once during bootstrap.
+/// JS calls once during bootstrap. Per OBS O5b the envelope also
+/// carries `log + trace + errors` drained from this call.
 pub(crate) fn tsot_list_card_pool_impl() -> Result<String, String> {
     use crate::card::CardRegistry;
     use crate::sim::deck_presets::build_card_pool_entries;
     use crate::sim::playable_pool::playable_pool;
 
+    crate::trace::set_ffi_call_label("tsot_list_card_pool");
+    let _ = crate::trace::drain();
+    let _ = crate::error::drain();
+    crate::trace::enable(true);
+
     let registry =
         CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;
     let pool = playable_pool(registry.cards());
     let entries = build_card_pool_entries(&pool);
-    serde_json::to_string(&entries).map_err(|e| format!("serialize card pool: {e}"))
+    let value = serde_json::to_value(&entries)
+        .map_err(|e| format!("serialize card pool: {e}"))?;
+    let envelope = wrap_result_envelope(value)?;
+    crate::trace::clear_ffi_call_label();
+    Ok(envelope)
 }
 
-/// Deckbuilder FFI: shipped preset decks (starter + 7 gauntlet
-/// variants). JSON shape: `[{id, name, cards: [card_id…]}, …]`.
-/// `cards` is flat with repetition — same shape the start_game FFI's
-/// `deck_a_ids` consumes. Length 8.
+/// Deckbuilder FFI: shipped preset decks (starter + variants),
+/// wrapped in envelope. `result` field is a JSON array
+/// `[{id, name, cards: [card_id…]}, …]` — same shape the start_game
+/// FFI's `deck_a_ids` consumes. Per OBS O5b + ERROR Slice 5: this
+/// call now validates that every card_id in every preset exists in
+/// the playable pool and emits a typed Error per missing id (warn-
+/// level — the preset still ships) so a corrupted preset doesn't
+/// silently produce an invalid deck downstream.
 pub(crate) fn tsot_list_preset_decks_impl() -> Result<String, String> {
     use crate::card::CardRegistry;
     use crate::sim::deck_presets::build_preset_decks;
     use crate::sim::playable_pool::playable_pool;
+    use std::collections::BTreeSet;
+
+    crate::trace::set_ffi_call_label("tsot_list_preset_decks");
+    let _ = crate::trace::drain();
+    let _ = crate::error::drain();
+    crate::trace::enable(true);
 
     let registry =
         CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;
     let pool = playable_pool(registry.cards());
     let presets = build_preset_decks(&pool);
-    serde_json::to_string(&presets).map_err(|e| format!("serialize presets: {e}"))
+
+    // ERROR Slice 5: validate each preset's card_ids against the
+    // playable pool. A missing id means the corpus changed without
+    // updating the hardcoded preset — the original preset-mystery
+    // audit failure mode. Surface every miss as a typed Error so
+    // the developer sees WHICH id in WHICH preset is broken.
+    let playable_ids: BTreeSet<&str> =
+        pool.iter().map(|c| c.id.as_str()).collect();
+    for preset in &presets {
+        for card_id in &preset.cards {
+            if !playable_ids.contains(card_id.as_str()) {
+                let title = format!(
+                    "preset '{}' references unknown card id '{}'",
+                    preset.id, card_id
+                );
+                let why = format!(
+                    "card_id '{}' is not in playable pool ({} cards). \
+                     Either the preset is stale or the corpus removed the card.",
+                    card_id,
+                    pool.len()
+                );
+                crate::error::emit_region(
+                    crate::error::Severity::Warn,
+                    "deckbuilder",
+                    "preset-dropdown",
+                    title,
+                    why,
+                );
+            }
+        }
+    }
+
+    let value = serde_json::to_value(&presets)
+        .map_err(|e| format!("serialize presets: {e}"))?;
+    let envelope = wrap_result_envelope(value)?;
+    crate::trace::clear_ffi_call_label();
+    Ok(envelope)
 }
 
 /// Preview-UCT FFI args. Defaults mirror `UctConfig::default()`.
@@ -325,13 +403,22 @@ pub(crate) fn tsot_run_auto_game_impl(args_json: &str) -> Result<String, String>
 pub(crate) fn tsot_save_game_impl() -> Result<String, String> {
     use crate::replay::SaveFile;
     crate::trace::set_ffi_call_label("tsot_save_game");
-    let json = with_session(|s| -> Result<String, String> {
+    let _ = crate::trace::drain();
+    let _ = crate::error::drain();
+    crate::trace::enable(true);
+    let save_json = with_session(|s| -> Result<String, String> {
         let save = SaveFile::from_step_engine(&s.engine, 0);
         save.to_json().map_err(|e| format!("save: {e}"))
     })
     .map_err(|e| e.to_string())??;
+    // Reparse the SaveFile JSON so it embeds as the structured
+    // `result` value in the envelope rather than as an opaque
+    // escaped string. JS callers wanting raw can re-stringify.
+    let value: serde_json::Value = serde_json::from_str(&save_json)
+        .map_err(|e| format!("reparse save_json: {e}"))?;
+    let envelope = wrap_result_envelope(value)?;
     crate::trace::clear_ffi_call_label();
-    Ok(json)
+    Ok(envelope)
 }
 
 /// Load-game args: the `SaveFile` JSON plus the AI to drive the
@@ -368,7 +455,20 @@ pub(crate) fn tsot_load_game_impl(args_json: &str) -> Result<String, String> {
     let _ = crate::trace::drain();
     crate::trace::enable(true);
 
-    let save = SaveFile::from_json(&args.save_json)
+    // Per OBS O5b: tsot_save_game now returns the wrapped envelope
+    // shape `{ok, result, log, trace, errors}`. Callers that pass
+    // that envelope through unchanged would otherwise fail SaveFile
+    // parse. Detect the envelope shape and extract the inner result
+    // before handing to SaveFile::from_json. Legacy raw-SaveFile-JSON
+    // callers continue to work unchanged.
+    let load_input = match serde_json::from_str::<serde_json::Value>(&args.save_json) {
+        Ok(v) if v.get("ok").is_some() && v.get("result").is_some() => {
+            serde_json::to_string(&v["result"])
+                .unwrap_or_else(|_| args.save_json.clone())
+        }
+        _ => args.save_json.clone(),
+    };
+    let save = SaveFile::from_json(&load_input)
         .map_err(|e| format!("load_game[parse SaveFile]: {e}"))?;
     let cursor_opt = save.cursor.clone();
     let registry = CardRegistry::load_embedded()
@@ -1159,8 +1259,19 @@ mod tests {
     #[test]
     fn list_card_pool_returns_pool_entries_json() {
         let json = tsot_list_card_pool_impl().expect("list_card_pool returned Err");
-        let arr: Vec<Value> =
-            serde_json::from_str(&json).expect("card pool JSON parses as array");
+        let env: Value = serde_json::from_str(&json).expect("envelope JSON parses");
+        assert_eq!(env["ok"], true, "envelope ok=true");
+        assert!(
+            env["trace"].is_array(),
+            "envelope.trace is an array (OBS O5b: non-envelope FFI now drains trace)"
+        );
+        assert!(
+            env["errors"].is_array(),
+            "envelope.errors is an array (ERROR Slice 4: typed errors flow through)"
+        );
+        let arr = env["result"]
+            .as_array()
+            .expect("envelope.result is the card-pool array");
         assert!(!arr.is_empty(), "card pool should be non-empty");
         // Every entry has the keys the JS deckbuilder renders.
         for (i, entry) in arr.iter().enumerate() {
@@ -1190,8 +1301,19 @@ mod tests {
     #[test]
     fn list_preset_decks_returns_starter_plus_gauntlet_json() {
         let json = tsot_list_preset_decks_impl().expect("list_preset_decks returned Err");
-        let arr: Vec<Value> =
-            serde_json::from_str(&json).expect("presets JSON parses as array");
+        let env: Value = serde_json::from_str(&json).expect("envelope JSON parses");
+        assert_eq!(env["ok"], true, "envelope ok=true");
+        assert!(
+            env["trace"].is_array(),
+            "envelope.trace is an array (OBS O5b)"
+        );
+        assert!(
+            env["errors"].is_array(),
+            "envelope.errors is an array (ERROR Slice 5)"
+        );
+        let arr = env["result"]
+            .as_array()
+            .expect("envelope.result is the presets array");
         assert_eq!(arr.len(), 3, "Red Starter + Blue Starter + Yield Test = 3 presets");
         assert_eq!(arr[0]["id"], "starter", "first preset is the Red Starter");
         assert_eq!(arr[1]["id"], "starter-blue", "second preset is the Blue Starter");
@@ -1373,12 +1495,22 @@ mod tests {
         .to_string();
         let _ = tsot_start_game_impl(&args).expect("start_game");
 
-        let save_json = tsot_save_game_impl().expect("save_game returned Err");
-        let parsed: Value =
-            serde_json::from_str(&save_json).expect("save JSON parses");
+        let envelope_json = tsot_save_game_impl().expect("save_game returned Err");
+        let env: Value =
+            serde_json::from_str(&envelope_json).expect("envelope JSON parses");
+        assert_eq!(env["ok"], true, "envelope ok=true");
+        assert!(
+            env["trace"].is_array(),
+            "envelope.trace is an array (OBS O5b)"
+        );
+        assert!(
+            env["errors"].is_array(),
+            "envelope.errors is an array"
+        );
+        let parsed = &env["result"];
         assert!(
             parsed.get("state").is_some(),
-            "SaveFile JSON should have a state field"
+            "SaveFile JSON (in envelope.result) should have a state field"
         );
         assert!(
             parsed.get("cursor").is_some(),

@@ -1605,7 +1605,7 @@ fn report_game_timeout(
     pick_timing: Option<&PickTiming>,
     game_color: u8,
 ) {
-    crate::game::bump_timeout_and_maybe_halt(site);
+    let _ = crate::game::bump_timeout_and_maybe_halt(site);
     let ids = |iids: &[InstanceId]| -> Vec<String> {
         iids.iter()
             .filter_map(|i| state.card_pool.get(i).map(|c| c.card.id.clone()))

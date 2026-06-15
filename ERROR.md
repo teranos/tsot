@@ -229,17 +229,38 @@ shipped end-to-end (per CLAUDE.md commit standard).
 
 ### Slice 4 — the Rust + FFI side
 
-- [ ] Define `tsot_engine::Error` mirroring the Elm shape. Serde
+- [~] Define `tsot_engine::Error` mirroring the Elm shape. Serde
   serialization byte-compatible with the Elm decoder.
-- [ ] `wasm_ffi.rs` envelope grows an `errors: Vec<Error>` field
+  **Shipped 2026-06-11**: `src/error.rs` with `Error`, `Severity`,
+  `Context`, `Anchor`. 6 unit tests pin the wire shape: round-trip,
+  lowercase severity strings, optional-field omission, monotonic id
+  counter, push/drain/reset semantics. Not yet end-to-end verified
+  by user click but the Rust→JS direction is exercised by tests.
+- [~] `wasm_ffi.rs` envelope grows an `errors: Vec<Error>` field
   drained from a thread-local buffer (sibling of the `trace` bus).
-- [ ] Every Rust `eprintln!` site that wants to surface to the
+  **Shipped 2026-06-11**: every FFI envelope path now drains the
+  error buffer — `tsot_start_game`, `tsot_apply_action`,
+  `tsot_save_game`, `tsot_load_game`, `tsot_run_auto_game`,
+  `err_envelope`, plus the new wrap-result paths from OBS O5b.
+  `err_envelope` itself emits a typed Error before draining, so the
+  Rust-side string error round-trips as a typed value too.
+- [~] Every Rust `eprintln!` site that wants to surface to the
   developer pushes an `Error` to the buffer instead of stderr (stderr
   stays as a CLI-only fallback gated behind `cfg(not(target_family =
   "wasm"))`).
-- [ ] `handler.call` errors (Lua-yield bug area) push `Error`s too;
+  **Partial 2026-06-11**: 3 `lua_api.rs` handler-failure sites
+  migrated (`fire_self_only`, `fire_activated`, `fire_with_partner`)
+  — they now `error::emit_region(...)` BEFORE the existing
+  `eprintln!` (kept as native-CLI fallback). `game.rs:53`
+  `bump_timeout_and_maybe_halt` is intentionally NOT migrated —
+  reached only by native-EA timeout paths, `process::exit` follows.
+  `cli_*.rs` `eprintln!` sites are CLI-binary-only surfaces;
+  exempt. The `game.print()` Lua debug print stays as `eprintln` —
+  it's intentional dev-tool debug output, not a failure.
+- [~] `handler.call` errors (Lua-yield bug area) push `Error`s too;
   the existing `eprintln!("[lua] {event} handler for {card_id} failed: {e}")`
-  pattern is the obvious first conversion.
+  pattern is the obvious first conversion. **Done 2026-06-11** via
+  the previous bullet — all 3 fire_* call sites push typed Errors.
 
 ### Slice 5 — contextual surfaces (Phase O0c)
 
@@ -257,11 +278,20 @@ shipped end-to-end (per CLAUDE.md commit standard).
   positioned container via `viewSurfaceWithErrors`. What's left:
   the named-region inline canary for specific decoder failures
   (next bullet).
-- [ ] The deckbuilder dropdown shows "decode failed: 1 preset rejected
+- [~] The deckbuilder dropdown shows "decode failed: 1 preset rejected
   — <field>" inline as the canary case the original audit session
-  found. Requires Slice 4 (Rust-side errors field on the
-  list_preset_decks envelope) to be most impactful — until then the
-  failure isn't surfaced by the Rust side at all.
+  found.
+  **Shipped 2026-06-11**: `tsot_list_preset_decks_impl` now
+  validates every `card_id` in every preset against the playable
+  pool and emits a typed `Error` (severity Warn, surface
+  `"deckbuilder"`, region `"preset-dropdown"`) for each miss. The
+  envelope `errors[]` field carries them to the JS dispatcher
+  which forwards through `tsotPushError`, where they render
+  inside the `deckbuilder` surface container via the existing
+  `viewSurfaceWithErrors` wrapping. The original preset-mystery
+  failure mode now surfaces. (Not yet user-verified end-to-end;
+  the validation is a no-op when every preset is well-formed,
+  which is the current corpus state.)
 - [ ] The prompt bar shows handler errors inline when a Lua handler
   emits an Error mid-cast. (Requires Slice 4.)
 

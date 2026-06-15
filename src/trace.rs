@@ -202,10 +202,15 @@ pub enum TraceEvent {
         duration_us: u64,
     },
     /// `state.play_card(active, iid, choices, …)` outcome.
+    /// `outcome` is a tagged enum (see [`OutcomeRepr`]); the previous
+    /// `String` shape lumped `ChoicePending` (a normal suspend that
+    /// turns into a HumanPrompt) into `err:` — that read as failure
+    /// in the LOG and was wrong. Splitting into Ok / Suspend / Err
+    /// surfaces the actual semantics at the schema layer.
     Play {
         at_us: u64,
         iid: InstanceId,
-        outcome: String,
+        outcome: OutcomeRepr,
         duration_us: u64,
     },
     /// `state.winner = Some(_)` transition. `cause` is the
@@ -272,16 +277,17 @@ pub enum TraceEvent {
     /// O9 (Phase 3): one Lua event handler invocation. `event` is
     /// the EventName lua_key ("on_play" / "on_die" / …), `source`
     /// is the iid carrying the handler, `partner` is the second
-    /// iid for two-card events (on_blocked_by, on_block). `error`
-    /// captures any Lua-side runtime error verbatim — useful for
-    /// debugging card scripts without `game.print()` sprinkling.
+    /// iid for two-card events (on_blocked_by, on_block).
+    /// `outcome` is a tagged enum (see [`OutcomeRepr`]). ChoicePending
+    /// is a Suspend, NOT an Err; the engine catches it and yields a
+    /// HumanPrompt. Real Lua crashes (typo, nil deref, etc.) are Err.
     Handler {
         at_us: u64,
         event: String,
         source: InstanceId,
         partner: Option<InstanceId>,
         duration_us: u64,
-        error: Option<String>,
+        outcome: OutcomeRepr,
     },
     /// O8 (Phase 2): blocker assignment decision. `attackers` is
     /// the set of incoming attackers, `assignments` is the
@@ -335,10 +341,38 @@ pub struct CandidateScore {
     pub rejected_reason: Option<String>,
 }
 
+/// Outcome of a play / handler call. Three semantically distinct
+/// cases that the previous `outcome: String` field collapsed into
+/// stringly-typed prefixes (`"ok"` / `"err:..."`) — losing the
+/// distinction between failure and suspend at the schema layer:
+///
+///   - `Ok` — call returned successfully.
+///   - `Suspend(detail)` — the call yielded a user-choice request
+///     (`ChoicePending` from the choice oracle). The engine catches it
+///     up the stack and surfaces a `HumanPrompt` to resume. NOT a
+///     failure; rendering as one in the LOG was the bug this enum fixes.
+///   - `Err(detail)` — real failure (Lua crash, bad cost, etc.).
+///
+/// `detail` is a free-form printable summary the formatter renders
+/// after the tag; structured fields belong on the variant carrying
+/// them. Wire shape matches serde's default for an externally-tagged
+/// enum so JS reads `{ Ok: null } | { Suspend: "…" } | { Err: "…" }`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OutcomeRepr {
+    Ok,
+    Suspend(String),
+    Err(String),
+}
+
 /// Format version. Bump on any breaking shape change to a variant's
 /// payload. Recorded traces written under an older version will be
 /// flagged by the replay tool (Phase 6).
-pub const TRACE_FORMAT_VERSION: u32 = 1;
+///
+/// Version 2 (2026-06-15): `TraceEvent::{Play, Handler}` outcome
+/// field changed from stringly-typed to [`OutcomeRepr`] — separating
+/// `Suspend` (ChoicePending) from `Err` (real failure). Old format
+/// version 1 traces no longer load against the current engine.
+pub const TRACE_FORMAT_VERSION: u32 = 2;
 
 // --- Panic capture (errors-as-first-class infrastructure) -----------
 
@@ -513,6 +547,68 @@ pub fn install_panic_hook() {
     // "rust-panic" envelopes.
     emit_info("panic hook installed");
 }
+
+/// Explicit allowlist of every `String`-typed field on `TraceEvent`
+/// and `CandidateScore`. Each entry says "this string was decided to
+/// stay as a string at this date for this reason." A test below
+/// reflects on the actual serialized shape of one instance of every
+/// variant and fails if any string field appears that isn't on this
+/// list — forcing the author of a new String field to think about it
+/// and add a justification.
+///
+/// **WHY THIS EXISTS, READ THIS WHEN YOU TOUCH IT.** On 2026-06-15
+/// `TraceEvent::Play.outcome` was a `String` containing one of
+/// `"ok"` / `"err:..."` — and that string lumped `ChoicePending` (a
+/// normal suspend) into the `err:` prefix. The LOG read Fireball
+/// casts as crashes. We fixed it (the `outcome` field is now
+/// [`OutcomeRepr`]). The lesson: a `String` field on a trace event
+/// hides the difference between "this happened" / "this needs human
+/// input" / "this failed." Always ask: *could this field flatten two
+/// different things into one?* If yes, type it.
+///
+/// Adding a new String field? Either:
+///   1. Make it a typed enum like `OutcomeRepr`, OR
+///   2. Add it here with a one-line note explaining why string is
+///      correct (e.g. "free-form developer text" / "lua_key already
+///      constrained upstream" / etc).
+#[cfg(test)]
+const TRACE_STRING_ALLOWLIST: &[(&str, &str)] = &[
+    // (variant_name, field_name) — kept short on purpose; the test
+    // tells you what to add if you forget. Items split into two
+    // groups: actual `String` fields that need a justification, and
+    // false-positives (typed values that serialize as JSON strings
+    // anyway — InstanceId aliases, unit-variant enums).
+    //
+    // --- Actual bare `String` fields, justified. ---
+    ("Step", "from"),          // EngineCursor Debug; renderer-side label
+    ("Step", "to"),            // EngineCursor Debug
+    ("Step", "result"),        // "Continue" | "NeedHuman" | "Done"; not yet ambiguous
+    ("Cursor", "from"),        // EngineCursor Debug
+    ("Cursor", "to"),          // EngineCursor Debug
+    ("Count", "key"),          // action_counts key — constrained upstream
+    ("Oracle", "call"),        // oracle method name — small fixed set
+    ("Oracle", "answer"),      // free-form answer summary
+    ("Winner", "cause"),       // mutation-site label — small fixed set
+    ("Ffi", "span"),           // FFI call label
+    ("AiPick", "ai"),          // AI kind name
+    ("Handler", "event"),      // EventName::lua_key — constrained upstream
+    ("Error", "source"),       // {rust-panic,rust-ffi,js,worker,wasm-trap}; renderer branches
+    ("Error", "message"),      // user-facing free-form
+    // --- False positives. Typed in Rust, serialize as JSON string. ---
+    ("AttackerSelection", "player"),   // PlayerId enum (unit variants)
+    ("BlockerSelection", "defender"),  // PlayerId
+    ("Count", "player"),               // PlayerId
+    ("Phase", "from"),                 // Phase enum (unit variants)
+    ("Phase", "to"),                   // Phase
+    ("Play", "iid"),                   // InstanceId = type alias for String, constrained
+    ("Play", "outcome"),               // OutcomeRepr::Ok unit variant serializes as "Ok"
+    ("Handler", "source"),             // InstanceId
+    ("Handler", "outcome"),            // OutcomeRepr::Ok
+    ("UctIteration", "winner"),        // PlayerId
+    ("Winner", "who"),                 // PlayerId
+    ("CandidateScore", "iid"),         // InstanceId
+    // CandidateScore.rejected_reason: Option<String> — see test note.
+];
 
 #[cfg(test)]
 mod tests {
@@ -782,5 +878,301 @@ mod tests {
         let t2 = now_us();
         assert!(t0 <= t1, "now_us went backwards: {t0} -> {t1}");
         assert!(t1 <= t2, "now_us went backwards: {t1} -> {t2}");
+    }
+
+    /// **Stringly-typed trace field detector.** The test below
+    /// reflects on the actual serialized shape and the goal is to
+    /// catch a field declared as a bare Rust `String` on `TraceEvent`
+    /// or `CandidateScore`. A JSON string in the output doesn't
+    /// necessarily mean the Rust type was `String` — `InstanceId`
+    /// is a type alias `= String` constrained upstream by the
+    /// engine, and unit-variant enums like `Phase::Untap` also
+    /// serialize as `"Untap"`. We allowlist those false positives.
+    /// What we WANT to catch is a freshly-added bare `String` field
+    /// that's actually a flattened-enum-in-disguise.
+    ///
+    /// **Why this exists:** on 2026-06-15 `TraceEvent::Play.outcome`
+    /// was a plain `String` that conflated `ChoicePending` (a normal
+    /// suspend) with real failures by prefix (`"ok"` vs `"err:..."`).
+    /// The LOG read Fireball casts as crashes. We split it into
+    /// [`OutcomeRepr`] `{Ok|Suspend|Err}`. This test exists so the
+    /// next `String` field anyone adds gets challenged at the
+    /// schema layer before it ships and lies about a different
+    /// suspend/failure case.
+    ///
+    /// Mechanism: serialize one instance of every TraceEvent variant
+    /// + `CandidateScore`, walk the resulting JSON, collect every
+    /// field path that holds a JSON string, diff against the
+    /// allowlist. Fails with a "you need to either type this field
+    /// or add it to TRACE_STRING_ALLOWLIST with a why" message.
+    #[test]
+    fn trace_event_string_fields_match_allowlist() {
+        use serde_json::{Map, Value};
+
+        // Build one minimal instance of every TraceEvent variant +
+        // CandidateScore. Field VALUES don't matter; the test only
+        // looks at which keys hold strings. If you add a variant,
+        // add a sample below; the missing-variant case is caught by
+        // the variant-coverage check at the end.
+        let samples: Vec<(&str, Value)> = vec![
+            (
+                "Step",
+                serde_json::to_value(TraceEvent::Step {
+                    at_us: 0,
+                    duration_us: 0,
+                    from: "x".into(),
+                    to: "y".into(),
+                    result: "Continue".into(),
+                })
+                .unwrap(),
+            ),
+            (
+                "Cursor",
+                serde_json::to_value(TraceEvent::Cursor {
+                    at_us: 0,
+                    from: "x".into(),
+                    to: "y".into(),
+                })
+                .unwrap(),
+            ),
+            (
+                "Phase",
+                serde_json::to_value(TraceEvent::Phase {
+                    at_us: 0,
+                    turn: 1,
+                    from: crate::game::Phase::Untap,
+                    to: crate::game::Phase::Draw,
+                })
+                .unwrap(),
+            ),
+            (
+                "Count",
+                serde_json::to_value(TraceEvent::Count {
+                    at_us: 0,
+                    key: "k".into(),
+                    player: crate::game::PlayerId::A,
+                    before: 0,
+                    after: 1,
+                })
+                .unwrap(),
+            ),
+            (
+                "Oracle",
+                serde_json::to_value(TraceEvent::Oracle {
+                    at_us: 0,
+                    call: "choose_card".into(),
+                    asker: None,
+                    answer: "iid".into(),
+                    duration_us: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                "Play",
+                serde_json::to_value(TraceEvent::Play {
+                    at_us: 0,
+                    iid: "A:0001".into(),
+                    outcome: OutcomeRepr::Ok,
+                    duration_us: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                "Winner",
+                serde_json::to_value(TraceEvent::Winner {
+                    at_us: 0,
+                    who: crate::game::PlayerId::A,
+                    cause: "deckout".into(),
+                })
+                .unwrap(),
+            ),
+            (
+                "Ffi",
+                serde_json::to_value(TraceEvent::Ffi {
+                    at_us: 0,
+                    span: "tsot_apply_action".into(),
+                    duration_us: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                "AiPick",
+                serde_json::to_value(TraceEvent::AiPick {
+                    at_us: 0,
+                    ai: "Heuristic".into(),
+                    candidates: vec![],
+                    chosen: None,
+                    duration_us: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                "AttackerSelection",
+                serde_json::to_value(TraceEvent::AttackerSelection {
+                    at_us: 0,
+                    player: crate::game::PlayerId::A,
+                    eligible: vec![],
+                    chosen: vec![],
+                    duration_us: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                "UctIteration",
+                serde_json::to_value(TraceEvent::UctIteration {
+                    at_us: 0,
+                    iter: 0,
+                    total: 0,
+                    path: vec![],
+                    winner: crate::game::PlayerId::A,
+                    duration_us: 0,
+                    rollout_turns: 0,
+                    rollout_plays: 0,
+                    rollout_attacks: 0,
+                    rollout_deaths: 0,
+                    rollout_handler_fires: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                "Handler",
+                serde_json::to_value(TraceEvent::Handler {
+                    at_us: 0,
+                    event: "on_play".into(),
+                    source: "A:0001".into(),
+                    partner: None,
+                    duration_us: 0,
+                    outcome: OutcomeRepr::Ok,
+                })
+                .unwrap(),
+            ),
+            (
+                "BlockerSelection",
+                serde_json::to_value(TraceEvent::BlockerSelection {
+                    at_us: 0,
+                    defender: crate::game::PlayerId::A,
+                    attackers: vec![],
+                    assignments: vec![],
+                    duration_us: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                "Error",
+                serde_json::to_value(TraceEvent::Error {
+                    at_us: 0,
+                    source: "rust-ffi".into(),
+                    ffi_call: None,
+                    message: "boom".into(),
+                    location: None,
+                    recent_trace: vec![],
+                })
+                .unwrap(),
+            ),
+            (
+                "CandidateScore",
+                serde_json::to_value(CandidateScore {
+                    iid: "A:0001".into(),
+                    score: 0,
+                    rejected_reason: None,
+                })
+                .unwrap(),
+            ),
+        ];
+
+        // Cross-check: every TraceEvent variant must have a sample
+        // above. If you add a variant and forget to add a sample,
+        // this list will be shorter than the variant count. Since
+        // Rust has no built-in "list variants of an enum" reflection,
+        // we maintain the expected count manually — bump it when you
+        // add a variant.
+        const EXPECTED_TRACEEVENT_VARIANTS: usize = 14;
+        let traceevent_sample_count =
+            samples.iter().filter(|(n, _)| *n != "CandidateScore").count();
+        assert_eq!(
+            traceevent_sample_count, EXPECTED_TRACEEVENT_VARIANTS,
+            "test sample count drifted from TraceEvent variant count — \
+             add a sample for the new variant in trace_event_string_fields_match_allowlist \
+             and bump EXPECTED_TRACEEVENT_VARIANTS (currently {EXPECTED_TRACEEVENT_VARIANTS}, \
+             got {traceevent_sample_count} samples)"
+        );
+
+        // Walk every sample, find every string-valued field.
+        fn collect_string_fields(
+            variant: &str,
+            value: &Value,
+            into: &mut Vec<(String, String)>,
+        ) {
+            // Skip the serde-tag field on TraceEvent (we know it's
+            // a string and it's not a payload field).
+            if let Value::Object(obj) = value {
+                for (k, v) in obj {
+                    if k == "kind" {
+                        continue;
+                    }
+                    if v.is_string() {
+                        into.push((variant.to_string(), k.clone()));
+                    } else if let Value::Object(_) = v {
+                        // Nested object (e.g. OutcomeRepr::Suspend(_)
+                        // serializes as {"Suspend":"..."}). Skip —
+                        // the wrapping enum variant means the field
+                        // is already typed; we're checking the
+                        // outer-level fields only.
+                    }
+                    // Arrays / Numbers / Booleans / Null don't violate.
+                }
+            }
+        }
+
+        let mut found: Vec<(String, String)> = Vec::new();
+        for (variant, sample) in &samples {
+            collect_string_fields(variant, sample, &mut found);
+        }
+        found.sort();
+        found.dedup();
+
+        let allowed: std::collections::BTreeSet<(String, String)> =
+            TRACE_STRING_ALLOWLIST
+                .iter()
+                .map(|(v, f)| (v.to_string(), f.to_string()))
+                .collect();
+
+        // Anything found that isn't in the allowlist: fail with
+        // instructions.
+        let unknown: Vec<&(String, String)> =
+            found.iter().filter(|p| !allowed.contains(*p)).collect();
+        if !unknown.is_empty() {
+            let report: Vec<String> = unknown
+                .iter()
+                .map(|(v, f)| format!("  {v}.{f}"))
+                .collect();
+            panic!(
+                "\nNew String field(s) on TraceEvent / CandidateScore are NOT in \
+                TRACE_STRING_ALLOWLIST:\n{}\n\nRemember `outcome: String` shipped \
+                Fireball as a crash because the string conflated ChoicePending with \
+                Err. So: either (a) replace the field with a typed enum like \
+                OutcomeRepr, OR (b) add it to TRACE_STRING_ALLOWLIST (above the \
+                tests mod) with a one-line note explaining why string is correct.\n",
+                report.join("\n")
+            );
+        }
+
+        // Reverse: anything in the allowlist that no longer exists
+        // (field was removed / typed). Soft-fail with a hint to clean
+        // up — keeps the list honest without breaking refactors.
+        let stale: Vec<&(String, String)> =
+            allowed.iter().filter(|p| !found.contains(p)).collect();
+        if !stale.is_empty() {
+            let report: Vec<String> = stale
+                .iter()
+                .map(|(v, f)| format!("  {v}.{f}"))
+                .collect();
+            panic!(
+                "\nTRACE_STRING_ALLOWLIST has entries that no longer match any \
+                actual String field — likely the field was renamed or typed \
+                away. Remove these from the allowlist:\n{}\n",
+                report.join("\n")
+            );
+        }
     }
 }

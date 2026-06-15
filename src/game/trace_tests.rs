@@ -250,7 +250,7 @@ fn play_card_with_unknown_iid_emits_one_play_event_with_error_outcome() {
     let r = state.play_card(PlayerId::A, &fake_iid, PlayChoices::default(), None);
     assert!(r.is_err(), "fake iid should fail play_card");
     let events = trace::drain();
-    let plays: Vec<(InstanceId, String)> = events
+    let plays: Vec<(InstanceId, crate::trace::OutcomeRepr)> = events
         .iter()
         .filter_map(|e| match e {
             TraceEvent::Play { iid, outcome, .. } => Some((iid.clone(), outcome.clone())),
@@ -260,8 +260,9 @@ fn play_card_with_unknown_iid_emits_one_play_event_with_error_outcome() {
     assert_eq!(plays.len(), 1, "expected exactly 1 Play event");
     assert_eq!(plays[0].0, fake_iid);
     assert!(
-        plays[0].1.starts_with("err:"),
-        "outcome should be err-prefixed, got {:?}",
+        matches!(plays[0].1, crate::trace::OutcomeRepr::Err(_)),
+        "outcome should be Err variant (fake iid is a real failure, \
+         not a ChoicePending suspend), got {:?}",
         plays[0].1
     );
 }

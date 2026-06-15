@@ -102,9 +102,16 @@ impl GameState {
         }
 
         if let (Some(t0), Some(iid)) = (t0, iid_for_trace) {
+            // PlayError::ChoicePending is a SUSPEND (the engine
+            // catches it and yields a HumanPrompt) — not a failure.
+            // Tagging it as Err here was the LOG misclassification
+            // that made Fireball look like a crash in trace v1.
             let outcome = match &result {
-                Ok(()) => "ok".to_string(),
-                Err(e) => format!("err:{e:?}"),
+                Ok(()) => crate::trace::OutcomeRepr::Ok,
+                Err(crate::game::PlayError::ChoicePending(p)) => {
+                    crate::trace::OutcomeRepr::Suspend(format!("{p:?}"))
+                }
+                Err(e) => crate::trace::OutcomeRepr::Err(format!("{e:?}")),
             };
             crate::trace::push(crate::trace::TraceEvent::Play {
                 at_us: crate::trace::now_us(),
@@ -974,7 +981,9 @@ impl GameState {
                     chain_dump.join("\n  "),
                 );
                 self.bump_action("chain_overflow", self.active_player);
-                super::bump_timeout_and_maybe_halt("drive_window_to_close (chain overflow)");
+                let _ = super::bump_timeout_and_maybe_halt(
+                    "drive_window_to_close (chain overflow)",
+                );
                 self.priority = None;
                 break;
             }
@@ -1009,7 +1018,9 @@ impl GameState {
                     chain_ids,
                 );
                 self.bump_action("response_spin_aborted", self.active_player);
-                super::bump_timeout_and_maybe_halt("drive_window_to_close (response spin)");
+                let _ = super::bump_timeout_and_maybe_halt(
+                    "drive_window_to_close (response spin)",
+                );
                 // Force-close the window. The pending chain is dropped —
                 // the game continues but this priority sequence is lost.
                 self.priority = None;

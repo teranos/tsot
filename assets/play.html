@@ -341,6 +341,25 @@ function pumpFfiQueue() {
           raw: typeof raw === 'string' ? raw.slice(0, 512) : null,
         }); } catch (_) {}
       }
+      // OBS O5b: list_card_pool / list_preset_decks / save_game now
+      // return the wrapped envelope `{ok, result, log, trace, errors}`.
+      // Forward side-channels uniformly here so RAW-return callers
+      // (which never went through parseEnvelope) still see typed
+      // errors + trace + log surface to the developer. Then unwrap
+      // `env.result` and re-stringify it so the caller's existing
+      // `JSON.parse(returnedString)` continues to work unchanged.
+      if (env && env.ok === true && env.result !== undefined) {
+        if (Array.isArray(env.errors)) {
+          for (const e of env.errors) {
+            try { tsotPushError(e); } catch (_) {}
+          }
+        }
+        if (Array.isArray(env.trace)) appendTrace(env.trace);
+        if (Array.isArray(env.log)) appendLog(env.log);
+        job.resolve(JSON.stringify(env.result));
+        pumpFfiQueue();
+        return;
+      }
       if (env && env.ok === false) {
         const trace = env.trace || [];
         appendTrace(trace);
