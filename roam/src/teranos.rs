@@ -344,6 +344,41 @@ pub fn flower_core_char(c: Option<FlowerCore>) -> char {
     }
 }
 
+/// The core renders as a radial gradient too. The edge color is one
+/// of: white (most common), petal-center color, or petal-edge color.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CoreEdge {
+    White,
+    MatchCenter,
+    MatchEdge,
+}
+
+pub fn flower_core_edge_at(x: i32, y: i32) -> Option<CoreEdge> {
+    flower_at(x, y)?;
+    let cx = canonical_x(x);
+    let h = splitmix64(
+        WORLD_SEED
+            ^ 0xC05E_ED6E_DEAD_BEEF
+            ^ ((cx as i64 as u64).wrapping_mul(0x7F4A_7C15_BF58_476D))
+            ^ (y as i64 as u64),
+    );
+    let r = (h >> 32) % 100;
+    Some(match r {
+        0..=69 => CoreEdge::White,
+        70..=84 => CoreEdge::MatchCenter,
+        _ => CoreEdge::MatchEdge,
+    })
+}
+
+pub fn core_edge_char(c: Option<CoreEdge>) -> char {
+    match c {
+        None => '0',
+        Some(CoreEdge::White) => '1',
+        Some(CoreEdge::MatchCenter) => '2',
+        Some(CoreEdge::MatchEdge) => '3',
+    }
+}
+
 /// Petal count for a flower. 5 is overwhelmingly common; 6/7/8 are
 /// increasingly rare tiers. Returns None if there's no flower at (x,y).
 /// Distribution (per 10000): 5 = 9939, 6 = 50, 7 = 10, 8 = 1.

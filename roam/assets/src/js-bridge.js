@@ -102,12 +102,13 @@ const invCtx = invEl ? invEl.getContext('2d') : null;
 const INV_PETAL_COLORS = ['#e44', '#fd4', '#48f', '#a4f', '#4cf', '#f9c', '#fff'];
 const INV_LABELS = ['red', 'yellow', 'blue', 'purple', 'azure', 'pink', 'glow'];
 
-function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale, petalCount, edgeFill) {
+function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale, petalCount, edgeFill, coreEdgeFill) {
   const n = petalCount || 5;
   const petalR = 3 * scale;
   const petalDist = 3.5 * scale;
   const coreR = 2 * scale;
   const edge = edgeFill || petalFill;
+  const coreEdge = coreEdgeFill || '#fff';
   for (let k = 0; k < n; k++) {
     const a = -Math.PI / 2 + (k * 2 * Math.PI) / n;
     const px = cx + Math.cos(a) * petalDist;
@@ -122,7 +123,10 @@ function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale, petalCount, ed
     ctx2.arc(px, py, petalR, 0, Math.PI * 2);
     ctx2.fill();
   }
-  ctx2.fillStyle = coreFill;
+  const coreG = ctx2.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+  coreG.addColorStop(0, coreFill);
+  coreG.addColorStop(1, coreEdge);
+  ctx2.fillStyle = coreG;
   ctx2.beginPath();
   ctx2.arc(cx, cy, coreR, 0, Math.PI * 2);
   ctx2.fill();
@@ -147,14 +151,16 @@ function renderInventory(inv) {
     const c = item[1];
     const n = item[2] || 5;
     const e = item[3] != null ? item[3] : p;
+    const ce = item[4] != null ? item[4] : 0;
     const petal = INV_PETAL_COLORS[p] || '#fff';
     const core = INV_CORE_COLORS[c] || '#fff';
     const edge = INV_PETAL_COLORS[e] || petal;
+    const coreEdge = ce === 1 ? petal : ce === 2 ? edge : '#fff';
     const col = i % cols;
     const row = Math.floor(i / cols);
     const cx = col * slot + slot / 2;
     const cy = row * slot + slot / 2;
-    drawFlowerIcon(invCtx, cx, cy, petal, core, 1.8, n, edge);
+    drawFlowerIcon(invCtx, cx, cy, petal, core, 1.8, n, edge, coreEdge);
   }
 }
 
@@ -1136,6 +1142,7 @@ moduleP.then(() => {
       const cores = V.flower_cores || '';
       const petalCounts = V.flower_petals || '';
       const edges = V.flower_edges || '';
+      const coreEdges = V.flower_core_edges || '';
       for (let vy = 0; vy < V.view_h; vy++) {
         for (let vx = 0; vx < V.view_w; vx++) {
           const i = vy * V.view_w + vx;
@@ -1148,6 +1155,9 @@ moduleP.then(() => {
           const n = parseInt(petalCounts[i] || '5', 10) || 5;
           const ec = edges[i] || fc;
           const edgeFill = FLOWER_PETAL[ec] || petalFill;
+          // Core edge: 1=white (default), 2=match petal center, 3=match petal edge.
+          const ceCode = coreEdges[i] || '1';
+          const coreEdgeFill = ceCode === '2' ? petalFill : ceCode === '3' ? edgeFill : '#fff';
           const worldTx = V.center_tx + vx - halfW;
           const worldTy = V.center_ty + vy - halfH;
           const cxF = (worldTx * tileWorld + tileWorld / 2 - s.x) * zoom + camCenterX;
@@ -1169,7 +1179,10 @@ moduleP.then(() => {
             ctx.arc(px, py, petalR, 0, Math.PI * 2);
             ctx.fill();
           }
-          ctx.fillStyle = coreFill;
+          const coreGrad = ctx.createRadialGradient(cxF, cyF, 0, cxF, cyF, coreR);
+          coreGrad.addColorStop(0, coreFill);
+          coreGrad.addColorStop(1, coreEdgeFill);
+          ctx.fillStyle = coreGrad;
           ctx.beginPath();
           ctx.arc(cxF, cyF, coreR, 0, Math.PI * 2);
           ctx.fill();
