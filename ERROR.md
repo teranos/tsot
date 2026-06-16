@@ -49,6 +49,144 @@ By analogy to `Card.elm`:
    (which surface, which interaction, which payload) is unactionable.
    No `"decode failed"` without the field path + raw input.
 
+## Unwired — current inventory (2026-06-16)
+
+Sacred-errors is the project's non-negotiable axiom (`CLAUDE.md`).
+This section enumerates every known gap so future sessions don't
+re-grep to rediscover the work. Tick a box only when the gap is
+closed AND user-verified end-to-end (a commit means done — see
+`CLAUDE.md`).
+
+### Hot — panics / active silent drops
+
+- [ ] `src/sim/step/combat.rs:116` — `self.state.confirm_attacks().unwrap()`
+  panics on refusal instead of routing through the typed Error
+  pipeline. Human click on "attack" → wasm trap → reload required.
+- [ ] `src/sim/step/combat.rs:234` — `self.state.confirm_blocks(...).unwrap()`
+  same shape, blocks side.
+- [ ] `step_resolve` Err-arm in `src/sim/step/main_phases.rs` is missing
+  a `ChoicePending` intercept like the upper Pattern B arm has.
+  Symptom: Read the Embers' `on_play` calls `game.choose_int`, the
+  Pending escapes through play_card, lands as a refusal, surfaces
+  the lie below. Fix: same intercept pattern as `main_phases.rs:396`.
+- [ ] 9 `.is_ok()` discard patterns in non-test Rust —
+  `grep -rn '\.is_ok()' src/ --include='*.rs' | grep -v _tests`.
+
+### Wrong-diagnostic lies currently shipping
+
+- [ ] `play_error_user_message::ChoicePending` message reads
+  "ChoicePending escaped the Main2 catch arm. File a bug." — the
+  bug is a MISSING intercept, not an escaped one. Future-you goes
+  hunting for a leaky catch arm that doesn't exist.
+- [ ] `play_error_user_message::VariableXValueMissing` reads
+  "The UI needs to ask first." — blames the UI for an engine
+  wiring gap (no NeedHuman X-prompt is yielded before play_card).
+- [ ] `crate::error::emit_region(..., format!("{e}"))` in
+  `src/game/lua_api.rs` (3 sites) does NOT walk mlua's
+  `CallbackError { cause: WithContext { cause: ExternalError(...) } }`
+  chain. Outer wrapper text shown; inner Lua line:message hidden.
+  `pending_from_mlua_error` already walks the chain — adopt the
+  same walk for the surfaced `why` field.
+- [ ] `TRACE_STRING_ALLOWLIST` (in `src/trace.rs`) catches NEW
+  bare-String fields but doesn't audit the 14 existing entries
+  (`Step.from/to/result`, `Cursor.from/to`, `Oracle.call/answer`,
+  `Winner.cause`, `Ffi.span`, `AiPick.ai`, `Error.source/message`,
+  `Count.key`, `Handler.event`). Each could be conflating two
+  meanings today the way `outcome: String` did before OutcomeRepr.
+
+### Engine internals (medium)
+
+- [ ] 32 `eprintln!` sites in non-CLI Rust still surface only to
+  stderr (invisible in browser). `grep -rn 'eprintln!' src/
+  --include='*.rs' | grep -v cli_ | grep -v _tests`.
+- [ ] 97 `let _ = result;` patterns in non-test code — most are
+  setup ("genuinely can't fail here"), ~20% need to either route
+  through the pipeline or carry a one-line `// silent because …`
+  justification.
+- [ ] `activate_ability` Err paths outside `src/sim/step/`.
+- [ ] `src/card/loader.rs` malformed-card handling — does a
+  rejected card surface anywhere, or does the corpus silently
+  shrink by one entry?
+
+### JS
+
+- [ ] 16 of 46 `catch (...)` blocks in `assets/` still silent or
+  routing only through the legacy `buildErrorBlock` path. Audit:
+  `grep -rn 'catch\s*(' assets/ --include='*.js' --include='*.html'`.
+- [ ] **ERROR.md Slice 1 deferred bullet, still open:** `LogPanel.ErrorEntry`
+  → `Error.view` collapse. Two parallel error renderers exist;
+  `appendErrorEvent`/`buildErrorBlock` (LogPanel) and `tsotPushError`
+  (Error.view). Same failure surfaces differently in two places —
+  the axiom violation rubric calls this out explicitly (§ Why
+  Error needs its own module, last row).
+
+### Elm
+
+- [ ] 53 `Maybe.withDefault` + 3 `Result.withDefault` — triage
+  needed. Most are legitimate "this Maybe carries 'absent' not
+  'failed'" defaults; ~10-15 are failure-swallow patterns that
+  should route through `pushDecodeError`.
+- [ ] `LogPanel.elm`, `GameScreen.elm`, `SpectatorBar.elm`,
+  `BuildFooter.elm` — unsweept. Only `Main.elm` has the 7 typed
+  decode-error sites today.
+
+### Architectural gaps (need engine work, not just wiring)
+
+- [ ] **Variable-X cast-time prompt.** No engine path yields a
+  `NeedHuman(ChooseInt)` for X before `play_card` runs. The
+  `oracle.choose_int` inside `build_pattern_b_choices` is the
+  closest existing path; making it work for human-active casts
+  is the slice. Until then Read the Embers (and every X-cost
+  card) can only be cast via the Lua-yield workaround if at all.
+- [ ] **Cast-time targeting** for spells with declared targets
+  (Fireball, every "target a creature" spell). Card schema needs
+  a `target: Option<TargetSpec>` field; engine yields a
+  `NeedHuman(ChooseCard)` BEFORE handing to `on_play`; R.1.a
+  response window fires with the target locked. Lua reads
+  `game.cast_target()`. Closes the Fireball "Y/N then choose"
+  workaround pattern.
+- [ ] **Activation flow through Main1/Main2.** Engine currently
+  surfaces a typed Error saying activations aren't supported
+  (sacred-errors win), but doesn't yet route a clicked
+  activation through the cursor/oracle path. Signal Goblin,
+  jewel hand-pay, etc. block on this.
+
+### Self-enforcement holes
+
+- [ ] `every_step_file_references_emit_human_refusal`
+  (`src/sim/step/tests.rs`) only covers `src/sim/step/`. Extend to
+  `src/game/lua_api.rs`, `src/game/play.rs`, `src/wasm_ffi.rs`,
+  `assets/play.html`, `assets/js-bridge.js`, plus the Elm modules
+  via a regex-based source scan in `elm-test`.
+- [ ] No CI grep that fails the build when a PR introduces a new
+  silent-drop pattern (`let _ = ` on a meaningful Result, bare
+  `catch`, `Err _ ->` in Elm). Counterpart to the allowlist test.
+- [ ] No Elm equivalent of `TRACE_STRING_ALLOWLIST` for ports —
+  port-payload shapes can drift without a test catching the case
+  Main.elm's 7 sites have to defend against today.
+
+### Verification debt (shipped but not user-confirmed end-to-end)
+
+- [ ] Build watermark visible on every Error window across all
+  surfaces (only confirmed on Test Panic + the Read the Embers
+  refusal so far).
+- [ ] Read the Embers cast actually completes once `step_resolve`
+  ChoicePending intercept lands.
+- [ ] Spectate path error surfacing under a real failure.
+- [ ] Save / Load error surfacing under a real failure.
+- [ ] Deckbuilder boot error surfacing on a deliberately broken
+  preset (the `build_preset_decks` validator emits a typed Warn —
+  needs a malformed preset to fire end-to-end).
+
+### Doc / axiom open items
+
+- [ ] ERROR.md Slice 6 — `localStorage` persistence + bijectivity
+  invariant for `Error.id` → DOM node.
+- [ ] OBSERVABILITY.md Phase 2 — AI-internals narration (O6, O7,
+  O8) so UCT opponent reasoning surfaces.
+- [ ] OBSERVABILITY.md Phase 5 — UI filter chips + click-to-expand
+  for the LOG so the trace stream is navigable, not a wall.
+
 ## Visual contract
 
 The Error render is **not a side panel, not a drawer, not a LOG line

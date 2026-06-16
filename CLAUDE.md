@@ -29,6 +29,8 @@ so the developer/user knows what to do next.
 If an error is not visible or surfaced, drop everything you do,
 and make sure we see the error FIRST before continuing with anything else.
 
+Every refusal surfaces typed at the user's cursor.
+
 **KNOW** the developer is always running the latest version of TSOT.
 If there is an issue, it is in the code.
 
