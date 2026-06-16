@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
 
+use serde::{Deserialize, Serialize};
+
+use crate::error::{emit as emit_error, Severity};
 use crate::teranos::{
-    core_edge_char, flower_at, flower_char, flower_core_at, flower_core_char,
-    flower_core_edge_at, flower_edge_at, flower_petals_at, surface_z, tile_at,
-    CoreEdge, FlowerColor, FlowerCore, TileKind, WORLD_CIRC_X,
+    flower_at, surface_z, tile_at, CoreEdge, Flower, FlowerColor, FlowerCore, TileKind,
+    WORLD_CIRC_X,
 };
-use crate::trace::{emit, TraceEvent};
+use crate::trace::{count_state_read, count_tick, emit, TraceEvent};
 
 pub const INPUT_W: u32 = 1 << 0;
 pub const INPUT_A: u32 = 1 << 1;
@@ -18,10 +20,8 @@ const SPEED: f32 = 0.2; // pixels per ms
 const SHALLOW_WATER_SPEED_MULT: f32 = 0.5;
 const MAX_STEP_UP_DOWN: i32 = 1; // max |Δz| between adjacent walkable columns
 
-const DEFAULT_VIEW_W: u32 = 32;
-const DEFAULT_VIEW_H: u32 = 24;
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Facing {
     N = 0,
     NE = 1,
@@ -34,39 +34,42 @@ pub enum Facing {
 }
 
 impl Facing {
-    fn as_u8(self) -> u8 {
+    pub fn as_u8(self) -> u8 {
         self as u8
     }
-    fn from_u8(v: u8) -> Self {
+
+    /// Strict byte → Facing. Returns None for unknown bytes; callers
+    /// must decide what to do with an invalid byte rather than this
+    /// function silently mapping it to a default.
+    pub fn from_u8(v: u8) -> Option<Self> {
         match v {
-            0 => Facing::N,
-            1 => Facing::NE,
-            2 => Facing::E,
-            3 => Facing::SE,
-            4 => Facing::S,
-            5 => Facing::SW,
-            6 => Facing::W,
-            7 => Facing::NW,
-            _ => Facing::S,
+            0 => Some(Facing::N),
+            1 => Some(Facing::NE),
+            2 => Some(Facing::E),
+            3 => Some(Facing::SE),
+            4 => Some(Facing::S),
+            5 => Some(Facing::SW),
+            6 => Some(Facing::W),
+            7 => Some(Facing::NW),
+            _ => None,
         }
     }
 }
 
 pub struct Player {
     pub x: f32, // world pixels; wraps modulo WORLD_CIRC_X * PIXELS_PER_TILE
-    pub y: f32, // world pixels; bounded by polar oceans
+    pub y: f32, // world pixels; bounded by polar ocean
     pub z: i32, // voxel z of the tile the player is standing on
     pub facing: Facing,
     /// Tiles this player has already picked a flower from. Personal —
     /// per CANONICAL.md every player has their own picked-set today;
-    /// gossip-based first-claim-wins lands later. Hash key is canonical
-    /// `(canonical_x_tile, y_tile)` so the wrap doesn't double-record.
+    /// gossip-based first-claim-wins lands later. Key is canonical
+    /// `(canonical_x_tile, y_tile)` so the cylinder wrap doesn't
+    /// double-record.
     pub picked: BTreeSet<(i32, i32)>,
-    /// Each picked flower is its own inventory entry — (petal_color,
-    /// core, petal_count, edge_color, core_edge_choice). 7 × 3 × 4 × 7
-    /// × 3 = 1764 distinct kinds. `core_edge_choice` is 0=white,
-    /// 1=match-petal-center, 2=match-petal-edge.
-    pub inventory: Vec<(u8, u8, u8, u8, u8)>,
+    /// One entry per picked flower. The full typed Flower is preserved;
+    /// rendering and inventory display read the fields directly.
+    pub inventory: Vec<Flower>,
 }
 
 pub struct World {
@@ -86,28 +89,6 @@ fn pixel_to_tile(px: f32) -> i32 {
 #[inline]
 fn tile_to_pixel_center(t: i32) -> f32 {
     (t as f32 + 0.5) * PIXELS_PER_TILE as f32
-}
-
-#[inline]
-fn flower_color_index(c: FlowerColor) -> u8 {
-    match c {
-        FlowerColor::Red => 0,
-        FlowerColor::Yellow => 1,
-        FlowerColor::Blue => 2,
-        FlowerColor::Purple => 3,
-        FlowerColor::Azure => 4,
-        FlowerColor::Pink => 5,
-        FlowerColor::Glow => 6,
-    }
-}
-
-#[inline]
-fn flower_core_index(c: FlowerCore) -> u8 {
-    match c {
-        FlowerCore::White => 0,
-        FlowerCore::Yellow => 1,
-        FlowerCore::Black => 2,
-    }
 }
 
 // Allowable z for walking on column (tx, ty), and whether it's shallow water.
@@ -140,16 +121,6 @@ fn facing_from_input(dx: f32, dy: f32) -> Option<Facing> {
         (-1, -1) => NW,
         _ => return None,
     })
-}
-
-fn tile_char(k: TileKind) -> char {
-    match k {
-        TileKind::Air => '0',
-        TileKind::Grass => '1',
-        TileKind::Rock => '2',
-        TileKind::ShallowWater => '3',
-        TileKind::DeepWater => '4',
-    }
 }
 
 impl Default for World {
@@ -186,8 +157,8 @@ impl World {
     }
 
     /// Pickup check: if the player's current tile has a flower and
-    /// it isn't in their picked-set, claim it. Increments inventory
-    /// for that color. Personal state — see CANONICAL.md.
+    /// it isn't in their picked-set, claim it. Personal state —
+    /// see CANONICAL.md.
     fn try_pickup(&mut self) {
         let tx = pixel_to_tile(self.player.x);
         let ty = pixel_to_tile(self.player.y);
@@ -196,30 +167,13 @@ impl World {
         if self.player.picked.contains(&key) {
             return;
         }
-        if let Some(color) = flower_at(tx, ty) {
-            let core = flower_core_at(tx, ty).unwrap_or(FlowerCore::White);
-            let petals = flower_petals_at(tx, ty).unwrap_or(5);
-            let edge = flower_edge_at(tx, ty).unwrap_or(color);
-            let core_edge = flower_core_edge_at(tx, ty).unwrap_or(CoreEdge::White);
+        if let Some(flower) = flower_at(tx, ty) {
             self.player.picked.insert(key);
-            self.player.inventory.push((
-                flower_color_index(color),
-                flower_core_index(core),
-                petals,
-                flower_color_index(edge),
-                match core_edge {
-                    CoreEdge::White => 0,
-                    CoreEdge::MatchCenter => 1,
-                    CoreEdge::MatchEdge => 2,
-                },
-            ));
             emit(TraceEvent::Note {
                 tag: "flower_picked",
-                msg: format!(
-                    "({tx}, {ty}) {:?} core={:?} petals={petals} edge={:?} core_edge={:?}",
-                    color, core, edge, core_edge
-                ),
+                msg: format!("({tx}, {ty}) {flower:?}"),
             });
+            self.player.inventory.push(flower);
         }
     }
 
@@ -247,10 +201,6 @@ impl World {
         let mvx = dx * SPEED * dt_ms * speed_mult;
         let mvy = dy * SPEED * dt_ms * speed_mult;
 
-        let before_x = self.player.x;
-        let before_y = self.player.y;
-        let before_z = self.player.z;
-
         let nx = self.player.x + mvx;
         let blocked_x = !self.try_set_position(nx, self.player.y);
         if !blocked_x {
@@ -272,21 +222,7 @@ impl World {
             self.player.x = self.player.x.rem_euclid(circ);
         }
 
-        emit(TraceEvent::Tick {
-            input_bits: input,
-            dt_ms,
-            before_x,
-            before_y,
-            before_z,
-            after_x: self.player.x,
-            after_y: self.player.y,
-            after_z: self.player.z,
-            facing: self.player.facing.as_u8(),
-            intended_dx: mvx,
-            intended_dy: mvy,
-            blocked_x,
-            blocked_y,
-        });
+        count_tick(blocked_x || blocked_y);
     }
 
     fn current_tile_kind(&self) -> TileKind {
@@ -312,12 +248,12 @@ impl World {
         true
     }
 
-    // Restore from a persisted (x, y, facing). Z snaps to the column's
-    // surface (or water surface for water columns) — the saved x/y
-    // determines location; z is always derived from current terrain
-    // so the saved player can never land inside a wall if terrain
-    // generation parameters shift between sessions.
-    pub fn set_position(&mut self, x: f32, y: f32, facing: u8) {
+    /// Restore from a persisted (x, y, facing). Z snaps to the column's
+    /// surface (or water surface for water columns). An invalid facing
+    /// byte falls back to South *and* emits a Note so the desync shows
+    /// in the trace bus — silently substituting a default without
+    /// surfacing the cause would violate the sacred-error axiom.
+    pub fn set_position(&mut self, x: f32, y: f32, facing_byte: u8) {
         let circ = world_circ_px();
         self.player.x = x.rem_euclid(circ);
         self.player.y = y;
@@ -325,189 +261,257 @@ impl World {
         let ty = pixel_to_tile(self.player.y);
         let sz = crate::teranos::surface_z(tx, ty);
         self.player.z = sz.max(0);
-        self.player.facing = Facing::from_u8(facing);
+        let facing = match Facing::from_u8(facing_byte) {
+            Some(f) => f,
+            None => {
+                emit(TraceEvent::Note {
+                    tag: "set_position_bad_facing",
+                    msg: format!(
+                        "facing byte {facing_byte} out of [0..=7]; falling back to S and surfacing"
+                    ),
+                });
+                Facing::S
+            }
+        };
+        self.player.facing = facing;
         emit(TraceEvent::Note {
             tag: "set_position",
             msg: format!(
                 "restored to ({:.1}, {:.1}, z={}) f={}",
-                self.player.x, self.player.y, self.player.z, self.player.facing.as_u8()
+                self.player.x,
+                self.player.y,
+                self.player.z,
+                self.player.facing.as_u8()
             ),
         });
     }
 
-    /// Serialize per-player session state — the picked-set + inventory —
-    /// for localStorage. Position lives in its own save key (separate
-    /// throttle), so this snapshot only carries what changes on pickup.
+    /// Serialize the per-player session state — picked-set + inventory —
+    /// for localStorage. Wire shape is defined by the `SessionSnapshot`
+    /// struct below: adding a Flower field is one edit there and serde
+    /// carries it.
     pub fn session_snapshot_json(&self) -> String {
-        let mut picked = String::from("[");
-        let mut first = true;
-        for &(x, y) in &self.player.picked {
-            if !first {
-                picked.push(',');
-            }
-            first = false;
-            picked.push_str(&format!("[{x},{y}]"));
-        }
-        picked.push(']');
-        let mut inv = String::from("[");
-        first = true;
-        for &(p, c, n, e, ce) in &self.player.inventory {
-            if !first {
-                inv.push(',');
-            }
-            first = false;
-            inv.push_str(&format!("[{p},{c},{n},{e},{ce}]"));
-        }
-        inv.push(']');
-        format!(r#"{{"picked":{picked},"inv":{inv}}}"#)
+        let snap = SessionSnapshot {
+            picked: self.player.picked.iter().copied().collect(),
+            inv: self.player.inventory.iter().copied().map(FlowerWire::from).collect(),
+        };
+        serde_json::to_string(&snap).unwrap_or_else(|err| {
+            emit_error(
+                Severity::Error,
+                "roam::world::session_snapshot_json",
+                "serde encode failed",
+                err.to_string(),
+            );
+            String::from(r#"{"picked":[],"inv":[]}"#)
+        })
     }
 
     /// Restore picked-set + inventory from a previous session snapshot.
-    /// Tolerates malformed input by leaving the state empty rather
-    /// than panicking — the renderer treats empty as "fresh start".
+    ///
+    /// Accepts two inventory entry shapes for one-shot migration: the
+    /// canonical named-field object and the legacy positional tuple
+    /// `[pc, cc, n, pe, ce]`. Anything else is malformed; the parser
+    /// fails loudly via a sacred-error event rather than silently
+    /// substituting defaults. The legacy branch is removed in a
+    /// later slice once no v1 sessions remain in the wild.
     pub fn restore_session_json(&mut self, raw: &str) {
-        // Minimal JSON walker — no serde_json over the FFI.
-        // Format: {"picked":[[x,y],...],"inv":[[petal,core],...]}.
-        self.player.picked.clear();
-        self.player.inventory.clear();
-        if let Some(picked_start) = raw.find("\"picked\":[") {
-            let rest = &raw[picked_start + "\"picked\":[".len()..];
-            if let Some(end) = rest.find(']') {
-                let pairs = &rest[..end];
-                for chunk in pairs.split("],[").map(|s| s.trim_start_matches('[').trim_end_matches(']')) {
-                    let mut it = chunk.split(',').filter_map(|t| t.trim().parse::<i32>().ok());
-                    if let (Some(x), Some(y)) = (it.next(), it.next()) {
-                        self.player.picked.insert((x, y));
+        match serde_json::from_str::<SessionSnapshot>(raw) {
+            Ok(snap) => {
+                self.player.picked = snap.picked.into_iter().collect();
+                let mut migrated = 0_usize;
+                let mut parsed = 0_usize;
+                self.player.inventory.clear();
+                for entry in snap.inv {
+                    match entry {
+                        FlowerWire::Named(named) => match named.try_into_flower() {
+                            Ok(f) => {
+                                self.player.inventory.push(f);
+                                parsed += 1;
+                            }
+                            Err(why) => {
+                                emit_error(
+                                    Severity::Error,
+                                    "roam::world::restore_session_json",
+                                    "inventory entry rejected",
+                                    why,
+                                );
+                            }
+                        },
+                        FlowerWire::Legacy(legacy) => match legacy_tuple_to_flower(&legacy) {
+                            Ok(f) => {
+                                self.player.inventory.push(f);
+                                migrated += 1;
+                            }
+                            Err(why) => {
+                                emit_error(
+                                    Severity::Error,
+                                    "roam::world::restore_session_json",
+                                    "legacy inventory entry rejected",
+                                    why,
+                                );
+                            }
+                        },
                     }
+                }
+                if migrated > 0 {
+                    emit(TraceEvent::Note {
+                        tag: "session_migrate_inventory",
+                        msg: format!(
+                            "restored {parsed} named-shape + {migrated} legacy-tuple inventory entries"
+                        ),
+                    });
                 }
             }
-        }
-        if let Some(inv_start) = raw.find("\"inv\":[") {
-            let rest = &raw[inv_start + "\"inv\":[".len()..];
-            if let Some(end) = rest.rfind(']') {
-                let pairs = &rest[..end];
-                if !pairs.trim().is_empty() {
-                    for chunk in pairs.split("],[").map(|s| s.trim_start_matches('[').trim_end_matches(']')) {
-                        // Accept all historical inventory shapes. Defaults:
-                        // n=5, e=p (no petal gradient), ce=0 (white core edge).
-                        let mut it = chunk.split(',').filter_map(|t| t.trim().parse::<u8>().ok());
-                        if let (Some(p), Some(c)) = (it.next(), it.next()) {
-                            let n = it.next().unwrap_or(5);
-                            let e = it.next().unwrap_or(p);
-                            let ce = it.next().unwrap_or(0);
-                            self.player.inventory.push((p, c, n, e, ce));
-                        }
-                    }
-                }
+            Err(err) => {
+                emit_error(
+                    Severity::Error,
+                    "roam::world::restore_session_json",
+                    "session snapshot rejected",
+                    format!("serde decode failed: {err}; raw[..120]={:?}", &raw.chars().take(120).collect::<String>()),
+                );
             }
         }
     }
 
     pub fn state_json(&self) -> String {
-        emit(TraceEvent::StateRead {
+        count_state_read();
+        let state = PlayerStateJson {
             x: self.player.x,
             y: self.player.y,
             z: self.player.z,
-            facing: self.player.facing.as_u8(),
-        });
-        let mut inv = String::from("[");
-        let mut first = true;
-        for &(p, c, n, e, ce) in &self.player.inventory {
-            if !first {
-                inv.push(',');
-            }
-            first = false;
-            inv.push_str(&format!("[{p},{c},{n},{e},{ce}]"));
-        }
-        inv.push(']');
-        format!(
-            r#"{{"x":{},"y":{},"z":{},"f":{},"inv":{}}}"#,
-            self.player.x,
-            self.player.y,
-            self.player.z,
-            self.player.facing.as_u8(),
-            inv,
-        )
+            f: self.player.facing.as_u8(),
+            inv: self.player.inventory.iter().copied().map(FlowerWire::from).collect(),
+        };
+        serde_json::to_string(&state).unwrap_or_else(|err| {
+            emit_error(
+                Severity::Error,
+                "roam::world::state_json",
+                "serde encode failed",
+                err.to_string(),
+            );
+            String::from(r#"{"x":0,"y":0,"z":0,"f":4,"inv":[]}"#)
+        })
     }
 
-    // Viewport tile data centered on the player. JS calls this per frame
-    // to render the visible slice at the player's current z.
-    pub fn map_json(&self) -> String {
-        self.viewport_json(DEFAULT_VIEW_W, DEFAULT_VIEW_H)
-    }
+}
 
-    // Top-down view: render the top of each column, not a flat slice at
-    // player.z. Hills above player show as elevated terrain; valleys
-    // below show through. JS uses the `elev` parallel string to shade
-    // each tile by `surface_z - player.z`.
-    //
-    // Caves (when underground) will need a different code path — switch
-    // to slice-at-player-z view when player.z < surface_z(player). Not
-    // yet relevant; player always lives at the surface in v0.3.5.
-    pub fn viewport_json(&self, view_w: u32, view_h: u32) -> String {
-        let center_tx = pixel_to_tile(self.player.x);
-        let center_ty = pixel_to_tile(self.player.y);
-        let z = self.player.z;
-        let half_w = view_w as i32 / 2;
-        let half_h = view_h as i32 / 2;
-        let cap = (view_w * view_h) as usize;
-        let mut tiles = String::with_capacity(cap);
-        let mut elev = String::with_capacity(cap);
-        let mut flowers = String::with_capacity(cap);
-        let mut flower_cores = String::with_capacity(cap);
-        let mut flower_petals = String::with_capacity(cap);
-        let mut flower_edges = String::with_capacity(cap);
-        let mut flower_core_edges = String::with_capacity(cap);
-        for dy in -half_h..(view_h as i32 - half_h) {
-            for dx in -half_w..(view_w as i32 - half_w) {
-                let tx = center_tx + dx;
-                let ty = center_ty + dy;
-                let sz = surface_z(tx, ty);
-                let top_z = sz.max(0);
-                tiles.push(tile_char(tile_at(tx, ty, top_z)));
-                elev.push(elev_char(sz));
-                let cx = tx.rem_euclid(WORLD_CIRC_X);
-                let (flower, core, petals, edge, core_edge) =
-                    if self.player.picked.contains(&(cx, ty)) {
-                        (None, None, None, None, None)
-                    } else {
-                        (
-                            flower_at(tx, ty),
-                            flower_core_at(tx, ty),
-                            flower_petals_at(tx, ty),
-                            flower_edge_at(tx, ty),
-                            flower_core_edge_at(tx, ty),
-                        )
-                    };
-                flowers.push(flower_char(flower));
-                flower_cores.push(flower_core_char(core));
-                flower_petals.push(match petals {
-                    Some(n) => char::from_digit(n as u32, 10).unwrap_or('5'),
-                    None => '0',
-                });
-                flower_edges.push(flower_char(edge));
-                flower_core_edges.push(core_edge_char(core_edge));
-            }
-        }
-        emit(TraceEvent::ViewportRead {
-            view_w,
-            view_h,
-            center_tx,
-            center_ty,
-            z,
-        });
-        format!(
-            r#"{{"tile":{},"view_w":{},"view_h":{},"center_tx":{},"center_ty":{},"z":{},"tiles":"{}","elev":"{}","flowers":"{}","flower_cores":"{}","flower_petals":"{}","flower_edges":"{}","flower_core_edges":"{}"}}"#,
-            PIXELS_PER_TILE, view_w, view_h, center_tx, center_ty, z, tiles, elev, flowers, flower_cores, flower_petals, flower_edges, flower_core_edges
-        )
+// ----- wire shapes: serde-derived JSON for state + session -----
+
+/// Session snapshot wire format. Versioning happens by addition: new
+/// fields default to None; existing readers ignore unknown fields per
+/// serde's default behavior.
+#[derive(Serialize, Deserialize)]
+struct SessionSnapshot {
+    picked: Vec<(i32, i32)>,
+    inv: Vec<FlowerWire>,
+}
+
+/// State wire format consumed by the JS HUD. Inventory shape matches
+/// `SessionSnapshot::inv`; the bridge reads `f.pc / .pe / .cc / .ce / .n`
+/// for the inventory panel.
+#[derive(Serialize)]
+struct PlayerStateJson {
+    x: f32,
+    y: f32,
+    z: i32,
+    f: u8,
+    inv: Vec<FlowerWire>,
+}
+
+/// On-wire flower representation. Two shapes accepted on decode:
+/// the canonical named-field object and the legacy positional tuple
+/// `[pc, cc, n, pe, ce]`. Encode is always Named (the `From<Flower>`
+/// impl produces only `Named`); the legacy branch is a one-shot
+/// migration for inbound v1 data.
+///
+/// **Variant order is load-bearing for decode.** serde_json can
+/// deserialize a struct from an array if the lengths match — putting
+/// `Legacy([u8; 5])` first means an array `[a,b,c,d,e]` matches
+/// `Legacy` before serde tries to fit it into `FlowerNamed` (which
+/// would silently accept the array with misaligned field semantics).
+#[derive(Serialize, Deserialize, Clone, Copy)]
+#[serde(untagged)]
+enum FlowerWire {
+    Legacy([u8; 5]),
+    Named(FlowerNamed),
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
+struct FlowerNamed {
+    pc: u8,
+    pe: u8,
+    cc: u8,
+    ce: u8,
+    n: u8,
+}
+
+impl From<Flower> for FlowerWire {
+    fn from(f: Flower) -> Self {
+        FlowerWire::Named(FlowerNamed {
+            pc: f.petal_center as u8,
+            pe: f.petal_edge as u8,
+            cc: f.core_center as u8,
+            ce: f.core_edge as u8,
+            n: f.petal_count,
+        })
     }
 }
 
-// Encode signed z (-32..62) as one printable ASCII char.
-// '!' = -32, 'A' = 0, 'a' = 32. Decodes as code - 33 - 32 (JS side).
-fn elev_char(z: i32) -> char {
-    let v = (z + 32).clamp(0, 94);
-    char::from_u32((v as u32) + 33).unwrap_or('!')
+impl FlowerNamed {
+    fn try_into_flower(self) -> Result<Flower, String> {
+        Ok(Flower {
+            petal_center: flower_color_from_u8(self.pc)?,
+            petal_edge: flower_color_from_u8(self.pe)?,
+            core_center: flower_core_from_u8(self.cc)?,
+            core_edge: core_edge_from_u8(self.ce)?,
+            petal_count: self.n,
+        })
+    }
+}
+
+/// Legacy positional inventory entry from before the named-shape
+/// migration. Order: `[petal_center, core_center, petal_count,
+/// petal_edge, core_edge]`. Only accepted on decode; new writes always
+/// emit the named shape.
+fn legacy_tuple_to_flower(tuple: &[u8; 5]) -> Result<Flower, String> {
+    Ok(Flower {
+        petal_center: flower_color_from_u8(tuple[0])?,
+        petal_edge: flower_color_from_u8(tuple[3])?,
+        core_center: flower_core_from_u8(tuple[1])?,
+        core_edge: core_edge_from_u8(tuple[4])?,
+        petal_count: tuple[2],
+    })
+}
+
+fn flower_color_from_u8(v: u8) -> Result<FlowerColor, String> {
+    match v {
+        0 => Ok(FlowerColor::Red),
+        1 => Ok(FlowerColor::Yellow),
+        2 => Ok(FlowerColor::Blue),
+        3 => Ok(FlowerColor::Purple),
+        4 => Ok(FlowerColor::Azure),
+        5 => Ok(FlowerColor::Pink),
+        6 => Ok(FlowerColor::Glow),
+        _ => Err(format!("FlowerColor discriminant out of range: {v}")),
+    }
+}
+
+fn flower_core_from_u8(v: u8) -> Result<FlowerCore, String> {
+    match v {
+        0 => Ok(FlowerCore::White),
+        1 => Ok(FlowerCore::Yellow),
+        2 => Ok(FlowerCore::Black),
+        _ => Err(format!("FlowerCore discriminant out of range: {v}")),
+    }
+}
+
+fn core_edge_from_u8(v: u8) -> Result<CoreEdge, String> {
+    match v {
+        0 => Ok(CoreEdge::White),
+        1 => Ok(CoreEdge::MatchPetalCenter),
+        2 => Ok(CoreEdge::MatchPetalEdge),
+        _ => Err(format!("CoreEdge discriminant out of range: {v}")),
+    }
 }
 
 #[cfg(test)]
@@ -540,13 +544,22 @@ mod tests {
     }
 
     #[test]
+    fn facing_from_u8_rejects_out_of_range() {
+        for v in 0..=7_u8 {
+            assert!(Facing::from_u8(v).is_some(), "{v} should map to a Facing");
+        }
+        for v in 8_u8..=255 {
+            assert!(Facing::from_u8(v).is_none(), "{v} must be rejected");
+        }
+    }
+
+    #[test]
     fn x_wraps_at_world_circumference() {
         let mut w = World::new();
         let circ = world_circ_px();
         w.player.x = circ - 1.0;
-        // Apply a small eastward push — should wrap to ~0.
         let dt = 10.0;
-        let push = SPEED * dt + 2.0; // overshoot the wrap
+        let push = SPEED * dt + 2.0;
         w.player.x = circ - 1.0;
         w.step(INPUT_D, push / SPEED);
         assert!(w.player.x < circ);
@@ -554,26 +567,66 @@ mod tests {
     }
 
     #[test]
-    fn viewport_json_tiles_and_elev_match() {
-        let w = World::new();
-        let s = w.viewport_json(8, 6);
-        // Extract the "tiles":"..." and "elev":"..." payloads.
-        let tile_start = s.find(r#""tiles":""#).unwrap() + r#""tiles":""#.len();
-        let after_tiles = s[tile_start..].find('"').unwrap();
-        let tile_len = after_tiles;
-        let elev_start = s.find(r#""elev":""#).unwrap() + r#""elev":""#.len();
-        let after_elev = s[elev_start..].find('"').unwrap();
-        let elev_len = after_elev;
-        assert_eq!(tile_len, 48);
-        assert_eq!(elev_len, 48);
+    fn session_round_trip_preserves_inventory() {
+        let mut w = World::new();
+        w.player.inventory.push(Flower {
+            petal_center: FlowerColor::Red,
+            petal_edge: FlowerColor::Glow,
+            core_center: FlowerCore::Black,
+            core_edge: CoreEdge::MatchPetalEdge,
+            petal_count: 8,
+        });
+        w.player.picked.insert((10, -20));
+        let snap = w.session_snapshot_json();
+        let mut w2 = World::new();
+        w2.restore_session_json(&snap);
+        assert_eq!(w2.player.inventory.len(), 1);
+        assert_eq!(w2.player.inventory[0], w.player.inventory[0]);
+        assert!(w2.player.picked.contains(&(10, -20)));
     }
 
     #[test]
-    fn elev_char_roundtrip() {
-        for z in -32..=62 {
-            let c = elev_char(z);
-            let decoded = (c as i32) - 33 - 32;
-            assert_eq!(decoded, z, "elev_char({z}) = {c:?} → decoded {decoded}");
-        }
+    fn restore_session_rejects_malformed_input_and_surfaces_error() {
+        crate::error::reset();
+        let mut w = World::new();
+        w.restore_session_json("not even json");
+        assert!(w.player.inventory.is_empty(), "malformed input must not silently load anything");
+        let errs = crate::error::drain();
+        assert!(!errs.is_empty(), "sacred-error: malformed restore must surface");
+        assert_eq!(errs[0].context.surface, "roam::world::restore_session_json");
+    }
+
+    #[test]
+    fn restore_session_rejects_out_of_range_discriminant() {
+        crate::error::reset();
+        let mut w = World::new();
+        // pc=99 is out of FlowerColor range. The named-shape parse
+        // succeeds at the JSON level, but the discriminant check
+        // rejects it; the inventory must stay empty and the error
+        // must surface to the sacred-error log.
+        let bad = r#"{"picked":[],"inv":[{"pc":99,"pe":0,"cc":0,"ce":0,"n":5}]}"#;
+        w.restore_session_json(bad);
+        assert!(w.player.inventory.is_empty());
+        let errs = crate::error::drain();
+        assert!(!errs.is_empty());
+        assert!(
+            errs.iter().any(|e| e.why.contains("FlowerColor discriminant out of range")),
+            "sacred-error: out-of-range discriminant must say so"
+        );
+    }
+
+    #[test]
+    fn restore_session_migrates_legacy_tuple() {
+        let mut w = World::new();
+        // Legacy snapshot: positional tuple inventory.
+        let legacy = r#"{"picked":[[1,2]],"inv":[[0,2,8,6,2]]}"#;
+        w.restore_session_json(legacy);
+        assert_eq!(w.player.inventory.len(), 1);
+        let f = w.player.inventory[0];
+        assert_eq!(f.petal_center, FlowerColor::Red);
+        assert_eq!(f.core_center, FlowerCore::Black);
+        assert_eq!(f.petal_count, 8);
+        assert_eq!(f.petal_edge, FlowerColor::Glow);
+        assert_eq!(f.core_edge, CoreEdge::MatchPetalEdge);
     }
 }

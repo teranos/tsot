@@ -2,7 +2,13 @@
 
 use std::cell::RefCell;
 
-use crate::trace::{drain_json, emit, pending_count, TraceEvent};
+use crate::teranos::{FlowerColor, FlowerCore, TileKind};
+use crate::trace::{
+    drain_json, emit, pending_count, TraceEvent, STATE_READ_COUNT, TICK_BLOCKED_COUNT, TICK_COUNT,
+    VIEWPORT_READ_COUNT,
+};
+use std::sync::atomic::Ordering;
+use crate::viewport::{viewport_ptr, write_viewport};
 use crate::world::World;
 
 #[cfg(target_arch = "wasm32")]
@@ -44,21 +50,6 @@ pub(crate) fn roam_state_impl() -> String {
     })
 }
 
-pub(crate) fn roam_map_impl() -> String {
-    WORLD.with(|w| {
-        w.borrow()
-            .as_ref()
-            .map(World::map_json)
-            .unwrap_or_else(|| {
-                emit(TraceEvent::Note {
-                    tag: "roam_map",
-                    msg: "called before roam_init; returning {}".to_string(),
-                });
-                "{}".to_string()
-            })
-    })
-}
-
 pub(crate) fn roam_set_position_impl(x: f32, y: f32, facing: u8) {
     WORLD.with(|w| {
         if let Some(world) = w.borrow_mut().as_mut() {
@@ -72,19 +63,104 @@ pub(crate) fn roam_set_position_impl(x: f32, y: f32, facing: u8) {
     });
 }
 
-pub(crate) fn roam_viewport_impl(view_w: u32, view_h: u32) -> String {
-    WORLD.with(|w| {
-        w.borrow()
-            .as_ref()
-            .map(|world| world.viewport_json(view_w, view_h))
-            .unwrap_or_else(|| {
-                emit(TraceEvent::Note {
-                    tag: "roam_viewport",
-                    msg: "called before roam_init; returning {}".to_string(),
-                });
-                "{}".to_string()
-            })
+/// Binary viewport FFI. Writes the typed `[ViewportHeader, TileCell × N]`
+/// byte sequence into a thread-local buffer and returns the total length.
+/// JS reads the buffer through wasm memory at `roam_viewport_ptr()`.
+pub(crate) fn roam_viewport_write_impl(view_w: u32, view_h: u32) -> u32 {
+    WORLD.with(|w| match w.borrow().as_ref() {
+        Some(world) => write_viewport(world, view_w, view_h),
+        None => {
+            emit(TraceEvent::Note {
+                tag: "roam_viewport_write",
+                msg: "called before roam_init; returning 0".to_string(),
+            });
+            0
+        }
     })
+}
+
+pub(crate) fn roam_viewport_ptr_impl() -> u32 {
+    viewport_ptr()
+}
+
+/// Color table FFI. Returns a pointer to a static byte buffer of RGB
+/// triplets, laid out in the order documented below. Single source of
+/// truth: JS / Elm never re-invent RGB on their side.
+///
+/// Layout, all triplets are u8[3]:
+///
+///   [0..15)  TileKind:    Air, Grass, Rock, ShallowWater, DeepWater
+///   [15..36) FlowerColor: Red, Yellow, Blue, Purple, Azure, Pink, Glow
+///   [36..45) FlowerCore:  White, Yellow, Black
+///
+/// The discriminant of each enum value matches its position in the
+/// table; JS indexes as `palette[3 * (kind_offset + discriminant) + c]`.
+pub(crate) const COLOR_TABLE_LEN: u32 = 45;
+pub(crate) const COLOR_TABLE_TILE_OFFSET: u32 = 0;
+pub(crate) const COLOR_TABLE_PETAL_OFFSET: u32 = 15;
+pub(crate) const COLOR_TABLE_CORE_OFFSET: u32 = 36;
+
+thread_local! {
+    static COLOR_TABLE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn roam_color_table_ptr_impl() -> u32 {
+    COLOR_TABLE.with(|t| {
+        let mut buf = t.borrow_mut();
+        if buf.is_empty() {
+            for tk in [
+                TileKind::Air,
+                TileKind::Grass,
+                TileKind::Rock,
+                TileKind::ShallowWater,
+                TileKind::DeepWater,
+            ] {
+                buf.extend_from_slice(&tk.rgb());
+            }
+            for fc in [
+                FlowerColor::Red,
+                FlowerColor::Yellow,
+                FlowerColor::Blue,
+                FlowerColor::Purple,
+                FlowerColor::Azure,
+                FlowerColor::Pink,
+                FlowerColor::Glow,
+            ] {
+                buf.extend_from_slice(&fc.rgb());
+            }
+            for c in [FlowerCore::White, FlowerCore::Yellow, FlowerCore::Black] {
+                buf.extend_from_slice(&c.rgb());
+            }
+            debug_assert_eq!(buf.len() as u32, COLOR_TABLE_LEN);
+        }
+        buf.as_ptr() as u32
+    })
+}
+
+pub(crate) fn roam_color_table_len_impl() -> u32 {
+    COLOR_TABLE_LEN
+}
+
+pub(crate) fn roam_pixels_per_tile_impl() -> u32 {
+    crate::world::PIXELS_PER_TILE
+}
+
+// ----- per-frame counters (replaced the per-frame trace events) -----
+
+pub(crate) fn roam_tick_count_impl() -> u64 {
+    TICK_COUNT.load(Ordering::Relaxed)
+}
+
+pub(crate) fn roam_tick_blocked_count_impl() -> u64 {
+    TICK_BLOCKED_COUNT.load(Ordering::Relaxed)
+}
+
+pub(crate) fn roam_state_read_count_impl() -> u64 {
+    STATE_READ_COUNT.load(Ordering::Relaxed)
+}
+
+pub(crate) fn roam_viewport_read_count_impl() -> u64 {
+    VIEWPORT_READ_COUNT.load(Ordering::Relaxed)
 }
 
 pub(crate) fn roam_drain_trace_impl() -> String {
@@ -110,7 +186,7 @@ pub(crate) fn roam_session_snapshot_impl() -> String {
                     tag: "roam_session_snapshot",
                     msg: "called before roam_init; returning empty".to_string(),
                 });
-                r#"{"picked":[],"inv":[0,0,0,0,0,0,0]}"#.to_string()
+                r#"{"picked":[],"inv":[]}"#.to_string()
             })
     })
 }
@@ -148,13 +224,48 @@ mod wasm_exports {
     }
 
     #[wasm_bindgen]
-    pub fn roam_map() -> String {
-        super::roam_map_impl()
+    pub fn roam_viewport_write(view_w: u32, view_h: u32) -> u32 {
+        super::roam_viewport_write_impl(view_w, view_h)
     }
 
     #[wasm_bindgen]
-    pub fn roam_viewport(view_w: u32, view_h: u32) -> String {
-        super::roam_viewport_impl(view_w, view_h)
+    pub fn roam_viewport_ptr() -> u32 {
+        super::roam_viewport_ptr_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_color_table_ptr() -> u32 {
+        super::roam_color_table_ptr_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_color_table_len() -> u32 {
+        super::roam_color_table_len_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_pixels_per_tile() -> u32 {
+        super::roam_pixels_per_tile_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_tick_count() -> u64 {
+        super::roam_tick_count_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_tick_blocked_count() -> u64 {
+        super::roam_tick_blocked_count_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_state_read_count() -> u64 {
+        super::roam_state_read_count_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_viewport_read_count() -> u64 {
+        super::roam_viewport_read_count_impl()
     }
 
     #[wasm_bindgen]

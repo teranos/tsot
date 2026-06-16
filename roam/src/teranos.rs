@@ -15,6 +15,8 @@ pub const INVOCATION: &str = "And I hereby invoke the Existence of Teranos, the 
 // First 8 bytes interpreted as little-endian u64.
 // Verify:
 //   printf '%s' "$INVOCATION" | shasum -a 256
+// The literal is checked against an in-test re-derivation; compile-time
+// SHA-256 derivation lands when const_sha2 is added (separate slice).
 pub const WORLD_SEED: u64 = 0x2b1b_0a0c_cfa7_de5a;
 
 // World topology: a cylinder. X wraps; Y is bounded by polar ocean.
@@ -45,6 +47,18 @@ pub const SURFACE_Z_MAX: i32 = 16;
 pub const TERRACE_STEP: i32 = 3;
 pub const GRADIENT_THRESHOLD: f32 = 0.65;
 
+// Noise frequencies in inverse-tile units. `SURFACE_NOISE_FREQUENCY =
+// 1/64` means one full surface-noise period spans 64 tiles. Break and
+// cave frequencies are tuned to the visual features they generate
+// (cliff segmentation, cave size).
+pub const SURFACE_NOISE_FREQUENCY: f32 = 1.0 / 64.0;
+pub const BREAK_NOISE_FREQUENCY: f32 = 1.0 / 24.0;
+pub const CAVE_NOISE_FREQUENCY: f32 = 1.0 / 24.0;
+pub const SURFACE_NOISE_OCTAVES: u32 = 4;
+pub const BREAK_NOISE_OCTAVES: u32 = 1;
+pub const CAVE_NOISE_OCTAVES: u32 = 3;
+pub const CAVE_OPEN_THRESHOLD: f32 = 0.45;
+
 // Day length in real seconds. 5 hours = one full day-night cycle.
 // Position-dependent phase: longitude shifts local phase.
 pub const DAY_LENGTH_SECS: u64 = 18000;
@@ -59,23 +73,161 @@ pub const FLASHLIGHT_CONE_ANGLE_DEG: f32 = 60.0;
 // Voxel kinds. Walkability and rendering are downstream of this enum
 // (see roam::world). Keep this set small until there's a reason to split.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum TileKind {
-    Air,
-    Grass,
-    Rock,
-    ShallowWater,
-    DeepWater,
+    Air = 0,
+    Grass = 1,
+    Rock = 2,
+    ShallowWater = 3,
+    DeepWater = 4,
 }
 
-// ----- noise primitives -----
+impl TileKind {
+    /// Single source of truth for tile color. JS / Elm read this via the
+    /// FFI color table; never re-invent RGB on the JS side.
+    pub const fn rgb(self) -> [u8; 3] {
+        match self {
+            TileKind::Air => [10, 10, 12],
+            TileKind::Grass => [70, 122, 64],
+            TileKind::Rock => [110, 100, 90],
+            TileKind::ShallowWater => [80, 130, 180],
+            TileKind::DeepWater => [40, 70, 130],
+        }
+    }
+}
+
+// ----- splitmix64 -----
+
+// Named constants from Steele/Lea SplitMix64. These ARE the algorithm —
+// changing them produces a different RNG. They live as named consts so
+// "0x9E3779B97F4A7C15" never appears as a bare literal in the codebase.
+pub const SPLITMIX_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+pub const SPLITMIX_MIX_1: u64 = 0xBF58_476D_1CE4_E5B9;
+pub const SPLITMIX_MIX_2: u64 = 0x94D0_49BB_1331_11EB;
 
 #[inline]
 fn splitmix64(mut x: u64) -> u64 {
-    x = x.wrapping_add(0x9E3779B97F4A7C15);
-    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    x = x.wrapping_add(SPLITMIX_GAMMA);
+    x = (x ^ (x >> 30)).wrapping_mul(SPLITMIX_MIX_1);
+    x = (x ^ (x >> 27)).wrapping_mul(SPLITMIX_MIX_2);
     x ^ (x >> 31)
 }
+
+// ----- named-derivation hash dimensions -----
+
+// Each independent hash off (x, y) used in worldgen gets its own
+// dimension. The dimension's salt and multiplier are derived from the
+// variant name via FNV-1a-64 at compile time — renaming a dimension
+// reshuffles the world; no hand-typed magic hex literals.
+//
+// HashDimension is internal to teranos.rs because it's a worldgen
+// implementation detail, not part of the public Flower surface.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum HashDimension {
+    FlowerPresence,
+    FlowerPetalEdge,
+    FlowerCoreCenter,
+    FlowerCoreEdge,
+    FlowerPetalCount,
+    TerrainBreakNoise,
+    TerrainCaveCarve,
+}
+
+const FNV_PRIME_64: u64 = 0x0000_0100_0000_01b3;
+const FNV_OFFSET_BASIS_SALT: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_OFFSET_BASIS_MULT: u64 = 0xa3b8_c91e_7d6a_2f47;
+
+const fn fnv1a_64(name: &[u8], offset_basis: u64) -> u64 {
+    let mut h: u64 = offset_basis;
+    let mut i = 0;
+    while i < name.len() {
+        h ^= name[i] as u64;
+        h = h.wrapping_mul(FNV_PRIME_64);
+        i += 1;
+    }
+    h
+}
+
+impl HashDimension {
+    const fn name(self) -> &'static [u8] {
+        match self {
+            Self::FlowerPresence => b"FlowerPresence",
+            Self::FlowerPetalEdge => b"FlowerPetalEdge",
+            Self::FlowerCoreCenter => b"FlowerCoreCenter",
+            Self::FlowerCoreEdge => b"FlowerCoreEdge",
+            Self::FlowerPetalCount => b"FlowerPetalCount",
+            Self::TerrainBreakNoise => b"TerrainBreakNoise",
+            Self::TerrainCaveCarve => b"TerrainCaveCarve",
+        }
+    }
+
+    const fn salt(self) -> u64 {
+        fnv1a_64(self.name(), FNV_OFFSET_BASIS_SALT)
+    }
+
+    /// OR'd with 1 to guarantee odd — odd multipliers make 64-bit
+    /// integer multiply a permutation, which keeps the hash bijective
+    /// in its multiplier step.
+    const fn mult(self) -> u64 {
+        fnv1a_64(self.name(), FNV_OFFSET_BASIS_MULT) | 1
+    }
+}
+
+/// 64-bit hash of (x, y) parametrized by an independent dimension.
+/// Same (x, y, dimension) on every peer = same hash, no coordination
+/// required. The cylinder seam is folded by canonicalizing x first.
+fn world_hash(x: i32, y: i32, dim: HashDimension) -> u64 {
+    let cx = canonical_x(x);
+    splitmix64(
+        WORLD_SEED
+            ^ dim.salt()
+            ^ ((cx as i64 as u64).wrapping_mul(dim.mult()))
+            ^ (y as i64 as u64),
+    )
+}
+
+// ----- weighted-pick over typed tables -----
+
+/// Sum of a const weight table. Compile-time so the total can be checked
+/// against an expected value via `const _: () = assert!(...)`.
+const fn weight_table_sum<T: Copy, const N: usize>(table: &[(T, u16); N]) -> u32 {
+    let mut sum: u32 = 0;
+    let mut i = 0;
+    while i < N {
+        sum += table[i].1 as u32;
+        i += 1;
+    }
+    sum
+}
+
+/// Deterministic weighted pick. `r` is a uniform 64-bit hash; modulo
+/// `total` selects an index biased by each row's weight.
+///
+/// `total` is passed in (not recomputed) because callers pin it as a
+/// compile-time constant — the const sum-check on the table catches
+/// any drift between declared `total` and actual sum at compile time.
+fn pick_weighted<T: Copy, const N: usize>(
+    r: u64,
+    table: &[(T, u16); N],
+    total: u32,
+) -> T {
+    let mut x = (r % total as u64) as u32;
+    let mut i = 0;
+    while i < N {
+        let w = table[i].1 as u32;
+        if x < w {
+            return table[i].0;
+        }
+        x -= w;
+        i += 1;
+    }
+    // Unreachable when `total == sum(table)`. The const sum-check on
+    // every declared table guarantees this; if we land here it's a
+    // logic bug in this function, not a caller-data problem.
+    unreachable!("pick_weighted: weight table inconsistent with declared total")
+}
+
+// ----- noise primitives -----
 
 #[inline]
 fn lattice_value(seed: u64, x: i32, y: i32, z: i32) -> f32 {
@@ -153,6 +305,9 @@ fn value_noise_3d(seed: u64, xf: f32, yf: f32, zf: f32, x_period: i32) -> f32 {
 // `x_period_base` is the lattice wrap width at octave 0; doubles each
 // octave (since each octave doubles the frequency, the lattice spans
 // twice as many points across the same world distance).
+//
+// Per-octave seed offset uses SPLITMIX_GAMMA so consecutive octaves
+// land at uncorrelated noise tables — same constant, named role.
 fn fractal_2d(seed: u64, x: f32, y: f32, octaves: u32, x_period_base: i32) -> f32 {
     let mut total = 0.0;
     let mut amp = 1.0;
@@ -160,7 +315,7 @@ fn fractal_2d(seed: u64, x: f32, y: f32, octaves: u32, x_period_base: i32) -> f3
     let mut max_amp = 0.0;
     let mut period = x_period_base;
     for o in 0..octaves {
-        let oseed = seed.wrapping_add((o as u64).wrapping_mul(0x9E3779B97F4A7C15));
+        let oseed = seed.wrapping_add((o as u64).wrapping_mul(SPLITMIX_GAMMA));
         total += value_noise_2d(oseed, x * freq, y * freq, period) * amp;
         max_amp += amp;
         amp *= 0.5;
@@ -177,7 +332,7 @@ fn fractal_3d(seed: u64, x: f32, y: f32, z: f32, octaves: u32, x_period_base: i3
     let mut max_amp = 0.0;
     let mut period = x_period_base;
     for o in 0..octaves {
-        let oseed = seed.wrapping_add((o as u64).wrapping_mul(0x9E3779B97F4A7C15));
+        let oseed = seed.wrapping_add((o as u64).wrapping_mul(SPLITMIX_GAMMA));
         total += value_noise_3d(oseed, x * freq, y * freq, z * freq, period) * amp;
         max_amp += amp;
         amp *= 0.5;
@@ -202,9 +357,14 @@ fn canonical_x(x: i32) -> i32 {
 fn raw_elevation(x: i32, y: i32) -> f32 {
     let cy = y.clamp(-WORLD_Y_LAT, WORLD_Y_LAT);
     let cx = canonical_x(x);
-    let s = 1.0 / 64.0;
-    let x_period_base = (WORLD_CIRC_X as f32 * s) as i32;
-    let n = fractal_2d(WORLD_SEED, cx as f32 * s, cy as f32 * s, 4, x_period_base);
+    let x_period_base = (WORLD_CIRC_X as f32 * SURFACE_NOISE_FREQUENCY) as i32;
+    let n = fractal_2d(
+        WORLD_SEED,
+        cx as f32 * SURFACE_NOISE_FREQUENCY,
+        cy as f32 * SURFACE_NOISE_FREQUENCY,
+        SURFACE_NOISE_OCTAVES,
+        x_period_base,
+    );
     let amplitude = (SURFACE_Z_MAX - SURFACE_Z_MIN) as f32 * 0.5;
     let mid = (SURFACE_Z_MAX + SURFACE_Z_MIN) as f32 * 0.5;
     n * amplitude + mid
@@ -222,15 +382,15 @@ pub fn surface_z(x: i32, y: i32) -> i32 {
 
     // Break noise: high-frequency mask that interrupts long ridges into
     // short cliff segments. Period 24 tiles → contiguous "cliff allowed"
-    // patches of ~12 tiles separated by ~12-tile smooth gaps.
-    let bs = 1.0 / 24.0;
-    let bs_period = (WORLD_CIRC_X as f32 * bs) as i32;
+    // patches of ~12 tiles separated by ~12-tile smooth gaps. The hash
+    // dimension carries the named seed; no hand-typed magic salt.
+    let bs_period = (WORLD_CIRC_X as f32 * BREAK_NOISE_FREQUENCY) as i32;
     let cx = canonical_x(x);
     let break_noise = fractal_2d(
-        WORLD_SEED.wrapping_add(0xBE_AC_07_BE_AC_07_BE),
-        cx as f32 * bs,
-        y as f32 * bs,
-        1,
+        WORLD_SEED ^ HashDimension::TerrainBreakNoise.salt(),
+        cx as f32 * BREAK_NOISE_FREQUENCY,
+        y as f32 * BREAK_NOISE_FREQUENCY,
+        BREAK_NOISE_OCTAVES,
         bs_period,
     );
     let break_active = break_noise > 0.0;
@@ -243,187 +403,189 @@ pub fn surface_z(x: i32, y: i32) -> i32 {
     z.clamp(SURFACE_Z_MIN, SURFACE_Z_MAX)
 }
 
-/// Flower colors with hand-tuned rarity weights summing to 1000.
-/// Red and yellow are common; blue/purple/azure are rare;
-/// pink is super-rare; glow is super-mega-rare.
+// ----- flowers -----
+
+/// Petal-edge / petal-center color. Rarity weights are declared in
+/// `FLOWER_COLOR_WEIGHTS` below; the const sum-check guards them.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum FlowerColor {
-    Red,
-    Yellow,
-    Blue,
-    Purple,
-    Azure,
-    Pink,
-    Glow,
+    Red = 0,
+    Yellow = 1,
+    Blue = 2,
+    Purple = 3,
+    Azure = 4,
+    Pink = 5,
+    Glow = 6,
 }
 
-const FLOWER_DENSITY_DENOM: u64 = 60; // ~1 in 60 grass tiles
+impl FlowerColor {
+    pub const fn rgb(self) -> [u8; 3] {
+        match self {
+            FlowerColor::Red => [0xee, 0x44, 0x44],
+            FlowerColor::Yellow => [0xff, 0xdd, 0x44],
+            FlowerColor::Blue => [0x44, 0x88, 0xff],
+            FlowerColor::Purple => [0xaa, 0x44, 0xff],
+            FlowerColor::Azure => [0x44, 0xcc, 0xff],
+            FlowerColor::Pink => [0xff, 0x99, 0xcc],
+            FlowerColor::Glow => [0xff, 0xff, 0xff],
+        }
+    }
+}
 
-/// Deterministic flower presence + color for a given (x, y). Only
-/// spawns on land columns (not water, not polar ocean). Same inputs
-/// from any peer = same flower; nothing has to be agreed on at runtime.
-pub fn flower_at(x: i32, y: i32) -> Option<FlowerColor> {
+/// Core-center color. Black is super-mega-rare.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FlowerCore {
+    White = 0,
+    Yellow = 1,
+    Black = 2,
+}
+
+impl FlowerCore {
+    pub const fn rgb(self) -> [u8; 3] {
+        match self {
+            FlowerCore::White => [0xff, 0xff, 0xff],
+            FlowerCore::Yellow => [0xff, 0xdd, 0x44],
+            FlowerCore::Black => [0x10, 0x10, 0x10],
+        }
+    }
+}
+
+/// Outer-edge color of the core's radial gradient. White (most common),
+/// or matches one of the petal colors.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CoreEdge {
+    White = 0,
+    MatchPetalCenter = 1,
+    MatchPetalEdge = 2,
+}
+
+// ----- flower weight tables -----
+
+const FLOWER_COLOR_WEIGHTS: [(FlowerColor, u16); 7] = [
+    (FlowerColor::Red, 350),
+    (FlowerColor::Yellow, 350),
+    (FlowerColor::Blue, 70),
+    (FlowerColor::Purple, 70),
+    (FlowerColor::Azure, 70),
+    (FlowerColor::Pink, 60),
+    (FlowerColor::Glow, 30),
+];
+const FLOWER_COLOR_WEIGHTS_TOTAL: u32 = 1000;
+const _: () = assert!(
+    weight_table_sum(&FLOWER_COLOR_WEIGHTS) == FLOWER_COLOR_WEIGHTS_TOTAL,
+    "FLOWER_COLOR_WEIGHTS rows must sum to FLOWER_COLOR_WEIGHTS_TOTAL",
+);
+
+const FLOWER_CORE_WEIGHTS: [(FlowerCore, u16); 3] = [
+    (FlowerCore::White, 495),
+    (FlowerCore::Yellow, 495),
+    (FlowerCore::Black, 10),
+];
+const FLOWER_CORE_WEIGHTS_TOTAL: u32 = 1000;
+const _: () = assert!(
+    weight_table_sum(&FLOWER_CORE_WEIGHTS) == FLOWER_CORE_WEIGHTS_TOTAL,
+    "FLOWER_CORE_WEIGHTS rows must sum to FLOWER_CORE_WEIGHTS_TOTAL",
+);
+
+const CORE_EDGE_WEIGHTS: [(CoreEdge, u16); 3] = [
+    (CoreEdge::White, 70),
+    (CoreEdge::MatchPetalCenter, 15),
+    (CoreEdge::MatchPetalEdge, 15),
+];
+const CORE_EDGE_WEIGHTS_TOTAL: u32 = 100;
+const _: () = assert!(
+    weight_table_sum(&CORE_EDGE_WEIGHTS) == CORE_EDGE_WEIGHTS_TOTAL,
+    "CORE_EDGE_WEIGHTS rows must sum to CORE_EDGE_WEIGHTS_TOTAL",
+);
+
+const PETAL_COUNT_WEIGHTS: [(u8, u16); 4] = [
+    (5, 9939),
+    (6, 50),
+    (7, 10),
+    (8, 1),
+];
+const PETAL_COUNT_WEIGHTS_TOTAL: u32 = 10000;
+const _: () = assert!(
+    weight_table_sum(&PETAL_COUNT_WEIGHTS) == PETAL_COUNT_WEIGHTS_TOTAL,
+    "PETAL_COUNT_WEIGHTS rows must sum to PETAL_COUNT_WEIGHTS_TOTAL",
+);
+
+/// Density of flowers on land: roughly one flower per N candidate
+/// tiles. The presence-hash gate fires when the dimension's hash for
+/// (x, y) is a multiple of this denominator.
+pub const FLOWER_DENSITY_DENOM: u64 = 60;
+
+/// A flower at a specific (x, y). Every field is derived from its own
+/// hash dimension off the same (x, y) so peers compute identical
+/// appearance without coordination.
+///
+/// 7 (petal_center) × 7 (petal_edge) × 3 (core_center) × 3 (core_edge)
+/// × 4 (petal_count) = 1764 distinct kinds.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct Flower {
+    pub petal_center: FlowerColor,
+    pub petal_edge: FlowerColor,
+    pub core_center: FlowerCore,
+    pub core_edge: CoreEdge,
+    pub petal_count: u8,
+}
+
+/// Deterministic flower at (x, y). Returns None for water columns,
+/// polar ocean, or tiles where the presence-hash gate doesn't fire.
+/// Once Some, every field of the returned Flower is fully determined —
+/// no further None-checking and no defaults required by callers.
+pub fn flower_at(x: i32, y: i32) -> Option<Flower> {
     if y.abs() > WORLD_Y_LAT {
         return None;
     }
     if surface_z(x, y) < 0 {
         return None;
     }
-    let cx = canonical_x(x);
-    let h = splitmix64(
-        WORLD_SEED
-            ^ 0xF10E_1257_F10E_1257
-            ^ ((cx as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
-            ^ (y as i64 as u64),
-    );
-    if !h.is_multiple_of(FLOWER_DENSITY_DENOM) {
+    let presence_hash = world_hash(x, y, HashDimension::FlowerPresence);
+    if !presence_hash.is_multiple_of(FLOWER_DENSITY_DENOM) {
         return None;
     }
-    let r = (splitmix64(h) >> 32) % 1000;
-    let color = match r {
-        0..=349 => FlowerColor::Red,
-        350..=699 => FlowerColor::Yellow,
-        700..=769 => FlowerColor::Blue,
-        770..=839 => FlowerColor::Purple,
-        840..=909 => FlowerColor::Azure,
-        910..=969 => FlowerColor::Pink,
-        _ => FlowerColor::Glow,
-    };
-    Some(color)
-}
-
-/// Char encoding for the viewport's parallel flower string. '0' is
-/// "no flower"; '1'..='7' are colors in declaration order. Mirrors
-/// the tile_char + elev_char pattern in world.rs.
-pub fn flower_char(f: Option<FlowerColor>) -> char {
-    match f {
-        None => '0',
-        Some(FlowerColor::Red) => '1',
-        Some(FlowerColor::Yellow) => '2',
-        Some(FlowerColor::Blue) => '3',
-        Some(FlowerColor::Purple) => '4',
-        Some(FlowerColor::Azure) => '5',
-        Some(FlowerColor::Pink) => '6',
-        Some(FlowerColor::Glow) => '7',
-    }
-}
-
-/// Petal-center color. Mostly white or yellow; very very very very
-/// rare black core. Determined by a second hash off the same (x, y)
-/// so every peer agrees on what each flower looks like.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum FlowerCore {
-    White,
-    Yellow,
-    Black,
-}
-
-pub fn flower_core_at(x: i32, y: i32) -> Option<FlowerCore> {
-    flower_at(x, y)?;
-    let cx = canonical_x(x);
-    let h = splitmix64(
-        WORLD_SEED
-            ^ 0xC0_5E_C0_5E_C0_5E_C0_5E
-            ^ ((cx as i64 as u64).wrapping_mul(0x94D0_49BB_1331_11EB))
-            ^ (y as i64 as u64),
+    // Petal center: an extra splitmix round on the presence hash so
+    // it decorrelates from the density gate but shares its derivation.
+    let petal_center = pick_weighted(
+        splitmix64(presence_hash) >> 32,
+        &FLOWER_COLOR_WEIGHTS,
+        FLOWER_COLOR_WEIGHTS_TOTAL,
     );
-    let r = (h >> 32) % 1000;
-    Some(match r {
-        0..=494 => FlowerCore::White,
-        495..=989 => FlowerCore::Yellow,
-        _ => FlowerCore::Black,
+    let petal_edge = pick_weighted(
+        world_hash(x, y, HashDimension::FlowerPetalEdge) >> 32,
+        &FLOWER_COLOR_WEIGHTS,
+        FLOWER_COLOR_WEIGHTS_TOTAL,
+    );
+    let core_center = pick_weighted(
+        world_hash(x, y, HashDimension::FlowerCoreCenter) >> 32,
+        &FLOWER_CORE_WEIGHTS,
+        FLOWER_CORE_WEIGHTS_TOTAL,
+    );
+    let core_edge = pick_weighted(
+        world_hash(x, y, HashDimension::FlowerCoreEdge) >> 32,
+        &CORE_EDGE_WEIGHTS,
+        CORE_EDGE_WEIGHTS_TOTAL,
+    );
+    let petal_count = pick_weighted(
+        world_hash(x, y, HashDimension::FlowerPetalCount) >> 32,
+        &PETAL_COUNT_WEIGHTS,
+        PETAL_COUNT_WEIGHTS_TOTAL,
+    );
+    Some(Flower {
+        petal_center,
+        petal_edge,
+        core_center,
+        core_edge,
+        petal_count,
     })
 }
 
-pub fn flower_core_char(c: Option<FlowerCore>) -> char {
-    match c {
-        None => '0',
-        Some(FlowerCore::White) => '1',
-        Some(FlowerCore::Yellow) => '2',
-        Some(FlowerCore::Black) => '3',
-    }
-}
-
-/// The core renders as a radial gradient too. The edge color is one
-/// of: white (most common), petal-center color, or petal-edge color.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum CoreEdge {
-    White,
-    MatchCenter,
-    MatchEdge,
-}
-
-pub fn flower_core_edge_at(x: i32, y: i32) -> Option<CoreEdge> {
-    flower_at(x, y)?;
-    let cx = canonical_x(x);
-    let h = splitmix64(
-        WORLD_SEED
-            ^ 0xC05E_ED6E_DEAD_BEEF
-            ^ ((cx as i64 as u64).wrapping_mul(0x7F4A_7C15_BF58_476D))
-            ^ (y as i64 as u64),
-    );
-    let r = (h >> 32) % 100;
-    Some(match r {
-        0..=69 => CoreEdge::White,
-        70..=84 => CoreEdge::MatchCenter,
-        _ => CoreEdge::MatchEdge,
-    })
-}
-
-pub fn core_edge_char(c: Option<CoreEdge>) -> char {
-    match c {
-        None => '0',
-        Some(CoreEdge::White) => '1',
-        Some(CoreEdge::MatchCenter) => '2',
-        Some(CoreEdge::MatchEdge) => '3',
-    }
-}
-
-/// Petal count for a flower. 5 is overwhelmingly common; 6/7/8 are
-/// increasingly rare tiers. Returns None if there's no flower at (x,y).
-/// Distribution (per 10000): 5 = 9939, 6 = 50, 7 = 10, 8 = 1.
-/// Petal-edge color — same 7-color vocabulary and same rarity weights
-/// as `flower_at`, drawn from an independent hash. Renders as a
-/// radial gradient inside each petal (center = petal color,
-/// edge = this color).
-pub fn flower_edge_at(x: i32, y: i32) -> Option<FlowerColor> {
-    flower_at(x, y)?;
-    let cx = canonical_x(x);
-    let h = splitmix64(
-        WORLD_SEED
-            ^ 0xED6E_ED6E_BA5E_C0DE
-            ^ ((cx as i64 as u64).wrapping_mul(0x94D0_49BB_1331_11EB))
-            ^ (y as i64 as u64),
-    );
-    let r = (h >> 32) % 1000;
-    Some(match r {
-        0..=349 => FlowerColor::Red,
-        350..=699 => FlowerColor::Yellow,
-        700..=769 => FlowerColor::Blue,
-        770..=839 => FlowerColor::Purple,
-        840..=909 => FlowerColor::Azure,
-        910..=969 => FlowerColor::Pink,
-        _ => FlowerColor::Glow,
-    })
-}
-
-pub fn flower_petals_at(x: i32, y: i32) -> Option<u8> {
-    flower_at(x, y)?;
-    let cx = canonical_x(x);
-    let h = splitmix64(
-        WORLD_SEED
-            ^ 0x5EAF_5EAF_C0DE_F123
-            ^ ((cx as i64 as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9))
-            ^ (y as i64 as u64),
-    );
-    let r = (h >> 32) % 10000;
-    Some(match r {
-        0 => 8,
-        1..=10 => 7,
-        11..=60 => 6,
-        _ => 5,
-    })
-}
+// ----- tiles -----
 
 pub fn tile_at(x: i32, y: i32, z: i32) -> TileKind {
     if !(Z_MIN..=Z_MAX).contains(&z) {
@@ -461,12 +623,18 @@ pub fn tile_at(x: i32, y: i32, z: i32) -> TileKind {
     }
 
     // Subsurface: cave-carving 3D noise. Threshold tuned for ~30% open space.
-    let cs = 1.0 / 24.0;
-    let cseed = WORLD_SEED.wrapping_add(0xC0FFEE_C0FFEE);
+    let cseed = WORLD_SEED ^ HashDimension::TerrainCaveCarve.salt();
     let cx = canonical_x(x);
-    let cave_x_period = (WORLD_CIRC_X as f32 * cs) as i32;
-    let n = fractal_3d(cseed, cx as f32 * cs, y as f32 * cs, z as f32 * cs, 3, cave_x_period);
-    if n > 0.45 {
+    let cave_x_period = (WORLD_CIRC_X as f32 * CAVE_NOISE_FREQUENCY) as i32;
+    let n = fractal_3d(
+        cseed,
+        cx as f32 * CAVE_NOISE_FREQUENCY,
+        y as f32 * CAVE_NOISE_FREQUENCY,
+        z as f32 * CAVE_NOISE_FREQUENCY,
+        CAVE_NOISE_OCTAVES,
+        cave_x_period,
+    );
+    if n > CAVE_OPEN_THRESHOLD {
         TileKind::Air
     } else {
         TileKind::Rock
@@ -508,7 +676,6 @@ mod tests {
 
     #[test]
     fn surface_z_is_deterministic() {
-        // Same input, same output. Always.
         let a = surface_z(123, -456);
         let b = surface_z(123, -456);
         assert_eq!(a, b);
@@ -532,9 +699,6 @@ mod tests {
 
     #[test]
     fn most_terrain_is_walkable() {
-        // In a 200x200 sample, the overwhelming majority of adjacent
-        // column pairs should be walkable (|Δz| ≤ 1). If most are
-        // cliffs, the cliff_mask threshold is set wrong.
         let mut walkable = 0;
         let mut total = 0;
         for x in -100..100 {
@@ -551,8 +715,6 @@ mod tests {
 
     #[test]
     fn cliffs_exist_but_sparse() {
-        // Cliffs (|Δz| > 1) exist but stay rare. Sample a 400x400 block
-        // since cliff zones at scale 1/256 may not show up in 200x200.
         let mut cliffs = 0;
         let mut total = 0;
         for x in -200..200 {
@@ -570,7 +732,6 @@ mod tests {
 
     #[test]
     fn surface_z_wraps_in_x() {
-        // x and x + WORLD_CIRC_X must agree.
         let here = surface_z(7, 100);
         let wrapped = surface_z(7 + WORLD_CIRC_X, 100);
         assert_eq!(here, wrapped);
@@ -597,7 +758,6 @@ mod tests {
         for x in -50..50 {
             for y in -50..50 {
                 let sz = surface_z(x, y);
-                // One above the surface (or sea level for water columns) must be Air.
                 let air_z = sz.max(0) + 1;
                 assert_eq!(tile_at(x, y, air_z), TileKind::Air, "expected Air at ({x},{y},{air_z}) sz={sz}");
             }
@@ -606,7 +766,6 @@ mod tests {
 
     #[test]
     fn tile_at_water_at_sea_level_below_sea() {
-        // Find a column with sz < 0 and confirm z=0 is water.
         let mut found = false;
         'outer: for x in 0..200 {
             for y in 0..200 {
@@ -625,7 +784,6 @@ mod tests {
 
     #[test]
     fn tile_at_polar_zone_is_ocean() {
-        // Any column past Y_LAT should have water at sea level.
         let y = WORLD_Y_LAT + 100;
         let t = tile_at(0, y, 0);
         assert_eq!(t, TileKind::DeepWater);
@@ -633,7 +791,6 @@ mod tests {
 
     #[test]
     fn day_phase_wraps_with_longitude() {
-        // Phase at (x, t) must equal phase at (x + CIRC_X, t).
         let a = day_phase(1_700_000_000, 100);
         let b = day_phase(1_700_000_000, 100 + WORLD_CIRC_X);
         assert!((a - b).abs() < 1e-6);
@@ -649,5 +806,111 @@ mod tests {
         assert!(midnight < 0.01);
         assert!((dawn - 0.5).abs() < 1e-4);
         assert!((dusk - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn hash_dimensions_have_distinct_salts() {
+        // If two dimensions hash to the same salt, their values are
+        // perfectly correlated — a worldgen bug. FNV-1a over distinct
+        // variant names should never collide.
+        let dims = [
+            HashDimension::FlowerPresence,
+            HashDimension::FlowerPetalEdge,
+            HashDimension::FlowerCoreCenter,
+            HashDimension::FlowerCoreEdge,
+            HashDimension::FlowerPetalCount,
+            HashDimension::TerrainBreakNoise,
+            HashDimension::TerrainCaveCarve,
+        ];
+        for i in 0..dims.len() {
+            for j in (i + 1)..dims.len() {
+                assert_ne!(
+                    dims[i].salt(),
+                    dims[j].salt(),
+                    "salt collision between {:?} and {:?}",
+                    dims[i],
+                    dims[j]
+                );
+                assert_ne!(
+                    dims[i].mult(),
+                    dims[j].mult(),
+                    "mult collision between {:?} and {:?}",
+                    dims[i],
+                    dims[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hash_dimension_mult_is_odd() {
+        // Odd multiplier keeps the multiply step bijective. The `| 1`
+        // in HashDimension::mult guarantees this.
+        for dim in [
+            HashDimension::FlowerPresence,
+            HashDimension::FlowerPetalEdge,
+            HashDimension::FlowerCoreCenter,
+            HashDimension::FlowerCoreEdge,
+            HashDimension::FlowerPetalCount,
+            HashDimension::TerrainBreakNoise,
+            HashDimension::TerrainCaveCarve,
+        ] {
+            assert_eq!(dim.mult() & 1, 1, "{:?}.mult() must be odd", dim);
+        }
+    }
+
+    #[test]
+    fn pick_weighted_distribution_matches_weights() {
+        // Sample 100k uniform hashes and check that the empirical
+        // distribution matches FLOWER_COLOR_WEIGHTS within ±2%.
+        let mut counts = [0u32; 7];
+        for i in 0..100_000_u64 {
+            let r = splitmix64(i);
+            let c = pick_weighted(r, &FLOWER_COLOR_WEIGHTS, FLOWER_COLOR_WEIGHTS_TOTAL);
+            counts[c as usize] += 1;
+        }
+        for (color, weight) in FLOWER_COLOR_WEIGHTS {
+            let observed = counts[color as usize] as f32 / 100_000.0;
+            let expected = weight as f32 / FLOWER_COLOR_WEIGHTS_TOTAL as f32;
+            let diff = (observed - expected).abs();
+            assert!(
+                diff < 0.02,
+                "color {:?}: observed {:.3} expected {:.3}",
+                color,
+                observed,
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn flower_at_deterministic() {
+        let a = flower_at(123, -456);
+        let b = flower_at(123, -456);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn flower_at_density_in_range() {
+        // Over a 200x200 land sample, density should be near 1/60.
+        // Allow generous slack since the gate is non-uniform per column.
+        let mut flowers = 0;
+        let mut land = 0;
+        for x in 0..200 {
+            for y in 0..200 {
+                if surface_z(x, y) >= 0 {
+                    land += 1;
+                    if flower_at(x, y).is_some() {
+                        flowers += 1;
+                    }
+                }
+            }
+        }
+        let density = flowers as f32 / land as f32;
+        let expected = 1.0 / FLOWER_DENSITY_DENOM as f32;
+        assert!(
+            (density - expected).abs() < expected,
+            "flower density {density:.4} far from expected {expected:.4}"
+        );
     }
 }

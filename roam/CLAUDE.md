@@ -25,6 +25,34 @@ a structured event into the trace bus. The UI renders the bus. No
 
 **Don't take the path of least resistance.**
 
+**JS is used in spite, not by choice.** It exists only because the
+browser refuses to let wasm call `gl.drawArrays`, `canvas.getContext`,
+`localStorage.setItem`, `libp2p.dial`, or `addEventListener` directly.
+Every line of JS in this project must be one of:
+
+1. A direct call to a browser API wasm cannot reach
+2. Init / teardown of (1)
+3. Byte-shoveling between (1) and wasm
+
+Anything else — game state, render decisions, protocol parsing, color
+tables, geometry, persistence schemas, inventory display — is a Rust
+responsibility. If JS contains it, it's a bug, regardless of whether
+the code works.
+
+Adding logic to JS because "it's faster to write there" violates
+*don't take the path of least resistance*. Write it in Rust. If the
+FFI is in the way, fix the FFI.
+
+**No stringly-typed FFI.** Wasm/JS boundary uses shared linear memory
+with typed structs (bincode or hand-laid byte layouts read with
+`DataView`). No JSON parallel-strings, no char-packed enums, no
+`parseInt(s[i])`. If the Rust side has an enum, the JS side reads it
+as an integer with a lookup table — never as a character.
+
+**No positional tuples across the boundary.** `(u8, u8, u8, u8, u8)`
+where each index means something different is a struct in disguise.
+Make it a struct. Adding a field should be one edit, not five.
+
 **Hard rules (apply from day one):**
 
 - No errors silencing or swallowing ever.

@@ -20,7 +20,15 @@ import initWasm, {
   roam_init,
   roam_tick,
   roam_state,
-  roam_viewport,
+  roam_viewport_write,
+  roam_viewport_ptr,
+  roam_color_table_ptr,
+  roam_color_table_len,
+  roam_pixels_per_tile,
+  roam_tick_count,
+  roam_tick_blocked_count,
+  roam_state_read_count,
+  roam_viewport_read_count,
   roam_set_position,
   roam_drain_trace,
   roam_drain_errors,
@@ -99,8 +107,30 @@ const logEl = document.getElementById('log');
 const invEl = document.getElementById('inv');
 const invCtx = invEl ? invEl.getContext('2d') : null;
 
-const INV_PETAL_COLORS = ['#e44', '#fd4', '#48f', '#a4f', '#4cf', '#f9c', '#fff'];
+// Single source of truth for color is roam::teranos via the FFI palette
+// table (read once at init). These arrays exist only as labels for the
+// HUD; the RGB triplets come from Rust and are looked up by enum
+// discriminant against the palette buffer below.
 const INV_LABELS = ['red', 'yellow', 'blue', 'purple', 'azure', 'pink', 'glow'];
+
+// Palette + offsets, populated from Rust at init. The layout is defined
+// by roam::wasm_ffi::roam_color_table_ptr_impl — 5 TileKind RGBs, then
+// 7 FlowerColor RGBs, then 3 FlowerCore RGBs. JS never invents RGB.
+let palette = null;
+let PALETTE_TILE_OFFSET = 0;
+let PALETTE_PETAL_OFFSET = 15;
+let PALETTE_CORE_OFFSET = 36;
+
+function rgbStringFromPalette(byteOffset) {
+  if (!palette) return '#fff';
+  return `rgb(${palette[byteOffset]},${palette[byteOffset + 1]},${palette[byteOffset + 2]})`;
+}
+function petalRgb(discriminant) {
+  return rgbStringFromPalette(PALETTE_PETAL_OFFSET + discriminant * 3);
+}
+function coreRgb(discriminant) {
+  return rgbStringFromPalette(PALETTE_CORE_OFFSET + discriminant * 3);
+}
 
 function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale, petalCount, edgeFill, coreEdgeFill) {
   const n = petalCount || 5;
@@ -132,12 +162,12 @@ function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale, petalCount, ed
   ctx2.fill();
 }
 
-const INV_CORE_COLORS = ['#fff', '#fd4', '#000'];
-
 function renderInventory(inv) {
-  if (!invCtx || !invEl) return;
-  // inv is now an array of [petalIdx, coreIdx] pairs — one slot per
-  // flower picked. Wrap rows so all picks are visible.
+  if (!invCtx || !invEl || !palette) return;
+  // `inv` is an array of named-shape Flower objects from Rust:
+  //   { pc, pe, cc, ce, n }
+  // Every discriminant resolves through the palette table; JS never
+  // re-invents RGB.
   const slot = 28;
   const cols = Math.max(1, Math.floor(invEl.width / slot));
   const items = Array.isArray(inv) ? inv : [];
@@ -146,21 +176,16 @@ function renderInventory(inv) {
   if (invEl.height !== neededH) invEl.height = neededH;
   invCtx.clearRect(0, 0, invEl.width, invEl.height);
   for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    const p = item[0];
-    const c = item[1];
-    const n = item[2] || 5;
-    const e = item[3] != null ? item[3] : p;
-    const ce = item[4] != null ? item[4] : 0;
-    const petal = INV_PETAL_COLORS[p] || '#fff';
-    const core = INV_CORE_COLORS[c] || '#fff';
-    const edge = INV_PETAL_COLORS[e] || petal;
-    const coreEdge = ce === 1 ? petal : ce === 2 ? edge : '#fff';
+    const f = items[i];
+    const petal = petalRgb(f.pc);
+    const edge = petalRgb(f.pe);
+    const core = coreRgb(f.cc);
+    const coreEdge = f.ce === 1 ? petal : f.ce === 2 ? edge : '#fff';
     const col = i % cols;
     const row = Math.floor(i / cols);
     const cx = col * slot + slot / 2;
     const cy = row * slot + slot / 2;
-    drawFlowerIcon(invCtx, cx, cy, petal, core, 1.8, n, edge, coreEdge);
+    drawFlowerIcon(invCtx, cx, cy, petal, core, 1.8, f.n, edge, coreEdge);
   }
 }
 
@@ -803,12 +828,39 @@ Promise.resolve(window.tsotReady).then((tsot) => {
   logError('tsotReady', err);
 });
 
-moduleP.then(() => {
+moduleP.then((wasm) => {
   roam_init();
+
+  // wasm-bindgen's init() resolves with the InitOutput object, which
+  // exposes the linear memory. Every typed-buffer FFI below reads
+  // through views over this single ArrayBuffer.
+  const wasmMemory = wasm.memory;
+  const PIXELS_PER_TILE = roam_pixels_per_tile();
+
+  // Color palette: one-time read of the Rust-owned RGB table. The
+  // returned bytes live in the static COLOR_TABLE buffer; we view them
+  // through a Uint8Array. Discriminants index this table — no hex
+  // colors in JS, ever.
+  const COLOR_TABLE_LEN = roam_color_table_len();
+  const COLOR_TABLE_PTR = roam_color_table_ptr();
+  palette = new Uint8Array(wasmMemory.buffer, COLOR_TABLE_PTR, COLOR_TABLE_LEN);
+
+  // Viewport layout — locked by roam::viewport's `#[repr(C)]` structs.
+  // If those structs change in Rust, the const assertions there fail
+  // at compile time before the new bytes can reach this side.
+  const VIEWPORT_HEADER_SIZE = 32;
+  const VIEWPORT_TILE_SIZE = 8;
+  const VIEWPORT_OFF_TILE_KIND = 0;
+  const VIEWPORT_OFF_ELEV = 1;
+  const VIEWPORT_OFF_HAS_FLOWER = 2;
+  const VIEWPORT_OFF_PETAL_CENTER = 3;
+  const VIEWPORT_OFF_PETAL_EDGE = 4;
+  const VIEWPORT_OFF_CORE_CENTER = 5;
+  const VIEWPORT_OFF_CORE_EDGE = 6;
+  const VIEWPORT_OFF_PETAL_COUNT = 7;
 
   const tick     = roam_tick;
   const state    = roam_state;
-  const viewport = roam_viewport;
   const setPos   = roam_set_position;
   const drainTr  = roam_drain_trace;
   const drainErr = roam_drain_errors;
@@ -843,20 +895,6 @@ moduleP.then(() => {
   let lastSave = 0;
   const SAVE_INTERVAL_MS = 1000;
 
-  // Tile kind char → base RGB triple. Matches teranos::TileKind ordering.
-  // Pre-split so per-tile shading is a multiply, not a hex parse.
-  const TILE_RGB = {
-    '0': null,             // Air — no fill (skybox bg shows through)
-    '1': [58, 125, 68],    // Grass
-    '2': [102, 102, 102],  // Rock
-    '3': [92, 160, 200],   // ShallowWater
-    '4': [26, 74, 127],    // DeepWater
-  };
-  // Elevation char → signed surface_z. Mirrors world.rs::elev_char.
-  // '!'=-32, 'A'=0, 'a'=32. Decode: code - 33 - 32.
-  function decodeElev(ch) {
-    return ch.charCodeAt(0) - 33 - 32;
-  }
   // Facing index → (dx, dy) unit vector for the player indicator.
   const FACING_VEC = [
     [0, -1], [0.707, -0.707], [1, 0], [0.707, 0.707],
@@ -866,10 +904,16 @@ moduleP.then(() => {
   let lastPost = 0;
   let last = performance.now();
   let lastInfoUpdate = 0;
-  let rustTickCount = 0;
-  let rustStateReadCount = 0;
-  let rustCollisionCount = 0;
-  let rustViewportReadCount = 0;
+
+  // Dirty-flag render. The frame loop runs at RAF rate to keep input
+  // and wasm physics flowing, but the canvas only repaints when
+  // something visible has changed. `lastRenderFp` is a short
+  // fingerprint of every input the render depends on; mismatch → paint.
+  // An idle heartbeat (4 fps when nothing moves) handles day-night
+  // brightness drift so the world doesn't freeze in time.
+  let lastRenderFp = '';
+  let lastRenderAt = 0;
+  const IDLE_RENDER_MIN_MS = 250;
 
   // Day/night cycle mirrors teranos::day_phase + teranos::brightness.
   // Keep these in sync with the Rust constants — they're load-bearing.
@@ -921,26 +965,18 @@ moduleP.then(() => {
       return;
     }
 
-    // Drain wasm-side trace bus and merge counts into the HUD. Tick,
-    // StateRead, and ViewportRead happen at frame rate; logging each
-    // one would bury gossipsub diagnostics in noise. The HUD's
-    // `rust trace:` line is sufficient; rare events (Init/Note) still
-    // get full entries.
+    // Drain rare narrative events (Init, Note, Overflow) from the
+    // trace bus. Per-frame Tick / StateRead / ViewportRead are no
+    // longer events — they're atomic counters in Rust, read on
+    // demand below when the HUD updates. Removing the per-frame
+    // events from the bus is the biggest single CPU win in the
+    // observability path.
     try {
       const traceJson = drainTr();
       const events = JSON.parse(traceJson);
       for (const e of events) {
         const ev = e.event;
-        if (ev.kind === 'Tick') {
-          rustTickCount++;
-          if (ev.blocked_x || ev.blocked_y) rustCollisionCount++;
-        } else if (ev.kind === 'StateRead') {
-          rustStateReadCount++;
-        } else if (ev.kind === 'ViewportRead') {
-          rustViewportReadCount++;
-        } else {
-          logEvent('info', `rust:${ev.kind} seq=${e.seq} ${JSON.stringify(ev)}`);
-        }
+        logEvent('info', `rust:${ev.kind} seq=${e.seq} ${JSON.stringify(ev)}`);
       }
     } catch (err) {
       logError('wasm trace drain/parse', err);
@@ -1036,14 +1072,14 @@ moduleP.then(() => {
         } else {
           meshEl.textContent = '(pubsub OFF)';
         }
-        const inv = (s && s.inv) || [0, 0, 0, 0, 0, 0, 0];
+        const inv = (s && Array.isArray(s.inv)) ? s.inv : [];
         renderInventory(inv);
         selfEl.textContent =
           `display id: ${PEER_ID}\n` +
           `libp2p peerId: ${libp2p.peerId.toString()}\n` +
           `multiaddrs:\n  ${libp2p.getMultiaddrs().map(a => a.toString()).join('\n  ') || '(none yet — waiting for relay reservation)'}\n` +
           `tsot bridge: ${__tsotBridge.state}${__tsotBridge.state === 'ready' ? ` (${__tsotBridge.cardCount} cards)` : ''}\n` +
-          `rust trace: ticks=${rustTickCount} stateReads=${rustStateReadCount} viewportReads=${rustViewportReadCount} collisions=${rustCollisionCount}\n` +
+          `rust trace: ticks=${roam_tick_count()} stateReads=${roam_state_read_count()} viewportReads=${roam_viewport_read_count()} collisions=${roam_tick_blocked_count()}\n` +
           `log: ${logLines.length} entries (press l=copy, k=clear, i=screenshot)`;
       } else {
         selfEl.textContent = `display id: ${PEER_ID}\nlibp2p: OFF (${libp2pErr ? libp2pErr.message : 'unknown'})`;
@@ -1056,56 +1092,77 @@ moduleP.then(() => {
     const camCenterX = canvas.width / 2;
     const camCenterY = canvas.height / 2;
 
+    // Dirty-flag fingerprint. Includes every input the render
+    // depends on; a string mismatch triggers a repaint. Peer
+    // positions are summed into one rolling value to keep the
+    // fingerprint short. The integer truncation on x/y means
+    // sub-pixel jitter doesn't force a redraw, but any actual
+    // movement does.
+    let peerFp = 0;
+    for (const [, p] of remotePeers) {
+      peerFp = (peerFp * 31 + (p.x | 0) + (p.y | 0) * 4093) | 0;
+    }
+    const fp = `${s.x | 0},${s.y | 0},${s.z},${s.f},${zoom},${canvas.width},${canvas.height},${peerFp},${remotePeers.size}`;
+    const idleHeartbeat = now - lastRenderAt > IDLE_RENDER_MIN_MS;
+    if (fp === lastRenderFp && !idleHeartbeat) {
+      requestAnimationFrame(frame);
+      return;
+    }
+    lastRenderFp = fp;
+    lastRenderAt = now;
+
     // Dynamic viewport size based on canvas + zoom. +2 margin for
     // partially-visible edge tiles; rounded up to even so half-width
     // splits cleanly around the player tile.
-    const tilePx = 32 * zoom; // matches PIXELS_PER_TILE in world.rs
+    const tilePx = PIXELS_PER_TILE * zoom;
     const wNeed = Math.ceil(canvas.width / tilePx) + 2;
     const hNeed = Math.ceil(canvas.height / tilePx) + 2;
     const viewW = wNeed + (wNeed & 1);
     const viewH = hNeed + (hNeed & 1);
 
-    let V;
-    try {
-      V = JSON.parse(viewport(viewW, viewH));
-    } catch (err) {
-      logError('wasm viewport JSON parse', err);
+    // Ask Rust to write the typed viewport buffer; obtain a
+    // Uint8Array view over wasm linear memory. No JSON, no
+    // parallel strings — every field is a known byte offset into
+    // a `#[repr(C)]` struct defined in roam::viewport.
+    const vbLen = roam_viewport_write(viewW, viewH);
+    const vbPtr = roam_viewport_ptr();
+    if (vbLen === 0) {
       requestAnimationFrame(frame);
       return;
     }
+    const vbView = new DataView(wasmMemory.buffer, vbPtr, vbLen);
+    const vb = new Uint8Array(wasmMemory.buffer, vbPtr, vbLen);
+
+    const hdrViewW = vbView.getUint32(0, true);
+    const hdrViewH = vbView.getUint32(4, true);
+    const centerTx = vbView.getInt32(8, true);
+    const centerTy = vbView.getInt32(12, true);
+    const tileWorld = vbView.getUint32(20, true);
 
     ctx.fillStyle = '#1a1a1f';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const tileWorld = V.tile;
     const tileScreen = tileWorld * zoom;
-    const halfW = (V.view_w / 2) | 0;
-    const halfH = (V.view_h / 2) | 0;
-    const playerZ = s.z;
+    const halfW = hdrViewW >>> 1;
+    const halfH = hdrViewH >>> 1;
     const dayB = dayBrightness(s.x, tileWorld);
 
-    // Pre-parse elevations into a typed array so cliff-edge neighbor
-    // checks are a single index lookup instead of a charCodeAt per side.
-    const elevArr = new Int8Array(V.view_w * V.view_h);
-    for (let i = 0; i < elevArr.length; i++) {
-      elevArr[i] = V.elev.charCodeAt(i) - 33 - 32;
-    }
-
     // Pass 1: tile colors with elevation shading × day/night brightness.
-    for (let vy = 0; vy < V.view_h; vy++) {
-      for (let vx = 0; vx < V.view_w; vx++) {
-        const i = vy * V.view_w + vx;
-        const ch = V.tiles[i];
-        const rgb = TILE_RGB[ch];
-        if (!rgb) continue;
-        const tileZ = elevArr[i];
-        const elevDiff = tileZ - playerZ;
+    // `elev_offset` is already `surface_z - player_z` (signed i8), so
+    // it can be read straight from the buffer with no decode pass.
+    for (let vy = 0; vy < hdrViewH; vy++) {
+      for (let vx = 0; vx < hdrViewW; vx++) {
+        const off = VIEWPORT_HEADER_SIZE + (vy * hdrViewW + vx) * VIEWPORT_TILE_SIZE;
+        const tileKind = vb[off + VIEWPORT_OFF_TILE_KIND];
+        if (tileKind === 0) continue; // Air — no fill
+        const elevDiff = (vb[off + VIEWPORT_OFF_ELEV] << 24) >> 24;
+        const pIdx = PALETTE_TILE_OFFSET + tileKind * 3;
         const b = Math.max(0.4, Math.min(1.4, 1.0 + elevDiff * 0.04)) * dayB;
-        const r = Math.min(255, (rgb[0] * b) | 0);
-        const g = Math.min(255, (rgb[1] * b) | 0);
-        const bl = Math.min(255, (rgb[2] * b) | 0);
-        const worldTx = V.center_tx + vx - halfW;
-        const worldTy = V.center_ty + vy - halfH;
+        const r = Math.min(255, (palette[pIdx] * b) | 0);
+        const g = Math.min(255, (palette[pIdx + 1] * b) | 0);
+        const bl = Math.min(255, (palette[pIdx + 2] * b) | 0);
+        const worldTx = centerTx + vx - halfW;
+        const worldTy = centerTy + vy - halfH;
         const sx = (worldTx * tileWorld - s.x) * zoom + camCenterX;
         const sy = (worldTy * tileWorld - s.y) * zoom + camCenterY;
         ctx.fillStyle = `rgb(${r},${g},${bl})`;
@@ -1113,103 +1170,79 @@ moduleP.then(() => {
       }
     }
 
-    // Pass 1.5: flowers. Two concentric circles per flower — outer
-    // petal (species color) + inner core (white / yellow / black).
-    // Already-picked tiles are filtered upstream to '0' so we never
-    // draw them again for this player.
-    if (V.flowers) {
-      const FLOWER_PETAL = {
-        '1': '#e44',  // red
-        '2': '#fd4',  // yellow
-        '3': '#48f',  // blue
-        '4': '#a4f',  // purple
-        '5': '#4cf',  // azure
-        '6': '#f9c',  // pink
-        '7': '#fff',  // glow
-      };
-      const FLOWER_CORE = {
-        '1': '#fff',  // white
-        '2': '#fd4',  // yellow
-        '3': '#000',  // black (super-mega-rare)
-      };
-      // Petals arranged around a center core. Each petal is a radial
-      // gradient: petal-center color at petal.center → edge color at
-      // petal-radius. Both colors are species-level (per flower, not
-      // per petal) so the flower reads as one coherent thing.
-      const petalR = Math.max(1.5, tileScreen * 0.15);
-      const petalDist = tileScreen * 0.18;
-      const coreR = Math.max(1, tileScreen * 0.10);
-      const cores = V.flower_cores || '';
-      const petalCounts = V.flower_petals || '';
-      const edges = V.flower_edges || '';
-      const coreEdges = V.flower_core_edges || '';
-      for (let vy = 0; vy < V.view_h; vy++) {
-        for (let vx = 0; vx < V.view_w; vx++) {
-          const i = vy * V.view_w + vx;
-          const fc = V.flowers[i];
-          if (fc === '0') continue;
-          const petalFill = FLOWER_PETAL[fc];
-          if (!petalFill) continue;
-          const cc = cores[i] || '1';
-          const coreFill = FLOWER_CORE[cc] || '#fff';
-          const n = parseInt(petalCounts[i] || '5', 10) || 5;
-          const ec = edges[i] || fc;
-          const edgeFill = FLOWER_PETAL[ec] || petalFill;
-          // Core edge: 1=white (default), 2=match petal center, 3=match petal edge.
-          const ceCode = coreEdges[i] || '1';
-          const coreEdgeFill = ceCode === '2' ? petalFill : ceCode === '3' ? edgeFill : '#fff';
-          const worldTx = V.center_tx + vx - halfW;
-          const worldTy = V.center_ty + vy - halfH;
-          const cxF = (worldTx * tileWorld + tileWorld / 2 - s.x) * zoom + camCenterX;
-          const cyF = (worldTy * tileWorld + tileWorld / 2 - s.y) * zoom + camCenterY;
-          for (let k = 0; k < n; k++) {
-            const a = -Math.PI / 2 + (k * 2 * Math.PI) / n;
-            const px = cxF + Math.cos(a) * petalDist;
-            const py = cyF + Math.sin(a) * petalDist;
-            // Gradient origin shifted INWARD toward the flower core
-            // so the bright center is on the petal's core-facing side
-            // and the edge color sits on the outer rim.
-            const gx = px - Math.cos(a) * petalR * 0.7;
-            const gy = py - Math.sin(a) * petalR * 0.7;
-            const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, petalR * 1.7);
-            g.addColorStop(0, petalFill);
-            g.addColorStop(1, edgeFill);
-            ctx.fillStyle = g;
-            ctx.beginPath();
-            ctx.arc(px, py, petalR, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          const coreGrad = ctx.createRadialGradient(cxF, cyF, 0, cxF, cyF, coreR);
-          coreGrad.addColorStop(0, coreFill);
-          coreGrad.addColorStop(1, coreEdgeFill);
-          ctx.fillStyle = coreGrad;
+    // Pass 1.5: flowers. Each visible cell carries a 1-byte
+    // presence flag and 5 typed enum bytes. Color lookup goes
+    // through the Rust-owned palette table.
+    const petalR = Math.max(1.5, tileScreen * 0.15);
+    const petalDist = tileScreen * 0.18;
+    const coreR = Math.max(1, tileScreen * 0.10);
+    for (let vy = 0; vy < hdrViewH; vy++) {
+      for (let vx = 0; vx < hdrViewW; vx++) {
+        const off = VIEWPORT_HEADER_SIZE + (vy * hdrViewW + vx) * VIEWPORT_TILE_SIZE;
+        if (vb[off + VIEWPORT_OFF_HAS_FLOWER] !== 1) continue;
+        const petalCenter = vb[off + VIEWPORT_OFF_PETAL_CENTER];
+        const petalEdge = vb[off + VIEWPORT_OFF_PETAL_EDGE];
+        const coreCenter = vb[off + VIEWPORT_OFF_CORE_CENTER];
+        const coreEdgeKind = vb[off + VIEWPORT_OFF_CORE_EDGE];
+        const petalCount = vb[off + VIEWPORT_OFF_PETAL_COUNT];
+        const petalFill = petalRgb(petalCenter);
+        const edgeFill = petalRgb(petalEdge);
+        const coreFill = coreRgb(coreCenter);
+        // CoreEdge discriminants from roam::teranos::CoreEdge:
+        // 0 = White, 1 = MatchPetalCenter, 2 = MatchPetalEdge.
+        const coreEdgeFill =
+          coreEdgeKind === 1 ? petalFill : coreEdgeKind === 2 ? edgeFill : '#fff';
+        const worldTx = centerTx + vx - halfW;
+        const worldTy = centerTy + vy - halfH;
+        const cxF = (worldTx * tileWorld + tileWorld / 2 - s.x) * zoom + camCenterX;
+        const cyF = (worldTy * tileWorld + tileWorld / 2 - s.y) * zoom + camCenterY;
+        for (let k = 0; k < petalCount; k++) {
+          const a = -Math.PI / 2 + (k * 2 * Math.PI) / petalCount;
+          const px = cxF + Math.cos(a) * petalDist;
+          const py = cyF + Math.sin(a) * petalDist;
+          const gx = px - Math.cos(a) * petalR * 0.7;
+          const gy = py - Math.sin(a) * petalR * 0.7;
+          const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, petalR * 1.7);
+          g.addColorStop(0, petalFill);
+          g.addColorStop(1, edgeFill);
+          ctx.fillStyle = g;
           ctx.beginPath();
-          ctx.arc(cxF, cyF, coreR, 0, Math.PI * 2);
+          ctx.arc(px, py, petalR, 0, Math.PI * 2);
           ctx.fill();
         }
+        const coreGrad = ctx.createRadialGradient(cxF, cyF, 0, cxF, cyF, coreR);
+        coreGrad.addColorStop(0, coreFill);
+        coreGrad.addColorStop(1, coreEdgeFill);
+        ctx.fillStyle = coreGrad;
+        ctx.beginPath();
+        ctx.arc(cxF, cyF, coreR, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
-    // Pass 2: cliff demarcation. Same threshold as movement (|Δz| > 1).
-    // Drawn on the boundary between two tiles where movement is blocked.
+    // Pass 2: cliff demarcation. `elev_offset` is already a signed
+    // delta from player.z, so neighbor comparisons read straight from
+    // the buffer with one sign-extend per byte.
     const edgeThickness = Math.max(2, zoom * 2);
     ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-    for (let vy = 0; vy < V.view_h; vy++) {
-      for (let vx = 0; vx < V.view_w; vx++) {
-        const i = vy * V.view_w + vx;
-        const e = elevArr[i];
-        const worldTx = V.center_tx + vx - halfW;
-        const worldTy = V.center_ty + vy - halfH;
+    for (let vy = 0; vy < hdrViewH; vy++) {
+      for (let vx = 0; vx < hdrViewW; vx++) {
+        const off = VIEWPORT_HEADER_SIZE + (vy * hdrViewW + vx) * VIEWPORT_TILE_SIZE;
+        const e = (vb[off + VIEWPORT_OFF_ELEV] << 24) >> 24;
+        const worldTx = centerTx + vx - halfW;
+        const worldTy = centerTy + vy - halfH;
         const sx = (worldTx * tileWorld - s.x) * zoom + camCenterX;
         const sy = (worldTy * tileWorld - s.y) * zoom + camCenterY;
-        if (vx + 1 < V.view_w) {
-          const eR = elevArr[i + 1];
+        if (vx + 1 < hdrViewW) {
+          const offR = VIEWPORT_HEADER_SIZE + (vy * hdrViewW + vx + 1) * VIEWPORT_TILE_SIZE;
+          const eR = (vb[offR + VIEWPORT_OFF_ELEV] << 24) >> 24;
           if (Math.abs(eR - e) > 1) {
             ctx.fillRect(sx + tileScreen - edgeThickness / 2, sy, edgeThickness, tileScreen + 1);
           }
         }
-        if (vy + 1 < V.view_h) {
-          const eD = elevArr[i + V.view_w];
+        if (vy + 1 < hdrViewH) {
+          const offD = VIEWPORT_HEADER_SIZE + ((vy + 1) * hdrViewW + vx) * VIEWPORT_TILE_SIZE;
+          const eD = (vb[offD + VIEWPORT_OFF_ELEV] << 24) >> 24;
           if (Math.abs(eD - e) > 1) {
             ctx.fillRect(sx, sy + tileScreen - edgeThickness / 2, tileScreen + 1, edgeThickness);
           }
