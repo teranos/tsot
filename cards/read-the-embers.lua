@@ -38,12 +38,15 @@ return {
     count_red(pays.graveyard)
     count_red(pays.mill)
     if red_count <= 0 then return end
-    -- "any target" simplified to "any opposing creature" — game.damage
-    -- works on creatures; player targeting needs a different API shape
-    -- (see pyre-spirit for the same pattern).
+    -- "any target" = opponent player OR any opposing creature.
+    -- game.damage(player_id, n) now mills n from that player's deck
+    -- (RULES L.1: no life total; deck-out is the loss condition).
+    -- The opponent's player id is added to the choice pool as a
+    -- pseudo-iid so the human can pick "shoot the player" vs
+    -- "shoot this creature" per damage instance.
     local opp = game.opponent(self.owner)
     for i = 1, red_count do
-      local pool = {}
+      local pool = { opp }
       for _, iid in ipairs(game.zones(opp).board) do
         local c = game.card(iid)
         if c and c.type == "creature" then

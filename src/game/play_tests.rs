@@ -3174,6 +3174,118 @@ granted_face: Vec::new(),
 }
 
 #[test]
+fn b8_lua_damage_accumulation_kills_creature_via_cleanup_b8_damage_deaths() {
+    // RULES B.8: a creature with accumulated damage ≥ Y dies. Pre-fix
+    // 2026-06-16: Lua-driven `game.damage(...)` increased
+    // `inst.damage` but never invoked any death check, so a 2/2
+    // taking 2 damage from Read the Embers stayed on the board
+    // displayed as "2/0 (-2)". Bug surfaced by play, fixed by
+    // calling `cleanup_b8_damage_deaths()` from `do_damage` after
+    // `set_damage`. This test pins the contract.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let victim = s.b.hand[0].clone();
+    let _ = s.move_card(&victim, PlayerId::B, Zone::Hand, Zone::Board);
+    {
+        let inst = s.card_pool.get_mut(&victim).unwrap();
+        inst.card.stats = Some(crate::card::Stats { x: 2.0, y: 2.0 });
+    }
+    // Apply 2 damage directly (skip the Lua layer).
+    s.set_damage(&victim, 2.0);
+    // The cleanup that do_damage now invokes.
+    s.cleanup_b8_damage_deaths();
+    assert!(
+        !s.b.board.contains(&victim),
+        "B.8: 2/2 with damage=2 must die — was board, must now be graveyard"
+    );
+    assert!(
+        s.b.graveyard.contains(&victim),
+        "B.8: dies to GRAVEYARD per P.4"
+    );
+}
+
+#[test]
+fn lua_damage_to_player_mills_n_from_their_deck_to_exile() {
+    // RULES L.1 + B.2 analog: this game has no life total; player
+    // damage is dealt by milling cards from their DECK. Pre-2026-06-16
+    // the Lua API `game.damage(target, n)` only accepted creature
+    // iids — cards saying "deal N damage to any target" couldn't
+    // actually target the opponent (Read the Embers card-impl had
+    // a TODO comment to that effect). Now `game.damage("a"|"b", n)`
+    // mills N from that player.
+    use crate::game::Zone;
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let pid_b = crate::game::PlayerId::B;
+    let deck_before = s.player(pid_b).deck.len();
+    let exile_before = s.player(pid_b).exile.len();
+    // Drive through the Lua-API entry point (not just set_damage)
+    // by emulating the binding's call shape.
+    let res = crate::game::lua_api::do_damage(&mut s, "b", 3.0);
+    assert!(res.is_ok());
+    assert_eq!(
+        s.player(pid_b).deck.len(),
+        deck_before - 3,
+        "deck shrunk by 3"
+    );
+    assert_eq!(
+        s.player(pid_b).exile.len(),
+        exile_before + 3,
+        "3 cards exiled (RULES B.2 analog)"
+    );
+}
+
+#[test]
+fn do_damage_invokes_b8_cleanup_wiring() {
+    // Integration test for the wiring: calling do_damage on a
+    // creature that should die from B.8 must leave it in graveyard.
+    // The unit test above
+    // (b8_lua_damage_accumulation_kills_creature_via_cleanup_b8_damage_deaths)
+    // exercises the cleanup function in isolation; this one
+    // exercises the entry point (the function that handlers actually
+    // invoke via game.damage), proving the sweep happens
+    // automatically. If someone deletes the cleanup call from
+    // do_damage (removing the wiring while leaving the sweep
+    // function intact), the unit test still passes but this one
+    // fails.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let victim = s.b.hand[0].clone();
+    let _ = s.move_card(&victim, PlayerId::B, Zone::Hand, Zone::Board);
+    {
+        let inst = s.card_pool.get_mut(&victim).unwrap();
+        inst.card.stats = Some(crate::card::Stats { x: 2.0, y: 2.0 });
+    }
+    let res = crate::game::lua_api::do_damage(&mut s, &victim, 2.0);
+    assert!(res.is_ok());
+    assert!(
+        !s.b.board.contains(&victim),
+        "do_damage must invoke cleanup_b8_damage_deaths; \
+         victim with damage=Y still on board"
+    );
+    assert!(
+        s.b.graveyard.contains(&victim),
+        "victim moves to GRAVEYARD per P.4"
+    );
+}
+
+#[test]
+fn b8_partial_damage_below_y_keeps_creature_alive() {
+    // Pin the negative case so a future "kill everything that took
+    // any damage" regression fails this test.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let survivor = s.b.hand[0].clone();
+    let _ = s.move_card(&survivor, PlayerId::B, Zone::Hand, Zone::Board);
+    {
+        let inst = s.card_pool.get_mut(&survivor).unwrap();
+        inst.card.stats = Some(crate::card::Stats { x: 2.0, y: 3.0 });
+    }
+    s.set_damage(&survivor, 1.0);
+    s.cleanup_b8_damage_deaths();
+    assert!(
+        s.b.board.contains(&survivor),
+        "B.8: 2/3 with damage=1 must SURVIVE (1 < 3)"
+    );
+}
+
+#[test]
 fn c15_neg_3_3_on_a_3_3_kills_via_effective_y_drop() {
     // C.15: applying -3/-3 to a 3/3 leaves it at 0/0 → dies. The kill
     // should fire from C.15's continuous check, not require the

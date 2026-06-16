@@ -885,6 +885,30 @@ impl StepEngine {
             preview_size.max(preview_size_before),
         );
 
+        // Sacred-error sweep — ChoicePending intercept. Mirror of the
+        // upper Main1 site (main_phases.rs:~439). A Lua handler that
+        // called `game.confirm` / `game.choose_card` / `game.choose_int` /
+        // `game.choose_player` against an exhausted HumanReplayOracle
+        // returns Err(PlayError::ChoicePending). The pre-sweep
+        // play_error_user_message arm for this variant LIED — said
+        // "ChoicePending escaped the Main2 catch arm. File a bug" —
+        // because no intercept existed here. The truth: the engine
+        // never had the intercept on the resume path. Closes the
+        // Read the Embers regression: handler-mid-cast suspends now
+        // yield NeedHuman, the human answers, replay history grows,
+        // step_resolve re-fires with the answer.
+        if let Err(crate::game::PlayError::ChoicePending(pending)) = &result {
+            let pending = pending.clone();
+            if let Some(journal) = self.state.journal.take() {
+                journal.rollback(&mut self.state);
+            }
+            bump_preview_rollback(&mut self.stats, active);
+            let new_cursor = ctx.on_pending(picked.clone(), history.clone());
+            self.set_cursor(new_cursor);
+            let prompt = pending_to_prompt(&self.state, pending);
+            return StepResult::NeedHuman(Box::new(prompt));
+        }
+
         if result.is_ok() && !suicide {
             if let Some(mut preview) = self.state.journal.take() {
                 if let Some(replay) = self.state.replay_journal.as_mut() {
@@ -969,9 +993,21 @@ fn play_error_user_message(
     use crate::game::PlayError as E;
     match err {
         E::ChoicePending(_) => (
-            // Should not reach here; ChoicePending is intercepted above.
-            format!("Can't cast {card_name}: choice pending (engine bug)"),
-            "ChoicePending escaped the Main2 catch arm. File a bug.".into(),
+            // Unreachable in practice — every caller intercepts
+            // PlayError::ChoicePending and routes to NeedHuman
+            // before reaching this translator. If you SEE this
+            // message in the UI, a new caller forgot the
+            // intercept. The fix is at the call site, not here.
+            format!(
+                "Can't cast {card_name}: ChoicePending reached the \
+                 refusal translator"
+            ),
+            "ChoicePending reached play_error_user_message — every \
+             caller of step_resolve / play_card must intercept this \
+             variant and yield NeedHuman with pending_to_prompt(_). \
+             Search for `PlayError::ChoicePending` in src/sim/step/ to \
+             see the pattern."
+                .into(),
         ),
         E::GameOver => (
             format!("Can't cast {card_name}: game over"),

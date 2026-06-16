@@ -59,18 +59,28 @@ closed AND user-verified end-to-end (a commit means done — see
 
 ### Hot — panics / active silent drops
 
-- [ ] `src/sim/step/combat.rs:116` — `self.state.confirm_attacks().unwrap()`
-  panics on refusal instead of routing through the typed Error
-  pipeline. Human click on "attack" → wasm trap → reload required.
-- [ ] `src/sim/step/combat.rs:234` — `self.state.confirm_blocks(...).unwrap()`
-  same shape, blocks side.
-- [ ] `step_resolve` Err-arm in `src/sim/step/main_phases.rs` is missing
-  a `ChoicePending` intercept like the upper Pattern B arm has.
-  Symptom: Read the Embers' `on_play` calls `game.choose_int`, the
-  Pending escapes through play_card, lands as a refusal, surfaces
-  the lie below. Fix: same intercept pattern as `main_phases.rs:396`.
-- [ ] 9 `.is_ok()` discard patterns in non-test Rust —
-  `grep -rn '\.is_ok()' src/ --include='*.rs' | grep -v _tests`.
+- [~] `src/sim/step/combat.rs:116` — `self.state.confirm_attacks().unwrap()`
+  **Shipped 2026-06-16**: replaced with match-on-Err that routes
+  through `emit_human_refusal` (surface=`"prompt"`, region=
+  `"confirm-attacks"`). Cursor advances to DeclareBlockers anyway
+  so the game doesn't deadlock. Not yet user-verified end-to-end
+  (needs a real refusal to fire).
+- [~] `src/sim/step/combat.rs:234` — `self.state.confirm_blocks(...).unwrap()`
+  **Shipped 2026-06-16**: same shape, region=`"confirm-blocks"`.
+  On Err, skips outcome accounting (no mills/deaths credited) and
+  advances cursor. Not user-verified.
+- [~] `step_resolve` Err-arm in `src/sim/step/main_phases.rs` missing
+  `ChoicePending` intercept. **Shipped 2026-06-16**: intercept
+  added (mirror of `main_phases.rs:~439`); Pending now rolls back
+  preview journal, sets cursor via `ctx.on_pending(picked, history)`,
+  yields `NeedHuman(pending_to_prompt(...))`. The lying
+  `play_error_user_message::ChoicePending` arm rewritten to a
+  meta-message pointing at the call-site fix. Read the Embers'
+  on_play game.choose_card should now suspend → prompt → resume.
+  Not user-verified end-to-end.
+- [x] ~~9 `.is_ok()` discard patterns audited — 6 legitimate
+  (test assertions, AI/EA paths, already-wired step_resolve sites);
+  0 are sacred-error violations~~ (2026-06-16).
 
 ### Wrong-diagnostic lies currently shipping
 
@@ -130,7 +140,31 @@ closed AND user-verified end-to-end (a commit means done — see
   `BuildFooter.elm` — unsweept. Only `Main.elm` has the 7 typed
   decode-error sites today.
 
+### Engine-correctness bugs surfaced by play (not sacred-errors gaps,
+### but their invisibility before sacred-errors made them hide)
+
+- [x] ~~`game.damage(iid, n)` from Lua never invoked B.8 death check.
+  A 2/2 taking 2 damage from Read the Embers stayed on the board.
+  **Fixed 2026-06-16**: extracted `cleanup_b8_damage_deaths()` in
+  `play.rs`, called from `do_damage` after `set_damage`. Two tests
+  pin the contract: damage ≥ Y kills, damage < Y survives.~~
+- [x] ~~`game.damage(target, n)` only accepted creature iids.
+  Cards saying "deal N damage to any target" couldn't actually
+  target the opponent player (Read the Embers had a TODO comment).
+  **Fixed 2026-06-16**: `do_damage` now detects "a"/"b" target as
+  player id; mills N from their DECK to EXILE (RULES B.2 analog,
+  L.1 loss check). Read the Embers' Lua handler updated to include
+  the opponent in the choice pool. One test pins it.~~
+
 ### Architectural gaps (need engine work, not just wiring)
+
+- [ ] **Graveyard payment human choice.** When a cast has a GY cost
+  source and the player has MULTIPLE color-anchor-satisfying cards
+  in their graveyard, `resolve_graveyard_payment` picks
+  deterministically — the human never gets to choose which card
+  pays. Fine for AI rollouts; wrong for human agency. Slice: add
+  `NeedHuman(ChooseCard)` for GY payment when active is Human,
+  same shape as the existing HAND-payment human pickers.
 
 - [ ] **Variable-X cast-time prompt.** No engine path yields a
   `NeedHuman(ChooseInt)` for X before `play_card` runs. The

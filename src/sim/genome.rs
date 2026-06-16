@@ -245,8 +245,43 @@ mod tests {
 
     use rand::SeedableRng;
 
+    // CardRegistry owns a `mlua::Lua` VM. `Card.handlers` contains
+    // `mlua::Function` values that reference that VM. If the
+    // registry is dropped while Card clones are still alive, any
+    // subsequent operation that touches a handler's `ValueRef`
+    // (including `Card::clone()` cloning the inner mlua::Function
+    // and bumping its registry ref-count) panics with "Lua instance
+    // is destroyed" inside mlua's value_ref.rs.
+    //
+    // The pre-fix `pool()` was `load_registry().cards().to_vec()` —
+    // the registry was a temporary, dropped before the Vec<Card>
+    // escaped the function. Tests that only BORROWED the Vec worked;
+    // tests that EXTRACTED + CLONED a Card (e.g. `pool()[0].clone()`)
+    // hit the dead VM and panicked.
+    //
+    // Fix: keep the registry alive for the test thread's entire run
+    // via a thread-local OnceCell that leaks the registry on first
+    // call. Memory leak is fine in tests. CardRegistry is `!Send`
+    // (the Lua VM), so a thread_local is the right shape — tests
+    // run on multiple threads in parallel and each gets its own
+    // long-lived registry.
+    fn long_lived_registry() -> &'static CardRegistry {
+        use std::cell::OnceCell;
+        thread_local! {
+            static THREAD_REGISTRY: OnceCell<&'static CardRegistry> =
+                const { OnceCell::new() };
+        }
+        THREAD_REGISTRY.with(|c| {
+            *c.get_or_init(|| {
+                Box::leak(Box::new(
+                    CardRegistry::load(Path::new("cards")).expect("load cards/"),
+                ))
+            })
+        })
+    }
+
     fn pool() -> Vec<Card> {
-        load_registry().cards().to_vec()
+        long_lived_registry().cards().to_vec()
     }
 
     #[test]

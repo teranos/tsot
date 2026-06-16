@@ -1268,6 +1268,52 @@ impl GameState {
         Ok(())
     }
 
+    /// B.8: any on-board creature with accumulated damage ≥ effective Y
+    /// dies (Board → Graveyard). Mirrors the death-check inside
+    /// `confirm_blocks` but reusable from non-combat damage paths
+    /// (today: `game.damage(...)` from Lua handlers). Fires on_die
+    /// handlers — NO, today this does NOT fire on_die, matching the
+    /// existing combat path's behavior under ChoicePending (combat.rs
+    /// ~line 497-501 TODO). When the Pending-through-on_die slice
+    /// lands, both this path and the combat path should gain on_die
+    /// firing in the same shape.
+    ///
+    /// Idempotent. Call after every damage application that targets a
+    /// BOARD creature.
+    pub fn cleanup_b8_damage_deaths(&mut self) {
+        let on_board: Vec<InstanceId> = self
+            .a
+            .board
+            .iter()
+            .chain(self.b.board.iter())
+            .cloned()
+            .collect();
+        let mut to_kill: Vec<InstanceId> = Vec::new();
+        for iid in &on_board {
+            let is_creature = self
+                .card_pool
+                .get(iid)
+                .map(|i| i.card.kind == crate::card::CardType::Creature)
+                .unwrap_or(false);
+            if !is_creature {
+                continue;
+            }
+            let damage = self.card_pool.get(iid).map(|i| i.damage).unwrap_or(0.0);
+            let y = self.effective_stats(iid).1;
+            if damage > 0.0 && damage >= y {
+                to_kill.push(iid.clone());
+            }
+        }
+        for iid in &to_kill {
+            let owner = self
+                .card_pool
+                .get(iid)
+                .map(|i| i.owner)
+                .unwrap_or(self.active_player);
+            let _ = self.move_card(iid, owner, Zone::Board, Zone::Graveyard);
+        }
+    }
+
     /// C.15: any on-board creature with effective Y ≤ 0 dies (Board →
     /// Graveyard). Fires on_die handlers if `ctx` is provided. Idempotent
     /// — call after any state change that could lower a creature's

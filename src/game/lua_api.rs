@@ -110,17 +110,56 @@ fn find_host_of_attached(s: &GameState, iid: &str) -> Option<InstanceId> {
 // --- Pure logic for each API method. All mutations go through journaled
 // helpers on GameState so handler effects are rollback-safe.
 
-fn do_damage(s: &mut GameState, iid: &str, n: f32) -> Result<()> {
-    let (owner, current) = match s.card_pool.get(iid) {
+pub(crate) fn do_damage(s: &mut GameState, target: &str, n: f32) -> Result<()> {
+    // Two targeting modes per RULES (cards say "deal N damage to any
+    // target" — creature or player):
+    //
+    //   1. Target is a player id ("a"/"b") → player damage. No life
+    //      total exists (X.1: no mana; X.2: no lands; L.1: deck-out
+    //      loses), so "damage to player" mills N cards from their
+    //      DECK. Closest analog to MTG-shape "lose N life."
+    //   2. Target is a creature iid → existing behavior: accumulate
+    //      damage on the creature, run B.8 death check.
+    //
+    // Disambiguation: a player id is exactly 1 char, lowercase a or
+    // b. Card iids look like "A:0007" / "B:0014" — distinct shape.
+    if matches!(target, "a" | "b") {
+        let pid = match target {
+            "a" => crate::game::PlayerId::A,
+            "b" => crate::game::PlayerId::B,
+            _ => unreachable!(),
+        };
+        let take = (n.max(0.0) as usize).min(s.player(pid).deck.len());
+        for _ in 0..take {
+            if let Some(top) = s.player(pid).deck.first().cloned() {
+                let _ = s.move_card(&top, pid, crate::game::Zone::Deck, crate::game::Zone::Exile);
+            }
+        }
+        s.bump_action("damage", pid);
+        // Deck-out loss check (RULES L.1).
+        if s.player(pid).deck.is_empty() && s.winner.is_none() {
+            s.winner = Some(pid.opponent());
+        }
+        return Ok(());
+    }
+    let (owner, current) = match s.card_pool.get(target) {
         Some(inst) => (Some(inst.owner), inst.damage),
         None => (None, 0.0),
     };
     if owner.is_some() {
-        s.set_damage(&iid.to_string(), current + n);
+        s.set_damage(&target.to_string(), current + n);
     }
     if let Some(o) = owner {
         s.bump_action("damage", o);
     }
+    // RULES B.8: a creature with accumulated damage ≥ effective Y
+    // dies. Combat damage already runs this check inside
+    // confirm_blocks; Lua-driven damage (game.damage from on_play /
+    // on_attack / etc) used to skip it, leaving creatures with
+    // damage ≥ Y standing on the board (Read the Embers + Ember Bat
+    // bug, 2026-06-16). Reuse the shared sweep so both paths share
+    // semantics.
+    s.cleanup_b8_damage_deaths();
     Ok(())
 }
 

@@ -113,7 +113,23 @@ impl StepEngine {
             }
         }
         if declared_atk_count > 0 {
-            self.state.confirm_attacks().unwrap();
+            // Sacred-error sweep: was `.unwrap()` — a refusal here
+            // would have panicked the wasm and demanded a reload.
+            // Route through the typed-Error pipeline so the human
+            // sees what went wrong at their cursor instead.
+            if let Err(e) = self.state.confirm_attacks() {
+                self.emit_human_refusal(
+                    active,
+                    "prompt",
+                    "confirm-attacks",
+                    "Combat: confirm_attacks refused".into(),
+                    format!(
+                        "Engine refused confirm_attacks after {declared_atk_count} \
+                         attacker(s) declared: {e:?}. The cursor advances to \
+                         blockers anyway — combat state may be incomplete."
+                    ),
+                );
+            }
             self.set_cursor(EngineCursor::DeclareBlockers);
         } else {
             // No attackers declared → skip blockers, still run the
@@ -225,19 +241,42 @@ impl StepEngine {
                 );
             }
         }
-        let outcome = self
-            .state
-            .confirm_blocks(Some(&mut EventContext::new(
-                self.registry.lua(),
-                &mut self.oracle,
-            )))
-            .unwrap();
-        bump_milled(&mut self.stats, defender, outcome.defender_milled_to_exile as u32);
-        for death in &outcome.deaths {
-            if self.state.card_pool.get(death).map(|i| i.owner) == Some(PlayerId::A) {
-                self.stats.a_deaths += 1;
-            } else {
-                self.stats.b_deaths += 1;
+        // Sacred-error sweep: was `.unwrap()` — a refusal panicked
+        // the wasm. Route through the typed-Error pipeline; on Err
+        // skip the outcome accounting (no mills, no deaths) and
+        // advance the cursor anyway so the game doesn't deadlock.
+        let confirm_outcome = self.state.confirm_blocks(Some(&mut EventContext::new(
+            self.registry.lua(),
+            &mut self.oracle,
+        )));
+        match confirm_outcome {
+            Ok(outcome) => {
+                bump_milled(
+                    &mut self.stats,
+                    defender,
+                    outcome.defender_milled_to_exile as u32,
+                );
+                for death in &outcome.deaths {
+                    if self.state.card_pool.get(death).map(|i| i.owner) == Some(PlayerId::A) {
+                        self.stats.a_deaths += 1;
+                    } else {
+                        self.stats.b_deaths += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                self.emit_human_refusal(
+                    defender,
+                    "prompt",
+                    "confirm-blocks",
+                    "Combat: confirm_blocks refused".into(),
+                    format!(
+                        "Engine refused confirm_blocks after {} block(s) \
+                         declared: {e:?}. Combat damage / mill / death \
+                         accounting is skipped for this turn.",
+                        assignments.len()
+                    ),
+                );
             }
         }
         // Eligibility list for the engine's own bookkeeping.

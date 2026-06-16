@@ -156,11 +156,32 @@ mod tests {
     use std::path::Path;
     use crate::card::CardRegistry;
 
+    // See sim/genome.rs's identical helper for the full why. Short
+    // version: CardRegistry owns the Lua VM. Cards hold mlua::Function
+    // handlers that reference that VM. A pre-fix `pool()` that
+    // returned `to_vec()` from a temporary registry left the cards'
+    // handler refs dangling; any subsequent `Card::clone()` panicked
+    // with "Lua instance is destroyed". Thread-local OnceCell that
+    // leaks the registry on first call keeps it alive for the test
+    // thread's lifetime — memory leak is fine in tests, CardRegistry
+    // is !Send so cross-thread sharing is wrong anyway.
+    fn long_lived_registry() -> &'static CardRegistry {
+        use std::cell::OnceCell;
+        thread_local! {
+            static THREAD_REGISTRY: OnceCell<&'static CardRegistry> =
+                const { OnceCell::new() };
+        }
+        THREAD_REGISTRY.with(|c| {
+            *c.get_or_init(|| {
+                Box::leak(Box::new(
+                    CardRegistry::load(Path::new("cards")).unwrap(),
+                ))
+            })
+        })
+    }
+
     fn pool() -> Vec<Card> {
-        CardRegistry::load(Path::new("cards"))
-            .unwrap()
-            .cards()
-            .to_vec()
+        long_lived_registry().cards().to_vec()
     }
 
     fn dummy_genome(len: usize, id_pattern: impl Fn(usize) -> String) -> Vec<String> {
