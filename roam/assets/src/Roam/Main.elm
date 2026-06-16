@@ -135,7 +135,7 @@ view model =
                 , div [ A.id "status" ] []
                 ]
             , div [ A.id "info" ]
-                [ panel "inventory" [ Html.canvas [ A.id "inv", A.width 280, A.height 60 ] [] ]
+                [ panel "inventory" [ div [ A.id "inv" ] [] ]
                 , panel "self" [ div [ A.id "self" ] [] ]
                 , panel "libp2p connections" [ div [ A.id "conns" ] [] ]
                 , panel "gossipsub mesh — topic peers" [ div [ A.id "mesh" ] [] ]

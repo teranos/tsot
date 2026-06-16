@@ -516,7 +516,7 @@ const _: () = assert!(
 /// Density of flowers on land: roughly one flower per N candidate
 /// tiles. The presence-hash gate fires when the dimension's hash for
 /// (x, y) is a multiple of this denominator.
-pub const FLOWER_DENSITY_DENOM: u64 = 60;
+pub const FLOWER_DENSITY_DENOM: u64 = 600;
 
 /// A flower at a specific (x, y). Every field is derived from its own
 /// hash dimension off the same (x, y) so peers compute identical

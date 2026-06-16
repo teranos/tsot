@@ -110,7 +110,6 @@ const connsEl = document.getElementById('conns');
 const meshEl = document.getElementById('mesh');
 const logEl = document.getElementById('log');
 const invEl = document.getElementById('inv');
-const invCtx = invEl ? invEl.getContext('2d') : null;
 
 // Single source of truth for color is roam::teranos via the FFI palette
 // table (read once at init). These arrays exist only as labels for the
@@ -150,62 +149,69 @@ function coreRgb(discriminant) {
   return `rgb(${p[0]},${p[1]},${p[2]})`;
 }
 
-function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale, petalCount, edgeFill, coreEdgeFill) {
-  const n = petalCount || 5;
-  const petalR = 3 * scale;
-  const petalDist = 3.5 * scale;
-  const coreR = 2 * scale;
-  const edge = edgeFill || petalFill;
-  const coreEdge = coreEdgeFill || '#fff';
+// Inventory rendering — no canvas2D anywhere. Each flower is an inline
+// SVG rendered via the browser's native vector pipeline; no
+// `createRadialGradient` allocation per icon. The bridge writes the
+// markup string once when the inventory changes (cached + change-
+// detected) — Rust still owns every RGB and every discriminant.
+const INV_ICON_SIZE = 24; // px
+const INV_PETAL_R = 3.6;
+const INV_PETAL_DIST = 4.3;
+const INV_CORE_R = 2.4;
+let invLastSignature = '';
+
+function flowerSvg(f, idx) {
+  const petal = petalRgb(f.pc);
+  const edge = petalRgb(f.pe);
+  const core = coreRgb(f.cc);
+  const coreEdge = f.ce === 1 ? petal : f.ce === 2 ? edge : '#fff';
+  const n = f.n || 5;
+  const cx = INV_ICON_SIZE / 2;
+  const cy = INV_ICON_SIZE / 2;
+  const petalGradId = `ip${idx}`;
+  const coreGradId = `ic${idx}`;
+  let petals = '';
   for (let k = 0; k < n; k++) {
     const a = -Math.PI / 2 + (k * 2 * Math.PI) / n;
-    const px = cx + Math.cos(a) * petalDist;
-    const py = cy + Math.sin(a) * petalDist;
-    const gx = px - Math.cos(a) * petalR * 0.7;
-    const gy = py - Math.sin(a) * petalR * 0.7;
-    const g = ctx2.createRadialGradient(gx, gy, 0, gx, gy, petalR * 1.7);
-    g.addColorStop(0, petalFill);
-    g.addColorStop(1, edge);
-    ctx2.fillStyle = g;
-    ctx2.beginPath();
-    ctx2.arc(px, py, petalR, 0, Math.PI * 2);
-    ctx2.fill();
+    const px = cx + Math.cos(a) * INV_PETAL_DIST;
+    const py = cy + Math.sin(a) * INV_PETAL_DIST;
+    petals += `<circle cx="${px.toFixed(2)}" cy="${py.toFixed(2)}" r="${INV_PETAL_R}" fill="url(#${petalGradId})"/>`;
   }
-  const coreG = ctx2.createRadialGradient(cx, cy, 0, cx, cy, coreR);
-  coreG.addColorStop(0, coreFill);
-  coreG.addColorStop(1, coreEdge);
-  ctx2.fillStyle = coreG;
-  ctx2.beginPath();
-  ctx2.arc(cx, cy, coreR, 0, Math.PI * 2);
-  ctx2.fill();
+  return (
+    `<svg width="${INV_ICON_SIZE}" height="${INV_ICON_SIZE}" viewBox="0 0 ${INV_ICON_SIZE} ${INV_ICON_SIZE}" xmlns="http://www.w3.org/2000/svg">` +
+      `<defs>` +
+        `<radialGradient id="${petalGradId}"><stop offset="0" stop-color="${petal}"/><stop offset="1" stop-color="${edge}"/></radialGradient>` +
+        `<radialGradient id="${coreGradId}"><stop offset="0" stop-color="${core}"/><stop offset="1" stop-color="${coreEdge}"/></radialGradient>` +
+      `</defs>` +
+      petals +
+      `<circle cx="${cx}" cy="${cy}" r="${INV_CORE_R}" fill="url(#${coreGradId})"/>` +
+    `</svg>`
+  );
 }
 
 function renderInventory(inv) {
-  if (!invCtx || !invEl || !wasmMemoryRef) return;
-  // `inv` is an array of named-shape Flower objects from Rust:
-  //   { pc, pe, cc, ce, n }
-  // Every discriminant resolves through the palette table; JS never
-  // re-invents RGB.
-  const slot = 28;
-  const cols = Math.max(1, Math.floor(invEl.width / slot));
+  if (!invEl || !wasmMemoryRef) return;
   const items = Array.isArray(inv) ? inv : [];
-  const rows = Math.max(1, Math.ceil(items.length / cols));
-  const neededH = rows * slot;
-  if (invEl.height !== neededH) invEl.height = neededH;
-  invCtx.clearRect(0, 0, invEl.width, invEl.height);
-  for (let i = 0; i < items.length; i++) {
-    const f = items[i];
-    const petal = petalRgb(f.pc);
-    const edge = petalRgb(f.pe);
-    const core = coreRgb(f.cc);
-    const coreEdge = f.ce === 1 ? petal : f.ce === 2 ? edge : '#fff';
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const cx = col * slot + slot / 2;
-    const cy = row * slot + slot / 2;
-    drawFlowerIcon(invCtx, cx, cy, petal, core, 1.8, f.n, edge, coreEdge);
+  // Cheap change-detection so we don't rewrite the DOM when nothing
+  // changed. innerHTML assignment is expensive (re-parses markup,
+  // re-creates all child nodes); skip when identical.
+  const sig =
+    items.length +
+    ':' +
+    items.map((f) => `${f.pc},${f.pe},${f.cc},${f.ce},${f.n}`).join('|');
+  if (sig === invLastSignature) return;
+  invLastSignature = sig;
+  if (items.length === 0) {
+    invEl.innerHTML = '';
+    return;
   }
+  let html = '';
+  for (let i = 0; i < items.length; i++) {
+    html += flowerSvg(items[i], i);
+  }
+  invEl.innerHTML = html;
 }
+
 
 // --- event log (errors are sacred) ---
 // Unbounded log. Truncating to make the panel "tidy" loses information.
@@ -983,6 +989,34 @@ moduleP.then((wasm) => {
   let lastRenderAt = 0;
   const IDLE_RENDER_MIN_MS = 250;
 
+  // Performance HUD: FPS (EMA), frame time, render-time, idle skips.
+  // Updated in the frame loop and surfaced as a DOM overlay so the
+  // developer doesn't have to crack open about:performance to know
+  // whether a change moved the needle. Lives at top-right of the
+  // world canvas, immediately below the page-level clock.
+  const perfHud = document.createElement('div');
+  perfHud.id = 'perf-hud';
+  perfHud.style.cssText = [
+    'position: absolute',
+    'top: 4px',
+    'right: 8px',
+    'font: 11px ui-monospace, Menlo, monospace',
+    'color: #888',
+    'pointer-events: none',
+    'white-space: pre',
+    'z-index: 5',
+    'text-align: right',
+  ].join(';');
+  canvas.parentElement?.appendChild(perfHud);
+
+  let fpsEma = 0;
+  let frameTimeEmaMs = 0;
+  let renderTimeEmaMs = 0;
+  let idleSkips = 0;
+  let renderedFrames = 0;
+  let perfLastSampleAt = 0;
+  const PERF_EMA_ALPHA = 0.1;
+
   // Day/night cycle mirrors teranos::day_phase + teranos::brightness.
   // Keep these in sync with the Rust constants — they're load-bearing.
   const WORLD_CIRC_X_TILES = 4096;
@@ -1020,6 +1054,7 @@ moduleP.then((wasm) => {
   });
 
   function frame(now) {
+    const frameStartMs = performance.now();
     const dt = Math.min(now - last, 100);
     last = now;
 
@@ -1177,11 +1212,13 @@ moduleP.then((wasm) => {
     const fp = `${s.x | 0},${s.y | 0},${s.z},${s.f},${zoom},${canvas.width},${canvas.height},${peerFp},${remotePeers.size}`;
     const idleHeartbeat = now - lastRenderAt > IDLE_RENDER_MIN_MS;
     if (fp === lastRenderFp && !idleHeartbeat) {
+      idleSkips += 1;
       requestAnimationFrame(frame);
       return;
     }
     lastRenderFp = fp;
     lastRenderAt = now;
+    const renderStartMs = performance.now();
 
     // Dynamic viewport size based on canvas + zoom. +2 margin for
     // partially-visible edge tiles; rounded up to even so half-width
@@ -1238,6 +1275,30 @@ moduleP.then((wasm) => {
     worldHud.textContent =
       `me=${PEER_ID} (${s.x.toFixed(1)}, ${s.y.toFixed(1)}, z=${s.z}) f=${s.f}  ` +
       `zoom=${zoom.toFixed(2)}  peers=${remotePeers.size}  ${libStatus}`;
+
+    // Perf accounting for the dirty-rendered path. Frame time = wall
+    // time since the previous render. Render time = wall time spent
+    // inside this rendered frame's body. EMA so the numbers are
+    // stable; raw values jitter too much for human reading.
+    renderedFrames += 1;
+    const renderEndMs = performance.now();
+    const frameMs = renderEndMs - frameStartMs;
+    const renderMs = renderEndMs - renderStartMs;
+    if (frameTimeEmaMs === 0) {
+      frameTimeEmaMs = frameMs;
+      renderTimeEmaMs = renderMs;
+      fpsEma = 1000 / Math.max(frameMs, 1);
+    } else {
+      frameTimeEmaMs = frameTimeEmaMs * (1 - PERF_EMA_ALPHA) + frameMs * PERF_EMA_ALPHA;
+      renderTimeEmaMs = renderTimeEmaMs * (1 - PERF_EMA_ALPHA) + renderMs * PERF_EMA_ALPHA;
+      fpsEma = fpsEma * (1 - PERF_EMA_ALPHA) + (1000 / Math.max(frameMs, 1)) * PERF_EMA_ALPHA;
+    }
+    if (renderEndMs - perfLastSampleAt > 250) {
+      perfLastSampleAt = renderEndMs;
+      perfHud.textContent =
+        `${fpsEma.toFixed(0)} fps · ${frameTimeEmaMs.toFixed(1)}ms frame · ${renderTimeEmaMs.toFixed(1)}ms gl\n` +
+        `rendered=${renderedFrames} idle-skips=${idleSkips}`;
+    }
 
     requestAnimationFrame(frame);
   }
