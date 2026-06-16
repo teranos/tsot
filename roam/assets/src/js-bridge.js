@@ -42,9 +42,13 @@ const POST_INTERVAL_MS = 50;
 function drainConsoleBuf() {
   const buf = (typeof window !== 'undefined' && window.__roamConsoleBuf) || [];
   if (buf.length === 0) return;
-  // Snapshot + clear synchronously so concurrent pushes don't get lost.
   const items = buf.splice(0, buf.length);
   for (const item of items) {
+    // Only real signal: warnings and errors. console.debug / .info /
+    // .log from libp2p are torrential and add no actionable info —
+    // explicit redial OK / dial failures already flow through our own
+    // logger. If you need full libp2p debug back, widen this gate.
+    if (item.m !== 'warn' && item.m !== 'error') continue;
     let msg;
     try {
       msg = item.args.map((a) => {
@@ -55,9 +59,6 @@ function drainConsoleBuf() {
     } catch (e) {
       msg = '(unserializable)';
     }
-    // Filter to libp2p/transport/protocol noise — wasm also logs via
-    // console and would drown the relevant lines.
-    if (!/libp2p|gossipsub|meshsub|noise|yamux|multistream|circuit-relay|identify/.test(msg)) continue;
     logEvent(item.m === 'error' ? 'error' : 'info', `console.${item.m}: ${msg.slice(0, 500)}`);
   }
 }
@@ -687,12 +688,12 @@ channel.addEventListener('messageerror', (e) =>
   logError('BroadcastChannel messageerror', e.data));
 
 // --- wasm loader + game loop ---
-// TSOT bridge probe: once both wasm modules are loaded, log the card
-// count so we know the cross-module call surface works. This is the
-// minimum proof that roam and TSOT are talking. Real usage (card
-// spawning, match handshake) builds on this same surface.
+// TSOT bridge probe + always-visible state. The SELF panel renders
+// `__tsotBridge.state` so we don't have to fish for a log line.
+let __tsotBridge = { state: 'pending', cardCount: 0 };
 Promise.resolve(window.tsotReady).then((tsot) => {
   if (!tsot) {
+    __tsotBridge = { state: 'error: no module', cardCount: 0 };
     logEvent('error', 'tsotReady resolved with no module');
     return;
   }
@@ -700,6 +701,7 @@ Promise.resolve(window.tsotReady).then((tsot) => {
   try {
     json = tsot.ccall('tsot_list_card_pool', 'string', [], []);
   } catch (err) {
+    __tsotBridge = { state: 'error: ccall threw', cardCount: 0 };
     logError('tsot_list_card_pool', err);
     return;
   }
@@ -707,13 +709,30 @@ Promise.resolve(window.tsotReady).then((tsot) => {
   try {
     parsed = JSON.parse(json);
   } catch (err) {
+    __tsotBridge = { state: 'error: JSON.parse', cardCount: 0 };
     const wrapped = new Error(`JSON.parse failed on tsot_list_card_pool response`, { cause: err });
     wrapped.diagnostic = `raw response (first 500 chars): ${String(json).slice(0, 500)}`;
     logError('tsot_list_card_pool JSON.parse', wrapped);
     return;
   }
-  logEvent('info', `tsot bridge ready: ${parsed.length} cards in pool`);
-}).catch((err) => logError('tsotReady', err));
+  // Envelope shape from tsot wasm_ffi::wrap_result_envelope:
+  // { ok, result: [...], log, trace, errors }
+  if (!parsed || parsed.ok !== true) {
+    __tsotBridge = { state: 'error: envelope ok=false', cardCount: 0 };
+    logError('tsot_list_card_pool envelope', new Error(`ok=${parsed && parsed.ok}`));
+    return;
+  }
+  const arr = Array.isArray(parsed.result) ? parsed.result : null;
+  if (!arr) {
+    __tsotBridge = { state: 'error: result not array', cardCount: 0 };
+    logError('tsot_list_card_pool envelope', new Error(`result shape: ${typeof parsed.result}`));
+    return;
+  }
+  __tsotBridge = { state: 'ready', cardCount: arr.length };
+}).catch((err) => {
+  __tsotBridge = { state: 'error: promise rejected', cardCount: 0 };
+  logError('tsotReady', err);
+});
 
 moduleP.then(() => {
   roam_init();
@@ -935,6 +954,7 @@ moduleP.then(() => {
           `display id: ${PEER_ID}\n` +
           `libp2p peerId: ${libp2p.peerId.toString()}\n` +
           `multiaddrs:\n  ${libp2p.getMultiaddrs().map(a => a.toString()).join('\n  ') || '(none yet — waiting for relay reservation)'}\n` +
+          `tsot bridge: ${__tsotBridge.state}${__tsotBridge.state === 'ready' ? ` (${__tsotBridge.cardCount} cards)` : ''}\n` +
           `rust trace: ticks=${rustTickCount} stateReads=${rustStateReadCount} viewportReads=${rustViewportReadCount} collisions=${rustCollisionCount}\n` +
           `log: ${logLines.length} entries (press l=copy, k=clear, i=screenshot)`;
       } else {
