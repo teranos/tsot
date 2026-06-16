@@ -39,7 +39,10 @@ import initWasm, {
   roam_set_peers,
   roam_player_state_ptr,
   roam_player_state_len,
+  roam_net_init,
+  roam_net_publish_position,
 } from '/roam.js';
+import * as netShim from './net-shim.js';
 
 const INPUT_W = 1 << 0;
 const INPUT_A = 1 << 1;
@@ -938,6 +941,28 @@ moduleP.then((wasm) => {
     logError('render_gl init', err);
   }
 
+  // Network seam (phase 2b). If libp2p came up, attach the JS shim
+  // and construct the Rust-side `Net`. The application-layer network
+  // code now lives in Rust (`roam::net::state::Net`); this file holds
+  // only the five thin callbacks the seam needs.
+  if (libp2p && pubsub) {
+    try {
+      netShim.attach(libp2p, pubsub);
+      roam_net_init(
+        netShim.selfPeerId,
+        netShim.publish,
+        netShim.subscribe,
+        netShim.unsubscribe,
+        netShim.drainEvents,
+      );
+      logEvent('info', `net: seam initialized, identity=${netShim.selfPeerId()}`);
+    } catch (err) {
+      logError('roam_net_init', err);
+    }
+  } else {
+    logEvent('info', 'net: libp2p unavailable, seam not initialized');
+  }
+
   // Color palette is Rust-owned. We capture the memory handle + table
   // pointer here, but every read goes through `paletteBytes()` which
   // re-acquires a `Uint8Array` view against the CURRENT buffer — wasm
@@ -1164,19 +1189,16 @@ moduleP.then((wasm) => {
     }
 
     if (now - lastPost >= POST_INTERVAL_MS) {
-      const msg = { peer_id: PEER_ID, x: s.x, y: s.y, z: s.z, f: s.f };
-      channel.postMessage(msg);
-      if (pubsub) {
-        const bytes = new TextEncoder().encode(JSON.stringify(msg));
-        pubsub.publish(TOPIC, bytes).catch((err) => {
-          // Every failure is logged — no rate-limiting. To control
-          // log volume we BATCH by second: identical error messages
-          // within a 1s window aggregate into one entry with a count.
-          // The information of "how many failures, when" is preserved.
-          const m = err && err.message ? err.message : String(err);
-          batchedError('pubsub.publish', m, err);
-        });
-      }
+      // Same-tab BroadcastChannel fallback stays in JS — it's a
+      // browser API (not libp2p) and other tabs in the same browser
+      // listen for it independently of the libp2p mesh.
+      channel.postMessage({ peer_id: PEER_ID, x: s.x, y: s.y, z: s.z, f: s.f });
+      // Cross-browser position broadcast runs through the network
+      // seam now: Rust holds the application-layer Net (in World),
+      // calls `provider.publish` which dispatches to `net-shim.js`,
+      // which calls the existing `pubsub.publish`. No JSON-stringify
+      // here — Rust owns the wire format.
+      roam_net_publish_position();
       lastPost = now;
     }
 

@@ -325,6 +325,80 @@ mod wasm_exports {
         super::roam_player_state_len_impl()
     }
 
+    /// Construct the application-layer network state and attach it
+    /// to `World`. Called once from the JS bridge after libp2p is up.
+    ///
+    /// The five JS callbacks form the seam between the trait
+    /// (`crate::net::NetworkProvider`) and the existing libp2p
+    /// instance. Future provider impls (`RustLibp2pProvider`,
+    /// `RemoteServerProvider`) replace this constructor; the rest of
+    /// the application never sees a JS function again.
+    #[wasm_bindgen]
+    pub fn roam_net_init(
+        self_peer_id_fn: js_sys::Function,
+        publish: js_sys::Function,
+        subscribe: js_sys::Function,
+        unsubscribe: js_sys::Function,
+        drain_events: js_sys::Function,
+    ) -> Result<(), JsValue> {
+        let provider = crate::net::js_libp2p::JsLibp2pProvider::new(
+            self_peer_id_fn,
+            publish,
+            subscribe,
+            unsubscribe,
+            drain_events,
+        )?;
+        let mut net = crate::net::state::Net::new(Box::new(provider));
+        if let Err(err) = net.subscribe_positions() {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "roam::wasm_ffi::roam_net_init",
+                "subscribe_positions failed",
+                format!("{err:?}"),
+            );
+        }
+        super::WORLD.with(|w| {
+            if let Some(world) = w.borrow_mut().as_mut() {
+                world.net = Some(net);
+            } else {
+                crate::error::emit(
+                    crate::error::Severity::Error,
+                    "roam::wasm_ffi::roam_net_init",
+                    "called before roam_init",
+                    "World is not constructed; Net not attached",
+                );
+            }
+        });
+        Ok(())
+    }
+
+    /// Publish the local player's current position on the canonical
+    /// positions topic. Called from the JS bridge's broadcast timer.
+    /// No-op if `Net` hasn't been attached yet (libp2p still booting).
+    #[wasm_bindgen]
+    pub fn roam_net_publish_position() {
+        super::WORLD.with(|w| {
+            if let Some(world) = w.borrow_mut().as_mut() {
+                let (x, y, z, facing) = (
+                    world.player.x,
+                    world.player.y,
+                    world.player.z,
+                    world.player.facing.as_u8(),
+                );
+                if let Some(net) = world.net.as_mut() {
+                    if let Err(err) = net.publish_position(x, y, z, facing) {
+                        crate::error::emit(
+                            crate::error::Severity::Warn,
+                            "roam::wasm_ffi::roam_net_publish_position",
+                            "publish_position failed",
+                            format!("{err:?}"),
+                        );
+                    }
+                }
+            }
+        });
+    }
+
     #[wasm_bindgen]
     pub fn roam_tick_count() -> u64 {
         super::roam_tick_count_impl()

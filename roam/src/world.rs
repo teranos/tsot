@@ -74,6 +74,12 @@ pub struct Player {
 
 pub struct World {
     pub player: Player,
+    /// Application-layer network state, owned by Rust per the seam in
+    /// `crate::net`. `None` until the JS bridge constructs a provider
+    /// and calls `roam_net_init` — that happens after libp2p is ready,
+    /// which is async on the JS side. The hot path (frame loop) must
+    /// tolerate `net.is_none()` during the bootstrap window.
+    pub net: Option<crate::net::state::Net>,
 }
 
 #[inline]
@@ -153,6 +159,7 @@ impl World {
                 picked: BTreeSet::new(),
                 inventory: Vec::new(),
             },
+            net: None,
         }
     }
 
