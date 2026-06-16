@@ -37,6 +37,8 @@ import initWasm, {
   roam_render_init,
   roam_render_frame,
   roam_set_peers,
+  roam_player_state_ptr,
+  roam_player_state_len,
 } from '/roam.js';
 
 const INPUT_W = 1 << 0;
@@ -77,17 +79,16 @@ function drainConsoleBuf() {
 }
 setInterval(drainConsoleBuf, 200);
 
-// Public IPFS bootstrap nodes. Connectivity-only — they route DHT/Bitswap
-// traffic but do NOT join our `roam-positions/v1` topic, so they can't
-// introduce two browsers to each other for pubsub. The local relay
-// (loaded below from /relay-multiaddr.txt if present) is what actually
-// makes cross-browser gossip work.
-const PUBLIC_BOOTSTRAP = [
-  '/dns4/sjc-1.bootstrap.libp2p.io/tcp/443/wss/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
-  '/dns4/sv15.bootstrap.libp2p.io/tcp/443/wss/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
-  '/dns4/ewr1.bootstrap.libp2p.io/tcp/443/wss/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa',
-  '/dns4/am6.bootstrap.libp2p.io/tcp/443/wss/p2p/QmSoLer265NRgSp2LA3dPaeykiS1J6DifTC88f5uVQKNAd',
-];
+// IPFS public bootstraps used to live here. Removed: they route
+// DHT/Bitswap traffic for the global libp2p network, and every
+// connection runs identify+ping+gossipsub-heartbeat, all signed
+// through SubtleCrypto on the browser main thread. The flame graph
+// showed SubtleCrypto::Sign dominating CPU time.
+//
+// Roam does not need the global IPFS network. We only need peers
+// subscribed to our gossipsub topic, which the local relay finds
+// for us. Bootstraps now come exclusively from /relay-multiaddr.txt.
+const PUBLIC_BOOTSTRAP = [];
 
 const status = document.getElementById('status');
 const canvas = document.getElementById('c');
@@ -240,12 +241,31 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+// DOM update batching. The previous logEvent rebuilt `logEl.innerHTML`
+// on every call, forcing a Layout/Reflow per event. With heavy
+// libp2p traffic that became the dominant cost in the Firefox
+// profiler (constant Reflow, Style, DoFlushPendingNotifications).
+// Now each call appends to logLines and marks the panel dirty; an
+// rAF coalesces the DOM flush so multiple events share one Layout.
+let __logDomDirty = false;
+let __logFlushScheduled = false;
 function logEvent(cls, line) {
   const t = new Date().toISOString().slice(11, 23); // ms precision
   logLines.push({ cls, t, line });
-  // Render only the tail to keep DOM cheap; full buffer is in logLines.
+  __logDomDirty = true;
+  if (!__logFlushScheduled) {
+    __logFlushScheduled = true;
+    requestAnimationFrame(flushLogDom);
+  }
+}
+function flushLogDom() {
+  __logFlushScheduled = false;
+  if (!__logDomDirty) return;
+  __logDomDirty = false;
   const tail = logLines.slice(-LOG_RENDER_TAIL);
-  logEl.innerHTML = tail.map((e) => `<span class="ev-${e.cls}">${e.t}  ${escapeHtml(e.line)}</span>`).join('\n');
+  logEl.innerHTML = tail
+    .map((e) => `<span class="ev-${e.cls}">${e.t}  ${escapeHtml(e.line)}</span>`)
+    .join('\n');
   logEl.scrollTop = logEl.scrollHeight;
 }
 // Monotonic id source for typed Error envelopes minted on the JS
@@ -602,7 +622,17 @@ try {
     connectionGater: { denyDialMultiaddr: async () => false },
     services: {
       identify: identify(),
-      pubsub: gossipsub({ allowPublishToZeroTopicPeers: true, emitSelf: false }),
+      pubsub: gossipsub({
+        allowPublishToZeroTopicPeers: true,
+        emitSelf: false,
+        // 2s heartbeat (default 1s) — halves the worker-to-main
+        // message rate from gossipsub's mesh maintenance, the
+        // dominant cost in the Firefox profiler trace. Latency for
+        // mesh churn doubles in return, which is acceptable for a
+        // game where position broadcasts are themselves rate-limited
+        // at 50ms in this bridge.
+        heartbeatInterval: 2000,
+      }),
     },
   });
 
@@ -881,10 +911,13 @@ moduleP.then((wasm) => {
   worldHud.id = 'world-hud';
   worldHud.style.cssText = [
     'position: absolute',
-    'top: 4px',
-    'left: 8px',
-    'font: 11px ui-monospace, Menlo, monospace',
-    'color: #888',
+    'top: 6px',
+    'left: 10px',
+    'font: 12px/1.4 ui-monospace, Menlo, monospace',
+    'color: #fff',
+    'background: rgba(0, 0, 0, 0.55)',
+    'padding: 4px 8px',
+    'border-radius: 4px',
     'pointer-events: none',
     'white-space: pre',
     'z-index: 5',
@@ -989,19 +1022,25 @@ moduleP.then((wasm) => {
   let lastRenderAt = 0;
   const IDLE_RENDER_MIN_MS = 250;
 
-  // Performance HUD: FPS (EMA), frame time, render-time, idle skips.
-  // Updated in the frame loop and surfaced as a DOM overlay so the
-  // developer doesn't have to crack open about:performance to know
-  // whether a change moved the needle. Lives at top-right of the
-  // world canvas, immediately below the page-level clock.
+  // Performance HUD. Two independent counters, both measured honestly:
+  //   raf Hz   — frame() callbacks per second (input responsiveness)
+  //   gl Hz    — actual paints per second (visible motion)
+  // Plus average elapsed time per frame and per paint, rolling
+  // every-second so the numbers are stable enough for a human to read
+  // without lying about quiet moments. The previous version measured
+  // "FPS" only on the paint path which collapsed to ~0 when the
+  // dirty-flag was skipping; that lied about frame-loop liveness.
   const perfHud = document.createElement('div');
   perfHud.id = 'perf-hud';
   perfHud.style.cssText = [
     'position: absolute',
-    'top: 4px',
-    'right: 8px',
-    'font: 11px ui-monospace, Menlo, monospace',
-    'color: #888',
+    'top: 6px',
+    'right: 10px',
+    'font: 12px/1.4 ui-monospace, Menlo, monospace',
+    'color: #fff',
+    'background: rgba(0, 0, 0, 0.55)',
+    'padding: 4px 8px',
+    'border-radius: 4px',
     'pointer-events: none',
     'white-space: pre',
     'z-index: 5',
@@ -1009,13 +1048,11 @@ moduleP.then((wasm) => {
   ].join(';');
   canvas.parentElement?.appendChild(perfHud);
 
-  let fpsEma = 0;
-  let frameTimeEmaMs = 0;
-  let renderTimeEmaMs = 0;
-  let idleSkips = 0;
-  let renderedFrames = 0;
-  let perfLastSampleAt = 0;
-  const PERF_EMA_ALPHA = 0.1;
+  let perfWindowStartMs = performance.now();
+  let perfRafCount = 0;
+  let perfRenderCount = 0;
+  let perfFrameMsSum = 0;
+  let perfRenderMsSum = 0;
 
   // Day/night cycle mirrors teranos::day_phase + teranos::brightness.
   // Keep these in sync with the Rust constants — they're load-bearing.
@@ -1057,16 +1094,23 @@ moduleP.then((wasm) => {
     const frameStartMs = performance.now();
     const dt = Math.min(now - last, 100);
     last = now;
+    perfRafCount += 1;
 
     tick(inputBits(), dt);
-    let s;
-    try {
-      s = JSON.parse(state());
-    } catch (err) {
-      logError('wasm state JSON parse', err);
-      requestAnimationFrame(frame);
-      return;
-    }
+
+    // Binary player state — 16 bytes. Replaces the per-frame
+    // JSON.parse(state()) which was a measurable cost in the
+    // profiler. Layout is defined in roam::wasm_ffi alongside the
+    // FFI export. Inventory + libp2p HUD updates still read the
+    // JSON shape but only on the throttled 500ms cadence below.
+    const psPtr = roam_player_state_ptr();
+    const psView = new DataView(wasmMemoryRef.buffer, psPtr, roam_player_state_len());
+    const s = {
+      x: psView.getFloat32(0, true),
+      y: psView.getFloat32(4, true),
+      z: psView.getInt32(8, true),
+      f: psView.getUint8(12),
+    };
 
     // Drain rare narrative events (Init, Note, Overflow) from the
     // trace bus. Per-frame Tick / StateRead / ViewportRead are no
@@ -1140,21 +1184,29 @@ moduleP.then((wasm) => {
       if (now - p.lastSeen > PEER_TIMEOUT_MS) remotePeers.delete(id);
     }
 
+    // Status text reflects the actual connection state every frame —
+    // not throttled. Previously the 500ms throttle around the
+    // libp2p-block update meant the page-level #status element lied
+    // about libp2p state between sample windows. The string template
+    // is cheap; we let it run unconditionally.
+    if (libp2p) {
+      const _conns = libp2p.getConnections();
+      const _meshN = (pubsub && pubsub.getMeshPeers) ? (pubsub.getMeshPeers(TOPIC) || []).length : 0;
+      status.textContent = _conns.length === 0
+        ? `me=${PEER_ID} — libp2p ready, 0 connections`
+        : `me=${PEER_ID} — libp2p conns=${_conns.length} mesh=${_meshN} remote-peers=${remotePeers.size}`;
+    } else if (libp2pErr) {
+      status.textContent = `me=${PEER_ID} — libp2p failed: ${libp2pErr.message || 'unknown'}`;
+    } else {
+      status.textContent = `me=${PEER_ID} — libp2p initializing…`;
+    }
+
     if (now - lastInfoUpdate > 500) {
       lastInfoUpdate = now;
       if (libp2p) {
         const conns = libp2p.getConnections();
-        // Status text reflects the actual connection state — was stuck
-        // on "bootstrapping libp2p…" forever before because nothing
-        // overwrote the initial value once libp2p connected.
         const meshPeerCount = (pubsub && pubsub.getMeshPeers)
           ? (pubsub.getMeshPeers(TOPIC) || []).length : 0;
-        if (conns.length === 0) {
-          status.textContent = `me=${PEER_ID} — bootstrapping libp2p…`;
-        } else {
-          status.textContent =
-            `me=${PEER_ID} — libp2p conns=${conns.length} mesh=${meshPeerCount} remote-peers=${remotePeers.size}`;
-        }
         connsEl.textContent = conns.length === 0
           ? '(no connections)'
           : conns.map(c => `${short(c.remotePeer)}  ${c.remoteAddr.toString()}`).join('\n');
@@ -1175,7 +1227,16 @@ moduleP.then((wasm) => {
         } else {
           meshEl.textContent = '(pubsub OFF)';
         }
-        const inv = (s && Array.isArray(s.inv)) ? s.inv : [];
+        // Inventory + remaining HUD fields still go through the JSON
+        // path — this block only runs every 500ms so the parse cost
+        // is absorbed in the slow tick, not the frame loop.
+        let sJson = null;
+        try {
+          sJson = JSON.parse(state());
+        } catch (err) {
+          logError('wasm state JSON parse (hud)', err);
+        }
+        const inv = (sJson && Array.isArray(sJson.inv)) ? sJson.inv : [];
         try {
           renderInventory(inv);
         } catch (err) {
@@ -1212,7 +1273,10 @@ moduleP.then((wasm) => {
     const fp = `${s.x | 0},${s.y | 0},${s.z},${s.f},${zoom},${canvas.width},${canvas.height},${peerFp},${remotePeers.size}`;
     const idleHeartbeat = now - lastRenderAt > IDLE_RENDER_MIN_MS;
     if (fp === lastRenderFp && !idleHeartbeat) {
-      idleSkips += 1;
+      // Honest accounting: still counts as a RAF tick (input is alive)
+      // but not a paint. raf Hz stays > 0 even when nothing renders.
+      perfFrameMsSum += performance.now() - frameStartMs;
+      maybeUpdatePerfHud();
       requestAnimationFrame(frame);
       return;
     }
@@ -1276,31 +1340,32 @@ moduleP.then((wasm) => {
       `me=${PEER_ID} (${s.x.toFixed(1)}, ${s.y.toFixed(1)}, z=${s.z}) f=${s.f}  ` +
       `zoom=${zoom.toFixed(2)}  peers=${remotePeers.size}  ${libStatus}`;
 
-    // Perf accounting for the dirty-rendered path. Frame time = wall
-    // time since the previous render. Render time = wall time spent
-    // inside this rendered frame's body. EMA so the numbers are
-    // stable; raw values jitter too much for human reading.
-    renderedFrames += 1;
+    // Honest perf accounting: this branch is the paint path.
+    perfRenderCount += 1;
     const renderEndMs = performance.now();
-    const frameMs = renderEndMs - frameStartMs;
-    const renderMs = renderEndMs - renderStartMs;
-    if (frameTimeEmaMs === 0) {
-      frameTimeEmaMs = frameMs;
-      renderTimeEmaMs = renderMs;
-      fpsEma = 1000 / Math.max(frameMs, 1);
-    } else {
-      frameTimeEmaMs = frameTimeEmaMs * (1 - PERF_EMA_ALPHA) + frameMs * PERF_EMA_ALPHA;
-      renderTimeEmaMs = renderTimeEmaMs * (1 - PERF_EMA_ALPHA) + renderMs * PERF_EMA_ALPHA;
-      fpsEma = fpsEma * (1 - PERF_EMA_ALPHA) + (1000 / Math.max(frameMs, 1)) * PERF_EMA_ALPHA;
-    }
-    if (renderEndMs - perfLastSampleAt > 250) {
-      perfLastSampleAt = renderEndMs;
-      perfHud.textContent =
-        `${fpsEma.toFixed(0)} fps · ${frameTimeEmaMs.toFixed(1)}ms frame · ${renderTimeEmaMs.toFixed(1)}ms gl\n` +
-        `rendered=${renderedFrames} idle-skips=${idleSkips}`;
-    }
+    perfFrameMsSum += renderEndMs - frameStartMs;
+    perfRenderMsSum += renderEndMs - renderStartMs;
+    maybeUpdatePerfHud();
 
     requestAnimationFrame(frame);
+  }
+
+  function maybeUpdatePerfHud() {
+    const nowMs = performance.now();
+    const elapsedMs = nowMs - perfWindowStartMs;
+    if (elapsedMs < 1000) return;
+    const rafHz = (perfRafCount * 1000) / elapsedMs;
+    const glHz = (perfRenderCount * 1000) / elapsedMs;
+    const frameMs = perfRafCount > 0 ? perfFrameMsSum / perfRafCount : 0;
+    const glMs = perfRenderCount > 0 ? perfRenderMsSum / perfRenderCount : 0;
+    perfHud.textContent =
+      `game loop  ${rafHz.toFixed(0)}/s   ${frameMs.toFixed(1)}ms each\n` +
+      `repaints   ${glHz.toFixed(0)}/s   ${glMs.toFixed(1)}ms each`;
+    perfWindowStartMs = nowMs;
+    perfRafCount = 0;
+    perfRenderCount = 0;
+    perfFrameMsSum = 0;
+    perfRenderMsSum = 0;
   }
 
   status.textContent = libp2pErr

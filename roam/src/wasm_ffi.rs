@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::cell::RefCell;
+use std::ops::Deref;
 
 use crate::teranos::{FlowerColor, FlowerCore, TileKind};
 use crate::trace::{
@@ -52,6 +53,68 @@ pub(crate) fn roam_state_impl() -> String {
                 "{}".to_string()
             })
     })
+}
+
+// ----- binary player-state FFI -----
+//
+// JSON-parsing the state every frame was a measurable cost in the
+// Firefox profiler. The dirty-flag fingerprint + GL render only need
+// (x, y, z, facing); the inventory still ships as JSON but the
+// throttled HUD path reads it once every 500ms, not per frame.
+//
+// Layout (16 bytes, little-endian, repr(C)):
+//   offset 0  f32  x
+//   offset 4  f32  y
+//   offset 8  i32  z
+//   offset 12 u8   facing
+//   offset 13 u8[3] padding
+//
+// `roam_player_state_ptr` snapshots into a thread-local static buffer
+// and returns its base pointer. Caller reads via DataView; the buffer
+// is overwritten on every call.
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+struct PlayerStateBinary {
+    x: f32,
+    y: f32,
+    z: i32,
+    facing: u8,
+    _pad: [u8; 3],
+}
+
+const _: () = assert!(core::mem::size_of::<PlayerStateBinary>() == 16);
+
+pub(crate) const PLAYER_STATE_LEN: u32 = 16;
+
+thread_local! {
+    static PLAYER_STATE_BUFFER: RefCell<PlayerStateBinary> =
+        const { RefCell::new(PlayerStateBinary {
+            x: 0.0,
+            y: 0.0,
+            z: 0,
+            facing: 4,
+            _pad: [0; 3],
+        }) };
+}
+
+pub(crate) fn roam_player_state_ptr_impl() -> u32 {
+    WORLD.with(|w| {
+        if let Some(world) = w.borrow().as_ref() {
+            PLAYER_STATE_BUFFER.with(|cell| {
+                let mut s = cell.borrow_mut();
+                s.x = world.player.x;
+                s.y = world.player.y;
+                s.z = world.player.z;
+                s.facing = world.player.facing.as_u8();
+            });
+        }
+        PLAYER_STATE_BUFFER.with(|cell| cell.borrow().deref() as *const _ as u32)
+    })
+}
+
+pub(crate) fn roam_player_state_len_impl() -> u32 {
+    PLAYER_STATE_LEN
 }
 
 pub(crate) fn roam_set_position_impl(x: f32, y: f32, facing: u8) {
@@ -250,6 +313,16 @@ mod wasm_exports {
     #[wasm_bindgen]
     pub fn roam_pixels_per_tile() -> u32 {
         super::roam_pixels_per_tile_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_player_state_ptr() -> u32 {
+        super::roam_player_state_ptr_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_player_state_len() -> u32 {
+        super::roam_player_state_len_impl()
     }
 
     #[wasm_bindgen]
