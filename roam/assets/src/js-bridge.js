@@ -41,6 +41,8 @@ import initWasm, {
   roam_player_state_len,
   roam_net_init,
   roam_net_publish_position,
+  roam_net_tick,
+  roam_net_peer_count,
 } from '/roam.js';
 import * as netShim from './net-shim.js';
 
@@ -1123,6 +1125,16 @@ moduleP.then((wasm) => {
 
     tick(inputBits(), dt);
 
+    // Drive the Rust-owned network state: drain incoming events,
+    // update the peer table, prune stale peers. Cheap when nothing's
+    // queued. `Date.now()` is the same epoch the shim stamps on
+    // incoming messages, so prune math compares like for like.
+    try {
+      roam_net_tick(Date.now());
+    } catch (err) {
+      logError('roam_net_tick', err);
+    }
+
     // Binary player state — 16 bytes. Replaces the per-frame
     // JSON.parse(state()) which was a measurable cost in the
     // profiler. Layout is defined in roam::wasm_ffi alongside the
@@ -1214,9 +1226,16 @@ moduleP.then((wasm) => {
     if (libp2p) {
       const _conns = libp2p.getConnections();
       const _meshN = (pubsub && pubsub.getMeshPeers) ? (pubsub.getMeshPeers(TOPIC) || []).length : 0;
+      // remote-peers/js is the legacy JS Map (still feeds the
+      // renderer's peer markers through `roam_set_peers`). rust-peers
+      // is the new Rust-owned table populated through the network
+      // seam — should converge to the same count once 2c is happy.
+      // Phase 2d removes the JS Map; until then the two counts side
+      // by side are the diagnostic that the seam is working.
+      const rustPeers = libp2p ? roam_net_peer_count() : 0;
       status.textContent = _conns.length === 0
         ? `me=${PEER_ID} — libp2p ready, 0 connections`
-        : `me=${PEER_ID} — libp2p conns=${_conns.length} mesh=${_meshN} remote-peers=${remotePeers.size}`;
+        : `me=${PEER_ID} — libp2p conns=${_conns.length} mesh=${_meshN} remote-peers/js=${remotePeers.size} rust=${rustPeers}`;
     } else if (libp2pErr) {
       status.textContent = `me=${PEER_ID} — libp2p failed: ${libp2pErr.message || 'unknown'}`;
     } else {

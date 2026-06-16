@@ -26,10 +26,14 @@ export function attach(libp2p, pubsub) {
     // will accept: { topic, from, bytes_b64, at_ms }.
     const d = e.detail;
     if (!d) return;
+    // Bytes go over the seam as a numeric array. JSON has no native
+    // byte type and adding a base64 dep just for one round trip is
+    // not worth it; arrays-of-numbers cost ~2x JSON size for the
+    // ~50-byte position envelope, which is irrelevant at 20 Hz.
     _eventQueue.push({
       topic: d.topic || '',
       from: d.from ? d.from.toString() : '',
-      bytes_b64: uint8ToBase64(d.data || new Uint8Array(0)),
+      bytes: Array.from(d.data || []),
       at_ms: Date.now(),
     });
   });
@@ -86,8 +90,3 @@ export function drainEvents() {
   return out;
 }
 
-function uint8ToBase64(bytes) {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}

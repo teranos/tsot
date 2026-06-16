@@ -372,6 +372,35 @@ mod wasm_exports {
         Ok(())
     }
 
+    /// Drain provider events, update the peer table, prune stale
+    /// peers. Called once per frame from the JS bridge. `now_ms` is
+    /// the JS-side `Date.now()` value (f64 to avoid BigInt at the
+    /// boundary; truncated to u64 inside).
+    #[wasm_bindgen]
+    pub fn roam_net_tick(now_ms: f64) {
+        super::WORLD.with(|w| {
+            if let Some(world) = w.borrow_mut().as_mut() {
+                if let Some(net) = world.net.as_mut() {
+                    net.tick(now_ms as u64);
+                }
+            }
+        });
+    }
+
+    /// Number of remote peers currently in the Rust-owned peer table.
+    /// Phase 2c diagnostic — confirms the seam is actually receiving
+    /// events. Removed once the renderer reads from `Net.peers`
+    /// directly (phase 2d).
+    #[wasm_bindgen]
+    pub fn roam_net_peer_count() -> u32 {
+        super::WORLD.with(|w| {
+            w.borrow()
+                .as_ref()
+                .and_then(|world| world.net.as_ref().map(|n| n.peers().count() as u32))
+                .unwrap_or(0)
+        })
+    }
+
     /// Publish the local player's current position on the canonical
     /// positions topic. Called from the JS bridge's broadcast timer.
     /// No-op if `Net` hasn't been attached yet (libp2p still booting).

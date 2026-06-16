@@ -119,12 +119,59 @@ impl NetworkProvider for JsLibp2pProvider {
     }
 
     fn poll_events(&mut self) -> Vec<NetEvent> {
-        // Phase 2c will deserialize the JSON array returned by
-        // `drain_events`. For 2b we expose the seam but no incoming
-        // event consumer exists yet, so callers get an empty list.
-        let _ = &self.drain_events;
-        Vec::new()
+        // Phase 2c: drain the JS-side queue. Format on the wire (set
+        // by `net-shim.js attach`):
+        //
+        //   [{ topic: string, from: string, bytes: number[], at_ms: number }, ...]
+        //
+        // PeerUp/PeerDown/SubscriptionChange/Error aren't queued yet
+        // — they're added once we attach the corresponding libp2p
+        // event listeners on the shim side.
+        let raw = match self.drain_events.call0(&JsValue::NULL) {
+            Ok(v) => v,
+            Err(e) => {
+                return vec![NetEvent::Error(NetError::ProviderInternal {
+                    reason: js_value_message(&e),
+                })];
+            }
+        };
+        let raw_str = match raw.as_string() {
+            Some(s) => s,
+            None => {
+                return vec![NetEvent::Error(NetError::ProviderInternal {
+                    reason: "drain_events did not return a string".to_string(),
+                })];
+            }
+        };
+        if raw_str.is_empty() || raw_str == "[]" {
+            return Vec::new();
+        }
+        match serde_json::from_str::<Vec<MessageWire>>(&raw_str) {
+            Ok(items) => items
+                .into_iter()
+                .map(|m| NetEvent::Message {
+                    topic: Topic(m.topic),
+                    from: PeerId(m.from),
+                    bytes: m.bytes,
+                    at_ms: m.at_ms,
+                })
+                .collect(),
+            Err(e) => vec![NetEvent::Error(NetError::ProviderInternal {
+                reason: format!("drain_events JSON parse failed: {e}"),
+            })],
+        }
     }
+}
+
+/// Wire shape for one queued message from `net-shim.js`. Numeric
+/// array for bytes; no base64 dep.
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Deserialize)]
+struct MessageWire {
+    topic: String,
+    from: String,
+    bytes: Vec<u8>,
+    at_ms: u64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -102,11 +102,11 @@ use serde::{Deserialize, Serialize};
 
 /// libp2p-format peer identifier (the `12D3KooW…` string).
 /// Newtype so the trait surface can't accidentally accept arbitrary strings.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PeerId(pub String);
 
 /// A pubsub topic name. Newtype for the same reason as `PeerId`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Topic(pub String);
 
 /// Failures the provider can surface. `reason` carries the provider-

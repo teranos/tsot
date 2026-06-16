@@ -13,9 +13,9 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::net::{NetError, NetworkProvider, PeerId, Topic};
+use crate::net::{NetError, NetEvent, NetworkProvider, PeerId, Topic};
 
 /// Topic where roam broadcasts player positions. Same string used by
 /// every node — gossipsub treats this as a flat namespace.
@@ -63,23 +63,68 @@ impl Net {
         self.peers.values()
     }
 
-    /// Called once per frame from `World::step` in phase 2b. Drains
-    /// provider events, updates the peer table, prunes timed-out
-    /// peers, schedules broadcasts.
-    ///
-    /// Phase 2a: placeholder. The provider-events drain and the prune
-    /// loop are the next slice; today this exists so 2b is a one-line
-    /// embedding in `World::step`.
+    /// Drain provider events, update the peer table from incoming
+    /// position messages, prune stale peers. Called once per frame
+    /// from `roam_net_tick` in the FFI.
     pub fn tick(&mut self, now_ms: u64) {
-        // Phase 2b: handle each event from `self.provider.poll_events()`
-        //   - NetEvent::PeerUp     → insert/update peer entry
-        //   - NetEvent::PeerDown   → remove peer
-        //   - NetEvent::Message    → decode WireMsg::Position, update peer
-        //   - NetEvent::Error      → forward to `error::push`
-        // Phase 2b: prune `self.peers` entries with `last_seen_ms`
-        //   older than `now_ms - PEER_TIMEOUT_MS`.
-        let _ = now_ms;
-        let _ = self.provider.poll_events();
+        let events = self.provider.poll_events();
+        for ev in events {
+            match ev {
+                NetEvent::Message {
+                    topic,
+                    from,
+                    bytes,
+                    at_ms,
+                } => {
+                    if topic.0 != POSITIONS_TOPIC {
+                        continue;
+                    }
+                    match serde_json::from_slice::<PositionWireIn>(&bytes) {
+                        Ok(pos) => {
+                            self.peers.insert(
+                                from.clone(),
+                                RemotePeer {
+                                    peer_id: from,
+                                    x: pos.x,
+                                    y: pos.y,
+                                    facing: pos.f,
+                                    last_seen_ms: at_ms,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            #[cfg(target_arch = "wasm32")]
+                            crate::error::emit(
+                                crate::error::Severity::Warn,
+                                "roam::net::Net::tick",
+                                "position decode failed",
+                                format!("from={from:?} reason={e}"),
+                            );
+                            #[cfg(not(target_arch = "wasm32"))]
+                            let _ = e;
+                        }
+                    }
+                }
+                NetEvent::PeerDown { peer, .. } => {
+                    self.peers.remove(&peer);
+                }
+                NetEvent::PeerUp { .. } | NetEvent::SubscriptionChange { .. } => {}
+                NetEvent::Error(err) => {
+                    #[cfg(target_arch = "wasm32")]
+                    crate::error::emit(
+                        crate::error::Severity::Warn,
+                        "roam::net::Net::tick",
+                        "provider error",
+                        format!("{err:?}"),
+                    );
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let _ = err;
+                }
+            }
+        }
+        // Prune stale peers (haven't seen them in PEER_TIMEOUT_MS).
+        self.peers
+            .retain(|_, p| now_ms.saturating_sub(p.last_seen_ms) < PEER_TIMEOUT_MS);
     }
 
     /// Inject identity for tests + the eventual `roam_state_json` path
@@ -131,6 +176,18 @@ impl Net {
     pub fn subscribe_positions(&mut self) -> Result<(), NetError> {
         self.provider.subscribe(&Topic(POSITIONS_TOPIC.to_string()))
     }
+}
+
+/// Wire shape for incoming position messages. Matches the envelope
+/// the bridge (and any pre-2b peers) put on the wire — `peer_id` and
+/// `z` flow on the wire but we don't store them here (peer authorship
+/// comes from the gossipsub `from` field; `z` isn't used by the
+/// renderer yet). Serde ignores fields not declared.
+#[derive(Deserialize)]
+struct PositionWireIn {
+    x: f32,
+    y: f32,
+    f: u8,
 }
 
 #[cfg(test)]
