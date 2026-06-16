@@ -344,6 +344,52 @@ pub fn flower_core_char(c: Option<FlowerCore>) -> char {
     }
 }
 
+/// Petal count for a flower. 5 is overwhelmingly common; 6/7/8 are
+/// increasingly rare tiers. Returns None if there's no flower at (x,y).
+/// Distribution (per 10000): 5 = 9939, 6 = 50, 7 = 10, 8 = 1.
+/// Petal-edge color — same 7-color vocabulary and same rarity weights
+/// as `flower_at`, drawn from an independent hash. Renders as a
+/// radial gradient inside each petal (center = petal color,
+/// edge = this color).
+pub fn flower_edge_at(x: i32, y: i32) -> Option<FlowerColor> {
+    flower_at(x, y)?;
+    let cx = canonical_x(x);
+    let h = splitmix64(
+        WORLD_SEED
+            ^ 0xED6E_ED6E_BA5E_C0DE
+            ^ ((cx as i64 as u64).wrapping_mul(0x94D0_49BB_1331_11EB))
+            ^ (y as i64 as u64),
+    );
+    let r = (h >> 32) % 1000;
+    Some(match r {
+        0..=349 => FlowerColor::Red,
+        350..=699 => FlowerColor::Yellow,
+        700..=769 => FlowerColor::Blue,
+        770..=839 => FlowerColor::Purple,
+        840..=909 => FlowerColor::Azure,
+        910..=969 => FlowerColor::Pink,
+        _ => FlowerColor::Glow,
+    })
+}
+
+pub fn flower_petals_at(x: i32, y: i32) -> Option<u8> {
+    flower_at(x, y)?;
+    let cx = canonical_x(x);
+    let h = splitmix64(
+        WORLD_SEED
+            ^ 0x5EAF_5EAF_C0DE_F123
+            ^ ((cx as i64 as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9))
+            ^ (y as i64 as u64),
+    );
+    let r = (h >> 32) % 10000;
+    Some(match r {
+        0 => 8,
+        1..=10 => 7,
+        11..=60 => 6,
+        _ => 5,
+    })
+}
+
 pub fn tile_at(x: i32, y: i32, z: i32) -> TileKind {
     if !(Z_MIN..=Z_MAX).contains(&z) {
         return TileKind::Air;

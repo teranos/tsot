@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use crate::teranos::{
-    flower_at, flower_char, flower_core_at, flower_core_char, surface_z, tile_at, FlowerColor,
-    FlowerCore, TileKind, WORLD_CIRC_X,
+    flower_at, flower_char, flower_core_at, flower_core_char, flower_edge_at, flower_petals_at,
+    surface_z, tile_at, FlowerColor, FlowerCore, TileKind, WORLD_CIRC_X,
 };
 use crate::trace::{emit, TraceEvent};
 
@@ -61,10 +61,10 @@ pub struct Player {
     /// gossip-based first-claim-wins lands later. Hash key is canonical
     /// `(canonical_x_tile, y_tile)` so the wrap doesn't double-record.
     pub picked: BTreeSet<(i32, i32)>,
-    /// Each picked flower is its own inventory entry — (petal, core)
-    /// indices. Preserves the full 21-kind variety instead of
-    /// aggregating to 7 petal-color counts.
-    pub inventory: Vec<(u8, u8)>,
+    /// Each picked flower is its own inventory entry — (petal_color,
+    /// core, petal_count, edge_color) tuple. 7 × 3 × 4 × 7 = 588
+    /// distinct kinds when the petal-edge gradient is included.
+    pub inventory: Vec<(u8, u8, u8, u8)>,
 }
 
 pub struct World {
@@ -196,11 +196,21 @@ impl World {
         }
         if let Some(color) = flower_at(tx, ty) {
             let core = flower_core_at(tx, ty).unwrap_or(FlowerCore::White);
+            let petals = flower_petals_at(tx, ty).unwrap_or(5);
+            let edge = flower_edge_at(tx, ty).unwrap_or(color);
             self.player.picked.insert(key);
-            self.player.inventory.push((flower_color_index(color), flower_core_index(core)));
+            self.player.inventory.push((
+                flower_color_index(color),
+                flower_core_index(core),
+                petals,
+                flower_color_index(edge),
+            ));
             emit(TraceEvent::Note {
                 tag: "flower_picked",
-                msg: format!("({tx}, {ty}) {:?} core={:?}", color, core),
+                msg: format!(
+                    "({tx}, {ty}) {:?} core={:?} petals={petals} edge={:?}",
+                    color, core, edge
+                ),
             });
         }
     }
@@ -333,12 +343,12 @@ impl World {
         picked.push(']');
         let mut inv = String::from("[");
         first = true;
-        for &(p, c) in &self.player.inventory {
+        for &(p, c, n, e) in &self.player.inventory {
             if !first {
                 inv.push(',');
             }
             first = false;
-            inv.push_str(&format!("[{p},{c}]"));
+            inv.push_str(&format!("[{p},{c},{n},{e}]"));
         }
         inv.push(']');
         format!(r#"{{"picked":{picked},"inv":{inv}}}"#)
@@ -366,15 +376,18 @@ impl World {
         }
         if let Some(inv_start) = raw.find("\"inv\":[") {
             let rest = &raw[inv_start + "\"inv\":[".len()..];
-            // Read until the matching outer bracket. The contents are
-            // pairs separated by "],[" — same shape as picked above.
             if let Some(end) = rest.rfind(']') {
                 let pairs = &rest[..end];
                 if !pairs.trim().is_empty() {
                     for chunk in pairs.split("],[").map(|s| s.trim_start_matches('[').trim_end_matches(']')) {
+                        // Accept [p,c] (legacy), [p,c,n] (no edge),
+                        // and [p,c,n,e] (current). Defaults: n=5, e=p
+                        // (no-gradient when restoring pre-edge data).
                         let mut it = chunk.split(',').filter_map(|t| t.trim().parse::<u8>().ok());
                         if let (Some(p), Some(c)) = (it.next(), it.next()) {
-                            self.player.inventory.push((p, c));
+                            let n = it.next().unwrap_or(5);
+                            let e = it.next().unwrap_or(p);
+                            self.player.inventory.push((p, c, n, e));
                         }
                     }
                 }
@@ -391,12 +404,12 @@ impl World {
         });
         let mut inv = String::from("[");
         let mut first = true;
-        for &(p, c) in &self.player.inventory {
+        for &(p, c, n, e) in &self.player.inventory {
             if !first {
                 inv.push(',');
             }
             first = false;
-            inv.push_str(&format!("[{p},{c}]"));
+            inv.push_str(&format!("[{p},{c},{n},{e}]"));
         }
         inv.push(']');
         format!(
@@ -434,6 +447,8 @@ impl World {
         let mut elev = String::with_capacity(cap);
         let mut flowers = String::with_capacity(cap);
         let mut flower_cores = String::with_capacity(cap);
+        let mut flower_petals = String::with_capacity(cap);
+        let mut flower_edges = String::with_capacity(cap);
         for dy in -half_h..(view_h as i32 - half_h) {
             for dx in -half_w..(view_w as i32 - half_w) {
                 let tx = center_tx + dx;
@@ -442,17 +457,25 @@ impl World {
                 let top_z = sz.max(0);
                 tiles.push(tile_char(tile_at(tx, ty, top_z)));
                 elev.push(elev_char(sz));
-                // Filter out flowers already picked by THIS player. The
-                // viewport collapses to '0' (no flower) for picked tiles
-                // so the renderer never draws them again.
+                // Filter out flowers already picked by THIS player.
                 let cx = tx.rem_euclid(WORLD_CIRC_X);
-                let (flower, core) = if self.player.picked.contains(&(cx, ty)) {
-                    (None, None)
+                let (flower, core, petals, edge) = if self.player.picked.contains(&(cx, ty)) {
+                    (None, None, None, None)
                 } else {
-                    (flower_at(tx, ty), flower_core_at(tx, ty))
+                    (
+                        flower_at(tx, ty),
+                        flower_core_at(tx, ty),
+                        flower_petals_at(tx, ty),
+                        flower_edge_at(tx, ty),
+                    )
                 };
                 flowers.push(flower_char(flower));
                 flower_cores.push(flower_core_char(core));
+                flower_petals.push(match petals {
+                    Some(n) => char::from_digit(n as u32, 10).unwrap_or('5'),
+                    None => '0',
+                });
+                flower_edges.push(flower_char(edge));
             }
         }
         emit(TraceEvent::ViewportRead {
@@ -463,8 +486,8 @@ impl World {
             z,
         });
         format!(
-            r#"{{"tile":{},"view_w":{},"view_h":{},"center_tx":{},"center_ty":{},"z":{},"tiles":"{}","elev":"{}","flowers":"{}","flower_cores":"{}"}}"#,
-            PIXELS_PER_TILE, view_w, view_h, center_tx, center_ty, z, tiles, elev, flowers, flower_cores
+            r#"{{"tile":{},"view_w":{},"view_h":{},"center_tx":{},"center_ty":{},"z":{},"tiles":"{}","elev":"{}","flowers":"{}","flower_cores":"{}","flower_petals":"{}","flower_edges":"{}"}}"#,
+            PIXELS_PER_TILE, view_w, view_h, center_tx, center_ty, z, tiles, elev, flowers, flower_cores, flower_petals, flower_edges
         )
     }
 }

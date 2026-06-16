@@ -101,22 +101,23 @@ const invCtx = invEl ? invEl.getContext('2d') : null;
 
 const INV_PETAL_COLORS = ['#e44', '#fd4', '#48f', '#a4f', '#4cf', '#f9c', '#fff'];
 const INV_LABELS = ['red', 'yellow', 'blue', 'purple', 'azure', 'pink', 'glow'];
-const INV_FLOWER_PETAL_ANGLES = [
-  -Math.PI / 2,
-  -Math.PI / 2 + (2 * Math.PI) / 5,
-  -Math.PI / 2 + (4 * Math.PI) / 5,
-  -Math.PI / 2 + (6 * Math.PI) / 5,
-  -Math.PI / 2 + (8 * Math.PI) / 5,
-];
 
-function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale) {
+function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale, petalCount, edgeFill) {
+  const n = petalCount || 5;
   const petalR = 3 * scale;
   const petalDist = 3.5 * scale;
   const coreR = 2 * scale;
-  ctx2.fillStyle = petalFill;
-  for (const a of INV_FLOWER_PETAL_ANGLES) {
+  const edge = edgeFill || petalFill;
+  for (let k = 0; k < n; k++) {
+    const a = -Math.PI / 2 + (k * 2 * Math.PI) / n;
     const px = cx + Math.cos(a) * petalDist;
     const py = cy + Math.sin(a) * petalDist;
+    const gx = px - Math.cos(a) * petalR * 0.7;
+    const gy = py - Math.sin(a) * petalR * 0.7;
+    const g = ctx2.createRadialGradient(gx, gy, 0, gx, gy, petalR * 1.7);
+    g.addColorStop(0, petalFill);
+    g.addColorStop(1, edge);
+    ctx2.fillStyle = g;
     ctx2.beginPath();
     ctx2.arc(px, py, petalR, 0, Math.PI * 2);
     ctx2.fill();
@@ -141,14 +142,19 @@ function renderInventory(inv) {
   if (invEl.height !== neededH) invEl.height = neededH;
   invCtx.clearRect(0, 0, invEl.width, invEl.height);
   for (let i = 0; i < items.length; i++) {
-    const [p, c] = items[i];
+    const item = items[i];
+    const p = item[0];
+    const c = item[1];
+    const n = item[2] || 5;
+    const e = item[3] != null ? item[3] : p;
     const petal = INV_PETAL_COLORS[p] || '#fff';
     const core = INV_CORE_COLORS[c] || '#fff';
+    const edge = INV_PETAL_COLORS[e] || petal;
     const col = i % cols;
     const row = Math.floor(i / cols);
     const cx = col * slot + slot / 2;
     const cy = row * slot + slot / 2;
-    drawFlowerIcon(invCtx, cx, cy, petal, core, 1.8);
+    drawFlowerIcon(invCtx, cx, cy, petal, core, 1.8, n, edge);
   }
 }
 
@@ -1120,20 +1126,16 @@ moduleP.then(() => {
         '2': '#fd4',  // yellow
         '3': '#000',  // black (super-mega-rare)
       };
-      // 5 petals arranged around a center core. Each petal is a small
-      // filled circle offset from the flower's center by `petalDist`
-      // at one of five evenly-spaced angles (72° apart).
+      // Petals arranged around a center core. Each petal is a radial
+      // gradient: petal-center color at petal.center → edge color at
+      // petal-radius. Both colors are species-level (per flower, not
+      // per petal) so the flower reads as one coherent thing.
       const petalR = Math.max(1.5, tileScreen * 0.15);
       const petalDist = tileScreen * 0.18;
       const coreR = Math.max(1, tileScreen * 0.10);
-      const PETAL_ANGLES = [
-        -Math.PI / 2,
-        -Math.PI / 2 + (2 * Math.PI) / 5,
-        -Math.PI / 2 + (4 * Math.PI) / 5,
-        -Math.PI / 2 + (6 * Math.PI) / 5,
-        -Math.PI / 2 + (8 * Math.PI) / 5,
-      ];
       const cores = V.flower_cores || '';
+      const petalCounts = V.flower_petals || '';
+      const edges = V.flower_edges || '';
       for (let vy = 0; vy < V.view_h; vy++) {
         for (let vx = 0; vx < V.view_w; vx++) {
           const i = vy * V.view_w + vx;
@@ -1143,14 +1145,26 @@ moduleP.then(() => {
           if (!petalFill) continue;
           const cc = cores[i] || '1';
           const coreFill = FLOWER_CORE[cc] || '#fff';
+          const n = parseInt(petalCounts[i] || '5', 10) || 5;
+          const ec = edges[i] || fc;
+          const edgeFill = FLOWER_PETAL[ec] || petalFill;
           const worldTx = V.center_tx + vx - halfW;
           const worldTy = V.center_ty + vy - halfH;
           const cxF = (worldTx * tileWorld + tileWorld / 2 - s.x) * zoom + camCenterX;
           const cyF = (worldTy * tileWorld + tileWorld / 2 - s.y) * zoom + camCenterY;
-          ctx.fillStyle = petalFill;
-          for (const a of PETAL_ANGLES) {
+          for (let k = 0; k < n; k++) {
+            const a = -Math.PI / 2 + (k * 2 * Math.PI) / n;
             const px = cxF + Math.cos(a) * petalDist;
             const py = cyF + Math.sin(a) * petalDist;
+            // Gradient origin shifted INWARD toward the flower core
+            // so the bright center is on the petal's core-facing side
+            // and the edge color sits on the outer rim.
+            const gx = px - Math.cos(a) * petalR * 0.7;
+            const gy = py - Math.sin(a) * petalR * 0.7;
+            const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, petalR * 1.7);
+            g.addColorStop(0, petalFill);
+            g.addColorStop(1, edgeFill);
+            ctx.fillStyle = g;
             ctx.beginPath();
             ctx.arc(px, py, petalR, 0, Math.PI * 2);
             ctx.fill();
