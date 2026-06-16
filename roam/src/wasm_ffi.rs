@@ -100,6 +100,34 @@ pub(crate) fn roam_drain_errors_impl() -> String {
     serde_json::to_string(&errors).unwrap_or_else(|_| "[]".to_string())
 }
 
+pub(crate) fn roam_session_snapshot_impl() -> String {
+    WORLD.with(|w| {
+        w.borrow()
+            .as_ref()
+            .map(World::session_snapshot_json)
+            .unwrap_or_else(|| {
+                emit(TraceEvent::Note {
+                    tag: "roam_session_snapshot",
+                    msg: "called before roam_init; returning empty".to_string(),
+                });
+                r#"{"picked":[],"inv":[0,0,0,0,0,0,0]}"#.to_string()
+            })
+    })
+}
+
+pub(crate) fn roam_restore_session_impl(raw: String) {
+    WORLD.with(|w| {
+        if let Some(world) = w.borrow_mut().as_mut() {
+            world.restore_session_json(&raw);
+        } else {
+            emit(TraceEvent::Note {
+                tag: "roam_restore_session",
+                msg: "called before roam_init; ignoring".to_string(),
+            });
+        }
+    });
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm_exports {
     use super::*;
@@ -142,6 +170,16 @@ mod wasm_exports {
     #[wasm_bindgen]
     pub fn roam_trace_pending_count() -> u32 {
         super::roam_trace_pending_count_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_session_snapshot() -> String {
+        super::roam_session_snapshot_impl()
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_restore_session(raw: String) {
+        super::roam_restore_session_impl(raw);
     }
 
     #[wasm_bindgen]

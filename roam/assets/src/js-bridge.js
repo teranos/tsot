@@ -24,6 +24,8 @@ import initWasm, {
   roam_set_position,
   roam_drain_trace,
   roam_drain_errors,
+  roam_session_snapshot,
+  roam_restore_session,
 } from '/roam.js';
 
 const INPUT_W = 1 << 0;
@@ -94,6 +96,61 @@ const selfEl = document.getElementById('self');
 const connsEl = document.getElementById('conns');
 const meshEl = document.getElementById('mesh');
 const logEl = document.getElementById('log');
+const invEl = document.getElementById('inv');
+const invCtx = invEl ? invEl.getContext('2d') : null;
+
+const INV_PETAL_COLORS = ['#e44', '#fd4', '#48f', '#a4f', '#4cf', '#f9c', '#fff'];
+const INV_LABELS = ['red', 'yellow', 'blue', 'purple', 'azure', 'pink', 'glow'];
+const INV_FLOWER_PETAL_ANGLES = [
+  -Math.PI / 2,
+  -Math.PI / 2 + (2 * Math.PI) / 5,
+  -Math.PI / 2 + (4 * Math.PI) / 5,
+  -Math.PI / 2 + (6 * Math.PI) / 5,
+  -Math.PI / 2 + (8 * Math.PI) / 5,
+];
+
+function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale) {
+  const petalR = 3 * scale;
+  const petalDist = 3.5 * scale;
+  const coreR = 2 * scale;
+  ctx2.fillStyle = petalFill;
+  for (const a of INV_FLOWER_PETAL_ANGLES) {
+    const px = cx + Math.cos(a) * petalDist;
+    const py = cy + Math.sin(a) * petalDist;
+    ctx2.beginPath();
+    ctx2.arc(px, py, petalR, 0, Math.PI * 2);
+    ctx2.fill();
+  }
+  ctx2.fillStyle = coreFill;
+  ctx2.beginPath();
+  ctx2.arc(cx, cy, coreR, 0, Math.PI * 2);
+  ctx2.fill();
+}
+
+const INV_CORE_COLORS = ['#fff', '#fd4', '#000'];
+
+function renderInventory(inv) {
+  if (!invCtx || !invEl) return;
+  // inv is now an array of [petalIdx, coreIdx] pairs — one slot per
+  // flower picked. Wrap rows so all picks are visible.
+  const slot = 28;
+  const cols = Math.max(1, Math.floor(invEl.width / slot));
+  const items = Array.isArray(inv) ? inv : [];
+  const rows = Math.max(1, Math.ceil(items.length / cols));
+  const neededH = rows * slot;
+  if (invEl.height !== neededH) invEl.height = neededH;
+  invCtx.clearRect(0, 0, invEl.width, invEl.height);
+  for (let i = 0; i < items.length; i++) {
+    const [p, c] = items[i];
+    const petal = INV_PETAL_COLORS[p] || '#fff';
+    const core = INV_CORE_COLORS[c] || '#fff';
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const cx = col * slot + slot / 2;
+    const cy = row * slot + slot / 2;
+    drawFlowerIcon(invCtx, cx, cy, petal, core, 1.8);
+  }
+}
 
 // --- event log (errors are sacred) ---
 // Unbounded log. Truncating to make the panel "tidy" loses information.
@@ -748,6 +805,7 @@ moduleP.then(() => {
   // re-snaps z to the local surface, so even if terrain generation
   // changed between sessions the player can't land inside a wall.
   const SAVE_KEY = 'roam_player_pos_v1';
+  const SESSION_KEY = 'roam_session_v1';
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (raw) {
@@ -759,6 +817,16 @@ moduleP.then(() => {
     }
   } catch (err) {
     logError('localStorage restore', err);
+  }
+  // Restore picked-set + inventory so flowers stay picked across reload.
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (raw) {
+      roam_restore_session(raw);
+      logEvent('info', `restored session snapshot (${raw.length} bytes)`);
+    }
+  } catch (err) {
+    logError('localStorage session restore', err);
   }
   let lastSave = 0;
   const SAVE_INTERVAL_MS = 1000;
@@ -883,13 +951,19 @@ moduleP.then(() => {
       logError('wasm error drain/parse', err);
     }
 
-    // Persist position to localStorage every SAVE_INTERVAL_MS so
-    // the player returns to their last known spot on reload.
+    // Persist position + session snapshot to localStorage every
+    // SAVE_INTERVAL_MS so the player returns to their last known
+    // spot, picked flowers stay picked, and inventory survives.
     if (now - lastSave > SAVE_INTERVAL_MS) {
       try {
         localStorage.setItem(SAVE_KEY, JSON.stringify({ x: s.x, y: s.y, f: s.f }));
       } catch (err) {
         logError('localStorage save', err);
+      }
+      try {
+        localStorage.setItem(SESSION_KEY, roam_session_snapshot());
+      } catch (err) {
+        logError('localStorage session save', err);
       }
       lastSave = now;
     }
@@ -950,6 +1024,8 @@ moduleP.then(() => {
         } else {
           meshEl.textContent = '(pubsub OFF)';
         }
+        const inv = (s && s.inv) || [0, 0, 0, 0, 0, 0, 0];
+        renderInventory(inv);
         selfEl.textContent =
           `display id: ${PEER_ID}\n` +
           `libp2p peerId: ${libp2p.peerId.toString()}\n` +
@@ -1022,6 +1098,68 @@ moduleP.then(() => {
         const sy = (worldTy * tileWorld - s.y) * zoom + camCenterY;
         ctx.fillStyle = `rgb(${r},${g},${bl})`;
         ctx.fillRect(sx, sy, tileScreen + 1, tileScreen + 1);
+      }
+    }
+
+    // Pass 1.5: flowers. Two concentric circles per flower — outer
+    // petal (species color) + inner core (white / yellow / black).
+    // Already-picked tiles are filtered upstream to '0' so we never
+    // draw them again for this player.
+    if (V.flowers) {
+      const FLOWER_PETAL = {
+        '1': '#e44',  // red
+        '2': '#fd4',  // yellow
+        '3': '#48f',  // blue
+        '4': '#a4f',  // purple
+        '5': '#4cf',  // azure
+        '6': '#f9c',  // pink
+        '7': '#fff',  // glow
+      };
+      const FLOWER_CORE = {
+        '1': '#fff',  // white
+        '2': '#fd4',  // yellow
+        '3': '#000',  // black (super-mega-rare)
+      };
+      // 5 petals arranged around a center core. Each petal is a small
+      // filled circle offset from the flower's center by `petalDist`
+      // at one of five evenly-spaced angles (72° apart).
+      const petalR = Math.max(1.5, tileScreen * 0.15);
+      const petalDist = tileScreen * 0.18;
+      const coreR = Math.max(1, tileScreen * 0.10);
+      const PETAL_ANGLES = [
+        -Math.PI / 2,
+        -Math.PI / 2 + (2 * Math.PI) / 5,
+        -Math.PI / 2 + (4 * Math.PI) / 5,
+        -Math.PI / 2 + (6 * Math.PI) / 5,
+        -Math.PI / 2 + (8 * Math.PI) / 5,
+      ];
+      const cores = V.flower_cores || '';
+      for (let vy = 0; vy < V.view_h; vy++) {
+        for (let vx = 0; vx < V.view_w; vx++) {
+          const i = vy * V.view_w + vx;
+          const fc = V.flowers[i];
+          if (fc === '0') continue;
+          const petalFill = FLOWER_PETAL[fc];
+          if (!petalFill) continue;
+          const cc = cores[i] || '1';
+          const coreFill = FLOWER_CORE[cc] || '#fff';
+          const worldTx = V.center_tx + vx - halfW;
+          const worldTy = V.center_ty + vy - halfH;
+          const cxF = (worldTx * tileWorld + tileWorld / 2 - s.x) * zoom + camCenterX;
+          const cyF = (worldTy * tileWorld + tileWorld / 2 - s.y) * zoom + camCenterY;
+          ctx.fillStyle = petalFill;
+          for (const a of PETAL_ANGLES) {
+            const px = cxF + Math.cos(a) * petalDist;
+            const py = cyF + Math.sin(a) * petalDist;
+            ctx.beginPath();
+            ctx.arc(px, py, petalR, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.fillStyle = coreFill;
+          ctx.beginPath();
+          ctx.arc(cxF, cyF, coreR, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
 

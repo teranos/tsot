@@ -243,6 +243,107 @@ pub fn surface_z(x: i32, y: i32) -> i32 {
     z.clamp(SURFACE_Z_MIN, SURFACE_Z_MAX)
 }
 
+/// Flower colors with hand-tuned rarity weights summing to 1000.
+/// Red and yellow are common; blue/purple/azure are rare;
+/// pink is super-rare; glow is super-mega-rare.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FlowerColor {
+    Red,
+    Yellow,
+    Blue,
+    Purple,
+    Azure,
+    Pink,
+    Glow,
+}
+
+const FLOWER_DENSITY_DENOM: u64 = 60; // ~1 in 60 grass tiles
+
+/// Deterministic flower presence + color for a given (x, y). Only
+/// spawns on land columns (not water, not polar ocean). Same inputs
+/// from any peer = same flower; nothing has to be agreed on at runtime.
+pub fn flower_at(x: i32, y: i32) -> Option<FlowerColor> {
+    if y.abs() > WORLD_Y_LAT {
+        return None;
+    }
+    if surface_z(x, y) < 0 {
+        return None;
+    }
+    let cx = canonical_x(x);
+    let h = splitmix64(
+        WORLD_SEED
+            ^ 0xF10E_1257_F10E_1257
+            ^ ((cx as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            ^ (y as i64 as u64),
+    );
+    if !h.is_multiple_of(FLOWER_DENSITY_DENOM) {
+        return None;
+    }
+    let r = (splitmix64(h) >> 32) % 1000;
+    let color = match r {
+        0..=349 => FlowerColor::Red,
+        350..=699 => FlowerColor::Yellow,
+        700..=769 => FlowerColor::Blue,
+        770..=839 => FlowerColor::Purple,
+        840..=909 => FlowerColor::Azure,
+        910..=969 => FlowerColor::Pink,
+        _ => FlowerColor::Glow,
+    };
+    Some(color)
+}
+
+/// Char encoding for the viewport's parallel flower string. '0' is
+/// "no flower"; '1'..='7' are colors in declaration order. Mirrors
+/// the tile_char + elev_char pattern in world.rs.
+pub fn flower_char(f: Option<FlowerColor>) -> char {
+    match f {
+        None => '0',
+        Some(FlowerColor::Red) => '1',
+        Some(FlowerColor::Yellow) => '2',
+        Some(FlowerColor::Blue) => '3',
+        Some(FlowerColor::Purple) => '4',
+        Some(FlowerColor::Azure) => '5',
+        Some(FlowerColor::Pink) => '6',
+        Some(FlowerColor::Glow) => '7',
+    }
+}
+
+/// Petal-center color. Mostly white or yellow; very very very very
+/// rare black core. Determined by a second hash off the same (x, y)
+/// so every peer agrees on what each flower looks like.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FlowerCore {
+    White,
+    Yellow,
+    Black,
+}
+
+pub fn flower_core_at(x: i32, y: i32) -> Option<FlowerCore> {
+    flower_at(x, y)?;
+    let cx = canonical_x(x);
+    let h = splitmix64(
+        WORLD_SEED
+            ^ 0xC0_5E_C0_5E_C0_5E_C0_5E
+            ^ ((cx as i64 as u64).wrapping_mul(0x94D0_49BB_1331_11EB))
+            ^ (y as i64 as u64),
+    );
+    let r = (h >> 32) % 1000;
+    Some(match r {
+        0..=494 => FlowerCore::White,
+        495..=989 => FlowerCore::Yellow,
+        _ => FlowerCore::Black,
+    })
+}
+
+pub fn flower_core_char(c: Option<FlowerCore>) -> char {
+    match c {
+        None => '0',
+        Some(FlowerCore::White) => '1',
+        Some(FlowerCore::Yellow) => '2',
+        Some(FlowerCore::Black) => '3',
+    }
+}
+
 pub fn tile_at(x: i32, y: i32, z: i32) -> TileKind {
     if !(Z_MIN..=Z_MAX).contains(&z) {
         return TileKind::Air;

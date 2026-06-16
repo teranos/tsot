@@ -1,4 +1,9 @@
-use crate::teranos::{surface_z, tile_at, TileKind, WORLD_CIRC_X};
+use std::collections::BTreeSet;
+
+use crate::teranos::{
+    flower_at, flower_char, flower_core_at, flower_core_char, surface_z, tile_at, FlowerColor,
+    FlowerCore, TileKind, WORLD_CIRC_X,
+};
 use crate::trace::{emit, TraceEvent};
 
 pub const INPUT_W: u32 = 1 << 0;
@@ -51,6 +56,15 @@ pub struct Player {
     pub y: f32, // world pixels; bounded by polar oceans
     pub z: i32, // voxel z of the tile the player is standing on
     pub facing: Facing,
+    /// Tiles this player has already picked a flower from. Personal —
+    /// per CANONICAL.md every player has their own picked-set today;
+    /// gossip-based first-claim-wins lands later. Hash key is canonical
+    /// `(canonical_x_tile, y_tile)` so the wrap doesn't double-record.
+    pub picked: BTreeSet<(i32, i32)>,
+    /// Each picked flower is its own inventory entry — (petal, core)
+    /// indices. Preserves the full 21-kind variety instead of
+    /// aggregating to 7 petal-color counts.
+    pub inventory: Vec<(u8, u8)>,
 }
 
 pub struct World {
@@ -70,6 +84,28 @@ fn pixel_to_tile(px: f32) -> i32 {
 #[inline]
 fn tile_to_pixel_center(t: i32) -> f32 {
     (t as f32 + 0.5) * PIXELS_PER_TILE as f32
+}
+
+#[inline]
+fn flower_color_index(c: FlowerColor) -> u8 {
+    match c {
+        FlowerColor::Red => 0,
+        FlowerColor::Yellow => 1,
+        FlowerColor::Blue => 2,
+        FlowerColor::Purple => 3,
+        FlowerColor::Azure => 4,
+        FlowerColor::Pink => 5,
+        FlowerColor::Glow => 6,
+    }
+}
+
+#[inline]
+fn flower_core_index(c: FlowerCore) -> u8 {
+    match c {
+        FlowerCore::White => 0,
+        FlowerCore::Yellow => 1,
+        FlowerCore::Black => 2,
+    }
 }
 
 // Allowable z for walking on column (tx, ty), and whether it's shallow water.
@@ -141,7 +177,31 @@ impl World {
                 y: spawn_y,
                 z: spawn_z,
                 facing: Facing::S,
+                picked: BTreeSet::new(),
+                inventory: Vec::new(),
             },
+        }
+    }
+
+    /// Pickup check: if the player's current tile has a flower and
+    /// it isn't in their picked-set, claim it. Increments inventory
+    /// for that color. Personal state — see CANONICAL.md.
+    fn try_pickup(&mut self) {
+        let tx = pixel_to_tile(self.player.x);
+        let ty = pixel_to_tile(self.player.y);
+        let cx = tx.rem_euclid(WORLD_CIRC_X);
+        let key = (cx, ty);
+        if self.player.picked.contains(&key) {
+            return;
+        }
+        if let Some(color) = flower_at(tx, ty) {
+            let core = flower_core_at(tx, ty).unwrap_or(FlowerCore::White);
+            self.player.picked.insert(key);
+            self.player.inventory.push((flower_color_index(color), flower_core_index(core)));
+            emit(TraceEvent::Note {
+                tag: "flower_picked",
+                msg: format!("({tx}, {ty}) {:?} core={:?}", color, core),
+            });
         }
     }
 
@@ -183,6 +243,10 @@ impl World {
         if !blocked_y {
             self.player.y = ny;
         }
+
+        // Pickup check on each step — cheap, fires only when the
+        // player's current tile has an unpicked flower.
+        self.try_pickup();
 
         // Cylindrical wrap in x.
         let circ = world_circ_px();
@@ -253,6 +317,71 @@ impl World {
         });
     }
 
+    /// Serialize per-player session state — the picked-set + inventory —
+    /// for localStorage. Position lives in its own save key (separate
+    /// throttle), so this snapshot only carries what changes on pickup.
+    pub fn session_snapshot_json(&self) -> String {
+        let mut picked = String::from("[");
+        let mut first = true;
+        for &(x, y) in &self.player.picked {
+            if !first {
+                picked.push(',');
+            }
+            first = false;
+            picked.push_str(&format!("[{x},{y}]"));
+        }
+        picked.push(']');
+        let mut inv = String::from("[");
+        first = true;
+        for &(p, c) in &self.player.inventory {
+            if !first {
+                inv.push(',');
+            }
+            first = false;
+            inv.push_str(&format!("[{p},{c}]"));
+        }
+        inv.push(']');
+        format!(r#"{{"picked":{picked},"inv":{inv}}}"#)
+    }
+
+    /// Restore picked-set + inventory from a previous session snapshot.
+    /// Tolerates malformed input by leaving the state empty rather
+    /// than panicking — the renderer treats empty as "fresh start".
+    pub fn restore_session_json(&mut self, raw: &str) {
+        // Minimal JSON walker — no serde_json over the FFI.
+        // Format: {"picked":[[x,y],...],"inv":[[petal,core],...]}.
+        self.player.picked.clear();
+        self.player.inventory.clear();
+        if let Some(picked_start) = raw.find("\"picked\":[") {
+            let rest = &raw[picked_start + "\"picked\":[".len()..];
+            if let Some(end) = rest.find(']') {
+                let pairs = &rest[..end];
+                for chunk in pairs.split("],[").map(|s| s.trim_start_matches('[').trim_end_matches(']')) {
+                    let mut it = chunk.split(',').filter_map(|t| t.trim().parse::<i32>().ok());
+                    if let (Some(x), Some(y)) = (it.next(), it.next()) {
+                        self.player.picked.insert((x, y));
+                    }
+                }
+            }
+        }
+        if let Some(inv_start) = raw.find("\"inv\":[") {
+            let rest = &raw[inv_start + "\"inv\":[".len()..];
+            // Read until the matching outer bracket. The contents are
+            // pairs separated by "],[" — same shape as picked above.
+            if let Some(end) = rest.rfind(']') {
+                let pairs = &rest[..end];
+                if !pairs.trim().is_empty() {
+                    for chunk in pairs.split("],[").map(|s| s.trim_start_matches('[').trim_end_matches(']')) {
+                        let mut it = chunk.split(',').filter_map(|t| t.trim().parse::<u8>().ok());
+                        if let (Some(p), Some(c)) = (it.next(), it.next()) {
+                            self.player.inventory.push((p, c));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn state_json(&self) -> String {
         emit(TraceEvent::StateRead {
             x: self.player.x,
@@ -260,12 +389,23 @@ impl World {
             z: self.player.z,
             facing: self.player.facing.as_u8(),
         });
+        let mut inv = String::from("[");
+        let mut first = true;
+        for &(p, c) in &self.player.inventory {
+            if !first {
+                inv.push(',');
+            }
+            first = false;
+            inv.push_str(&format!("[{p},{c}]"));
+        }
+        inv.push(']');
         format!(
-            r#"{{"x":{},"y":{},"z":{},"f":{}}}"#,
+            r#"{{"x":{},"y":{},"z":{},"f":{},"inv":{}}}"#,
             self.player.x,
             self.player.y,
             self.player.z,
-            self.player.facing.as_u8()
+            self.player.facing.as_u8(),
+            inv,
         )
     }
 
@@ -292,6 +432,8 @@ impl World {
         let cap = (view_w * view_h) as usize;
         let mut tiles = String::with_capacity(cap);
         let mut elev = String::with_capacity(cap);
+        let mut flowers = String::with_capacity(cap);
+        let mut flower_cores = String::with_capacity(cap);
         for dy in -half_h..(view_h as i32 - half_h) {
             for dx in -half_w..(view_w as i32 - half_w) {
                 let tx = center_tx + dx;
@@ -300,6 +442,17 @@ impl World {
                 let top_z = sz.max(0);
                 tiles.push(tile_char(tile_at(tx, ty, top_z)));
                 elev.push(elev_char(sz));
+                // Filter out flowers already picked by THIS player. The
+                // viewport collapses to '0' (no flower) for picked tiles
+                // so the renderer never draws them again.
+                let cx = tx.rem_euclid(WORLD_CIRC_X);
+                let (flower, core) = if self.player.picked.contains(&(cx, ty)) {
+                    (None, None)
+                } else {
+                    (flower_at(tx, ty), flower_core_at(tx, ty))
+                };
+                flowers.push(flower_char(flower));
+                flower_cores.push(flower_core_char(core));
             }
         }
         emit(TraceEvent::ViewportRead {
@@ -310,8 +463,8 @@ impl World {
             z,
         });
         format!(
-            r#"{{"tile":{},"view_w":{},"view_h":{},"center_tx":{},"center_ty":{},"z":{},"tiles":"{}","elev":"{}"}}"#,
-            PIXELS_PER_TILE, view_w, view_h, center_tx, center_ty, z, tiles, elev
+            r#"{{"tile":{},"view_w":{},"view_h":{},"center_tx":{},"center_ty":{},"z":{},"tiles":"{}","elev":"{}","flowers":"{}","flower_cores":"{}"}}"#,
+            PIXELS_PER_TILE, view_w, view_h, center_tx, center_ty, z, tiles, elev, flowers, flower_cores
         )
     }
 }
