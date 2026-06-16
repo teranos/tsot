@@ -34,6 +34,8 @@ import initWasm, {
   roam_drain_errors,
   roam_session_snapshot,
   roam_restore_session,
+  roam_render_init,
+  roam_render_frame,
 } from '/roam.js';
 
 const INPUT_W = 1 << 0;
@@ -88,7 +90,9 @@ const PUBLIC_BOOTSTRAP = [
 
 const status = document.getElementById('status');
 const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
+// World canvas now belongs to Rust's WebGL2 renderer. `roam_render_init`
+// is called below once wasm is ready; getContext('2d') is intentionally
+// NOT called on this element — WebGL2 and 2D are exclusive per canvas.
 const clockEl = document.getElementById('clock');
 
 // Live wall-clock so when the user pastes a screenshot we can correlate
@@ -113,23 +117,36 @@ const invCtx = invEl ? invEl.getContext('2d') : null;
 // discriminant against the palette buffer below.
 const INV_LABELS = ['red', 'yellow', 'blue', 'purple', 'azure', 'pink', 'glow'];
 
-// Palette + offsets, populated from Rust at init. The layout is defined
-// by roam::wasm_ffi::roam_color_table_ptr_impl — 5 TileKind RGBs, then
-// 7 FlowerColor RGBs, then 3 FlowerCore RGBs. JS never invents RGB.
-let palette = null;
-let PALETTE_TILE_OFFSET = 0;
-let PALETTE_PETAL_OFFSET = 15;
-let PALETTE_CORE_OFFSET = 36;
+// Palette table layout, defined by roam::wasm_ffi::roam_color_table_ptr_impl:
+// 5 TileKind RGBs, then 7 FlowerColor RGBs, then 3 FlowerCore RGBs.
+// JS never invents RGB.
+const PALETTE_TILE_OFFSET = 0;
+const PALETTE_PETAL_OFFSET = 15;
+const PALETTE_CORE_OFFSET = 36;
+const PALETTE_LEN = 45;
 
-function rgbStringFromPalette(byteOffset) {
-  if (!palette) return '#fff';
-  return `rgb(${palette[byteOffset]},${palette[byteOffset + 1]},${palette[byteOffset + 2]})`;
+// Live handle re-acquired from wasm memory at init. We DON'T cache a
+// `Uint8Array` view: WebAssembly.Memory.buffer gets replaced (and the
+// old one detached) every time wasm grows its heap — common during
+// WebGL buffer uploads. Holding a stale view returns undefined and
+// produces `rgb(undefined,undefined,undefined)` which CanvasGradient
+// silently rejects with "Invalid color".
+let wasmMemoryRef = null;
+let colorTablePtr = 0;
+
+function paletteBytes(offset, len) {
+  if (!wasmMemoryRef) return null;
+  return new Uint8Array(wasmMemoryRef.buffer, colorTablePtr + offset, len);
 }
 function petalRgb(discriminant) {
-  return rgbStringFromPalette(PALETTE_PETAL_OFFSET + discriminant * 3);
+  const p = paletteBytes(PALETTE_PETAL_OFFSET + discriminant * 3, 3);
+  if (!p) return '#fff';
+  return `rgb(${p[0]},${p[1]},${p[2]})`;
 }
 function coreRgb(discriminant) {
-  return rgbStringFromPalette(PALETTE_CORE_OFFSET + discriminant * 3);
+  const p = paletteBytes(PALETTE_CORE_OFFSET + discriminant * 3, 3);
+  if (!p) return '#fff';
+  return `rgb(${p[0]},${p[1]},${p[2]})`;
 }
 
 function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale, petalCount, edgeFill, coreEdgeFill) {
@@ -163,7 +180,7 @@ function drawFlowerIcon(ctx2, cx, cy, petalFill, coreFill, scale, petalCount, ed
 }
 
 function renderInventory(inv) {
-  if (!invCtx || !invEl || !palette) return;
+  if (!invCtx || !invEl || !wasmMemoryRef) return;
   // `inv` is an array of named-shape Flower objects from Rust:
   //   { pc, pe, cc, ce, n }
   // Every discriminant resolves through the palette table; JS never
@@ -837,13 +854,40 @@ moduleP.then((wasm) => {
   const wasmMemory = wasm.memory;
   const PIXELS_PER_TILE = roam_pixels_per_tile();
 
-  // Color palette: one-time read of the Rust-owned RGB table. The
-  // returned bytes live in the static COLOR_TABLE buffer; we view them
-  // through a Uint8Array. Discriminants index this table — no hex
-  // colors in JS, ever.
+  // Size the canvas explicitly — the Elm template doesn't carry
+  // width/height attrs so the browser default of 300x150 was leaking
+  // through. WebGL's framebuffer comes from this backing-store size;
+  // CSS scaling won't add resolution. 720x720 is a comfortable square
+  // for the M1 + GPU + libp2p combination on the typical dev layout.
+  canvas.width = 1440;
+  canvas.height = 1440;
+  canvas.style.width = '1440px';
+  canvas.style.height = '1440px';
+
+  // Hand the world canvas to Rust's WebGL2 renderer. From this point
+  // on, every world-canvas pixel comes from `roam_render_frame`. The
+  // JS bridge issues no draw calls against the world canvas; canvas2D
+  // and WebGL2 are exclusive per canvas, and we've committed to GL.
+  try {
+    roam_render_init(canvas);
+    logEvent('info', `render_gl: WebGL2 attached to world canvas (${canvas.width}x${canvas.height})`);
+  } catch (err) {
+    logError('render_gl init', err);
+  }
+
+  // Color palette is Rust-owned. We capture the memory handle + table
+  // pointer here, but every read goes through `paletteBytes()` which
+  // re-acquires a `Uint8Array` view against the CURRENT buffer — wasm
+  // heap growth detaches old buffers, so a cached view goes stale.
+  wasmMemoryRef = wasmMemory;
+  colorTablePtr = roam_color_table_ptr();
   const COLOR_TABLE_LEN = roam_color_table_len();
-  const COLOR_TABLE_PTR = roam_color_table_ptr();
-  palette = new Uint8Array(wasmMemory.buffer, COLOR_TABLE_PTR, COLOR_TABLE_LEN);
+  if (COLOR_TABLE_LEN !== PALETTE_LEN) {
+    logError(
+      'palette',
+      new Error(`Rust color table length ${COLOR_TABLE_LEN} disagrees with JS PALETTE_LEN ${PALETTE_LEN}`),
+    );
+  }
 
   // Viewport layout — locked by roam::viewport's `#[repr(C)]` structs.
   // If those structs change in Rust, the const assertions there fail
@@ -1073,7 +1117,11 @@ moduleP.then((wasm) => {
           meshEl.textContent = '(pubsub OFF)';
         }
         const inv = (s && Array.isArray(s.inv)) ? s.inv : [];
-        renderInventory(inv);
+        try {
+          renderInventory(inv);
+        } catch (err) {
+          logError('renderInventory', err);
+        }
         selfEl.textContent =
           `display id: ${PEER_ID}\n` +
           `libp2p peerId: ${libp2p.peerId.toString()}\n` +
@@ -1120,165 +1168,30 @@ moduleP.then((wasm) => {
     const viewW = wNeed + (wNeed & 1);
     const viewH = hNeed + (hNeed & 1);
 
-    // Ask Rust to write the typed viewport buffer; obtain a
-    // Uint8Array view over wasm linear memory. No JSON, no
-    // parallel strings — every field is a known byte offset into
-    // a `#[repr(C)]` struct defined in roam::viewport.
+    // Ask Rust to (re)write the typed viewport buffer. The GL
+    // renderer reads it directly out of wasm memory; JS never
+    // touches the bytes.
     const vbLen = roam_viewport_write(viewW, viewH);
-    const vbPtr = roam_viewport_ptr();
     if (vbLen === 0) {
       requestAnimationFrame(frame);
       return;
     }
-    const vbView = new DataView(wasmMemory.buffer, vbPtr, vbLen);
-    const vb = new Uint8Array(wasmMemory.buffer, vbPtr, vbLen);
 
-    const hdrViewW = vbView.getUint32(0, true);
-    const hdrViewH = vbView.getUint32(4, true);
-    const centerTx = vbView.getInt32(8, true);
-    const centerTy = vbView.getInt32(12, true);
-    const tileWorld = vbView.getUint32(20, true);
-
-    ctx.fillStyle = '#1a1a1f';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    const tileScreen = tileWorld * zoom;
-    const halfW = hdrViewW >>> 1;
-    const halfH = hdrViewH >>> 1;
-    const dayB = dayBrightness(s.x, tileWorld);
-
-    // Pass 1: tile colors with elevation shading × day/night brightness.
-    // `elev_offset` is already `surface_z - player_z` (signed i8), so
-    // it can be read straight from the buffer with no decode pass.
-    for (let vy = 0; vy < hdrViewH; vy++) {
-      for (let vx = 0; vx < hdrViewW; vx++) {
-        const off = VIEWPORT_HEADER_SIZE + (vy * hdrViewW + vx) * VIEWPORT_TILE_SIZE;
-        const tileKind = vb[off + VIEWPORT_OFF_TILE_KIND];
-        if (tileKind === 0) continue; // Air — no fill
-        const elevDiff = (vb[off + VIEWPORT_OFF_ELEV] << 24) >> 24;
-        const pIdx = PALETTE_TILE_OFFSET + tileKind * 3;
-        const b = Math.max(0.4, Math.min(1.4, 1.0 + elevDiff * 0.04)) * dayB;
-        const r = Math.min(255, (palette[pIdx] * b) | 0);
-        const g = Math.min(255, (palette[pIdx + 1] * b) | 0);
-        const bl = Math.min(255, (palette[pIdx + 2] * b) | 0);
-        const worldTx = centerTx + vx - halfW;
-        const worldTy = centerTy + vy - halfH;
-        const sx = (worldTx * tileWorld - s.x) * zoom + camCenterX;
-        const sy = (worldTy * tileWorld - s.y) * zoom + camCenterY;
-        ctx.fillStyle = `rgb(${r},${g},${bl})`;
-        ctx.fillRect(sx, sy, tileScreen + 1, tileScreen + 1);
-      }
+    // S4b: tile renderer in WebGL2. Rust owns the entire frame —
+    // reads the viewport buffer it just wrote, builds the per-tile
+    // instance attribute array, issues one instanced draw call.
+    //
+    // S4c (next): flowers via procedural fragment shader.
+    // S4d: cliff demarcation, player + peer markers, facing arrow,
+    //      status text. Until S4d lands, the world canvas shows
+    //      tiles only — the camera is centered on the player by
+    //      construction, so screen-center IS the player.
+    const dayB = dayBrightness(s.x, PIXELS_PER_TILE);
+    try {
+      roam_render_frame(s.x, s.y, zoom, canvas.width, canvas.height, dayB);
+    } catch (err) {
+      logError('roam_render_frame', err);
     }
-
-    // Pass 1.5: flowers. Each visible cell carries a 1-byte
-    // presence flag and 5 typed enum bytes. Color lookup goes
-    // through the Rust-owned palette table.
-    const petalR = Math.max(1.5, tileScreen * 0.15);
-    const petalDist = tileScreen * 0.18;
-    const coreR = Math.max(1, tileScreen * 0.10);
-    for (let vy = 0; vy < hdrViewH; vy++) {
-      for (let vx = 0; vx < hdrViewW; vx++) {
-        const off = VIEWPORT_HEADER_SIZE + (vy * hdrViewW + vx) * VIEWPORT_TILE_SIZE;
-        if (vb[off + VIEWPORT_OFF_HAS_FLOWER] !== 1) continue;
-        const petalCenter = vb[off + VIEWPORT_OFF_PETAL_CENTER];
-        const petalEdge = vb[off + VIEWPORT_OFF_PETAL_EDGE];
-        const coreCenter = vb[off + VIEWPORT_OFF_CORE_CENTER];
-        const coreEdgeKind = vb[off + VIEWPORT_OFF_CORE_EDGE];
-        const petalCount = vb[off + VIEWPORT_OFF_PETAL_COUNT];
-        const petalFill = petalRgb(petalCenter);
-        const edgeFill = petalRgb(petalEdge);
-        const coreFill = coreRgb(coreCenter);
-        // CoreEdge discriminants from roam::teranos::CoreEdge:
-        // 0 = White, 1 = MatchPetalCenter, 2 = MatchPetalEdge.
-        const coreEdgeFill =
-          coreEdgeKind === 1 ? petalFill : coreEdgeKind === 2 ? edgeFill : '#fff';
-        const worldTx = centerTx + vx - halfW;
-        const worldTy = centerTy + vy - halfH;
-        const cxF = (worldTx * tileWorld + tileWorld / 2 - s.x) * zoom + camCenterX;
-        const cyF = (worldTy * tileWorld + tileWorld / 2 - s.y) * zoom + camCenterY;
-        for (let k = 0; k < petalCount; k++) {
-          const a = -Math.PI / 2 + (k * 2 * Math.PI) / petalCount;
-          const px = cxF + Math.cos(a) * petalDist;
-          const py = cyF + Math.sin(a) * petalDist;
-          const gx = px - Math.cos(a) * petalR * 0.7;
-          const gy = py - Math.sin(a) * petalR * 0.7;
-          const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, petalR * 1.7);
-          g.addColorStop(0, petalFill);
-          g.addColorStop(1, edgeFill);
-          ctx.fillStyle = g;
-          ctx.beginPath();
-          ctx.arc(px, py, petalR, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        const coreGrad = ctx.createRadialGradient(cxF, cyF, 0, cxF, cyF, coreR);
-        coreGrad.addColorStop(0, coreFill);
-        coreGrad.addColorStop(1, coreEdgeFill);
-        ctx.fillStyle = coreGrad;
-        ctx.beginPath();
-        ctx.arc(cxF, cyF, coreR, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
-    // Pass 2: cliff demarcation. `elev_offset` is already a signed
-    // delta from player.z, so neighbor comparisons read straight from
-    // the buffer with one sign-extend per byte.
-    const edgeThickness = Math.max(2, zoom * 2);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-    for (let vy = 0; vy < hdrViewH; vy++) {
-      for (let vx = 0; vx < hdrViewW; vx++) {
-        const off = VIEWPORT_HEADER_SIZE + (vy * hdrViewW + vx) * VIEWPORT_TILE_SIZE;
-        const e = (vb[off + VIEWPORT_OFF_ELEV] << 24) >> 24;
-        const worldTx = centerTx + vx - halfW;
-        const worldTy = centerTy + vy - halfH;
-        const sx = (worldTx * tileWorld - s.x) * zoom + camCenterX;
-        const sy = (worldTy * tileWorld - s.y) * zoom + camCenterY;
-        if (vx + 1 < hdrViewW) {
-          const offR = VIEWPORT_HEADER_SIZE + (vy * hdrViewW + vx + 1) * VIEWPORT_TILE_SIZE;
-          const eR = (vb[offR + VIEWPORT_OFF_ELEV] << 24) >> 24;
-          if (Math.abs(eR - e) > 1) {
-            ctx.fillRect(sx + tileScreen - edgeThickness / 2, sy, edgeThickness, tileScreen + 1);
-          }
-        }
-        if (vy + 1 < hdrViewH) {
-          const offD = VIEWPORT_HEADER_SIZE + ((vy + 1) * hdrViewW + vx) * VIEWPORT_TILE_SIZE;
-          const eD = (vb[offD + VIEWPORT_OFF_ELEV] << 24) >> 24;
-          if (Math.abs(eD - e) > 1) {
-            ctx.fillRect(sx, sy + tileScreen - edgeThickness / 2, tileScreen + 1, edgeThickness);
-          }
-        }
-      }
-    }
-
-    // Player + peer marker size scales with zoom, clamped to stay
-    // visible at extreme zooms.
-    const markerSize = Math.max(8, Math.min(32, 14 * zoom));
-
-    for (const [, p] of remotePeers) {
-      const sx = (p.x - s.x) * zoom + camCenterX;
-      const sy = (p.y - s.y) * zoom + camCenterY;
-      ctx.fillStyle = p.source === 'libp2p' ? '#f6a' : '#fa6';
-      ctx.fillRect(sx - markerSize / 2, sy - markerSize / 2, markerSize, markerSize);
-    }
-
-    ctx.fillStyle = '#6cf';
-    ctx.fillRect(camCenterX - markerSize / 2, camCenterY - markerSize / 2, markerSize, markerSize);
-    const [fdx, fdy] = FACING_VEC[s.f] || [0, 1];
-    ctx.strokeStyle = '#cfc';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(camCenterX, camCenterY);
-    ctx.lineTo(camCenterX + fdx * markerSize, camCenterY + fdy * markerSize);
-    ctx.stroke();
-
-    const conns = libp2p ? libp2p.getConnections().length : 0;
-    const libStatus = libp2p ? `libp2p conns=${conns}` : 'libp2p off';
-    ctx.fillStyle = '#888';
-    ctx.font = '11px ui-monospace, Menlo, monospace';
-    ctx.fillText(
-      `me=${PEER_ID} (${s.x.toFixed(1)}, ${s.y.toFixed(1)}, z=${s.z}) f=${s.f}  zoom=${zoom.toFixed(2)}  peers=${remotePeers.size}  ${libStatus}`,
-      8, 14
-    );
 
     requestAnimationFrame(frame);
   }

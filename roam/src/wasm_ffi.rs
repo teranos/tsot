@@ -13,6 +13,10 @@ use crate::world::World;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::wasm_bindgen;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsValue;
+#[cfg(target_arch = "wasm32")]
+use web_sys::HtmlCanvasElement;
 
 thread_local! {
     static WORLD: RefCell<Option<World>> = const { RefCell::new(None) };
@@ -296,5 +300,31 @@ mod wasm_exports {
     #[wasm_bindgen]
     pub fn roam_drain_errors() -> String {
         super::roam_drain_errors_impl()
+    }
+
+    // ----- S4a: WebGL2 renderer wire -----
+
+    #[wasm_bindgen]
+    pub fn roam_render_init(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
+        crate::render_gl::init(canvas)
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_render_frame(
+        player_x_px: f32,
+        player_y_px: f32,
+        zoom: f32,
+        canvas_w: u32,
+        canvas_h: u32,
+        day_brightness: f32,
+    ) -> Result<(), JsValue> {
+        crate::render_gl::render_frame(
+            player_x_px,
+            player_y_px,
+            zoom,
+            canvas_w,
+            canvas_h,
+            day_brightness,
+        )
     }
 }

@@ -1,4 +1,6 @@
 pub mod error;
+#[cfg(target_arch = "wasm32")]
+pub mod render_gl;
 pub mod teranos;
 pub mod trace;
 pub mod viewport;
