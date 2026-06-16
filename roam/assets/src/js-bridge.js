@@ -36,6 +36,7 @@ import initWasm, {
   roam_restore_session,
   roam_render_init,
   roam_render_frame,
+  roam_set_peers,
 } from '/roam.js';
 
 const INPUT_W = 1 << 0;
@@ -1177,15 +1178,29 @@ moduleP.then((wasm) => {
       return;
     }
 
-    // S4b: tile renderer in WebGL2. Rust owns the entire frame —
-    // reads the viewport buffer it just wrote, builds the per-tile
-    // instance attribute array, issues one instanced draw call.
+    // S4b/c/d: Rust owns the entire frame. Bridge publishes the live
+    // peer list to wasm (positions + source tag), then issues one
+    // `roam_render_frame` call which draws tiles, flowers, and
+    // markers. JS does NOT decide any pixel.
     //
-    // S4c (next): flowers via procedural fragment shader.
-    // S4d: cliff demarcation, player + peer markers, facing arrow,
-    //      status text. Until S4d lands, the world canvas shows
-    //      tiles only — the camera is centered on the player by
-    //      construction, so screen-center IS the player.
+    // Source tag: 0.0 = libp2p, 1.0 = BroadcastChannel. Rust picks
+    // the marker color from there — single source of truth for
+    // marker colors lives in roam::render_gl.
+    const peerCount = remotePeers.size;
+    if (peerCount > 0) {
+      const packed = new Float32Array(peerCount * 3);
+      let i = 0;
+      for (const [, p] of remotePeers) {
+        packed[i * 3] = p.x;
+        packed[i * 3 + 1] = p.y;
+        packed[i * 3 + 2] = p.source === 'libp2p' ? 0.0 : 1.0;
+        i += 1;
+      }
+      roam_set_peers(packed);
+    } else {
+      roam_set_peers(new Float32Array(0));
+    }
+
     const dayB = dayBrightness(s.x, PIXELS_PER_TILE);
     try {
       roam_render_frame(s.x, s.y, zoom, canvas.width, canvas.height, dayB);

@@ -30,6 +30,42 @@ use crate::viewport::{viewport_ptr, VIEWPORT_HEADER_SIZE, VIEWPORT_TILE_SIZE};
 
 thread_local! {
     static RENDERER: RefCell<Option<Renderer>> = const { RefCell::new(None) };
+    /// Peer positions + sources, refilled by the JS bridge each frame
+    /// via `set_peers`. Storage layout matches the wire format: 3
+    /// floats per peer = (world_x, world_y, source). `source` is 0.0
+    /// for libp2p, 1.0 for BroadcastChannel; Rust picks the color.
+    static PEER_STATE: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Source-of-peer-data tag, matching the `f32` source field passed
+/// through `set_peers`. Color picked from this in the marker pass.
+const PEER_SOURCE_LIBP2P: f32 = 0.0;
+const PEER_SOURCE_BROADCASTCHANNEL: f32 = 1.0;
+
+/// Color triplets — RGB in 0..1. Single source of truth for marker
+/// colors lives in Rust (consistent with the tile/flower palette).
+const PLAYER_MARKER_RGB: [f32; 3] = [0.4, 0.8, 1.0]; // #6cf
+const PEER_LIBP2P_RGB: [f32; 3] = [1.0, 0.4, 0.66]; // #f6a
+const PEER_BROADCAST_RGB: [f32; 3] = [1.0, 0.66, 0.4]; // #fa6
+
+/// Called by the JS bridge before each `render_frame` to publish the
+/// current peer list. The slice is `[x0, y0, src0, x1, y1, src1, ...]`.
+/// Anything not on this list disappears from the next frame's draw.
+pub fn set_peers(packed: &[f32]) {
+    if packed.len() % 3 != 0 {
+        emit_error(
+            Severity::Warn,
+            "roam::render_gl::set_peers",
+            "peer array length not a multiple of 3",
+            format!("got {} floats; expected groups of (x, y, source)", packed.len()),
+        );
+        return;
+    }
+    PEER_STATE.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        buf.clear();
+        buf.extend_from_slice(packed);
+    });
 }
 
 pub struct Renderer {
@@ -37,6 +73,7 @@ pub struct Renderer {
     canvas: HtmlCanvasElement,
     tile_prog: TileProgram,
     flower_prog: FlowerProgram,
+    marker_prog: MarkerProgram,
     /// Per-frame scratch buffer for tile instance attributes
     /// (tile_kind, elev_offset). Two floats per visible tile.
     tile_instance_scratch: Vec<f32>,
@@ -45,6 +82,11 @@ pub struct Renderer {
     /// core_center.rgb, core_edge.rgb, petal_count). 15 floats per
     /// visible flower; matches `FlowerProgram::INSTANCE_STRIDE_FLOATS`.
     flower_instance_scratch: Vec<f32>,
+    /// Marker positions populated by `roam_set_peers` from JS and
+    /// drained each frame in the marker pass. Storage is
+    /// (world_x, world_y, r, g, b, size_world_px) per marker, matching
+    /// `MarkerProgram::INSTANCE_STRIDE_FLOATS`.
+    marker_instance_scratch: Vec<f32>,
 }
 
 struct TileProgram {
@@ -73,6 +115,19 @@ struct FlowerProgram {
 
 impl FlowerProgram {
     const INSTANCE_STRIDE_FLOATS: usize = 15;
+}
+
+struct MarkerProgram {
+    program: WebGlProgram,
+    vao: WebGlVertexArrayObject,
+    instance_buffer: WebGlBuffer,
+    u_camera_px: WebGlUniformLocation,
+    u_canvas_px: WebGlUniformLocation,
+    u_zoom: WebGlUniformLocation,
+}
+
+impl MarkerProgram {
+    const INSTANCE_STRIDE_FLOATS: usize = 6;
 }
 
 // ----- tile shader sources -----
@@ -279,6 +334,54 @@ void main() {
 }
 "#;
 
+// ----- marker shader sources -----
+//
+// Solid-color squares. Per-instance attributes give world-pixel
+// position, color, and world-pixel size. Same camera math as the tile
+// and flower shaders so everything lines up.
+
+const MARKER_VS: &str = r#"#version 300 es
+precision highp float;
+
+// Unit quad corner in 0..1 space — centered to ±0.5 inside the shader.
+layout(location = 0) in vec2 a_unit;
+layout(location = 1) in vec2 a_world_pos;
+layout(location = 2) in vec3 a_color;
+layout(location = 3) in float a_size_world_px;
+
+uniform vec2 u_camera_px;
+uniform vec2 u_canvas_px;
+uniform float u_zoom;
+
+flat out vec3 v_color;
+
+void main() {
+    // Center the unit quad and scale to the requested world size.
+    vec2 local = (a_unit - vec2(0.5)) * a_size_world_px;
+    vec2 world_frag_px = a_world_pos + local;
+    vec2 frag_screen_px =
+        (world_frag_px - u_camera_px) * u_zoom + u_canvas_px * 0.5;
+    vec2 clip = vec2(
+        (frag_screen_px.x / u_canvas_px.x) * 2.0 - 1.0,
+        1.0 - (frag_screen_px.y / u_canvas_px.y) * 2.0
+    );
+    gl_Position = vec4(clip, 0.0, 1.0);
+    v_color = a_color;
+}
+"#;
+
+const MARKER_FS: &str = r#"#version 300 es
+precision highp float;
+
+flat in vec3 v_color;
+
+out vec4 out_color;
+
+void main() {
+    out_color = vec4(v_color, 1.0);
+}
+"#;
+
 // ----- init -----
 
 /// Acquire WebGL2 from the canvas, compile shaders, allocate buffers.
@@ -311,6 +414,7 @@ pub fn init(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
 
     let tile_prog = build_tile_program(&gl)?;
     let flower_prog = build_flower_program(&gl)?;
+    let marker_prog = build_marker_program(&gl)?;
 
     RENDERER.with(|cell| {
         *cell.borrow_mut() = Some(Renderer {
@@ -318,8 +422,10 @@ pub fn init(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
             canvas,
             tile_prog,
             flower_prog,
+            marker_prog,
             tile_instance_scratch: Vec::new(),
             flower_instance_scratch: Vec::new(),
+            marker_instance_scratch: Vec::new(),
         });
     });
     Ok(())
@@ -452,6 +558,65 @@ fn build_flower_program(gl: &Gl) -> Result<FlowerProgram, JsValue> {
         u_world_px_per_tile,
         u_zoom,
         u_day_brightness,
+    })
+}
+
+fn build_marker_program(gl: &Gl) -> Result<MarkerProgram, JsValue> {
+    let program = compile_program(gl, MARKER_VS, MARKER_FS, "marker")?;
+
+    let u_camera_px = get_uniform(gl, &program, "u_camera_px")?;
+    let u_canvas_px = get_uniform(gl, &program, "u_canvas_px")?;
+    let u_zoom = get_uniform(gl, &program, "u_zoom")?;
+
+    let vao = gl
+        .create_vertex_array()
+        .ok_or_else(|| JsValue::from_str("gl.createVertexArray returned null"))?;
+    gl.bind_vertex_array(Some(&vao));
+
+    let unit_quad: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let unit_buffer = create_buffer_with_data(gl, &unit_quad)?;
+    gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&unit_buffer));
+    gl.vertex_attrib_pointer_with_i32(0, 2, Gl::FLOAT, false, 0, 0);
+    gl.enable_vertex_attrib_array(0);
+
+    let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
+    let idx_buffer = gl
+        .create_buffer()
+        .ok_or_else(|| JsValue::from_str("gl.createBuffer (marker idx) returned null"))?;
+    gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&idx_buffer));
+    unsafe {
+        let view = Uint16Array::view(&indices);
+        gl.buffer_data_with_array_buffer_view(Gl::ELEMENT_ARRAY_BUFFER, &view, Gl::STATIC_DRAW);
+    }
+
+    // Per-instance buffer: 6 floats per marker. Layout matches
+    // `MarkerProgram::INSTANCE_STRIDE_FLOATS`.
+    //   loc 1: vec2  a_world_pos          offset 0,  size 8
+    //   loc 2: vec3  a_color               offset 8,  size 12
+    //   loc 3: float a_size_world_px       offset 20, size 4
+    // Stride = 24 bytes.
+    let instance_buffer = gl
+        .create_buffer()
+        .ok_or_else(|| JsValue::from_str("gl.createBuffer (marker instance) returned null"))?;
+    gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&instance_buffer));
+    let stride = (MarkerProgram::INSTANCE_STRIDE_FLOATS * 4) as i32;
+    gl.vertex_attrib_pointer_with_i32(1, 2, Gl::FLOAT, false, stride, 0);
+    gl.vertex_attrib_pointer_with_i32(2, 3, Gl::FLOAT, false, stride, 8);
+    gl.vertex_attrib_pointer_with_i32(3, 1, Gl::FLOAT, false, stride, 20);
+    for loc in 1..=3 {
+        gl.enable_vertex_attrib_array(loc);
+        gl.vertex_attrib_divisor(loc, 1);
+    }
+
+    gl.bind_vertex_array(None);
+
+    Ok(MarkerProgram {
+        program,
+        vao,
+        instance_buffer,
+        u_camera_px,
+        u_canvas_px,
+        u_zoom,
     })
 }
 
@@ -682,6 +847,81 @@ pub fn render_frame(
             );
         }
 
+        // ----- marker pass -----
+        //
+        // Player marker is always first; remote peers follow. Marker
+        // size matches the original canvas2D logic: 14 screen px at
+        // zoom 1, clamped to [8, 32]. Convert to world pixels so
+        // we can place the quad in world-space and reuse the zoom
+        // uniform path.
+        let marker_screen_size = (14.0_f32 * zoom).clamp(8.0, 32.0);
+        let marker_world_size = marker_screen_size / zoom;
+        let marker_scratch = &mut renderer.marker_instance_scratch;
+        marker_scratch.clear();
+
+        // Player.
+        marker_scratch.push(player_x_px);
+        marker_scratch.push(player_y_px);
+        marker_scratch.extend_from_slice(&PLAYER_MARKER_RGB);
+        marker_scratch.push(marker_world_size);
+
+        // Peers.
+        PEER_STATE.with(|cell| {
+            let peers = cell.borrow();
+            for chunk in peers.chunks_exact(3) {
+                let x = chunk[0];
+                let y = chunk[1];
+                let source = chunk[2];
+                marker_scratch.push(x);
+                marker_scratch.push(y);
+                let rgb = if (source - PEER_SOURCE_LIBP2P).abs() < f32::EPSILON {
+                    PEER_LIBP2P_RGB
+                } else if (source - PEER_SOURCE_BROADCASTCHANNEL).abs() < f32::EPSILON {
+                    PEER_BROADCAST_RGB
+                } else {
+                    // Unknown source — surface and fall back to magenta.
+                    emit_error(
+                        Severity::Warn,
+                        "roam::render_gl::render_frame",
+                        "peer source tag out of range",
+                        format!(
+                            "expected 0.0 (libp2p) or 1.0 (BroadcastChannel), got {source}"
+                        ),
+                    );
+                    [1.0, 0.0, 1.0]
+                };
+                marker_scratch.extend_from_slice(&rgb);
+                marker_scratch.push(marker_world_size);
+            }
+        });
+
+        let marker_count =
+            marker_scratch.len() / MarkerProgram::INSTANCE_STRIDE_FLOATS;
+        if marker_count > 0 {
+            let marker_prog = &renderer.marker_prog;
+            gl.bind_vertex_array(Some(&marker_prog.vao));
+            gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&marker_prog.instance_buffer));
+            unsafe {
+                let view = Float32Array::view(marker_scratch);
+                gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &view, Gl::STREAM_DRAW);
+            }
+            gl.use_program(Some(&marker_prog.program));
+            gl.uniform2f(Some(&marker_prog.u_camera_px), player_x_px, player_y_px);
+            gl.uniform2f(
+                Some(&marker_prog.u_canvas_px),
+                canvas_w as f32,
+                canvas_h as f32,
+            );
+            gl.uniform1f(Some(&marker_prog.u_zoom), zoom);
+            gl.draw_elements_instanced_with_i32(
+                Gl::TRIANGLES,
+                6,
+                Gl::UNSIGNED_SHORT,
+                0,
+                marker_count as i32,
+            );
+        }
+
         // Sacred-error compliance: surface GL errors through the
         // event log instead of leaving them silent in `gl.getError()`.
         let err = gl.get_error();
@@ -691,7 +931,7 @@ pub fn render_frame(
                 "roam::render_gl::render_frame",
                 format!("gl.getError = 0x{err:x} after draw"),
                 format!(
-                    "tile_count={tile_count} flower_count={flower_count} canvas={canvas_w}x{canvas_h}"
+                    "tile_count={tile_count} flower_count={flower_count} marker_count={marker_count} canvas={canvas_w}x{canvas_h}"
                 ),
             );
         }

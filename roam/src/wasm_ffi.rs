@@ -327,4 +327,13 @@ mod wasm_exports {
             day_brightness,
         )
     }
+
+    /// Publish the current peer list to the renderer. The packed array
+    /// is `[x0, y0, src0, x1, y1, src1, ...]` with `src` as 0.0 for
+    /// libp2p and 1.0 for BroadcastChannel. Called once per frame
+    /// before `roam_render_frame`.
+    #[wasm_bindgen]
+    pub fn roam_set_peers(packed: &[f32]) {
+        crate::render_gl::set_peers(packed);
+    }
 }
