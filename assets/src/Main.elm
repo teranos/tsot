@@ -414,7 +414,6 @@ type Msg
     | BootDataReceived D.Value
     | PoolCardClicked String
     | DeckRowRemove String
-    | DeckClearClicked
     | PresetChosen String
     | OppAiChanged String
     | SpecAiAChanged String
@@ -889,9 +888,6 @@ update msg model =
 
         DeckRowRemove cardId ->
             ( { model | deck = removeFirst cardId model.deck }, Cmd.none )
-
-        DeckClearClicked ->
-            ( { model | deck = [] }, Cmd.none )
 
         PresetChosen presetId ->
             case List.filter (\p -> p.id == presetId) model.presets |> List.head of
@@ -2945,7 +2941,6 @@ viewDeckControls model =
                 ( "(choose\u{2026})", "" )
                     :: List.map (\p -> ( p.name, p.id )) model.presets
             ]
-        , button [ class "danger", onClick DeckClearClicked ] [ text "Clear deck" ]
         , Html.label
             [ style "color" "#888"
             , style "font-size" "0.7rem"

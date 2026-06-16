@@ -88,15 +88,28 @@ impl StepEngine {
 
         let mut declared_atk_count = 0u32;
         for atk in &attackers {
-            if self
-                .state
-                .declare_attacker(
-                    atk,
-                    Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
-                )
-                .is_ok()
-            {
-                declared_atk_count += 1;
+            match self.state.declare_attacker(
+                atk,
+                Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
+            ) {
+                Ok(()) => declared_atk_count += 1,
+                Err(e) => {
+                    // Sacred-error sweep: silent failure of an
+                    // attacker the human picked must surface.
+                    let card_name = self
+                        .state
+                        .card_pool
+                        .get(atk)
+                        .map(|i| i.card.name.clone())
+                        .unwrap_or_else(|| atk.clone());
+                    self.emit_human_refusal(
+                        active,
+                        "prompt",
+                        "declare-attackers",
+                        format!("Can't attack with {card_name}"),
+                        format!("Engine refused declare_attacker: {e:?}"),
+                    );
+                }
             }
         }
         if declared_atk_count > 0 {
@@ -185,13 +198,32 @@ impl StepEngine {
         }
 
         for (blk, atk) in &assignments {
-            let _ = self
-                .state
-                .declare_blocker(
-                    blk,
-                    atk,
-                    Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
+            if let Err(e) = self.state.declare_blocker(
+                blk,
+                atk,
+                Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
+            ) {
+                // Sacred-error sweep: silent block-assignment failure.
+                let blk_name = self
+                    .state
+                    .card_pool
+                    .get(blk)
+                    .map(|i| i.card.name.clone())
+                    .unwrap_or_else(|| blk.clone());
+                let atk_name = self
+                    .state
+                    .card_pool
+                    .get(atk)
+                    .map(|i| i.card.name.clone())
+                    .unwrap_or_else(|| atk.clone());
+                self.emit_human_refusal(
+                    defender,
+                    "prompt",
+                    "declare-blockers",
+                    format!("Can't block {atk_name} with {blk_name}"),
+                    format!("Engine refused declare_blocker: {e:?}"),
                 );
+            }
         }
         let outcome = self
             .state

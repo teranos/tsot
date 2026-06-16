@@ -905,3 +905,131 @@
             other => panic!("expected Done on second call, got {other:?}"),
         }
     }
+
+    /// SACRED-ERROR SWEEP REGRESSION TEST. `emit_human_refusal` is
+    /// the gateway the sweep funnels every play_card / activation /
+    /// combat refusal through. When the active player is Human, it
+    /// must push a typed Error to the sacred-error bus; when AI,
+    /// silent. This test pins that contract — any change that
+    /// breaks gating, or removes the emit_region call, fails here.
+    ///
+    /// Together with grep-discoverable callsites (`emit_human_refusal`
+    /// in src/sim/step/) this gives the project an actual safety
+    /// net: deleting `emit_human_refusal` and leaving the callsites
+    /// fails the build; un-gating breaks `ai_branch_is_silent`.
+    #[test]
+    fn emit_human_refusal_pushes_when_human_active() {
+        use crate::sim::human::HumanInterface;
+        use std::sync::Arc;
+
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| matches!(c.kind, CardType::Creature))
+            .expect("any creature").clone();
+        let deck_a: Vec<_> = (0..50).map(|_| template.clone()).collect();
+        let deck_b = deck_a.clone();
+        let state = GameState::new(deck_a, deck_b);
+        let (iface, _prompt_rx, _action_tx) = HumanInterface::new();
+
+        let engine = StepEngine::new(
+            state,
+            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            registry,
+            0xCAFE,
+        );
+
+        crate::error::reset();
+        engine.emit_human_refusal(
+            crate::game::PlayerId::A,
+            "prompt",
+            "play-card",
+            "Test refusal".into(),
+            "Test why".into(),
+        );
+        let errors = crate::error::drain();
+        assert_eq!(errors.len(), 1, "Human-active refusal MUST push exactly one Error");
+        assert_eq!(errors[0].context.surface, "prompt");
+        assert_eq!(errors[0].context.region.as_deref(), Some("play-card"));
+        assert_eq!(errors[0].title, "Test refusal");
+        assert!(matches!(errors[0].severity, crate::error::Severity::Warn));
+    }
+
+    /// Mirror — AI-active refusal must NOT push (EA / probe loops
+    /// would drown).
+    #[test]
+    fn emit_human_refusal_silent_when_ai_active() {
+        let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| matches!(c.kind, CardType::Creature))
+            .expect("any creature").clone();
+        let deck_a: Vec<_> = (0..50).map(|_| template.clone()).collect();
+        let deck_b = deck_a.clone();
+        let state = GameState::new(deck_a, deck_b);
+
+        let engine = StepEngine::new(
+            state,
+            [AiKind::Heuristic, AiKind::Heuristic],
+            registry,
+            0xCAFE,
+        );
+
+        crate::error::reset();
+        engine.emit_human_refusal(
+            crate::game::PlayerId::A,
+            "prompt",
+            "play-card",
+            "Test refusal".into(),
+            "Test why".into(),
+        );
+        let errors = crate::error::drain();
+        assert!(
+            errors.is_empty(),
+            "AI-active refusal must NOT push — EA loop gating contract violated"
+        );
+    }
+
+    /// Sweep coverage check: the source of every step/ file must
+    /// reference `emit_human_refusal` at least once. If a sweep site
+    /// gets accidentally deleted, the file's coverage of the sweep
+    /// drops and this test fails. New step/ files (combat ext,
+    /// activation ext) without a refusal site will also fail — add
+    /// the wiring or document why this file has no human-refusal
+    /// surface.
+    #[test]
+    fn every_step_file_references_emit_human_refusal() {
+        let step_dir = std::path::Path::new("src/sim/step");
+        let entries = std::fs::read_dir(step_dir).expect("step/ dir");
+        let mut covered = 0u32;
+        let mut total = 0u32;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue };
+            // Skip tests/trace_tests/mod — only check the
+            // production-code files that actually drive PlayError
+            // returns to a HumanAction-active cursor.
+            if !matches!(name, "main_phases.rs" | "combat.rs") {
+                continue;
+            }
+            total += 1;
+            let src = std::fs::read_to_string(&path).expect("read step file");
+            if src.contains("emit_human_refusal") {
+                covered += 1;
+            } else {
+                panic!(
+                    "SACRED-ERROR SWEEP COVERAGE GAP: {} does not call \
+                     emit_human_refusal anywhere. Either add a refusal \
+                     site for every Err arm a HumanAction can land in, \
+                     or document why this file has no human-refusal \
+                     surface (and update this test's allowlist).",
+                    name
+                );
+            }
+        }
+        assert!(total > 0, "no step files matched the coverage check");
+        assert_eq!(covered, total, "coverage gap: {covered}/{total}");
+    }
+

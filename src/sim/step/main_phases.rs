@@ -123,6 +123,37 @@ impl ResolveContext {
 }
 
 impl StepEngine {
+    /// Push a typed `Error` into the sacred-error bus IFF the active
+    /// player is human. Sacred-errors axiom (`CLAUDE.md` + `ERROR.md`):
+    /// every refusal the human triggers must surface at their cursor.
+    /// The AI gets nothing — the EA / probe loops swallow refusals by
+    /// design and would drown in events if we emitted one per pick.
+    ///
+    /// Called from every `play_card` / `activate_ability` failure arm
+    /// in this module. Keep the call sites symmetric — if you add a
+    /// new `Err(_)` match arm anywhere a HumanAction can land, route
+    /// it through here.
+    pub(super) fn emit_human_refusal(
+        &self,
+        active: crate::game::PlayerId,
+        surface: &'static str,
+        region: &'static str,
+        title: String,
+        why: String,
+    ) {
+        if let crate::sim::AiKind::Human(_) = &self.ais[active.index()] {
+            crate::error::emit_region(
+                crate::error::Severity::Warn,
+                surface,
+                region,
+                title,
+                why,
+            );
+        }
+    }
+}
+
+impl StepEngine {
     /// Pattern B: pick a card to play (or pass into combat).
     /// Vanilla AI scope unchanged; the Human arm yields a
     /// `NeedHuman(PickCard{…})` on `pending=None` and resumes from
@@ -206,9 +237,21 @@ impl StepEngine {
                 Some(HumanAction::Pass) => None,
                 Some(HumanAction::PlayCard { iid }) => Some(iid),
                 Some(HumanAction::Activate { .. }) => {
-                    // S9: human activations through Pattern B. For now,
-                    // ignore the action and re-prompt so the frontend
-                    // can resend Pass / PlayCard.
+                    // S9 deferred: human activation routing through
+                    // Pattern B isn't implemented yet. Re-prompting
+                    // without telling the user was a silent drop —
+                    // they clicked, nothing happened. Sacred-errors
+                    // sweep: surface the gap instead of pretending.
+                    self.emit_human_refusal(
+                        active,
+                        "prompt",
+                        "activate-ability",
+                        "Activations not yet supported in Main1".into(),
+                        "The engine doesn't yet route human-clicked \
+                         activated abilities through the Pattern B \
+                         (Main1) flow. Cast a card or pass for now; \
+                         this is a known engine gap.".into(),
+                    );
                     let candidates = crate::sim::ai::enumerate_playable_in_hand(
                         &self.state,
                         active,
@@ -515,6 +558,15 @@ impl StepEngine {
                         active_gy.join(", "),
                     ),
                 );
+                // Sacred-error sweep: same refusal surface as Main2.
+                let card_name = self
+                    .state
+                    .card_pool
+                    .get(&picked)
+                    .map(|c| c.card.name.clone())
+                    .unwrap_or_else(|| card_id.clone());
+                let (title, why) = play_error_user_message(&card_name, err);
+                self.emit_human_refusal(active, "prompt", "play-card", title, why);
             } else if suicide {
                 crate::sim::instrument::tee_log(
                     &mut self.log,
@@ -650,8 +702,18 @@ impl StepEngine {
                 StepResult::Continue
             }
             Some(HumanAction::Activate { .. }) => {
-                // S9-extended (human-side activations); re-prompt for
-                // now so the frontend can resend Pass / PlayCard.
+                // S9-extended deferred — human activations through
+                // Main2 aren't routed yet. Sacred-errors sweep:
+                // surface the gap instead of silently re-prompting.
+                self.emit_human_refusal(
+                    active,
+                    "prompt",
+                    "activate-ability",
+                    "Activations not yet supported in Main2".into(),
+                    "The engine doesn't yet route human-clicked \
+                     activated abilities through Main2. Cast a card \
+                     or pass for now; this is a known engine gap.".into(),
+                );
                 let candidates = crate::sim::ai::enumerate_playable_in_hand(
                     &self.state,
                     active,
@@ -744,6 +806,24 @@ impl StepEngine {
         let choices = match build_result {
             BuildChoiceResult::Choices(c) => c,
             BuildChoiceResult::UnaffordableX { .. } => {
+                let card_name = self
+                    .state
+                    .card_pool
+                    .get(&picked)
+                    .map(|c| c.card.name.clone())
+                    .unwrap_or_else(|| picked.clone());
+                self.emit_human_refusal(
+                    active,
+                    "prompt",
+                    "play-card",
+                    format!("Can't cast {card_name}: no affordable X"),
+                    format!(
+                        "Variable-X cost on {card_name}: every X ≥ 1 \
+                         exceeds the player's available resources \
+                         (hand / graveyard / mill). The cast was \
+                         refused before any cost was paid."
+                    ),
+                );
                 let new_cursor = ctx.on_unaffordable(picked_is_creature);
                 self.set_cursor(new_cursor);
                 return StepResult::Continue;
@@ -853,10 +933,104 @@ impl StepEngine {
             if suicide {
                 self.state.bump_action("preview_skip_suicide", active);
             }
+            // Sacred-error sweep: a human clicked a card, the engine
+            // refused for some PlayError reason, and the UI got
+            // nothing — exactly the silent-drop the axiom forbids.
+            // ChoicePending was already caught + surfaced above the
+            // is_ok() check; what remains here is real refusal
+            // (cost, timing, target, etc).
+            if let Err(err) = &result {
+                let card_name = self
+                    .state
+                    .card_pool
+                    .get(&picked)
+                    .map(|c| c.card.name.clone())
+                    .unwrap_or_else(|| picked.clone());
+                let (title, why) = play_error_user_message(&card_name, err);
+                self.emit_human_refusal(active, "prompt", "play-card", title, why);
+            }
             let new_cursor = ctx.on_failure(picked_is_creature);
             self.set_cursor(new_cursor);
         }
 
         StepResult::Continue
+    }
+}
+
+/// Translate a `PlayError` into a (title, why) pair suitable for the
+/// cursor-anchored Error window. Title is the one-line summary; why
+/// is the actionable explanation. Sacred-errors axiom: every refusal
+/// the human triggers must carry enough context to act on, without
+/// devtools.
+fn play_error_user_message(
+    card_name: &str,
+    err: &crate::game::PlayError,
+) -> (String, String) {
+    use crate::game::PlayError as E;
+    match err {
+        E::ChoicePending(_) => (
+            // Should not reach here; ChoicePending is intercepted above.
+            format!("Can't cast {card_name}: choice pending (engine bug)"),
+            "ChoicePending escaped the Main2 catch arm. File a bug.".into(),
+        ),
+        E::GameOver => (
+            format!("Can't cast {card_name}: game over"),
+            "The game is already over.".into(),
+        ),
+        E::NotInHand => (
+            format!("Can't cast {card_name}: not in hand"),
+            "The selected card is not in your hand — UI may be stale.".into(),
+        ),
+        E::UnsupportedType(t) => (
+            format!("Can't cast {card_name}: {t:?} not supported"),
+            format!("Card type {t:?} is not yet supported by the engine."),
+        ),
+        E::SorceryAtInstantSpeed => (
+            format!("Can't cast {card_name}: sorcery timing"),
+            "Sorceries can only be played on your own main phase, outside any \
+             response window. (RULES R.1 + C.7)".into(),
+        ),
+        E::UnsupportedCostSource(s) => (
+            format!("Can't cast {card_name}: unsupported cost source"),
+            format!("Cost component source {s:?} is not yet supported by the engine."),
+        ),
+        E::InsufficientGraveyardForCost { needed, have } => (
+            format!("Can't cast {card_name}: not enough cards in graveyard"),
+            format!(
+                "Graveyard cost requires {needed} card(s), you have {have}."
+            ),
+        ),
+        E::WrongGraveyardPaymentCount { expected, got } => (
+            format!("Can't cast {card_name}: wrong graveyard payment count"),
+            format!(
+                "Engine expected {expected} graveyard cards as cost, got {got}."
+            ),
+        ),
+        E::GraveyardPaymentInvalid(iid) => (
+            format!("Can't cast {card_name}: invalid graveyard payment"),
+            format!("Graveyard payment id {iid} is not in your graveyard."),
+        ),
+        E::DuplicateGraveyardPayment(iid) => (
+            format!("Can't cast {card_name}: duplicate graveyard payment"),
+            format!("Graveyard payment id {iid} appears more than once."),
+        ),
+        E::VariableXValueMissing => (
+            format!("Can't cast {card_name}: X value missing"),
+            "This card has a variable-X cost and the engine wasn't told \
+             what X is. The UI needs to ask first.".into(),
+        ),
+        E::XBelowMinimum => (
+            format!("Can't cast {card_name}: X must be at least 1"),
+            "Variable-X cost must be ≥ 1 unless the card opts into X=0 \
+             (`allow_x_zero = true`). (RULES P.30)".into(),
+        ),
+        other => (
+            format!("Can't cast {card_name}: {other:?}"),
+            format!(
+                "Engine refused the cast: {other:?}. No human-friendly \
+                 message for this variant yet — file an issue so we can \
+                 add one."
+            ),
+        ),
     }
 }
