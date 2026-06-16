@@ -48,6 +48,16 @@ const PLAYER_MARKER_RGB: [f32; 3] = [0.4, 0.8, 1.0]; // #6cf
 const PEER_LIBP2P_RGB: [f32; 3] = [1.0, 0.4, 0.66]; // #f6a
 const PEER_BROADCAST_RGB: [f32; 3] = [1.0, 0.66, 0.4]; // #fa6
 
+/// Cliff outline: same translucent black the canvas2D path used
+/// (`rgba(0, 0, 0, 0.55)`). Drawn between tiles whose elevation
+/// delta exceeds the walkable step.
+const CLIFF_RGBA: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
+/// Facing arrow color, matches canvas2D `#cfc` stroke.
+const FACING_ARROW_RGBA: [f32; 4] = [0.8, 1.0, 0.8, 1.0];
+/// Elevation delta beyond which two adjacent tiles are an unwalkable
+/// cliff. Mirrors `roam::world::MAX_STEP_UP_DOWN`.
+const CLIFF_THRESHOLD: f32 = 1.0;
+
 /// Called by the JS bridge before each `render_frame` to publish the
 /// current peer list. The slice is `[x0, y0, src0, x1, y1, src1, ...]`.
 /// Anything not on this list disappears from the next frame's draw.
@@ -74,6 +84,7 @@ pub struct Renderer {
     tile_prog: TileProgram,
     flower_prog: FlowerProgram,
     marker_prog: MarkerProgram,
+    line_prog: LineProgram,
     /// Per-frame scratch buffer for tile instance attributes
     /// (tile_kind, elev_offset). Two floats per visible tile.
     tile_instance_scratch: Vec<f32>,
@@ -87,6 +98,11 @@ pub struct Renderer {
     /// (world_x, world_y, r, g, b, size_world_px) per marker, matching
     /// `MarkerProgram::INSTANCE_STRIDE_FLOATS`.
     marker_instance_scratch: Vec<f32>,
+    /// Per-frame scratch buffer for line vertices. Layout matches
+    /// `LineProgram::VERTEX_STRIDE_FLOATS`: 6 floats per vertex
+    /// (world_x, world_y, r, g, b, a). Two vertices per line segment.
+    /// Used for the facing arrow and cliff outlines.
+    line_vertex_scratch: Vec<f32>,
 }
 
 struct TileProgram {
@@ -128,6 +144,19 @@ struct MarkerProgram {
 
 impl MarkerProgram {
     const INSTANCE_STRIDE_FLOATS: usize = 6;
+}
+
+struct LineProgram {
+    program: WebGlProgram,
+    vao: WebGlVertexArrayObject,
+    vertex_buffer: WebGlBuffer,
+    u_camera_px: WebGlUniformLocation,
+    u_canvas_px: WebGlUniformLocation,
+    u_zoom: WebGlUniformLocation,
+}
+
+impl LineProgram {
+    const VERTEX_STRIDE_FLOATS: usize = 6;
 }
 
 // ----- tile shader sources -----
@@ -382,6 +411,52 @@ void main() {
 }
 "#;
 
+// ----- line shader sources -----
+//
+// Vertex stream of (world_pos, rgba). Drawn as gl.LINES. Used for the
+// facing arrow and cliff outlines. Per-vertex alpha lets the cliff
+// outlines bleed through with translucency; the facing arrow keeps
+// alpha at 1.0.
+//
+// WebGL2 caps line width at 1px on most drivers — visually thinner
+// than the original canvas2D 2px. If that's not enough contrast, a
+// separate quad-based line pass replaces this; not blocking the slice.
+
+const LINE_VS: &str = r#"#version 300 es
+precision highp float;
+
+layout(location = 0) in vec2 a_world_pos;
+layout(location = 1) in vec4 a_color;
+
+uniform vec2 u_camera_px;
+uniform vec2 u_canvas_px;
+uniform float u_zoom;
+
+out vec4 v_color;
+
+void main() {
+    vec2 frag_screen_px =
+        (a_world_pos - u_camera_px) * u_zoom + u_canvas_px * 0.5;
+    vec2 clip = vec2(
+        (frag_screen_px.x / u_canvas_px.x) * 2.0 - 1.0,
+        1.0 - (frag_screen_px.y / u_canvas_px.y) * 2.0
+    );
+    gl_Position = vec4(clip, 0.0, 1.0);
+    v_color = a_color;
+}
+"#;
+
+const LINE_FS: &str = r#"#version 300 es
+precision highp float;
+
+in vec4 v_color;
+out vec4 out_color;
+
+void main() {
+    out_color = v_color;
+}
+"#;
+
 // ----- init -----
 
 /// Acquire WebGL2 from the canvas, compile shaders, allocate buffers.
@@ -415,6 +490,7 @@ pub fn init(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
     let tile_prog = build_tile_program(&gl)?;
     let flower_prog = build_flower_program(&gl)?;
     let marker_prog = build_marker_program(&gl)?;
+    let line_prog = build_line_program(&gl)?;
 
     RENDERER.with(|cell| {
         *cell.borrow_mut() = Some(Renderer {
@@ -423,9 +499,11 @@ pub fn init(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
             tile_prog,
             flower_prog,
             marker_prog,
+            line_prog,
             tile_instance_scratch: Vec::new(),
             flower_instance_scratch: Vec::new(),
             marker_instance_scratch: Vec::new(),
+            line_vertex_scratch: Vec::new(),
         });
     });
     Ok(())
@@ -620,6 +698,45 @@ fn build_marker_program(gl: &Gl) -> Result<MarkerProgram, JsValue> {
     })
 }
 
+fn build_line_program(gl: &Gl) -> Result<LineProgram, JsValue> {
+    let program = compile_program(gl, LINE_VS, LINE_FS, "line")?;
+
+    let u_camera_px = get_uniform(gl, &program, "u_camera_px")?;
+    let u_canvas_px = get_uniform(gl, &program, "u_canvas_px")?;
+    let u_zoom = get_uniform(gl, &program, "u_zoom")?;
+
+    let vao = gl
+        .create_vertex_array()
+        .ok_or_else(|| JsValue::from_str("gl.createVertexArray returned null"))?;
+    gl.bind_vertex_array(Some(&vao));
+
+    let vertex_buffer = gl
+        .create_buffer()
+        .ok_or_else(|| JsValue::from_str("gl.createBuffer (line vertex) returned null"))?;
+    gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&vertex_buffer));
+
+    // Per-vertex layout matches `LineProgram::VERTEX_STRIDE_FLOATS`:
+    //   loc 0: vec2 a_world_pos  offset 0, size 8
+    //   loc 1: vec4 a_color      offset 8, size 16
+    // Stride = 24 bytes.
+    let stride = (LineProgram::VERTEX_STRIDE_FLOATS * 4) as i32;
+    gl.vertex_attrib_pointer_with_i32(0, 2, Gl::FLOAT, false, stride, 0);
+    gl.vertex_attrib_pointer_with_i32(1, 4, Gl::FLOAT, false, stride, 8);
+    gl.enable_vertex_attrib_array(0);
+    gl.enable_vertex_attrib_array(1);
+
+    gl.bind_vertex_array(None);
+
+    Ok(LineProgram {
+        program,
+        vao,
+        vertex_buffer,
+        u_camera_px,
+        u_canvas_px,
+        u_zoom,
+    })
+}
+
 fn compile_program(gl: &Gl, vs_src: &str, fs_src: &str, name: &str) -> Result<WebGlProgram, JsValue> {
     let vs = compile_shader(gl, Gl::VERTEX_SHADER, vs_src, name)?;
     let fs = compile_shader(gl, Gl::FRAGMENT_SHADER, fs_src, name)?;
@@ -692,6 +809,7 @@ fn create_buffer_with_data(gl: &Gl, data: &[f32]) -> Result<WebGlBuffer, JsValue
 pub fn render_frame(
     player_x_px: f32,
     player_y_px: f32,
+    facing: u8,
     zoom: f32,
     canvas_w: u32,
     canvas_h: u32,
@@ -728,8 +846,10 @@ pub fn render_frame(
             world_px_per_tile = read_u32_le(ptr, 20) as f32;
         }
 
-        // Build tile instance attributes + collect flower instances in
-        // a single pass over the viewport buffer.
+        // Build tile instance attributes + collect flower instances +
+        // collect cliff line segments in a single pass over the
+        // viewport buffer. `elev_offset` is already a signed delta
+        // from player.z so neighbor comparisons are direct.
         let tile_count = (view_w * view_h) as usize;
         let half_w = view_w as i32 / 2;
         let half_h = view_h as i32 / 2;
@@ -738,6 +858,8 @@ pub fn render_frame(
         tile_scratch.reserve(tile_count * 2);
         let flower_scratch = &mut renderer.flower_instance_scratch;
         flower_scratch.clear();
+        let line_scratch = &mut renderer.line_vertex_scratch;
+        line_scratch.clear();
         unsafe {
             let ptr = viewport_ptr() as *const u8;
             for i in 0..tile_count {
@@ -778,8 +900,69 @@ pub fn render_frame(
                     flower_scratch.extend_from_slice(&ce_rgb);
                     flower_scratch.push(petal_count as f32);
                 }
+
+                // Cliff outlines: where the local |Δelev| with the
+                // right or down neighbor exceeds the walkable step
+                // (CLIFF_THRESHOLD), draw a line along that boundary.
+                let vx = (i as i32) % (view_w as i32);
+                let vy = (i as i32) / (view_w as i32);
+                let world_tx = (center_tx + vx - half_w) as f32;
+                let world_ty = (center_ty + vy - half_h) as f32;
+                let world_x0 = world_tx * world_px_per_tile;
+                let world_y0 = world_ty * world_px_per_tile;
+                let world_x1 = world_x0 + world_px_per_tile;
+                let world_y1 = world_y0 + world_px_per_tile;
+
+                if vx + 1 < view_w as i32 {
+                    let off_r = VIEWPORT_HEADER_SIZE
+                        + ((vy as usize) * (view_w as usize) + (vx as usize) + 1)
+                            * VIEWPORT_TILE_SIZE;
+                    let e_r = *ptr.add(off_r + 1) as i8 as f32;
+                    if (e_r - elev_offset).abs() > CLIFF_THRESHOLD {
+                        push_line(
+                            line_scratch,
+                            world_x1,
+                            world_y0,
+                            world_x1,
+                            world_y1,
+                            CLIFF_RGBA,
+                        );
+                    }
+                }
+                if vy + 1 < view_h as i32 {
+                    let off_d = VIEWPORT_HEADER_SIZE
+                        + (((vy as usize) + 1) * (view_w as usize) + (vx as usize))
+                            * VIEWPORT_TILE_SIZE;
+                    let e_d = *ptr.add(off_d + 1) as i8 as f32;
+                    if (e_d - elev_offset).abs() > CLIFF_THRESHOLD {
+                        push_line(
+                            line_scratch,
+                            world_x0,
+                            world_y1,
+                            world_x1,
+                            world_y1,
+                            CLIFF_RGBA,
+                        );
+                    }
+                }
             }
         }
+
+        // Facing arrow as a line from the player to player + facing
+        // direction × marker world size. Same green as the canvas2D
+        // stroke (#cfc).
+        let (fdx, fdy) = facing_unit_vec(facing);
+        let arrow_world_size = (14.0_f32 * zoom).clamp(8.0, 32.0) / zoom;
+        let arrow_end_x = player_x_px + fdx * arrow_world_size;
+        let arrow_end_y = player_y_px + fdy * arrow_world_size;
+        push_line(
+            line_scratch,
+            player_x_px,
+            player_y_px,
+            arrow_end_x,
+            arrow_end_y,
+            FACING_ARROW_RGBA,
+        );
 
         let gl = &renderer.gl;
 
@@ -922,6 +1105,28 @@ pub fn render_frame(
             );
         }
 
+        // ----- line pass (cliffs + facing arrow) -----
+        let line_vertex_count =
+            line_scratch.len() / LineProgram::VERTEX_STRIDE_FLOATS;
+        if line_vertex_count > 0 {
+            let line_prog = &renderer.line_prog;
+            gl.bind_vertex_array(Some(&line_prog.vao));
+            gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&line_prog.vertex_buffer));
+            unsafe {
+                let view = Float32Array::view(line_scratch);
+                gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &view, Gl::STREAM_DRAW);
+            }
+            gl.use_program(Some(&line_prog.program));
+            gl.uniform2f(Some(&line_prog.u_camera_px), player_x_px, player_y_px);
+            gl.uniform2f(
+                Some(&line_prog.u_canvas_px),
+                canvas_w as f32,
+                canvas_h as f32,
+            );
+            gl.uniform1f(Some(&line_prog.u_zoom), zoom);
+            gl.draw_arrays(Gl::LINES, 0, line_vertex_count as i32);
+        }
+
         // Sacred-error compliance: surface GL errors through the
         // event log instead of leaving them silent in `gl.getError()`.
         let err = gl.get_error();
@@ -1013,6 +1218,43 @@ fn core_edge_from_u8(v: u8) -> Option<CoreEdge> {
         1 => Some(CoreEdge::MatchPetalCenter),
         2 => Some(CoreEdge::MatchPetalEdge),
         _ => None,
+    }
+}
+
+/// Push two vertices (one line segment) into the per-frame line
+/// vertex buffer. Layout matches `LineProgram::VERTEX_STRIDE_FLOATS`:
+/// 6 floats per vertex (world.xy + rgba). Two vertices per line.
+fn push_line(buf: &mut Vec<f32>, x0: f32, y0: f32, x1: f32, y1: f32, rgba: [f32; 4]) {
+    buf.push(x0);
+    buf.push(y0);
+    buf.extend_from_slice(&rgba);
+    buf.push(x1);
+    buf.push(y1);
+    buf.extend_from_slice(&rgba);
+}
+
+/// 8-way facing → unit (dx, dy) for the facing arrow. Matches the
+/// `Facing` discriminant order in `roam::world::Facing`.
+fn facing_unit_vec(facing: u8) -> (f32, f32) {
+    use core::f32::consts::FRAC_1_SQRT_2 as S;
+    match facing {
+        0 => (0.0, -1.0),  // N
+        1 => (S, -S),      // NE
+        2 => (1.0, 0.0),   // E
+        3 => (S, S),       // SE
+        4 => (0.0, 1.0),   // S
+        5 => (-S, S),      // SW
+        6 => (-1.0, 0.0),  // W
+        7 => (-S, -S),     // NW
+        _ => {
+            emit_error(
+                Severity::Warn,
+                "roam::render_gl::facing_unit_vec",
+                "facing byte out of range",
+                format!("got {facing}, expected 0..=7; defaulting to S"),
+            );
+            (0.0, 1.0)
+        }
     }
 }
 

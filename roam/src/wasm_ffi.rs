@@ -313,6 +313,7 @@ mod wasm_exports {
     pub fn roam_render_frame(
         player_x_px: f32,
         player_y_px: f32,
+        facing: u8,
         zoom: f32,
         canvas_w: u32,
         canvas_h: u32,
@@ -321,6 +322,7 @@ mod wasm_exports {
         crate::render_gl::render_frame(
             player_x_px,
             player_y_px,
+            facing,
             zoom,
             canvas_w,
             canvas_h,

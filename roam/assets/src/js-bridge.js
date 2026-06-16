@@ -865,6 +865,29 @@ moduleP.then((wasm) => {
   canvas.style.width = '1440px';
   canvas.style.height = '1440px';
 
+  // Status text overlay. The browser renders text well; making Rust
+  // load a bitmap font + glyph atlas just so a 12-char debug HUD can
+  // live "in WebGL" would be busywork. Use the platform: a DOM element
+  // positioned over the canvas top-left, textContent updated per frame.
+  // Single source of truth for the format string is in this file, but
+  // every datum comes from Rust (state JSON / libp2p / counters).
+  const worldHud = document.createElement('div');
+  worldHud.id = 'world-hud';
+  worldHud.style.cssText = [
+    'position: absolute',
+    'top: 4px',
+    'left: 8px',
+    'font: 11px ui-monospace, Menlo, monospace',
+    'color: #888',
+    'pointer-events: none',
+    'white-space: pre',
+    'z-index: 5',
+  ].join(';');
+  if (canvas.parentElement) {
+    canvas.parentElement.style.position = 'relative';
+    canvas.parentElement.appendChild(worldHud);
+  }
+
   // Hand the world canvas to Rust's WebGL2 renderer. From this point
   // on, every world-canvas pixel comes from `roam_render_frame`. The
   // JS bridge issues no draw calls against the world canvas; canvas2D
@@ -1203,10 +1226,18 @@ moduleP.then((wasm) => {
 
     const dayB = dayBrightness(s.x, PIXELS_PER_TILE);
     try {
-      roam_render_frame(s.x, s.y, zoom, canvas.width, canvas.height, dayB);
+      roam_render_frame(s.x, s.y, s.f, zoom, canvas.width, canvas.height, dayB);
     } catch (err) {
       logError('roam_render_frame', err);
     }
+
+    // Status text overlay: rendered by the browser as DOM, not by GL.
+    // Bridge composes the format string from Rust-supplied data only.
+    const conns = libp2p ? libp2p.getConnections().length : 0;
+    const libStatus = libp2p ? `libp2p conns=${conns}` : 'libp2p off';
+    worldHud.textContent =
+      `me=${PEER_ID} (${s.x.toFixed(1)}, ${s.y.toFixed(1)}, z=${s.z}) f=${s.f}  ` +
+      `zoom=${zoom.toFixed(2)}  peers=${remotePeers.size}  ${libStatus}`;
 
     requestAnimationFrame(frame);
   }
