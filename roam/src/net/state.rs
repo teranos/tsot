@@ -46,6 +46,13 @@ pub const PEER_TIMEOUT_MS: u64 = 2000;
 pub struct Net {
     provider: Box<dyn NetworkProvider>,
     peers: BTreeMap<PeerId, RemotePeer>,
+    /// Monotonic counter that bumps whenever the peer table changes
+    /// — insert, remove, or position update. The render bridge reads
+    /// this to feed the dirty-flag fingerprint so peers moving on
+    /// screen actually triggers a repaint when the local player is
+    /// still. `wrapping_add` so 32-bit u32 dirty-flag stays cheap to
+    /// read across the FFI without BigInt-marshaling at the boundary.
+    peer_state_seq: u32,
 }
 
 impl Net {
@@ -53,7 +60,13 @@ impl Net {
         Self {
             provider,
             peers: BTreeMap::new(),
+            peer_state_seq: 0,
         }
+    }
+
+    /// Read the peer-table change counter (see field doc).
+    pub fn peer_state_seq(&self) -> u32 {
+        self.peer_state_seq
     }
 
     /// Read-only iteration over the peer table. Used by the renderer
@@ -91,6 +104,7 @@ impl Net {
                                     last_seen_ms: at_ms,
                                 },
                             );
+                            self.peer_state_seq = self.peer_state_seq.wrapping_add(1);
                         }
                         Err(e) => {
                             #[cfg(target_arch = "wasm32")]
@@ -106,7 +120,9 @@ impl Net {
                     }
                 }
                 NetEvent::PeerDown { peer, .. } => {
-                    self.peers.remove(&peer);
+                    if self.peers.remove(&peer).is_some() {
+                        self.peer_state_seq = self.peer_state_seq.wrapping_add(1);
+                    }
                 }
                 NetEvent::PeerUp { .. } | NetEvent::SubscriptionChange { .. } => {}
                 NetEvent::Error(err) => {
@@ -123,8 +139,12 @@ impl Net {
             }
         }
         // Prune stale peers (haven't seen them in PEER_TIMEOUT_MS).
+        let before = self.peers.len();
         self.peers
             .retain(|_, p| now_ms.saturating_sub(p.last_seen_ms) < PEER_TIMEOUT_MS);
+        if self.peers.len() != before {
+            self.peer_state_seq = self.peer_state_seq.wrapping_add(1);
+        }
     }
 
     /// Inject identity for tests + the eventual `roam_state_json` path

@@ -36,13 +36,13 @@ import initWasm, {
   roam_restore_session,
   roam_render_init,
   roam_render_frame,
-  roam_set_peers,
   roam_player_state_ptr,
   roam_player_state_len,
   roam_net_init,
   roam_net_publish_position,
   roam_net_tick,
   roam_net_peer_count,
+  roam_net_peer_state_seq,
 } from '/roam.js';
 import * as netShim from './net-shim.js';
 
@@ -505,22 +505,11 @@ function inputBits() {
   return i;
 }
 
-// --- remote peer table (fed by both transports) ---
-const remotePeers = new Map(); // id -> { x, y, z, f, lastSeen, source }
-function ingest(msg, source) {
-  if (!msg || !msg.peer_id) {
-    logEvent('error', `${source}: ignoring msg without peer_id: ${JSON.stringify(msg).slice(0, 80)}`);
-    return;
-  }
-  if (msg.peer_id === PEER_ID) return; // self-echo, fine
-  if (typeof msg.x !== 'number' || typeof msg.y !== 'number') {
-    logEvent('error', `${source}: ignoring msg with non-number coords from ${msg.peer_id}: ${JSON.stringify(msg).slice(0, 80)}`);
-    return;
-  }
-  const z = typeof msg.z === 'number' ? msg.z : 0;
-  const f = typeof msg.f === 'number' ? msg.f : 4; // default south
-  remotePeers.set(msg.peer_id, { x: msg.x, y: msg.y, z, f, lastSeen: performance.now(), source });
-}
+// Phase 2d: the JS-side `remotePeers` Map and the `ingest` ↦ Map
+// pipeline used to live here. Both are gone. Incoming pubsub
+// messages now flow through `net-shim.js` into the Rust-owned
+// `Net.peers` table. The renderer reads peers from Rust; the bridge
+// reads counts through `roam_net_peer_count` / `roam_net_peer_state_seq`.
 
 // Start wasm load IMMEDIATELY, in parallel with the libp2p init that
 // follows. Without this, the canvas + game loop block on libp2p (which
@@ -814,14 +803,9 @@ try {
   setTimeout(() => dumpState('t+4s'), 4000);
   setTimeout(() => dumpState('t+10s'), 10000);
 
-  pubsub.addEventListener('message', (e) => {
-    if (e.detail.topic !== TOPIC) return;
-    try {
-      ingest(JSON.parse(new TextDecoder().decode(e.detail.data)), 'libp2p');
-    } catch (err) {
-      logError('libp2p msg parse', err);
-    }
-  });
+  // Phase 2d: the pubsub message → ingest → remotePeers Map path is
+  // gone. Incoming messages are queued by `net-shim.js` and drained
+  // each frame by Rust via `roam_net_tick`.
 } catch (err) {
   libp2pErr = err;
   logError('libp2p init', err);
@@ -831,14 +815,12 @@ const PEER_ID = libp2p
   ? libp2p.peerId.toString().slice(-8)
   : crypto.randomUUID().slice(0, 8);
 
-// --- BroadcastChannel (same-browser fallback) ---
-const channel = new BroadcastChannel('roam');
-channel.addEventListener('message', (e) => {
-  try { ingest(e.data, 'broadcast'); }
-  catch (err) { logError('broadcast ingest', err); }
-});
-channel.addEventListener('messageerror', (e) =>
-  logError('BroadcastChannel messageerror', e.data));
+// Phase 2d: BroadcastChannel (same-browser fallback) was deleted
+// when the JS-side peer table went away. Same-browser comms still
+// work because the local relay routes them through libp2p loopback;
+// the BC path was an extra fallback that didn't survive the seam
+// migration. Can be re-added later as a `NetworkProvider` impl
+// (`BroadcastChannelProvider`) plugging into the same trait.
 
 // --- wasm loader + game loop ---
 // TSOT bridge probe + always-visible state. The SELF panel renders
@@ -1201,22 +1183,17 @@ moduleP.then((wasm) => {
     }
 
     if (now - lastPost >= POST_INTERVAL_MS) {
-      // Same-tab BroadcastChannel fallback stays in JS — it's a
-      // browser API (not libp2p) and other tabs in the same browser
-      // listen for it independently of the libp2p mesh.
-      channel.postMessage({ peer_id: PEER_ID, x: s.x, y: s.y, z: s.z, f: s.f });
       // Cross-browser position broadcast runs through the network
-      // seam now: Rust holds the application-layer Net (in World),
+      // seam: Rust holds the application-layer `Net` (in World),
       // calls `provider.publish` which dispatches to `net-shim.js`,
-      // which calls the existing `pubsub.publish`. No JSON-stringify
-      // here — Rust owns the wire format.
+      // which calls `pubsub.publish`. Wire format owned by Rust.
       roam_net_publish_position();
       lastPost = now;
     }
 
-    for (const [id, p] of remotePeers) {
-      if (now - p.lastSeen > PEER_TIMEOUT_MS) remotePeers.delete(id);
-    }
+    // Stale-peer pruning lives in Rust now (`Net::tick`), driven by
+    // the `roam_net_tick(Date.now())` call above. No JS-side peer
+    // table to walk.
 
     // Status text reflects the actual connection state every frame —
     // not throttled. Previously the 500ms throttle around the
@@ -1226,16 +1203,11 @@ moduleP.then((wasm) => {
     if (libp2p) {
       const _conns = libp2p.getConnections();
       const _meshN = (pubsub && pubsub.getMeshPeers) ? (pubsub.getMeshPeers(TOPIC) || []).length : 0;
-      // remote-peers/js is the legacy JS Map (still feeds the
-      // renderer's peer markers through `roam_set_peers`). rust-peers
-      // is the new Rust-owned table populated through the network
-      // seam — should converge to the same count once 2c is happy.
-      // Phase 2d removes the JS Map; until then the two counts side
-      // by side are the diagnostic that the seam is working.
-      const rustPeers = libp2p ? roam_net_peer_count() : 0;
+      // Peer count is Rust-owned (the only source of truth post-2d).
+      const peerCount = libp2p ? roam_net_peer_count() : 0;
       status.textContent = _conns.length === 0
         ? `me=${PEER_ID} — libp2p ready, 0 connections`
-        : `me=${PEER_ID} — libp2p conns=${_conns.length} mesh=${_meshN} remote-peers/js=${remotePeers.size} rust=${rustPeers}`;
+        : `me=${PEER_ID} — libp2p conns=${_conns.length} mesh=${_meshN} peers=${peerCount}`;
     } else if (libp2pErr) {
       status.textContent = `me=${PEER_ID} — libp2p failed: ${libp2pErr.message || 'unknown'}`;
     } else {
@@ -1307,11 +1279,11 @@ moduleP.then((wasm) => {
     // fingerprint short. The integer truncation on x/y means
     // sub-pixel jitter doesn't force a redraw, but any actual
     // movement does.
-    let peerFp = 0;
-    for (const [, p] of remotePeers) {
-      peerFp = (peerFp * 31 + (p.x | 0) + (p.y | 0) * 4093) | 0;
-    }
-    const fp = `${s.x | 0},${s.y | 0},${s.z},${s.f},${zoom},${canvas.width},${canvas.height},${peerFp},${remotePeers.size}`;
+    // Peer-table state lives in Rust; a single monotonic counter
+    // bumps on every insert / remove / position update / prune. Fold
+    // it into the fingerprint instead of walking a JS Map.
+    const peerSeq = libp2p ? roam_net_peer_state_seq() : 0;
+    const fp = `${s.x | 0},${s.y | 0},${s.z},${s.f},${zoom},${canvas.width},${canvas.height},${peerSeq}`;
     const idleHeartbeat = now - lastRenderAt > IDLE_RENDER_MIN_MS;
     if (fp === lastRenderFp && !idleHeartbeat) {
       // Honest accounting: still counts as a RAF tick (input is alive)
@@ -1343,29 +1315,9 @@ moduleP.then((wasm) => {
       return;
     }
 
-    // S4b/c/d: Rust owns the entire frame. Bridge publishes the live
-    // peer list to wasm (positions + source tag), then issues one
-    // `roam_render_frame` call which draws tiles, flowers, and
-    // markers. JS does NOT decide any pixel.
-    //
-    // Source tag: 0.0 = libp2p, 1.0 = BroadcastChannel. Rust picks
-    // the marker color from there — single source of truth for
-    // marker colors lives in roam::render_gl.
-    const peerCount = remotePeers.size;
-    if (peerCount > 0) {
-      const packed = new Float32Array(peerCount * 3);
-      let i = 0;
-      for (const [, p] of remotePeers) {
-        packed[i * 3] = p.x;
-        packed[i * 3 + 1] = p.y;
-        packed[i * 3 + 2] = p.source === 'libp2p' ? 0.0 : 1.0;
-        i += 1;
-      }
-      roam_set_peers(packed);
-    } else {
-      roam_set_peers(new Float32Array(0));
-    }
-
+    // Phase 2d: Rust owns the entire frame AND the peer table.
+    // `roam_render_frame` reads peers from `Net.peers` internally;
+    // no `roam_set_peers` call from JS. Pixel decisions live in Rust.
     const dayB = dayBrightness(s.x, PIXELS_PER_TILE);
     try {
       roam_render_frame(s.x, s.y, s.f, zoom, canvas.width, canvas.height, dayB);
@@ -1377,9 +1329,10 @@ moduleP.then((wasm) => {
     // Bridge composes the format string from Rust-supplied data only.
     const conns = libp2p ? libp2p.getConnections().length : 0;
     const libStatus = libp2p ? `libp2p conns=${conns}` : 'libp2p off';
+    const peerCount = libp2p ? roam_net_peer_count() : 0;
     worldHud.textContent =
       `me=${PEER_ID} (${s.x.toFixed(1)}, ${s.y.toFixed(1)}, z=${s.z}) f=${s.f}  ` +
-      `zoom=${zoom.toFixed(2)}  peers=${remotePeers.size}  ${libStatus}`;
+      `zoom=${zoom.toFixed(2)}  peers=${peerCount}  ${libStatus}`;
 
     // Honest perf accounting: this branch is the paint path.
     perfRenderCount += 1;

@@ -24,49 +24,61 @@
 //!
 //! ## Roadmap
 //!
-//! ### Phase 1 — types only (this file, done)
+//! ### Phase 1 — types only (done)
 //!
 //! Trait, types, wire-message enum, serde round-trip tests. No impl,
 //! no behavior change.
 //!
-//! Files: `roam/src/net.rs` (this), `roam/src/lib.rs` (module decl).
+//! Files: `roam/src/net/mod.rs` (this), `roam/src/lib.rs` (module decl).
 //!
-//! ### Phase 2 — move application logic to Rust + first provider impl
+//! ### Phase 2 — application logic in Rust, first provider impl (done)
 //!
-//! Application-layer network code moves from `js-bridge.js` into
-//! Rust. JS keeps only provider-internal concerns (libp2p instance,
-//! redial driver, raw-WS probes, relay-multiaddr fetch). A new
-//! `Net` struct owns `Box<dyn NetworkProvider>` plus the peer table,
-//! broadcast scheduling, message handling. Embedded in `World`.
+//! Application-layer network code lives in Rust. The bridge keeps
+//! only provider-internal concerns (libp2p instance, redial driver,
+//! raw-WS probes, relay-multiaddr fetch) plus the five-function shim
+//! in `net-shim.js`. `Net` owns `Box<dyn NetworkProvider>` plus the
+//! peer table; it's embedded in `World` as `Option<Net>` (attached
+//! once libp2p init resolves on the JS side).
 //!
-//! First provider impl: `JsLibp2pProvider`. Rust struct, wasm-bindgen
-//! extern imports for ~5 `js_net_*` functions, JS shim over the
-//! existing libp2p instance. Operational parity with today — same
-//! multiplayer behavior, routed through the seam.
+//! Provider impl: `JsLibp2pProvider`. Construction takes five
+//! `js_sys::Function` callbacks (publish, subscribe, unsubscribe,
+//! self-peer-id, drain-events) rather than wasm-bindgen extern
+//! imports, which avoids a separate JS module path that bun would
+//! also have to know about. Functionally equivalent.
 //!
-//! Files (planned):
-//! - `roam/src/net.rs` → split to `roam/src/net/mod.rs`
-//! - `roam/src/net/state.rs` — `Net` struct, `RemotePeer`, tick logic
-//! - `roam/src/net/js_libp2p.rs` — `JsLibp2pProvider` impl
-//! - `roam/src/world.rs` — embed `Net`, call `net.tick(...)` in step
-//! - `roam/src/wasm_ffi.rs` — export `roam_net_tick(now_ms: u64)`
-//! - `roam/src/render_gl.rs` — render remote peers from peer table
-//! - `roam/src/error.rs` — funnel `NetError` through the error sink
-//! - `roam/assets/src/js-bridge.js` — delete app-layer code, add the
-//!   five `js_net_*` extern functions as a thin libp2p shim
-//! - `roam/Cargo.toml` — add `postcard` for wire encoding
+//! Files that landed:
+//! - `roam/src/net/mod.rs` — trait, types, wire-message enum.
+//! - `roam/src/net/state.rs` — `Net`, `RemotePeer`, `tick`,
+//!   `publish_position`, `subscribe_positions`, `peer_state_seq`.
+//! - `roam/src/net/js_libp2p.rs` — `JsLibp2pProvider` over five JS
+//!   callbacks; per-target cfg keeps the same struct compilable for
+//!   native unit tests.
+//! - `roam/src/world.rs` — `pub net: Option<Net>`.
+//! - `roam/src/wasm_ffi.rs` — exports `roam_net_init`,
+//!   `roam_net_tick`, `roam_net_publish_position`,
+//!   `roam_net_peer_count`, `roam_net_peer_state_seq`. The render
+//!   FFI populates peer markers from `Net.peers` before each draw.
+//! - `roam/assets/src/net-shim.js` — five thin functions over
+//!   `libp2p` / `pubsub`.
+//! - `roam/assets/src/js-bridge.js` — bridge calls `roam_net_init`
+//!   after libp2p is up, drives `roam_net_tick` per frame, replaces
+//!   the position broadcast with `roam_net_publish_position`.
 //!
-//! End-state: Rust owns the network application layer. JS owns
-//! transport internals only. The seam exists with one impl; future
-//! impls are pure additions.
+//! Wire format on the pubsub topic stays JSON `{peer_id, x, y, z, f}`
+//! for backward compatibility with pre-2b peers. `postcard` and the
+//! `WireMsg` enum land alongside `RustLibp2pProvider` in phase 3 (when
+//! we control both sides of the wire).
 //!
-//! ### Phase 3 — alternate impls
+//! ### Phase 3 — alternate impls (not started)
 //!
 //! Each is a swap at construction, decoupled from application code:
 //!
 //! - `RustLibp2pProvider` — direct rust-libp2p (`libp2p`,
 //!   `libp2p-websocket-websys`, `libp2p-webrtc-websys`,
-//!   `libp2p-gossipsub`). No JS in the network path.
+//!   `libp2p-gossipsub`). No JS in the network path; in-wasm crypto
+//!   (no `SubtleCrypto` worker round-trip per sign). When we land
+//!   this we also switch the wire to `postcard` since both ends are
+//!   Rust.
 //!
 //! - `RemoteServerProvider` — Rust struct opening a WebSocket to an
 //!   external process (Elixir, Go, …) speaking a serde-defined wire
@@ -86,14 +98,28 @@
 //! - Deterministic replay: trace network events + game events on
 //!   one timeline.
 //!
-//! ## Status
 //!
-//! Phase 1: complete.
-//! Phase 2a: skeletons in place (`state::Net`, `state::RemotePeer`,
-//!   `js_libp2p::JsLibp2pProvider`). No callers yet; embedding into
-//!   `World` and routing real messages lands in 2b.
-//! Phase 2b–d: not started.
-//! Phase 3: not started.
+//! - **Phase 1** (types + trait): complete.
+//! - **Phase 2a** (skeletons): complete — `state::Net`,
+//!   `state::RemotePeer`, `js_libp2p::JsLibp2pProvider`.
+//! - **Phase 2b** (outgoing through the seam): complete — the bridge's
+//!   broadcast timer calls `roam_net_publish_position`, which goes
+//!   `Net::publish_position` → `provider.publish` → `net-shim.js`
+//!   → `pubsub.publish`. Wire format owned by Rust.
+//! - **Phase 2c** (incoming through the seam): complete — incoming
+//!   pubsub messages queue in `net-shim.js`, drain in
+//!   `JsLibp2pProvider::poll_events`, route through `Net::tick` which
+//!   decodes positions and updates the Rust-owned peer table.
+//! - **Phase 2d** (delete JS-side peer table): complete — the
+//!   bridge's `remotePeers` Map, `ingest` function, the legacy
+//!   pubsub `message` listener that fed it, the BroadcastChannel
+//!   fallback, and the `roam_set_peers` FFI are all gone. The
+//!   renderer reads peers from `Net.peers` via `wasm_ffi`. The bridge
+//!   reads peer count + change-counter through
+//!   `roam_net_peer_count` / `roam_net_peer_state_seq`.
+//! - **Phase 3** (alternate impls — `RustLibp2pProvider`,
+//!   `RemoteServerProvider`): not started. They drop in via the same
+//!   trait; application code in `Net` doesn't move.
 
 pub mod js_libp2p;
 pub mod state;

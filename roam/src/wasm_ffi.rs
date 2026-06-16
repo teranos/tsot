@@ -388,15 +388,28 @@ mod wasm_exports {
     }
 
     /// Number of remote peers currently in the Rust-owned peer table.
-    /// Phase 2c diagnostic — confirms the seam is actually receiving
-    /// events. Removed once the renderer reads from `Net.peers`
-    /// directly (phase 2d).
+    /// Used by the bridge for the status HUD and as the canonical
+    /// peer-count source (the JS-side table was deleted in 2d).
     #[wasm_bindgen]
     pub fn roam_net_peer_count() -> u32 {
         super::WORLD.with(|w| {
             w.borrow()
                 .as_ref()
                 .and_then(|world| world.net.as_ref().map(|n| n.peers().count() as u32))
+                .unwrap_or(0)
+        })
+    }
+
+    /// Monotonic counter that bumps on any peer-table change (add,
+    /// remove, position update, timeout). Bridge folds this into the
+    /// render dirty-flag fingerprint so peers moving on screen
+    /// triggers a repaint even when the local player is still.
+    #[wasm_bindgen]
+    pub fn roam_net_peer_state_seq() -> u32 {
+        super::WORLD.with(|w| {
+            w.borrow()
+                .as_ref()
+                .and_then(|world| world.net.as_ref().map(|n| n.peer_state_seq()))
                 .unwrap_or(0)
         })
     }
@@ -495,6 +508,28 @@ mod wasm_exports {
         canvas_h: u32,
         day_brightness: f32,
     ) -> Result<(), JsValue> {
+        // Phase 2d: peer markers come from the Rust-owned Net.peers
+        // table, not a JS-published list. We pack here right before
+        // the draw call so the renderer always sees the latest peer
+        // table without a separate FFI per frame.
+        super::WORLD.with(|w| {
+            if let Some(world) = w.borrow().as_ref() {
+                if let Some(net) = world.net.as_ref() {
+                    let mut packed: Vec<f32> = Vec::with_capacity(net.peers().count() * 3);
+                    for p in net.peers() {
+                        packed.push(p.x);
+                        packed.push(p.y);
+                        // Source tag: 0.0 = libp2p. We dropped the
+                        // BroadcastChannel fallback when the JS-side
+                        // peer table went away — all remote peers
+                        // flow through the libp2p mesh now.
+                        packed.push(0.0);
+                    }
+                    crate::render_gl::set_peers(&packed);
+                }
+            }
+        });
+
         crate::render_gl::render_frame(
             player_x_px,
             player_y_px,
@@ -504,14 +539,5 @@ mod wasm_exports {
             canvas_h,
             day_brightness,
         )
-    }
-
-    /// Publish the current peer list to the renderer. The packed array
-    /// is `[x0, y0, src0, x1, y1, src1, ...]` with `src` as 0.0 for
-    /// libp2p and 1.0 for BroadcastChannel. Called once per frame
-    /// before `roam_render_frame`.
-    #[wasm_bindgen]
-    pub fn roam_set_peers(packed: &[f32]) {
-        crate::render_gl::set_peers(packed);
     }
 }
