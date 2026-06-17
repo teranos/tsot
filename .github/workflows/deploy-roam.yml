@@ -1,0 +1,111 @@
+# Build the roam wasm bundle and deploy it to roam.sbvh.nl on every
+# push to master that touches roam/. No long-lived AWS keys — the job
+# assumes `arn:aws:iam::548351057127:role/roam-github-deploy` via
+# OIDC; the role's trust policy is pinned to this repo's master
+# branch (see infra/cicd.tf).
+
+name: deploy-roam
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'roam/**'
+      - '.github/workflows/deploy-roam.yml'
+  workflow_dispatch:
+
+# OIDC token requires `id-token: write`. `contents: read` for actions/checkout.
+permissions:
+  id-token: write
+  contents: read
+
+# Cancel an in-flight run if a newer push lands while the previous
+# build is still mid-flight — stale artifacts shouldn't reach S3.
+concurrency:
+  group: deploy-roam
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  STATIC_BUCKET: roam-sbvh-static
+  STATIC_DISTRIBUTION_ID: E3NN2Z3W132SXO
+  DEPLOY_ROLE_ARN: arn:aws:iam::548351057127:role/roam-github-deploy
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same Nix flake the developer uses locally — wasm-bindgen,
+      # cargo, the works. cachix gives us a binary cache so we're not
+      # re-building rustc from source each run.
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Build wasm + stage dist/. This is the same target a developer
+      # types `nix develop -c make wasm` to run locally; CI must not
+      # diverge.
+      - name: Build wasm bundle
+        working-directory: roam
+        run: nix develop -c make wasm
+
+      # Sanity-check the artifact exists before reaching for AWS.
+      - name: Verify dist contents
+        working-directory: roam
+        run: |
+          test -f dist/index.html       || { echo "dist/index.html missing"; exit 1; }
+          test -f dist/roam.wasm        || { echo "dist/roam.wasm missing"; exit 1; }
+          test -f dist/roam.js          || { echo "dist/roam.js missing"; exit 1; }
+          test -f dist/js-bridge.js     || { echo "dist/js-bridge.js missing"; exit 1; }
+          ls -la dist/
+
+      - name: Assume deploy role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # `--delete` drops files that vanished from dist/. Without it,
+      # old bundles would accumulate forever and could be hit by stale
+      # imports. The cache-control headers keep index.html short-lived
+      # so CloudFront picks up the new build within seconds of S3
+      # write completing — invalidation below is belt-and-suspenders.
+      - name: Sync dist to S3
+        working-directory: roam
+        run: |
+          aws s3 sync dist/ "s3://${{ env.STATIC_BUCKET }}/" \
+            --delete \
+            --cache-control "public, max-age=300" \
+            --exclude "index.html"
+          aws s3 cp dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --content-type "text/html; charset=utf-8"
+
+      - name: Invalidate CloudFront
+        run: |
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
+            --paths '/*' \
+            --query 'Invalidation.Id' \
+            --output text)
+          echo "Created invalidation $INVALIDATION_ID"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
+            --id "$INVALIDATION_ID"
+          echo "Invalidation $INVALIDATION_ID completed."
+
+      - name: Summarize
+        run: |
+          {
+            echo "## Deploy complete"
+            echo ""
+            echo "- Bucket: ${{ env.STATIC_BUCKET }}"
+            echo "- Distribution: ${{ env.STATIC_DISTRIBUTION_ID }}"
+            echo "- Live at: https://roam.sbvh.nl/"
+          } >> "$GITHUB_STEP_SUMMARY"
