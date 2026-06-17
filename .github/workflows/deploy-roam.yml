@@ -48,6 +48,15 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      # `bun install` populates roam/node_modules from bun.lock so the
+      # JS bundler in `make assets` can resolve `libp2p` and friends.
+      # A developer's local tree has this from a prior `bun install`;
+      # a fresh CI checkout doesn't. The lockfile pinning means this
+      # produces the same dependency graph as the developer's machine.
+      - name: bun install
+        working-directory: roam
+        run: nix develop -c bun install --frozen-lockfile
+
       # Build wasm + stage dist/. This is the same target a developer
       # types `nix develop -c make wasm` to run locally; CI must not
       # diverge.
