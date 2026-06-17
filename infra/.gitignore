@@ -1,0 +1,10 @@
+# Lock file (.terraform.lock.hcl) is intentionally NOT ignored — it
+# pins the provider hash for cross-machine reproducibility, same role
+# as Cargo.lock. Commit it.
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfvars
+crash.log
+*.tfplan
+planfile

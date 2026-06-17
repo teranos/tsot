@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars and fill in. Each variable also has a
+# sensible default in variables.tf; this file is for overrides only.
+
+# aws_region          = "eu-central-1"
+# aws_profile         = "default"
+# root_domain         = "sbvh.nl"
+# game_subdomain      = "roam"
+# relay_subdomain     = "relay"
+# static_bucket_name  = "roam-sbvh-static"
+
+# Set once Lightsail is up and `origin-relay.sbvh.nl` (or whichever
+# subdomain) resolves to the box's static IP.
+# relay_origin_domain = "origin-relay.sbvh.nl"
+# relay_origin_port   = 9001
