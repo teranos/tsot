@@ -69,7 +69,7 @@ jobs:
         working-directory: roam
         run: |
           test -f dist/index.html       || { echo "dist/index.html missing"; exit 1; }
-          test -f dist/roam.wasm        || { echo "dist/roam.wasm missing"; exit 1; }
+          test -f dist/roam_bg.wasm     || { echo "dist/roam_bg.wasm missing"; exit 1; }
           test -f dist/roam.js          || { echo "dist/roam.js missing"; exit 1; }
           test -f dist/js-bridge.js     || { echo "dist/js-bridge.js missing"; exit 1; }
           ls -la dist/
