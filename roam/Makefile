@@ -11,7 +11,7 @@ help:
 	@echo "  make run             cargo run --bin roam (sanity)"
 	@echo ""
 	@echo "WASM:"
-	@echo "  make wasm            build + stage dist/ (needs wasm-bindgen-cli)"
+	@echo "  make wasm            build + stage dist/ (rust-libp2p default; needs wasm-bindgen-cli)"
 	@echo "  make wasm-serve      \`make wasm\` then caddy on dist/ (PORT=$(ROAM_SERVE_PORT) default)"
 	@echo "  make clean-wasm      rm -rf dist/"
 	@echo ""

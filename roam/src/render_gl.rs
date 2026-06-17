@@ -62,7 +62,7 @@ const CLIFF_THRESHOLD: f32 = 1.0;
 /// current peer list. The slice is `[x0, y0, src0, x1, y1, src1, ...]`.
 /// Anything not on this list disappears from the next frame's draw.
 pub fn set_peers(packed: &[f32]) {
-    if packed.len() % 3 != 0 {
+    if !packed.len().is_multiple_of(3) {
         emit_error(
             Severity::Warn,
             "roam::render_gl::set_peers",

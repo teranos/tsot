@@ -126,15 +126,17 @@ impl Net {
                 }
                 NetEvent::PeerUp { .. } | NetEvent::SubscriptionChange { .. } => {}
                 NetEvent::Error(err) => {
-                    #[cfg(target_arch = "wasm32")]
-                    crate::error::emit(
-                        crate::error::Severity::Warn,
-                        "roam::net::Net::tick",
-                        "provider error",
-                        format!("{err:?}"),
-                    );
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let _ = err;
+                    // Routine network errors (publish-duplicate, no-peers,
+                    // dial failures during normal operation) belong in the
+                    // log, NOT the cursor popover. Same anti-pattern fix
+                    // as `d21a533` on the JS-libp2p path: visibility yes,
+                    // attention-grab no. The trace bus is the right surface
+                    // — these events flow into the event-log panel the
+                    // user already reads.
+                    crate::trace::emit(crate::trace::TraceEvent::Note {
+                        tag: "net::provider_error",
+                        msg: format!("{err:?}"),
+                    });
                 }
             }
         }

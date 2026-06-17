@@ -11,14 +11,49 @@ crate-type = ["rlib", "cdylib"]
 name = "roam"
 path = "src/main.rs"
 
+[features]
+# rust-libp2p is the default substrate. `--no-default-features` (or
+# `make wasm-js-only`) builds the JS-libp2p-only fallback bundle.
+default = ["rust-libp2p"]
+rust-libp2p = ["dep:libp2p", "dep:wasm-bindgen-futures", "dep:futures", "dep:getrandom_0_3"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# rust-libp2p substrate (phase 3). Gated by the `rust-libp2p` feature.
+# Pinned to a specific version per CLAUDE.md — if cargo resolves and
+# wasm32 links, this is the verified-working combination. Browser-only
+# feature set: no tokio (no runtime in wasm), no `tcp` (no sockets in
+# browser), no `noise+yamux` defaults — explicit picks only.
+libp2p = { version = "=0.56.0", optional = true, default-features = false, features = [
+    "websocket-websys",
+    "webrtc-websys",
+    "noise",
+    "yamux",
+    "gossipsub",
+    "ping",
+    "identify",
+    "macros",
+    "wasm-bindgen",
+] }
+wasm-bindgen-futures = { version = "=0.4.71", optional = true }
+# `futures` (channels + StreamExt + select_biased!) drives the
+# `RustLibp2pProvider` Swarm task. Transitive via libp2p today but
+# pinned as a direct dep so the import path stays stable.
+futures = { version = "=0.3.32", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.121"
 js-sys = "=0.3.98"
 getrandom = { version = "=0.2.15", features = ["js"] }
+# getrandom 0.3 enters the tree transitively via libp2p (the feature
+# gate `rust-libp2p`). The wasm32-unknown-unknown target needs the
+# `wasm_js` feature explicitly + the `getrandom_backend="wasm_js"`
+# rustflag in `.cargo/config.toml`. Direct dep here so the feature is
+# enabled even when libp2p pulls 0.3 transitively; the rustflag side
+# is conditioned on the `rust-libp2p` feature via cargo build invocation.
+getrandom_0_3 = { package = "getrandom", version = "=0.3.4", features = ["wasm_js"], optional = true }
 web-sys = { version = "=0.3.98", features = [
     "HtmlCanvasElement",
     "WebGl2RenderingContext",

@@ -3,3 +3,10 @@
 #   cargo build --target wasm32-unknown-unknown --release
 #   wasm-bindgen target/wasm32-unknown-unknown/release/roam.wasm \
 #     --target web --out-dir dist
+
+# getrandom 0.3 (transitive via the `rust-libp2p` feature) needs this
+# rustflag on wasm32-unknown-unknown to select its browser-API backend.
+# Harmless when the rust-libp2p feature is off (getrandom 0.3 isn't in
+# the tree, the cfg flag goes unused).
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

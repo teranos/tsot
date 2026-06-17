@@ -372,6 +372,62 @@ mod wasm_exports {
         Ok(())
     }
 
+    /// Construct a `RustLibp2pProvider` and attach it to `World.net`.
+    /// `bootstrap_json` is a JSON array of multiaddr strings; the
+    /// provider dials each one as the Swarm comes up. Parity drop-in
+    /// for `roam_net_init`.
+    ///
+    /// The export is **always** present so the bridge's static
+    /// `import { roam_net_init_rust_libp2p } from '/roam.js'` resolves
+    /// regardless of build features (a missing export would
+    /// `SyntaxError` at module load on default `make wasm` builds).
+    /// When the `rust-libp2p` feature is OFF, the body returns an
+    /// explicit error explaining the missing feature; the JS bridge
+    /// already routes that through `logError`.
+    #[wasm_bindgen]
+    pub fn roam_net_init_rust_libp2p(bootstrap_json: String) -> Result<(), JsValue> {
+        #[cfg(feature = "rust-libp2p")]
+        {
+            let bootstrap_addrs: Vec<String> =
+                serde_json::from_str(&bootstrap_json).map_err(|e| {
+                    JsValue::from_str(&format!(
+                        "roam_net_init_rust_libp2p: bootstrap_json parse failed: {e}"
+                    ))
+                })?;
+            let provider = crate::net::rust_libp2p::RustLibp2pProvider::new(bootstrap_addrs)
+                .map_err(|e| JsValue::from_str(&format!("RustLibp2pProvider::new: {e:?}")))?;
+            let mut net = crate::net::state::Net::new(Box::new(provider));
+            if let Err(err) = net.subscribe_positions() {
+                crate::error::emit(
+                    crate::error::Severity::Error,
+                    "roam::wasm_ffi::roam_net_init_rust_libp2p",
+                    "subscribe_positions failed",
+                    format!("{err:?}"),
+                );
+            }
+            super::WORLD.with(|w| {
+                if let Some(world) = w.borrow_mut().as_mut() {
+                    world.net = Some(net);
+                } else {
+                    crate::error::emit(
+                        crate::error::Severity::Error,
+                        "roam::wasm_ffi::roam_net_init_rust_libp2p",
+                        "called before roam_init",
+                        "World is not constructed; Net not attached",
+                    );
+                }
+            });
+            Ok(())
+        }
+        #[cfg(not(feature = "rust-libp2p"))]
+        {
+            let _ = bootstrap_json;
+            Err(JsValue::from_str(
+                "roam_net_init_rust_libp2p: this build was not compiled with --features rust-libp2p. Use `make wasm-rust` to enable the rust-libp2p substrate.",
+            ))
+        }
+    }
+
     /// Drain provider events, update the peer table, prune stale
     /// peers. Called once per frame from the JS bridge. `now_ms` is
     /// the JS-side `Date.now()` value (f64 to avoid BigInt at the

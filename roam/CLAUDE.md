@@ -1,5 +1,16 @@
 roam — top-down P2P Rogue-like Deckbuilder MMO.
 
+**The only command that matters for the developer's workflow is:**
+
+```
+nix develop -c make wasm-serve
+```
+
+Everything else — feature flags, alt build targets, URL params, verification
+matrices, `make wasm-rust` style alternates — is noise. Don't propose it, don't
+add it, don't make the developer wade through it. If a change requires the
+developer to type something other than that one command, the change is wrong.
+
 You roam an open world, gather TSOT cards lying on the ground, build
 a deck from your collection, play TSOT matches against other players
 you encounter automatically.

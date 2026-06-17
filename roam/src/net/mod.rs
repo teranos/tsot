@@ -69,21 +69,32 @@
 //! `WireMsg` enum land alongside `RustLibp2pProvider` in phase 3 (when
 //! we control both sides of the wire).
 //!
-//! ### Phase 3 — alternate impls (not started)
+//! ### Phase 3 — alternate impls
 //!
-//! Each is a swap at construction, decoupled from application code:
+//! Each is a swap at construction, decoupled from application code.
 //!
-//! - `RustLibp2pProvider` — direct rust-libp2p (`libp2p`,
-//!   `libp2p-websocket-websys`, `libp2p-webrtc-websys`,
-//!   `libp2p-gossipsub`). No JS in the network path; in-wasm crypto
-//!   (no `SubtleCrypto` worker round-trip per sign). When we land
-//!   this we also switch the wire to `postcard` since both ends are
-//!   Rust.
+//! - **3a — `RustLibp2pProvider` scaffolding (done):** stub behind
+//!   `#[cfg(feature = "rust-libp2p")]`, returns `NotConnected` for
+//!   every operation. No rust-libp2p crates linked yet; default
+//!   builds unchanged. Verifies the feature-flag plumbing.
 //!
-//! - `RemoteServerProvider` — Rust struct opening a WebSocket to an
-//!   external process (Elixir, Go, …) speaking a serde-defined wire
-//!   envelope. The remote process owns its own libp2p (or libcluster,
-//!   or anything). The application doesn't know.
+//! - **3b — `RustLibp2pProvider` real impl (not started):** add
+//!   `libp2p` + `libp2p-websocket-websys` + `libp2p-webrtc-websys` +
+//!   `libp2p-gossipsub` under the same feature, replace the stub
+//!   body with Swarm construction + publish + drain. Wire stays JSON
+//!   for compatibility with peers running the `JsLibp2pProvider`
+//!   bundle during transition.
+//!
+//! - **3c — `RemoteServerProvider` (not started):** Rust struct
+//!   opening a WebSocket to an external process (Elixir, Go, …)
+//!   speaking a serde-defined wire envelope. The remote process
+//!   owns its own libp2p (or libcluster, or anything). Deferred
+//!   until an identified backend exists.
+//!
+//! When `RustLibp2pProvider` is ready to ship as the default, the JS
+//! impl + `net-shim.js` get deleted in a follow-up — at that point
+//! the wire codec can also switch to `postcard` since both ends are
+//! Rust.
 //!
 //! ### What this seam unblocks
 //!
@@ -117,11 +128,20 @@
 //!   renderer reads peers from `Net.peers` via `wasm_ffi`. The bridge
 //!   reads peer count + change-counter through
 //!   `roam_net_peer_count` / `roam_net_peer_state_seq`.
-//! - **Phase 3** (alternate impls — `RustLibp2pProvider`,
-//!   `RemoteServerProvider`): not started. They drop in via the same
-//!   trait; application code in `Net` doesn't move.
+//! - **Phase 3a** (`RustLibp2pProvider` scaffolding): complete —
+//!   stub returns `NotConnected` for every operation, gated by
+//!   `#[cfg(feature = "rust-libp2p")]`. Default build unchanged.
+//! - **Phase 3b.1** (deps + linkage): complete — `libp2p = "=0.56.0"`
+//!   (browser feature set), `wasm-bindgen-futures = "=0.4.71"`,
+//!   `futures = "=0.3.32"`, `getrandom_0_3 = "=0.3.4"` (wasm_js
+//!   feature) all link to wasm32-unknown-unknown.
+//! - **Phase 3b.2** (real Swarm): complete. `RustLibp2pProvider::new()` builds a Swarm with WebSocket-WebSys + WebRTC-WebSys transports (noise+yamux on the WebSocket side, WebRTC self-secured), gossipsub + identify + ping behaviour, driven by `wasm_bindgen_futures::spawn_local` via `select_biased!` between command channel and swarm events. Trait surface translates into `Cmd::{Publish,Subscribe,Unsubscribe}`; swarm events translate into `NetEvent`s drained by `poll_events`. Native (non-wasm32) build keeps the 3a stub so unit tests continue.
+//! - **Phase 3b.3** (FFI + bridge wiring + Makefile target): complete. `RustLibp2pProvider::new(bootstrap_addrs)` accepts a Vec of multiaddr strings and dials each one as the Swarm comes up; parse + dial failures route through `NetEvent::Error`. `roam_net_init_rust_libp2p(bootstrap_json: String)` exported (gated by `#[cfg(feature = "rust-libp2p")]`) as a parity drop-in for `roam_net_init`. The JS bridge reads `?provider=rust` from the URL query; on `rust` it skips the createLibp2p path via a `SkipLibp2pInit` sentinel (catch discriminates so `libp2pErr` stays null), then calls `roam_net_init_rust_libp2p(JSON.stringify(bootstrapList))` at the seam-attach site. `make wasm-rust` builds with `--features rust-libp2p` and prints the `?provider=rust` URL. Remaining: end-to-end parity test against a `JsLibp2pProvider` peer over the shared Bun relay + gossipsub topic (manual browser test).
+//! - **Phase 3c** (`RemoteServerProvider`): not started.
 
 pub mod js_libp2p;
+#[cfg(feature = "rust-libp2p")]
+pub mod rust_libp2p;
 pub mod state;
 
 use serde::{Deserialize, Serialize};
