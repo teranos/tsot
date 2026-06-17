@@ -39,12 +39,18 @@ import initWasm, {
   roam_player_state_ptr,
   roam_player_state_len,
   roam_net_init,
+  roam_net_init_rust_libp2p,
   roam_net_publish_position,
   roam_net_tick,
   roam_net_peer_count,
   roam_net_peer_state_seq,
 } from '/roam.js';
 import * as netShim from './net-shim.js';
+
+// Network substrate. js-libp2p is the default until Phase 3b lands
+// the real rust-libp2p impl; `?provider=rust` only works when the
+// wasm is built with `--features rust-libp2p`.
+const PROVIDER = new URLSearchParams(location.search).get('provider') || 'js';
 
 const INPUT_W = 1 << 0;
 const INPUT_A = 1 << 1;
@@ -487,14 +493,21 @@ window.addEventListener('keydown', (e) => {
 });
 
 // --- input ---
+// WASD + arrow keys both drive the same four canonical inputs. The
+// Set stores the normalized w/a/s/d letters; arrow keys map to those
+// before insertion so `inputBits` doesn't have to know about either.
 const keys = new Set();
+const KEY_MAP = {
+  w: 'w', a: 'a', s: 's', d: 'd',
+  arrowup: 'w', arrowleft: 'a', arrowdown: 's', arrowright: 'd',
+};
 window.addEventListener('keydown', (e) => {
-  const k = e.key.toLowerCase();
-  if ('wasd'.includes(k)) { keys.add(k); e.preventDefault(); }
+  const k = KEY_MAP[e.key.toLowerCase()];
+  if (k) { keys.add(k); e.preventDefault(); }
 });
 window.addEventListener('keyup', (e) => {
-  const k = e.key.toLowerCase();
-  if ('wasd'.includes(k)) { keys.delete(k); e.preventDefault(); }
+  const k = KEY_MAP[e.key.toLowerCase()];
+  if (k) { keys.delete(k); e.preventDefault(); }
 });
 function inputBits() {
   let i = 0;
@@ -598,8 +611,16 @@ let libp2p = null;
 let pubsub = null;
 let libp2pErr = null;
 let publishFailRate = 0; // running count for HUD
-logEvent('info', 'creating libp2p node…');
+// Sentinel error tag the catch below recognises as "intentional skip,
+// not a failure" — so `libp2pErr` stays null and the HUD doesn't show
+// a fake "libp2p failed" message when the rust substrate is in use.
+class SkipLibp2pInit extends Error { constructor(msg) { super(msg); this.name = 'SkipLibp2pInit'; } }
+
 try {
+  if (PROVIDER !== 'js') {
+    throw new SkipLibp2pInit(`PROVIDER=${PROVIDER} → skipping JS-libp2p init; RustLibp2pProvider will own the network.`);
+  }
+  logEvent('info', 'creating libp2p node…');
   libp2p = await createLibp2p({
     addresses: { listen: ['/webrtc'] },
     transports: [
@@ -807,8 +828,12 @@ try {
   // gone. Incoming messages are queued by `net-shim.js` and drained
   // each frame by Rust via `roam_net_tick`.
 } catch (err) {
-  libp2pErr = err;
-  logError('libp2p init', err);
+  if (err instanceof SkipLibp2pInit) {
+    logEvent('info', err.message);
+  } else {
+    libp2pErr = err;
+    logError('libp2p init', err);
+  }
 }
 
 const PEER_ID = libp2p
@@ -925,11 +950,26 @@ moduleP.then((wasm) => {
     logError('render_gl init', err);
   }
 
-  // Network seam (phase 2b). If libp2p came up, attach the JS shim
-  // and construct the Rust-side `Net`. The application-layer network
-  // code now lives in Rust (`roam::net::state::Net`); this file holds
-  // only the five thin callbacks the seam needs.
-  if (libp2p && pubsub) {
+  // Network seam. Two substrates supported via `?provider=` URL flag:
+  //   js    (default): the JS-libp2p instance + `net-shim.js` callbacks
+  //   rust            : `RustLibp2pProvider` constructed entirely in
+  //                     Rust; no JS-side libp2p instance involved.
+  // The application code in `roam::net::state::Net` is identical for
+  // both — the seam is at the trait, not at this call site.
+  if (PROVIDER === 'rust') {
+    if (typeof roam_net_init_rust_libp2p !== 'function') {
+      logError('roam_net_init_rust_libp2p', new Error(
+        'PROVIDER=rust requested but the wasm was not built with `--features rust-libp2p`; rebuild with the feature or drop `?provider=rust`.',
+      ));
+    } else {
+      try {
+        roam_net_init_rust_libp2p(JSON.stringify(bootstrapList));
+        logEvent('info', `net: RustLibp2pProvider initialized, bootstrap=${bootstrapList.length} addr(s)`);
+      } catch (err) {
+        logError('roam_net_init_rust_libp2p', err);
+      }
+    }
+  } else if (libp2p && pubsub) {
     try {
       netShim.attach(libp2p, pubsub);
       roam_net_init(
@@ -986,17 +1026,49 @@ moduleP.then((wasm) => {
   // changed between sessions the player can't land inside a wall.
   const SAVE_KEY = 'roam_player_pos_v1';
   const SESSION_KEY = 'roam_session_v1';
-  try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (raw) {
-      const p = JSON.parse(raw);
-      if (typeof p.x === 'number' && typeof p.y === 'number') {
-        setPos(p.x, p.y, typeof p.f === 'number' ? p.f : 4);
-        logEvent('info', `restored position (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) f=${p.f ?? 4}`);
-      }
+  // setPos takes WORLD-PIXEL coordinates; tile-center = (tile + 0.5) *
+  // PIXELS_PER_TILE. PIXELS_PER_TILE is already in scope from the
+  // earlier `roam_pixels_per_tile()` call (line ~904) — reuse that.
+  // Expose a tile-coord helper so JS (URL params, buttons, future
+  // commands) speaks tiles end-to-end.
+  const tileToPixel = (t) => (t + 0.5) * PIXELS_PER_TILE;
+  window.roamTeleport = function (tx, ty, facing) {
+    const f = Number.isFinite(facing) ? facing : 4;
+    const px = tileToPixel(tx);
+    const py = tileToPixel(ty);
+    setPos(px, py, f);
+    logEvent('info', `teleport → tile (${tx}, ${ty}) px (${px.toFixed(1)}, ${py.toFixed(1)}) f=${f}`);
+  };
+
+  // URL teleport: `?x=NNN&y=NNN[&f=N]` — x and y are TILE coordinates,
+  // not world pixels. (Earlier version of this code took pixels and
+  // confused everyone who tried it, including the developer who wrote
+  // it.) Overrides the localStorage restore. Spawn is tile (16, 16).
+  const _url = new URLSearchParams(location.search);
+  const _tx = _url.get('x');
+  const _ty = _url.get('y');
+  if (_tx !== null && _ty !== null) {
+    const tx = parseFloat(_tx);
+    const ty = parseFloat(_ty);
+    const f = parseInt(_url.get('f') ?? '4', 10);
+    if (Number.isFinite(tx) && Number.isFinite(ty)) {
+      window.roamTeleport(tx, ty, Number.isFinite(f) ? f : 4);
+    } else {
+      logError('URL teleport', new Error(`invalid x/y: x=${_tx} y=${_ty}`));
     }
-  } catch (err) {
-    logError('localStorage restore', err);
+  } else {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (typeof p.x === 'number' && typeof p.y === 'number') {
+          setPos(p.x, p.y, typeof p.f === 'number' ? p.f : 4);
+          logEvent('info', `restored position (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) f=${p.f ?? 4}`);
+        }
+      }
+    } catch (err) {
+      logError('localStorage restore', err);
+    }
   }
   // Restore picked-set + inventory so flowers stay picked across reload.
   try {
