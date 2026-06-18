@@ -1,0 +1,21 @@
+[package]
+name = "sacred-error"
+version = "0.1.0"
+edition = "2021"
+description = "The Sacred Error primitive — one typed value that crosses every layer of the system unchanged. See ERROR.md at the repository root for the axiom."
+
+# Library only; this crate has no binaries, no examples, no build
+# script. Consumed by `tsot` and `roam` via path dependency.
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+# Pinned to match TSOT root (`serde = "=1.0.219"`). roam pins
+# `serde = "1"` (open), so the version that compiles for both is
+# whatever cargo resolves under TSOT's pin — TSOT is stricter.
+serde = { version = "=1.0.219", features = ["derive"] }
+
+[dev-dependencies]
+# Tests pin the wire shape; serde_json is the cross-layer envelope.
+# Same pin as TSOT root.
+serde_json = "=1.0.140"

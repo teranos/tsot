@@ -15,9 +15,10 @@ path = "src/main.rs"
 # rust-libp2p is the default substrate. `--no-default-features` (or
 # `make wasm-js-only`) builds the JS-libp2p-only fallback bundle.
 default = ["rust-libp2p"]
-rust-libp2p = ["dep:libp2p", "dep:wasm-bindgen-futures", "dep:futures", "dep:getrandom_0_3"]
+rust-libp2p = ["dep:libp2p", "dep:wasm-bindgen-futures", "dep:futures", "dep:futures-timer", "dep:getrandom_0_3"]
 
 [dependencies]
+sacred-error = { path = "../crates/sacred-error" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -42,6 +43,10 @@ wasm-bindgen-futures = { version = "=0.4.71", optional = true }
 # `RustLibp2pProvider` Swarm task. Transitive via libp2p today but
 # pinned as a direct dep so the import path stays stable.
 futures = { version = "=0.3.32", optional = true }
+# Periodic-tick future for the rust-libp2p heartbeat diagnostic. Already
+# transitive via libp2p; pinned as a direct dep so the import path is
+# stable + survives a libp2p revision that drops it.
+futures-timer = { version = "=3.0.4", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.121"

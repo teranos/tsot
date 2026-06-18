@@ -5,6 +5,10 @@ assets/src/elm-stuff/
 assets/elm-stuff/
 .DS_Store
 /target
+# Nested target/ inside workspace-member crates under crates/.
+# Path deps like sacred-error generate their own when built standalone
+# (e.g. `cd crates/sacred-error && cargo test`).
+crates/*/target/
 __pycache__/
 tsot-report.html
 .em-cache/
