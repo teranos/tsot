@@ -973,6 +973,21 @@ impl GameState {
                             .collect()
                     })
                     .unwrap_or_default();
+                // Sacred-error: an invariant violation (chain stack
+                // grew unboundedly) needs to land in the dev tool, not
+                // only in the native CLI's stderr. Surfaces as
+                // surface="engine", region="response-stack-overflow"
+                // so the LOG / inline overlay shows the depth + dump.
+                crate::error::emit_region(
+                    crate::error::Severity::Error,
+                    "engine",
+                    "response-stack-overflow",
+                    format!(
+                        "response stack overflowed at depth {chain_depth} (turn={}, active={:?})",
+                        self.turn, self.active_player
+                    ),
+                    format!("chain contents:\n  {}", chain_dump.join("\n  ")),
+                );
                 eprintln!(
                     "[CHAIN OVERFLOW] turn={} active={:?} chain_len={} contents:\n  {}",
                     self.turn,
@@ -1007,6 +1022,21 @@ impl GameState {
                     .as_ref()
                     .and_then(|iid| self.card_pool.get(iid).map(|i| i.card.id.clone()))
                     .unwrap_or_else(|| "(unknown)".to_string());
+                // Sacred-error: the same "response window can't make
+                // progress" infinite-loop guard that surfaces
+                // CHAIN OVERFLOW also produces this spin variant.
+                // Land it in the dev tool too so the loop's victim
+                // (the card whose response keeps failing) is visible.
+                crate::error::emit_region(
+                    crate::error::Severity::Error,
+                    "engine",
+                    "response-spin",
+                    format!(
+                        "response window spun {consecutive_failed_responds}× on the same card (turn={}, active={:?}, last_failed_card={failed_card_id})",
+                        self.turn, self.active_player
+                    ),
+                    format!("last_err={last_failed_err:?} chain={chain_ids:?}"),
+                );
                 eprintln!(
                     "[RESPONSE SPIN] turn={} active={:?} consecutive_failed_responds={} \
                      last_failed_card={} err={:?} chain={:?}",

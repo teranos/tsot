@@ -298,6 +298,17 @@ fn simulate_rollout(
             // MCTS rollouts use RandomOracle which never returns
             // ChoicePending. Treat as a loss for `player` to bail out
             // cleanly if a future oracle wraps this path.
+            //
+            // Sacred-error: if this fires, the "RandomOracle never
+            // returns Pending" invariant is broken — surface it as
+            // a typed Error so the bug isn't invisible in wasm UCT.
+            crate::error::emit_region(
+                crate::error::Severity::Error,
+                "mcts",
+                "unexpected-pending",
+                "MCTS rollout received ChoicePending; RandomOracle should never produce one".to_string(),
+                format!("{p:?}"),
+            );
             eprintln!("MCTS rollout: unexpected ChoicePending: {p:?}");
             let rollout_journal = state.replay_journal.take().unwrap_or_default();
             rollout_journal.rollback(state);

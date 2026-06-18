@@ -1333,6 +1333,54 @@ fn pending_from_mlua_error(e: &mlua::Error) -> Option<ChoicePending> {
     }
 }
 
+/// Walk an `mlua::Error`'s wrapper chain and render every layer's
+/// human-readable message, joined by ` → `. The bare `format!("{e}")`
+/// only shows the outermost wrapper (e.g. `"callback error: ..."`)
+/// and HIDES the inner Lua line:message — which is exactly the piece
+/// a card-author needs to fix their handler. ERROR.md slice 4 calls
+/// this out as a wrong-diagnostic lie: outer wrapper text shown,
+/// inner message hidden. This walker mirrors the `pending_from_mlua_error`
+/// chain traversal but for the developer-visible `why` field.
+///
+/// For each layer:
+///   - `CallbackError`: skipped (wrapper noise; cause has the real info).
+///   - `WithContext { context, cause }`: emit `context`, descend into cause.
+///   - `ExternalError`: render via `Display` and stop (we can't introspect
+///     deeper; ChoicePending is the only `ExternalError` we expect at this
+///     layer and it's already intercepted by `pending_from_mlua_error`).
+///   - leaf variants (RuntimeError, SyntaxError, …): render via `Display`
+///     and stop.
+fn mlua_error_chain_why(e: &mlua::Error) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut cur = e;
+    loop {
+        match cur {
+            mlua::Error::CallbackError { cause, .. } => {
+                cur = cause.as_ref();
+            }
+            mlua::Error::WithContext { context, cause } => {
+                parts.push(context.to_string());
+                cur = cause.as_ref();
+            }
+            other => {
+                // Leaf (or ExternalError): render via Display + stop.
+                // `RuntimeError` carries the actual Lua line:message
+                // string the card-author is looking for.
+                parts.push(other.to_string());
+                break;
+            }
+        }
+    }
+    if parts.is_empty() {
+        // Defensive: shouldn't happen because the loop always pushes at
+        // least once before breaking, but render the original error so
+        // we never surface an empty `why`.
+        e.to_string()
+    } else {
+        parts.join(" → ")
+    }
+}
+
 /// Map a Lua handler-call result to a [`crate::trace::OutcomeRepr`]
 /// for `TraceEvent::Handler`. ChoicePending is a Suspend (engine
 /// catches and yields a HumanPrompt); everything else that isn't Ok
@@ -1430,7 +1478,7 @@ pub(crate) fn fire_self_only(
                     "lua-handler",
                     event_key,
                     format!("Lua {event_key} handler for {card_id} failed"),
-                    format!("{e}"),
+                    mlua_error_chain_why(&e),
                 );
                 eprintln!("[lua] {event_key} handler for {card_id} failed: {e}");
                 Ok(())
@@ -1478,7 +1526,7 @@ pub(crate) fn fire_activated(
                     "lua-handler",
                     "activated",
                     format!("Lua activated handler for {card_id} failed"),
-                    format!("{e}"),
+                    mlua_error_chain_why(&e),
                 );
                 eprintln!("[lua] activated handler for {card_id} failed: {e}");
                 Ok(())
@@ -1583,7 +1631,7 @@ pub(crate) fn fire_with_partner(
                     "lua-handler",
                     event_key,
                     format!("Lua {event_key} handler for {card_id} (partner) failed"),
-                    format!("{e}"),
+                    mlua_error_chain_why(&e),
                 );
                 eprintln!("[lua] {event_key} handler for {card_id} failed: {e}");
                 Ok(())
@@ -1984,4 +2032,144 @@ mod lua_yield_pending_tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod mlua_chain_walker_tests {
+    //! Tests for `mlua_error_chain_why` — ERROR.md slice 4 fixed the
+    //! "outer wrapper hides the inner Lua line:message" lie. These
+    //! pin the contract: each layer of mlua's error chain renders
+    //! exactly once, the `CallbackError` wrapper noise is stripped,
+    //! and a runtime error's actionable line:message is preserved.
+
+    use super::mlua_error_chain_why;
+    use std::sync::Arc;
+
+    #[test]
+    fn leaf_runtime_error_renders_with_line_and_message_intact() {
+        // The whole point of the chain walker is preserving exactly
+        // this kind of leaf message — the card-author needs the line
+        // number + the Lua reason to fix their handler.
+        let e = mlua::Error::RuntimeError(
+            "[string \"draw-two\"]:42: attempt to perform arithmetic on a nil value".to_string(),
+        );
+        let why = mlua_error_chain_why(&e);
+        assert!(
+            why.contains(":42:"),
+            "leaf RuntimeError must preserve line number; got: {why}"
+        );
+        assert!(
+            why.contains("attempt to perform arithmetic"),
+            "leaf RuntimeError must preserve message; got: {why}"
+        );
+    }
+
+    #[test]
+    fn callback_error_wrapper_is_stripped_to_reveal_inner_runtime_error() {
+        // This is the EXACT pattern that motivated the fix:
+        // `format!("{e}")` on a CallbackError-wrapped RuntimeError
+        // shows "callback error: ..." with the inner message hidden.
+        // The walker must drill through and show the inner message
+        // WITHOUT the wrapper noise.
+        let inner = mlua::Error::RuntimeError(
+            "[string \"goblin-scribe\"]:7: bad argument #1".to_string(),
+        );
+        let wrapped = mlua::Error::CallbackError {
+            traceback: "irrelevant".to_string(),
+            cause: Arc::new(inner),
+        };
+        let why = mlua_error_chain_why(&wrapped);
+        assert!(
+            why.contains(":7: bad argument #1"),
+            "must surface inner RuntimeError message; got: {why}"
+        );
+        assert!(
+            !why.contains("callback error"),
+            "CallbackError wrapper noise must be stripped; got: {why}"
+        );
+    }
+
+    #[test]
+    fn with_context_layer_emits_its_context_and_descends_into_cause() {
+        // WithContext carries a human-supplied context message; the
+        // walker preserves it (joined to the cause via " → ") because
+        // it usually names the call-site (e.g. "during on_play").
+        let inner = mlua::Error::RuntimeError("nil arithmetic".to_string());
+        let wrapped = mlua::Error::WithContext {
+            context: "while running on_play".to_string(),
+            cause: Arc::new(inner),
+        };
+        let why = mlua_error_chain_why(&wrapped);
+        assert!(
+            why.contains("while running on_play"),
+            "WithContext context must be emitted; got: {why}"
+        );
+        assert!(
+            why.contains("nil arithmetic"),
+            "WithContext cause must be emitted; got: {why}"
+        );
+        assert!(
+            why.contains(" → "),
+            "layers must be joined with ' → '; got: {why}"
+        );
+    }
+
+    #[test]
+    fn callback_wrapping_context_wrapping_runtime_walks_full_chain() {
+        // The realistic shape: handler raises a RuntimeError → mlua
+        // adds context as it unwinds the Lua call → mlua wraps the
+        // whole thing in CallbackError when it crosses back into Rust.
+        // The walker must skip CallbackError, emit WithContext's
+        // context, and emit the leaf RuntimeError.
+        let inner = mlua::Error::RuntimeError(
+            "[string \"draw-two\"]:3: assertion failed".to_string(),
+        );
+        let with_ctx = mlua::Error::WithContext {
+            context: "on_play(self=draw-two-iid-1)".to_string(),
+            cause: Arc::new(inner),
+        };
+        let cb = mlua::Error::CallbackError {
+            traceback: "stack traceback: ...".to_string(),
+            cause: Arc::new(with_ctx),
+        };
+        let why = mlua_error_chain_why(&cb);
+        assert!(
+            why.contains("on_play(self=draw-two-iid-1)"),
+            "WithContext context must appear; got: {why}"
+        );
+        assert!(
+            why.contains(":3: assertion failed"),
+            "leaf RuntimeError line:message must appear; got: {why}"
+        );
+        // CallbackError contributes nothing; WithContext + leaf are
+        // the two emitted layers → exactly one joiner.
+        let arrow_count = why.matches(" → ").count();
+        assert_eq!(
+            arrow_count, 1,
+            "expected exactly one ' → ' between two emitted layers; got: {why}",
+        );
+    }
+
+    #[test]
+    fn empty_chain_falls_back_to_display() {
+        // Defensive: if the chain walker somehow produces an empty
+        // parts vec (impossible with the current match arms — every
+        // path either pushes or descends), we fall back to the
+        // original error's Display so we never surface an empty `why`.
+        // This pins the fallback. Using a SyntaxError to exercise the
+        // "leaf renders via Display" arm with non-RuntimeError data.
+        let e = mlua::Error::SyntaxError {
+            message: "unexpected symbol near '='".to_string(),
+            incomplete_input: false,
+        };
+        let why = mlua_error_chain_why(&e);
+        assert!(
+            !why.is_empty(),
+            "non-empty why even for non-RuntimeError leaves; got: {why}"
+        );
+        assert!(
+            why.contains("unexpected symbol"),
+            "SyntaxError message must appear; got: {why}"
+        );
+    }
 }
