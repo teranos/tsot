@@ -6,8 +6,6 @@ return {
   type = "creature",
   subtypes = {"apparition"},
   cost = {{amount = 2, source = "mill"}},
-  abilities = {
-    "flying.",
-  },
+  abilities = {},
   stats = {x = 0.5, y = 1},
 }
