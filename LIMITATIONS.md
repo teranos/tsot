@@ -1,11 +1,17 @@
 # tsot — Known Limitations
 
 > What the engine cannot do today. Code TODOs are tagged so they map back
-> to a section here. Last refresh: 2026-06-01 (shift intent-aware targeting).
+> to a section here. Last refresh: 2026-06-18 (audit: lua replay path is built — gap is the 10 discard sites; OnDealtDamageToPlayer shipped; P.8 attached-cascade partial).
+
+New cards:
+
+156:
+Artifact, 0
+T:Sac this, Search your library for a card called Amsterdam and put it on the board.
 
 ## events
 
-- **`OnDealtDamageToPlayer`** — no per-attacker post-combat trigger for "this creature successfully damaged the defender's deck." Cinder Wurm currently uses `on_attack` as a workaround (fires whether blocked or not).
+- **`OnDealtDamageToPlayer`** — **shipped.** `EventName::OnDealtDamageToPlayer` at `src/card.rs:516` fires per-attacker post-mill at `src/game/combat.rs:421-432`, including for every card attached to the successful attacker (klotho-style mutations declare the handler and receive `self = the mutation`). Corpus-migration pending: `cards/cinder-wurm.lua:10,34` still uses the `on_attack` workaround.
 - **Phase-entry triggers** — `on_turn_end`, `on_upkeep`, `on_untap_step`. Coupled with the delayed-trigger registry; usually wired together.
 - **Delayed-trigger registry** — handlers can't queue future triggers. Required by slow-recall (recurring exile return), attach-shuffler (delayed bounce), bitter-dawn's effect 2 (next-turn sacrifice).
 
@@ -32,11 +38,18 @@
 
 ## lua
 
-- **Lua coroutine yield on choice-pending oracle doesn't suspend the handler.** `game.confirm` / `game.choose_card` / `game.choose_player` / `game.choose_int` from inside a Lua handler return `ChoicePending` to the Lua wrapper, but the wrapper does not yield the Lua coroutine + park it for resumption — it surfaces the pending status as a value, which the handler then treats as an error. Observed live as Fireball's `on_play` running `game.confirm("aim at opponent? (no = burn a creature)")` and erroring with `ERR: lua game.confirm: oracle returned ChoicePending` instead of suspending and reaching the UI. Affects every Lua-driven choice — Fireball (confirm + choose_card), goblin-conspirator (confirm + choose_card), flesh-eating-plant (confirm + choose_card), jellyfish (choose_card), every other card whose Lua handler calls a Phase 2 `game.choose_*` / `game.confirm`. LUA.md Phase 1 status marks these as `[x]` but only the call surface + Pending return are wired; the asyncify-style suspend (analogous to the StepEngine cursors that handle engine-driven, non-Lua Confirm/ChoosePlayer/ChooseInt prompts via tasks S7+S8) hasn't been ported to the mlua coroutine path. Fix lives at the `build_game_table!` macro / per-method wrapper in `src/game/lua_api.rs`: when the oracle returns Pending, the wrapper must call `coroutine.yield(pending)` on the Lua thread, the engine must record the pending handler + its coroutine, the UI prompt fires and the user answers, then the engine resumes the coroutine via `coroutine.resume(thread, answer)`. Until then, every Lua-driven `game.confirm` / `game.choose_*` card silently errors out of its handler.
+- **`ChoicePending` discarded at 10 handler-fire sites.** The replay pipeline IS built. `build_game_table!`'s `choose_card` / `confirm` / `choose_player` / `choose_int` wrappers raise `Err(mlua::Error::external(ChoicePending))` (the `coroutine.yield` path was investigated and rejected — Lua blocks yield across C-call boundaries; `src/game/lua_api.rs:514-517` documents the decision). `fire_self_only` / `fire_with_partner` / `fire_activated` correctly downcast and return `Result<(), ChoicePending>`. `play_card` propagates via `PlayError::ChoicePending`. `HumanReplayOracle` yields up to the StepEngine, which surfaces a `HumanPrompt`, rolls back the preview journal, appends the user's answer to `replay`, and re-fires the operation. Tests at `src/game/lua_api.rs:1955-2033` pin the contract. **What still discards `Err(ChoicePending)` with `let _ = ...`** (each site flagged with `TODO(lua-yield)`):
+  - `src/game/play/activate.rs:201` — activated-ability handlers. Blocks the ghost cycle and any activation whose effect calls `game.choose_*`.
+  - `src/game/combat.rs:170` — `OnAttack`.
+  - `src/game/combat.rs:315,325` — `OnBlock` / `OnBlockedBy`.
+  - `src/game/combat.rs:442,452` — `OnDie` from combat damage + attached cards' on-die.
+  - `src/game/combat.rs:501,513` — `OnDie` (another death path) + `OnCreatureDies` broadcast.
+  - `src/game/turn.rs:119,127` — end-of-turn triggers.
+  Each needs its error type to grow a `ChoicePending(crate::choice::ChoicePending)` variant (mirroring `PlayError::ChoicePending` in `src/game/play/errors.rs:106`) and propagation via `.map_err(...)?`. The on_play / on_die-from-sacrifice / on_enter_board paths in `play.rs:853,1184,1268,1285,1293` are wired correctly today, so Fireball / goblin-conspirator / jellyfish / flesh-eating-plant `on_play` is unblocked. The activated-ability path is the next gap; combat + turn triggers follow.
 
 ## costs
 
-- **SELF / SelfExile** (P.5) — played card itself → EXILE on resolution. Originally on opponent-draw (currently a HAND substitute).
+- **SELF / SelfExile** (P.5) — **shipped for cast.** `CostSource::SelfExile` in cast paths at `src/game/play.rs:257,1155-1166` routes the played card → EXILE on resolution. SELF cost on *activated* abilities is the open piece — see `## activated abilities` Deferred.
 - **Subtype filter on SACRIFICE** — `CostComponent.kind` filters by CardType today. A `subtypes` filter ("sacrifice a goblin") is the next gap; no current card needs it.
 - **Variable X for spells in playability filter** — fixed. `can_pay_instant_cost` accepts is_x cost components (X=1 minimum affordability). `run.rs` X-pick caps X by the tightest binding resource (identity-matching hand size, deck size, GY size, board-creature count for sacrifice). Per RULES P.30 the AI picks `min: 1`, and the engine rejects `x_value = Some(0)` with `XBelowMinimum` unless the card sets `allow_x_zero = true`. Recast and turn-back-time stay filtered (SelfExile cost). Shift now has an `on_play` handler (X mill → move X attached between hosts); recast and turn-back-time remain handler-less.
 - **GY → EXILE as HAND-payment substitute** — engine path implemented (`Card.gy_hand_substitute` flag, `PlayChoices.gy_hand_payment_ids`, sim AI integration via `find_gy_hand_substitutes` + `identity_matching_hand_count`, `NoHandPaymentForIdentity` gate). Unit-tested but not yet end-to-end confirmed by an EA round actually drafting and exploiting Clear View. May reveal AI-heuristic gaps (e.g., when to keep Clear Views in GY vs. when to spend them aggressively).
@@ -80,6 +93,7 @@ Phase 1.75 landed: X-cost activations. Cost components can carry `is_x = true`; 
 Phase 3 landed: static-granted activated abilities (RULES A.10). `StaticDef.granted_activated` lets a card's static effect grant a full activated ability to matching candidates. The 6 jewels now grant `T: draw, discard` to the creature they're pitched onto (their host). `GameState::activation_count` / `activation_at` resolve indices across printed + granted activations transparently; the sim AI's activation pass picks up granted abilities the same as printed ones.
 
 Deferred:
+
 - SACRIFICE / SELF cost components in activations — needed by Portable Bolt's "exile this card" rider (SELF).
 - Activations from non-BOARD zones — needed by Portable Bolt's portable rider (activate from ATTACHED) and by cycling-style hand activations.
 - **AI activation timing is asymmetric vs. human.** The sim AI auto-fires its activation pass at one fixed engine moment (post-combat in `step/combat.rs::step_activation_pass`, body in `run.rs::run_activation_pass`), firing the *first* eligible ability per board card. The human drives activations explicitly via `HumanAction::Activate { iid, ability_index, x }` at any moment during Main1 or Main2. This means UCT/MCTS never see activations as branching choices in their search trees — they fire automatically after the tree's plays resolve, outside the decision graph. Probe results that depend on activation sequencing (mostly the jewel cycle, vigilant-human, dark salamander's X cost) are not reflecting honest AI play. Fix: lift activations into Pattern B's candidate set so they're first-class actions; widen `enumerate_playable_in_hand` to `enumerate_priority_actions → Vec<Action>` where `Action = Play(iid) | Activate(iid, idx, x) | Pass`; change UCT/MCTS pick signatures to return `Action`; delete `run_activation_pass` entirely.
@@ -88,7 +102,7 @@ Per RULES A.5 activations resolve immediately and cannot be responded to. This i
 
 ## state-based actions (SBAs)
 
-Not started. `combat.rs:321` has a TODO marker. tsot does combat damage + death check in one atomic pass; MTG-style SBAs fire BETWEEN stack-item resolutions so "regenerate" / "prevent damage" responses can save a dying creature.
+Not started. `combat.rs:463` has a `TODO(sbas)` marker. tsot does combat damage + death check in one atomic pass; MTG-style SBAs fire BETWEEN stack-item resolutions so "regenerate" / "prevent damage" responses can save a dying creature.
 
 ## sim AI strategic depth
 
@@ -101,7 +115,7 @@ These aren't engine bugs but they limit the validity of sim-based playtest signa
 
 ## smaller items
 
-- **P.8 attached → EXILE on host's death** — attached cards currently get dropped on the floor or stay attached depending on path. RULES says exile.
+- **P.8 attached → EXILE on host's death** — **partial.** Sacrifice path cascades correctly (`src/game/play.rs:877`). Combat-death path and source-movement death path still TODO (`src/game/play.rs:1351,1419`). Same RULES.md rule; coverage is partial across the death sites.
 - **No set concept on cards.** A "set" in the MTG-Standard sense is a named release — a batch of cards that came out together (Innistrad, Theros, etc.). Cards currently have no `set` field declaring which release they belong to. Without it: no way to group cards by release, no way to compute "what's in Standard" (which is just a derived list of recent sets), no clean way to mark personal test cards / experimental drafts as not part of any released set. The `test` subtype filter and `is_variant` flag handle narrow exclusion cases but they're not a release-set primitive. Minimal shape: a `set` field on each card (`set = "core-1"`, etc.) and a derived legality predicate (`legal_sets = ["core-1", "core-2"]`) that `playable_pool` honors. Larger consequence: limited formats (draft, sealed) are structurally foreclosed — boosters are set-anchored pack compositions (rarity slots filled from the set's card list), and without sets there is no booster, and without boosters there is no draft pod or sealed pool.
 
 ## design intents not yet encoded by a card
