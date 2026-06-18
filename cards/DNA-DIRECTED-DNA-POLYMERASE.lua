@@ -17,8 +17,8 @@
 -- creature → fires on their next on_turn_begin and THEY draw, because
 -- the host's owner is them.
 return {
-  id = "dna-directed-dna-polymerase",
-  name = "DNA-directed DNA polymerase",
+  id = "DNA-DIRECTED-DNA-POLYMERASE",
+  name = "DNA-DIRECTED DNA POLYMERASE",
   type = "mutation",
   colors = {"blue", "green"},
   symbol = "δ",

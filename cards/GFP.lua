@@ -3,7 +3,7 @@
 -- jellyfish — the gene that became biology's universal "did the
 -- transfection work" tag because expressing cells literally glow.
 return {
-  id = "gfp",
+  id = "GFP",
   name = "GFP",
   type = "mutation",
   colors = {"green"},

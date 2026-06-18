@@ -13,7 +13,7 @@
 --
 -- Free to cast — the payoff is in the proliferation loop.
 return {
-  id = "myc",
+  id = "MYC",
   name = "MYC",
   type = "mutation",
   colors = {"orange"},

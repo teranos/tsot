@@ -5,8 +5,8 @@
 -- abilities (printed AND granted) while this mutation is attached,
 -- with a small bump to attack at a cost to toughness.
 return {
-  id = "nonsense-mutation",
-  name = "Nonsense Mutation",
+  id = "NONSENSE-MUTATION",
+  name = "NONSENSE MUTATION",
   type = "mutation",
   colors = {"purple"},
   cost = {

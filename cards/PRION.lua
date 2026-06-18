@@ -4,8 +4,8 @@
 -- host into a zombie, and when it dies, find another zombie to keep
 -- the fold spreading.
 return {
-  id = "prion",
-  name = "Prion",
+  id = "PRION",
+  name = "PRION",
   type = "mutation",
   colors = {"black"},
   subtypes = {"zombie"},

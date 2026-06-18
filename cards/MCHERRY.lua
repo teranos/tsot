@@ -4,8 +4,8 @@
 -- monomer stability and brightness. Same mechanical role as GFP, color
 -- differs.
 return {
-  id = "mcherry",
-  name = "mCherry",
+  id = "MCHERRY",
+  name = "MCHERRY",
   type = "mutation",
   colors = {"pink"},
   face = {"glow"},

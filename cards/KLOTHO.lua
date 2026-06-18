@@ -10,8 +10,8 @@
 -- damaged the defender's deck (B.2). Klotho's handler receives `self`
 -- = the Klotho mutation; it draws a card for `self.owner`.
 return {
-  id = "klotho",
-  name = "Klotho",
+  id = "KLOTHO",
+  name = "KLOTHO",
   type = "mutation",
   colors = {"blue"},
   cost = {},

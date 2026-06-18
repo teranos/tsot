@@ -6,8 +6,8 @@
 --   - Host becomes cyan (granted color).
 --   - Host gets +1/-0.25 for each shiny card on the board (both sides).
 return {
-  id = "missense-mutation",
-  name = "Missense Mutation",
+  id = "MISSENSE-MUTATION",
+  name = "MISSENSE MUTATION",
   type = "mutation",
   colors = {"cyan"},
   cost = {

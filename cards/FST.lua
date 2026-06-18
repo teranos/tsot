@@ -3,7 +3,7 @@
 -- Wired today (no missing-event dependency like klotho has) because
 -- the effect is a continuous stat modifier, not a triggered ability.
 return {
-  id = "fst",
+  id = "FST",
   name = "FST",
   type = "mutation",
   colors = {"red"},
