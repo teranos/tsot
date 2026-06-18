@@ -117,7 +117,13 @@ mod real {
             // js-libp2p uses the same default and that's why tab-js's
             // duplicates DO propagate.
             let gossipsub_config = gossipsub::ConfigBuilder::default()
-                .heartbeat_interval(Duration::from_secs(10))
+                // 1s matches js-libp2p's default and the rate the relay
+                // sets (`heartbeatInterval: 1000` in `relay/relay.ts`).
+                // 10s left mesh maintenance lagging long enough that the
+                // connection died with BrokenPipe before GRAFT could
+                // settle. Empirically observed via the inspect.ts probe
+                // on 2026-06-18.
+                .heartbeat_interval(Duration::from_secs(1))
                 .validation_mode(gossipsub::ValidationMode::Strict)
                 .build()
                 .map_err(|e| NetError::ProviderInternal {
@@ -136,7 +142,12 @@ mod real {
                 keypair.public(),
             ));
 
-            let ping_b = ping::Behaviour::new(ping::Config::default());
+            // Ping every 5s instead of the 15s default — keeps the
+            // WebSocket warm against any idle-timeout on the relay's
+            // network path (CloudFront / Lightsail / kernel).
+            let ping_b = ping::Behaviour::new(
+                ping::Config::new().with_interval(Duration::from_secs(5)),
+            );
 
             let behaviour = RoamBehaviour {
                 gossipsub: gossipsub_b,
@@ -153,6 +164,36 @@ mod real {
             let swarm: Swarm<RoamBehaviour> = SwarmBuilder::with_existing_identity(keypair)
                 .with_wasm_bindgen()
                 .with_other_transport(|key| {
+                    // WebSocket only. Previous code also added
+                    // `libp2p::webrtc_websys::Transport`, which calls
+                    // `web_sys::RtcPeerConnection::new_with_configuration`
+                    // (see ~/.cargo/.../libp2p-webrtc-websys-*/src/
+                    // connection.rs `RtcPeerConnection::new`) at upgrade
+                    // time — this maps to a JS-side `new RTCPeerConnection(…)`.
+                    //
+                    // The capability probe at the top of
+                    // `assets/src/net-worker.js` empirically reported
+                    // `RTCPeerConnection=absent` in dedicated workers
+                    // in BOTH Firefox and Chrome on 2026-06-18
+                    // (versions current at that date). It is therefore
+                    // worker-context-general at least for those two
+                    // engines today, not Firefox-specific as an earlier
+                    // version of this comment claimed.
+                    //
+                    // Authoritative cross-vendor citation TODO — the
+                    // most recent attempt to pull MDN compat data or a
+                    // tracking bug timed out / didn't surface a
+                    // single-line spec quote. Until then, the canonical
+                    // evidence is the probe in `net-worker.js` — re-run
+                    // it before reintroducing WebRTC. The Chromium
+                    // tracker for the work is referenced as issue 40262971
+                    // ("Using WebRTC inside Service Worker"); it is NOT
+                    // a worker support announcement, treat it as a
+                    // breadcrumb not a guarantee.
+                    //
+                    // WebSocket via the relay is the substrate the JS
+                    // path already uses, so this is functional parity
+                    // for the shipping behaviour, not a downgrade.
                     let ws = libp2p::websocket_websys::Transport::default()
                         .upgrade(upgrade::Version::V1)
                         .authenticate(
@@ -162,15 +203,7 @@ mod real {
                         .map(|(p, m), _| {
                             (p, libp2p::core::muxing::StreamMuxerBox::new(m))
                         });
-                    let webrtc = libp2p::webrtc_websys::Transport::new(
-                        libp2p::webrtc_websys::Config::new(key),
-                    )
-                    .map(|(p, m), _| (p, libp2p::core::muxing::StreamMuxerBox::new(m)));
-                    let combined = ws.or_transport(webrtc).map(|either, _| match either {
-                        futures::future::Either::Left(t) => t,
-                        futures::future::Either::Right(t) => t,
-                    });
-                    Ok(combined.boxed())
+                    Ok(ws.boxed())
                 })
                 .map_err(|e| NetError::ProviderInternal {
                     reason: format!("swarm transport: {e}"),
@@ -204,11 +237,49 @@ mod real {
                 bootstrap_addrs,
             ));
 
+            // Heartbeat probe — separate task that sleeps 100ms then
+            // wakes. Each wake records gap_ms since the last wake; every
+            // ~1s of intended elapsed time, emits a trace with the max
+            // gap seen. If the main thread is starving futures, max_gap
+            // grows well past 100ms. If scheduling is healthy, max_gap
+            // hovers near 100ms (the requested sleep interval).
+            wasm_bindgen_futures::spawn_local(heartbeat_task());
+
             Ok(Self {
                 self_peer_id,
                 cmd_tx,
                 events,
             })
+        }
+    }
+
+    async fn heartbeat_task() {
+        let start_ms = now_ms();
+        let mut last_wake_ms = start_ms;
+        let mut wake_count = 0u64;
+        let mut max_gap_ms: u64 = 0;
+        loop {
+            futures_timer::Delay::new(Duration::from_millis(100)).await;
+            let now = now_ms();
+            let gap = now.saturating_sub(last_wake_ms);
+            if gap > max_gap_ms {
+                max_gap_ms = gap;
+            }
+            last_wake_ms = now;
+            wake_count += 1;
+            // Every 10 wakes ≈ 1s wall-clock (if not starved).
+            if wake_count.is_multiple_of(10) {
+                crate::trace::emit(crate::trace::TraceEvent::Note {
+                    tag: "net::heartbeat",
+                    msg: format!(
+                        "wakes={} elapsed_ms={} max_gap_ms_window={}",
+                        wake_count,
+                        now.saturating_sub(start_ms),
+                        max_gap_ms,
+                    ),
+                });
+                max_gap_ms = 0;
+            }
         }
     }
 
@@ -259,7 +330,15 @@ mod real {
         // `NetEvent::Error` and the loop continues; the redial story
         // here is provider-internal (libp2p connection-keepalive +
         // explicit retry) and lands when bootstrap stability needs it.
+        crate::trace::emit(crate::trace::TraceEvent::Note {
+            tag: "net::drive_swarm_start",
+            msg: format!("bootstrap_addrs.len()={}", bootstrap_addrs.len()),
+        });
         for addr_str in &bootstrap_addrs {
+            crate::trace::emit(crate::trace::TraceEvent::Note {
+                tag: "net::dial_attempt",
+                msg: addr_str.clone(),
+            });
             match addr_str.parse::<libp2p::Multiaddr>() {
                 Ok(addr) => {
                     if let Err(e) = swarm.dial(addr) {

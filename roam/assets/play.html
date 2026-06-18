@@ -8,7 +8,24 @@
   #wrap { display: flex; gap: 1rem; padding: 0.75rem; align-items: flex-start; }
   #game { display: flex; flex-direction: column; gap: 0.5rem; }
   canvas { background: #1a1a1f; border: 1px solid #333; display: block; }
-  #status { color: #888; min-height: 1em; }
+  /* #status is the legacy bottom-of-game text. It was duplicated by
+     the `world-hud` canvas overlay added in 209eb08. Hide it; the
+     bridge still writes to it (cheap, no need to also rip the
+     writes), but the user shouldn't see two `me=…` lines. */
+  #status { display: none; }
+  /* Colored dot prepended to the world-hud overlay — at-a-glance
+     network state without reading the text. Set via `net-*` classes
+     below; the bridge updates the class on every state transition. */
+  #world-hud { padding-left: 1.1em !important; position: relative; }
+  #world-hud::before {
+    content: '●'; position: absolute; left: 0.4em; top: 0.4em;
+    color: #555; transition: color 0.25s ease;
+  }
+  #world-hud.net-idle::before  { color: #555; }       /* gray   — nothing happening yet */
+  #world-hud.net-init::before  { color: #ff0; }       /* yellow — wasm/transport coming up */
+  #world-hud.net-ready::before { color: #6cf; }       /* cyan   — substrate ready, no peers */
+  #world-hud.net-peers::before { color: #6f9; }       /* green  — at least one peer in mesh */
+  #world-hud.net-error::before { color: #f44; }       /* red    — substrate failed */
   #info { display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-width: 24em; max-width: 40em; }
   .panel { border: 1px solid #333; padding: 0.5rem; }
   .panel h2 { font-size: 0.7rem; margin: 0 0 0.4rem 0; color: #888; font-weight: normal; text-transform: uppercase; letter-spacing: 0.05em; }

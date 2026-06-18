@@ -92,6 +92,9 @@ elm:
 # Use this after editing assets/*.html, assets/src/*.{js,elm}.
 assets: js elm
 	cp assets/play.html $(WASM_DIST)/index.html
+	@# Worker entry stays as native ES module — runs `type: 'module'`
+	@# and imports `/roam.js` at runtime; no bundling needed.
+	cp assets/src/net-worker.js $(WASM_DIST)/net-worker.js
 
 wasm: assets
 	@command -v wasm-bindgen >/dev/null 2>&1 || { \

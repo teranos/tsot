@@ -52,6 +52,40 @@ import * as netShim from './net-shim.js';
 // wasm is built with `--features rust-libp2p`.
 const PROVIDER = new URLSearchParams(location.search).get('provider') || 'js';
 
+// At-a-glance network state, driven into the colored dot on #status
+// (see play.html CSS `#status.net-*::before`). Five buckets:
+//   idle   — substrate hasn't started yet (page just loaded)
+//   init   — wasm/transport handshake in flight
+//   ready  — substrate up, no peer connection yet
+//   peers  — at least one connected peer in mesh
+//   error  — substrate reported a fatal error
+let netState = 'init';
+const NET_STATE_TOOLTIPS = {
+  idle:  'idle — substrate hasn\'t started yet',
+  init:  'init — wasm or transport handshake in flight',
+  ready: 'ready — substrate up, no peer connection yet',
+  peers: 'peers — at least one connected peer in the gossipsub mesh',
+  error: 'error — substrate failed; reload page to retry',
+};
+function setNetState(next) {
+  if (netState === next) return;
+  // Stuck-in-error guard: don't drop back to "ready" or "init" without
+  // proof of peer connection — once we're red, only the next reload or
+  // an actual peer:up should turn the dot.
+  if (netState === 'error' && next !== 'peers' && next !== 'error') return;
+  netState = next;
+  // Dot lives on `#world-hud` (the top-of-canvas overlay). That
+  // element gets created later in this file (see `worldHud` setup);
+  // until then `getElementById` returns null and we just store state
+  // — the class gets applied lazily on the next setNetState call once
+  // the element exists.
+  const el = document.getElementById('world-hud');
+  if (el) {
+    el.className = `net-${next}`;
+    el.title = NET_STATE_TOOLTIPS[next] || next;
+  }
+}
+
 const INPUT_W = 1 << 0;
 const INPUT_A = 1 << 1;
 const INPUT_S = 1 << 2;
@@ -90,16 +124,21 @@ function drainConsoleBuf() {
 }
 setInterval(drainConsoleBuf, 200);
 
-// IPFS public bootstraps used to live here. Removed: they route
-// DHT/Bitswap traffic for the global libp2p network, and every
-// connection runs identify+ping+gossipsub-heartbeat, all signed
-// through SubtleCrypto on the browser main thread. The flame graph
-// showed SubtleCrypto::Sign dominating CPU time.
-//
-// Roam does not need the global IPFS network. We only need peers
-// subscribed to our gossipsub topic, which the local relay finds
-// for us. Bootstraps now come exclusively from /relay-multiaddr.txt.
-const PUBLIC_BOOTSTRAP = [];
+// Production relay (CloudFront → Lightsail). Hardcoded in source —
+// NOT read from `dist/relay-multiaddr.txt` at runtime — so dev
+// utilities (headless probes, scratch scripts) can't mutate it.
+// Identity loaded from AWS Secrets Manager on the relay box; the
+// peer-id is stable across deploys because the secret persists.
+const PRODUCTION_RELAY = '/dns4/relay.sbvh.nl/tcp/443/wss/p2p/12D3KooWMSVxS7ntMVuvVADgZWMZwsjyYmcZvhnyQAJ53PtSJHpN';
+
+// Dev-time relay override. `?relay=/ip4/127.0.0.1/tcp/9001/ws/p2p/…`
+// lets a developer point the substrate at a local relay (started via
+// `bun run relay/relay.ts`) without touching the source-of-truth
+// constant above. Used to isolate "is this disconnect a path-level
+// problem or a libp2p-protocol problem?" — same bridge → worker →
+// rust-libp2p stack, different relay endpoint, side-by-side compare.
+const RELAY_MULTIADDR =
+  new URLSearchParams(location.search).get('relay') || PRODUCTION_RELAY;
 
 const status = document.getElementById('status');
 const canvas = document.getElementById('c');
@@ -260,7 +299,24 @@ function escapeHtml(s) {
 // rAF coalesces the DOM flush so multiple events share one Layout.
 let __logDomDirty = false;
 let __logFlushScheduled = false;
+// Dev-tap mirror: every logEvent line is fire-and-forget POSTed to
+// `http://localhost:9100/log` so a tail on `/tmp/roam-dev.log` (the
+// dev-tap server in `test/dev-tap.ts`) gives live visibility into
+// what the page sees, without devtools or screenshots. Silent when
+// the server isn't running — `.catch(() => {})` because failing to
+// log to the dev-tap shouldn't itself become a logged error.
+function devTap(cls, line) {
+  try {
+    fetch('http://localhost:9100/log', {
+      method: 'POST',
+      body: `[${cls}] ${line}`,
+      keepalive: true,
+    }).catch(() => {});
+  } catch {}
+}
+
 function logEvent(cls, line) {
+  devTap(cls, line);
   const t = new Date().toISOString().slice(11, 23); // ms precision
   logLines.push({ cls, t, line });
   __logDomDirty = true;
@@ -577,24 +633,13 @@ async function probeRawWebSocket(addrStr) {
   });
 }
 
-// --- local relay discovery ---
-// The relay (relay/relay.ts) writes its multiaddr to dist/relay-multiaddr.txt
-// on startup. Fetch it at boot and prepend to the bootstrap list so the
-// browser tries the relay first. If the file is missing (404), the relay
-// isn't running — log it (info, not error) and continue with IPFS bootstrap.
-let bootstrapList = [...PUBLIC_BOOTSTRAP];
-try {
-  const res = await fetch('/relay-multiaddr.txt', { cache: 'no-store' });
-  if (res.ok) {
-    const lines = (await res.text()).trim().split('\n').filter(Boolean);
-    bootstrapList = [...lines, ...bootstrapList];
-    logEvent('info', `loaded ${lines.length} local relay multiaddr(s)`);
-  } else {
-    logEvent('info', `no local relay (HTTP ${res.status} on /relay-multiaddr.txt)`);
-  }
-} catch (err) {
-  logError('relay-multiaddr fetch', err);
-}
+// Bootstrap list. Used to be loaded at runtime from
+// `dist/relay-multiaddr.txt`, which dev utilities (headless probes,
+// scratch scripts) trivially clobbered. Now hardcoded — the only
+// way the relay's peer-id changes is a deliberate
+// `tofu taint aws_secretsmanager_secret.relay_identity` followed by
+// `apply`. Source-of-truth lives in committed code.
+const bootstrapList = [RELAY_MULTIADDR];
 
 // Raw-WebSocket probe of each local relay BEFORE libp2p init. Tells
 // us if the browser-native WS API can talk to the relay independent
@@ -651,8 +696,16 @@ try {
     },
   });
 
-  libp2p.addEventListener('peer:connect', (e) => logEvent('connect', `peer:connect ${short(e.detail)}`));
-  libp2p.addEventListener('peer:disconnect', (e) => logEvent('disconnect', `peer:disconnect ${short(e.detail)}`));
+  libp2p.addEventListener('peer:connect', (e) => {
+    setNetState('peers');
+    logEvent('connect', `peer:connect ${short(e.detail)}`);
+  });
+  libp2p.addEventListener('peer:disconnect', (e) => {
+    // Drop back to "ready" if no peers remain. `getPeers()` reflects
+    // post-disconnect state synchronously.
+    if (libp2p.getPeers().length === 0) setNetState('ready');
+    logEvent('disconnect', `peer:disconnect ${short(e.detail)}`);
+  });
   libp2p.addEventListener('connection:open', (e) =>
     logEvent('connect', `connection:open ${short(e.detail.remotePeer)} via ${e.detail.remoteAddr.toString()}`));
   libp2p.addEventListener('connection:close', (e) =>
@@ -675,6 +728,7 @@ try {
     logEvent('info', `transport:close ${e.detail?.toString?.() || ''}`));
 
   await libp2p.start();
+  setNetState('ready');
   logEvent('info', `libp2p started, peerId ${libp2p.peerId.toString()}`);
 
   pubsub = libp2p.services.pubsub;
@@ -768,23 +822,10 @@ try {
     }
   }, REDIAL_TICK_MS);
 
-  // Liveness check: poll /relay-multiaddr.txt for peer-id changes
-  // (signals a relay restart while the tab was open).
-  let lastSeenRelayAddr = bootstrapList.find(
-    (a) => a.includes('127.0.0.1') || a.includes('localhost'),
-  );
-  setInterval(async () => {
-    try {
-      const res = await fetch('/relay-multiaddr.txt', { cache: 'no-store' });
-      if (!res.ok) return;
-      const lines = (await res.text()).trim().split('\n').filter(Boolean);
-      const current = lines[0];
-      if (current && current !== lastSeenRelayAddr) {
-        logEvent('info', `relay multiaddr changed: ${lastSeenRelayAddr ? short(lastSeenRelayAddr) : '(none)'} → ${short(current)}`);
-        lastSeenRelayAddr = current;
-      }
-    } catch {}
-  }, 30000);
+  // Liveness check removed. The relay's peer-id is stable
+  // (loaded from Secrets Manager) so there's no in-page rediscovery
+  // to do; a peer-id rotation requires a deliberate tofu apply +
+  // bundle rebuild, which the page picks up on next load.
 
   pubsub.addEventListener('subscription-change', (e) => {
     const subs = (e.detail.subscriptions || []).map(s => `${s.subscribe ? '+' : '-'}${s.topic}`).join(' ');
@@ -829,9 +870,13 @@ try {
   // each frame by Rust via `roam_net_tick`.
 } catch (err) {
   if (err instanceof SkipLibp2pInit) {
+    // Sentinel skip — the rust path will drive setNetState from the
+    // worker's `ready`/`error` messages, so we leave the dot in
+    // its current "init" state.
     logEvent('info', err.message);
   } else {
     libp2pErr = err;
+    setNetState('error');
     logError('libp2p init', err);
   }
 }
@@ -938,6 +983,11 @@ moduleP.then((wasm) => {
     canvas.parentElement.style.position = 'relative';
     canvas.parentElement.appendChild(worldHud);
   }
+  // Apply the current net-state class + tooltip now that the element
+  // exists. setNetState's earlier calls (from before worldHud was
+  // created) were no-ops; this catches up.
+  worldHud.className = `net-${netState}`;
+  worldHud.title = NET_STATE_TOOLTIPS[netState] || netState;
 
   // Hand the world canvas to Rust's WebGL2 renderer. From this point
   // on, every world-canvas pixel comes from `roam_render_frame`. The
@@ -957,17 +1007,142 @@ moduleP.then((wasm) => {
   // The application code in `roam::net::state::Net` is identical for
   // both — the seam is at the trait, not at this call site.
   if (PROVIDER === 'rust') {
-    if (typeof roam_net_init_rust_libp2p !== 'function') {
-      logError('roam_net_init_rust_libp2p', new Error(
-        'PROVIDER=rust requested but the wasm was not built with `--features rust-libp2p`; rebuild with the feature or drop `?provider=rust`.',
-      ));
-    } else {
-      try {
-        roam_net_init_rust_libp2p(JSON.stringify(bootstrapList));
-        logEvent('info', `net: RustLibp2pProvider initialized, bootstrap=${bootstrapList.length} addr(s)`);
-      } catch (err) {
-        logError('roam_net_init_rust_libp2p', err);
+    // Option B: rust-libp2p Swarm lives in a Web Worker, not main
+    // thread. The main-thread `Net` still uses `JsLibp2pProvider`'s
+    // five-callback shape; the callbacks here postMessage to the
+    // worker instead of touching a JS-libp2p instance. See
+    // `assets/src/net-worker.js`.
+    logEvent('info', 'PROVIDER=rust → spawning net-worker');
+    let netWorker;
+    try {
+      netWorker = new Worker(new URL('./net-worker.js', location.href), { type: 'module' });
+      logEvent('info', `net-worker spawned at ${new URL('./net-worker.js', location.href)}`);
+    } catch (err) {
+      logError('net-worker spawn', err);
+      throw err;
+    }
+    let workerIdentity = '';
+    let workerReady = false;
+    const incomingMessageBuffer = [];
+
+    netWorker.addEventListener('message', (e) => {
+      const msg = e.data || {};
+      switch (msg.kind) {
+        case 'ready':
+          workerIdentity = msg.identity || '';
+          workerReady = true;
+          setNetState('ready');
+          logEvent('info', `net: net-worker ready, identity=${workerIdentity}`);
+          // The initial `subscribe` command was sent eagerly (below) at
+          // bridge boot, before the worker was ready, and got silently
+          // dropped on the worker side (`if (!initialized) break;`).
+          // Re-subscribe now that the worker can answer. Gossipsub
+          // tolerates duplicate subscribes; this is the cheap idempotent
+          // catch-up.
+          netWorker.postMessage({ cmd: 'subscribe', topic: 'roam-positions/v1' });
+          break;
+        case 'events':
+          for (const m of msg.messages || []) {
+            incomingMessageBuffer.push(m);
+          }
+          break;
+        case 'traces':
+          // Mirror the worker's trace bus into the main thread log. The
+          // worker has its own `roam_drain_trace` thread-local, separate
+          // from main thread's.
+          try {
+            const events = JSON.parse(msg.json);
+            for (const e of events) {
+              const ev = e.event;
+              logEvent('info', `worker:${ev.kind} seq=${e.seq} ${JSON.stringify(ev)}`);
+            }
+          } catch (err) {
+            logError('net-worker traces parse', err);
+          }
+          break;
+        case 'tick-debug':
+          logEvent('info', `net-worker tick alive: count=${msg.count} traceLen=${msg.traceLen}`);
+          break;
+        case 'lifecycle':
+          logEvent('info', `net-worker lifecycle: ${msg.stage}`);
+          break;
+        case 'capability': {
+          // Capability snapshot from the worker BEFORE wasm init.
+          // Hypothesis test for "WebRTC isn't available in workers";
+          // result lands in the log so we don't have to rely on
+          // memory or MDN.
+          const rtc = msg.hasRTCConstruct ? 'OK'
+            : msg.hasRTCType ? `type-exists-but-construct-throws: ${msg.constructError}`
+            : 'absent';
+          logEvent('info',
+            `net-worker capability: RTCPeerConnection=${rtc}, WebSocket=${msg.hasWebSocket ? 'OK' : 'absent'}, ua="${msg.userAgent}"`);
+          if (!msg.hasRTCConstruct) {
+            logError('net-worker capability', new Error(
+              `RTCPeerConnection unusable in this worker (${rtc}). libp2p-webrtc-websys will fail.`
+            ));
+          }
+          break;
+        }
+        case 'error': {
+          // Worker errors carry stack + source location from the
+          // worker's `self.onerror` / `unhandledrejection`. Build a
+          // synthetic Error so logError's cause-chain + stack
+          // formatter renders the full context in #log.
+          const err = new Error(msg.message || '(no message)');
+          if (msg.stack) err.stack = msg.stack;
+          if (msg.filename) {
+            err.diagnostic = `at ${msg.filename}:${msg.line || '?'}:${msg.col || '?'}`;
+          }
+          setNetState('error');
+          logError(`net-worker ${msg.where}`, err);
+          break;
+        }
+        default:
+          logEvent('info', `net-worker unknown msg: ${JSON.stringify(msg)}`);
       }
+    });
+    netWorker.addEventListener('error', (e) => logError('net-worker onerror', e.error || e.message));
+
+    netWorker.postMessage({ cmd: 'init', bootstrap_json: JSON.stringify(bootstrapList) });
+
+    // JsLibp2pProvider callbacks routed through the worker.
+    const selfPeerIdFn = () => workerIdentity;
+    const publishFn = (topic, bytes) => {
+      if (!workerReady) return;
+      // bytes is a Uint8Array view over wasm memory — copy into a
+      // structured-clonable array before postMessage so the wasm
+      // buffer isn't aliased into the worker's address space.
+      const arr = Array.from(bytes);
+      netWorker.postMessage({ cmd: 'publish', topic, bytes: arr });
+    };
+    const subscribeFn = (topic) => {
+      if (!workerReady) return;
+      netWorker.postMessage({ cmd: 'subscribe', topic });
+    };
+    const unsubscribeFn = (topic) => {
+      if (!workerReady) return;
+      netWorker.postMessage({ cmd: 'unsubscribe', topic });
+    };
+    const drainEventsFn = () => {
+      if (incomingMessageBuffer.length === 0) return '[]';
+      const json = JSON.stringify(incomingMessageBuffer);
+      incomingMessageBuffer.length = 0;
+      return json;
+    };
+
+    // Eager Net init. The first subscribe command queued here arrives
+    // at the worker before it's done with wasm init; the worker's
+    // onmessage handler drops it (`if (!initialized) break;`). The
+    // 'ready' branch above resends the subscribe once it actually has
+    // a provider. Publishes that go out before 'ready' are also
+    // dropped, but `publishFn` short-circuits with `if (!workerReady)
+    // return;` so they fail silently — gossipsub on the rust side will
+    // pick up at the first published position once the worker is up.
+    try {
+      roam_net_init(selfPeerIdFn, publishFn, subscribeFn, unsubscribeFn, drainEventsFn);
+      logEvent('info', `net: seam initialized via net-worker (worker init in flight), bootstrap=${bootstrapList.length} addr(s)`);
+    } catch (err) {
+      logError('roam_net_init (worker path)', err);
     }
   } else if (libp2p && pubsub) {
     try {
@@ -1296,6 +1471,35 @@ moduleP.then((wasm) => {
 
     if (now - lastInfoUpdate > 500) {
       lastInfoUpdate = now;
+      // Inventory — provider-agnostic. Was nested inside the
+      // `if (libp2p)` block which meant `?provider=rust` (sentinel-
+      // skips libp2p) silently dropped every inventory repaint.
+      // The state JSON is owned by Rust's `world::state_json` and
+      // doesn't depend on which network substrate is running.
+      let sJson = null;
+      try {
+        sJson = JSON.parse(state());
+      } catch (err) {
+        logError('wasm state JSON parse (hud)', err);
+      }
+      const inv = (sJson && Array.isArray(sJson.inv)) ? sJson.inv : [];
+      try {
+        renderInventory(inv);
+      } catch (err) {
+        logError('renderInventory', err);
+      }
+      // Net dot reconciliation (provider-agnostic). Peer count is
+      // Rust-owned and reflects whichever substrate is active:
+      // JsLibp2pProvider for `?provider=js`, worker proxy for
+      // `?provider=rust`. Once we're connected to a peer, stay
+      // green; if we lose them all, drop back to cyan (substrate
+      // healthy, just nobody else on the line). Doesn't override
+      // an `error` state — that needs a reload.
+      try {
+        const npc = roam_net_peer_count();
+        if (npc > 0) setNetState('peers');
+        else if (netState === 'peers') setNetState('ready');
+      } catch {}
       if (libp2p) {
         const conns = libp2p.getConnections();
         const meshPeerCount = (pubsub && pubsub.getMeshPeers)
@@ -1320,21 +1524,8 @@ moduleP.then((wasm) => {
         } else {
           meshEl.textContent = '(pubsub OFF)';
         }
-        // Inventory + remaining HUD fields still go through the JSON
-        // path — this block only runs every 500ms so the parse cost
-        // is absorbed in the slow tick, not the frame loop.
-        let sJson = null;
-        try {
-          sJson = JSON.parse(state());
-        } catch (err) {
-          logError('wasm state JSON parse (hud)', err);
-        }
-        const inv = (sJson && Array.isArray(sJson.inv)) ? sJson.inv : [];
-        try {
-          renderInventory(inv);
-        } catch (err) {
-          logError('renderInventory', err);
-        }
+        // Inventory render lives outside this `if (libp2p)` block —
+        // see the hoisted call above; both substrates need it.
         selfEl.textContent =
           `display id: ${PEER_ID}\n` +
           `libp2p peerId: ${libp2p.peerId.toString()}\n` +

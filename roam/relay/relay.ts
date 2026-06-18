@@ -158,6 +158,27 @@ const node = await createLibp2p({
     }),
     pubsub: gossipsub({ allowPublishToZeroTopicPeers: true }),
   },
+  // js-libp2p v2 attaches a connection-monitor by default. It sends
+  // `/ipfs/ping/1.0.0` to every connected peer and aborts the
+  // connection when the reply doesn't arrive in time. Empirically
+  // verified on 2026-06-18 (relay log + inspect log side-by-side):
+  // rust-libp2p browser-worker peers fail this ping within ~7s of
+  // connect and the relay closes them as BrokenPipe; with the monitor
+  // disabled the same connection sustains the full 45s soak.
+  //
+  // Disabling here is the working fix until rust-libp2p's inbound
+  // `/ipfs/ping/1.0.0` handler is investigated. Likely candidates:
+  //   - head-of-line blocking on the yamux session by gossipsub
+  //     publishes at 20 Hz (the bridge's position broadcast)
+  //   - protocol-handler scheduling in the worker's spawn_local
+  //     executor
+  //   - libp2p::swarm idle-handling around inbound stream open
+  //
+  // We don't lose much by disabling: connection lifecycle is still
+  // managed by libp2p's transport-level detection (BrokenPipe /
+  // close events from yamux / WebSocket). The monitor was only an
+  // extra safety net for stuck connections.
+  connectionMonitor: { enabled: false } as any,
 });
 
 // Subscribe to the topic so peer-exchange propagates subscribers to

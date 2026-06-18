@@ -72,6 +72,12 @@ pub fn emit(
         // (OBSERVABILITY.md Phase 2). The Elm decoder accepts any
         // string here; empty is the sentinel for "no engine clock yet".
         at: String::new(),
+        source: None,
+        ffi_call: None,
+        location: None,
+        js_stack: None,
+        raw_stderr: None,
+        requires_reload: false,
     };
     push(error.clone());
     error
@@ -97,6 +103,12 @@ pub fn emit_region(
         trace: vec![],
         raw: None,
         at: String::new(),
+        source: None,
+        ffi_call: None,
+        location: None,
+        js_stack: None,
+        raw_stderr: None,
+        requires_reload: false,
     };
     push(error.clone());
     error

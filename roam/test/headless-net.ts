@@ -24,11 +24,10 @@
 // abnormal exit via SIGINT/SIGTERM handlers.
 
 import { chromium, type Browser, type Page } from 'playwright';
-import { unlinkSync } from 'node:fs';
 
 const RELAY_MULTIADDR_FILE = './dist/relay-multiaddr.txt';
 const SERVE_PORT = 8084;             // sidesteps `make wasm-serve` (8083)
-const SOAK_MS = 60_000;              // total observation window (rust gossipsub heartbeat is 10s)
+const SOAK_MS = 150_000;             // total observation window (worker wasm init can take 40s)
 const POLL_MS = 2_000;               // how often we tail #log to stdout
 
 function tag(prefix: string, line: string): void {
@@ -100,10 +99,12 @@ async function readStatus(page: Page): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  // 1. Wipe stale multiaddr so we can detect when the new relay writes it.
-  try { unlinkSync(RELAY_MULTIADDR_FILE); } catch {}
-
-  // 2. Spawn relay. Disable metrics so it doesn't try to talk to AWS.
+  // Spawn relay. Don't touch `dist/relay-multiaddr.txt` — the bridge
+  // now reads `RELAY_MULTIADDR` from source, not from that file, so
+  // writing to it would just pollute the developer's dev environment
+  // without affecting probe behavior. The probe currently dials the
+  // hardcoded production relay; an `?relay=` URL override would let
+  // probes point at a local relay again (not yet implemented).
   tag('[runner]', 'spawning relay (bun run relay/relay.ts)');
   relayProc = Bun.spawn(['bun', 'run', 'relay/relay.ts'], {
     stdout: 'pipe',
@@ -111,6 +112,7 @@ async function main(): Promise<void> {
     env: {
       ...process.env,
       ROAM_RELAY_PUBLISH_METRICS: '0',
+      ROAM_RELAY_WRITE_DIST: '0',                           // don't pollute dist/
       ROAM_RELAY_LISTEN_PORT: '9002',                       // sidestep the user's :9001
       // Bypass `/dns4/localhost/...` so the browser doesn't go through
       // a DNS lookup that, in headless Chromium, blocks ~10s on IPv6
@@ -125,15 +127,15 @@ async function main(): Promise<void> {
   });
   pipeProcess(relayProc, 'relay');
 
-  // 3. Wait for the relay to write its multiaddr (signal that it's up).
-  const multiaddr = await pollUntil(async () => {
-    try {
-      const t = await Bun.file(RELAY_MULTIADDR_FILE).text();
-      const first = t.trim().split('\n')[0];
-      return first && first.length > 0 ? first : undefined;
-    } catch { return undefined; }
-  }, 10_000, 'relay multiaddr file');
-  tag('[runner]', `relay listening: ${multiaddr}`);
+  // Wait for the relay to log its peerId line (signal that it's up
+  // and accepting connections). Reads relayProc.stdout — pipeProcess
+  // above already attached its own reader, so we tap the same byte
+  // stream via a small "log line saw" pattern below.
+  // For now: 3-second blunt-instrument sleep. The probe doesn't
+  // currently use the local relay's address (bridge dials the
+  // hardcoded production relay), so this is just letting the
+  // process spin up before caddy boots.
+  await new Promise((r) => setTimeout(r, 3_000));
 
   // 4. Spawn caddy on SERVE_PORT (separate from the dev port).
   tag('[runner]', `spawning caddy on :${SERVE_PORT}`);

@@ -428,6 +428,190 @@ mod wasm_exports {
         }
     }
 
+    // ---- Worker-direct provider FFI (Option B) ----
+    //
+    // This wasm module is also instantiated inside `assets/src/net-worker.js`.
+    // That worker gets its own browser event loop, so the Swarm's
+    // `spawn_local` tasks aren't starved by render + Elm + wasm-init
+    // contention on the main page thread (measured: up to 9.8s gaps —
+    // see commit fc00b2a's heartbeat instrumentation).
+    //
+    // The exports below let the worker hold ONE `RustLibp2pProvider`
+    // in a thread-local and drive it directly — no `Net`, no `World`.
+    // Net stays in main-thread wasm with a `JsLibp2pProvider` whose
+    // five callbacks postMessage commands/events to/from this worker.
+
+    #[cfg(feature = "rust-libp2p")]
+    thread_local! {
+        static WORKER_PROVIDER: std::cell::RefCell<Option<crate::net::rust_libp2p::RustLibp2pProvider>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Construct the worker's singleton `RustLibp2pProvider` and
+    /// return its peer-id (libp2p `12D3KooW…` string). The main-thread
+    /// bridge captures the returned identity once on worker `ready`
+    /// and exposes it through the `selfPeerId` callback to its
+    /// `JsLibp2pProvider`.
+    #[wasm_bindgen]
+    pub fn roam_net_worker_provider_init(bootstrap_json: String) -> Result<String, JsValue> {
+        #[cfg(feature = "rust-libp2p")]
+        {
+            use crate::net::NetworkProvider;
+            let bootstrap_addrs: Vec<String> = serde_json::from_str(&bootstrap_json)
+                .map_err(|e| JsValue::from_str(&format!("bootstrap_json parse: {e}")))?;
+            let provider = crate::net::rust_libp2p::RustLibp2pProvider::new(bootstrap_addrs)
+                .map_err(|e| JsValue::from_str(&format!("provider::new: {e:?}")))?;
+            let identity = provider.identity().0;
+            WORKER_PROVIDER.with(|p| *p.borrow_mut() = Some(provider));
+            Ok(identity)
+        }
+        #[cfg(not(feature = "rust-libp2p"))]
+        {
+            let _ = bootstrap_json;
+            Err(JsValue::from_str(
+                "roam_net_worker_provider_init: rust-libp2p feature not enabled",
+            ))
+        }
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_net_worker_provider_publish(topic: String, bytes: Vec<u8>) -> Result<(), JsValue> {
+        #[cfg(feature = "rust-libp2p")]
+        {
+            use crate::net::{NetworkProvider, Topic};
+            WORKER_PROVIDER.with(|p| match p.borrow_mut().as_mut() {
+                Some(provider) => provider
+                    .publish(&Topic(topic), &bytes)
+                    .map_err(|e| JsValue::from_str(&format!("publish: {e:?}"))),
+                None => Err(JsValue::from_str(
+                    "roam_net_worker_provider_publish: provider not initialized",
+                )),
+            })
+        }
+        #[cfg(not(feature = "rust-libp2p"))]
+        {
+            let _ = (topic, bytes);
+            Err(JsValue::from_str("rust-libp2p feature not enabled"))
+        }
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_net_worker_provider_subscribe(topic: String) -> Result<(), JsValue> {
+        #[cfg(feature = "rust-libp2p")]
+        {
+            use crate::net::{NetworkProvider, Topic};
+            WORKER_PROVIDER.with(|p| match p.borrow_mut().as_mut() {
+                Some(provider) => provider
+                    .subscribe(&Topic(topic))
+                    .map_err(|e| JsValue::from_str(&format!("subscribe: {e:?}"))),
+                None => Err(JsValue::from_str(
+                    "roam_net_worker_provider_subscribe: provider not initialized",
+                )),
+            })
+        }
+        #[cfg(not(feature = "rust-libp2p"))]
+        {
+            let _ = topic;
+            Err(JsValue::from_str("rust-libp2p feature not enabled"))
+        }
+    }
+
+    #[wasm_bindgen]
+    pub fn roam_net_worker_provider_unsubscribe(topic: String) -> Result<(), JsValue> {
+        #[cfg(feature = "rust-libp2p")]
+        {
+            use crate::net::{NetworkProvider, Topic};
+            WORKER_PROVIDER.with(|p| match p.borrow_mut().as_mut() {
+                Some(provider) => provider
+                    .unsubscribe(&Topic(topic))
+                    .map_err(|e| JsValue::from_str(&format!("unsubscribe: {e:?}"))),
+                None => Err(JsValue::from_str(
+                    "roam_net_worker_provider_unsubscribe: provider not initialized",
+                )),
+            })
+        }
+        #[cfg(not(feature = "rust-libp2p"))]
+        {
+            let _ = topic;
+            Err(JsValue::from_str("rust-libp2p feature not enabled"))
+        }
+    }
+
+    /// Drain queued NetEvents from the worker's provider. Returns a
+    /// JSON-encoded array; the main thread's `JsLibp2pProvider` shim
+    /// passes this through its `drainEvents` callback unmodified.
+    #[wasm_bindgen]
+    pub fn roam_net_worker_provider_drain_events() -> String {
+        #[cfg(feature = "rust-libp2p")]
+        {
+            use crate::net::NetworkProvider;
+            // The shape the JS-side `JsLibp2pProvider` callbacks expect
+            // is a list of `{ topic, from, bytes: number[], at_ms }`
+            // (see `js_libp2p.rs::MessageWire`). Message events flow
+            // through that channel. PeerUp/PeerDown/Subscription/Error
+            // events don't fit that shape — we surface them as
+            // `trace::Note` events instead so they land in the main
+            // thread's `#log` via `roam_drain_trace`. Without this,
+            // dial failures and connection events are silently dropped.
+            WORKER_PROVIDER.with(|p| match p.borrow_mut().as_mut() {
+                Some(provider) => {
+                    let events = provider.poll_events();
+                    let mut messages: Vec<serde_json::Value> = Vec::new();
+                    for e in events {
+                        match e {
+                            crate::net::NetEvent::Message {
+                                topic,
+                                from,
+                                bytes,
+                                at_ms,
+                            } => {
+                                messages.push(serde_json::json!({
+                                    "topic": topic.0,
+                                    "from": from.0,
+                                    "bytes": bytes,
+                                    "at_ms": at_ms,
+                                }));
+                            }
+                            crate::net::NetEvent::PeerUp { peer, addrs } => {
+                                crate::trace::emit(crate::trace::TraceEvent::Note {
+                                    tag: "net::peer_up",
+                                    msg: format!("peer={} addrs={}", peer.0, addrs.join(",")),
+                                });
+                            }
+                            crate::net::NetEvent::PeerDown { peer, reason } => {
+                                crate::trace::emit(crate::trace::TraceEvent::Note {
+                                    tag: "net::peer_down",
+                                    msg: format!("peer={} reason={}", peer.0, reason),
+                                });
+                            }
+                            crate::net::NetEvent::SubscriptionChange { topic, peer, joined } => {
+                                crate::trace::emit(crate::trace::TraceEvent::Note {
+                                    tag: "net::sub_change",
+                                    msg: format!(
+                                        "topic={} peer={} joined={}",
+                                        topic.0, peer.0, joined
+                                    ),
+                                });
+                            }
+                            crate::net::NetEvent::Error(err) => {
+                                crate::trace::emit(crate::trace::TraceEvent::Note {
+                                    tag: "net::provider_error",
+                                    msg: format!("{err:?}"),
+                                });
+                            }
+                        }
+                    }
+                    serde_json::to_string(&messages).unwrap_or_else(|_| "[]".to_string())
+                }
+                None => "[]".to_string(),
+            })
+        }
+        #[cfg(not(feature = "rust-libp2p"))]
+        {
+            "[]".to_string()
+        }
+    }
+
     /// Drain provider events, update the peer table, prune stale
     /// peers. Called once per frame from the JS bridge. `now_ms` is
     /// the JS-side `Date.now()` value (f64 to avoid BigInt at the
