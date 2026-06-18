@@ -187,6 +187,28 @@ pipeline.
 port errorIn : (D.Value -> msg) -> Sub msg
 
 
+{-| Slice 6 — outbound persistence. After every change to
+`model.errors`, the update function dispatches the full list (or a
+delta — for now, the full snapshot to keep semantics simple) here.
+JS-side writes to `localStorage.setItem('tsot_errors_v1', JSON.stringify(...))`.
+
+The list is capped at 100 most-recent entries on the JS side so a
+runaway error producer can't exhaust localStorage. Eviction order
+is FIFO (oldest first).
+-}
+port errorPersistOut : E.Value -> Cmd msg
+
+
+{-| Slice 6 — inbound restore on boot. JS reads
+`localStorage.getItem('tsot_errors_v1')` once at module init and
+ships the parsed array through this port. Empty array if nothing
+stored. The `RestoreErrors` Msg seeds `model.errors` from the
+decoded list, preserving each Error's original id (bijectivity
+invariant: same id keys to same DOM node across reloads).
+-}
+port errorRestoreIn : (D.Value -> msg) -> Sub msg
+
+
 
 -- MODEL
 

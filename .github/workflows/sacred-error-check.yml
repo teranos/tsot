@@ -1,0 +1,112 @@
+# Sacred-error axiom CI gate.
+#
+# Fails the build on any new silent-drop pattern that violates the
+# axiom in ERROR.md (and CLAUDE.md). Allowlists below carry an exact
+# count of legitimate sites at the time of writing; if a PR adds a new
+# match, the count goes up and the job fails — author must either
+# route through the typed Error pipeline or extend the allowlist with
+# a `# justified: ...` comment.
+#
+# Patterns checked:
+#   - `let _ = result;` on a Rust Result that carries meaningful failure
+#   - `.catch (() => {})` and `catch (_) {}` style silent JS catches
+#   - `Err _ -> ...` arms in Elm that don't route through pushDecodeError
+#
+# Counterpart to the engine-side `every_step_file_references_emit_human_refusal`
+# test (which asserts each `src/sim/step/*.rs` references the typed
+# Error pipeline). This CI job catches the broader axiom across
+# Rust + JS + Elm in a single pass.
+
+name: sacred-error-check
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'assets/**'
+      - 'roam/src/**'
+      - 'roam/assets/**'
+      - '.github/workflows/sacred-error-check.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'assets/**'
+      - 'roam/src/**'
+      - 'roam/assets/**'
+
+permissions:
+  contents: read
+
+jobs:
+  axiom-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Each grep returns the file:line count of pattern matches.
+      # Compare against the snapshotted baseline; if the count grows,
+      # fail with a hint pointing at the new offending line(s).
+      #
+      # The baselines are checked into .github/sacred-error-baseline/
+      # so they live in version control next to the workflow. To
+      # update a baseline (after a legitimate sweep that closes
+      # violations), commit the new counts; the job passes.
+      - name: Count + compare silent-drop patterns
+        run: |
+          mkdir -p .github/sacred-error-baseline
+
+          # Patterns to track. Each is (label, glob, ripgrep-pattern).
+          # If you add one, also add a baseline file with the current
+          # count so the gate passes on the next PR.
+          patterns=(
+            "rust-let-underscore|src/**/*.rs|^[[:space:]]*let _ ="
+            "rust-let-underscore-roam|roam/src/**/*.rs|^[[:space:]]*let _ ="
+            "js-empty-catch-paren|assets/**/*.{js,html}|catch[[:space:]]*\\([^)]*\\)[[:space:]]*\\{[[:space:]]*\\}"
+            "js-empty-catch-paren-roam|roam/assets/**/*.{js,html}|catch[[:space:]]*\\([^)]*\\)[[:space:]]*\\{[[:space:]]*\\}"
+            "elm-err-discard|assets/src/**/*.elm|Err _ ->"
+          )
+
+          fail=0
+          for entry in "${patterns[@]}"; do
+            IFS="|" read -r label glob pattern <<< "$entry"
+            baseline_file=".github/sacred-error-baseline/${label}.count"
+            count=$(grep -rE "$pattern" $glob 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+            baseline=0
+            if [ -f "$baseline_file" ]; then
+              baseline=$(cat "$baseline_file")
+            fi
+            echo "${label}: ${count} (baseline ${baseline})"
+            if [ "$count" -gt "$baseline" ]; then
+              echo "::error::sacred-error axiom violation: ${label} grew from ${baseline} to ${count}"
+              echo "::error::New matches:"
+              grep -rnE "$pattern" $glob | head -20
+              fail=1
+            fi
+            if [ "$count" -lt "$baseline" ]; then
+              echo "::notice::${label} dropped from ${baseline} to ${count} — update the baseline file when this PR merges."
+            fi
+          done
+
+          if [ "$fail" = "1" ]; then
+            cat <<EOF
+
+          The sacred-error axiom (ERROR.md) forbids silent-drops. Each
+          pattern listed above has a baseline count checked into
+          .github/sacred-error-baseline/. A PR that introduces a new
+          match must either:
+
+            1. Route the failure through the typed Error pipeline
+               (crate::error::emit_region in Rust, tsotPushError in JS,
+               pushDecodeError in Elm).
+            2. Add a justification comment on the line ('// silent because
+               <why>' / '/* silent because <why> */') AND update the
+               baseline file to the new count, which makes the reason
+               reviewable in the diff.
+
+          See ERROR.md \"Self-enforcement holes\" for the rationale.
+          EOF
+            exit 1
+          fi
