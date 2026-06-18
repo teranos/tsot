@@ -3,6 +3,7 @@ module Error exposing
     , Context
     , DragOffset
     , Error
+    , ListConfig
     , Severity(..)
     , ViewConfig
     , clickAnchorDecoder
@@ -11,6 +12,7 @@ module Error exposing
     , key
     , styles
     , view
+    , viewList
     , viewLogLine
     )
 
@@ -49,9 +51,11 @@ the failure without opening browser devtools:
 
 -}
 
+import Dict exposing (Dict)
 import Html exposing (Html, button, div, node, span, text)
 import Html.Attributes as A exposing (class)
 import Html.Events as E
+import Html.Keyed
 import Json.Decode as D
 
 
@@ -516,6 +520,214 @@ viewRaw raw =
 
 
 
+
+
+{-| List-level render config. The high-level entry point for any
+consumer rendering a `List Error` (e.g. an app's top-level overlay
+layer). Bundles the per-error config + the parent's drag-override
+state so the primitive owns layout end-to-end:
+
+  - `onDismiss` / `onDragStart` — same as `ViewConfig`.
+  - `viewport` — used both by per-error corner-flip AND by the
+    cascade so a cascading-on-spam list never walks off-screen
+    (sacred-errors axiom: errors land in front of the user).
+  - `buildLabel` — same as `ViewConfig`.
+  - `positions` — Dict of error-id → user-dragged anchor. Errors
+    in this dict skip cascade and render at the dragged position.
+    Parent updates this on `onDragStart` / `ErrorDragMoved` /
+    `ErrorDragEnded`.
+
+The parent doesn't compute layout. Just supply the inputs.
+-}
+type alias ListConfig msg =
+    { onDismiss : String -> msg
+    , onDragStart : String -> DragOffset -> msg
+    , viewport : { w : Float, h : Float }
+    , buildLabel : Maybe String
+    , positions : Dict String Anchor
+    }
+
+
+{-| Render a `List Error` as a keyed top-level overlay layer. This
+is the entry point every consumer should call — it owns:
+
+  - Filtering to only the errors carrying a cursor anchor (the
+    anchored set; surface-anchored errors go through the per-surface
+    `view` calls inline at the surface that owns them).
+  - The cascade algorithm: when spam-clicking generates many errors
+    at the same cursor pixel, each successive window steps diagonally
+    by (24, 24) so titlebars and × close buttons stay grabbable.
+  - Viewport-awareness: the cascade wraps SNAKE-STYLE within the
+    viewport rather than walking off-screen. After the viewport is
+    full it falls back to overlap rather than violating the
+    sacred-errors "land in front of the user" axiom.
+  - Per-error drag-overrides (`positions`).
+  - `Html.Keyed` identity so the same Error.id maps to the same DOM
+    node across re-renders (per `ERROR.md` Slice 6 bijectivity).
+-}
+viewList : ListConfig msg -> List Error -> Html msg
+viewList cfg errors =
+    let
+        anchored =
+            List.filter (\e -> e.context.anchor /= Nothing) errors
+
+        -- Walk the list in order, accumulating each error's
+        -- rendered top-left so later errors cascade away from
+        -- earlier ones' positions. Drag overrides skip the cascade
+        -- but still count as occupied positions for subsequent
+        -- errors.
+        layoutStep e ( occupied, acc ) =
+            let
+                topLeft =
+                    case Dict.get e.id cfg.positions of
+                        Just dragged ->
+                            dragged
+
+                        Nothing ->
+                            case e.context.anchor of
+                                Just cursor ->
+                                    effectivePosition cfg.viewport occupied cursor
+
+                                Nothing ->
+                                    { x = 0, y = 0 }
+            in
+            ( topLeft :: occupied
+            , ( e, topLeft ) :: acc
+            )
+
+        ( _, withPositions ) =
+            List.foldl layoutStep ( [], [] ) anchored
+
+        viewOne ( e, pos ) =
+            ( key e
+            , view
+                { onDismiss = cfg.onDismiss
+                , onDragStart = cfg.onDragStart
+                , position = Just pos
+                , viewport = cfg.viewport
+                , buildLabel = cfg.buildLabel
+                }
+                e
+            )
+    in
+    Html.Keyed.node "div"
+        [ class "tsot-anchored-errors" ]
+        -- foldl reverses; re-reverse for stable render order.
+        (List.map viewOne (List.reverse withPositions))
+
+
+{-| Internal: compute the box's rendered top-left position from
+the cursor anchor, corner-flipping near viewport edges and cascade-
+offsetting away from `existing` positions (which are themselves
+top-lefts of previously-placed boxes).
+
+Unifies corner-flip + cascade. When the natural (cursor + 8, +8)
+position would clip the viewport right/bottom edge, the box opens
+to the LEFT or UP respectively. Cascade then walks diagonally from
+that flipped natural position; when the cascade would itself walk
+off-screen, the snake wraps to the next column. After the viewport
+is exhausted the natural top-left is returned — sacred-errors
+axiom forbids off-screen placement even when the viewport is full;
+overlap is the lesser evil.
+
+The 80% overlap threshold: a candidate position is acceptable iff
+its overlap area with EVERY existing rectangle is ≤ 80% of the new
+rectangle's area. Single isolated errors land exactly at the
+(corner-flipped) natural position.
+-}
+effectivePosition : { w : Float, h : Float } -> List Anchor -> Anchor -> Anchor
+effectivePosition viewport existing cursor =
+    let
+        boxW =
+            448
+
+        boxH =
+            180
+
+        boxArea =
+            boxW * boxH
+
+        offset =
+            8
+
+        slack =
+            12
+
+        -- Corner-flipped natural top-left from cursor.
+        naturalX =
+            if cursor.x + offset + boxW > viewport.w - slack then
+                cursor.x - offset - boxW
+
+            else
+                cursor.x + offset
+
+        naturalY =
+            if cursor.y + offset + boxH > viewport.h - slack then
+                cursor.y - offset - boxH
+
+            else
+                cursor.y + offset
+
+        natural =
+            { x = naturalX, y = naturalY }
+
+        ovArea a b =
+            let
+                dx =
+                    max 0 (min (a.x + boxW) (b.x + boxW) - max a.x b.x)
+
+                dy =
+                    max 0 (min (a.y + boxH) (b.y + boxH) - max a.y b.y)
+            in
+            dx * dy
+
+        overlapTooMuch cur a =
+            ovArea cur a / boxArea > 0.8
+
+        fitsInViewport cur =
+            (cur.x + boxW <= viewport.w - slack)
+                && (cur.y + boxH <= viewport.h - slack)
+                && (cur.x >= slack)
+                && (cur.y >= slack)
+
+        -- Snake-cascade from natural. Columns wrap when the
+        -- accumulated Y offset would push the box past the
+        -- viewport's bottom.
+        rowsAvailable =
+            max 1
+                (floor ((viewport.h - slack - natural.y - boxH) / 24))
+
+        candidate n =
+            let
+                col =
+                    n // rowsAvailable
+
+                row =
+                    modBy rowsAvailable n
+            in
+            { x = natural.x + toFloat (col * 32)
+            , y = natural.y + toFloat (row * 24)
+            }
+
+        firstValid n =
+            if n > 999 then
+                natural
+
+            else
+                let
+                    cur =
+                        candidate n
+                in
+                if not (fitsInViewport cur) then
+                    natural
+
+                else if List.any (overlapTooMuch cur) existing then
+                    firstValid (n + 1)
+
+                else
+                    cur
+    in
+    firstValid 0
 
 
 {-| Stripped historical mirror for the LOG drawer. Same content but

@@ -1246,6 +1246,9 @@ update msg model =
             -- If the sender supplied an anchor, honor it; otherwise
             -- fall back to `model.lastClickAnchor` so a click-driven
             -- failure renders AT the cursor that triggered it.
+            -- Cascade + viewport-aware layout happens inside
+            -- `Error.viewList` at render time — this branch just
+            -- stores the original cursor anchor.
             case D.decodeValue Error.decode raw of
                 Ok decoded ->
                     let
@@ -2050,25 +2053,18 @@ override in `model.errorPositions` wins over the original anchor.
 -}
 viewAnchoredErrors : Model -> Html Msg
 viewAnchoredErrors model =
-    let
-        anchored =
-            List.filter (\e -> e.context.anchor /= Nothing) model.errors
-
-        viewOne e =
-            ( Error.key e
-            , Error.view
-                { onDismiss = ErrorDismissed
-                , onDragStart = ErrorDragStarted
-                , position = Dict.get e.id model.errorPositions
-                , viewport = model.viewport
-                , buildLabel = errorBuildLabel model.build
-                }
-                e
-            )
-    in
-    Keyed.node "div"
-        [ class "tsot-anchored-errors" ]
-        (List.map viewOne anchored)
+    -- Layout (anchor + cascade + viewport-aware snake + drag override
+    -- + Html.Keyed identity + filter for anchored) all live inside
+    -- Error.viewList — the primitive owns its placement so every
+    -- consumer gets it for free. Main.elm just supplies inputs.
+    Error.viewList
+        { onDismiss = ErrorDismissed
+        , onDragStart = ErrorDragStarted
+        , viewport = model.viewport
+        , buildLabel = errorBuildLabel model.build
+        , positions = model.errorPositions
+        }
+        model.errors
 
 
 {-| Wrap a surface render in a `position: relative` container with
