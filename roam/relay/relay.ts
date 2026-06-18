@@ -244,6 +244,20 @@ const INSTANCE_NAME = process.env.ROAM_RELAY_INSTANCE_NAME ?? 'roam-relay-eu-2';
 const METRIC_INTERVAL_MS = Number(process.env.ROAM_RELAY_METRIC_INTERVAL_MS ?? '60000');
 const PUBLISH_METRICS = process.env.ROAM_RELAY_PUBLISH_METRICS !== '0';
 
+// `mem_used_percent` is reported as RSS / MEMORY_CAP_MB, NOT as a
+// percentage of the box's total RAM. The relay's systemd unit caps
+// the process at `MemoryMax=400M`; using the box's 512 MB total
+// would make the alarm's 80%-threshold land ABOVE systemd's hard
+// kill (410 MB > 400 MB), so the alarm could never fire before the
+// OOM. Tying the denominator to the actual cap lets a 75-80% alarm
+// reliably trigger BEFORE systemd kills the process. The unit
+// `Percent` is preserved so existing alarms keep evaluating against
+// the same axis.
+//
+// MUST stay in sync with the systemd unit's `MemoryMax` value.
+// Document any change in both places.
+const MEMORY_CAP_MB = Number(process.env.ROAM_RELAY_MEMORY_CAP_MB ?? '400');
+
 let pubsubMessagesReceived = 0;
 pubsub.addEventListener('message', () => { pubsubMessagesReceived++; });
 
@@ -267,7 +281,7 @@ if (PUBLISH_METRICS) {
         MetricData: [
           { MetricName: 'procstat_memory_rss',  Dimensions: dimensions, Timestamp: now, Value: mem.rss,      Unit: 'Bytes' },
           { MetricName: 'procstat_memory_vms',  Dimensions: dimensions, Timestamp: now, Value: mem.heapTotal,Unit: 'Bytes' },
-          { MetricName: 'mem_used_percent',     Dimensions: dimensions, Timestamp: now, Value: (mem.rss / (1024 * 1024 * 512)) * 100, Unit: 'Percent' },
+          { MetricName: 'mem_used_percent',     Dimensions: dimensions, Timestamp: now, Value: (mem.rss / (1024 * 1024 * MEMORY_CAP_MB)) * 100, Unit: 'Percent' },
           { MetricName: 'relay_peer_count',     Dimensions: dimensions, Timestamp: now, Value: peers,        Unit: 'Count' },
           { MetricName: 'relay_connection_count', Dimensions: dimensions, Timestamp: now, Value: conns,      Unit: 'Count' },
           { MetricName: 'relay_pubsub_msgs_per_sec', Dimensions: dimensions, Timestamp: now, Value: rate,    Unit: 'Count/Second' },
