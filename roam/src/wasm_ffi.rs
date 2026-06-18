@@ -24,6 +24,12 @@ thread_local! {
 }
 
 pub(crate) fn roam_init_impl() {
+    // Install the panic hook FIRST so any panic raised during World
+    // construction lands in the trace bus before the wasm module
+    // aborts. The hook is idempotent (Once-gated), so repeated
+    // roam_init calls are safe — they just rebuild the World on top
+    // of the already-installed hook.
+    crate::trace::install_panic_hook();
     WORLD.with(|w| *w.borrow_mut() = Some(World::new()));
 }
 
