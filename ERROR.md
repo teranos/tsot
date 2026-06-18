@@ -91,12 +91,25 @@ closed AND user-verified end-to-end (a commit means done — see
 - [ ] `play_error_user_message::VariableXValueMissing` reads
   "The UI needs to ask first." — blames the UI for an engine
   wiring gap (no NeedHuman X-prompt is yielded before play_card).
-- [ ] `crate::error::emit_region(..., format!("{e}"))` in
+- [~] `crate::error::emit_region(..., format!("{e}"))` in
   `src/game/lua_api.rs` (3 sites) does NOT walk mlua's
   `CallbackError { cause: WithContext { cause: ExternalError(...) } }`
   chain. Outer wrapper text shown; inner Lua line:message hidden.
   `pending_from_mlua_error` already walks the chain — adopt the
   same walk for the surfaced `why` field.
+  **Code shipped 2026-06-18** (NOT user-verified end-to-end): added
+  `mlua_error_chain_why()` next to `pending_from_mlua_error()` in
+  `src/game/lua_api.rs`; same chain traversal (`CallbackError`
+  stripped, `WithContext` context emitted, leaf RuntimeError/
+  SyntaxError preserved with line:message), layers joined with ` → `.
+  The 3 `emit_region` sites in `fire_self_only`, `fire_activated`,
+  `fire_with_partner` now pass the walked string instead of
+  `format!("{e}")`. 5 unit tests pin the contract: leaf renders with
+  line preserved; CallbackError wrapper stripped; WithContext emits
+  context + cause; nested chain walks fully; non-RuntimeError leaves
+  (SyntaxError) still render via Display. Verification debt: trigger
+  a real handler failure in the dev tool and confirm the inner Lua
+  line:message appears in the error overlay's `why` field.
 - [ ] `TRACE_STRING_ALLOWLIST` (in `src/trace.rs`) catches NEW
   bare-String fields but doesn't audit the 14 existing entries
   (`Step.from/to/result`, `Cursor.from/to`, `Oracle.call/answer`,
@@ -106,9 +119,40 @@ closed AND user-verified end-to-end (a commit means done — see
 
 ### Engine internals (medium)
 
-- [ ] 32 `eprintln!` sites in non-CLI Rust still surface only to
+- [~] 32 `eprintln!` sites in non-CLI Rust still surface only to
   stderr (invisible in browser). `grep -rn 'eprintln!' src/
   --include='*.rs' | grep -v cli_ | grep -v _tests`.
+  **Triaged 2026-06-18**: of the original 32, the actual
+  failure-surface set (sites where a real engine bug should land in
+  the dev tool) is smaller. Triage:
+  - **3 lua_api.rs handler-failure sites** (lines 1435, 1483, 1588):
+    already typed-Error since 2026-06-11; eprintln kept as native-CLI
+    fallback (intentional). Improved 2026-06-18 with chain walker
+    (see "wrong-diagnostic lies" item above).
+  - **3 sites migrated 2026-06-18** (code shipped, NOT user-verified
+    end-to-end): `src/game/play.rs:976` `[CHAIN OVERFLOW]` →
+    `Severity::Error` `surface="engine" region="response-stack-overflow"`;
+    `src/game/play.rs:1010` `[RESPONSE SPIN]` →
+    `Severity::Error` `surface="engine" region="response-spin"`;
+    `src/sim/mcts.rs:301` unexpected ChoicePending →
+    `Severity::Error` `surface="mcts" region="unexpected-pending"`.
+    eprintln kept as native-CLI fallback in each.
+  - **~20 sim/run.rs EA-diagnostic sites** (heartbeat, slow-cast,
+    state dumps, baseline-load errors): EA binary is native-CLI only;
+    these are intentional terminal progress reporting per the
+    `cli_*.rs` exemption rule (sim/run.rs isn't `cli_*` but its only
+    consumer is the EA CLI binary).
+  - **2 trace.rs sites** (lines 410, 540): cfg-gated
+    `#[cfg(not(target_arch = "wasm32"))]` native-only fallbacks
+    paired with wasm-side `tsot_emit_info` / `tsot_emit_panic`
+    externs. Exempt — wasm path already surfaces.
+  - **`game.print()` Lua debug** (lua_api.rs:1176): intentional
+    dev-tool debug print. Exempt per `ERROR.md` original guidance.
+  - **main.rs:136, 146**: CLI startup. Exempt.
+  Net remaining failure-surface sites needing migration: zero in
+  this codebase as of 2026-06-18. If a future Rust site adds an
+  `eprintln!` for a real failure, that site must route through
+  `crate::error::emit_region` BEFORE the eprintln fallback.
 - [ ] 97 `let _ = result;` patterns in non-test code — most are
   setup ("genuinely can't fail here"), ~20% need to either route
   through the pipeline or carry a one-line `// silent because …`
@@ -408,6 +452,17 @@ shipped end-to-end (per CLAUDE.md commit standard).
   lowercase severity strings, optional-field omission, monotonic id
   counter, push/drain/reset semantics. Not yet end-to-end verified
   by user click but the Rust→JS direction is exercised by tests.
+  **Extracted 2026-06-18**: type definitions moved to
+  `crates/sacred-error/src/lib.rs`; TSOT (`src/error.rs`) and roam
+  (`roam/src/error.rs`) both consume them via path dep. The two
+  parallel copies that previously drifted (roam's mirrored TSOT's
+  but with `at: String::new()` placeholder + `"err-roam-"` id
+  prefix) are now thin per-crate bus modules over a shared type.
+  Wire-shape tests live in `sacred-error` (4 tests including
+  axiom-enforcement: unknown severity label FAILS decode); each
+  consumer keeps 3 bus-behavior tests for its id-prefix +
+  thread-local. Any future field added to `Error` lands once in
+  `sacred-error/src/lib.rs` instead of twice.
 - [~] `wasm_ffi.rs` envelope grows an `errors: Vec<Error>` field
   drained from a thread-local buffer (sibling of the `trace` bus).
   **Shipped 2026-06-11**: every FFI envelope path now drains the
