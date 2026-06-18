@@ -901,13 +901,13 @@ mod tests {
     /// suspend/failure case.
     ///
     /// Mechanism: serialize one instance of every TraceEvent variant
-    /// + `CandidateScore`, walk the resulting JSON, collect every
+    /// and `CandidateScore`, walk the resulting JSON, collect every
     /// field path that holds a JSON string, diff against the
     /// allowlist. Fails with a "you need to either type this field
     /// or add it to TRACE_STRING_ALLOWLIST with a why" message.
     #[test]
     fn trace_event_string_fields_match_allowlist() {
-        use serde_json::{Map, Value};
+        use serde_json::Value;
 
         // Build one minimal instance of every TraceEvent variant +
         // CandidateScore. Field VALUES don't matter; the test only

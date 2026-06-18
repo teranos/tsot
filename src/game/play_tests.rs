@@ -3212,7 +3212,6 @@ fn lua_damage_to_player_mills_n_from_their_deck_to_exile() {
     // actually target the opponent (Read the Embers card-impl had
     // a TODO comment to that effect). Now `game.damage("a"|"b", n)`
     // mills N from that player.
-    use crate::game::Zone;
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let pid_b = crate::game::PlayerId::B;
     let deck_before = s.player(pid_b).deck.len();
