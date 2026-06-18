@@ -69,8 +69,6 @@ mod real {
     use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
     use libp2p::{gossipsub, identify, identity, ping, Swarm, SwarmBuilder};
     use std::cell::RefCell;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
     use std::rc::Rc;
     use std::time::Duration;
 
@@ -110,17 +108,17 @@ mod real {
             let peer_id = libp2p::PeerId::from(keypair.public());
             let self_peer_id = PeerId(peer_id.to_string());
 
-            // Gossipsub: deterministic message-id by hashing the body, so
-            // duplicates from multiple paths collapse.
-            let message_id_fn = |msg: &gossipsub::Message| {
-                let mut s = DefaultHasher::new();
-                msg.data.hash(&mut s);
-                gossipsub::MessageId::from(s.finish().to_string())
-            };
+            // Gossipsub: use the default message-id function, which
+            // combines source peer-id + sequence number. Hashing only
+            // `msg.data` (what I had before) means identical position
+            // payloads get identical IDs and are rejected as
+            // `Duplicate` locally before they even hit the mesh — the
+            // player standing still would never publish a second time.
+            // js-libp2p uses the same default and that's why tab-js's
+            // duplicates DO propagate.
             let gossipsub_config = gossipsub::ConfigBuilder::default()
                 .heartbeat_interval(Duration::from_secs(10))
                 .validation_mode(gossipsub::ValidationMode::Strict)
-                .message_id_fn(message_id_fn)
                 .build()
                 .map_err(|e| NetError::ProviderInternal {
                     reason: format!("gossipsub config: {e}"),
@@ -181,7 +179,19 @@ mod real {
                 .map_err(|e| NetError::ProviderInternal {
                     reason: format!("swarm behaviour: {e}"),
                 })?
+                // Default connection_timeout is 10s — covers the entire
+                // upgrade stack (TCP+WS open + multistream-select + noise +
+                // yamux). In wasm32 main-thread context the raw WS open
+                // alone has been measured at 2-16s in headless Chromium,
+                // leaving zero budget for the rest of the upgrade.
+                // Bumping to 60s removes the per-stage time pressure so
+                // we can isolate whether timeout was the cause vs there
+                // being deeper protocol issues.
+                // `with_connection_timeout` lives on `BuildPhase`, so it
+                // must come AFTER `with_swarm_config` (which transitions
+                // SwarmPhase → BuildPhase).
                 .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
+                .with_connection_timeout(Duration::from_secs(60))
                 .build();
 
             let (cmd_tx, cmd_rx) = mpsc::unbounded::<Cmd>();

@@ -1272,7 +1272,15 @@ moduleP.then((wasm) => {
     // libp2p-block update meant the page-level #status element lied
     // about libp2p state between sample windows. The string template
     // is cheap; we let it run unconditionally.
-    if (libp2p) {
+    if (PROVIDER === 'rust') {
+      // PROVIDER=rust: JS-libp2p was sentinel-skipped at init; the
+      // network lives entirely in the Rust-side Swarm. We surface
+      // only what the Rust side exposes through FFI — peer count.
+      // Connection/mesh introspection would require new FFI exports
+      // and isn't worth wiring until rust-libp2p is the default.
+      const peerCount = roam_net_peer_count();
+      status.textContent = `me=${PEER_ID} — rust-libp2p peers=${peerCount}`;
+    } else if (libp2p) {
       const _conns = libp2p.getConnections();
       const _meshN = (pubsub && pubsub.getMeshPeers) ? (pubsub.getMeshPeers(TOPIC) || []).length : 0;
       // Peer count is Rust-owned (the only source of truth post-2d).

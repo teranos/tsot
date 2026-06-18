@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "bun-types": "latest",
+    "playwright": "^1.49.0",
     "tsx": "^4.22.4",
     "typescript": "latest"
   },

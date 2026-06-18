@@ -89,6 +89,18 @@ impl Net {
                     bytes,
                     at_ms,
                 } => {
+                    // Diagnostic trace — every incoming gossip event
+                    // surfaces in the event-log panel so cross-substrate
+                    // parity (does tab-rust see tab-js's positions and
+                    // vice versa?) is observable without inspecting
+                    // protocol internals.
+                    crate::trace::emit(crate::trace::TraceEvent::Note {
+                        tag: "net::recv",
+                        msg: format!(
+                            "topic={} from={} bytes={} at_ms={}",
+                            topic.0, from.0, bytes.len(), at_ms
+                        ),
+                    });
                     if topic.0 != POSITIONS_TOPIC {
                         continue;
                     }
@@ -119,12 +131,22 @@ impl Net {
                         }
                     }
                 }
-                NetEvent::PeerDown { peer, .. } => {
+                NetEvent::PeerDown { peer, reason } => {
+                    crate::trace::emit(crate::trace::TraceEvent::Note {
+                        tag: "net::peer_down",
+                        msg: format!("peer={} reason={}", peer.0, reason),
+                    });
                     if self.peers.remove(&peer).is_some() {
                         self.peer_state_seq = self.peer_state_seq.wrapping_add(1);
                     }
                 }
-                NetEvent::PeerUp { .. } | NetEvent::SubscriptionChange { .. } => {}
+                NetEvent::PeerUp { peer, addrs } => {
+                    crate::trace::emit(crate::trace::TraceEvent::Note {
+                        tag: "net::peer_up",
+                        msg: format!("peer={} addrs={}", peer.0, addrs.join(",")),
+                    });
+                }
+                NetEvent::SubscriptionChange { .. } => {}
                 NetEvent::Error(err) => {
                     // Routine network errors (publish-duplicate, no-peers,
                     // dial failures during normal operation) belong in the
