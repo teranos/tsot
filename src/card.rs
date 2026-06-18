@@ -316,75 +316,20 @@ pub enum StaticController {
 /// `condition` (if any) is satisfied, and the `affects` predicate matches.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaticDef {
+    /// Predicate gating which cards on the BOARD this static applies to.
     pub affects: StaticAffects,
-    /// Phase 1.5: stat modifier values are no longer fixed integers — each
-    /// is a `ModifierValue` that resolves to an `i32` against the source's
-    /// current state at every read. Lets cards scale with their attached
-    /// set (hydra: +1/+1 per attached; reef-phantom: +1/+1 per attached blue)
-    /// without the snapshot leak that imperative `add_modifier` had.
-    pub modifier_x: ModifierValue,
-    pub modifier_y: ModifierValue,
-    /// Phase 2: keyword granted to matching candidates. None = no keyword
-    /// grant. Lowercase string matching `has_keyword` lookup. Examples:
-    /// "flying", "vigilance", "haste", "cannot-block".
-    #[serde(default)]
-    pub modifier_keyword: Option<String>,
-    /// Phase 2: state-reading gate. None = always active when the source
-    /// is on board. Some(cond) = the static only fires when the engine's
+    /// State-reading gate. None = always active when the source is on
+    /// board. Some(cond) = the static only fires when the engine's
     /// evaluation of `cond` against game state is true.
     #[serde(default)]
     pub condition: Option<StaticCondition>,
-    /// Phase 3: restrictions imposed on matching candidates. Each restriction
-    /// is consulted by the engine at the corresponding choke point
-    /// (declare_attacker, resolve_hand_payment, etc.). Empty = no
-    /// restrictions. One static can carry multiple (flesh-eating-plant:
-    /// `cannot_attack` AND `cannot_be_cost_paid`).
-    #[serde(default)]
-    pub restrictions: Vec<Restriction>,
-    /// Phase 3.5: cost reductions applied to matching candidates when they
-    /// are cast. The `affects` predicate gates which cards get the discount;
-    /// each entry reduces one cost-source by `amount` (clamped to 0 per P.20).
-    /// Modern LCD Clock uses this with `affects.kind = creature` and one
-    /// entry each for HAND and GRAVEYARD reductions.
-    #[serde(default)]
-    pub cost_modifiers: Vec<CostModifier>,
-    /// Static-granted activated ability. Matching cards (per `affects`)
-    /// gain this ability in addition to any printed activations they
-    /// already have. Used by the jewel cycle: the jewel's static
-    /// (scope = attached_host) grants `T: draw a card, then discard a
-    /// card` to its host creature. Not serialized — the Lua handler
-    /// references inside are rebound from the live CardRegistry per
-    /// the same convention as `Card.handlers` / `Card.activated`.
+    /// Effects this static applies to matching candidates. Each entry is
+    /// one continuous effect kind (`StaticEffect` enum). Dispatch code
+    /// iterates this list and matches on the variant. Not serialized —
+    /// effects carry Lua `ActivatedAbility` references rebound from the
+    /// live CardRegistry per the same convention as `Card.handlers`.
     #[serde(skip, default)]
-    pub granted_activated: Option<ActivatedAbility>,
-    /// Colors granted to matching candidates. Empty Vec = no color
-    /// grant. Used by fluorescent-protein mutations (GFP grants green +
-    /// glow to its host). `GameState::effective_colors(iid)` unions the
-    /// candidate's printed colors with every grant from active statics
-    /// whose `affects` predicate matches. Identity matching (P.7a) and
-    /// jewel pitch validation (P.24) consult effective colors; the
-    /// static-affects matcher itself uses printed colors only, to
-    /// avoid recursion (same pattern as the keyword-grant cycle guard).
-    #[serde(default)]
-    pub granted_colors: Vec<String>,
-    /// Face (cosmetic surface) attributes granted to matching candidates.
-    /// Parallel to `granted_colors` but lives on the face axis — used by
-    /// gfp / mcherry / sparkle to grant `glow` to their host. Empty Vec =
-    /// no face grant.
-    #[serde(default)]
-    pub granted_face: Vec<String>,
-    /// Subtractive: while this static is active on the target, the
-    /// target's effective color identity is empty. Read by
-    /// `GameState::host_loses_colors`. Nonsense Mutation uses this.
-    #[serde(default)]
-    pub makes_host_colorless: bool,
-    /// Subtractive: while this static is active on the target, the
-    /// target's own abilities (printed + granted) are suppressed —
-    /// its static_def stops applying, its handlers don't fire, its
-    /// activated abilities can't be initiated. Read by
-    /// `GameState::host_loses_abilities`. Nonsense Mutation uses this.
-    #[serde(default)]
-    pub suppresses_host_abilities: bool,
+    pub effects: Vec<StaticEffect>,
 }
 
 /// Phase 3.5 cost reduction component on a static ability. Applied during
@@ -395,6 +340,53 @@ pub struct StaticDef {
 pub struct CostModifier {
     pub source: CostSource,
     pub amount: i32,
+}
+
+/// One kind of continuous effect a static ability can produce. A
+/// `StaticDef` carries a `Vec<StaticEffect>` listing every effect the
+/// static applies to matching candidates. Adding a new continuous-effect
+/// kind means adding a variant here.
+#[derive(Debug, Clone)]
+pub enum StaticEffect {
+    /// Stat (X/Y) modifier. Both axes carried together since a single
+    /// static typically grants paired modifications (anthem +1/+1, hydra
+    /// per-attached +1/+1). Either axis may be zero for asymmetric grants.
+    StatBoost {
+        x: ModifierValue,
+        y: ModifierValue,
+    },
+    /// Keyword grant (e.g., flying, vigilance, haste). Lowercase string
+    /// matching `GameState::has_keyword`.
+    KeywordGrant(String),
+    /// Behavior restriction (cannot_attack, cannot_be_cost_paid, etc.)
+    /// imposed on matching candidates. Consulted at the corresponding
+    /// engine choke point (declare_attacker, resolve_hand_payment, ...).
+    Restrict(Restriction),
+    /// Cost reduction. Applied during `play_card` cost computation and
+    /// read at handler-side via `effective_combined_cost` (A.12).
+    CostModify {
+        source: CostSource,
+        amount: i32,
+    },
+    /// Activated ability granted to matching candidates. The recipient
+    /// pays the cost and resolves the effect as the activation source.
+    GrantActivated(ActivatedAbility),
+    /// Color granted to matching candidates (e.g., GFP grants green).
+    /// Unioned with printed colors by `GameState::effective_colors`.
+    GrantColor(String),
+    /// Face attribute granted to matching candidates (e.g., GFP grants
+    /// `glow`). Read by `GameState::effective_face`.
+    GrantFace(String),
+    /// Subtractive: while this static is active on the target, the
+    /// target's effective color identity is empty. Read by
+    /// `GameState::host_loses_colors`. Nonsense Mutation uses this.
+    MakesHostColorless,
+    /// Subtractive: while this static is active on the target, the
+    /// target's own abilities (printed + granted) are suppressed —
+    /// its static_def stops applying, its handlers don't fire, its
+    /// activated abilities can't be initiated. Read by
+    /// `GameState::host_loses_abilities`. Nonsense Mutation uses this.
+    SuppressesHostAbilities,
 }
 
 /// Phase 1.5 dynamic stat-modifier value. Resolved to an `i32` against the

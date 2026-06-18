@@ -20,6 +20,17 @@ use crate::card::EventName;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CombatError {
+    /// A Lua handler fired during combat (on_attack / on_block / on_blocked_by
+    /// / on_die from combat damage / on_creature_dies broadcast / on-attached
+    /// for attackers that landed damage) called `game.choose_card` /
+    /// `game.confirm` / `game.choose_player` / `game.choose_int` with an
+    /// oracle that needs the human to answer. Mirrors
+    /// `PlayError::ChoicePending` — wrapper raises `Error::external(_)`,
+    /// `fire_*` downcasts, the combat method lifts via `?`. The StepEngine
+    /// catches this variant, rolls back the preview journal, surfaces a
+    /// `HumanPrompt::Choose*`, and re-fires after the user's answer is
+    /// appended to `HumanReplayOracle.replay`.
+    ChoicePending(crate::choice::ChoicePending),
     GameOver,
     NotCombatPhase,
     NotAwaitingAttackers,
@@ -162,12 +173,8 @@ impl GameState {
         let _ = self.drive_window_to_close(ctx.as_deref_mut());
 
         if let Some(c) = ctx {
-            // TODO(lua-yield): if a Lua on_attack handler calls
-            // game.choose_* / game.confirm against a human oracle, the
-            // Pending is dropped here (CombatError doesn't yet carry
-            // ChoicePending). Battle Captain etc. don't yield today,
-            // so it's not blocking the corpus. Lift when needed.
-            let _ = lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker);
+            lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker)
+                .map_err(CombatError::ChoicePending)?;
         }
 
         Ok(())
@@ -309,27 +316,26 @@ impl GameState {
         // Errors log and continue per LUA.md Q #3.
         let mut ctx = ctx;
         if let Some(c) = ctx.as_mut() {
-            // TODO(lua-yield): see attack-side note. CombatError doesn't
-            // yet carry ChoicePending; on_blocked_by handlers can't suspend
-            // a human-choice yield from here without a CombatError variant.
-            let _ = lua_api::fire_with_partner(
+            lua_api::fire_with_partner(
                 c.lua,
                 self,
                 c.oracle(),
                 EventName::OnBlockedBy,
                 attacker,
                 blocker,
-            );
+            )
+            .map_err(CombatError::ChoicePending)?;
         }
         if let Some(c) = ctx.as_mut() {
-            let _ = lua_api::fire_with_partner(
+            lua_api::fire_with_partner(
                 c.lua,
                 self,
                 c.oracle(),
                 EventName::OnBlock,
                 blocker,
                 attacker,
-            );
+            )
+            .map_err(CombatError::ChoicePending)?;
         }
         // RULES R.1 lists only two window-openers: card-played and
         // attack-declared. Block declarations are atomic — no window opens
@@ -357,14 +363,14 @@ impl GameState {
             _ => return Err(CombatError::NotAwaitingBlockers),
         };
         self.set_combat(None);
-        Ok(self.resolve_combat(attacks, ctx))
+        self.resolve_combat(attacks, ctx)
     }
 
     fn resolve_combat(
         &mut self,
         attacks: Vec<AttackDecl>,
         ctx: Option<&mut EventContext>,
-    ) -> CombatOutcome {
+    ) -> Result<CombatOutcome, CombatError> {
         let mut outcome = CombatOutcome::default();
         let defender = self.active_player.opponent();
         let mut ctx = ctx;
@@ -438,24 +444,25 @@ impl GameState {
                 .map(|i| i.attached.clone())
                 .unwrap_or_default();
             if let Some(c) = ctx.as_deref_mut() {
-                // TODO(lua-yield): CombatError doesn't carry ChoicePending.
-                let _ = lua_api::fire_self_only(
+                lua_api::fire_self_only(
                     c.lua,
                     self,
                     c.oracle(),
                     EventName::OnDealtDamageToPlayer,
                     attacker,
-                );
+                )
+                .map_err(CombatError::ChoicePending)?;
             }
             for aid in &attached {
                 if let Some(c) = ctx.as_deref_mut() {
-                    let _ = lua_api::fire_self_only(
+                    lua_api::fire_self_only(
                         c.lua,
                         self,
                         c.oracle(),
                         EventName::OnDealtDamageToPlayer,
                         aid,
-                    );
+                    )
+                    .map_err(CombatError::ChoicePending)?;
                 }
             }
         }
@@ -494,11 +501,8 @@ impl GameState {
             // attached cards via game.move; P.8 (auto-exile of leftover
             // attached) is still TODO and will run after handlers when wired.
             if let Some(c) = ctx.as_mut() {
-                // TODO(lua-yield): on_die handlers like flesh-eating-plant
-                // can yield via game.choose_card / game.confirm. The fix
-                // there is a CombatError::ChoicePending variant + threading
-                // through confirm_blocks. Today: swallowed.
-                let _ = lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid);
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid)
+                    .map_err(CombatError::ChoicePending)?;
                 // Broadcast OnCreatureDies to every BOARD watcher (both
                 // sides). The dying card already left BOARD above, so
                 // it's naturally excluded from the snapshot.
@@ -510,14 +514,15 @@ impl GameState {
                     .cloned()
                     .collect();
                 for watcher in &watchers {
-                    let _ = lua_api::fire_with_partner(
+                    lua_api::fire_with_partner(
                         c.lua,
                         self,
                         c.oracle(),
                         EventName::OnCreatureDies,
                         watcher,
                         iid,
-                    );
+                    )
+                    .map_err(CombatError::ChoicePending)?;
                 }
             }
             // P.8: cascade any cards still attached to the dead host
@@ -526,7 +531,7 @@ impl GameState {
             // hand still get the first read.
             self.exile_remaining_attached(iid);
         }
-        outcome
+        Ok(outcome)
     }
 }
 

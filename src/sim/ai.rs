@@ -181,15 +181,31 @@ pub fn play_priority_score(state: &GameState, iid: &InstanceId) -> i32 {
     };
     let mut s = 0i32;
     if let Some(def) = &inst.card.static_def {
-        if !def.cost_modifiers.is_empty() {
+        let mut has_cost = false;
+        let mut has_stat_or_keyword = false;
+        let mut has_restrict = false;
+        for eff in &def.effects {
+            match eff {
+                crate::card::StaticEffect::CostModify { .. } => has_cost = true,
+                crate::card::StaticEffect::StatBoost { x, y } => {
+                    let nonzero = !matches!(x, crate::ModifierValue::Fixed(n) if *n == 0.0)
+                        || !matches!(y, crate::ModifierValue::Fixed(n) if *n == 0.0);
+                    if nonzero {
+                        has_stat_or_keyword = true;
+                    }
+                }
+                crate::card::StaticEffect::KeywordGrant(_) => has_stat_or_keyword = true,
+                crate::card::StaticEffect::Restrict(_) => has_restrict = true,
+                _ => {}
+            }
+        }
+        if has_cost {
             s += 50;
         }
-        let stat_active = !matches!(def.modifier_x, crate::ModifierValue::Fixed(n) if n == 0.0)
-            || !matches!(def.modifier_y, crate::ModifierValue::Fixed(n) if n == 0.0);
-        if stat_active || def.modifier_keyword.is_some() {
+        if has_stat_or_keyword {
             s += 20;
         }
-        if !def.restrictions.is_empty() {
+        if has_restrict {
             s += 15;
         }
     }
@@ -564,7 +580,11 @@ pub fn attached_keep_value(state: &GameState, attached_iid: &InstanceId) -> i32 
             .card
             .static_def
             .as_ref()
-            .is_some_and(|d| d.granted_activated.is_some())
+            .is_some_and(|d| {
+                d.effects
+                    .iter()
+                    .any(|e| matches!(e, crate::card::StaticEffect::GrantActivated(_)))
+            })
         {
             score += 15;
         }
@@ -1157,7 +1177,7 @@ mod tests {
     #[test]
     fn can_pay_instant_cost_refuses_2hand_spell_with_static_hand_reduction_and_no_identity_match() {
         use crate::card::{
-            CardType, CostComponent, CostModifier, CostSource, ModifierValue, StaticAffects,
+            CardType, CostComponent, CostSource, StaticAffects,
             StaticDef,
         };
         let mut s = fresh();
@@ -1189,20 +1209,11 @@ mod tests {
                     kind: Some(CardType::Spell),
                     ..Default::default()
                 },
-                modifier_x: ModifierValue::Fixed(0.0),
-                modifier_y: ModifierValue::Fixed(0.0),
-                modifier_keyword: None,
                 condition: None,
-                restrictions: Vec::new(),
-                cost_modifiers: vec![CostModifier {
+                effects: vec![crate::card::StaticEffect::CostModify {
                     source: CostSource::Hand,
                     amount: 1,
                 }],
-                granted_activated: None,
-                granted_colors: Vec::new(),
-                granted_face: Vec::new(),
-                makes_host_colorless: false,
-                suppresses_host_abilities: false,
             });
         }
         // Reducer goes to BOARD so its static fires.

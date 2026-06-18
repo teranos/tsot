@@ -3096,7 +3096,7 @@ fn zero_y_creature_dies_per_c15_after_attached_detached_as_cost() {
     // +attached/+attached. With 1 attached, effective_y = 1. Detach
     // that attached as cost for a spell. After the cast resolves, the
     // creature's effective Y is 0 and it must be in GRAVEYARD.
-    use crate::card::{ModifierValue, Restriction, StaticAffects, StaticDef};
+    use crate::card::{ModifierValue, StaticAffects, StaticDef};
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let host_cast = s.a.hand[0].clone();
     let attached = s.a.hand[1].clone();
@@ -3117,17 +3117,11 @@ fn zero_y_creature_dies_per_c15_after_attached_detached_as_cost() {
                 kind: None,
                 has_keyword: None,
             },
-            modifier_x: ModifierValue::AttachedCount,
-            modifier_y: ModifierValue::AttachedCount,
-            modifier_keyword: None,
             condition: None,
-            restrictions: Vec::<Restriction>::new(),
-            cost_modifiers: vec![],
-            granted_activated: None,
-            granted_colors: vec![],
-granted_face: Vec::new(),
-            makes_host_colorless: false,
-            suppresses_host_abilities: false,
+            effects: vec![crate::card::StaticEffect::StatBoost {
+                x: ModifierValue::AttachedCount,
+                y: ModifierValue::AttachedCount,
+            }],
         });
     }
     let _ = s.remove_from_zone(&attached, PlayerId::A, Zone::Hand);

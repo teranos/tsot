@@ -1056,3 +1056,64 @@ fn unblocked_attack_can_cause_deckout_win() {
     assert_eq!(outcome.defender_milled_to_exile, 1);
     assert_eq!(s.winner, Some(PlayerId::A));
 }
+
+/// Mirror of the activate.rs / lua_api.rs propagation tests at the
+/// combat boundary. Pins the contract that when an `on_attack` handler
+/// calls `game.choose_card` against a HumanReplayOracle with no replay,
+/// `declare_attacker` returns `Err(CombatError::ChoicePending(_))`
+/// instead of silently swallowing the suspend.
+#[test]
+fn declare_attacker_returns_choice_pending_when_on_attack_yields() {
+    use crate::card::EventName;
+    use crate::choice::{ChoicePending, RandomOracle};
+    use crate::game::context::EventContext;
+    use crate::sim::human::HumanReplayOracle;
+    use mlua::Lua;
+    use rand::SeedableRng;
+
+    let lua = Lua::new();
+    let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+    let atk = s.a.hand[0].clone();
+    put_on_board(&mut s, PlayerId::A, &atk);
+    add_ability(&mut s, &atk, "haste");
+    // Park a target on the opponent's board to give the handler a
+    // pool element. The wrapper short-circuits to Pending before
+    // reading it; the iid just has to exist for the Lua side.
+    let target = s.b.hand[0].clone();
+    put_on_board(&mut s, PlayerId::B, &target);
+
+    let handler_src = format!(
+        r#"return function(game, self)
+             local picked = game.choose_card({{ "{target}" }}, {{ prompt = "test" }})
+             if picked ~= nil then game.damage(picked, 1) end
+           end"#
+    );
+    let handler: mlua::Function = lua.load(&handler_src).eval().unwrap();
+    s.card_pool
+        .get_mut(&atk)
+        .unwrap()
+        .card
+        .handlers
+        .insert(EventName::OnAttack, handler);
+
+    let mut oracle = HumanReplayOracle::new(
+        RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0)),
+        Some(PlayerId::A),
+    );
+
+    enter_combat(&mut s);
+    let result = {
+        let mut ctx = EventContext::new(&lua, &mut oracle);
+        s.declare_attacker(&atk, Some(&mut ctx))
+    };
+
+    match result {
+        Err(CombatError::ChoicePending(ChoicePending::Card(req))) => {
+            assert_eq!(req.asker, Some(PlayerId::A));
+            assert!(!req.pool.is_empty());
+        }
+        other => panic!(
+            "expected Err(CombatError::ChoicePending(Card)), got {other:?}"
+        ),
+    }
+}

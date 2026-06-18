@@ -11,6 +11,16 @@ use crate::card::{CardType, CostSource};
 /// enforces each rule so manual call sites and replays stay honest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActivateError {
+    /// A Lua handler fired during the activation's `effect` called
+    /// `game.choose_card` / `game.confirm` / `game.choose_player` /
+    /// `game.choose_int` with an oracle that needs the human to answer.
+    /// Mirrors `PlayError::ChoicePending` — wrapper raises
+    /// `Error::external(ChoicePending)`, `fire_activated` downcasts,
+    /// `activate_ability` lifts via `?`. The StepEngine catches this
+    /// variant, rolls back the preview journal, surfaces a
+    /// `HumanPrompt::Choose*`, and re-fires after the user's answer
+    /// is appended to `HumanReplayOracle.replay`.
+    ChoicePending(crate::choice::ChoicePending),
     /// Source iid not in the card pool.
     SourceMissing,
     /// `ability_idx` out of range for this card's `activated` array.

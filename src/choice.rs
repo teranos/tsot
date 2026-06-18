@@ -1032,7 +1032,7 @@ impl<O: ChoiceOracle> ChoiceOracle for RecordingOracle<O> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::card::{ModifierValue, StaticAffects, StaticDef};
+    use crate::card::{StaticAffects, StaticDef};
     use crate::game::test_helpers::deck_of;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
@@ -1045,17 +1045,8 @@ mod tests {
     fn give_static_def(s: &mut GameState, iid: &InstanceId) {
         s.card_pool.get_mut(iid).unwrap().card.static_def = Some(StaticDef {
             affects: StaticAffects::default(),
-            modifier_x: ModifierValue::default(),
-            modifier_y: ModifierValue::default(),
-            modifier_keyword: None,
             condition: None,
-            restrictions: vec![],
-            cost_modifiers: vec![],
-            granted_activated: None,
-            granted_colors: vec![],
-granted_face: Vec::new(),
-            makes_host_colorless: false,
-            suppresses_host_abilities: false,
+            effects: vec![],
         });
     }
 

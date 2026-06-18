@@ -433,19 +433,58 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
             )))
         }
     };
+    // Phase 1 of the StaticEffect refactor: populate the unified
+    // continuous-effect vec from the parsed legacy fields. The legacy
+    // fields stay (read by existing dispatch sites); new dispatch code
+    // reads from `effects`. See the StaticEffect enum comment.
+    let mut effects: Vec<crate::card::StaticEffect> = Vec::new();
+    // StatBoost only emitted when either axis is nonzero (Fixed(0.0) on
+    // both = no boost). Non-Fixed variants (AttachedCount etc.) always
+    // count as "boost present" since the value resolves at read time.
+    let stat_present = match (&modifier_x, &modifier_y) {
+        (crate::card::ModifierValue::Fixed(x), crate::card::ModifierValue::Fixed(y)) => {
+            *x != 0.0 || *y != 0.0
+        }
+        _ => true,
+    };
+    if stat_present {
+        effects.push(crate::card::StaticEffect::StatBoost {
+            x: modifier_x.clone(),
+            y: modifier_y.clone(),
+        });
+    }
+    if let Some(k) = &modifier_keyword {
+        effects.push(crate::card::StaticEffect::KeywordGrant(k.clone()));
+    }
+    for r in &restrictions {
+        effects.push(crate::card::StaticEffect::Restrict(*r));
+    }
+    for cm in &cost_modifiers {
+        effects.push(crate::card::StaticEffect::CostModify {
+            source: cm.source,
+            amount: cm.amount,
+        });
+    }
+    if let Some(act) = &granted_activated {
+        effects.push(crate::card::StaticEffect::GrantActivated(act.clone()));
+    }
+    for c in &granted_colors {
+        effects.push(crate::card::StaticEffect::GrantColor(c.clone()));
+    }
+    for f in &granted_face {
+        effects.push(crate::card::StaticEffect::GrantFace(f.clone()));
+    }
+    if makes_host_colorless {
+        effects.push(crate::card::StaticEffect::MakesHostColorless);
+    }
+    if suppresses_host_abilities {
+        effects.push(crate::card::StaticEffect::SuppressesHostAbilities);
+    }
+
     Ok(Some(StaticDef {
         affects,
-        modifier_x,
-        modifier_y,
-        modifier_keyword,
         condition,
-        restrictions,
-        cost_modifiers,
-        granted_activated,
-        granted_colors,
-        granted_face,
-        makes_host_colorless,
-        suppresses_host_abilities,
+        effects,
     }))
 }
 
@@ -1208,10 +1247,14 @@ mod tests {
         assert_eq!(card.cost.len(), 2);
         let def = card.static_def.as_ref().expect("static_def present");
         assert!(matches!(def.affects.scope, crate::card::StaticScope::AttachedHost));
-        use crate::card::ModifierValue;
+        use crate::card::{ModifierValue, StaticEffect};
+        let (mx, my) = def.effects.iter().find_map(|e| match e {
+            StaticEffect::StatBoost { x, y } => Some((x.clone(), y.clone())),
+            _ => None,
+        }).expect("stat boost effect present");
         // X = +1 per shiny board card.
         assert_eq!(
-            def.modifier_x,
+            mx,
             ModifierValue::Sum(vec![
                 ModifierValue::Fixed(0.0),
                 ModifierValue::Scaled(1.0, Box::new(ModifierValue::BoardCountByFace("shiny".into()))),
@@ -1219,14 +1262,14 @@ mod tests {
         );
         // Y = -0.5 + (-0.25 × shiny board count).
         assert_eq!(
-            def.modifier_y,
+            my,
             ModifierValue::Sum(vec![
                 ModifierValue::Fixed(-0.5),
                 ModifierValue::Scaled(-0.25, Box::new(ModifierValue::BoardCountByFace("shiny".into()))),
             ])
         );
         // Becomes cyan: grant cyan to the host.
-        assert!(def.granted_colors.iter().any(|c| c == "cyan"));
+        assert!(def.effects.iter().any(|e| matches!(e, StaticEffect::GrantColor(c) if c == "cyan")));
     }
 
     #[test]
@@ -1248,9 +1291,13 @@ mod tests {
             }
         "#);
         let def = card.static_def.expect("static_def present");
-        use crate::card::ModifierValue;
+        use crate::card::{ModifierValue, StaticEffect};
+        let my = def.effects.iter().find_map(|e| match e {
+            StaticEffect::StatBoost { y, .. } => Some(y.clone()),
+            _ => None,
+        }).expect("stat boost effect present");
         assert_eq!(
-            def.modifier_y,
+            my,
             ModifierValue::Sum(vec![
                 ModifierValue::Fixed(-0.5),
                 ModifierValue::Scaled(-0.25, Box::new(ModifierValue::BoardCountByFace("shiny".into()))),
@@ -1271,7 +1318,11 @@ mod tests {
             }
         "#);
         let def = card.static_def.expect("static_def present");
-        assert_eq!(def.modifier_x, crate::card::ModifierValue::BoardCountByFace("shiny".into()));
+        let mx = def.effects.iter().find_map(|e| match e {
+            crate::card::StaticEffect::StatBoost { x, .. } => Some(x.clone()),
+            _ => None,
+        }).expect("stat boost effect present");
+        assert_eq!(mx, crate::card::ModifierValue::BoardCountByFace("shiny".into()));
     }
 
     #[test]
@@ -1286,10 +1337,15 @@ mod tests {
         assert_eq!(card.cost.len(), 2);
         let def = card.static_def.as_ref().expect("static_def present");
         assert!(matches!(def.affects.scope, crate::card::StaticScope::AttachedHost));
-        assert_eq!(def.modifier_x, crate::card::ModifierValue::Fixed(1.0));
-        assert_eq!(def.modifier_y, crate::card::ModifierValue::Fixed(-1.0));
-        assert!(def.makes_host_colorless);
-        assert!(def.suppresses_host_abilities);
+        use crate::card::StaticEffect;
+        let (mx, my) = def.effects.iter().find_map(|e| match e {
+            StaticEffect::StatBoost { x, y } => Some((x.clone(), y.clone())),
+            _ => None,
+        }).expect("stat boost effect present");
+        assert_eq!(mx, crate::card::ModifierValue::Fixed(1.0));
+        assert_eq!(my, crate::card::ModifierValue::Fixed(-1.0));
+        assert!(def.effects.iter().any(|e| matches!(e, StaticEffect::MakesHostColorless)));
+        assert!(def.effects.iter().any(|e| matches!(e, StaticEffect::SuppressesHostAbilities)));
     }
 
     #[test]
@@ -1309,8 +1365,15 @@ mod tests {
             }
         "#);
         let def = card.static_def.expect("static_def present");
-        assert!(def.makes_host_colorless, "modifier.colorless = true → makes_host_colorless");
-        assert!(def.suppresses_host_abilities, "modifier.suppresses_abilities = true → suppresses_host_abilities");
+        use crate::card::StaticEffect;
+        assert!(
+            def.effects.iter().any(|e| matches!(e, StaticEffect::MakesHostColorless)),
+            "modifier.colorless = true → MakesHostColorless effect",
+        );
+        assert!(
+            def.effects.iter().any(|e| matches!(e, StaticEffect::SuppressesHostAbilities)),
+            "modifier.suppresses_abilities = true → SuppressesHostAbilities effect",
+        );
     }
 
     #[test]
@@ -1430,8 +1493,12 @@ mod tests {
             }"#,
         );
         let s = cards[0].static_def.as_ref().expect("static set");
-        assert_eq!(s.modifier_x, super::ModifierValue::AttachedCountScaled(2));
-        assert_eq!(s.modifier_y, super::ModifierValue::AttachedCountScaled(3));
+        let (mx, my) = s.effects.iter().find_map(|e| match e {
+            super::StaticEffect::StatBoost { x, y } => Some((x.clone(), y.clone())),
+            _ => None,
+        }).expect("stat boost effect present");
+        assert_eq!(mx, super::ModifierValue::AttachedCountScaled(2));
+        assert_eq!(my, super::ModifierValue::AttachedCountScaled(3));
     }
 
     #[test]
@@ -1600,10 +1667,10 @@ mod tests {
             }"#,
         );
         let st = card.static_def.as_ref().expect("static_def present");
-        let ga = st
-            .granted_activated
-            .as_ref()
-            .expect("granted_activated present");
+        let ga = st.effects.iter().find_map(|e| match e {
+            super::StaticEffect::GrantActivated(a) => Some(a),
+            _ => None,
+        }).expect("GrantActivated effect present");
         assert!(ga.cost_tap);
         assert!(ga.cost_components.is_empty());
         assert_eq!(ga.text, "T: draw a card");
@@ -1709,13 +1776,17 @@ mod tests {
             }"#,
         );
         let l = &lhs.activated[0];
-        let r = &rhs
+        let r = rhs
             .static_def
             .as_ref()
             .unwrap()
-            .granted_activated
-            .as_ref()
-            .unwrap();
+            .effects
+            .iter()
+            .find_map(|e| match e {
+                super::StaticEffect::GrantActivated(a) => Some(a),
+                _ => None,
+            })
+            .expect("GrantActivated present");
         assert_eq!(l.cost_tap, r.cost_tap);
         assert_eq!(l.cost_components.len(), r.cost_components.len());
         for (lc, rc) in l.cost_components.iter().zip(r.cost_components.iter()) {

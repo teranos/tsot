@@ -1,5 +1,5 @@
 
-The Symbols of Teranos: ax = ⋈, ix = ⨳, am = ≡, pulse = ꩜, sem = ⊨
+The Symbols of Teranos: ax = ⋈, ix = ⨳, am = ≡, pulse = ꩜, sem = ⊨, delta = δ
 
 WASM - Collectible Card Game
 

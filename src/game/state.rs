@@ -1154,8 +1154,13 @@ impl GameState {
     ) -> Option<(f32, f32)> {
         let def = self.static_def_if_matches(source_iid, target_iid)?;
         let source = self.card_pool.get(source_iid)?;
-        let dx = self.resolve_modifier_value(source, &def.modifier_x);
-        let dy = self.resolve_modifier_value(source, &def.modifier_y);
+        let (mut dx, mut dy) = (0.0, 0.0);
+        for eff in &def.effects {
+            if let crate::card::StaticEffect::StatBoost { x, y } = eff {
+                dx += self.resolve_modifier_value(source, x);
+                dy += self.resolve_modifier_value(source, y);
+            }
+        }
         Some((dx, dy))
     }
 
@@ -1265,7 +1270,12 @@ impl GameState {
         target_iid: &InstanceId,
     ) -> Option<&str> {
         let def = self.static_def_if_matches(source_iid, target_iid)?;
-        def.modifier_keyword.as_deref()
+        for eff in &def.effects {
+            if let crate::card::StaticEffect::KeywordGrant(k) = eff {
+                return Some(k.as_str());
+            }
+        }
+        None
     }
 
     /// Shared affects-predicate check. Returns the source's StaticDef iff
@@ -1510,7 +1520,11 @@ impl GameState {
             let Some(def) = attached.card.static_def.as_ref() else {
                 continue;
             };
-            if !def.makes_host_colorless {
+            if !def
+                .effects
+                .iter()
+                .any(|e| matches!(e, crate::card::StaticEffect::MakesHostColorless))
+            {
                 continue;
             }
             if self.static_def_if_matches(attached_iid, target_iid).is_some() {
@@ -1535,7 +1549,11 @@ impl GameState {
             let Some(def) = attached.card.static_def.as_ref() else {
                 continue;
             };
-            if !def.suppresses_host_abilities {
+            if !def
+                .effects
+                .iter()
+                .any(|e| matches!(e, crate::card::StaticEffect::SuppressesHostAbilities))
+            {
                 continue;
             }
             if self.static_def_if_matches(attached_iid, target_iid).is_some() {
@@ -1562,10 +1580,12 @@ impl GameState {
         }
         for source_iid in self.static_source_iids() {
             if let Some(def) = self.static_def_if_matches(source_iid, iid) {
-                for c in &def.granted_colors {
-                    let lc = c.to_ascii_lowercase();
-                    if !out.iter().any(|x| x == &lc) {
-                        out.push(lc);
+                for eff in &def.effects {
+                    if let crate::card::StaticEffect::GrantColor(c) = eff {
+                        let lc = c.to_ascii_lowercase();
+                        if !out.iter().any(|x| x == &lc) {
+                            out.push(lc);
+                        }
                     }
                 }
             }
@@ -1591,10 +1611,12 @@ impl GameState {
         }
         for source_iid in self.static_source_iids() {
             if let Some(def) = self.static_def_if_matches(source_iid, iid) {
-                for f in &def.granted_face {
-                    let lc = f.to_ascii_lowercase();
-                    if !out.iter().any(|x| x == &lc) {
-                        out.push(lc);
+                for eff in &def.effects {
+                    if let crate::card::StaticEffect::GrantFace(f) = eff {
+                        let lc = f.to_ascii_lowercase();
+                        if !out.iter().any(|x| x == &lc) {
+                            out.push(lc);
+                        }
                     }
                 }
             }
@@ -1620,8 +1642,12 @@ impl GameState {
     pub fn has_restriction(&self, iid: &InstanceId, restriction: crate::card::Restriction) -> bool {
         for source_iid in self.static_source_iids() {
             if let Some(def) = self.static_def_if_matches(source_iid, iid) {
-                if def.restrictions.contains(&restriction) {
-                    return true;
+                for eff in &def.effects {
+                    if let crate::card::StaticEffect::Restrict(r) = eff {
+                        if *r == restriction {
+                            return true;
+                        }
+                    }
                 }
             }
         }
@@ -1650,8 +1676,12 @@ impl GameState {
             .static_source_iids()
             .filter(|src| {
                 self.static_def_if_matches(src, iid)
-                    .and_then(|def| def.granted_activated.as_ref())
-                    .is_some()
+                    .map(|def| {
+                        def.effects
+                            .iter()
+                            .any(|e| matches!(e, crate::card::StaticEffect::GrantActivated(_)))
+                    })
+                    .unwrap_or(false)
             })
             .count();
         printed + granted
@@ -1670,11 +1700,13 @@ impl GameState {
         let mut remaining = idx - printed_count;
         for src in self.static_source_iids() {
             if let Some(def) = self.static_def_if_matches(src, iid) {
-                if let Some(granted) = def.granted_activated.as_ref() {
-                    if remaining == 0 {
-                        return Some(granted);
+                for eff in &def.effects {
+                    if let crate::card::StaticEffect::GrantActivated(granted) = eff {
+                        if remaining == 0 {
+                            return Some(granted);
+                        }
+                        remaining -= 1;
                     }
-                    remaining -= 1;
                 }
             }
         }
@@ -1694,12 +1726,50 @@ impl GameState {
         let mut total = 0i32;
         for source_iid in self.static_source_iids() {
             if let Some(def) = self.static_def_if_matches(source_iid, iid) {
-                for m in &def.cost_modifiers {
-                    if m.source == source {
-                        total += m.amount;
+                for eff in &def.effects {
+                    if let crate::card::StaticEffect::CostModify { source: s, amount } = eff {
+                        if *s == source {
+                            total += amount;
+                        }
                     }
                 }
             }
+        }
+        total
+    }
+
+    /// A.12: effective combined cost — sum of per-source cost amounts after
+    /// every on-board cost-reduction static has applied. Mirrors
+    /// `effective_stats`'s pattern (printed → walk modifier sources → sum)
+    /// for the cost axis. Per P.20, each per-source amount is clamped to 0
+    /// before summing — over-reduction on one source does not bleed into
+    /// another. Used by `game.card(iid).combined_cost` so Lua handlers
+    /// reading the gate ("destroy creature with combined cost ≥ N") observe
+    /// the reduced value.
+    pub fn effective_combined_cost(&self, iid: &InstanceId) -> i32 {
+        let Some(inst) = self.card_pool.get(iid) else {
+            return 0;
+        };
+        let mut total: i32 = 0;
+        let sources = [
+            crate::card::CostSource::Hand,
+            crate::card::CostSource::Mill,
+            crate::card::CostSource::Graveyard,
+            crate::card::CostSource::Sacrifice,
+            crate::card::CostSource::Attached,
+            crate::card::CostSource::SelfExile,
+        ];
+        for source in sources {
+            let printed: i32 = inst
+                .card
+                .cost
+                .iter()
+                .filter(|c| c.source == source)
+                .map(|c| c.amount.max(0))
+                .sum();
+            let reduction = self.cost_reduction(iid, source).max(0);
+            let effective = (printed - reduction).max(0);
+            total += effective;
         }
         total
     }

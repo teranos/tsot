@@ -196,9 +196,8 @@ impl GameState {
         // remains visible via `game.x_value()` (set above before the
         // validate hook).
         if let Some(c) = ctx {
-            // TODO(lua-yield): ActivateError doesn't carry ChoicePending.
-            // Lift when an activated ability needs to yield mid-resolution.
-            let _ = lua_api::fire_activated(c.lua, self, c.oracle(), iid, handler);
+            lua_api::fire_activated(c.lua, self, c.oracle(), iid, handler)
+                .map_err(ActivateError::ChoicePending)?;
         }
 
         self.current_activation_x = prior_x;
@@ -281,5 +280,94 @@ fn effective_cost_amount(c: &crate::card::CostComponent, x_value: i32) -> usize 
         x_value.max(0) as usize
     } else {
         c.amount.max(0) as usize
+    }
+}
+
+#[cfg(test)]
+mod choice_pending_tests {
+    //! Mirror of the `fire_self_only` propagation tests at the
+    //! `activate_ability` boundary. Pins the contract that when an
+    //! activated ability's `effect` calls `game.choose_*` against a
+    //! HumanReplayOracle with no replay, `activate_ability` returns
+    //! `Err(ActivateError::ChoicePending(_))` rather than silently
+    //! eating the suspend.
+
+    use super::*;
+    use crate::card::{ActivatedAbility, Timing};
+    use crate::choice::{ChoicePending, RandomOracle};
+    use crate::game::context::EventContext;
+    use crate::game::test_helpers::deck_of;
+    use crate::game::{GameState, PlayerId};
+    use crate::sim::human::HumanReplayOracle;
+    use mlua::Lua;
+    use rand::SeedableRng;
+
+    /// Today: discard at `activate.rs:201` swallowed the Pending and
+    /// `activate_ability` returned `Ok(())` — the human never saw the
+    /// prompt. After the fix: propagates as `Err(ChoicePending(_))`.
+    #[test]
+    fn activate_ability_returns_choice_pending_when_effect_yields() {
+        let lua = Lua::new();
+        let mut state = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let card_iid = state.a.hand[0].clone();
+
+        // Park the iid on BOARD so the activation passes the NotOnBoard /
+        // SummoningSick gates. Match B.3 untap/sick reset.
+        state
+            .move_card(&card_iid, PlayerId::A, Zone::Hand, Zone::Board)
+            .unwrap();
+        state.set_summoning_sick(&card_iid, false);
+
+        // Install a single activated ability whose `effect` calls
+        // `game.choose_card` on a 1-element pool. The pool element is
+        // a placeholder iid — the wrapper short-circuits to Pending
+        // before any candidate is read.
+        let target = state.b.hand[0].clone();
+        let effect_src = format!(
+            r#"return function(game, self)
+                 local picked = game.choose_card({{ "{target}" }}, {{ prompt = "test" }})
+                 if picked ~= nil then game.damage(picked, 1) end
+               end"#
+        );
+        let effect: mlua::Function = lua.load(&effect_src).eval().unwrap();
+        state
+            .card_pool
+            .get_mut(&card_iid)
+            .unwrap()
+            .card
+            .activated
+            .push(ActivatedAbility {
+                cost_tap: false,
+                cost_components: vec![],
+                text: String::new(),
+                timing: Timing::Instant,
+                validate: None,
+                target: None,
+                effect,
+            });
+
+        // Empty replay → the first choose_card call returns Pending.
+        let mut oracle = HumanReplayOracle::new(
+            RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0)),
+            Some(PlayerId::A),
+        );
+
+        let result = {
+            let mut ctx = EventContext::new(&lua, &mut oracle);
+            state.activate_ability(&card_iid, 0, None, Some(&mut ctx))
+        };
+
+        match result {
+            Err(ActivateError::ChoicePending(ChoicePending::Card(req))) => {
+                assert_eq!(req.asker, Some(PlayerId::A));
+                assert!(
+                    !req.pool.is_empty(),
+                    "ChoicePending must carry the original pool back up"
+                );
+            }
+            other => panic!(
+                "expected Err(ActivateError::ChoicePending(Card)), got {other:?}"
+            ),
+        }
     }
 }

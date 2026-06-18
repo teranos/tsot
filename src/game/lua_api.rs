@@ -1257,18 +1257,15 @@ macro_rules! build_game_table {
                     let (x, y) = s.effective_stats(&iid);
                     t.set("x", x)?;
                     t.set("y", y)?;
-                    // Sum of printed cost-component amounts (ignores
-                    // is_x components — they contribute 0 to the sum
-                    // since their amount field is not the chosen X).
-                    // Used by handlers like "kill creature with combined
-                    // cost ≥ N."
-                    let combined_cost: i32 = inst
-                        .card
-                        .cost
-                        .iter()
-                        .map(|c| c.amount.max(0))
-                        .sum();
-                    t.set("combined_cost", combined_cost)?;
+                    // A.12: effective combined cost — sum across sources
+                    // after every on-board cost-reduction static applies,
+                    // per-source clamped to 0 (P.20). Routes through
+                    // `effective_combined_cost` so handler-gates like
+                    // "kill creature with combined cost ≥ N" observe the
+                    // reduced value when the target sits under a
+                    // cost-reduction static. is_x components contribute 0
+                    // (their amount field is not the chosen X).
+                    t.set("combined_cost", s.effective_combined_cost(&iid))?;
                     t.set(
                         "attached",
                         lua.create_sequence_from(inst.attached.clone())?,
@@ -1643,7 +1640,7 @@ pub(crate) fn fire_with_partner(
 #[cfg(test)]
 mod suppress_tests {
     use super::*;
-    use crate::card::{EventName, StaticAffects, StaticDef, StaticScope, ModifierValue};
+    use crate::card::{EventName, StaticAffects, StaticDef, StaticScope};
     use crate::choice::RandomOracle;
     use crate::game::test_helpers::deck_of;
     use rand::SeedableRng;
@@ -1676,17 +1673,8 @@ mod suppress_tests {
                 kind: None,
                 has_keyword: None,
             },
-            modifier_x: ModifierValue::Fixed(0.0),
-            modifier_y: ModifierValue::Fixed(0.0),
-            modifier_keyword: None,
             condition: None,
-            restrictions: Vec::new(),
-            cost_modifiers: Vec::new(),
-            granted_activated: None,
-            granted_colors: Vec::new(),
-            granted_face: Vec::new(),
-            makes_host_colorless: false,
-            suppresses_host_abilities: true,
+            effects: vec![crate::card::StaticEffect::SuppressesHostAbilities],
         }
     }
 
