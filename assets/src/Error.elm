@@ -332,7 +332,14 @@ view cfg e =
                             cornerAnchorAttrs cursor cfg.viewport
 
                         Nothing ->
-                            []
+                            -- Port-triggered (no cursor anchor):
+                            -- center on screen, in-your-face, no
+                            -- cropping. The bottom-left fallback
+                            -- before this lost information at the
+                            -- viewport edge — exactly the failure
+                            -- mode the axiom forbids (errors are
+                            -- sacred, never collapsed/cropped).
+                            centerScreenAttrs
     in
     div
         ([ class "tsot-error"
@@ -382,6 +389,27 @@ viewBuildFooter maybeLabel =
             text ""
 
 
+{-| Port-triggered errors (no cursor anchor) used to fall back to
+"surface bounding box" anchoring — in practice that meant bottom-
+left of the screen, with the overlay's outer `overflow: hidden`
+cropping the body text. Truth-destroying. The axiom forbids it.
+
+New fallback: center on screen, fixed position, with a high z-index
+so the overlay covers whatever surface it came from. The body's
+`max-height: 80vh` + `overflow-y: auto` lets it scroll if the
+content is huge, but the box itself is large enough that ordinary
+errors fit without scrolling.
+-}
+centerScreenAttrs : List (Html.Attribute msg)
+centerScreenAttrs =
+    [ A.class "tsot-error-anchored"
+    , A.class "tsot-error-centered"
+    , A.style "top" "50%"
+    , A.style "left" "50%"
+    , A.style "transform" "translate(-50%, -50%)"
+    ]
+
+
 {-| Decide which corner of the box the cursor sits on so the box
 opens INTO the viewport. Classic-OS context-menu behavior:
 
@@ -395,9 +423,8 @@ opens INTO the viewport. Classic-OS context-menu behavior:
     corner — emit `right = ...; bottom = ...`.
 
 `approxBoxW`/`approxBoxH` estimate the rendered size for the flip
-decision. The box itself sizes via `.tsot-error` CSS (`width: 28rem`,
-content-driven height). These constants match closely enough that
-the flip fires when the box WOULD overflow.
+decision. The box itself sizes via `.tsot-error` CSS; constants
+match closely enough that the flip fires when the box WOULD overflow.
 
 The cursor is always on a corner of the box; the box never shifts
 AWAY from the cursor. Only the direction it opens changes.
@@ -807,8 +834,13 @@ errorCss =
       position: absolute;
       z-index: 1000;
       min-width: 18rem;
-      width: 28rem;
-      max-width: min(32rem, calc(100vw - 1rem));
+      /* Sized to fit content — no fixed width, no forced overflow
+         hiding. Truth first, polish second. The previous
+         `width: 28rem; overflow: hidden` cropped long error
+         messages mid-sentence, exactly the failure mode the
+         axiom forbids. */
+      min-width: 24rem;
+      max-width: min(48rem, calc(100vw - 2rem));
       background: #2a0c0c;
       border: 1px solid #4a1414;
       border-radius: 4px;
@@ -819,7 +851,14 @@ errorCss =
       line-height: 1.4;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
+    }
+
+    /* Center-screen variant — port-triggered errors with no cursor
+       anchor open here. High z-index so the overlay covers the
+       surface it came from; the developer can't miss it. */
+    .tsot-error-centered {
+      z-index: 9999;
+      max-height: calc(100vh - 2rem);
     }
 
     /* Classic-OS titlebar — severity-tinted band across the top.
@@ -889,9 +928,14 @@ errorCss =
       display: flex;
       flex-direction: column;
       gap: 0.35rem;
+      /* Body shows its content fully. Scroll only kicks in for
+         pathological cases (huge raw payload + huge trace) where
+         the box itself would exceed the viewport. The previous
+         `max-height: 50vh` cropped the why field at half the
+         screen even when there was plenty of room — wrong default. */
       overflow-x: auto;
-      max-height: 50vh;
       overflow-y: auto;
+      max-height: 80vh;
     }
     .tsot-error-field {
       display: flex;
