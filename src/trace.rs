@@ -301,33 +301,28 @@ pub enum TraceEvent {
         assignments: Vec<(InstanceId, InstanceId)>,
         duration_us: u64,
     },
-    /// Every failure mode the system can report. Same shape regardless
-    /// of source — Rust panic, FFI `Err`, JS catch, worker exception.
-    /// First-class observability event: same bus, same envelope, same
-    /// renderer as `Step` / `Phase` / `Play` etc. The LOG panel
-    /// dispatches on `kind === "Error"` and renders a distinct block
-    /// with full context.
-    Error {
-        at_us: u64,
-        /// Where the failure originated. "rust-panic" | "rust-ffi" |
-        /// "js" | "worker" | "wasm-trap". Lets the renderer color /
-        /// label the block per source.
-        source: String,
-        /// Label of the FFI call (or JS operation) the failure
-        /// happened inside. Set by `set_ffi_call_label` for Rust
-        /// errors; passed in for JS errors.
-        ffi_call: Option<String>,
-        /// Full message — never truncated.
-        message: String,
-        /// `file:line:column` if known. Rust panics fill this from
-        /// `PanicHookInfo::location`; FFI Err paths can include a
-        /// stage label here ("load_game[rebind handlers]") instead.
-        location: Option<String>,
-        /// The trace events the bus had buffered at the moment of
-        /// the failure — the lead-up. Serialized as opaque JSON so
-        /// we don't have to recurse the enum into itself.
-        recent_trace: Vec<serde_json::Value>,
-    },
+    /// Every failure mode the system can report — Rust panic, FFI
+    /// `Err`, JS catch, worker exception. The variant wraps the
+    /// canonical [`sacred_error::Error`] type so the trace bus and
+    /// the error bus carry IDENTICAL data with no field-shape drift.
+    /// Per the unification 2026-06-18: pre-fix the trace event had
+    /// its own `source/ffi_call/message/location/recent_trace`
+    /// fields that paralleled `sacred_error::Error` — two types,
+    /// same intent, drift waiting to happen. Now one type.
+    ///
+    /// `Error.at` carries the timestamp (formatted by the emitter);
+    /// `Error.trace` carries the breadcrumb (formerly
+    /// `recent_trace`). `Error.source` distinguishes
+    /// "rust-panic" / "rust-ffi" / "js" / "worker" / "wasm-trap".
+    /// JS-side `fmtTraceEvent` reads from these positions instead
+    /// of the old top-level fields.
+    ///
+    /// Boxed because `sacred_error::Error` carries ~14 String fields
+    /// (long-form `why`, optional `js_stack` / `raw_stderr`, trace
+    /// breadcrumb, etc.) — without indirection the variant would
+    /// dominate the size of every `TraceEvent` in the hot-path buffer.
+    /// Error emission is rare; the box cost is paid on the cold path.
+    Error(Box<crate::error::Error>),
 }
 
 /// Per-candidate scoring record carried inside `TraceEvent::AiPick`.
@@ -438,27 +433,39 @@ fn snapshot_panic(info: &std::panic::PanicHookInfo<'_>) -> TraceEvent {
         format!("{info}")
     };
     let ffi_call = FFI_CALL_LABEL.with(|c| c.try_borrow().ok().and_then(|b| b.clone()));
-    let recent_trace: Vec<serde_json::Value> = TRACE.with(|c| {
+    let trace_breadcrumb: Vec<String> = TRACE.with(|c| {
         c.try_borrow()
             .ok()
-            .map(|b| {
-                b.iter()
-                    .map(|ev| serde_json::to_value(ev).unwrap_or(serde_json::Value::Null))
-                    .collect()
-            })
+            .map(|b| b.iter().map(|ev| format!("{ev:?}")).collect())
             .unwrap_or_default()
     });
     let at_us = TRACE_ORIGIN
         .with(|c| c.try_borrow().ok().and_then(|b| b.map(|o| o.elapsed().as_micros() as u64)))
         .unwrap_or(0);
-    TraceEvent::Error {
-        at_us,
-        source: "rust-panic".to_string(),
+    let panic_error = crate::error::Error {
+        // Defensive: don't borrow the ERROR_COUNTER inside a panic
+        // hook (might be poisoned). Synthesize a fresh id from the
+        // timestamp so we never collide and never panic-in-panic.
+        id: format!("err-rust-panic-{at_us}"),
+        severity: crate::error::Severity::Panic,
+        context: crate::error::Context {
+            surface: "engine".to_string(),
+            region: None,
+            anchor: None,
+        },
+        title: format!("Rust panic at {}", location.as_deref().unwrap_or("(unknown location)")),
+        why: message,
+        trace: trace_breadcrumb,
+        raw: None,
+        at: format!("{at_us}us"),
+        source: Some("rust-panic".to_string()),
         ffi_call,
-        message,
         location,
-        recent_trace,
-    }
+        js_stack: None,
+        raw_stderr: None,
+        requires_reload: true,
+    };
+    TraceEvent::Error(Box::new(panic_error))
 }
 
 /// Emit a `TraceEvent::Error` from a Rust FFI Err path. Same shape
@@ -470,27 +477,39 @@ fn snapshot_panic(info: &std::panic::PanicHookInfo<'_>) -> TraceEvent {
 /// the Error event to the JS side where the LOG renders it.
 pub fn emit_error(source: &str, stage: Option<&str>, message: impl Into<String>) {
     let ffi_call = current_ffi_call_label();
-    let recent_trace: Vec<serde_json::Value> = TRACE.with(|c| {
+    let trace_breadcrumb: Vec<String> = TRACE.with(|c| {
         c.try_borrow()
             .ok()
-            .map(|b| {
-                b.iter()
-                    .map(|ev| serde_json::to_value(ev).unwrap_or(serde_json::Value::Null))
-                    .collect()
-            })
+            .map(|b| b.iter().map(|ev| format!("{ev:?}")).collect())
             .unwrap_or_default()
     });
     let at_us = TRACE_ORIGIN
         .with(|c| c.try_borrow().ok().and_then(|b| b.map(|o| o.elapsed().as_micros() as u64)))
         .unwrap_or(0);
-    push(TraceEvent::Error {
-        at_us,
-        source: source.to_string(),
+    let message = message.into();
+    let error = crate::error::Error {
+        id: format!("err-rust-trace-{at_us}"),
+        severity: crate::error::Severity::Error,
+        context: crate::error::Context {
+            surface: "engine".to_string(),
+            region: stage.map(|s| s.to_string()),
+            anchor: None,
+        },
+        title: stage
+            .map(|s| format!("FFI Err: {s}"))
+            .unwrap_or_else(|| "FFI Err".to_string()),
+        why: message,
+        trace: trace_breadcrumb,
+        raw: None,
+        at: format!("{at_us}us"),
+        source: Some(source.to_string()),
         ffi_call,
-        message: message.into(),
         location: stage.map(|s| s.to_string()),
-        recent_trace,
-    });
+        js_stack: None,
+        raw_stderr: None,
+        requires_reload: source == "rust-panic" || source == "wasm-trap",
+    };
+    push(TraceEvent::Error(Box::new(error)));
 }
 
 /// Install a process-wide panic hook that captures every panic as a
@@ -593,7 +612,19 @@ const TRACE_STRING_ALLOWLIST: &[(&str, &str)] = &[
     ("AiPick", "ai"),          // AI kind name
     ("Handler", "event"),      // EventName::lua_key — constrained upstream
     ("Error", "source"),       // {rust-panic,rust-ffi,js,worker,wasm-trap}; renderer branches
-    ("Error", "message"),      // user-facing free-form
+    // Error variant now wraps `sacred_error::Error` (DRY unification
+    // 2026-06-18). The Error type's fields are hoisted into the
+    // TraceEvent serialization by serde's externally-tagged enum
+    // shape. Each below is grandfathered with a justification.
+    ("Error", "id"),           // monotonic session-scoped id string
+    ("Error", "title"),        // free-form one-line summary
+    ("Error", "why"),          // free-form cause chain (mlua-walked etc.)
+    ("Error", "at"),           // timestamp string ("1234us") — could be u64 someday
+    ("Error", "ffi_call"),     // FFI call label (small fixed set, mirrors Ffi.span)
+    ("Error", "location"),     // "file:line:col" or stage label — free-form
+    ("Error", "js_stack"),     // JS exception stack — free-form
+    ("Error", "raw_stderr"),   // captured wasm stderr — free-form
+    ("Error", "severity"),     // Severity enum (unit variants serde-rename'd lowercase)
     // --- False positives. Typed in Rust, serialize as JSON string. ---
     ("AttackerSelection", "player"),   // PlayerId enum (unit variants)
     ("BlockerSelection", "defender"),  // PlayerId
@@ -641,36 +672,50 @@ mod tests {
         assert_eq!(current_ffi_call_label(), None);
     }
 
-    /// INTENT: `TraceEvent::Error` serializes to JSON with the same
-    /// `kind` tag convention as every other variant, so the JS-side
-    /// renderer can dispatch on `kind === "Error"` consistently. All
-    /// failure sources (panic, ffi-err, js, worker) share this shape.
+    /// INTENT: `TraceEvent::Error` wraps a `sacred_error::Error` (the
+    /// DRY unification, 2026-06-18) and serializes with `kind=Error`
+    /// + the canonical Error fields hoisted by the serde-tag
+    /// convention. JS-side renderer dispatches on `kind === "Error"`
+    /// and reads from the typed-Error positions (no top-level
+    /// `message`/`source`/`recent_trace` anymore — those came from
+    /// the pre-unification struct payload).
     #[test]
     fn error_variant_serializes_with_kind_tag() {
-        let ev = TraceEvent::Error {
-            at_us: 1234,
-            source: "rust-panic".to_string(),
+        let error = crate::error::Error {
+            id: "err-test".to_string(),
+            severity: crate::error::Severity::Panic,
+            context: crate::error::Context {
+                surface: "engine".to_string(),
+                region: None,
+                anchor: None,
+            },
+            title: "Rust panic".to_string(),
+            why: "index out of bounds".to_string(),
+            trace: vec!["Step".to_string()],
+            raw: None,
+            at: "1234us".to_string(),
+            source: Some("rust-panic".to_string()),
             ffi_call: Some("tsot_load_game".to_string()),
-            message: "index out of bounds".to_string(),
             location: Some("src/foo.rs:42:13".to_string()),
-            recent_trace: vec![serde_json::json!({"kind": "Step"})],
+            js_stack: None,
+            raw_stderr: None,
+            requires_reload: true,
         };
+        let ev = TraceEvent::Error(Box::new(error));
         let json = serde_json::to_value(&ev).expect("Error serializes");
         assert_eq!(json["kind"], "Error");
         assert_eq!(json["source"], "rust-panic");
-        assert_eq!(json["message"], "index out of bounds");
+        assert_eq!(json["why"], "index out of bounds");
         assert_eq!(json["location"], "src/foo.rs:42:13");
         assert_eq!(json["ffi_call"], "tsot_load_game");
-        assert_eq!(json["at_us"], 1234);
-        assert!(
-            json["recent_trace"].is_array(),
-            "recent_trace must be a JSON array even when empty"
-        );
+        assert_eq!(json["at"], "1234us");
+        assert_eq!(json["requires_reload"], true);
     }
 
-    /// INTENT: `emit_error` pushes a `TraceEvent::Error` to the bus
-    /// when enabled, with `source` / `stage` / `message` filled in.
-    /// The next `drain` carries the event to the FFI envelope.
+    /// INTENT: `emit_error` pushes a `TraceEvent::Error(Error)` to
+    /// the bus with `source` / `stage` / `message` flowed into the
+    /// typed Error's fields. The next `drain` carries the event to
+    /// the FFI envelope.
     #[test]
     fn emit_error_pushes_event_with_source_and_message() {
         reset();
@@ -680,17 +725,15 @@ mod tests {
         emit_error("rust-ffi", Some("rebind handlers"), "card id not in registry: foo");
         let events = drain();
         let err = events.iter().find_map(|e| match e {
-            TraceEvent::Error { source, message, location, ffi_call, .. } => {
-                Some((source.clone(), message.clone(), location.clone(), ffi_call.clone()))
-            }
+            TraceEvent::Error(error) => Some(error.clone()),
             _ => None,
         });
         assert!(err.is_some(), "emit_error must push an Error event");
-        let (source, message, location, ffi_call) = err.unwrap();
-        assert_eq!(source, "rust-ffi");
-        assert_eq!(message, "card id not in registry: foo");
-        assert_eq!(location, Some("rebind handlers".to_string()));
-        assert_eq!(ffi_call, Some("tsot_load_game".to_string()));
+        let err = err.unwrap();
+        assert_eq!(err.source.as_deref(), Some("rust-ffi"));
+        assert_eq!(err.why, "card id not in registry: foo");
+        assert_eq!(err.location.as_deref(), Some("rebind handlers"));
+        assert_eq!(err.ffi_call.as_deref(), Some("tsot_load_game"));
         clear_ffi_call_label();
     }
 
@@ -1059,14 +1102,31 @@ mod tests {
             ),
             (
                 "Error",
-                serde_json::to_value(TraceEvent::Error {
-                    at_us: 0,
-                    source: "rust-ffi".into(),
-                    ffi_call: None,
-                    message: "boom".into(),
-                    location: None,
-                    recent_trace: vec![],
-                })
+                // Populate every optional field so each one appears
+                // in the serialized JSON — the allowlist test scans
+                // for actual JSON-string occurrences. None values
+                // get skipped by `skip_serializing_if` and would
+                // mark the allowlist entry "stale."
+                serde_json::to_value(TraceEvent::Error(Box::new(crate::error::Error {
+                    id: "err-test".to_string(),
+                    severity: crate::error::Severity::Error,
+                    context: crate::error::Context {
+                        surface: "engine".to_string(),
+                        region: None,
+                        anchor: None,
+                    },
+                    title: "boom".to_string(),
+                    why: "boom".to_string(),
+                    trace: vec![],
+                    raw: None,
+                    at: "0us".to_string(),
+                    source: Some("rust-ffi".to_string()),
+                    ffi_call: Some("tsot_apply_action".to_string()),
+                    location: Some("src/foo.rs:1:1".to_string()),
+                    js_stack: Some("at f (file.js:1:1)".to_string()),
+                    raw_stderr: Some("panicked\n".to_string()),
+                    requires_reload: false,
+                })))
                 .unwrap(),
             ),
             (

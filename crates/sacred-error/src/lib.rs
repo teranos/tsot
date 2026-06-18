@@ -46,6 +46,14 @@ use serde::{Deserialize, Serialize};
 /// as the DOM key (`Html.Keyed` on the Elm side); two Errors emitted
 /// from the same logical site at different times have different ids
 /// so they don't collide in the rendered log.
+///
+/// **Source-specific fields** (`source`, `ffi_call`, `location`,
+/// `js_stack`, `raw_stderr`, `requires_reload`) are the
+/// previously-`LogPanel.ErrorEntry`-only payload, lifted onto the
+/// canonical Error so the two parallel JS-side render paths
+/// (`buildErrorBlock` + `Error.view`) can collapse to one.
+/// All are optional / default-empty so existing producers don't
+/// have to fill them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Error {
     pub id: String,
@@ -58,6 +66,41 @@ pub struct Error {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
     pub at: String,
+    /// Origin classification — `"rust-panic" | "rust-ffi" | "js" |
+    /// "worker" | "wasm-trap"`. Distinct from `context.surface`
+    /// (which is the UI placement label): a Rust panic surfacing
+    /// at the prompt has `source="rust-panic"` AND
+    /// `context.surface="prompt"`. Renderers can color/tag per
+    /// source independently of placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Label of the FFI call (or JS operation) the failure
+    /// happened inside. Set by `set_ffi_call_label` on the Rust
+    /// side for FFI errors; passed in by JS-side catches for JS
+    /// errors. Lets the developer pinpoint which entry-point the
+    /// failure originated from without parsing the trace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ffi_call: Option<String>,
+    /// `file:line:column` for Rust panics (from
+    /// `PanicHookInfo::location`) or a stage label for FFI Err
+    /// paths (e.g. `"load_game[rebind handlers]"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// JS exception stack. Filled by JS-side catches that capture
+    /// `err.stack`; `None` on the Rust side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub js_stack: Option<String>,
+    /// Raw stderr captured from a wasm panic. Filled by the
+    /// worker-side panic capture path; `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_stderr: Option<String>,
+    /// Set by rust-panic and wasm-trap sources to signal that the
+    /// wasm module is dead and the developer must reload. The
+    /// renderer surfaces this as a distinct footer
+    /// ("reload required") so the user doesn't keep clicking into
+    /// the broken state.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requires_reload: bool,
 }
 
 /// Severity vocabulary. Matches `Error.elm`'s `Severity` decoder
@@ -132,6 +175,12 @@ mod tests {
             trace: vec!["build_preset_decks".into()],
             raw: Some("{\"id\":\"x\",\"cards\":[]}".into()),
             at: "1234us".into(),
+            source: None,
+            ffi_call: None,
+            location: None,
+            js_stack: None,
+            raw_stderr: None,
+            requires_reload: false,
         };
         let json = serde_json::to_string(&e).unwrap();
         let v: Value = serde_json::from_str(&json).unwrap();
@@ -152,10 +201,50 @@ mod tests {
     }
 
     #[test]
+    fn ffi_fields_round_trip_when_populated() {
+        // Source-specific fields (the LogPanel.ErrorEntry-only set
+        // before unification) round-trip cleanly. Filled by Rust
+        // panic hooks / FFI envelopes / JS catches; renderer reads
+        // them via the same decoder.
+        let e = Error {
+            id: "err-panic-1".into(),
+            severity: Severity::Panic,
+            context: Context {
+                surface: "prompt".into(),
+                region: None,
+                anchor: None,
+            },
+            title: "wasm trapped".into(),
+            why: "panicked at lib.rs:42:8".into(),
+            trace: vec![],
+            raw: None,
+            at: "9876us".into(),
+            source: Some("rust-panic".into()),
+            ffi_call: Some("tsot_apply_action".into()),
+            location: Some("src/lib.rs:42:8".into()),
+            js_stack: None,
+            raw_stderr: Some("thread main panicked\n".into()),
+            requires_reload: true,
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["source"], "rust-panic");
+        assert_eq!(v["ffi_call"], "tsot_apply_action");
+        assert_eq!(v["location"], "src/lib.rs:42:8");
+        assert_eq!(v["raw_stderr"], "thread main panicked\n");
+        assert_eq!(v["requires_reload"], true);
+        assert!(v.get("js_stack").is_none(), "None field omitted");
+        let round: Error = serde_json::from_value(v).unwrap();
+        assert_eq!(round, e);
+    }
+
+    #[test]
     fn optional_fields_omitted_when_default() {
         // Empty trace + None raw + None region/anchor must not
         // appear in the serialized JSON. Elm's optionalField
-        // decoders accept their absence and supply defaults.
+        // decoders accept their absence and supply defaults. The
+        // FFI-specific fields (added 2026-06-18) follow the same
+        // rule: producers that don't fill them omit them.
         let e = Error {
             id: "x".into(),
             severity: Severity::Info,
@@ -169,12 +258,24 @@ mod tests {
             trace: vec![],
             raw: None,
             at: "0us".into(),
+            source: None,
+            ffi_call: None,
+            location: None,
+            js_stack: None,
+            raw_stderr: None,
+            requires_reload: false,
         };
         let json = serde_json::to_string(&e).unwrap();
         assert!(!json.contains("\"trace\""), "trace should be omitted: {json}");
         assert!(!json.contains("\"raw\""), "raw should be omitted: {json}");
         assert!(!json.contains("\"region\""), "region should be omitted: {json}");
         assert!(!json.contains("\"anchor\""), "anchor should be omitted: {json}");
+        assert!(!json.contains("\"source\""), "source omitted when None: {json}");
+        assert!(!json.contains("\"ffi_call\""), "ffi_call omitted: {json}");
+        assert!(!json.contains("\"location\""), "location omitted: {json}");
+        assert!(!json.contains("\"js_stack\""), "js_stack omitted: {json}");
+        assert!(!json.contains("\"raw_stderr\""), "raw_stderr omitted: {json}");
+        assert!(!json.contains("\"requires_reload\""), "requires_reload omitted when false: {json}");
     }
 
     #[test]

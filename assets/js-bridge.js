@@ -219,23 +219,31 @@ function appendLiveUctIter(line) {
 // Errors are first-class observability events — same shape, full
 // context (source, FFI call, message, location, breadcrumb),
 // never collapsed, never truncated.
+// Pre-unification: pulled fields from a bespoke Error event shape
+// (source/message/recent_trace etc.) emitted by the Rust trace bus.
+// Post-unification 2026-06-18: TraceEvent::Error wraps the canonical
+// sacred_error::Error, so this reads from THAT shape: ev.why (was
+// message), ev.source (still), ev.ffi_call, ev.location, ev.trace
+// (was recent_trace, now Vec<String> of formatted lines from the
+// breadcrumb), ev.js_stack, ev.raw_stderr, ev.requires_reload (was
+// derived from source). Same DOM as before.
 function buildErrorBlock(ev) {
   const block = document.createElement('div');
   block.className = 'log-error';
   const source = ev.source || 'error';
   const header = document.createElement('div');
   header.className = 'log-error-header';
-  header.textContent = `[${source.toUpperCase()}] ${ev.message || '(no message)'}`;
+  header.textContent = `[${source.toUpperCase()}] ${ev.why || ev.title || '(no message)'}`;
   block.appendChild(header);
   const sub = document.createElement('div');
   sub.className = 'log-error-meta';
   const parts = [];
   if (ev.location) parts.push(`at ${ev.location}`);
   if (ev.ffi_call) parts.push(`inside FFI ${ev.ffi_call}`);
-  if (typeof ev.at_us === 'number') parts.push(`t=${(ev.at_us / 1000).toFixed(1)}ms`);
+  if (typeof ev.at === 'string') parts.push(`t=${ev.at}`);
   sub.textContent = parts.join('  ·  ');
   block.appendChild(sub);
-  const trail = ev.recent_trace || [];
+  const trail = ev.trace || [];
   if (trail.length) {
     const breadcrumb = document.createElement('div');
     breadcrumb.className = 'log-error-trail';
@@ -244,8 +252,8 @@ function buildErrorBlock(ev) {
     for (const inner of trail) {
       const line2 = document.createElement('div');
       line2.className = 'log-error-trail-line';
-      try { line2.textContent = fmtTraceEvent(inner); }
-      catch (_) { line2.textContent = JSON.stringify(inner); }
+      // trail entries are pre-formatted strings on the unified shape.
+      line2.textContent = typeof inner === 'string' ? inner : JSON.stringify(inner);
       block.appendChild(line2);
     }
   }
@@ -271,7 +279,7 @@ function buildErrorBlock(ev) {
     stderrPre.textContent = ev.raw_stderr;
     block.appendChild(stderrPre);
   }
-  if (source === 'rust-panic' || source === 'wasm-trap') {
+  if (ev.requires_reload || source === 'rust-panic' || source === 'wasm-trap') {
     const footer = document.createElement('div');
     footer.className = 'log-error-meta';
     footer.textContent = 'wasm module aborted after this point — reload the page to continue';
@@ -280,23 +288,24 @@ function buildErrorBlock(ev) {
   return block;
 }
 
-// Append the error block to the LOG (the audit trail). Pre-formats
-// the recent_trace breadcrumb via fmtTraceEvent here (the formatter
-// is in this same file), then pushes a structured envelope through
-// the logErrorIn port. Elm rebuilds the styled .log-error block from
-// the same fields — the `renderErrorAt` inline-error-next-to-button
-// path uses `buildErrorBlock` directly so the DOM is the same shape.
+// Append the error block to the LOG (the audit trail). Pushes a
+// structured envelope through the logErrorIn port. Elm rebuilds the
+// styled .log-error block from the same fields — the
+// `renderErrorAt` inline-error-next-to-button path uses
+// `buildErrorBlock` directly so the DOM is the same shape.
+//
+// Reads from the unified sacred_error::Error wire shape; see
+// buildErrorBlock for the field mapping.
 function appendErrorEvent(ev) {
   const formatted = {
     source: ev.source || 'error',
-    message: ev.message || '(no message)',
+    message: ev.why || ev.title || '(no message)',
     location: ev.location || null,
     ffi_call: ev.ffi_call || null,
-    at_us: typeof ev.at_us === 'number' ? ev.at_us : null,
-    breadcrumb: (ev.recent_trace || []).map((inner) => {
-      try { return fmtTraceEvent(inner); }
-      catch (_) { return JSON.stringify(inner); }
-    }),
+    at_us: typeof ev.at === 'string' ? ev.at : null,
+    breadcrumb: (ev.trace || []).map((inner) =>
+      typeof inner === 'string' ? inner : JSON.stringify(inner)
+    ),
     js_stack: ev.js_stack || null,
     raw_stderr: ev.raw_stderr || null,
   };
