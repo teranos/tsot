@@ -221,6 +221,17 @@ pub fn build_preset_decks(_playable: &[Card]) -> Vec<PresetDeck> {
             name: "Yield Test (Red)".to_string(),
             cards: YIELD_TEST_DECK_IDS.iter().map(|s| s.to_string()).collect(),
         },
+        // Chaos-engineering deck: 50× Faal. Each Faal carries six
+        // tap-activated abilities that each trigger a distinct
+        // sacred-error pipeline branch. Use this preset to verify
+        // ERROR.md items end-to-end in the dev tool — tap an
+        // ability, observe the typed-Error overlay shape. See
+        // `cards/faal.lua` for the failure-mode map.
+        PresetDeck {
+            id: "faal-chaos".to_string(),
+            name: "Faal Test (chaos eng.)".to_string(),
+            cards: std::iter::repeat_n("faal".to_string(), 50).collect(),
+        },
     ]
 }
 
@@ -228,10 +239,44 @@ pub fn build_preset_decks(_playable: &[Card]) -> Vec<PresetDeck> {
 mod tests {
     use super::*;
     use crate::card::CardRegistry;
-    use crate::sim::playable_pool::playable_pool;
+    use crate::sim::playable_pool::{deckbuilder_pool, playable_pool};
 
     fn registry() -> CardRegistry {
         CardRegistry::load(std::path::Path::new("cards")).expect("registry loads")
+    }
+
+    /// Structural guarantee. Every preset deck must consist entirely
+    /// of cards the user can actually pick (i.e. in `deckbuilder_pool`).
+    /// If a preset references a card_id that doesn't exist in the
+    /// pool, this test fails the build — the runtime warn-overlay
+    /// in `tsot_list_preset_decks_impl` is the user-visible safety
+    /// net, but the build-time test stops the corrupt preset from
+    /// ever shipping.
+    ///
+    /// Closes the "cards in a deck are always playable" guarantee.
+    #[test]
+    fn every_preset_card_id_is_in_deckbuilder_pool() {
+        let reg = registry();
+        let pool = deckbuilder_pool(reg.cards());
+        let pool_ids: std::collections::BTreeSet<&str> =
+            pool.iter().map(|c| c.id.as_str()).collect();
+
+        let presets = build_preset_decks(&pool);
+        let mut violations: Vec<(String, String)> = Vec::new();
+        for preset in &presets {
+            for card_id in &preset.cards {
+                if !pool_ids.contains(card_id.as_str()) {
+                    violations.push((preset.id.clone(), card_id.clone()));
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "preset(s) reference card_ids not in the deckbuilder pool. \
+             Either the preset is stale (delete the bad card_id) or \
+             the card file is missing/malformed (fix cards/<id>.lua). \
+             Violations: {violations:#?}"
+        );
     }
 
     // ----- CardPoolEntry -----------------------------------------
@@ -297,21 +342,25 @@ mod tests {
     // ----- PresetDeck --------------------------------------------
 
     #[test]
-    fn preset_decks_returns_red_blue_and_yield_test() {
-        // Order pinned 2026-06-09 / 2026-06-10:
+    fn preset_decks_returns_red_blue_yield_test_and_faal_chaos() {
+        // Order pinned 2026-06-09 / 2026-06-10 / 2026-06-18:
         //   [0] "starter" (Red Starter — deckbuilder default on boot)
         //   [1] "starter-blue" (Blue Starter)
         //   [2] "yield-test" (Yield Test — exercises the Lua-yield bug fix)
+        //   [3] "faal-chaos" (Faal Test — chaos-engineering probes,
+        //       50× Faal for sacred-error pipeline verification)
         let reg = registry();
         let pool = playable_pool(reg.cards());
         let presets = build_preset_decks(&pool);
-        assert_eq!(presets.len(), 3);
+        assert_eq!(presets.len(), 4);
         assert_eq!(presets[0].id, "starter");
         assert_eq!(presets[0].name, "Red Starter");
         assert_eq!(presets[1].id, "starter-blue");
         assert_eq!(presets[1].name, "Blue Starter");
         assert_eq!(presets[2].id, "yield-test");
         assert_eq!(presets[2].name, "Yield Test (Red)");
+        assert_eq!(presets[3].id, "faal-chaos");
+        assert_eq!(presets[3].name, "Faal Test (chaos eng.)");
     }
 
     #[test]

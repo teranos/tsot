@@ -60,7 +60,7 @@ fn wrap_result_envelope(result: serde_json::Value) -> Result<String, String> {
 pub(crate) fn tsot_list_card_pool_impl() -> Result<String, String> {
     use crate::card::CardRegistry;
     use crate::sim::deck_presets::build_card_pool_entries;
-    use crate::sim::playable_pool::playable_pool;
+    use crate::sim::playable_pool::deckbuilder_pool;
 
     crate::trace::set_ffi_call_label("tsot_list_card_pool");
     let _ = crate::trace::drain();
@@ -69,7 +69,10 @@ pub(crate) fn tsot_list_card_pool_impl() -> Result<String, String> {
 
     let registry =
         CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;
-    let pool = playable_pool(registry.cards());
+    // Deckbuilder uses the HUMAN-eligibility pool, not the EA-pool.
+    // The narrower playable_pool would gate user decks by EA-search
+    // heuristics, which is the wrong axis of authority.
+    let pool = deckbuilder_pool(registry.cards());
     let entries = build_card_pool_entries(&pool);
     let value = serde_json::to_value(&entries)
         .map_err(|e| format!("serialize card pool: {e}"))?;
@@ -89,7 +92,7 @@ pub(crate) fn tsot_list_card_pool_impl() -> Result<String, String> {
 pub(crate) fn tsot_list_preset_decks_impl() -> Result<String, String> {
     use crate::card::CardRegistry;
     use crate::sim::deck_presets::build_preset_decks;
-    use crate::sim::playable_pool::playable_pool;
+    use crate::sim::playable_pool::deckbuilder_pool;
     use std::collections::BTreeSet;
 
     crate::trace::set_ffi_call_label("tsot_list_preset_decks");
@@ -99,7 +102,11 @@ pub(crate) fn tsot_list_preset_decks_impl() -> Result<String, String> {
 
     let registry =
         CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;
-    let pool = playable_pool(registry.cards());
+    // Preset validation uses the deckbuilder pool — every preset
+    // card_id must exist in the set the user can actually pick. The
+    // narrower playable_pool would falsely-flag debug-subtype cards
+    // as "missing" even though they ARE loaded and human-pickable.
+    let pool = deckbuilder_pool(registry.cards());
     let presets = build_preset_decks(&pool);
 
     // ERROR Slice 5: validate each preset's card_ids against the
