@@ -1051,9 +1051,16 @@ fn play_error_user_message(
             format!("Graveyard payment id {iid} appears more than once."),
         ),
         E::VariableXValueMissing => (
-            format!("Can't cast {card_name}: X value missing"),
-            "This card has a variable-X cost and the engine wasn't told \
-             what X is. The UI needs to ask first.".into(),
+            format!("Can't cast {card_name}: variable-X cost needs a value"),
+            "The card declares a variable-X cost (`is_x = true` on one \
+             or more cost components) but the engine has no \
+             NeedHuman(ChooseInt) prompt path that fires BEFORE \
+             play_card. Without that yield, the human's PlayCard \
+             action lands in step_resolve with no x_value, and \
+             play_card rejects it here. Known engine gap (search \
+             ERROR.md § Architectural gaps: \"Variable-X cast-time \
+             prompt\"). Not a UI bug."
+                .into(),
         ),
         E::XBelowMinimum => (
             format!("Can't cast {card_name}: X must be at least 1"),
