@@ -13,14 +13,17 @@
 //! Distinct from `tests/replay.rs`: that test verifies FORWARD apply of
 //! a serialized journal. This one verifies the INVERSE direction.
 
-use tsot::card::{Card, CardRegistry, CardType, CostSource};
+mod common;
+
+use tsot::card::{Card, CardRegistry};
 use tsot::choice::ScriptedOracle;
 use tsot::game::{EventContext, GameState, Journal, Phase, PlayChoices};
 
 /// Debug fingerprint of state, excluding the journal slots themselves
 /// (since the journal is what we're testing — comparing journal-to-
 /// journal after rollback would be circular). All other fields are in
-/// scope.
+/// scope. Includes `priority` (which replay.rs's fingerprint does not
+/// — rollback testing cares about every engine-visible field).
 fn fingerprint(state: &GameState) -> String {
     format!(
         "a={:?}|b={:?}|pool={:?}|active={:?}|turn={}|phase={:?}|winner={:?}|combat={:?}|fires={:?}|actions={:?}|priority={:?}",
@@ -38,25 +41,6 @@ fn fingerprint(state: &GameState) -> String {
     )
 }
 
-/// Pick a template: 1-hand-cost creature with no on_* handlers, so
-/// play_card doesn't need scripted oracle answers. Frost-cat / wildcat
-/// / wisp-cat / dawn-bat fit. We prefer one we can repeat in a deck.
-fn pick_vanilla_template(registry: &CardRegistry) -> Card {
-    registry
-        .cards()
-        .iter()
-        .find(|c| {
-            matches!(c.kind, CardType::Creature)
-                && c.handlers.is_empty()
-                && c.cost.len() == 1
-                && c.cost[0].source == CostSource::Hand
-                && c.cost[0].amount == 1
-                && !c.cost[0].is_x
-        })
-        .expect("a vanilla 1-hand creature with no handlers should exist in cards/")
-        .clone()
-}
-
 /// Drive a multi-turn varied mutation sequence:
 ///   - phase advances (untap → draw → main1 → combat → main2 → end → swap)
 ///   - play_card (hand → board with attached payment)
@@ -68,10 +52,7 @@ fn pick_vanilla_template(registry: &CardRegistry) -> Card {
 fn drive_scripted_game(state: &mut GameState, lua: &mlua::Lua) {
     let mut oracle = ScriptedOracle::new(vec![]);
     for _ in 0..3 {
-        // Advance to Main1.
-        while state.phase != Phase::Main1 && state.winner.is_none() {
-            state.next_phase(None);
-        }
+        common::advance_to(state, Phase::Main1);
         if state.winner.is_some() {
             return;
         }
@@ -96,38 +77,24 @@ fn drive_scripted_game(state: &mut GameState, lua: &mlua::Lua) {
             );
         }
 
-        // Advance to Combat.
-        while state.phase != Phase::Combat && state.winner.is_none() {
-            state.next_phase(None);
-        }
+        common::advance_to(state, Phase::Combat);
         if state.winner.is_some() {
             return;
         }
 
-        // Declare every active-player attacker. Summoning-sick creatures
-        // will be rejected by the engine — that's fine, the mutations
-        // that DO happen still need to journal correctly.
-        let attackers: Vec<_> = state.player(state.active_player).board.to_vec();
-        for atk in &attackers {
-            let _ = state.declare_attacker(
-                atk,
-                Some(&mut EventContext::new(lua, &mut oracle)),
-            );
-        }
-        let _ = state.confirm_attacks();
-        let _ = state.confirm_blocks(Some(&mut EventContext::new(lua, &mut oracle)));
+        // Summoning-sick creatures will be rejected by the engine —
+        // that's fine, the mutations that DO happen still need to
+        // journal correctly.
+        common::declare_and_resolve_all_attackers(state, &mut oracle, lua);
 
-        // Wrap to next turn.
-        while state.phase != Phase::Untap && state.winner.is_none() {
-            state.next_phase(None);
-        }
+        common::advance_to(state, Phase::Untap);
     }
 }
 
 #[test]
 fn replay_journal_rollback_restores_full_state() {
     let registry = CardRegistry::load_embedded().expect("load embedded cards");
-    let template = pick_vanilla_template(&registry);
+    let template = common::vanilla_template(&registry);
     let deck_a: Vec<Card> = (0..50).map(|_| template.clone()).collect();
     let deck_b: Vec<Card> = (0..50).map(|_| template.clone()).collect();
 
@@ -182,7 +149,7 @@ fn replay_journal_rollback_restores_full_state() {
 #[test]
 fn replay_journal_rollback_is_idempotent_with_a_fresh_state() {
     let registry = CardRegistry::load_embedded().expect("load embedded cards");
-    let template = pick_vanilla_template(&registry);
+    let template = common::vanilla_template(&registry);
     let deck_a: Vec<Card> = (0..50).map(|_| template.clone()).collect();
     let deck_b: Vec<Card> = (0..50).map(|_| template.clone()).collect();
 
@@ -208,4 +175,3 @@ fn replay_journal_rollback_is_idempotent_with_a_fresh_state() {
     assert_eq!(after_a, after_b, "rollback is deterministic");
     assert_eq!(snap_a, after_a, "rollback restores initial");
 }
-
