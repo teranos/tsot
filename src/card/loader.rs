@@ -174,100 +174,11 @@ fn read_activated(t: &Table) -> mlua::Result<Vec<ActivatedAbility>> {
     };
     let mut out = Vec::new();
     for item in raw.sequence_values::<Table>() {
-        let item = item?;
-        // Two shapes supported for `cost`:
-        //   1. String shorthand: `cost = "tap"` → tap-only.
-        //   2. List of components: `cost = {{source = "...", amount = N}}` →
-        //      one or more cost components, possibly including a tap
-        //      pseudo-component `{source = "tap"}` (no amount).
-        let cost_value: Value = item.get("cost")?;
-        let (cost_tap, cost_components) = match cost_value {
-            Value::String(s) => {
-                let s = s.to_str()?.to_ascii_lowercase();
-                if s == "tap" || s == "t" {
-                    (true, Vec::new())
-                } else {
-                    return Err(mlua::Error::runtime(format!(
-                        "activation cost string {s:?} not recognized (expected \"tap\")"
-                    )));
-                }
-            }
-            Value::Table(tt) => {
-                let mut tap = false;
-                let mut comps: Vec<CostComponent> = Vec::new();
-                for comp in tt.sequence_values::<Table>() {
-                    let comp = comp?;
-                    let src_s: String = comp.get("source")?;
-                    let lowered = src_s.to_ascii_lowercase();
-                    if lowered == "tap" || lowered == "t" {
-                        tap = true;
-                        continue;
-                    }
-                    let amount = comp.get::<Option<i32>>("amount")?.unwrap_or(0);
-                    let is_x = comp.get::<Option<bool>>("is_x")?.unwrap_or(false);
-                    let source = parse_source(&lowered).map_err(mlua::Error::runtime)?;
-                    let kind = match comp.get::<Option<String>>("kind")? {
-                        None => None,
-                        Some(k) => Some(parse_type(&k).map_err(mlua::Error::runtime)?.0),
-                    };
-                    comps.push(CostComponent {
-                        amount,
-                        source,
-                        is_x,
-                        kind,
-                    });
-                }
-                (tap, comps)
-            }
-            other => {
-                return Err(mlua::Error::runtime(format!(
-                    "activation cost must be a string or a list, got {other:?}"
-                )))
-            }
-        };
-        let text = item.get::<Option<String>>("text")?.unwrap_or_default();
-        let timing_s = item
-            .get::<Option<String>>("timing")?
-            .unwrap_or_else(|| "sorcery".to_string());
-        let timing = match timing_s.to_ascii_lowercase().as_str() {
-            "instant" => Timing::Instant,
-            "sorcery" => Timing::Sorcery,
-            other => {
-                return Err(mlua::Error::runtime(format!(
-                    "unknown activation timing: {other:?} (must be \"instant\" or \"sorcery\")"
-                )))
-            }
-        };
-        let validate: Option<Function> = match item.get::<Value>("validate")? {
-            Value::Nil => None,
-            Value::Function(f) => Some(f),
-            other => {
-                return Err(mlua::Error::runtime(format!(
-                    "activation `validate` must be a function, got {other:?}"
-                )))
-            }
-        };
-        let effect: Function = item.get("effect")?;
-        let target: Option<Target> = match item.get::<Option<String>>("target")? {
-            None => None,
-            Some(s) => match s.to_ascii_lowercase().as_str() {
-                "chain" => Some(Target::Chain),
-                other => {
-                    return Err(mlua::Error::runtime(format!(
-                        "unknown activation target category: {other:?}"
-                    )))
-                }
-            },
-        };
-        out.push(ActivatedAbility {
-            cost_tap,
-            cost_components,
-            text,
-            timing,
-            validate,
-            target,
-            effect,
-        });
+        // Per-entry parsing is shared with `granted_activated` (in
+        // `read_static`) via `parse_one_activated_entry`. The label
+        // appears in every error message so the developer knows
+        // which Lua field a parse failure came from.
+        out.push(parse_one_activated_entry(item?, "activation")?);
     }
     Ok(out)
 }
@@ -515,7 +426,7 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
     // effect, optional validate }.
     let granted_activated = match static_t.get::<Value>("granted_activated")? {
         Value::Nil => None,
-        Value::Table(t) => Some(parse_one_activated_entry(t)?),
+        Value::Table(t) => Some(parse_one_activated_entry(t, "granted_activated")?),
         other => {
             return Err(mlua::Error::runtime(format!(
                 "static.granted_activated must be a table, got {other:?}"
@@ -538,7 +449,28 @@ fn read_static(t: &Table) -> mlua::Result<Option<StaticDef>> {
     }))
 }
 
-fn parse_one_activated_entry(item: Table) -> mlua::Result<ActivatedAbility> {
+/// Parse one `{ cost, text, timing, effect, optional validate, optional target }`
+/// table into an [`ActivatedAbility`].
+///
+/// Used by:
+///   - [`read_activated`] (top-level `activated[]` field), `field_label`
+///     passed as `"activation"`.
+///   - [`read_static`] (`granted_activated` field of a `static` block),
+///     `field_label` passed as `"granted_activated"`.
+///
+/// `field_label` is interpolated into every error message so the
+/// developer knows which Lua field a parse failure came from — the
+/// only meaningful difference between the two call sites.
+///
+/// Two shapes are supported for `cost`:
+///   1. String shorthand: `cost = "tap"` → tap-only, no components.
+///   2. List of components: `cost = {{source = "...", amount = N}}` →
+///      one or more cost components, possibly including a tap
+///      pseudo-component `{source = "tap"}` (no amount).
+fn parse_one_activated_entry(
+    item: Table,
+    field_label: &str,
+) -> mlua::Result<ActivatedAbility> {
     let cost_value: Value = item.get("cost")?;
     let (cost_tap, cost_components) = match cost_value {
         Value::String(s) => {
@@ -547,7 +479,7 @@ fn parse_one_activated_entry(item: Table) -> mlua::Result<ActivatedAbility> {
                 (true, Vec::new())
             } else {
                 return Err(mlua::Error::runtime(format!(
-                    "granted_activated cost string {s:?} not recognized (expected \"tap\")"
+                    "{field_label} cost string {s:?} not recognized (expected \"tap\")"
                 )));
             }
         }
@@ -580,7 +512,7 @@ fn parse_one_activated_entry(item: Table) -> mlua::Result<ActivatedAbility> {
         }
         other => {
             return Err(mlua::Error::runtime(format!(
-                "granted_activated cost must be a string or list, got {other:?}"
+                "{field_label} cost must be a string or list, got {other:?}"
             )))
         }
     };
@@ -593,7 +525,7 @@ fn parse_one_activated_entry(item: Table) -> mlua::Result<ActivatedAbility> {
         "sorcery" => Timing::Sorcery,
         other => {
             return Err(mlua::Error::runtime(format!(
-                "granted_activated timing {other:?} must be \"instant\" or \"sorcery\""
+                "{field_label} timing {other:?} must be \"instant\" or \"sorcery\""
             )))
         }
     };
@@ -602,7 +534,7 @@ fn parse_one_activated_entry(item: Table) -> mlua::Result<ActivatedAbility> {
         Value::Function(f) => Some(f),
         other => {
             return Err(mlua::Error::runtime(format!(
-                "granted_activated validate must be a function, got {other:?}"
+                "{field_label} validate must be a function, got {other:?}"
             )))
         }
     };
@@ -613,7 +545,7 @@ fn parse_one_activated_entry(item: Table) -> mlua::Result<ActivatedAbility> {
             "chain" => Some(Target::Chain),
             other => {
                 return Err(mlua::Error::runtime(format!(
-                    "unknown granted_activated target category: {other:?}"
+                    "unknown {field_label} target category: {other:?}"
                 )))
             }
         },
@@ -1570,5 +1502,230 @@ mod tests {
                 "expected `{allowed}` to be present in sandboxed VM"
             );
         }
+    }
+
+    // ---- parse_one_activated_entry shared-helper tests ------------
+    //
+    // Pin the dedup: both `read_activated` (top-level `activated[]`)
+    // and `read_static`'s `granted_activated` path funnel through
+    // `parse_one_activated_entry(item, field_label)`. The helper
+    // produces identical `ActivatedAbility` values for identical
+    // inputs; only error-message wording diverges via `field_label`.
+    //
+    // Before the 2026-06-18 dedup these were two ~85-line parser
+    // bodies with subtle divergences (e.g. "string or a list" vs
+    // "string or list", "unknown activation timing: X (must be Y)"
+    // vs "granted_activated timing X must be Y") — kept intact in
+    // muscle memory by maintainers re-syncing fixes one-at-a-time.
+
+    fn load_card_from_lua_or_err(src: &str) -> Result<Card, String> {
+        // Variant of load_card_from_lua that returns the loader
+        // error instead of panicking, so tests can assert on the
+        // surfaced error message.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "tsot_card_test_err_{}_{}",
+            std::process::id(),
+            id
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("under-test.lua");
+        std::fs::write(&path, src).unwrap();
+        let result = CardRegistry::load(&tmp)
+            .map_err(|e| format!("{e}"))
+            .and_then(|registry| {
+                registry
+                    .cards()
+                    .iter()
+                    .find(|c| c.id == "under-test")
+                    .cloned()
+                    .ok_or_else(|| "card with id `under-test` not loaded".to_string())
+            });
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&tmp).ok();
+        result
+    }
+
+    #[test]
+    fn activated_happy_path_parses_via_shared_helper() {
+        // Verifies read_activated → parse_one_activated_entry round-
+        // trips. Exact same shape that previously had its own copy
+        // of the parser.
+        let card = load_card_from_lua(
+            r#"return {
+                id = "under-test",
+                type = "creature",
+                colors = {"green"},
+                stats = {x = 1, y = 1},
+                activated = {
+                    {
+                        cost = "tap",
+                        text = "T: draw a card",
+                        timing = "sorcery",
+                        effect = function(g, s) end,
+                    },
+                },
+            }"#,
+        );
+        assert_eq!(card.activated.len(), 1);
+        let a = &card.activated[0];
+        assert!(a.cost_tap, "cost_tap must be true for cost=\"tap\"");
+        assert!(a.cost_components.is_empty());
+        assert_eq!(a.text, "T: draw a card");
+        assert!(matches!(a.timing, Timing::Sorcery));
+    }
+
+    #[test]
+    fn granted_activated_happy_path_parses_via_shared_helper() {
+        // Verifies read_static → parse_one_activated_entry round-
+        // trips. Same shape as activated[] but lives under
+        // static.granted_activated.
+        let card = load_card_from_lua(
+            r#"return {
+                id = "under-test",
+                type = "creature",
+                colors = {"green"},
+                stats = {x = 1, y = 1},
+                static = {
+                    affects = { scope = "attached_host" },
+                    granted_activated = {
+                        cost = "tap",
+                        text = "T: draw a card",
+                        timing = "sorcery",
+                        effect = function(g, s) end,
+                    },
+                },
+            }"#,
+        );
+        let st = card.static_def.as_ref().expect("static_def present");
+        let ga = st
+            .granted_activated
+            .as_ref()
+            .expect("granted_activated present");
+        assert!(ga.cost_tap);
+        assert!(ga.cost_components.is_empty());
+        assert_eq!(ga.text, "T: draw a card");
+        assert!(matches!(ga.timing, Timing::Sorcery));
+    }
+
+    #[test]
+    fn activated_error_message_uses_activation_label() {
+        // The whole point of the `field_label` parameter: the
+        // developer should see WHICH Lua field a malformed entry
+        // came from. read_activated's path → "activation ...".
+        let err = load_card_from_lua_or_err(
+            r#"return {
+                id = "under-test",
+                type = "creature",
+                colors = {"green"},
+                stats = {x = 1, y = 1},
+                activated = {
+                    {
+                        cost = "wiggle",
+                        effect = function(g, s) end,
+                    },
+                },
+            }"#,
+        )
+        .expect_err("malformed activated cost must error");
+        assert!(
+            err.contains("activation"),
+            "error should mention `activation` field: {err}"
+        );
+        assert!(
+            !err.contains("granted_activated"),
+            "error from read_activated must NOT mention granted_activated: {err}"
+        );
+    }
+
+    #[test]
+    fn granted_activated_error_message_uses_granted_activated_label() {
+        // The complement: read_static's path → "granted_activated ...".
+        // A maintainer who breaks the granted_activated parser sees the
+        // origin in the error, not a generic "cost must be ...".
+        let err = load_card_from_lua_or_err(
+            r#"return {
+                id = "under-test",
+                type = "creature",
+                colors = {"green"},
+                stats = {x = 1, y = 1},
+                static = {
+                    affects = { scope = "attached_host" },
+                    granted_activated = {
+                        cost = "wiggle",
+                        effect = function(g, s) end,
+                    },
+                },
+            }"#,
+        )
+        .expect_err("malformed granted_activated cost must error");
+        assert!(
+            err.contains("granted_activated"),
+            "error should mention `granted_activated` field: {err}"
+        );
+    }
+
+    #[test]
+    fn activated_and_granted_activated_produce_identical_ability_for_same_input() {
+        // The strongest dedup contract: the two code paths now go
+        // through the SAME function with only the label differing.
+        // Given identical cost/text/timing/effect input, the
+        // ActivatedAbility values they construct must be field-
+        // identical (modulo the effect Function reference, which
+        // can't be compared by eq).
+        let lhs = load_card_from_lua(
+            r#"return {
+                id = "under-test",
+                type = "creature",
+                colors = {"green"},
+                stats = {x = 1, y = 1},
+                activated = {
+                    {
+                        cost = {{source = "graveyard", amount = 2}, {source = "tap"}},
+                        text = "graveyard fuel + tap",
+                        timing = "instant",
+                        effect = function(g, s) end,
+                    },
+                },
+            }"#,
+        );
+        let rhs = load_card_from_lua(
+            r#"return {
+                id = "under-test",
+                type = "creature",
+                colors = {"green"},
+                stats = {x = 1, y = 1},
+                static = {
+                    affects = { scope = "attached_host" },
+                    granted_activated = {
+                        cost = {{source = "graveyard", amount = 2}, {source = "tap"}},
+                        text = "graveyard fuel + tap",
+                        timing = "instant",
+                        effect = function(g, s) end,
+                    },
+                },
+            }"#,
+        );
+        let l = &lhs.activated[0];
+        let r = &rhs
+            .static_def
+            .as_ref()
+            .unwrap()
+            .granted_activated
+            .as_ref()
+            .unwrap();
+        assert_eq!(l.cost_tap, r.cost_tap);
+        assert_eq!(l.cost_components.len(), r.cost_components.len());
+        for (lc, rc) in l.cost_components.iter().zip(r.cost_components.iter()) {
+            assert_eq!(lc.amount, rc.amount);
+            assert!(matches!(lc.source, CostSource::Graveyard));
+            assert!(matches!(rc.source, CostSource::Graveyard));
+            assert_eq!(lc.is_x, rc.is_x);
+        }
+        assert_eq!(l.text, r.text);
+        assert!(matches!(l.timing, Timing::Instant));
+        assert!(matches!(r.timing, Timing::Instant));
     }
 }
