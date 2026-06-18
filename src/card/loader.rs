@@ -1239,9 +1239,9 @@ mod tests {
     #[test]
     fn missense_mutation_card_loads_with_full_shape() {
         let lua = Lua::new();
-        let path = Path::new("cards/missense-mutation.lua");
-        let cards = load_card(&lua, path).expect("load missense-mutation");
-        let card = cards.iter().find(|c| c.id == "missense-mutation").unwrap();
+        let path = Path::new("cards/MISSENSE-MUTATION.lua");
+        let cards = load_card(&lua, path).expect("load MISSENSE-MUTATION");
+        let card = cards.iter().find(|c| c.id == "MISSENSE-MUTATION").unwrap();
         assert_eq!(card.colors, vec!["cyan"]);
         assert_eq!(card.kind, crate::card::CardType::Mutation);
         assert_eq!(card.cost.len(), 2);
@@ -1328,9 +1328,9 @@ mod tests {
     #[test]
     fn nonsense_mutation_card_loads_with_full_shape() {
         let lua = Lua::new();
-        let path = Path::new("cards/nonsense-mutation.lua");
-        let cards = load_card(&lua, path).expect("load nonsense-mutation");
-        let card = cards.iter().find(|c| c.id == "nonsense-mutation").unwrap();
+        let path = Path::new("cards/NONSENSE-MUTATION.lua");
+        let cards = load_card(&lua, path).expect("load NONSENSE-MUTATION");
+        let card = cards.iter().find(|c| c.id == "NONSENSE-MUTATION").unwrap();
         assert_eq!(card.colors, vec!["purple"]);
         assert_eq!(card.kind, crate::card::CardType::Mutation);
         // 1 graveyard + 2 mill.
