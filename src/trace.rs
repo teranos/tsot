@@ -674,7 +674,7 @@ mod tests {
 
     /// INTENT: `TraceEvent::Error` wraps a `sacred_error::Error` (the
     /// DRY unification, 2026-06-18) and serializes with `kind=Error`
-    /// + the canonical Error fields hoisted by the serde-tag
+    /// alongside the canonical Error fields hoisted by the serde-tag
     /// convention. JS-side renderer dispatches on `kind === "Error"`
     /// and reads from the typed-Error positions (no top-level
     /// `message`/`source`/`recent_trace` anymore — those came from

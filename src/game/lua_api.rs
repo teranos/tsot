@@ -2030,7 +2030,13 @@ mod mlua_chain_walker_tests {
     //! exactly once, the `CallbackError` wrapper noise is stripped,
     //! and a runtime error's actionable line:message is preserved.
 
-    use super::mlua_error_chain_why;
+    use super::{fire_self_only, mlua_error_chain_why};
+    use crate::card::EventName;
+    use crate::choice::RandomOracle;
+    use crate::game::GameState;
+    use crate::game::test_helpers::deck_of;
+    use mlua::Lua;
+    use rand::SeedableRng;
     use std::sync::Arc;
 
     #[test]
@@ -2158,6 +2164,95 @@ mod mlua_chain_walker_tests {
         assert!(
             why.contains("unexpected symbol"),
             "SyntaxError message must appear; got: {why}"
+        );
+    }
+
+    // ---- end-to-end: real Lua handler runtime error -----------------
+    //
+    // The synthetic tests above pin the walker against hand-built
+    // mlua::Error chains. This one runs an ACTUAL Lua handler that
+    // raises a runtime error and verifies the resulting typed Error
+    // pushed by `fire_self_only` carries the inner Lua line:message
+    // in its `why` field — closing the verification debt entry that
+    // the docstring referenced ("trigger a real handler failure …
+    // confirm the inner Lua line:message appears").
+
+    #[test]
+    fn real_lua_handler_runtime_error_surfaces_with_inner_line_in_typed_error() {
+        crate::error::reset();
+        let lua = Lua::new();
+        // Sandbox stripping happens in CardRegistry, but here we
+        // construct the VM directly so we can install a handler that
+        // panics. The error pipeline doesn't care which VM the error
+        // came from — it cares about the chain shape.
+        let mut state = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let host_iid = state.a.hand[0].clone();
+
+        // Install an on_die handler that deliberately dereferences
+        // a nil. mlua wraps the runtime error in CallbackError →
+        // (sometimes WithContext) → RuntimeError. The walker must
+        // reach the leaf RuntimeError and preserve its [string ...]
+        // line marker.
+        let handler: mlua::Function = lua
+            .load(
+                r#"return function(game, self)
+                    -- This indexes a nil and produces:
+                    -- "attempt to index a nil value (local 'x')"
+                    local x = nil
+                    return x.boom
+                end"#,
+            )
+            .eval()
+            .unwrap();
+        state
+            .card_pool
+            .get_mut(&host_iid)
+            .unwrap()
+            .card
+            .handlers
+            .insert(EventName::OnDie, handler);
+
+        let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
+        // Fire the handler. fire_self_only catches the runtime error,
+        // walks the chain, and pushes a typed Error onto the bus.
+        // The function returns Ok(()) (the handler failure does NOT
+        // propagate as a ChoicePending) so we don't care about the
+        // return value here — we care about the error bus.
+        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnDie, &host_iid);
+        assert!(
+            result.is_ok(),
+            "fire_self_only must Ok-and-emit on a non-Pending Lua error; got {result:?}",
+        );
+
+        let errors = crate::error::drain();
+        assert_eq!(
+            errors.len(),
+            1,
+            "exactly one typed Error must surface for the handler failure; got {}: {:?}",
+            errors.len(),
+            errors
+        );
+        let e = &errors[0];
+        assert_eq!(e.severity, crate::error::Severity::Error);
+        assert_eq!(e.context.surface, "lua-handler");
+        // event_key for OnDie is "on_die" per EventName::lua_key().
+        assert_eq!(e.context.region.as_deref(), Some("on_die"));
+        // The card-id is empty in this synthetic state (deck_of doesn't
+        // populate a real card id on the cloned instance) but the
+        // important assertion is on the inner Lua message: the `why`
+        // must contain "[string" (Lua's chunk marker) AND the actual
+        // runtime message about indexing a nil value. If only the
+        // outer "callback error" appears, the chain walker isn't
+        // doing its job.
+        assert!(
+            e.why.contains("attempt to index"),
+            "the inner Lua runtime error must be in `why`; got: {}",
+            e.why
+        );
+        assert!(
+            !e.why.starts_with("callback error"),
+            "the outer wrapper must be stripped; `why` should NOT begin with 'callback error'; got: {}",
+            e.why
         );
     }
 }

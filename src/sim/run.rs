@@ -1031,6 +1031,17 @@ pub fn run_game_continue(
                                 crate::sim::instrument::tee_log(log, format!(
                                     "turn {turn} ({active:?}): human activation {iid}[{ability_index}] failed: {e:?}"
                                 ));
+                                // Sacred-error: previously the error
+                                // only landed in the sim log. Route
+                                // through the typed Error pipeline
+                                // so a wasm-UI surface sees it.
+                                crate::error::emit_region(
+                                    crate::error::Severity::Error,
+                                    "engine",
+                                    "activate-failed",
+                                    format!("activation rejected for {iid}[{ability_index}]"),
+                                    format!("turn {turn} ({active:?}): {e:?}"),
+                                );
                             }
                             continue;
                         }
@@ -1396,6 +1407,13 @@ pub fn run_game_continue(
                             crate::sim::instrument::tee_log(log, format!(
                                 "turn {turn} ({active:?}): main2 activation {iid}[{ability_index}] failed: {e:?}"
                             ));
+                            crate::error::emit_region(
+                                crate::error::Severity::Error,
+                                "engine",
+                                "activate-failed",
+                                format!("Main2 activation rejected for {iid}[{ability_index}]"),
+                                format!("turn {turn} ({active:?}): {e:?}"),
+                            );
                         }
                     }
                     super::human::MainPhaseChoice::Play(picked) => {

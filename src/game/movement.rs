@@ -53,6 +53,72 @@ impl GameState {
         Ok(())
     }
 
+    /// Sacred-error wrapper around [`move_card`]. Routes the `NotInZone`
+    /// failure through the typed Error pipeline with a caller-supplied
+    /// `region` tag (e.g. `"combat-mill"`, `"play-discard"`, `"upkeep-draw"`)
+    /// instead of dropping the Result on the floor.
+    ///
+    /// Use this at sites where the previous code was `let _ = self.move_card(...);`
+    /// — a `NotInZone` there means "the engine asked to move a card
+    /// that wasn't actually in the zone it claimed," i.e. a contract
+    /// violation. Silently swallowing it hid state corruption; now the
+    /// failure surfaces with `surface="engine" region=<caller>` so the
+    /// developer sees the corrupt-state signature instead of a frozen UI.
+    ///
+    /// Returns the same `Result` as `move_card` so callers can still
+    /// branch on Ok/Err if they want; the typed Error is pushed as a
+    /// side effect on Err.
+    pub fn move_card_or_emit(
+        &mut self,
+        iid: &InstanceId,
+        side: PlayerId,
+        from: Zone,
+        to: Zone,
+        region: &'static str,
+    ) -> Result<(), MoveError> {
+        let result = self.move_card(iid, side, from, to);
+        if let Err(ref e) = result {
+            crate::error::emit_region(
+                crate::error::Severity::Error,
+                "engine",
+                region,
+                format!(
+                    "zone-move failed: {iid} not in {from:?} (tried to move to {to:?})"
+                ),
+                format!("{e:?}; player={side:?}"),
+            );
+        }
+        result
+    }
+
+    /// Sacred-error wrapper around `remove_from_zone`. The underlying
+    /// method returns `Option<usize>` (the position the card had been
+    /// at) — `None` means "iid wasn't in the named zone." Same kind
+    /// of contract violation as `move_card`'s `NotInZone`, just a
+    /// different return shape. Pushes a typed Error on `None` with
+    /// the caller-supplied `region` label.
+    pub fn remove_from_zone_or_emit(
+        &mut self,
+        iid: &super::InstanceId,
+        owner: PlayerId,
+        zone: Zone,
+        region: &'static str,
+    ) -> Option<usize> {
+        let result = self.remove_from_zone(iid, owner, zone);
+        if result.is_none() {
+            crate::error::emit_region(
+                crate::error::Severity::Error,
+                "engine",
+                region,
+                format!(
+                    "zone-remove failed: {iid} not in {zone:?}"
+                ),
+                format!("player={owner:?}"),
+            );
+        }
+        result
+    }
+
     /// RULES P.8: move any cards still attached to `host` into their
     /// own owner's EXILE. Called AFTER `OnDie` (or any equivalent
     /// last-words handler) has run so handlers like trustworthy-lender
@@ -96,6 +162,59 @@ mod tests {
             .is_ok());
         assert!(!s.a.hand.contains(&iid));
         assert!(s.a.graveyard.contains(&iid));
+    }
+
+    #[test]
+    fn move_card_or_emit_emits_typed_error_on_notinzone() {
+        // The sweep helper: a zone-move that fails must push a typed
+        // Error so the silent-drop pattern of the call-site
+        // (`let _ = self.move_card(...)`) doesn't hide state corruption.
+        crate::error::reset();
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        // iid that doesn't exist in player A's Hand.
+        let bogus_iid: InstanceId = "iid-does-not-exist".to_string();
+        let result = s.move_card_or_emit(
+            &bogus_iid,
+            PlayerId::A,
+            Zone::Hand,
+            Zone::Graveyard,
+            "test-region",
+        );
+        assert!(matches!(result, Err(MoveError::NotInZone)));
+        let errors = crate::error::drain();
+        assert_eq!(errors.len(), 1, "exactly one typed Error must surface");
+        let e = &errors[0];
+        assert_eq!(e.severity, crate::error::Severity::Error);
+        assert_eq!(e.context.surface, "engine");
+        assert_eq!(e.context.region.as_deref(), Some("test-region"));
+        assert!(
+            e.title.contains("not in Hand"),
+            "title must name the source zone: {}",
+            e.title
+        );
+        assert!(
+            e.why.contains("NotInZone"),
+            "why must carry the raw error variant: {}",
+            e.why
+        );
+    }
+
+    #[test]
+    fn move_card_or_emit_emits_nothing_on_success() {
+        // The happy path must not pollute the bus.
+        crate::error::reset();
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let iid = s.a.hand[0].clone();
+        let result = s.move_card_or_emit(
+            &iid,
+            PlayerId::A,
+            Zone::Hand,
+            Zone::Graveyard,
+            "test-region",
+        );
+        assert!(result.is_ok());
+        let errors = crate::error::drain();
+        assert!(errors.is_empty(), "happy path must not push errors");
     }
 
     #[test]

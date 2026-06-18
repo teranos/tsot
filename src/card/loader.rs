@@ -994,7 +994,26 @@ pub fn load_cards_dir(lua: &Lua, dir: &Path) -> mlua::Result<Vec<Card>> {
     entries.sort();
     let mut all: Vec<Card> = Vec::new();
     for p in &entries {
-        all.extend(load_card(lua, p)?);
+        // Sacred-error: malformed individual card files surface a
+        // typed Error and the corpus continues loading WITHOUT that
+        // card. Previously `?` aborted the whole load on the first
+        // bad card, which both hid which card was bad (mlua's error
+        // doesn't always preserve file context) and silently shrank
+        // the corpus to ZERO. Per-card try-and-emit lets the engine
+        // boot with a known-incomplete corpus AND tells the developer
+        // which file rejected.
+        match load_card(lua, p) {
+            Ok(cards) => all.extend(cards),
+            Err(e) => {
+                crate::error::emit_region(
+                    crate::error::Severity::Warn,
+                    "card-loader",
+                    "malformed-card",
+                    format!("card file rejected: {}", p.display()),
+                    format!("{e}"),
+                );
+            }
+        }
     }
     Ok(all)
 }
@@ -1007,11 +1026,34 @@ pub fn load_cards_embedded(lua: &Lua) -> mlua::Result<Vec<Card>> {
     files.sort_by_key(|f| f.path().to_path_buf());
     let mut all: Vec<Card> = Vec::new();
     for f in &files {
-        let source = f
-            .contents_utf8()
-            .ok_or_else(|| mlua::Error::runtime(format!("non-utf8 card: {}", f.path().display())))?;
         let chunk_name = f.path().display().to_string();
-        all.extend(load_card_from_source(lua, source, &chunk_name)?);
+        let source = match f.contents_utf8() {
+            Some(s) => s,
+            None => {
+                crate::error::emit_region(
+                    crate::error::Severity::Warn,
+                    "card-loader",
+                    "malformed-card",
+                    format!("embedded card is not UTF-8: {chunk_name}"),
+                    "skipping; file is non-text or contains invalid UTF-8".to_string(),
+                );
+                continue;
+            }
+        };
+        // Same sacred-error pattern as load_cards_dir: one bad card
+        // surfaces and the rest still load.
+        match load_card_from_source(lua, source, &chunk_name) {
+            Ok(cards) => all.extend(cards),
+            Err(e) => {
+                crate::error::emit_region(
+                    crate::error::Severity::Warn,
+                    "card-loader",
+                    "malformed-card",
+                    format!("embedded card rejected: {chunk_name}"),
+                    format!("{e}"),
+                );
+            }
+        }
     }
     Ok(all)
 }
@@ -1587,8 +1629,12 @@ mod tests {
 
     fn load_card_from_lua_or_err(src: &str) -> Result<Card, String> {
         // Variant of load_card_from_lua that returns the loader
-        // error instead of panicking, so tests can assert on the
-        // surfaced error message.
+        // error instead of panicking. Since the 2026-06-18 sacred-
+        // error sweep, `load_cards_dir` no longer aborts on a
+        // malformed card — it emits a typed Error and continues.
+        // So the test pulls the latest typed-error message from
+        // `crate::error::drain()` if the registry came back without
+        // our `under-test` card.
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -1600,6 +1646,11 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("under-test.lua");
         std::fs::write(&path, src).unwrap();
+        // Reset the error bus so our drain only sees errors from THIS
+        // load. The bus is thread-local and shared across tests; if
+        // another test left errors in it, our assertion could match
+        // the wrong message.
+        crate::error::reset();
         let result = CardRegistry::load(&tmp)
             .map_err(|e| format!("{e}"))
             .and_then(|registry| {
@@ -1608,7 +1659,20 @@ mod tests {
                     .iter()
                     .find(|c| c.id == "under-test")
                     .cloned()
-                    .ok_or_else(|| "card with id `under-test` not loaded".to_string())
+                    .ok_or_else(|| {
+                        // Card didn't load — the loader emitted a typed
+                        // Error on the bus instead of returning Err.
+                        // Drain it and surface the message so the test
+                        // can assert on the field label.
+                        let errors = crate::error::drain();
+                        errors
+                            .last()
+                            .map(|e| format!("{}: {}", e.title, e.why))
+                            .unwrap_or_else(|| {
+                                "card with id `under-test` not loaded \
+                                 (and no typed Error on the bus)".to_string()
+                            })
+                    })
             });
         std::fs::remove_file(&path).ok();
         std::fs::remove_dir(&tmp).ok();
@@ -1798,5 +1862,129 @@ mod tests {
         assert_eq!(l.text, r.text);
         assert!(matches!(l.timing, Timing::Instant));
         assert!(matches!(r.timing, Timing::Instant));
+    }
+
+    // ---- loader malformed-card surface verification ---------------
+    //
+    // ERROR.md "Engine internals" item:
+    //   "src/card/loader.rs malformed-card handling — does a rejected
+    //    card surface anywhere, or does the corpus silently shrink by
+    //    one entry?"
+    //
+    // These tests pin the post-2026-06-18 contract: a malformed card
+    // emits a typed `Severity::Warn` (surface="card-loader",
+    // region="malformed-card") AND the rest of the corpus continues
+    // to load. Closes the verification debt for the loader path
+    // without requiring a browser session (the typed Error pushed
+    // here is what the dev tool renders inline at the deckbuilder).
+
+    #[test]
+    fn load_cards_dir_surfaces_typed_warn_for_a_malformed_card() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "tsot_verify_loader_malformed_{}_{}",
+            std::process::id(),
+            id
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // One well-formed card.
+        std::fs::write(
+            tmp.join("aaa-good.lua"),
+            r#"return {
+                id = "verify-good",
+                type = "creature",
+                colors = {"green"},
+                stats = {x = 1, y = 1},
+            }"#,
+        )
+        .unwrap();
+        // One broken card. Note the leading 'aaa-' / 'zzz-' filenames
+        // so `entries.sort()` puts the good one BEFORE the bad —
+        // proving the bad card doesn't stop the next iteration.
+        std::fs::write(tmp.join("zzz-bad.lua"), "this is )) not valid lua").unwrap();
+
+        crate::error::reset();
+        let registry = CardRegistry::load(&tmp)
+            .expect("loader must NOT abort the whole corpus on a single bad card");
+        let errors = crate::error::drain();
+
+        // The good card loaded.
+        let good_loaded = registry.cards().iter().any(|c| c.id == "verify-good");
+        assert!(
+            good_loaded,
+            "verify-good must be present despite zzz-bad.lua being malformed"
+        );
+
+        // Exactly one typed Warn surfaced for the bad card.
+        assert_eq!(
+            errors.len(),
+            1,
+            "exactly one typed Error must surface for the bad card; got {}: {:?}",
+            errors.len(),
+            errors
+        );
+        let e = &errors[0];
+        assert_eq!(e.severity, crate::error::Severity::Warn);
+        assert_eq!(e.context.surface, "card-loader");
+        assert_eq!(e.context.region.as_deref(), Some("malformed-card"));
+        assert!(
+            e.title.contains("zzz-bad.lua"),
+            "the title must name the offending file; got: {}",
+            e.title
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_cards_dir_continues_loading_a_third_card_after_a_bad_one_in_the_middle() {
+        // Even harder case: bad card sits between two good ones in
+        // the sort order. Proves the loop doesn't break out early
+        // on the bad entry.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "tsot_verify_loader_middle_bad_{}_{}",
+            std::process::id(),
+            id
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        for (name, src) in [
+            (
+                "aaa.lua",
+                r#"return { id = "verify-a", type = "creature", colors = {"green"}, stats = {x=1,y=1} }"#,
+            ),
+            ("mmm.lua", "totally not valid lua"),
+            (
+                "zzz.lua",
+                r#"return { id = "verify-z", type = "creature", colors = {"red"}, stats = {x=2,y=2} }"#,
+            ),
+        ] {
+            std::fs::write(tmp.join(name), src).unwrap();
+        }
+
+        crate::error::reset();
+        let registry = CardRegistry::load(&tmp).expect("registry must load with 2 good + 1 bad");
+        let errors = crate::error::drain();
+        let ids: Vec<&str> = registry.cards().iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"verify-a"),
+            "verify-a (before bad) must be present: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"verify-z"),
+            "verify-z (after bad) must be present: {:?}",
+            ids
+        );
+        assert_eq!(errors.len(), 1, "exactly one typed Warn for the middle bad card");
+        assert_eq!(errors[0].severity, crate::error::Severity::Warn);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

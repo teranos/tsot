@@ -195,7 +195,14 @@ impl GameState {
             return;
         }
         let top = self.player(pid).deck[0].clone();
-        let _ = self.move_card(&top, pid, Zone::Deck, Zone::Hand);
+        // Sacred-error sweep: draw step deck-top → hand.
+        let _ = self.move_card_or_emit(
+            &top,
+            pid,
+            Zone::Deck,
+            Zone::Hand,
+            "turn-draw-step",
+        );
     }
 
     /// U.10: at End phase, the active player discards down to a HAND size of 6.
@@ -212,7 +219,14 @@ impl GameState {
             let Some(front) = self.player(pid).hand.first().cloned() else {
                 break;
             };
-            let _ = self.move_card(&front, pid, Zone::Hand, Zone::Graveyard);
+            // Sacred-error sweep: end-step discard hand-front → graveyard.
+            let _ = self.move_card_or_emit(
+                &front,
+                pid,
+                Zone::Hand,
+                Zone::Graveyard,
+                "turn-end-discard",
+            );
             self.bump_action("discard", pid);
         }
     }

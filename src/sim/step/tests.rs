@@ -1033,3 +1033,43 @@
         assert_eq!(covered, total, "coverage gap: {covered}/{total}");
     }
 
+    /// Sacred-error sweep coverage — broader than `src/sim/step/`.
+    /// Every file that crosses the FFI boundary or fires Lua handlers
+    /// must reference the typed Error pipeline (`crate::error::emit`
+    /// or `emit_region` or `crate::error::push`). If a sweep site
+    /// gets deleted from any of these, this test fails.
+    ///
+    /// Extension of ERROR.md's self-enforcement net (the original
+    /// only covered `src/sim/step/`). Mirrors what
+    /// `every_step_file_references_emit_human_refusal` does for the
+    /// step layer — same pattern, more files.
+    #[test]
+    fn every_pipeline_boundary_file_references_typed_error() {
+        let files = [
+            "src/game/lua_api.rs",
+            "src/game/play.rs",
+            "src/wasm_ffi.rs",
+            "src/card/loader.rs",
+            "src/sim/mcts.rs",
+            "src/sim/run.rs",
+        ];
+        for rel in files {
+            let path = std::path::Path::new(rel);
+            let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                panic!("could not read {rel} for sacred-error coverage check: {e}")
+            });
+            let touches_pipeline = src.contains("crate::error::emit")
+                || src.contains("crate::error::push")
+                || src.contains("super::error::emit")
+                || src.contains("emit_human_refusal");
+            assert!(
+                touches_pipeline,
+                "SACRED-ERROR SWEEP COVERAGE GAP: {rel} does not reference \
+                 the typed Error pipeline (crate::error::emit_region / \
+                 emit / push / emit_human_refusal). Either route at least \
+                 one error through it, or document the exemption here and \
+                 remove the file from the coverage list."
+            );
+        }
+    }
+

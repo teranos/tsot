@@ -788,7 +788,17 @@ impl GameState {
                 break;
             };
             payments_snapshot.mill.push(top.clone());
-            let _ = self.move_card(&top, player, Zone::Deck, Zone::Graveyard);
+            // Sacred-error sweep: was `let _ = self.move_card(...)`.
+            // The `top` came from `deck.first()` two lines up so
+            // NotInZone shouldn't be possible — but if it ever happens,
+            // it's state corruption that previously hid silently.
+            let _ = self.move_card_or_emit(
+                &top,
+                player,
+                Zone::Deck,
+                Zone::Graveyard,
+                "play-mill-cost",
+            );
         }
 
         // GRAVEYARD cost (P.12): if the caller supplied explicit
@@ -800,12 +810,24 @@ impl GameState {
         if choices.graveyard_payment_ids.is_empty() {
             for gid in &auto_gy_pitch {
                 payments_snapshot.graveyard.push(gid.clone());
-                let _ = self.move_card(gid, player, Zone::Graveyard, Zone::Exile);
+                let _ = self.move_card_or_emit(
+                    gid,
+                    player,
+                    Zone::Graveyard,
+                    Zone::Exile,
+                    "play-gy-cost-auto",
+                );
             }
         } else {
             payments_snapshot.graveyard = choices.graveyard_payment_ids.clone();
             for gid in choices.graveyard_payment_ids.clone() {
-                let _ = self.move_card(&gid, player, Zone::Graveyard, Zone::Exile);
+                let _ = self.move_card_or_emit(
+                    &gid,
+                    player,
+                    Zone::Graveyard,
+                    Zone::Exile,
+                    "play-gy-cost-explicit",
+                );
             }
         }
 
@@ -829,7 +851,13 @@ impl GameState {
                 .unwrap_or(false);
             self.set_tapped(&sub_iid, true);
             if is_jewel {
-                let _ = self.move_card(&sub_iid, player, Zone::Board, Zone::Graveyard);
+                let _ = self.move_card_or_emit(
+                    &sub_iid,
+                    player,
+                    Zone::Board,
+                    Zone::Graveyard,
+                    "play-jewel-sacrifice",
+                );
             }
             self.bump_action("jewel_tap_substitution", player);
         }
@@ -837,7 +865,13 @@ impl GameState {
         // Clear View-style HAND-substitute payments: each chosen card
         // in GY moves GY → EXILE. Validation above confirmed eligibility.
         for gid in choices.gy_hand_payment_ids.clone() {
-            let _ = self.move_card(&gid, player, Zone::Graveyard, Zone::Exile);
+            let _ = self.move_card_or_emit(
+                &gid,
+                player,
+                Zone::Graveyard,
+                Zone::Exile,
+                "play-gy-hand-substitute",
+            );
             self.bump_action("gy_hand_substitution", player);
         }
 
@@ -845,7 +879,13 @@ impl GameState {
         // on_die per card (matches combat's death-detection sequence).
         let sac_ids: Vec<InstanceId> = choices.sacrifice_ids.clone();
         for sid in &sac_ids {
-            let _ = self.move_card(sid, player, Zone::Board, Zone::Graveyard);
+            let _ = self.move_card_or_emit(
+                sid,
+                player,
+                Zone::Board,
+                Zone::Graveyard,
+                "play-sacrifice-cost",
+            );
             self.bump_action("sacrificed_as_cost", player);
         }
         if let Some(c) = ctx.as_mut() {
@@ -889,7 +929,12 @@ impl GameState {
         // alternate identical responses indefinitely (see Bug 3).
         // HAND payments still stay in hand until resolution (their
         // refund-on-counter semantic is unchanged).
-        let _ = self.remove_from_zone(instance, player, cast_source_zone);
+        let _ = self.remove_from_zone_or_emit(
+            instance,
+            player,
+            cast_source_zone,
+            "play-cast-source-remove",
+        );
 
         // Announce the cast. Non-hand cost (mill, graveyard) is already
         // paid; HAND payments stay in hand until resolution (mirrors MTG:
@@ -1169,7 +1214,13 @@ impl GameState {
             .unwrap_or(false);
         if self_exiles {
             for hid in choices.hand_payment_ids.clone() {
-                let _ = self.move_card(&hid, player, Zone::Hand, Zone::Graveyard);
+                let _ = self.move_card_or_emit(
+                    &hid,
+                    player,
+                    Zone::Hand,
+                    Zone::Graveyard,
+                    "play-self-exile-hand-pay",
+                );
             }
             for aid in choices.attached_payment_ids.clone() {
                 if let Some(host) = self.host_of(&aid) {
@@ -1201,11 +1252,22 @@ impl GameState {
         // GRAVEYARD (no host to attach to).
         for hid in &payments {
             if is_board_placed {
-                let _ = self.remove_from_zone(hid, player, Zone::Hand);
+                let _ = self.remove_from_zone_or_emit(
+                    hid,
+                    player,
+                    Zone::Hand,
+                    "play-hand-payment-attach",
+                );
                 self.add_attached(instance, hid);
                 self.set_face_down(hid, true);
             } else {
-                let _ = self.move_card(hid, player, Zone::Hand, Zone::Graveyard);
+                let _ = self.move_card_or_emit(
+                    hid,
+                    player,
+                    Zone::Hand,
+                    Zone::Graveyard,
+                    "play-hand-payment-discard",
+                );
             }
         }
 
@@ -1340,7 +1402,13 @@ impl GameState {
                 .get(iid)
                 .map(|i| i.owner)
                 .unwrap_or(self.active_player);
-            let _ = self.move_card(iid, owner, Zone::Board, Zone::Graveyard);
+            let _ = self.move_card_or_emit(
+                iid,
+                owner,
+                Zone::Board,
+                Zone::Graveyard,
+                "cleanup-b8-death",
+            );
         }
     }
 
@@ -1380,7 +1448,13 @@ impl GameState {
                 .get(iid)
                 .map(|i| i.owner)
                 .unwrap_or(self.active_player);
-            let _ = self.move_card(iid, owner, Zone::Board, Zone::Graveyard);
+            let _ = self.move_card_or_emit(
+                iid,
+                owner,
+                Zone::Board,
+                Zone::Graveyard,
+                "cleanup-zero-y-death",
+            );
             if let Some(c) = ctx.as_mut() {
                 // cleanup_zero_y_deaths returns () — can't propagate
                 // Pending via `?`. Swallow with a log; the wider engine

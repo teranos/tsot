@@ -169,7 +169,13 @@ impl GameState {
                 CostSource::Mill => {
                     for _ in 0..amount {
                         if let Some(top) = self.player(controller).deck.first().cloned() {
-                            let _ = self.move_card(&top, controller, Zone::Deck, Zone::Graveyard);
+                            let _ = self.move_card_or_emit(
+                                &top,
+                                controller,
+                                Zone::Deck,
+                                Zone::Graveyard,
+                                "activate-mill-cost",
+                            );
                             self.bump_action("mill", controller);
                         }
                     }
@@ -177,7 +183,13 @@ impl GameState {
                 CostSource::Graveyard => {
                     for _ in 0..amount {
                         if let Some(card) = self.player(controller).graveyard.first().cloned() {
-                            let _ = self.move_card(&card, controller, Zone::Graveyard, Zone::Exile);
+                            let _ = self.move_card_or_emit(
+                                &card,
+                                controller,
+                                Zone::Graveyard,
+                                Zone::Exile,
+                                "activate-graveyard-cost",
+                            );
                         }
                     }
                 }

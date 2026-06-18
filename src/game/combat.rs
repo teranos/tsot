@@ -422,7 +422,17 @@ impl GameState {
             let Some(top) = self.player(defender).deck.first().cloned() else {
                 break;
             };
-            let _ = self.move_card(&top, defender, Zone::Deck, Zone::Exile);
+            // Sacred-error sweep: combat damage mills deck-top to exile.
+            // top came from deck.first() so NotInZone shouldn't happen,
+            // but if it ever does it's state corruption that the typed
+            // Error surfaces now instead of swallowing.
+            let _ = self.move_card_or_emit(
+                &top,
+                defender,
+                Zone::Deck,
+                Zone::Exile,
+                "combat-damage-mill",
+            );
         }
         if mill_n > 0 {
             damaged_attackers.extend(unblocked_attackers);
@@ -494,7 +504,14 @@ impl GameState {
                 .get(iid)
                 .map(|i| i.owner)
                 .unwrap_or(self.active_player);
-            let _ = self.move_card(iid, owner, Zone::Board, Zone::Graveyard);
+            // Sacred-error sweep: board → graveyard on combat death.
+            let _ = self.move_card_or_emit(
+                iid,
+                owner,
+                Zone::Board,
+                Zone::Graveyard,
+                "combat-death",
+            );
             outcome.deaths.push(iid.clone());
             // LUA Phase 1: fire on_die after the Board → Graveyard move so the
             // handler observes the post-death zone state. Handlers may return
