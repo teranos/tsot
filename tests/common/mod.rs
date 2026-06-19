@@ -60,7 +60,7 @@ pub fn vanilla_template(registry: &CardRegistry) -> Card {
 /// the call before mutating further.
 pub fn advance_to(state: &mut GameState, target: Phase) {
     while state.phase != target && state.winner.is_none() {
-        state.next_phase(None);
+        state.next_phase(None).expect("None ctx never yields");
     }
 }
 

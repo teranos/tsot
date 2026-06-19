@@ -400,12 +400,12 @@ fn play_card_symbol_cap_resets_on_turn_begin() {
         .expect("first symbol cast");
     // Advance Untap → Draw → Main1 → Combat → Main2 → End → next Untap.
     for _ in 0..6 {
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
     }
     // Active player flipped to B on turn 2. Advance B's full turn so we
     // come back to A on turn 3 — A's cap should be cleared by then.
     for _ in 0..6 {
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
     }
     assert_eq!(s.active_player, PlayerId::A);
     assert_eq!(
@@ -427,7 +427,7 @@ fn play_card_symbol_cap_per_player() {
         .expect("A casts symbol");
     // Advance to B's turn (full A-turn cycle).
     for _ in 0..6 {
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
     }
     assert_eq!(s.active_player, PlayerId::B);
     assert_eq!(
@@ -458,7 +458,7 @@ fn play_card_symbol_unique_blocks_duplicate_id_self() {
     // P.35 cap would also fire here; advance to A's next turn so the
     // cap is clear and only P.36 can refuse the second cast.
     for _ in 0..12 {
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
     }
     assert_eq!(s.active_player, PlayerId::A);
     assert_eq!(
@@ -486,7 +486,7 @@ fn play_card_symbol_unique_blocks_duplicate_id_opponent() {
         .expect("A casts symbol");
     // Advance to B's turn.
     for _ in 0..6 {
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
     }
     assert_eq!(s.active_player, PlayerId::B);
     assert_eq!(
@@ -516,7 +516,7 @@ fn play_card_symbol_unique_castable_after_leaves_board() {
     let _ = s.move_card(&a_sym, PlayerId::A, Zone::Board, Zone::Graveyard);
     // Advance to B's turn.
     for _ in 0..6 {
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
     }
     assert_eq!(s.active_player, PlayerId::B);
     assert_eq!(

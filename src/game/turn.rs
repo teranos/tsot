@@ -7,6 +7,22 @@ use super::lua_api;
 use super::state::{GameState, InstanceId, Phase, StatusEffect, Zone};
 use crate::card::EventName;
 
+/// Outcome shape for `next_phase`. Mirrors `PlayError::ChoicePending` /
+/// `CombatError::ChoicePending` / `ActivateError::ChoicePending`: when
+/// a Lua handler fired during a phase-advance trigger (currently
+/// OnTurnBegin at the End→Untap transition) calls `game.choose_card` /
+/// `game.confirm` / `game.choose_player` / `game.choose_int` against
+/// an oracle that needs the human to answer, the wrapper raises
+/// `Error::external(_)`, `fire_self_only` downcasts to
+/// `Result<(), ChoicePending>`, and `next_phase` lifts via `?`. The
+/// StepEngine catches this variant, rolls back the preview journal,
+/// surfaces a `HumanPrompt::Choose*`, and re-fires the operation after
+/// the user's answer is appended to `HumanReplayOracle.replay`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnError {
+    ChoicePending(crate::choice::ChoicePending),
+}
+
 impl GameState {
     /// Advance to the next phase, firing the entry action for the new phase.
     /// Phase order per U.6: Untap → Draw → Main1 → Combat → Main2 → End → next turn's Untap.
@@ -14,9 +30,9 @@ impl GameState {
     /// phase-entry events that need to fire Lua handlers
     /// (`OnTurnBegin` at Untap entry currently); pass `None` from sites
     /// that don't have a Lua VM in scope.
-    pub fn next_phase(&mut self, ctx: Option<&mut EventContext>) {
+    pub fn next_phase(&mut self, ctx: Option<&mut EventContext>) -> Result<(), TurnError> {
         if self.winner.is_some() {
-            return;
+            return Ok(());
         }
         let from = self.phase;
         let next = match self.phase {
@@ -113,29 +129,29 @@ impl GameState {
                         .get(iid)
                         .map(|i| i.attached.clone())
                         .unwrap_or_default();
-                    // TODO(lua-yield): turn-begin triggers run inside
-                    // `next_phase` which returns (). Pending swallowed
-                    // until next_phase grows a Result type.
-                    let _ = lua_api::fire_self_only(
+                    lua_api::fire_self_only(
                         c.lua,
                         self,
                         c.oracle(),
                         EventName::OnTurnBegin,
                         iid,
-                    );
+                    )
+                    .map_err(TurnError::ChoicePending)?;
                     for aid in &attached {
-                        let _ = lua_api::fire_self_only(
+                        lua_api::fire_self_only(
                             c.lua,
                             self,
                             c.oracle(),
                             EventName::OnTurnBegin,
                             aid,
-                        );
+                        )
+                        .map_err(TurnError::ChoicePending)?;
                     }
                 }
             }
         }
         self.enter_phase_action();
+        Ok(())
     }
 
     fn enter_phase_action(&mut self) {
@@ -260,17 +276,17 @@ mod tests {
     fn phase_cycles_in_order() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         assert_eq!(s.phase, Phase::Untap);
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
         assert_eq!(s.phase, Phase::Draw);
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
         assert_eq!(s.phase, Phase::Main1);
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
         assert_eq!(s.phase, Phase::Combat);
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
         assert_eq!(s.phase, Phase::Main2);
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
         assert_eq!(s.phase, Phase::End);
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
         assert_eq!(s.phase, Phase::Untap);
     }
 
@@ -278,7 +294,7 @@ mod tests {
     fn end_to_untap_swaps_active_and_increments_turn() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         for _ in 0..6 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         assert_eq!(s.phase, Phase::Untap);
         assert_eq!(s.turn, 2);
@@ -291,7 +307,7 @@ mod tests {
         let hand_before = s.a.hand.len();
         let deck_before = s.a.deck.len();
         let top = s.a.deck[0].clone();
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
         assert_eq!(s.phase, Phase::Draw);
         assert_eq!(s.a.hand.len(), hand_before + 1);
         assert_eq!(s.a.deck.len(), deck_before - 1);
@@ -302,7 +318,7 @@ mod tests {
     fn empty_deck_on_a_draw_makes_b_winner() {
         let mut s = GameState::new(deck_of(5, "a"), deck_of(50, "b"));
         assert_eq!(s.a.deck.len(), 0);
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
         assert_eq!(s.winner, Some(PlayerId::B));
     }
 
@@ -310,7 +326,7 @@ mod tests {
     fn empty_deck_on_b_draw_makes_a_winner() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(5, "b"));
         for _ in 0..7 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         assert_eq!(s.winner, Some(PlayerId::A));
     }
@@ -318,11 +334,11 @@ mod tests {
     #[test]
     fn winner_set_makes_next_phase_a_noop() {
         let mut s = GameState::new(deck_of(5, "a"), deck_of(50, "b"));
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
         assert!(s.winner.is_some());
         let phase_before = s.phase;
         let turn_before = s.turn;
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
         assert_eq!(s.phase, phase_before);
         assert_eq!(s.turn, turn_before);
     }
@@ -347,7 +363,7 @@ mod tests {
 
         // Advance through a full cycle: Untap → Draw → ... → End → Untap.
         for _ in 0..6 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
 
         assert_ne!(snapshot, format!("{:?}", s));
@@ -365,7 +381,7 @@ mod tests {
     fn natural_deckout_takes_91_turns_with_50_card_decks() {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         while s.winner.is_none() {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         assert_eq!(s.winner, Some(PlayerId::B));
         assert_eq!(s.turn, 91);
@@ -380,7 +396,7 @@ mod tests {
         s.card_pool.get_mut(&iid).unwrap().tapped = true;
 
         for _ in 0..12 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         assert_eq!(s.phase, Phase::Untap);
         assert_eq!(s.active_player, PlayerId::A);
@@ -396,7 +412,7 @@ mod tests {
         s.card_pool.get_mut(&iid).unwrap().tapped = true;
 
         for _ in 0..6 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         assert_eq!(s.phase, Phase::Untap);
         assert_eq!(s.active_player, PlayerId::B);
@@ -416,7 +432,7 @@ mod tests {
         }
 
         for _ in 0..12 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         let inst = s.card_pool.get(&iid).unwrap();
         assert!(inst.tapped);
@@ -427,14 +443,14 @@ mod tests {
         ));
 
         for _ in 0..12 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         let inst = s.card_pool.get(&iid).unwrap();
         assert!(inst.tapped);
         assert!(inst.status_effects.is_empty());
 
         for _ in 0..12 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         assert!(!s.card_pool.get(&iid).unwrap().tapped);
     }
@@ -454,7 +470,7 @@ mod tests {
         // Advance to End: Untap → Draw → Main1 → Combat → Main2 → End.
         // Drawing adds one more card, making the hand 10 before discard.
         for _ in 0..5 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         assert_eq!(s.phase, Phase::End);
         assert_eq!(s.a.hand.len(), 6);
@@ -471,7 +487,7 @@ mod tests {
         let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
         // Default hand size is 5; advance to End. Draw makes it 6, exactly the cap.
         for _ in 0..5 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         assert_eq!(s.phase, Phase::End);
         assert_eq!(s.a.hand.len(), 6);
@@ -488,7 +504,7 @@ mod tests {
         }
         assert_eq!(s.b.hand.len(), 9);
         for _ in 0..5 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         assert_eq!(s.phase, Phase::End);
         assert_eq!(s.active_player, PlayerId::A);
@@ -503,8 +519,79 @@ mod tests {
         let iid = s.a.hand[0].clone();
         s.card_pool.get_mut(&iid).unwrap().damage = 5.0;
         for _ in 0..6 {
-            s.next_phase(None);
+            s.next_phase(None).expect("None ctx never yields");
         }
         assert_eq!(s.card_pool.get(&iid).unwrap().damage, 0.0);
+    }
+
+    /// Mirror of the activate.rs / combat_tests.rs propagation tests at
+    /// the turn boundary. Pins the contract that when an OnTurnBegin
+    /// handler (fired during the End→Untap transition inside
+    /// `next_phase`) calls `game.choose_card` against a
+    /// HumanReplayOracle with no replay, `next_phase` returns
+    /// `Err(TurnError::ChoicePending(_))` instead of silently
+    /// swallowing the suspend. Closes the last two `let _ =` discard
+    /// sites flagged in LIMITATIONS.md.
+    #[test]
+    fn next_phase_returns_choice_pending_when_on_turn_begin_yields() {
+        use crate::card::EventName;
+        use crate::choice::{ChoicePending, RandomOracle};
+        use crate::game::context::EventContext;
+        use crate::sim::human::HumanReplayOracle;
+        use mlua::Lua;
+        use rand::SeedableRng;
+
+        let lua = Lua::new();
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        // Park a card on B's board: End→Untap swaps active to B, so
+        // the OnTurnBegin sweep iterates B's board.
+        let iid = s.b.hand[0].clone();
+        s.b.hand.remove(0);
+        s.b.board.push(iid.clone());
+        // Pool element for choose_card; the wrapper suspends before
+        // reading it, but it has to be non-empty for the request.
+        let target = s.a.hand[0].clone();
+
+        let handler_src = format!(
+            r#"return function(game, self)
+                 local picked = game.choose_card({{ "{target}" }}, {{ prompt = "test" }})
+                 if picked ~= nil then game.damage(picked, 1) end
+               end"#
+        );
+        let handler: mlua::Function = lua.load(&handler_src).eval().unwrap();
+        s.card_pool
+            .get_mut(&iid)
+            .unwrap()
+            .card
+            .handlers
+            .insert(EventName::OnTurnBegin, handler);
+
+        // Advance to End (Untap → Draw → Main1 → Combat → Main2 → End
+        // is 5 transitions). The 6th transition is End→Untap with
+        // active swapping to B and OnTurnBegin firing.
+        for _ in 0..5 {
+            s.next_phase(None).expect("None ctx never yields");
+        }
+        assert_eq!(s.phase, Phase::End);
+
+        let mut oracle = HumanReplayOracle::new(
+            RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0)),
+            Some(PlayerId::B),
+        );
+
+        let result = {
+            let mut ctx = EventContext::new(&lua, &mut oracle);
+            s.next_phase(Some(&mut ctx))
+        };
+
+        match result {
+            Err(TurnError::ChoicePending(ChoicePending::Card(req))) => {
+                assert_eq!(req.asker, Some(PlayerId::B));
+                assert!(!req.pool.is_empty());
+            }
+            other => panic!(
+                "expected Err(TurnError::ChoicePending(Card)), got {other:?}"
+            ),
+        }
     }
 }

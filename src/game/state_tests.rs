@@ -1172,8 +1172,8 @@ fn pending_main_phase_returns_flush_on_main1_entry() {
     s.a.exile.push(iid.clone());
     s.pending_main_phase_returns.push(iid.clone());
     assert_eq!(s.phase, Phase::Untap);
-    s.next_phase(None); // Untap → Draw
-    s.next_phase(None); // Draw  → Main1
+    s.next_phase(None).expect("None ctx never yields"); // Untap → Draw
+    s.next_phase(None).expect("None ctx never yields"); // Draw  → Main1
     assert_eq!(s.phase, Phase::Main1);
     assert!(s.a.board.contains(&iid), "queued card must return to owner's board");
     assert!(!s.a.exile.contains(&iid), "queued card must leave exile");
@@ -1188,12 +1188,12 @@ fn pending_main_phase_returns_flush_on_main2_entry() {
     let iid = s.a.hand[0].clone();
     s.a.hand.retain(|i| i != &iid);
     s.a.exile.push(iid.clone());
-    s.next_phase(None); // Untap → Draw
-    s.next_phase(None); // Draw  → Main1
+    s.next_phase(None).expect("None ctx never yields"); // Untap → Draw
+    s.next_phase(None).expect("None ctx never yields"); // Draw  → Main1
     // Queue AFTER Main1 entry so the first flush doesn't catch it.
     s.pending_main_phase_returns.push(iid.clone());
-    s.next_phase(None); // Main1 → Combat
-    s.next_phase(None); // Combat → Main2
+    s.next_phase(None).expect("None ctx never yields"); // Main1 → Combat
+    s.next_phase(None).expect("None ctx never yields"); // Combat → Main2
     assert_eq!(s.phase, Phase::Main2);
     assert!(s.a.board.contains(&iid), "queued card must return on Main2 entry");
     assert!(!s.a.exile.contains(&iid));

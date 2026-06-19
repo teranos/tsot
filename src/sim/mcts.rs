@@ -444,7 +444,7 @@ mod tests {
         use crate::game::Phase;
         for state in [&mut state_1, &mut state_2] {
             while state.phase != Phase::Main1 {
-                state.next_phase(None);
+                state.next_phase(None).expect("None ctx never yields");
             }
         }
 

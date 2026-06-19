@@ -1,7 +1,7 @@
 # tsot — Known Limitations
 
 > What the engine cannot do today. Code TODOs are tagged so they map back
-> to a section here. Last refresh: 2026-06-18 (audit: lua replay path is built — gap is the 10 discard sites; OnDealtDamageToPlayer shipped; P.8 attached-cascade partial).
+> to a section here. Last refresh: 2026-06-18 (audit: all 10 ChoicePending discard sites closed across play / activate / combat / turn — handlers now suspend end-to-end via typed `*Error::ChoicePending` propagation; OnDealtDamageToPlayer shipped; P.8 attached-cascade partial).
 
 New cards:
 
@@ -38,14 +38,7 @@ T:Sac this, Search your library for a card called Amsterdam and put it on the bo
 
 ## lua
 
-- **`ChoicePending` discarded at 10 handler-fire sites.** The replay pipeline IS built. `build_game_table!`'s `choose_card` / `confirm` / `choose_player` / `choose_int` wrappers raise `Err(mlua::Error::external(ChoicePending))` (the `coroutine.yield` path was investigated and rejected — Lua blocks yield across C-call boundaries; `src/game/lua_api.rs:514-517` documents the decision). `fire_self_only` / `fire_with_partner` / `fire_activated` correctly downcast and return `Result<(), ChoicePending>`. `play_card` propagates via `PlayError::ChoicePending`. `HumanReplayOracle` yields up to the StepEngine, which surfaces a `HumanPrompt`, rolls back the preview journal, appends the user's answer to `replay`, and re-fires the operation. Tests at `src/game/lua_api.rs:1955-2033` pin the contract. **What still discards `Err(ChoicePending)` with `let _ = ...`** (each site flagged with `TODO(lua-yield)`):
-  - `src/game/play/activate.rs:201` — activated-ability handlers. Blocks the ghost cycle and any activation whose effect calls `game.choose_*`.
-  - `src/game/combat.rs:170` — `OnAttack`.
-  - `src/game/combat.rs:315,325` — `OnBlock` / `OnBlockedBy`.
-  - `src/game/combat.rs:442,452` — `OnDie` from combat damage + attached cards' on-die.
-  - `src/game/combat.rs:501,513` — `OnDie` (another death path) + `OnCreatureDies` broadcast.
-  - `src/game/turn.rs:119,127` — end-of-turn triggers.
-  Each needs its error type to grow a `ChoicePending(crate::choice::ChoicePending)` variant (mirroring `PlayError::ChoicePending` in `src/game/play/errors.rs:106`) and propagation via `.map_err(...)?`. The on_play / on_die-from-sacrifice / on_enter_board paths in `play.rs:853,1184,1268,1285,1293` are wired correctly today, so Fireball / goblin-conspirator / jellyfish / flesh-eating-plant `on_play` is unblocked. The activated-ability path is the next gap; combat + turn triggers follow.
+ChoicePending propagation is complete across every handler-fire boundary: `PlayError::ChoicePending` (play), `ActivateError::ChoicePending` (activate), `CombatError::ChoicePending` (combat), `TurnError::ChoicePending` (turn-begin triggers). `build_game_table!`'s `choose_card` / `confirm` / `choose_player` / `choose_int` wrappers raise `Err(mlua::Error::external(ChoicePending))` (the `coroutine.yield` path was investigated and rejected — Lua blocks yield across C-call boundaries; `src/game/lua_api.rs:514-517` documents the decision). The `fire_*` family downcasts to `Result<(), ChoicePending>`; each subsystem lifts via `.map_err(*Error::ChoicePending)?`. The StepEngine catches every variant, rolls back the preview journal, surfaces a `HumanPrompt`, and re-fires the operation after the user's answer lands in `HumanReplayOracle.replay`. Open gap downstream: the StepEngine still uses `RandomOracle` for phase-advance triggers, so OnTurnBegin handlers that call `game.choose_*` get random answers rather than human prompts; swapping that to `HumanReplayOracle` is a separate slice.
 
 ## costs
 

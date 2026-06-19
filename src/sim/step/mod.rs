@@ -380,10 +380,17 @@ impl StepEngine {
                 while self.state.phase != Phase::Main1 && self.state.winner.is_none() {
                     let mut oracle =
                         RandomOracle::new(StdRng::seed_from_u64(self.rng.gen()));
-                    self.state.next_phase(Some(&mut EventContext::new(
-                        self.registry.lua(),
-                        &mut oracle,
-                    )));
+                    self.state
+                        .next_phase(Some(&mut EventContext::new(
+                            self.registry.lua(),
+                            &mut oracle,
+                        )))
+                        .expect(
+                            "StepEngine phase advance uses RandomOracle which \
+                             never yields ChoicePending; OnTurnBegin human-prompt \
+                             surfacing is a separate slice (requires swapping \
+                             oracle to HumanReplayOracle)",
+                        );
                 }
                 self.set_cursor(EngineCursor::PatternBPick {
                     played_creature: false,
@@ -419,10 +426,16 @@ impl StepEngine {
                 while self.state.turn == starting_turn && self.state.winner.is_none() {
                     let mut oracle =
                         RandomOracle::new(StdRng::seed_from_u64(self.rng.gen()));
-                    self.state.next_phase(Some(&mut EventContext::new(
-                        self.registry.lua(),
-                        &mut oracle,
-                    )));
+                    self.state
+                        .next_phase(Some(&mut EventContext::new(
+                            self.registry.lua(),
+                            &mut oracle,
+                        )))
+                        .expect(
+                            "StepEngine phase advance uses RandomOracle which \
+                             never yields ChoicePending; OnTurnBegin human-prompt \
+                             surfacing is a separate slice",
+                        );
                 }
                 self.set_cursor(EngineCursor::StartTurn);
                 StepResult::Continue

@@ -633,10 +633,16 @@ impl StepEngine {
                 return StepResult::Continue;
             }
             let mut oracle = RandomOracle::new(StdRng::seed_from_u64(self.rng.gen()));
-            self.state.next_phase(Some(&mut EventContext::new(
-                self.registry.lua(),
-                &mut oracle,
-            )));
+            self.state
+                .next_phase(Some(&mut EventContext::new(
+                    self.registry.lua(),
+                    &mut oracle,
+                )))
+                .expect(
+                    "StepEngine phase advance uses RandomOracle which never \
+                     yields ChoicePending; OnTurnBegin human-prompt surfacing \
+                     is a separate slice",
+                );
         }
         if self.state.winner.is_some() {
             return StepResult::Continue;

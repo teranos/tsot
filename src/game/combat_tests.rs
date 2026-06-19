@@ -19,7 +19,7 @@ fn add_ability(s: &mut GameState, iid: &InstanceId, ability: &str) {
 fn enter_combat(s: &mut GameState) {
     // From Untap, advance 3 phases to reach Combat.
     while s.phase != Phase::Combat {
-        s.next_phase(None);
+        s.next_phase(None).expect("None ctx never yields");
     }
 }
 
