@@ -158,27 +158,38 @@ const node = await createLibp2p({
     }),
     pubsub: gossipsub({ allowPublishToZeroTopicPeers: true }),
   },
-  // js-libp2p v2 attaches a connection-monitor by default. It sends
-  // `/ipfs/ping/1.0.0` to every connected peer and aborts the
-  // connection when the reply doesn't arrive in time. Empirically
-  // verified on 2026-06-18 (relay log + inspect log side-by-side):
-  // rust-libp2p browser-worker peers fail this ping within ~7s of
-  // connect and the relay closes them as BrokenPipe; with the monitor
-  // disabled the same connection sustains the full 45s soak.
+  // js-libp2p v2 (libp2p 2.10) attaches a connection-monitor by
+  // default. It periodically opens `/ipfs/ping/1.0.0` streams to every
+  // connected peer and **aborts the connection** when the response
+  // doesn't arrive in time. Empirically verified on 2026-06-19 via
+  // relay-side journal + DEBUG=libp2p:bun-ws-transport:* :
+  // rust-libp2p browser-worker peers reset the relay's inbound ping
+  // stream (the StreamResetError shows up in yamux processFlags) and
+  // the second ping attempt 2s later surfaces as
+  // `UnsupportedProtocolError: protocol selection failed` from
+  // `libp2p/dist/src/connection-monitor.js:48`. After the monitor's
+  // adaptive timeout expires (~5-7s total) it calls connection.abort,
+  // the bun-ws-transport sees `DOMException [TimeoutError]`, the
+  // WebSocket closes with code=1006 — and the browser sees
+  // `io::BrokenPipe`. Connection lifetimes ~10s, every time, despite
+  // the underlying transport being healthy.
   //
-  // Disabling here is the working fix until rust-libp2p's inbound
-  // `/ipfs/ping/1.0.0` handler is investigated. Likely candidates:
-  //   - head-of-line blocking on the yamux session by gossipsub
-  //     publishes at 20 Hz (the bridge's position broadcast)
-  //   - protocol-handler scheduling in the worker's spawn_local
-  //     executor
-  //   - libp2p::swarm idle-handling around inbound stream open
+  // Previous attempt: `connectionMonitor: { enabled: false } as any`.
+  // That was a no-op — the ConnectionMonitor class has no `enabled`
+  // option; only `protocolPrefix`, `pingInterval`, `pingTimeout`,
+  // `abortConnectionOnPingFailure` exist (see
+  // `node_modules/libp2p/dist/src/connection-monitor.js` constructor).
+  // The `as any` cast suppressed the type error that would have
+  // caught this. We've been silently running the monitor for weeks.
   //
-  // We don't lose much by disabling: connection lifecycle is still
-  // managed by libp2p's transport-level detection (BrokenPipe /
-  // close events from yamux / WebSocket). The monitor was only an
-  // extra safety net for stuck connections.
-  connectionMonitor: { enabled: false } as any,
+  // Real fix: `abortConnectionOnPingFailure: false`. The monitor
+  // still pings (some background noise) but a failed ping doesn't
+  // tear down the connection. The underlying browser-side bug —
+  // rust-libp2p resetting inbound ping streams, suspected yamux
+  // head-of-line blocking from the 20Hz position-publish flood — is
+  // a separate, deeper investigation. This config flip is the
+  // immediate unblock so connections can actually sustain.
+  connectionMonitor: { abortConnectionOnPingFailure: false },
 });
 
 // Subscribe to the topic so peer-exchange propagates subscribers to
