@@ -6,10 +6,13 @@
 -- and once the real attached cards are exhausted the host dies even
 -- though the mutation is still "with" it.
 --
--- Non-executable today, dependencies:
---   - Slice A3 (turn.rs:119 ChoicePending discard) — the on_turn_begin
---     trigger fires `game.choose_card` to pick which attached card to
---     strip; today that yield is discarded and the handler errors.
+-- Dependencies:
+--   - Slice A3 (TurnError::ChoicePending propagation) shipped — the
+--     handler's choose_card no longer errors silently. Downstream gap
+--     per LIMITATIONS.md ## lua: phase-advance triggers still use
+--     RandomOracle, so AI side gets a random pick of which attached
+--     card to strip and human side does NOT receive a HumanPrompt
+--     (separate slice: swap the phase-advance oracle).
 --   - `same_sleeve` semantic on the mutation (not yet in the engine).
 --     Without it, the mutation IS in the attached list, and the "no
 --     attached cards remain → sacrifice host" check would either count
@@ -33,5 +36,5 @@ return {
   abilities = {
     "the host creature gets: at the beginning of your turn, move one of this creature's attached cards to your graveyard. if no cards are attached to this creature anymore, sacrifice it.",
   },
-  flavor = "The cell tidies itself out of existence, one organelle at a time.",
+  flavor = "P53 calls it. The cell agrees, then tidies itself out of existence one organelle at a time.",
 }
