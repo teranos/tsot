@@ -43,6 +43,9 @@ use libp2p::{
 };
 use tracing::{info, warn};
 
+mod identity_secret;
+mod metrics;
+
 /// Canonical positions topic. Must match the value the bridge
 /// publishes on — see `roam/assets/src/js-bridge.js` `TOPIC`
 /// constant and `roam/src/net/state.rs::POSITIONS_TOPIC`.
@@ -61,9 +64,10 @@ const MAX_RELAY_RESERVATIONS: usize = 128;
 /// `Duration::from_secs(1)`. Keep all three the same.
 const GOSSIPSUB_HEARTBEAT: Duration = Duration::from_secs(1);
 
-/// CloudWatch metric publishing interval. Matches the TS relay's
-/// 60s cadence.
-const CLOUDWATCH_PUBLISH_INTERVAL: Duration = Duration::from_secs(60);
+/// CloudWatch metric publishing interval. Re-exports the
+/// metrics-module constant so the call-site reads cleanly; both
+/// always agree because the same value is referenced.
+const CLOUDWATCH_PUBLISH_INTERVAL: Duration = metrics::INTERVAL_DEFAULT;
 
 /// Composite behaviour. NetworkBehaviour derive synthesises the
 /// matching event enum. Mirrors the TS relay's `services` block
@@ -178,12 +182,73 @@ async fn main() -> Result<()> {
     let mut cw_interval = tokio::time::interval(CLOUDWATCH_PUBLISH_INTERVAL);
     cw_interval.tick().await; // skip the immediate first tick
 
+    let metric_namespace = std::env::var("ROAM_RELAY_METRIC_NAMESPACE")
+        .unwrap_or_else(|_| metrics::NAMESPACE_DEFAULT.to_string());
+    let instance_name = std::env::var("ROAM_RELAY_INSTANCE_NAME")
+        .unwrap_or_else(|_| metrics::INSTANCE_DEFAULT.to_string());
+    let memory_cap_mb: u64 = std::env::var("ROAM_RELAY_MEMORY_CAP_MB")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(metrics::MEMORY_CAP_MB_DEFAULT);
+    let publish_metrics = std::env::var("ROAM_RELAY_PUBLISH_METRICS")
+        .map(|v| v != "0")
+        .unwrap_or(true);
+
+    // Counters for the per-interval rate metric and for the
+    // peer/conn snapshots we publish to CloudWatch. Updated by
+    // `handle_event` on each SwarmEvent.
+    let mut pubsub_msg_count: u64 = 0;
+    let mut last_pubsub_msg_count: u64 = 0;
+    let mut conn_count: u64 = 0;
+    // CloudWatch error tracking — surface once on first failure,
+    // then every 60th failure (matches relay.ts:328 backoff).
+    let mut cw_consecutive_errors: u64 = 0;
+
     loop {
         tokio::select! {
-            event = swarm.select_next_some() => handle_event(event),
-            _ = cw_interval.tick() => {
-                if let Err(e) = publish_cloudwatch(&cloudwatch, &swarm).await {
-                    warn!(error = ?e, "cloudwatch publish failed");
+            event = swarm.select_next_some() => {
+                handle_event(event, &mut pubsub_msg_count, &mut conn_count);
+            }
+            _ = cw_interval.tick(), if publish_metrics => {
+                let interval_secs = CLOUDWATCH_PUBLISH_INTERVAL.as_secs_f64();
+                let msgs_since_last = pubsub_msg_count - last_pubsub_msg_count;
+                last_pubsub_msg_count = pubsub_msg_count;
+                let rate = (msgs_since_last as f64) / interval_secs;
+                let (rss, vms) = metrics::read_proc_memory();
+                let peer_count = swarm.connected_peers().count() as u64;
+
+                let snapshot = metrics::Snapshot {
+                    peers: peer_count,
+                    conns: conn_count,
+                    pubsub_msgs_per_sec: rate,
+                    mem_rss_bytes: rss,
+                    mem_vms_bytes: vms,
+                };
+                let data = metrics::build_metric_data(&snapshot, &instance_name, memory_cap_mb);
+
+                match cloudwatch
+                    .put_metric_data()
+                    .namespace(&metric_namespace)
+                    .set_metric_data(Some(data))
+                    .send()
+                    .await
+                {
+                    Ok(_) => {
+                        cw_consecutive_errors = 0;
+                    }
+                    Err(e) => {
+                        cw_consecutive_errors += 1;
+                        // Surface once on first failure, then every
+                        // 60th so the journal doesn't fill with the
+                        // same error every minute. Matches relay.ts:328.
+                        if cw_consecutive_errors == 1 || cw_consecutive_errors.is_multiple_of(60) {
+                            warn!(
+                                consecutive = cw_consecutive_errors,
+                                error = %e,
+                                "cloudwatch PutMetricData failed"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -207,25 +272,36 @@ async fn load_identity(
         .await
         .with_context(|| format!("get_secret_value({arn})"))?;
 
-    // Try the canonical libp2p protobuf encoding first. If the
-    // secret holds a different shape (js-libp2p's bespoke JSON),
-    // bail loudly so the operator knows to format-translate or
-    // migrate. The doc (roam/relay/relayers.md, Q2) calls this
-    // out as the one decision the verifications produce.
-    let bytes = resp
-        .secret_string()
-        .map(|s| s.as_bytes().to_vec())
-        .or_else(|| resp.secret_binary().map(|b| b.as_ref().to_vec()))
-        .context("secret has neither string nor binary value")?;
+    // Q3 verified 2026-06-19: the deployed secret is stored as
+    // SecretString containing base64-encoded canonical libp2p
+    // protobuf (header `08 01 12 40` = KeyType=Ed25519 + Data
+    // length 64). Base64-decode it before handing to
+    // `decode_identity`. If a future secret uses SecretBinary
+    // (raw bytes, no base64 wrapper), the second branch handles
+    // it directly. Both paths refuse to fall through to a fresh
+    // keypair — that would change the PeerId browsers know.
+    let bytes = if let Some(s) = resp.secret_string() {
+        identity_secret::decode_base64(s)
+            .context("SecretString is not valid base64 — see relayers.md Q2")?
+    } else if let Some(b) = resp.secret_binary() {
+        b.as_ref().to_vec()
+    } else {
+        anyhow::bail!("secret has neither SecretString nor SecretBinary value")
+    };
 
-    identity::Keypair::from_protobuf_encoding(&bytes)
+    identity_secret::decode_identity(&bytes)
         .context("secret is not a libp2p canonical protobuf keypair — see relayers.md Q2")
 }
 
 /// Log connection lifecycle and behaviour events. Mirrors the TS
 /// relay's `[relay] peer:connect / peer:disconnect /
-/// connection:open / connection:close` logging.
-fn handle_event(event: SwarmEvent<RelayerBehaviourEvent>) {
+/// connection:open / connection:close` logging and increments
+/// the per-interval counters the CloudWatch publisher reads.
+fn handle_event(
+    event: SwarmEvent<RelayerBehaviourEvent>,
+    pubsub_msg_count: &mut u64,
+    conn_count: &mut u64,
+) {
     match event {
         SwarmEvent::NewListenAddr { address, .. } => {
             info!(addr = %address, "new listen address");
@@ -233,18 +309,30 @@ fn handle_event(event: SwarmEvent<RelayerBehaviourEvent>) {
         SwarmEvent::ConnectionEstablished {
             peer_id, endpoint, ..
         } => {
-            info!(peer = %peer_id, ?endpoint, "connection:open");
+            *conn_count = conn_count.saturating_add(1);
+            info!(peer = %peer_id, ?endpoint, conns = *conn_count, "connection:open");
         }
         SwarmEvent::ConnectionClosed {
             peer_id, cause, ..
         } => {
-            info!(peer = %peer_id, cause = ?cause, "connection:close");
+            *conn_count = conn_count.saturating_sub(1);
+            info!(peer = %peer_id, cause = ?cause, conns = *conn_count, "connection:close");
         }
         SwarmEvent::IncomingConnectionError { error, .. } => {
             warn!(error = ?error, "incoming connection error");
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
             warn!(peer = ?peer_id, error = ?error, "outgoing connection error");
+        }
+        SwarmEvent::Behaviour(RelayerBehaviourEvent::Gossipsub(
+            gossipsub::Event::Message { .. },
+        )) => {
+            // Counted, not logged — at 20Hz this would drown the
+            // journal. The interval rate ends up in CloudWatch
+            // (`relay_pubsub_msgs_per_sec`) which is the load-
+            // bearing observation; the per-message granularity is
+            // not useful for the relayer's operational view.
+            *pubsub_msg_count = pubsub_msg_count.saturating_add(1);
         }
         SwarmEvent::Behaviour(RelayerBehaviourEvent::Gossipsub(
             gossipsub::Event::Subscribed { peer_id, topic },
@@ -260,17 +348,9 @@ fn handle_event(event: SwarmEvent<RelayerBehaviourEvent>) {
     }
 }
 
-/// Publish CloudWatch metrics. Namespace + dimension match what
-/// the TS relay used so existing alarms / dashboards keep
-/// working unchanged across the cut-over.
-async fn publish_cloudwatch(
-    _client: &aws_sdk_cloudwatch::Client,
-    _swarm: &Swarm<RelayerBehaviour>,
-) -> Result<()> {
-    // TODO: port the metric set from `roam/relay/relay.ts`'s
-    // periodic publish. The TS code reads peer count, mesh size,
-    // memory_used_percent (CWAgent populates that one), and
-    // emits PutMetricData every 60s. Match the same metric
-    // names + dimensions so alarms don't need to change.
-    Ok(())
-}
+// CloudWatch publish is inlined into the main select_loop above
+// — see the `cw_interval.tick()` branch. The metric_data shape
+// lives in `metrics.rs` (pure function, tested); the AWS SDK
+// call shape lives at the call site so the per-attempt error
+// path (consecutive-error backoff) stays adjacent to the loop
+// state it reads.

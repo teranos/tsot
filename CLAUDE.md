@@ -3,6 +3,12 @@ The Symbols of Teranos: ax = ⋈, ix = ⨳, am = ≡, pulse = ꩜, sem = ⊨, de
 
 WASM - Collectible Card Game
 
+---
+
+roam AWS: `AWS_PROFILE=sbvh` (account `548351057127`).
+
+---
+
 **A commit is verified code** — the developer has tested it and confirmed it matches intent. Uncommitted changes in the working tree ARE the running code. Never use commit history to determine what is or isn't running. We develop and test on the same machine as where you are running, you do not need to commit in order to get the changes to me, we test here, and if its good, only then we commit.
 
 The only development flow that works for the user is: Talk, discuss, refine, suggest, proof, specify/define, develop, build+run, test, verify, hand-off, ...
