@@ -50,7 +50,9 @@ import * as netShim from './net-shim.js';
 // Network substrate. js-libp2p is the default until Phase 3b lands
 // the real rust-libp2p impl; `?provider=rust` only works when the
 // wasm is built with `--features rust-libp2p`.
-const PROVIDER = new URLSearchParams(location.search).get('provider') || 'js';
+// Default substrate is `rust` — see roam/README.md v0.3 line. JS impl
+// is still available via `?provider=js` for fallback / comparison.
+const PROVIDER = new URLSearchParams(location.search).get('provider') || 'rust';
 
 // At-a-glance network state, driven into the colored dot on #status
 // (see play.html CSS `#status.net-*::before`). Five buckets:
@@ -315,10 +317,25 @@ function devTap(cls, line) {
   } catch {}
 }
 
-function logEvent(cls, line) {
+function logEvent(cls, line, fingerprint) {
   devTap(cls, line);
   const t = new Date().toISOString().slice(11, 23); // ms precision
-  logLines.push({ cls, t, line });
+  // Consecutive-duplicate collapse. High-volume sources (worker trace
+  // bus under ?provider=rust) emit dozens of events per second sharing
+  // a (kind, tag) signature but differing in seq / timestamp / payload.
+  // Without aggregation the human-readable signal is buried under
+  // mechanical repetition. When the caller supplies a `fingerprint`
+  // and it matches the most-recent entry, bump a count instead of
+  // appending a fresh row — the most-recent payload + timestamp win,
+  // so the displayed line still reflects current state.
+  const last = logLines[logLines.length - 1];
+  if (fingerprint && last && last.fingerprint === fingerprint) {
+    last.count = (last.count || 1) + 1;
+    last.t = t;
+    last.line = line;
+  } else {
+    logLines.push({ cls, t, line, fingerprint, count: 1 });
+  }
   __logDomDirty = true;
   if (!__logFlushScheduled) {
     __logFlushScheduled = true;
@@ -331,9 +348,24 @@ function flushLogDom() {
   __logDomDirty = false;
   const tail = logLines.slice(-LOG_RENDER_TAIL);
   logEl.innerHTML = tail
-    .map((e) => `<span class="ev-${e.cls}">${e.t}  ${escapeHtml(e.line)}</span>`)
+    .map((e) => {
+      const suffix = e.count > 1 ? `  ×${e.count}` : '';
+      return `<span class="ev-${e.cls}">${e.t}  ${escapeHtml(e.line)}${suffix}</span>`;
+    })
     .join('\n');
-  logEl.scrollTop = logEl.scrollHeight;
+  // Setting `scrollTop = scrollHeight` clipped the freshest entry's
+  // wrapped continuation under `pre-wrap; word-break: break-all`: the
+  // scroll lands using a `scrollHeight` snapshot from before the new
+  // line's wrap height was reflected in layout, so the bottom of the
+  // multi-visual-line entry ended up below the viewport. Scrolling
+  // the last element explicitly into view handles wrapping correctly
+  // — the browser measures the element's full layout box.
+  const last = logEl.lastElementChild;
+  if (last && typeof last.scrollIntoView === 'function') {
+    last.scrollIntoView({ block: 'end', behavior: 'instant' });
+  } else {
+    logEl.scrollTop = logEl.scrollHeight;
+  }
 }
 // Monotonic id source for typed Error envelopes minted on the JS
 // side. Distinct from Rust's `err-roam-N` namespace so the two
@@ -400,16 +432,24 @@ function logError(where, err, { popover = true } = {}) {
   }
 }
 
-// Press `l` to copy the FULL log buffer (not just the rendered tail)
-// to clipboard. Counterpart to `i` for screenshot.
+// Press `l` to copy the most recent 20 log entries to clipboard.
+// Counterpart to `i` for screenshot. Bounded slice (was: full buffer)
+// because under `?provider=rust` the log can grow large enough that
+// pasting the whole thing into an LLM session causes the receiving
+// context to compaction-loop. 20 lines is the practical ceiling for a
+// useful diagnostic snippet — enough to see a startup sequence or a
+// failure window, small enough to never blow up downstream tooling.
+const LOG_COPY_TAIL_LINES = 20;
 window.addEventListener('keydown', async (e) => {
   if (e.key !== 'l' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
-  const txt = logLines.map((e) => `${e.t} [${e.cls}] ${e.line}`).join('\n');
+  const tail = logLines.slice(-LOG_COPY_TAIL_LINES);
+  const txt = tail.map((e) => `${e.t} [${e.cls}] ${e.line}`).join('\n');
   try {
     await navigator.clipboard.writeText(txt);
-    logEvent('info', `log → clipboard (${logLines.length} entries, ${(txt.length / 1024).toFixed(1)}KB)`);
+    logEvent('info',
+      `log → clipboard (last ${tail.length} of ${logLines.length} entries, ${(txt.length / 1024).toFixed(1)}KB)`);
   } catch (err) {
     logError('log copy', err);
   }
@@ -656,6 +696,74 @@ let libp2p = null;
 let pubsub = null;
 let libp2pErr = null;
 let publishFailRate = 0; // running count for HUD
+
+// PROVIDER=rust HUD state. The worker substrate emits `net::peer_up`
+// and `net::peer_down` traces; the bridge keeps a count so the world-
+// HUD can show truthful `peers=N` and a `libp2p (rust) conns=N` status
+// instead of the JS-libp2p-instance-or-zero short-circuit that left it
+// permanently reading `peers=0  libp2p off` under `?provider=rust`.
+let rustPeerCount = 0;
+let rustConnCount = 0;
+// Liveness counter — incremented for every `net::heartbeat` trace the
+// worker emits. Heartbeats themselves are filtered out of the visible
+// event log (pure noise; break dedup runs on adjacent error events).
+// Surfaced via SELF panel so the worker's pulse is still observable
+// without flooding the log.
+let rustHeartbeatCount = 0;
+// `tick-debug` counters lifted out of the visible log (they broke
+// consecutive-duplicate dedup runs of adjacent `provider_error`s).
+// Surfaced in the SELF panel for diagnostic completeness.
+let rustTickDebugCount = 0;
+let rustTickDebugTraceLen = 0;
+// Liveness sparkline state. Each second's incoming-event count goes
+// into a fixed-size ring buffer; rendered into the otherwise-empty
+// #conns panel under ?provider=rust so "is the thing alive" is a
+// glance question, not a scroll-through-the-log question.
+const SPARK_BIN_COUNT = 60;
+const SPARK_BIN_MS = 1000;
+const sparkBins = new Array(SPARK_BIN_COUNT).fill(0);
+let sparkLastBinStartMs = Date.now();
+function sparkRecord() {
+  const now = Date.now();
+  while (now - sparkLastBinStartMs >= SPARK_BIN_MS) {
+    sparkBins.shift();
+    sparkBins.push(0);
+    sparkLastBinStartMs += SPARK_BIN_MS;
+  }
+  sparkBins[sparkBins.length - 1] += 1;
+}
+function sparkRender() {
+  const w = 240, h = 36;
+  const max = Math.max(1, ...sparkBins);
+  const pts = sparkBins
+    .map((v, i) => {
+      const x = (i / (SPARK_BIN_COUNT - 1)) * w;
+      const y = h - (v / max) * (h - 2) - 1;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  const totalLastMin = sparkBins.reduce((a, b) => a + b, 0);
+  const recent = sparkBins[sparkBins.length - 1] || 0;
+  return (
+    `worker events: ${recent}/s now, ${totalLastMin} last 60s, peak ${max}/s\n` +
+    `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;margin-top:4px">` +
+    `<rect width="${w}" height="${h}" fill="#1a1a1a" stroke="#333"/>` +
+    `<polyline fill="none" stroke="#6cf" stroke-width="1" points="${pts}"/>` +
+    `</svg>`
+  );
+}
+// Most recent `net::peer_down` reason text. Captured at the moment the
+// event arrives so the disconnect cause survives the row scrolling out
+// of the rendered tail. Surfaced in the SELF panel under
+// `?provider=rust`; the value is the libp2p `ConnectionError` debug-
+// formatted by the seam in `rust_libp2p.rs::handle_swarm_event`.
+let lastPeerDownAt = '';
+let lastPeerDownReason = '';
+// Worker readiness + identity for the SELF panel. Hoisted from the
+// `if (PROVIDER === 'rust')` init block so the renderer can read them
+// without crossing scope boundaries.
+let workerIdentity = '';
+let workerReady = false;
 // Sentinel error tag the catch below recognises as "intentional skip,
 // not a failure" — so `libp2pErr` stays null and the HUD doesn't show
 // a fake "libp2p failed" message when the rust substrate is in use.
@@ -1021,8 +1129,8 @@ moduleP.then((wasm) => {
       logError('net-worker spawn', err);
       throw err;
     }
-    let workerIdentity = '';
-    let workerReady = false;
+    // workerIdentity and workerReady are hoisted to module scope so
+    // the SELF panel renderer can read them.
     const incomingMessageBuffer = [];
 
     netWorker.addEventListener('message', (e) => {
@@ -1050,18 +1158,92 @@ moduleP.then((wasm) => {
           // Mirror the worker's trace bus into the main thread log. The
           // worker has its own `roam_drain_trace` thread-local, separate
           // from main thread's.
+          //
+          // Also drive the rust-provider HUD counters from this stream:
+          // `net::peer_up` / `net::peer_down` are the seam's source of
+          // truth for connection state. Reading them here keeps the HUD
+          // honest under `?provider=rust` (where the JS-libp2p instance
+          // is null and `libp2p.getConnections()` doesn't exist).
           try {
             const events = JSON.parse(msg.json);
             for (const e of events) {
               const ev = e.event;
-              logEvent('info', `worker:${ev.kind} seq=${e.seq} ${JSON.stringify(ev)}`);
+              sparkRecord();
+              if (ev.kind === 'Note') {
+                if (ev.tag === 'net::peer_up') {
+                  rustConnCount += 1;
+                  rustPeerCount = rustConnCount;
+                } else if (ev.tag === 'net::peer_down') {
+                  rustConnCount = Math.max(0, rustConnCount - 1);
+                  rustPeerCount = rustConnCount;
+                  // Capture the reason text now so the disconnect cause
+                  // survives the row scrolling out of the rendered tail.
+                  // Surfaced in the SELF panel.
+                  lastPeerDownAt = new Date().toISOString().slice(11, 23);
+                  lastPeerDownReason = ev.msg || '(no reason in event)';
+                }
+                // net::heartbeat is pure liveness signal — fires once per
+                // libp2p heartbeat tick, semantically empty. The SELF
+                // panel's `rust trace: ticks=N` and the periodic
+                // `net-worker tick alive` lines already prove the worker
+                // is running. Rendering heartbeats in the event log buys
+                // nothing and breaks consecutive-duplicate dedup runs for
+                // adjacent provider_errors, making the log unreadable
+                // under any non-trivial error rate. Counted, not shown.
+                if (ev.tag === 'net::heartbeat') {
+                  rustHeartbeatCount += 1;
+                  continue;
+                }
+              }
+              // Fingerprint by (kind, tag) for Note events so repeated
+              // taggings (net::provider_error) collapse into a single
+              // row with a count.
+              const fp = ev.kind === 'Note' && ev.tag
+                ? `worker:Note:${ev.tag}`
+                : `worker:${ev.kind}`;
+              // Display line. Stringifying the entire event object put
+              // the machinery (`{"kind":"Note","tag":"..."}`) at the
+              // left, the actually-useful payload (`msg`) past the
+              // panel's truncation column, so every line looked
+              // identical. Lead with the tag, then the msg. For non-
+              // Note kinds or events without a msg, fall back to the
+              // raw object so we don't silently drop information.
+              let line;
+              if (ev.kind === 'Note' && ev.tag) {
+                const msg = ev.msg && String(ev.msg).length > 0
+                  ? ` ${ev.msg}`
+                  : '';
+                line = `${ev.tag}${msg}`;
+              } else {
+                line = `${ev.kind} ${JSON.stringify(ev)}`;
+              }
+              // Color-code by tag using the existing #log .ev-* CSS
+              // classes (defined in play.html). Grey-on-grey for every
+              // event made the log unskimmable; this lets the eye land
+              // on disconnects (red) and connects (green) at a glance.
+              let cls = 'info';
+              if (ev.kind === 'Note' && ev.tag) {
+                if (ev.tag === 'net::peer_up') cls = 'connect';
+                else if (ev.tag === 'net::peer_down') cls = 'disconnect';
+                else if (ev.tag === 'net::provider_error') cls = 'error';
+                else if (ev.tag === 'net::sub_change') cls = 'sub';
+              }
+              logEvent(cls, line, fp);
             }
           } catch (err) {
             logError('net-worker traces parse', err);
           }
           break;
         case 'tick-debug':
-          logEvent('info', `net-worker tick alive: count=${msg.count} traceLen=${msg.traceLen}`);
+          // Liveness ping from the worker — fires every batched tick
+          // (~1/sec wall time). Pure noise in the visible log AND
+          // breaks consecutive-duplicate dedup runs of adjacent
+          // `provider_error` rows. Counted, not rendered. The SELF
+          // panel `rust trace: ticks=N` line already surfaces tick
+          // count; `tick-debug` carried only `count` + `traceLen`,
+          // both diagnostic-only.
+          rustTickDebugCount = msg.count;
+          rustTickDebugTraceLen = msg.traceLen;
           break;
         case 'lifecycle':
           logEvent('info', `net-worker lifecycle: ${msg.stage}`);
@@ -1074,13 +1256,14 @@ moduleP.then((wasm) => {
           const rtc = msg.hasRTCConstruct ? 'OK'
             : msg.hasRTCType ? `type-exists-but-construct-throws: ${msg.constructError}`
             : 'absent';
+          // RTCPeerConnection absence in workers is a known, accepted
+          // constraint — the transport stack dropped libp2p-webrtc-
+          // websys in `ef62411`. Surfacing this through `logError`
+          // raised a red "sacred error" overlay for what is documented,
+          // expected behavior. The `logEvent('info', ...)` line above
+          // already records the capability snapshot for diagnostics.
           logEvent('info',
             `net-worker capability: RTCPeerConnection=${rtc}, WebSocket=${msg.hasWebSocket ? 'OK' : 'absent'}, ua="${msg.userAgent}"`);
-          if (!msg.hasRTCConstruct) {
-            logError('net-worker capability', new Error(
-              `RTCPeerConnection unusable in this worker (${rtc}). libp2p-webrtc-websys will fail.`
-            ));
-          }
           break;
         }
         case 'error': {
@@ -1500,7 +1683,20 @@ moduleP.then((wasm) => {
         if (npc > 0) setNetState('peers');
         else if (netState === 'peers') setNetState('ready');
       } catch {}
-      if (libp2p) {
+      if (PROVIDER === 'rust') {
+        // Rust substrate: panels are populated from the worker-tracked
+        // state plus the sparkline buffer. innerHTML because the
+        // sparkline needs SVG markup; the rest is text concatenated
+        // into the same element.
+        const lastDown = lastPeerDownReason
+          ? `<div style="color:#fbb;background:#310;border-left:3px solid #f44;padding:2px 6px;margin-top:4px">last peer_down: ${lastPeerDownAt} — ${escapeHtml(lastPeerDownReason)}</div>`
+          : '';
+        connsEl.innerHTML =
+          `peers: <b>${rustPeerCount}</b>  conns: <b>${rustConnCount}</b>  heartbeats: ${rustHeartbeatCount}  ticks: ${rustTickDebugCount}\n` +
+          sparkRender() +
+          lastDown;
+        meshEl.textContent = '(gossipsub mesh detail not yet plumbed from worker)';
+      } else if (libp2p) {
         const conns = libp2p.getConnections();
         const meshPeerCount = (pubsub && pubsub.getMeshPeers)
           ? (pubsub.getMeshPeers(TOPIC) || []).length : 0;
@@ -1533,6 +1729,23 @@ moduleP.then((wasm) => {
           `tsot bridge: ${__tsotBridge.state}${__tsotBridge.state === 'ready' ? ` (${__tsotBridge.cardCount} cards)` : ''}\n` +
           `rust trace: ticks=${roam_tick_count()} stateReads=${roam_state_read_count()} viewportReads=${roam_viewport_read_count()} collisions=${roam_tick_blocked_count()}\n` +
           `log: ${logLines.length} entries (press l=copy, k=clear, i=screenshot)`;
+      } else if (PROVIDER === 'rust') {
+        // Rust-libp2p worker substrate. No JS-libp2p instance exists;
+        // identity, peers, and conns are owned by the worker. Show the
+        // same shape of fields as the `libp2p ?` branch above, sourced
+        // from the worker-trace counters and the ready signal.
+        const lastDownLine = lastPeerDownReason
+          ? `last peer_down: ${lastPeerDownAt}  ${lastPeerDownReason}\n`
+          : '';
+        selfEl.textContent =
+          `display id: ${PEER_ID}\n` +
+          `libp2p (rust): ${workerReady ? 'ready' : 'starting'}\n` +
+          `worker peerId: ${workerIdentity || '(awaiting ready signal)'}\n` +
+          `peers: ${rustPeerCount}  conns: ${rustConnCount}  heartbeats: ${rustHeartbeatCount}\n` +
+          lastDownLine +
+          `tsot bridge: ${__tsotBridge.state}${__tsotBridge.state === 'ready' ? ` (${__tsotBridge.cardCount} cards)` : ''}\n` +
+          `rust trace: ticks=${roam_tick_count()} stateReads=${roam_state_read_count()} viewportReads=${roam_viewport_read_count()} collisions=${roam_tick_blocked_count()}\n` +
+          `log: ${logLines.length} entries (press l=copy last 20, k=clear, i=screenshot)`;
       } else {
         selfEl.textContent = `display id: ${PEER_ID}\nlibp2p: OFF (${libp2pErr ? libp2pErr.message : 'unknown'})`;
       }
@@ -1598,9 +1811,30 @@ moduleP.then((wasm) => {
 
     // Status text overlay: rendered by the browser as DOM, not by GL.
     // Bridge composes the format string from Rust-supplied data only.
-    const conns = libp2p ? libp2p.getConnections().length : 0;
-    const libStatus = libp2p ? `libp2p conns=${conns}` : 'libp2p off';
-    const peerCount = libp2p ? roam_net_peer_count() : 0;
+    //
+    // PROVIDER=js: `libp2p` is the main-thread js-libp2p instance.
+    // PROVIDER=rust: `libp2p` is null (init was skipped by
+    // SkipLibp2pInit); the network lives in the worker. The HUD reads
+    // its state from `rustPeerCount` / `rustConnCount` (maintained by
+    // the worker-message handler from `net::peer_up` / `net::peer_down`
+    // traces) so `peer_up` firing in the worker actually shows up here.
+    let peerCount, libStatus;
+    if (PROVIDER === 'rust') {
+      peerCount = rustPeerCount;
+      // Wording matches the dot-state taxonomy in setNetState (line 55):
+      // workerReady=false → "starting"; ready but no peer → "ready";
+      // at least one conn → "conns=N". "off" was wrong here because the
+      // substrate IS running — just without a current peer.
+      libStatus = !workerReady
+        ? 'libp2p (rust) starting'
+        : rustConnCount > 0
+          ? `libp2p (rust) conns=${rustConnCount}`
+          : 'libp2p (rust) ready';
+    } else {
+      const conns = libp2p ? libp2p.getConnections().length : 0;
+      libStatus = libp2p ? `libp2p conns=${conns}` : 'libp2p off';
+      peerCount = libp2p ? roam_net_peer_count() : 0;
+    }
     worldHud.textContent =
       `me=${PEER_ID} (${s.x.toFixed(1)}, ${s.y.toFixed(1)}, z=${s.z}) f=${s.f}  ` +
       `zoom=${zoom.toFixed(2)}  peers=${peerCount}  ${libStatus}`;

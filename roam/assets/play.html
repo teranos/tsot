@@ -30,11 +30,44 @@
   .panel { border: 1px solid #333; padding: 0.5rem; }
   .panel h2 { font-size: 0.7rem; margin: 0 0 0.4rem 0; color: #888; font-weight: normal; text-transform: uppercase; letter-spacing: 0.05em; }
   #self, #conns, #mesh { color: #ddd; font-size: 0.7rem; white-space: pre-wrap; word-break: break-all; line-height: 1.4; }
-  #log { color: #bbb; font-size: 0.7rem; max-height: 24em; overflow-y: auto; line-height: 1.3; margin: 0; }
-  #log .ev-connect { color: #6f9; }
-  #log .ev-disconnect { color: #f88; }
+  /* Event log box. Was 24em (too small to read a startup sequence
+     without scrolling). Now viewport-bound — claims most of the
+     visible height, capped so it can't grow off-screen the way a
+     `flex: 1` chain did when the ancestor `#wrap` had no anchored
+     height. `min-height: 18em` keeps it readable on short windows. */
+  #log { color: #bbb; font-size: 0.7rem; max-height: 70vh; min-height: 18em; overflow-y: auto; line-height: 1.3; margin: 0;
+         /* Wrap long payloads to the next line instead of clipping at
+            the panel's right edge — `provider_error PublishFailed {…}`
+            messages and `peer_down reason=…` payloads carry the
+            actually-useful diagnostic past 40em otherwise. */
+         white-space: pre-wrap; word-break: break-all; }
+  #log .ev-connect { color: #6f9; font-weight: bold; }
+  /* Disconnects SCREAM. The axiom says errors land in front of the
+     user — text-with-a-tint inside a sea of grey log lines is not
+     "in front." A red block with white bold text, padding, and a
+     left bar is. peer_down is the single most diagnostic event in
+     the seam; it cannot be skimmable-past. */
+  #log .ev-disconnect {
+    color: #fff;
+    background: #a00;
+    border-left: 4px solid #f33;
+    padding: 2px 6px;
+    font-weight: bold;
+    display: inline-block;
+    box-shadow: 0 0 0 1px #f33 inset;
+  }
   #log .ev-sub { color: #6cf; }
-  #log .ev-error { color: #f44; }
+  /* provider_error / general errors — red text on a darker red
+     background, less aggressive than disconnect because they can
+     fire at high rate (publish failures during startup). Still
+     unmistakably an error. */
+  #log .ev-error {
+    color: #fbb;
+    background: #310;
+    border-left: 3px solid #f44;
+    padding: 1px 4px;
+    display: inline-block;
+  }
   #log .ev-info { color: #aaa; }
 </style>
 </head>
