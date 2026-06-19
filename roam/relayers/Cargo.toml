@@ -1,0 +1,53 @@
+[package]
+name = "relayers"
+version = "0.1.0"
+edition = "2021"
+description = "roam libp2p relayer — replaces the TypeScript relay at roam/relay/. See roam/relay/relayers.md."
+
+[[bin]]
+name = "relayers"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned to match the version the browser-worker uses
+# (roam/Cargo.toml). Same protocol semantics on both ends of the
+# wire — diverging versions risks gossipsub / yamux frame drift.
+libp2p = { version = "=0.56.0", default-features = false, features = [
+    "tokio",
+    "websocket",
+    "tcp",  # required by `websocket` builder phase (libp2p_tcp::tokio::TcpStream)
+    "dns",  # same — websocket builder uses libp2p_dns::tokio::Transport
+    "noise",
+    "yamux",
+    "gossipsub",
+    "ping",
+    "identify",
+    "relay",
+    "macros",
+] }
+
+# Async runtime + utilities.
+tokio = { version = "=1.47.1", features = ["full"] }
+futures = "=0.3.32"
+
+# AWS — identity persistence (Secrets Manager) + observability
+# (CloudWatch PutMetricData on the CWAgent namespace, same
+# dimension the TS relay used).
+aws-config = "=1.5.13"
+aws-sdk-secretsmanager = "=1.61.0"
+aws-sdk-cloudwatch = "=1.65.0"
+
+# Structured logging. tracing-subscriber's EnvFilter is what
+# replaces the TS side's `DEBUG=libp2p:*` discovery — set
+# `RUST_LOG=info,libp2p_swarm=debug,relayers=debug` etc.
+tracing = "=0.1.41"
+tracing-subscriber = { version = "=0.3.20", features = ["env-filter"] }
+
+# Error envelope. anyhow at the binary edge (top-level main()),
+# typed errors via thiserror for everything below.
+anyhow = "=1.0.99"
+thiserror = "=2.0.16"
+
+# Identity key (de)serialization. libp2p's keypair format is
+# protobuf-encoded.
+prost = "=0.13.5"
