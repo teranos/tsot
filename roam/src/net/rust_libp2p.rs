@@ -68,6 +68,7 @@ mod real {
     use libp2p::core::upgrade;
     use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
     use libp2p::{gossipsub, identify, identity, ping, Swarm, SwarmBuilder};
+    use libp2p_connection_limits as connection_limits;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::time::Duration;
@@ -80,6 +81,12 @@ mod real {
         gossipsub: gossipsub::Behaviour,
         identify: identify::Behaviour,
         ping: ping::Behaviour,
+        // Enforces "only the relay" architecturally. roam doesn't
+        // need a wide mesh — the relay subscribes to the same topic
+        // and re-broadcasts, so a single connected peer is sufficient.
+        // See `CANONICAL.md` for the design (canonical world via
+        // relay, non-canonical sandbox local only).
+        connection_limits: connection_limits::Behaviour,
     }
 
     /// Commands from the trait surface into the swarm driver task.
@@ -149,10 +156,26 @@ mod real {
                 ping::Config::new().with_interval(Duration::from_secs(5)),
             );
 
+            // "Only the relay" cap. One established outgoing connection
+            // (the bootstrap relay), zero incoming (browsers can't
+            // accept inbound), a small pending-outgoing window so the
+            // bootstrap retry has room. Without this cap, identify-
+            // discovered addresses become auto-dial targets that all
+            // fail (browsers can't reach each other without WebRTC,
+            // which we dropped), producing the `net::provider_error`
+            // stream that hid every other signal in the event log.
+            let conn_limits = connection_limits::ConnectionLimits::default()
+                .with_max_established_outgoing(Some(1))
+                .with_max_established_incoming(Some(0))
+                .with_max_established_per_peer(Some(1))
+                .with_max_pending_outgoing(Some(2));
+            let connection_limits_b = connection_limits::Behaviour::new(conn_limits);
+
             let behaviour = RoamBehaviour {
                 gossipsub: gossipsub_b,
                 identify: identify_b,
                 ping: ping_b,
+                connection_limits: connection_limits_b,
             };
 
             // Transport stack: WebSocket(noise+yamux) ⊕ WebRTC(self-secured).
@@ -394,6 +417,41 @@ mod real {
         }
     }
 
+    /// Walk an error chain via `std::error::Error::source()`, extracting
+    /// `io::ErrorKind` at each level where the type downcasts to
+    /// `io::Error`. Stops `format!("{e:?}")`-style collapse — instead of
+    /// surfacing
+    /// `IO(Custom { kind: Other, error: Custom { kind: Other, error: Error(Right(Decode(Io(Kind(BrokenPipe))))) } })`
+    /// we surface `io::BrokenPipe ← yamux decode error ← <wrapper>`,
+    /// which is what the user needs to diagnose without scrolling.
+    /// Bounded to 8 levels so a pathological cycle can't spin.
+    fn decode_error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
+        let mut depth = 0;
+        while let Some(e) = current {
+            if depth >= 8 {
+                parts.push("…(chain truncated)".into());
+                break;
+            }
+            if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+                parts.push(format!("io::{:?}", io_err.kind()));
+            } else {
+                let s = format!("{e}");
+                if !s.is_empty() {
+                    parts.push(s);
+                }
+            }
+            current = e.source();
+            depth += 1;
+        }
+        if parts.is_empty() {
+            "(no detail)".into()
+        } else {
+            parts.join(" ← ")
+        }
+    }
+
     fn handle_swarm_event(event: SwarmEvent<RoamBehaviourEvent>, events: &Rc<RefCell<Vec<NetEvent>>>) {
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
@@ -406,8 +464,9 @@ mod real {
                 events.borrow_mut().push(NetEvent::PeerDown {
                     peer: PeerId(peer_id.to_string()),
                     reason: cause
-                        .map(|e| format!("{e:?}"))
-                        .unwrap_or_else(|| "closed".into()),
+                        .as_ref()
+                        .map(|e| decode_error_chain(e))
+                        .unwrap_or_else(|| "graceful close (no cause reported)".into()),
                 });
             }
             // Dial failures — surfaced so we can see WHY the mesh
@@ -418,29 +477,32 @@ mod real {
                 let peer_str = peer_id
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "<unknown>".into());
+                let chain = decode_error_chain(&error);
                 events
                     .borrow_mut()
                     .push(NetEvent::Error(NetError::NotConnected {
-                        reason: format!("outgoing dial to {peer_str}: {error}"),
+                        reason: format!("outgoing dial to {peer_str}: {chain}"),
                     }));
             }
             SwarmEvent::IncomingConnectionError { error, .. } => {
+                let chain = decode_error_chain(&error);
                 events
                     .borrow_mut()
                     .push(NetEvent::Error(NetError::NotConnected {
-                        reason: format!("incoming connection error: {error}"),
+                        reason: format!("incoming connection error: {chain}"),
                     }));
             }
-            SwarmEvent::Dialing { peer_id, .. } => {
-                let peer_str = peer_id
-                    .map(|p| p.to_string())
-                    .unwrap_or_else(|| "<unknown>".into());
-                events
-                    .borrow_mut()
-                    .push(NetEvent::Error(NetError::NotConnected {
-                        reason: format!("dialing {peer_str}…"),
-                    }));
-            }
+            // `Dialing` is a STATUS event ("I'm initiating a dial"),
+            // not a failure — it fires continuously during libp2p's
+            // peer-discovery / mesh-repair / keepalive cycles. Pushing
+            // it as `NetEvent::Error` produced a ~20Hz storm of
+            // `net::provider_error` traces that drowned every other
+            // signal in the event log. Actual dial failures are still
+            // surfaced via `OutgoingConnectionError` above; successful
+            // dials produce `ConnectionEstablished` → `PeerUp`. Dialing-
+            // in-progress is redundant with both and not worth
+            // surfacing.
+            SwarmEvent::Dialing { .. } => {}
             SwarmEvent::Behaviour(RoamBehaviourEvent::Gossipsub(gossipsub::Event::Message {
                 propagation_source,
                 message,
@@ -471,6 +533,66 @@ mod real {
                     topic: Topic(topic.to_string()),
                     peer: PeerId(peer_id.to_string()),
                     joined: false,
+                });
+            }
+            // Ping behaviour — emits per outgoing ping result. The
+            // single most diagnostic event for "did the connection
+            // actually die or did we kill it." Both success (with
+            // RTT) and failure are surfaced; rendering / dedup is
+            // the bridge's responsibility.
+            SwarmEvent::Behaviour(RoamBehaviourEvent::Ping(ping::Event { peer, result, .. })) => {
+                match result {
+                    Ok(rtt) => {
+                        crate::trace::emit(crate::trace::TraceEvent::Note {
+                            tag: "net::ping_ok",
+                            msg: format!("peer={} rtt_ms={}", peer, rtt.as_millis()),
+                        });
+                    }
+                    Err(failure) => {
+                        crate::trace::emit(crate::trace::TraceEvent::Note {
+                            tag: "net::ping_failed",
+                            msg: format!("peer={} failure={}", peer, failure),
+                        });
+                    }
+                }
+            }
+            // Identify protocol — peer info exchange. `Received` carries
+            // the remote's advertised protocol version and listen addrs;
+            // `Sent` confirms we pushed ours. `Error` is a real problem
+            // (e.g., protocol version mismatch).
+            SwarmEvent::Behaviour(RoamBehaviourEvent::Identify(identify::Event::Received {
+                peer_id,
+                info,
+                ..
+            })) => {
+                crate::trace::emit(crate::trace::TraceEvent::Note {
+                    tag: "net::identify_received",
+                    msg: format!(
+                        "peer={peer_id} protocol={} agent={} listen_addrs={}",
+                        info.protocol_version,
+                        info.agent_version,
+                        info.listen_addrs.len()
+                    ),
+                });
+            }
+            SwarmEvent::Behaviour(RoamBehaviourEvent::Identify(identify::Event::Sent {
+                peer_id,
+                ..
+            })) => {
+                crate::trace::emit(crate::trace::TraceEvent::Note {
+                    tag: "net::identify_sent",
+                    msg: format!("peer={peer_id}"),
+                });
+            }
+            SwarmEvent::Behaviour(RoamBehaviourEvent::Identify(identify::Event::Error {
+                peer_id,
+                error,
+                ..
+            })) => {
+                let chain = decode_error_chain(&error);
+                crate::trace::emit(crate::trace::TraceEvent::Note {
+                    tag: "net::identify_error",
+                    msg: format!("peer={peer_id} {chain}"),
                 });
             }
             _ => {}

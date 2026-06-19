@@ -15,7 +15,7 @@ path = "src/main.rs"
 # rust-libp2p is the default substrate. `--no-default-features` (or
 # `make wasm-js-only`) builds the JS-libp2p-only fallback bundle.
 default = ["rust-libp2p"]
-rust-libp2p = ["dep:libp2p", "dep:wasm-bindgen-futures", "dep:futures", "dep:futures-timer", "dep:getrandom_0_3"]
+rust-libp2p = ["dep:libp2p", "dep:libp2p-connection-limits", "dep:wasm-bindgen-futures", "dep:futures", "dep:futures-timer", "dep:getrandom_0_3"]
 
 [dependencies]
 sacred-error = { path = "../crates/sacred-error" }
@@ -38,6 +38,15 @@ libp2p = { version = "=0.56.0", optional = true, default-features = false, featu
     "macros",
     "wasm-bindgen",
 ] }
+# `libp2p-connection-limits` enforces "only the relay" at the swarm
+# level. roam doesn't need a wide mesh — the relay re-broadcasts
+# gossipsub via `relay/relay.ts` (it subscribes to TOPIC itself), so a
+# single connected peer is sufficient. Without this cap, libp2p auto-
+# dials peers identify learns about and the bridge surfaces the
+# failures as a high-rate `net::provider_error` stream. Direct dep
+# because the libp2p meta-crate doesn't expose this behaviour through
+# a feature flag in 0.56.0 (only `memory-connection-limits` is gated).
+libp2p-connection-limits = { version = "=0.6.0", optional = true }
 wasm-bindgen-futures = { version = "=0.4.71", optional = true }
 # `futures` (channels + StreamExt + select_biased!) drives the
 # `RustLibp2pProvider` Swarm task. Transitive via libp2p today but
