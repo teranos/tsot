@@ -66,16 +66,16 @@ card, not the same card relocating.
 
 ## Current state (2026-06-09)
 
-Violated in three measurable ways.
+Violated in ~~three~~ one measurable way.
 
-### Violation 1 — Phase 4 popover doubles the DOM per attached card
+### ~~Violation 1 — Phase 4 popover doubles the DOM per attached card~~
 
 `Card.viewAttachedRow` renders a `.attached-slot` (clipped Back) AND a
 `.attached-popover` (full Front) for every attached card. Two `.card`
 divs per iid. Hover swaps which one is visible. The popover and the peek
 are not the same element.
 
-### Violation 2 — Front and Back are separate render paths
+### ~~Violation 2 — Front and Back are separate render paths~~
 
 `Card.view` dispatches on `RenderMode` to `viewFront` vs `viewBack`,
 emitting structurally different DOM. A card going from face-up to
@@ -98,7 +98,7 @@ when children reorder. Cross-parent moves still destroy + construct.
 
 Five slices, smallest to largest.
 
-### Slice 1 — single render path with `.face-down` state class
+### ~~Slice 1 — single render path with `.face-down` state class~~
 
 - Drop `RenderMode` from `Card.elm`. Drop `viewFront` / `viewBack`. One
   `view` function emits the full face-up DOM unconditionally.

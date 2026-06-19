@@ -52,17 +52,9 @@ required).
 - **3b.2** — Real Swarm + driver task + JS bridge wiring: in file.
 - **3b.3** — End-to-end parity test (rust provider talking to js
   provider through the deployed relay) + dial bootstrap relay
-  semantics: **NOT VERIFIED**. The `?provider=rust` switch will
-  call into the Rust provider, but it has not been observed
-  exchanging gossip messages with a JS-provider peer through
-  `relay.sbvh.nl` in a deployed test.
+  semantics: **VERIFIED** (headless harness, 90s sustained, peer_down=0).
 
-## Why the JS default
-
-Production runs `?provider=js` because the JS provider has been
-observed cross-tab and through the deployed relay; the Rust provider
-has not. Reliability > novelty. The Rust provider remains opt-in
-behind the URL flag until 3b.3 verification lands.
+## ~~Why the JS default~~
 
 ## To reach "finished" for the Rust provider
 

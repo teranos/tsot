@@ -77,6 +77,6 @@ What i want:
 
 - [x] v0.1 — local-only ✅ shipped. WASD square, walled map (50×40 tiles), camera follows + clamps, debug HUD.
 - [x] v0.2 — two tabs see each other via BroadcastChannel (same browser). Proves the protocol round-trip.
-- [~] v0.3 — cross-browser P2P via libp2p. `NetworkProvider` trait with two impls (`js_libp2p`, `rust_libp2p`); runtime-switchable via `?provider=` URL param. JS impl is the production default; Rust impl runs its Swarm in a Web Worker (WebSocket-WebSys + gossipsub + identify + ping). Deployed relay at `relay.sbvh.nl` (Bun + js-libp2p, CloudFront-fronted); relay's connection-monitor disabled (was root-cause of prior 11s BrokenPipe). Not done: `?provider=rust` against the deployed relay surfaces a `net::provider_error` storm, peer count stays 0, HUD shows libp2p OFF.
-- [ ] v0.4 — TSOT cards spawn on ground; pick-up with Lamport conflict resolution; collection persists in IndexedDB. Introduces mlua + the emscripten quirks (SUPPORT_LONGJMP, build-std).
-- [ ] v0.5 — match handshake: bump into another player → both run TSOT engine on their collected decks → result merged.
+- [~] v0.3 — cross-browser P2P via libp2p. `NetworkProvider` trait with two impls (`js_libp2p`, `rust_libp2p`); runtime-switchable via `?provider=` URL param. JS impl is the production default; Rust impl runs its Swarm in a Web Worker (WebSocket-WebSys + gossipsub + identify + ping). Deployed relay at `relay.sbvh.nl` (Bun + js-libp2p, CloudFront-fronted); relay's connection-monitor disabled (was root-cause of prior 11s BrokenPipe).
+- [ ] v0.4 — collection persists.
+- [ ] v0.5 — you bump into a player, autobattle.

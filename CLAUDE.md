@@ -68,7 +68,7 @@ If the user asks for balance input, point them at sim output or write
 the analysis.
 
 Same applies to strategy talk: lines of play, optimal sequencing,
-"tempo", matchup analysis, what a player "should" do with a card,
+"tempo", matchup analysis,
 deckbuilding heuristics, archetype labels, combo identification. You
 don't play the game and your strategic intuitions are confabulated
 from CCG pattern-matching. Don't generate it. Cards, mechanics, rules,
