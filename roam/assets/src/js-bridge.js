@@ -323,60 +323,20 @@ function devTap(cls, line) {
 //   D6 — polish rotate-identity confirmation modal copy.
 //   D7 — visible confirmation when import succeeds (peerId line lights up briefly).
 
-// Persistent libp2p identity. Key lives in IndexedDB so the PeerId
-// stays stable across page reloads and browser restarts — without
-// this, every tab regenerates a fresh Ed25519 keypair on every load
-// and the "same player" looks like a different peer every refresh.
-// Schema: `roam` database, `identity` object store, key `v1` holds
-// the libp2p-canonical protobuf-encoded keypair as Uint8Array. The
-// v1 suffix is intentional — if the wire format ever rotates, write
-// `v2` and let `v1` exist for migration.
-const IDENTITY_DB_NAME = 'roam';
-const IDENTITY_STORE_NAME = 'identity';
-const IDENTITY_KEY = 'v1';
+// Persistent libp2p identity lives in `./identity.js` — extracted
+// so the load + worker-bootstrap path is testable in isolation under
+// bun:test. See `test/identity.test.js` for the falsifiable contract
+// (mocked IDB throws → no init posted to worker, hard-fail surfaced).
+import {
+  loadOrMintIdentity as _loadOrMintIdentity,
+  bootstrapIdentityToWorker as _bootstrapIdentityToWorker,
+} from './identity.js';
 
-async function loadOrMintIdentity() {
-  const db = await new Promise((resolve, reject) => {
-    const req = indexedDB.open(IDENTITY_DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const upgrading = req.result;
-      if (!upgrading.objectStoreNames.contains(IDENTITY_STORE_NAME)) {
-        upgrading.createObjectStore(IDENTITY_STORE_NAME);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  try {
-    const existing = await new Promise((resolve, reject) => {
-      const tx = db.transaction(IDENTITY_STORE_NAME, 'readonly');
-      const store = tx.objectStore(IDENTITY_STORE_NAME);
-      const req = store.get(IDENTITY_KEY);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-    if (existing instanceof Uint8Array && existing.length > 0) {
-      logEvent('info', `identity: loaded from IndexedDB (${existing.length} bytes)`);
-      return existing;
-    }
-    // First visit (or v1 entry missing / corrupted). Mint via wasm.
-    const minted = roam_net_generate_identity_bytes();
-    if (!(minted instanceof Uint8Array) || minted.length === 0) {
-      throw new Error('roam_net_generate_identity_bytes returned empty');
-    }
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(IDENTITY_STORE_NAME, 'readwrite');
-      const store = tx.objectStore(IDENTITY_STORE_NAME);
-      const req = store.put(minted, IDENTITY_KEY);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-    logEvent('info', `identity: minted + stored to IndexedDB (${minted.length} bytes)`);
-    return minted;
-  } finally {
-    db.close();
-  }
-}
+const loadOrMintIdentity = () => _loadOrMintIdentity({
+  idb: indexedDB,
+  mintBytes: roam_net_generate_identity_bytes,
+  log: logEvent,
+});
 
 function logEvent(cls, line, fingerprint) {
   devTap(cls, line);
@@ -1127,18 +1087,13 @@ moduleP.then((wasm) => {
     // the working path until someone noticed the PeerId rotating on
     // every reload. We refuse to bring the network up at all and let
     // the user see the red dot + the log line; reload retries.
-    loadOrMintIdentity()
-      .then((identityBytes) => {
-        netWorker.postMessage({
-          cmd: 'init',
-          bootstrap_json: JSON.stringify(bootstrapList),
-          identity_bytes: identityBytes,
-        });
-      })
-      .catch((err) => {
-        logError('identity load/mint — network NOT started', err);
-        setNetState('error');
-      });
+    _bootstrapIdentityToWorker({
+      load: loadOrMintIdentity,
+      postMessage: (m) => netWorker.postMessage(m),
+      setNetState,
+      bootstrap: bootstrapList,
+      log: (cls, msg) => (cls === 'error' ? logError(msg, new Error('identity bootstrap failed')) : logEvent(cls, msg)),
+    });
 
     // JsLibp2pProvider callbacks routed through the worker.
     const selfPeerIdFn = () => workerIdentity;
