@@ -1,0 +1,87 @@
+# roam-tests — CI gate that runs the actual roam test suites.
+#
+# Failing on a PR means a regression in roam's invariants. The
+# existing sacred-error-check workflow only catches *static* silent-
+# drop patterns; this workflow catches *behavioural* regressions
+# (e.g. F2's author-vs-forwarder collapse, identity hard-fail
+# silently restoring its ephemeral fallback).
+#
+# Falsifiable on purpose: every test in this suite is constructed
+# so reverting the corresponding fix makes the test fail
+# (mutation-verified at the commit that added each test).
+
+name: roam-tests
+
+on:
+  pull_request:
+    paths:
+      - 'roam/**'
+      - '.github/workflows/roam-tests.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'roam/**'
+
+permissions:
+  contents: read
+
+jobs:
+  cargo:
+    name: cargo test + clippy (roam + relayers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup component add clippy
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            roam/target
+            roam/relayers/target
+          key: roam-cargo-${{ hashFiles('roam/Cargo.lock', 'roam/relayers/Cargo.lock') }}
+
+      - name: roam — cargo test --lib
+        working-directory: roam
+        run: cargo test --lib --quiet
+
+      - name: roam — cargo clippy
+        working-directory: roam
+        run: cargo clippy --all-targets --quiet -- -D warnings
+
+      - name: relayers — cargo test
+        working-directory: roam/relayers
+        run: cargo test --quiet
+
+      - name: relayers — cargo clippy
+        working-directory: roam/relayers
+        run: cargo clippy --all-targets --quiet -- -D warnings
+
+  bun:
+    name: bun test (roam frontend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: roam — bun install
+        working-directory: roam
+        run: bun install --frozen-lockfile
+
+      - name: roam — bun test
+        working-directory: roam
+        run: bun test

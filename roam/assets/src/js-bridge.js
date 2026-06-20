@@ -6,16 +6,11 @@
 // message + stack. window.onerror + unhandledrejection capture
 // anything we missed.
 
-import { createLibp2p } from 'libp2p';
-import { webSockets } from '@libp2p/websockets';
-import { webRTC } from '@libp2p/webrtc';
-import { circuitRelayTransport } from '@libp2p/circuit-relay-v2';
-import { bootstrap } from '@libp2p/bootstrap';
-import { noise } from '@chainsafe/libp2p-noise';
-import { yamux } from '@chainsafe/libp2p-yamux';
-import { identify } from '@libp2p/identify';
-import { gossipsub } from '@chainsafe/libp2p-gossipsub';
-import { multiaddr } from '@multiformats/multiaddr';
+// js-libp2p substrate retired in 0.3.2 — rust-libp2p (Web Worker) is
+// the only network path. All gossipsub / transport / discovery work
+// happens in `assets/src/net-worker.js`; this file's networking role
+// is the `WorkerBridge` postMessage relay (callbacks handed to
+// `roam_net_init`).
 import initWasm, {
   roam_init,
   roam_tick,
@@ -46,14 +41,11 @@ import initWasm, {
   roam_net_peer_state_seq,
   roam_net_generate_identity_bytes,
 } from '/roam.js';
-import * as netShim from './net-shim.js';
 
-// Network substrate. js-libp2p is the default until Phase 3b lands
-// the real rust-libp2p impl; `?provider=rust` only works when the
-// wasm is built with `--features rust-libp2p`.
-// Default substrate is `rust` — see roam/README.md v0.3 line. JS impl
-// is still available via `?provider=js` for fallback / comparison.
-const PROVIDER = new URLSearchParams(location.search).get('provider') || 'rust';
+// Network substrate: rust-libp2p in a Web Worker. The dual-path
+// design (?provider=js fallback) was retired in 0.3.2; only the
+// worker path remains. WorkerBridge in roam Rust holds the
+// NetworkProvider; this file wires its callbacks to net-worker.js.
 
 // At-a-glance network state, driven into the colored dot on #status
 // (see play.html CSS `#status.net-*::before`). Five buckets:
@@ -331,60 +323,20 @@ function devTap(cls, line) {
 //   D6 — polish rotate-identity confirmation modal copy.
 //   D7 — visible confirmation when import succeeds (peerId line lights up briefly).
 
-// Persistent libp2p identity. Key lives in IndexedDB so the PeerId
-// stays stable across page reloads and browser restarts — without
-// this, every tab regenerates a fresh Ed25519 keypair on every load
-// and the "same player" looks like a different peer every refresh.
-// Schema: `roam` database, `identity` object store, key `v1` holds
-// the libp2p-canonical protobuf-encoded keypair as Uint8Array. The
-// v1 suffix is intentional — if the wire format ever rotates, write
-// `v2` and let `v1` exist for migration.
-const IDENTITY_DB_NAME = 'roam';
-const IDENTITY_STORE_NAME = 'identity';
-const IDENTITY_KEY = 'v1';
+// Persistent libp2p identity lives in `./identity.js` — extracted
+// so the load + worker-bootstrap path is testable in isolation under
+// bun:test. See `test/identity.test.js` for the falsifiable contract
+// (mocked IDB throws → no init posted to worker, hard-fail surfaced).
+import {
+  loadOrMintIdentity as _loadOrMintIdentity,
+  bootstrapIdentityToWorker as _bootstrapIdentityToWorker,
+} from './identity.js';
 
-async function loadOrMintIdentity() {
-  const db = await new Promise((resolve, reject) => {
-    const req = indexedDB.open(IDENTITY_DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const upgrading = req.result;
-      if (!upgrading.objectStoreNames.contains(IDENTITY_STORE_NAME)) {
-        upgrading.createObjectStore(IDENTITY_STORE_NAME);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  try {
-    const existing = await new Promise((resolve, reject) => {
-      const tx = db.transaction(IDENTITY_STORE_NAME, 'readonly');
-      const store = tx.objectStore(IDENTITY_STORE_NAME);
-      const req = store.get(IDENTITY_KEY);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-    if (existing instanceof Uint8Array && existing.length > 0) {
-      logEvent('info', `identity: loaded from IndexedDB (${existing.length} bytes)`);
-      return existing;
-    }
-    // First visit (or v1 entry missing / corrupted). Mint via wasm.
-    const minted = roam_net_generate_identity_bytes();
-    if (!(minted instanceof Uint8Array) || minted.length === 0) {
-      throw new Error('roam_net_generate_identity_bytes returned empty');
-    }
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(IDENTITY_STORE_NAME, 'readwrite');
-      const store = tx.objectStore(IDENTITY_STORE_NAME);
-      const req = store.put(minted, IDENTITY_KEY);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-    logEvent('info', `identity: minted + stored to IndexedDB (${minted.length} bytes)`);
-    return minted;
-  } finally {
-    db.close();
-  }
-}
+const loadOrMintIdentity = () => _loadOrMintIdentity({
+  idb: indexedDB,
+  mintBytes: roam_net_generate_identity_bytes,
+  log: logEvent,
+});
 
 function logEvent(cls, line, fingerprint) {
   devTap(cls, line);
@@ -760,10 +712,7 @@ for (const addrStr of bootstrapList) {
   probeRawWebSocket(addrStr); // fire and observe
 }
 
-// --- libp2p init (cross-browser) ---
-let libp2p = null;
-let pubsub = null;
-let libp2pErr = null;
+// --- HUD counters ---
 let publishFailRate = 0; // running count for HUD
 
 // PROVIDER=rust HUD state. The worker substrate emits `net::peer_up`
@@ -828,239 +777,15 @@ function sparkRender() {
 // formatted by the seam in `rust_libp2p.rs::handle_swarm_event`.
 let lastPeerDownAt = '';
 let lastPeerDownReason = '';
-// Worker readiness + identity for the SELF panel. Hoisted from the
-// `if (PROVIDER === 'rust')` init block so the renderer can read them
-// without crossing scope boundaries.
+// Worker readiness + identity for the SELF panel. The network
+// (gossipsub / transport / dial) lives entirely in the Web Worker
+// (`assets/src/net-worker.js`); this file reads readiness flags here.
 let workerIdentity = '';
 let workerReady = false;
-// Sentinel error tag the catch below recognises as "intentional skip,
-// not a failure" — so `libp2pErr` stays null and the HUD doesn't show
-// a fake "libp2p failed" message when the rust substrate is in use.
-class SkipLibp2pInit extends Error { constructor(msg) { super(msg); this.name = 'SkipLibp2pInit'; } }
-
-try {
-  if (PROVIDER !== 'js') {
-    throw new SkipLibp2pInit(`PROVIDER=${PROVIDER} → skipping JS-libp2p init; RustLibp2pProvider will own the network.`);
-  }
-  logEvent('info', 'creating libp2p node…');
-  libp2p = await createLibp2p({
-    addresses: { listen: ['/webrtc'] },
-    transports: [
-      webSockets(),
-      webRTC(),
-      circuitRelayTransport({ discoverRelays: 1 }),
-    ],
-    connectionEncrypters: [noise()],
-    streamMuxers: [yamux()],
-    peerDiscovery: [bootstrap({ list: bootstrapList })],
-    // Default gater denies dials to private/loopback addresses in
-    // browser mode (security — don't let random pages probe LAN).
-    // For local dev we explicitly allow them; revert to default in prod.
-    connectionGater: { denyDialMultiaddr: async () => false },
-    services: {
-      identify: identify(),
-      pubsub: gossipsub({
-        allowPublishToZeroTopicPeers: true,
-        emitSelf: false,
-        // 2s heartbeat (default 1s) — halves the worker-to-main
-        // message rate from gossipsub's mesh maintenance, the
-        // dominant cost in the Firefox profiler trace. Latency for
-        // mesh churn doubles in return, which is acceptable for a
-        // game where position broadcasts are themselves rate-limited
-        // at 50ms in this bridge.
-        heartbeatInterval: 2000,
-      }),
-    },
-  });
-
-  libp2p.addEventListener('peer:connect', (e) => {
-    setNetState('peers');
-    logEvent('connect', `peer:connect ${short(e.detail)}`);
-  });
-  libp2p.addEventListener('peer:disconnect', (e) => {
-    // Drop back to "ready" if no peers remain. `getPeers()` reflects
-    // post-disconnect state synchronously.
-    if (libp2p.getPeers().length === 0) setNetState('ready');
-    logEvent('disconnect', `peer:disconnect ${short(e.detail)}`);
-  });
-  libp2p.addEventListener('connection:open', (e) =>
-    logEvent('connect', `connection:open ${short(e.detail.remotePeer)} via ${e.detail.remoteAddr.toString()}`));
-  libp2p.addEventListener('connection:close', (e) =>
-    logEvent('disconnect', `connection:close ${short(e.detail.remotePeer)}`));
-  libp2p.addEventListener('connection:prune', (e) =>
-    logEvent('disconnect', `connection:prune count=${e.detail?.length || 0}`));
-  libp2p.addEventListener('peer:discovery', (e) => {
-    const addrs = e.detail?.multiaddrs?.map((a) => a.toString()).join(', ') || '(no addrs)';
-    logEvent('info', `peer:discovery ${short(e.detail.id)} addrs=${addrs}`);
-  });
-  libp2p.addEventListener('peer:identify', (e) =>
-    logEvent('info', `peer:identify ${short(e.detail?.peerId)} protocols=${(e.detail?.protocols || []).length}`));
-  libp2p.addEventListener('self:peer:update', () => {
-    const addrs = libp2p.getMultiaddrs().map((a) => a.toString()).join(', ') || '(none)';
-    logEvent('info', `self:peer:update addrs=${addrs}`);
-  });
-  libp2p.addEventListener('transport:listening', (e) =>
-    logEvent('info', `transport:listening ${e.detail?.toString?.() || ''}`));
-  libp2p.addEventListener('transport:close', (e) =>
-    logEvent('info', `transport:close ${e.detail?.toString?.() || ''}`));
-
-  await libp2p.start();
-  setNetState('ready');
-  logEvent('info', `libp2p started, peerId ${libp2p.peerId.toString()}`);
-
-  pubsub = libp2p.services.pubsub;
-  pubsub.subscribe(TOPIC);
-  logEvent('sub', `subscribed to ${TOPIC}`);
-
-  // Force-dial any local relay addresses. Bootstrap discovery alone
-  // doesn't trigger a dial — the connection manager sees the 2 IPFS
-  // bootstrap connections, considers itself satisfied, and never
-  // contacts the relay. Without the relay subscribed to our topic,
-  // the gossipsub mesh never forms.
-  // 5s timeout to unblock module init. CRITICAL: the inner libp2p.dial
-  // promise is kept alive after the timeout fires, so its eventual
-  // resolution (success OR error) lands in the log even if it comes
-  // 60s later. Previously we wrapped and discarded — the real cause
-  // arrived after our wrapper rejected and was lost.
-  const DIAL_TIMEOUT_MS = 5000;
-  for (const addrStr of bootstrapList) {
-    if (!addrStr.includes('127.0.0.1') && !addrStr.includes('localhost')) continue;
-    const ma = multiaddr(addrStr);
-    logEvent('info', `force-dialing relay ${addrStr} (timeout ${DIAL_TIMEOUT_MS}ms; inner promise kept alive)`);
-    const dialT0 = performance.now();
-    const dialPromise = libp2p.dial(ma);
-    // Keep observing the inner promise no matter what the wrapper does.
-    dialPromise.then(
-      (conn) => {
-        const ms = (performance.now() - dialT0).toFixed(0);
-        logEvent('connect', `relay dial settled (eventually): OK after ${ms}ms peer=${short(conn.remotePeer)}`);
-      },
-      (err) => {
-        const ms = (performance.now() - dialT0).toFixed(0);
-        logError(`relay dial settled (eventually) after ${ms}ms`, err, { popover: false });
-      },
-    );
-    try {
-      const conn = await Promise.race([
-        dialPromise,
-        new Promise((_, rej) => setTimeout(
-          () => rej(Object.assign(new Error(`wrapper timeout after ${DIAL_TIMEOUT_MS}ms (${addrStr})`), { name: 'DialTimeoutError' })),
-          DIAL_TIMEOUT_MS,
-        )),
-      ]);
-      logEvent('connect', `relay dial OK (within timeout): ${short(conn.remotePeer)}`);
-    } catch (err) {
-      logEvent('info', `dial wrapper threw for ${addrStr}: ${err.name}: ${err.message}`);
-      const diag = await probeRelayHttp(addrStr);
-      err.diagnostic = diag;
-      logError(`dial wrapper ${addrStr}`, err, { popover: false });
-    }
-  }
-
-  // Redial driver: keep configured bootstrap addresses connected.
-  // Every 5 s, check each addr's peer id against libp2p.getConnections();
-  // if not connected, attempt dial with exponential backoff per address
-  // (5 s → 10 s → 20 s → 40 s, capped at 60 s). On successful dial the
-  // delay resets to 5 s.
-  const REDIAL_TICK_MS = 5000;
-  const REDIAL_BASE_MS = 5000;
-  const REDIAL_MAX_MS = 60000;
-  const redialState = new Map();
-  for (const addrStr of bootstrapList) {
-    redialState.set(addrStr, { nextAt: Date.now() + REDIAL_TICK_MS, delayMs: REDIAL_BASE_MS });
-  }
-  setInterval(async () => {
-    if (!libp2p) return;
-    const now = Date.now();
-    const conns = libp2p.getConnections();
-    const connectedPeers = new Set(conns.map((c) => c.remotePeer.toString()));
-    for (const addrStr of bootstrapList) {
-      const state = redialState.get(addrStr);
-      if (!state) continue;
-      const m = addrStr.match(/\/p2p\/([^/]+)/);
-      if (!m) continue;
-      const peerId = m[1];
-      if (connectedPeers.has(peerId)) {
-        state.delayMs = REDIAL_BASE_MS;
-        state.nextAt = now + REDIAL_TICK_MS;
-        continue;
-      }
-      if (now < state.nextAt) continue;
-      try {
-        await libp2p.dial(multiaddr(addrStr));
-        logEvent('connect', `redial OK: ${peerId.slice(-12)}`);
-        state.delayMs = REDIAL_BASE_MS;
-        state.nextAt = now + REDIAL_TICK_MS;
-      } catch (err) {
-        state.delayMs = Math.min(state.delayMs * 2, REDIAL_MAX_MS);
-        state.nextAt = now + state.delayMs;
-        logError(`redial ${peerId.slice(-12)} (next in ${state.delayMs}ms)`, err, { popover: false });
-      }
-    }
-  }, REDIAL_TICK_MS);
-
-  // Liveness check removed. The relay's peer-id is stable
-  // (loaded from Secrets Manager) so there's no in-page rediscovery
-  // to do; a peer-id rotation requires a deliberate tofu apply +
-  // bundle rebuild, which the page picks up on next load.
-
-  pubsub.addEventListener('subscription-change', (e) => {
-    const subs = (e.detail.subscriptions || []).map(s => `${s.subscribe ? '+' : '-'}${s.topic}`).join(' ');
-    logEvent('sub', `subscription-change peer=${short(e.detail.peerId)} ${subs}`);
-  });
-
-  // Dump advertised protocols + per-connection stream state + gossipsub
-  // internal state 4s and 10s after boot. `streamsOutbound.size > 0`
-  // tells us gossipsub successfully opened its meshsub stream to the
-  // peer (the step that fails silently when something is wrong).
-  const dumpState = async (tag) => {
-    try {
-      const gs = libp2p.services.pubsub;
-      const gsOut = gs?.streamsOutbound?.size ?? 'N/A';
-      const gsIn = gs?.streamsInbound?.size ?? 'N/A';
-      const gsPeers = gs?.peers?.size ?? 'N/A';
-      const gsTopics = gs?.subscriptions ? Array.from(gs.subscriptions).join(',') : '(no subscriptions)';
-      logEvent('info', `${tag} gossipsub: outStreams=${gsOut} inStreams=${gsIn} peers=${gsPeers} subs=${gsTopics}`);
-      const myRec = await libp2p.peerStore.get(libp2p.peerId).catch(() => null);
-      const myProtos = myRec?.protocols || [];
-      logEvent('info', `${tag} my protocols (${myProtos.length}): ${myProtos.join(', ')}`);
-      for (const conn of libp2p.getConnections()) {
-        try {
-          const rec = await libp2p.peerStore.get(conn.remotePeer);
-          const meshsub = (rec.protocols || []).filter(p => p.includes('meshsub') || p.includes('floodsub'));
-          const streams = conn.streams || [];
-          const streamProtos = streams.map((s) => s.protocol || '?').join(', ');
-          logEvent('info', `${tag} peer ${short(conn.remotePeer)} dir=${conn.direction} limits=${conn.limits ? JSON.stringify(conn.limits) : 'none'} protos=${rec.protocols.length} meshsub=[${meshsub.join(',')}] streams=${streams.length} [${streamProtos}]`);
-        } catch (e) {
-          logError(`peerStore.get(${short(conn.remotePeer)})`, e);
-        }
-      }
-    } catch (err) {
-      logError(`${tag} dump`, err);
-    }
-  };
-  setTimeout(() => dumpState('t+4s'), 4000);
-  setTimeout(() => dumpState('t+10s'), 10000);
-
-  // Phase 2d: the pubsub message → ingest → remotePeers Map path is
-  // gone. Incoming messages are queued by `net-shim.js` and drained
-  // each frame by Rust via `roam_net_tick`.
-} catch (err) {
-  if (err instanceof SkipLibp2pInit) {
-    // Sentinel skip — the rust path will drive setNetState from the
-    // worker's `ready`/`error` messages, so we leave the dot in
-    // its current "init" state.
-    logEvent('info', err.message);
-  } else {
-    libp2pErr = err;
-    setNetState('error');
-    logError('libp2p init', err);
-  }
-}
-
-const PEER_ID = libp2p
-  ? libp2p.peerId.toString().slice(-8)
-  : crypto.randomUUID().slice(0, 8);
+// PEER_ID: short device label shown in the SELF panel. The real
+// PeerId comes from the worker (`workerIdentity`) once it's ready;
+// this is the bootstrap placeholder before the worker reports back.
+const PEER_ID = crypto.randomUUID().slice(0, 8);
 
 // Phase 2d: BroadcastChannel (same-browser fallback) was deleted
 // when the JS-side peer table went away. Same-browser comms still
@@ -1177,19 +902,12 @@ moduleP.then((wasm) => {
     logError('render_gl init', err);
   }
 
-  // Network seam. Two substrates supported via `?provider=` URL flag:
-  //   js    (default): the JS-libp2p instance + `net-shim.js` callbacks
-  //   rust            : `RustLibp2pProvider` constructed entirely in
-  //                     Rust; no JS-side libp2p instance involved.
-  // The application code in `roam::net::state::Net` is identical for
-  // both — the seam is at the trait, not at this call site.
-  if (PROVIDER === 'rust') {
-    // Option B: rust-libp2p Swarm lives in a Web Worker, not main
-    // thread. The main-thread `Net` still uses `JsLibp2pProvider`'s
-    // five-callback shape; the callbacks here postMessage to the
-    // worker instead of touching a JS-libp2p instance. See
-    // `assets/src/net-worker.js`.
-    logEvent('info', 'PROVIDER=rust → spawning net-worker');
+  // Network seam. rust-libp2p Swarm lives in a Web Worker, not the
+  // main thread. The main-thread `Net` uses `WorkerBridge`'s five-
+  // callback shape; the callbacks below postMessage to the worker.
+  // See `assets/src/net-worker.js` for the worker side.
+  {
+    logEvent('info', 'spawning net-worker');
     let netWorker;
     try {
       netWorker = new Worker(new URL('./net-worker.js', location.href), { type: 'module' });
@@ -1360,25 +1078,22 @@ moduleP.then((wasm) => {
     // wasm + persist on first visit. The bytes get passed to the
     // worker so its PeerId stays stable across sessions — same key
     // serves the libp2p identity AND the future v0.4 collection-
-    // owner identity. Failure path: log the error sacredly and fall
-    // back to letting the worker generate fresh; this means the
-    // PeerId is ephemeral that session, but the bridge keeps moving.
-    loadOrMintIdentity()
-      .then((identityBytes) => {
-        netWorker.postMessage({
-          cmd: 'init',
-          bootstrap_json: JSON.stringify(bootstrapList),
-          identity_bytes: identityBytes,
-        });
-      })
-      .catch((err) => {
-        logError('identity load/mint', err);
-        netWorker.postMessage({
-          cmd: 'init',
-          bootstrap_json: JSON.stringify(bootstrapList),
-          identity_bytes: new Uint8Array(0),
-        });
-      });
+    // owner identity.
+    //
+    // Failure path is HARD-FAIL per "errors are sacred". IDB-locked,
+    // private-browsing quota, schema corruption, or the wasm mint
+    // export missing all land here — the previous fallback was a
+    // silent ephemeral mint, which made a failure look identical to
+    // the working path until someone noticed the PeerId rotating on
+    // every reload. We refuse to bring the network up at all and let
+    // the user see the red dot + the log line; reload retries.
+    _bootstrapIdentityToWorker({
+      load: loadOrMintIdentity,
+      postMessage: (m) => netWorker.postMessage(m),
+      setNetState,
+      bootstrap: bootstrapList,
+      log: (cls, msg) => (cls === 'error' ? logError(msg, new Error('identity bootstrap failed')) : logEvent(cls, msg)),
+    });
 
     // JsLibp2pProvider callbacks routed through the worker.
     const selfPeerIdFn = () => workerIdentity;
@@ -1419,22 +1134,6 @@ moduleP.then((wasm) => {
     } catch (err) {
       logError('roam_net_init (worker path)', err);
     }
-  } else if (libp2p && pubsub) {
-    try {
-      netShim.attach(libp2p, pubsub);
-      roam_net_init(
-        netShim.selfPeerId,
-        netShim.publish,
-        netShim.subscribe,
-        netShim.unsubscribe,
-        netShim.drainEvents,
-      );
-      logEvent('info', `net: seam initialized, identity=${netShim.selfPeerId()}`);
-    } catch (err) {
-      logError('roam_net_init', err);
-    }
-  } else {
-    logEvent('info', 'net: libp2p unavailable, seam not initialized');
   }
 
   // Color palette is Rust-owned. We capture the memory handle + table
@@ -1718,31 +1417,12 @@ moduleP.then((wasm) => {
     // table to walk.
 
     // Status text reflects the actual connection state every frame —
-    // not throttled. Previously the 500ms throttle around the
-    // libp2p-block update meant the page-level #status element lied
-    // about libp2p state between sample windows. The string template
-    // is cheap; we let it run unconditionally.
-    if (PROVIDER === 'rust') {
-      // PROVIDER=rust: JS-libp2p was sentinel-skipped at init; the
-      // network lives entirely in the Rust-side Swarm. We surface
-      // only what the Rust side exposes through FFI — peer count.
-      // Connection/mesh introspection would require new FFI exports
-      // and isn't worth wiring until rust-libp2p is the default.
-      const peerCount = roam_net_peer_count();
-      status.textContent = `me=${PEER_ID} — rust-libp2p peers=${peerCount}`;
-    } else if (libp2p) {
-      const _conns = libp2p.getConnections();
-      const _meshN = (pubsub && pubsub.getMeshPeers) ? (pubsub.getMeshPeers(TOPIC) || []).length : 0;
-      // Peer count is Rust-owned (the only source of truth post-2d).
-      const peerCount = libp2p ? roam_net_peer_count() : 0;
-      status.textContent = _conns.length === 0
-        ? `me=${PEER_ID} — libp2p ready, 0 connections`
-        : `me=${PEER_ID} — libp2p conns=${_conns.length} mesh=${_meshN} peers=${peerCount}`;
-    } else if (libp2pErr) {
-      status.textContent = `me=${PEER_ID} — libp2p failed: ${libp2pErr.message || 'unknown'}`;
-    } else {
-      status.textContent = `me=${PEER_ID} — libp2p initializing…`;
-    }
+    // String template is cheap; render unconditionally so the
+    // #status line never lies about state between sample windows.
+    // Network lives entirely in the Web Worker; the FFI exposes
+    // peer count via `roam_net_peer_count()`.
+    const peerCount = roam_net_peer_count();
+    status.textContent = `me=${PEER_ID} — rust-libp2p peers=${peerCount}`;
 
     if (now - lastInfoUpdate > 500) {
       lastInfoUpdate = now;
@@ -1775,72 +1455,27 @@ moduleP.then((wasm) => {
         if (npc > 0) setNetState('peers');
         else if (netState === 'peers') setNetState('ready');
       } catch {}
-      if (PROVIDER === 'rust') {
-        // Rust substrate: panels are populated from the worker-tracked
-        // state plus the sparkline buffer. innerHTML because the
-        // sparkline needs SVG markup; the rest is text concatenated
-        // into the same element.
-        const lastDown = lastPeerDownReason
-          ? `<div style="color:#fbb;background:#310;border-left:3px solid #f44;padding:2px 6px;margin-top:4px">last peer_down: ${lastPeerDownAt} — ${escapeHtml(lastPeerDownReason)}</div>`
-          : '';
-        connsEl.innerHTML =
-          `peers: <b>${rustPeerCount}</b>  conns: <b>${rustConnCount}</b>  heartbeats: ${rustHeartbeatCount}  ticks: ${rustTickDebugCount}\n` +
-          sparkRender() +
-          lastDown;
-        meshEl.textContent = '(gossipsub mesh detail not yet plumbed from worker)';
-      } else if (libp2p) {
-        const conns = libp2p.getConnections();
-        const meshPeerCount = (pubsub && pubsub.getMeshPeers)
-          ? (pubsub.getMeshPeers(TOPIC) || []).length : 0;
-        connsEl.textContent = conns.length === 0
-          ? '(no connections)'
-          : conns.map(c => `${short(c.remotePeer)}  ${c.remoteAddr.toString()}`).join('\n');
-        if (pubsub) {
-          const subs = pubsub.getSubscribers(TOPIC) || [];
-          const topics = (pubsub.getTopics && pubsub.getTopics()) || [];
-          const meshPeers = (pubsub.getMeshPeers && pubsub.getMeshPeers(TOPIC)) || [];
-          const peerList = (pubsub.getPeers && pubsub.getPeers()) || [];
-          meshEl.textContent =
-            `topic: ${TOPIC}\n` +
-            `subscribers (announced): ${subs.length}\n` +
-            (subs.length ? subs.map((p) => '  ' + short(p)).join('\n') + '\n' : '') +
-            `mesh peers (grafted): ${meshPeers.length}\n` +
-            (meshPeers.length ? meshPeers.map((p) => '  ' + short(p)).join('\n') + '\n' : '') +
-            `all pubsub peers (any topic): ${peerList.length}\n` +
-            (peerList.length ? peerList.map((p) => '  ' + short(p)).join('\n') + '\n' : '') +
-            `my subscribed topics: ${topics.length === 0 ? '(none)' : topics.join(', ')}`;
-        } else {
-          meshEl.textContent = '(pubsub OFF)';
-        }
-        // Inventory render lives outside this `if (libp2p)` block —
-        // see the hoisted call above; both substrates need it.
-        selfEl.textContent =
-          `display id: ${PEER_ID}\n` +
-          `libp2p peerId: ${libp2p.peerId.toString()}\n` +
-          `multiaddrs:\n  ${libp2p.getMultiaddrs().map(a => a.toString()).join('\n  ') || '(none yet — waiting for relay reservation)'}\n` +
-          `tsot bridge: ${__tsotBridge.state}${__tsotBridge.state === 'ready' ? ` (${__tsotBridge.cardCount} cards)` : ''}\n` +
-          `rust trace: ticks=${roam_tick_count()} stateReads=${roam_state_read_count()} viewportReads=${roam_viewport_read_count()} collisions=${roam_tick_blocked_count()}\n` +
-          `log: ${logLines.length} entries (press l=copy, k=clear, i=screenshot)`;
-      } else if (PROVIDER === 'rust') {
-        // Rust-libp2p worker substrate. No JS-libp2p instance exists;
-        // identity, peers, and conns are owned by the worker. Show the
-        // same shape of fields as the `libp2p ?` branch above, sourced
-        // from the worker-trace counters and the ready signal.
-        const lastDownLine = lastPeerDownReason
-          ? `last peer_down: ${lastPeerDownAt}  ${lastPeerDownReason}\n`
-          : '';
-        selfEl.textContent =
-          `display id: ${PEER_ID}\n` +
-          `libp2p (rust): ${workerReady ? 'ready' : 'starting'}\n` +
-          `worker peerId: ${workerIdentity || '(awaiting ready signal)'}\n` +
-          `peers: ${rustPeerCount}  conns: ${rustConnCount}  heartbeats: ${rustHeartbeatCount}\n` +
-          lastDownLine +
-          `tsot bridge: ${__tsotBridge.state}${__tsotBridge.state === 'ready' ? ` (${__tsotBridge.cardCount} cards)` : ''}\n` +
-          `rust trace: ticks=${roam_tick_count()} stateReads=${roam_state_read_count()} viewportReads=${roam_viewport_read_count()} collisions=${roam_tick_blocked_count()}\n` +
-          `log: ${logLines.length} entries (press l=copy last 20, k=clear, i=screenshot)`;
-      } else {
-        selfEl.textContent = `display id: ${PEER_ID}\nlibp2p: OFF (${libp2pErr ? libp2pErr.message : 'unknown'})`;
-      }
+      // Worker-substrate panels: counters + sparkline + last peer_down.
+      const lastDown = lastPeerDownReason
+        ? `<div style="color:#fbb;background:#310;border-left:3px solid #f44;padding:2px 6px;margin-top:4px">last peer_down: ${lastPeerDownAt} — ${escapeHtml(lastPeerDownReason)}</div>`
+        : '';
+      connsEl.innerHTML =
+        `peers: <b>${rustPeerCount}</b>  conns: <b>${rustConnCount}</b>  heartbeats: ${rustHeartbeatCount}  ticks: ${rustTickDebugCount}\n` +
+        sparkRender() +
+        lastDown;
+      meshEl.textContent = '(gossipsub mesh detail not yet plumbed from worker)';
+      const lastDownLine = lastPeerDownReason
+        ? `last peer_down: ${lastPeerDownAt}  ${lastPeerDownReason}\n`
+        : '';
+      selfEl.textContent =
+        `display id: ${PEER_ID}\n` +
+        `libp2p (rust): ${workerReady ? 'ready' : 'starting'}\n` +
+        `worker peerId: ${workerIdentity || '(awaiting ready signal)'}\n` +
+        `peers: ${rustPeerCount}  conns: ${rustConnCount}  heartbeats: ${rustHeartbeatCount}\n` +
+        lastDownLine +
+        `tsot bridge: ${__tsotBridge.state}${__tsotBridge.state === 'ready' ? ` (${__tsotBridge.cardCount} cards)` : ''}\n` +
+        `rust trace: ticks=${roam_tick_count()} stateReads=${roam_state_read_count()} viewportReads=${roam_viewport_read_count()} collisions=${roam_tick_blocked_count()}\n` +
+        `log: ${logLines.length} entries (press l=copy last 20, k=clear, i=screenshot)`;
     }
 
     // Camera centers on player. World wraps in x (cylinder) — wasm
@@ -1903,33 +1538,17 @@ moduleP.then((wasm) => {
 
     // Status text overlay: rendered by the browser as DOM, not by GL.
     // Bridge composes the format string from Rust-supplied data only.
-    //
-    // PROVIDER=js: `libp2p` is the main-thread js-libp2p instance.
-    // PROVIDER=rust: `libp2p` is null (init was skipped by
-    // SkipLibp2pInit); the network lives in the worker. The HUD reads
-    // its state from `rustPeerCount` / `rustConnCount` (maintained by
-    // the worker-message handler from `net::peer_up` / `net::peer_down`
-    // traces) so `peer_up` firing in the worker actually shows up here.
-    let peerCount, libStatus;
-    if (PROVIDER === 'rust') {
-      peerCount = rustPeerCount;
-      // Wording matches the dot-state taxonomy in setNetState (line 55):
-      // workerReady=false → "starting"; ready but no peer → "ready";
-      // at least one conn → "conns=N". "off" was wrong here because the
-      // substrate IS running — just without a current peer.
-      libStatus = !workerReady
-        ? 'libp2p (rust) starting'
-        : rustConnCount > 0
-          ? `libp2p (rust) conns=${rustConnCount}`
-          : 'libp2p (rust) ready';
-    } else {
-      const conns = libp2p ? libp2p.getConnections().length : 0;
-      libStatus = libp2p ? `libp2p conns=${conns}` : 'libp2p off';
-      peerCount = libp2p ? roam_net_peer_count() : 0;
-    }
+    // The network lives entirely in the Web Worker; the HUD reads
+    // its state from `rustPeerCount` / `rustConnCount` (maintained
+    // by the worker-message handler from `net::peer_up` / `net::peer_down`).
+    const libStatus = !workerReady
+      ? 'libp2p (rust) starting'
+      : rustConnCount > 0
+        ? `libp2p (rust) conns=${rustConnCount}`
+        : 'libp2p (rust) ready';
     worldHud.textContent =
       `me=${PEER_ID} (${s.x.toFixed(1)}, ${s.y.toFixed(1)}, z=${s.z}) f=${s.f}  ` +
-      `zoom=${zoom.toFixed(2)}  peers=${peerCount}  ${libStatus}`;
+      `zoom=${zoom.toFixed(2)}  peers=${rustPeerCount}  ${libStatus}`;
 
     // Honest perf accounting: this branch is the paint path.
     perfRenderCount += 1;
@@ -1959,9 +1578,7 @@ moduleP.then((wasm) => {
     perfRenderMsSum = 0;
   }
 
-  status.textContent = libp2pErr
-    ? `me=${PEER_ID} — libp2p failed; BroadcastChannel only`
-    : `me=${PEER_ID} — bootstrapping libp2p…`;
+  status.textContent = `me=${PEER_ID} — bootstrapping libp2p…`;
   requestAnimationFrame(frame);
 }).catch((err) => {
   logError('wasm load', err);

@@ -347,7 +347,7 @@ mod wasm_exports {
         unsubscribe: js_sys::Function,
         drain_events: js_sys::Function,
     ) -> Result<(), JsValue> {
-        let provider = crate::net::js_libp2p::JsLibp2pProvider::new(
+        let provider = crate::net::worker_bridge::WorkerBridge::new(
             self_peer_id_fn,
             publish,
             subscribe,
@@ -624,7 +624,11 @@ mod wasm_exports {
                             } => {
                                 messages.push(serde_json::json!({
                                     "topic": topic.0,
-                                    "from": from.0,
+                                    // `from` is `Author(PeerId(String))`
+                                    // post-F2 newtype. Emit the inner
+                                    // String for the JS bridge; wire
+                                    // shape unchanged.
+                                    "from": from.0.0,
                                     "bytes": bytes,
                                     "at_ms": at_ms,
                                 }));

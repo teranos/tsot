@@ -498,6 +498,20 @@ mod real {
         }
     }
 
+    fn build_message_event(
+        propagation_source: libp2p::PeerId,
+        message: gossipsub::Message,
+        at_ms: u64,
+    ) -> NetEvent {
+        crate::net::build_authored_message(
+            propagation_source.to_string(),
+            message.source.as_ref().map(|s| s.to_string()),
+            message.topic.to_string(),
+            message.data,
+            at_ms,
+        )
+    }
+
     fn handle_swarm_event(event: SwarmEvent<RoamBehaviourEvent>, events: &Rc<RefCell<Vec<NetEvent>>>) {
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
@@ -554,12 +568,9 @@ mod real {
                 message,
                 ..
             })) => {
-                events.borrow_mut().push(NetEvent::Message {
-                    topic: Topic(message.topic.to_string()),
-                    from: PeerId(propagation_source.to_string()),
-                    bytes: message.data,
-                    at_ms: now_ms(),
-                });
+                events
+                    .borrow_mut()
+                    .push(build_message_event(propagation_source, message, now_ms()));
             }
             SwarmEvent::Behaviour(RoamBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed {
                 peer_id,

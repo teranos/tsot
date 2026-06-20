@@ -1,7 +1,7 @@
 # Learning resources
 
-Background reading and viewing for working on roam (Rust → wasm, js-libp2p,
-gossipsub, circuit-relay).
+Background reading and viewing for working on roam (Rust → wasm,
+rust-libp2p, gossipsub, circuit-relay).
 
 ## Video
 

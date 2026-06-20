@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::net::{NetError, NetEvent, NetworkProvider, PeerId, Topic};
+use crate::net::{Author, NetError, NetEvent, NetworkProvider, PeerId, Topic};
 
 /// Topic where roam broadcasts player positions. Same string used by
 /// every node — gossipsub treats this as a flat namespace.
@@ -27,7 +27,10 @@ pub const POSITIONS_TOPIC: &str = "roam-positions/v1";
 /// rendering ghosts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RemotePeer {
-    pub peer_id: PeerId,
+    /// The author of the position messages we've been tracking.
+    /// Typed `Author` (not bare `PeerId`) so the table is structurally
+    /// keyable only by signed authorship — never by a forwarder hop.
+    pub peer_id: Author,
     pub x: f32,
     pub y: f32,
     pub facing: u8,
@@ -45,7 +48,7 @@ pub const PEER_TIMEOUT_MS: u64 = 2000;
 /// construction-time choice, not an application-code change.
 pub struct Net {
     provider: Box<dyn NetworkProvider>,
-    peers: BTreeMap<PeerId, RemotePeer>,
+    peers: BTreeMap<Author, RemotePeer>,
     /// Monotonic counter that bumps whenever the peer table changes
     /// — insert, remove, or position update. The render bridge reads
     /// this to feed the dirty-flag fingerprint so peers moving on
@@ -98,7 +101,7 @@ impl Net {
                         tag: "net::recv",
                         msg: format!(
                             "topic={} from={} bytes={} at_ms={}",
-                            topic.0, from.0, bytes.len(), at_ms
+                            topic.0, from.0.0, bytes.len(), at_ms
                         ),
                     });
                     if topic.0 != POSITIONS_TOPIC {
@@ -136,9 +139,13 @@ impl Net {
                         tag: "net::peer_down",
                         msg: format!("peer={} reason={}", peer.0, reason),
                     });
-                    if self.peers.remove(&peer).is_some() {
-                        self.peer_state_seq = self.peer_state_seq.wrapping_add(1);
-                    }
+                    // PeerDown.peer is the immediate connection peer
+                    // (a `Forwarder` semantically — in star topology
+                    // always the relay), NOT the author. The peer
+                    // table is `Author`-keyed; F2's whole point is
+                    // that these are different identities and cannot
+                    // be conflated. Stale authors get evicted by the
+                    // PEER_TIMEOUT_MS pruner below, not here.
                 }
                 NetEvent::PeerUp { peer, addrs } => {
                     crate::trace::emit(crate::trace::TraceEvent::Note {
@@ -294,11 +301,89 @@ mod tests {
     }
 
     #[test]
-    fn net_tick_is_a_noop_in_phase_2a() {
-        // Verifies the placeholder doesn't crash on a provider that
-        // produces no events. Replace once 2b adds real logic.
+    fn net_tick_with_no_events_leaves_peer_table_empty() {
         let mut net = Net::new(Box::new(StubProvider::new("12D3KooWself")));
         net.tick(1_700_000_000_000);
         assert_eq!(net.peers().count(), 0);
+    }
+
+    fn position_bytes(x: f32, y: f32, facing: u8) -> Vec<u8> {
+        serde_json::json!({
+            "peer_id": "ignored-the-from-field-is-authoritative",
+            "x": x,
+            "y": y,
+            "f": facing,
+            "z": 0,
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    fn position_event(author_id: &str, x: f32, y: f32) -> NetEvent {
+        NetEvent::Message {
+            topic: Topic(POSITIONS_TOPIC.to_string()),
+            from: Author(PeerId(author_id.to_string())),
+            bytes: position_bytes(x, y, 0),
+            at_ms: 1_700_000_000_000,
+        }
+    }
+
+    /// Three authored position messages → three distinct peer-table
+    /// entries. The placeholder test this replaces only asserted
+    /// `peers().count() == 0` after a no-op tick — which is why F2
+    /// (`propagation_source` masquerading as `from`) shipped without
+    /// any state-level test catching it: every author would have
+    /// collapsed to one peer in the table and nothing here would have
+    /// noticed.
+    ///
+    /// Falsifiable: if Net::tick ever conflates authors (e.g. someone
+    /// re-keys the BTreeMap on something other than `Author`, or the
+    /// insert lookup uses the wrong field), this test trips with
+    /// `assert_eq! left != right`. Mutation-verified by hand: replace
+    /// `self.peers.insert(from.clone(), ...)` with
+    /// `self.peers.insert(self.peers.keys().next().cloned().unwrap_or(from.clone()), ...)`
+    /// → all three messages collapse to one entry → this assert
+    /// fails.
+    #[test]
+    fn net_tick_records_three_distinct_authors_as_three_peers() {
+        let mut provider = StubProvider::new("12D3KooWself");
+        provider.events.push(position_event("12D3KooWAuthorA", 1.0, 2.0));
+        provider.events.push(position_event("12D3KooWAuthorB", 3.0, 4.0));
+        provider.events.push(position_event("12D3KooWAuthorC", 5.0, 6.0));
+
+        let mut net = Net::new(Box::new(provider));
+        net.tick(1_700_000_000_000);
+
+        assert_eq!(
+            net.peers().count(),
+            3,
+            "three distinct Author keys must produce three peer-table entries"
+        );
+
+        let ids: std::collections::BTreeSet<String> =
+            net.peers().map(|p| p.peer_id.0 .0.clone()).collect();
+        assert!(ids.contains("12D3KooWAuthorA"));
+        assert!(ids.contains("12D3KooWAuthorB"));
+        assert!(ids.contains("12D3KooWAuthorC"));
+    }
+
+    /// Re-broadcast of a position from the same author updates the
+    /// existing peer entry rather than inserting a duplicate. This
+    /// is the "I moved, here's my new (x,y)" path; the table must
+    /// stay keyed by Author and the row's x/y must reflect the
+    /// latest message.
+    #[test]
+    fn net_tick_reauthored_message_updates_position_no_duplicate() {
+        let mut provider = StubProvider::new("12D3KooWself");
+        provider.events.push(position_event("12D3KooWAuthorA", 1.0, 2.0));
+        provider.events.push(position_event("12D3KooWAuthorA", 7.5, 8.5));
+
+        let mut net = Net::new(Box::new(provider));
+        net.tick(1_700_000_000_000);
+
+        let peers: Vec<&RemotePeer> = net.peers().collect();
+        assert_eq!(peers.len(), 1, "same author across two messages → one peer entry");
+        assert!((peers[0].x - 7.5).abs() < 1e-6);
+        assert!((peers[0].y - 8.5).abs() < 1e-6);
     }
 }

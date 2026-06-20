@@ -687,7 +687,7 @@ height=\"{h}\" preserveAspectRatio=\"none\">\
 fn format_status_response(body: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
-Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+Content-Length: {}\r\nCache-Control: max-age=60\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body
     )
@@ -828,5 +828,20 @@ Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: x\r\n\r\n
         assert!(resp_str.contains("Content-Length: 123"));
         assert!(resp_str.contains("Connection: close"));
         assert!(resp_str.ends_with(&body));
+    }
+
+    /// CloudFront caches the response by default-TTL when the origin
+    /// emits no Cache-Control — observed during 0.3.1 deploy as a
+    /// stale page after a fresh build. max-age=60 matches the
+    /// sparkline sample cadence: a visitor sees something that's at
+    /// most one sample stale, never older.
+    #[test]
+    fn status_response_emits_cache_control() {
+        let resp = format_status_response("body");
+        let resp_str = std::str::from_utf8(&resp).unwrap();
+        assert!(
+            resp_str.contains("Cache-Control: max-age=60"),
+            "must emit Cache-Control: max-age=60 (got: {resp_str})"
+        );
     }
 }
