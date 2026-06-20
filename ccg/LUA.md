@@ -1,189 +1,87 @@
-# tsot — Lua Execution Plan
+# tsot — Lua
 
-> Three-phase plan for turning card abilities from strings into executable Lua handlers.
-> Resolves the `events` theme in LIMITATIONS.md.
-
----
-
-## Phase 1 — Foundation
-
-Cards become modules; the engine fires a small set of events; a minimal `game` API lets handlers do basic moves.
-
-**Goal:** prove the architecture. Three to five cards' abilities actually execute. No design questions deferred to later phases gate this.
-
-### Status (2026-05-29)
-
-Phase 1 spec is structurally complete. All six events are wired and firing in the sim; all originally-planned API methods plus a few additions (`deck_top`, `attackers`) are exposed; the mlua sandbox is in place. Some methods (`add_status`, `discard`) are deterministic placeholders for what becomes choice-driven in Phase 2.
-
-**Events wired** (fire site → `fire_self_only` or `fire_with_partner` in `lua_api.rs` → log-and-continue on error):
-- [x] `on_blocked_by` (per blocker, in `declare_blocker`) — added beyond the original v1 list as the squirrel-overrun canary
-- [x] `on_die` (in `resolve_combat` death loop, after Board → Graveyard)
-- [x] `on_enter_board` (in `play_card` after board.push + attachment wiring)
-- [x] `on_attack` (in `declare_attacker` after attack recorded) — fires on the attacker AND on every card in `attacker.attached`, mirroring `on_dealt_damage_to_player`'s iteration. Mutations like TNF / VEGF declare the handler and receive `self = the mutation` when the host attacks.
-- [x] `on_block` (in `declare_blocker`, blocker-side; per blocker)
-- [x] `on_play` (in `play_card` after validation, before mutations — card still in HAND)
-
-**Self table** passed to handlers: `{ instance_id, owner, controller, attached }`. Partner table (`on_blocked_by`, `on_block`) has the same shape.
-
-**`game` API** (exposed via per-call scoped userdata in `src/game/lua_api.rs`, built by `build_game_table!` macro):
-- [x] `game.damage(card_id, n)`
-- [x] `game.mill(player_id, n, "graveyard"|"exile")`
-- [x] `game.draw(player_id, n)` — empty-deck mid-effect assigns L.1 loss
-- [x] `game.move(card_id, dest_zone)` — searches zones AND attached lists; clears face_down when unattaching
-- [x] `game.opponent(player_id)`
-- [x] `game.deck_top(player_id) → iid_or_nil` — read top of deck without drawing
-- [x] `game.tap(card_id)`, `game.untap(card_id)`
-- [x] `game.zones(player_id).{hand, deck, graveyard, exile, board}` — returns iid lists per zone
-- [x] `game.attackers() → list of iids` — currently-declared attackers (added beyond the original v1 list; needed for "untap other attackers"-style handlers)
-- [x] `game.card(card_id) → table_or_nil` — read-only view: `id, instance_id, type, subtypes, colors, symbol, tapped, face_down, owner, controller, x, y` (effective stats). Returns nil if iid not in pool.
-- [x] `game.print(msg)` — debug; writes `[card] {msg}` to stderr
-- [x] `game.add_status(card_id, kind, duration)` — currently only `"skip_untap"` kind; accumulates with any existing entry of the same kind
-- [x] `game.discard(player_id, n)` — deterministic front-of-hand pending choice API; bumps the same `action_counts["discard"]` as U.10 engine discards
-- [x] `game.choose_card(pool, opts)` — pick one iid from a pool with `{optional, prompt}`. End-to-end via the replay pipeline: wrapper raises `Err(mlua::Error::external(ChoicePending))`, `fire_*` downcasts to `Result<(), ChoicePending>`, each subsystem (`play_card` / `activate_ability` / `declare_attacker` / `declare_blocker` / `next_phase`) lifts via `.map_err(*Error::ChoicePending)?`. The StepEngine catches every variant, rolls back the preview journal, surfaces a `HumanPrompt::ChooseCard`, and re-fires after the user's answer lands in `HumanReplayOracle.replay`. Open downstream gap (per LIMITATIONS.md `## lua`): phase-advance triggers still route through `RandomOracle` rather than `HumanReplayOracle`, so `on_turn_begin` choose-prompts get random AI answers on the human side.
-- [x] `game.confirm(prompt)` — same shape as `choose_card`, returns `bool` after user answer.
-- [x] `game.choose_player({exclude, optional, prompt}) → "a"|"b"|nil` — same shape.
-- [x] `game.choose_int(min, max, prompt) → int` — same shape; foundation for variable-X costs.
-
-**Cards with active handlers:**
-- `tantrum-imp` — `on_blocked_by`: damage blocker 1, mill defender 1 to exile
-- `squirrel-overrun` — `on_blocked_by`: draw 1
-- `trustworthy-lender` — `on_die`: return attached to controller's hand
-- `midnight-raven` — `on_attack`: put top of deck on the bottom
-- `goblin-scribe` — `on_enter_board`: draw 1
-- `thorn-beetle` — `on_block`: deal 1 damage to attacker
-- `draw-two` — `on_play`: draw 2 (first instant — `play_card` now routes Instant → GRAVEYARD; GRAVEYARD cost source supported deterministically by exiling most-recent N)
-- `battle-captain` — `on_attack`: untap all other attacking creatures (static lord-effect ability still deferred to Phase 2)
-- `surge` — `on_play`: untap all your creatures (second instant; uses `game.zones`)
-- `mortal-bee` — `on_attack`: exile 1 from opponent's deck, self-skip next untap (white flying insect; demonstrates `game.add_status` with `"skip_untap"`)
-- `binding-knight` — `on_attack`: tap an untapped opposing creature (first card to use `game.tap`)
-- `jellyfish` — `on_enter_board`: bounce a creature from opponent's board (first card to use `game.choose_card`)
-- `flesh-eating-plant` — `on_die`: may return an insect from your graveyard (uses `confirm` + filtered `choose_card`; static "insects can't attack" still deferred)
-- `goblin-conspirator` — `on_play`: may reveal a goblin from your hand for a draw (uses `confirm` + filtered `choose_card`)
-
-**Other Phase 1 spec items:**
-- [x] mlua sandbox: VM constructed via `Lua::new_with(MATH | STRING | TABLE | COROUTINE)`; base-lib loader functions (`load`, `loadstring`, `loadfile`, `dofile`) nil'd in globals. Test in `card::tests::sandbox_denies_dangerous_stdlib`.
-- [x] `CardRegistry` owns long-lived Lua VM; handlers stored as `mlua::Function` on `Card`
-- [x] Engine metrics: `event_fires: HashMap<EventName, [u32; 2]>` and `action_counts: HashMap<&'static str, [u32; 2]>` (per-action counts for `game.*` invocations and engine-driven actions like U.10 discards) — sim surfaces both as per-game averages
-
-**Plumbing pattern:** every event method (`play_card`, `declare_attacker`, `declare_blocker`, `confirm_blocks`) takes `Option<&Lua>`. `None` = tests of pure game logic; `Some(registry.lua())` = sim and integration tests. The trigger to introduce an `Engine` wrapper owning both `GameState` and `&CardRegistry` is when this `Option<&Lua>` becomes noisy across many more methods.
-
-**Surfaced engine bug fixed along the way:** `declare_attacker` had a hidden state-reset that silently dropped previously-declared attackers when a second `declare_attacker` was called on the same combat. Discovered while wiring `battle-captain`'s `on_attack` handler (which calls `game.attackers()` and expected the full list). Multi-attacker combats now work; the reset block was unreachable-by-design and got removed.
-
-**Scope (in):**
-- **Card file shape extended.** Each `.lua` card may add function fields alongside the existing data table:
-  ```lua
-  return {
-    id = "mesopelagic-fish",
-    -- ... data ...
-    on_die = function(game, self) ... end,
-  }
-  ```
-- **Event taxonomy v1**, 5 events:
-  - `on_enter_board` — fires when a card enters the BOARD (after play_card resolves).
-  - `on_die` — fires when a creature is moved to GRAVEYARD due to combat damage.
-  - `on_attack` — fires when the controller declares an attack with this creature.
-  - `on_block` — fires when a creature is declared as blocker.
-  - `on_play` — fires when a card is played from HAND (before destination determination).
-- **`game` API v1**, sync only, ~10 methods:
-  - `game.move(card_id, zone)` — move within current owner's zones.
-  - `game.draw(player_id, n)` — draw n cards.
-  - `game.zones(player_id).{hand, deck, graveyard, exile, board}` — list of card IDs.
-  - `game.card(card_id)` — read-only view of a card (id, type, colors, stats, etc.).
-  - `game.tap(card_id)`, `game.untap(card_id)`.
-  - `game.damage(card_id, n)` — add n to damage; trigger death check.
-  - `game.add_status(card_id, kind, duration)` — apply a status effect.
-  - `game.opponent(player_id)`.
-  - `game.print(msg)` — debug only.
-- **Lua execution via mlua**, sandbox mode enabled (no `os`, `io`, `loadstring`, etc.).
-- **Engine fires events** at the existing sites where TODOs already mark them. Each `fire_event(name, ctx)` call iterates relevant cards' handlers and invokes them.
-
-**Out (deferred to later phases):**
-- Player choices (no `game.choose_*` yet — handlers run to completion without input).
-- Continuous effects (`static`).
-- Visibility filtering of the API view.
-- Damage to player, complex zone transitions, P.8 attached cleanup.
-- Variable X cost.
-
-**Cards working after Phase 1:**
-- `mesopelagic-fish` — partial (return without target choice; just picks first non-creature in graveyard).
-- `stinging-bee` — partial (apply SkipUntap status on damage, ignoring choice).
-- `attach-shuffler`'s "return at end of turn" — once end-of-turn event added.
-- Several cards' `on_enter_board` triggers if they have one.
-
-**Deliverable:** `cargo test` includes a test that loads a fixture card with `on_die`, kills it, and verifies the handler ran. `cargo run` simulator shows non-zero counts in the "triggered abilities fired" pending-stats column.
+How card abilities are authored, executed, and triggered.
 
 ---
 
-## Phase 2 — Player choices and continuous effects
+## Shipped
 
-Two big additions: blocking choice prompts and continuous-effect re-evaluation.
+**Events** (`card::EventName`, 10 variants today):
+`on_enter_board`, `on_die`, `on_attack`, `on_block`, `on_blocked_by`,
+`on_play`, `on_attached_as_cost`, `on_dealt_damage_to_player`,
+`on_turn_begin`, `on_creature_dies`.
 
-**Goal:** real card design space opens up. Handlers can ask players to pick things, and `static` lets cards modify each other.
+**Handler signature** — `function(game, self, partner?)`. `self` carries
+`{ instance_id, owner, controller, attached }`. `partner` is present
+on the two-card events (`on_blocked_by`, `on_block`,
+`on_creature_dies`, `on_attached_as_cost`).
 
-**Scope (in):**
-- **Choice API (blocking via Lua coroutines):**
-  - `game.choose_card(pool, opts)` — pool is a list of card IDs; opts include `{filter, optional, prompt}`. Suspends Lua; engine yields to UI/sim; resumes with the chosen ID (or nil if optional).
-  - `game.choose_player({opts})`.
-  - `game.confirm(prompt)` — yes/no.
-  - `game.choose_int(min, max, prompt)` — for variable X.
-- **Headless choice mode for the simulator.** The sim provides a `choice_oracle` (random or scripted) so games run without UI. Production runtime asks the user.
-- **`static` handler:** a function that returns a list of modifier-add operations. Re-evaluated whenever the engine's mutation counter ticks (every state change). The engine diffs old vs new modifier set and applies the delta.
-- **Visibility filtering.** The `game` API view of cards in HAND, ATTACHED, etc. respects V.1–V.7. A handler running on Player A's card cannot see Player B's hand identities through `game.zones(B).hand`; only counts.
-- **Death-check integration.** `game.damage` now properly cascades into death events with deferred resolution (don't fire `on_die` mid-damage-tick).
-- **End-of-turn events** so attach-shuffler's "return at end of turn" delayed effect works.
+**Choice API.** `game.choose_card`, `game.confirm`, `game.choose_player`,
+`game.choose_int`. The wrapper raises `mlua::Error::external(ChoicePending)`;
+each subsystem (`play_card`, `activate_ability`, `declare_attacker`,
+`declare_blocker`, `next_phase`) lifts via `.map_err(_::ChoicePending)?`.
+StepEngine catches every variant, rolls back the preview journal,
+surfaces a `HumanPrompt`, and re-fires after the user's answer lands
+in `HumanReplayOracle.replay`. Headless sim uses `RandomOracle` for
+the same surface. Phase-advance triggers go through the same path
+(`turn.rs::next_phase_returns_choice_pending_when_on_turn_begin_yields`).
 
-**Out (deferred to Phase 3):**
-- The response window machinery (R.1, the stack) is still not built. Choice prompts inside handlers are *not* the same as instant-casting response windows.
-- Variable X cost integration with play_card (X chosen at cast — different surface from `choose_int` inside a handler).
-- Full event taxonomy (still ~5-7 events).
+**Static effects.** `static = { ... }` on a card declares a continuous
+effect re-evaluated on each engine mutation tick; `card::StaticDef`
+carries the affects-predicate + the effect list. 46 cards use it.
 
-**Cards working after Phase 2:**
-- `mesopelagic-fish` fully (choice of which non-creature to return).
-- `squirrel-overrun` mostly (static stat boost + on_attack with attach choice + on_blocked_by draw).
-- `companion-bird` fully (static gives host flying while attached).
-- `modern-lcd-clock` fully (static cost reduction on creatures).
-- `flesh-eating-plant` partially (returns insect on death with choice).
-- `silent-murder` fully (choose target + kill + conditional draw).
+**Other `game.*`.** `damage`, `mill`, `draw`, `move`, `move_to`,
+`move_to_deck_top`, `move_attached`, `tap`, `untap`, `add_status`,
+`add_modifier`, `discard`, `zones`, `card`, `attackers`, `opponent`,
+`deck_top`, `deck_bottom`, `print`, plus attach helpers
+(`attach`, `attach_from_deck`, `attached_of`, `host_of`), counter helpers
+(`counter`, `counter_top`, `chain`, `legal_counter_targets`,
+`set_intent`), and timing helpers (`schedule_return_at_next_main`,
+`grant_extra_turn`, `creature_attacked_this_turn`, `set_summoning_sick`,
+`x_value`, `payment_ids`).
 
-**Deliverable:** simulator's headless oracle picks random-but-legal choices. Card-level integration tests verify each card's intended behavior end-to-end. The "triggered abilities fired" column shows realistic per-game counts.
+**Sandbox.** `Lua::new_with(MATH | STRING | TABLE | COROUTINE)`;
+`load`/`loadstring`/`loadfile`/`dofile` nil'd. Pinned by
+`card::tests::sandbox_denies_dangerous_stdlib`.
+
+**Cards using handlers.** 111 of the corpus. Authoritative count: grep
+`cards/*.lua`.
 
 ---
 
-## Phase 3 — Full coverage
+## Outstanding
 
-Round out the taxonomy, harden the API, integrate with the stack work that lands separately.
+**Events still to wire:** `on_turn_end`, generic `on_zone_change`,
+`on_draw`, `on_discard`, `on_attach` (distinct from `on_attached_as_cost`),
+`on_detach`, `on_combat_begin`, `on_main_phase_begin`, plus
+`on_damage_to_creature` (the creature-target equivalent of
+`on_dealt_damage_to_player`).
 
-**Goal:** every card in the corpus runs. New cards can be authored end-to-end in Lua with no Rust changes.
+**`game.*` gaps:** `game.search(zone, filter)` for tutor effects;
+`game.modify_card(card_id, prop, value)` for color/symbol/type
+mutations; `game.count_by_symbol(zone, symbol)` for Amsterdam-City;
+`game.reveal(card_id)` for temporary face-up.
 
-**Scope (in):**
-- **Full event taxonomy** — add the remaining events surfaced by the corpus:
-  - `on_damage_to_creature`, `on_damage_to_player`, `on_zone_change` (generic), `on_draw`, `on_discard`, `on_attach`, `on_detach`, `on_turn_begin`, `on_turn_end`, `on_combat_begin`, `on_main_phase_begin`.
-- **`game` API completion:**
-  - `game.attach(card_id, host_id)`, `game.detach(card_id)`.
-  - `game.exile(card_id)`, `game.bounce(card_id)` (BOARD → HAND).
-  - `game.discard(player_id, n, opts)`.
-  - `game.mill(player_id, n, dest)` — n cards from top of DECK to GRAVEYARD or EXILE.
-  - `game.search(zone, filter)` — for tutor effects.
-  - `game.modify_card(card_id, prop, value)` — for color/symbol/type mutations.
-  - `game.count_by_symbol(zone, symbol)` — Amsterdam-City's `count cards with symbol ⨳`.
-  - `game.set_modifier(card_id, key, value)`, `game.remove_modifier(card_id, key)`.
-  - `game.reveal(card_id)` — flips face-down to face-up temporarily.
-- **Integration with stack work** (the `stack` theme from LIMITATIONS.md, built in parallel):
-  - Handlers that emit `game.cast_response_for(card_id)` queue a response on the stack.
-  - `on_play` inside a response window respects R.1–R.7.
-  - Triggered abilities themselves go on the stack.
-- **Variable X cost handler hook.** When a card has `is_x` cost, `play_card` calls a card-level `choose_x(game, self)` Lua function (or uses `game.choose_int` from inside).
-- **Pre-declared responses** (UX X.6 / X-E.4) via a Lua-level register API.
-- **Performance hardening** — memoize `static` evaluation based on observed dependencies, avoid full-scan recomputation.
-- **Card author documentation** — a guide explaining the event taxonomy and `game` API with 5–10 example cards walked through.
+**Variable X cost integration with `play_card`.** When a card has
+`is_x` cost, `play_card` should call a card-level `choose_x(game, self)`
+or let the card use `game.choose_int` from inside its handler.
 
-**Out:**
-- Multiplayer (still 1v1).
-- Custom user-uploaded cards (sandboxing is in place but vetting flow isn't).
+**Stack integration** — see STACK.md. Triggered abilities currently
+resolve inline; the stack work will let `on_play` inside a response
+window respect R.1–R.7 and let handlers queue responses.
 
-**Cards working after Phase 3:** every card currently in `cards/`. The "Pending mechanics" section in `cargo run` shows non-zero values for nearly all rows.
+**Visibility filtering** of the `game` API view (V.1–V.7). Handlers
+can read what they shouldn't through `game.zones(opponent).hand`.
+`face_down` and a couple V-rule references exist in `lua_api.rs` but
+there's no uniform filter.
 
-**Deliverable:** corpus-wide regression suite — for every card, an integration test asserting its observable behavior in a scripted game state. Card-authoring docs let someone write a new card from scratch using only the guide.
+**Deferred death cascade.** `game.damage` triggering `on_die`
+mid-damage-tick is still the call path; resolving deaths after all
+damage is dealt is still pending.
+
+**Card author guide.** Walkthrough of the event taxonomy + `game` API
+through 5–10 example cards. None of the docs in this file substitute
+for it.
 
 ---
 
@@ -196,57 +94,41 @@ base card plus one card per variant, with id `{base-id}-{key}` and
 so they never enter `make evolve` / champions / gauntlets; `tsot
 balance-probe` is the only consumer that picks them up.
 
-**Schema example** — author once, compare versions side-by-side:
-
 ```lua
 return {
   id = "dark-salamander",
   -- ... base definition ...
   variants = {
-    ["1pwr"] = { activated = {...} },   -- partial override
+    ["1pwr"] = { activated = {...} },
     ["2pwr"] = { activated = {...} },
   },
 }
 ```
 
-**Override semantics** — each top-level field in a variant table
-replaces the base wholesale. There is no deep merge. To tweak one
-ability inside `activated`, copy the full `activated` array into the
-variant with the tweak. This keeps the schema predictable at the
-cost of some duplication.
+Override semantics: each top-level field in a variant table replaces
+the base wholesale. No deep merge.
 
-**Workflow** — `make probe` auto-discovers every card with declared
-variants and probes them side-by-side; `make probe <CARD_ID>` probes
-one card's variants. The probe pins each variant into every genome
-of a short EA and reports the ceiling fitness + top co-occurring
-cards. No file paths, no flag juggling — the LLM (or you) edits the
-card's .lua, you type `make probe`.
+Workflow: `make probe` auto-discovers; `make probe <CARD_ID>` runs
+one. The probe pins each variant into every genome of a short EA
+and reports ceiling fitness + top co-occurring cards.
 
-**When to add variants** — when you want to compare alternative
-versions of the same conceptual card (different cost, different
-stats, different effect magnitude). Don't duplicate .lua files; add
-a variants block instead.
+When to add variants: comparing alternative versions of the same
+conceptual card (cost, stats, effect magnitude). Don't duplicate .lua
+files.
 
 ---
 
-## Cross-cutting design questions to resolve
+## Open
 
-These come up across phases and are worth pinning down early:
+- **Hot reload.** Re-load cards mid-session? Convenient for authoring,
+  complicates state. Deferred.
+- **Deployment target.** Browser via wasm, wrapped in a native WebView
+  shell (Capacitor or equivalent) for App Store / Play Store
+  distribution. Rust target: `wasm32-unknown-emscripten` (required by
+  mlua's vendored Lua C runtime — pure-Rust wasm targets are not
+  supported). Cards embed via `include_dir!` so the runtime has no
+  filesystem dependency. `rayon` is cfg-gated to native; the EA sim
+  doesn't ship in the app.
 
-1. **Where do handlers live in the Card struct?** Probably as `HashMap<EventName, mlua::Function>` separate from `abilities: Vec<String>`. Strings stay as documentation / pre-implementation, functions are the executable surface.
-2. **Is the `game` handle a fresh userdata per call, or a long-lived registry?** Probably long-lived — `game` is `mlua::UserData` whose methods proxy into Rust.
-3. **Error handling.** A Lua error inside a handler should not crash the engine. Catch, log, continue — the rest of the game keeps running. Maybe surface as a game event for testing.
-4. **Hot reload.** Should card edits trigger a re-load mid-session? Convenient for authoring; complicates state. Probably no for v1; yes for dev mode later.
-5. **Coroutine yield semantics.** For Phase 2's choice API, what yields and what blocks? mlua's `Thread` is the mechanism. Spec the exact pattern before writing it.
-6. **Deployment target.** Browser via wasm, wrapped in a native WebView shell (Capacitor or equivalent) for App Store / Play Store distribution. Rust target: `wasm32-unknown-emscripten` (required by mlua's vendored Lua C runtime — pure-Rust wasm targets are not supported). Cards are embedded in the binary via `include_dir!` so the runtime has no filesystem dependency. `rayon` is cfg-gated to native; the EA sim doesn't ship in the app.
-
----
-
-## How this fits with LIMITATIONS.md's four themes
-
-- **events** — this whole document.
-- **costs** — Phase 3's variable-X integration; otherwise mostly Rust-side work, separate slice.
-- **types** — Rust-side work in `play_card`. Lua doesn't decide where instants go; the engine does.
-- **stack** — separate slice. Phase 3 integrates with it but doesn't build it.
-
-Each phase here is one slice of `events`. The four themes' slices interleave by necessity.
+See LIMITATIONS.md for cross-cutting themes (events, costs, types,
+stack).
