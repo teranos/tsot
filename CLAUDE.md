@@ -64,7 +64,7 @@ You can compare alternative versions of a card (cost, stats, effect magnitude),
 Don't push probe results at the user. Don't ask them whether to
 probe. Don't probe a single new card — there's nothing to compare.
 
-See @LUA.md and @RULES.md. Sim AI + game-runner internals
+See @ccg/LUA.md and @ccg/RULES.md. Sim AI + game-runner internals
 in @src/sim/README.md.
 
 Balance, power level, "premium cost", card-economy ratios, win-conditions,
