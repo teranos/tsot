@@ -1,4 +1,5 @@
 pub mod error;
+pub mod identity;
 pub mod net;
 #[cfg(target_arch = "wasm32")]
 pub mod render_gl;
