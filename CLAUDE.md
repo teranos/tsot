@@ -1,7 +1,15 @@
+Monorepo: shared axioms here, project-specific rules in each
+subproject's own `CLAUDE.md`.
 
-The Symbols of Teranos: ax = ⋈, ix = ⨳, am = ≡, pulse = ꩜, sem = ⊨, delta = δ
+Subprojects:
+- `ccg/` — TSOT (the card game). See `ccg/CLAUDE.md`.
+- `roam/` — the open-world game. See `roam/CLAUDE.md`.
 
-WASM - Collectible Card Game
+These are independent. Architecture, dependencies, and patterns do
+not transfer from one to the other unless the integration is
+explicit. The only confirmed integration: v0.5 of roam invokes the
+ccg engine to resolve player-vs-player encounters. Anything else is
+confabulation.
 
 ---
 
@@ -37,7 +45,7 @@ and make sure we see the error FIRST before continuing with anything else.
 
 Every refusal surfaces typed at the user's cursor.
 
-**KNOW** the developer is always running the latest version of TSOT.
+**KNOW** the developer is always running the latest code.
 If there is an issue, it is in the code.
 
 - Never ask if the developer has rebuilt/restarted
@@ -51,31 +59,6 @@ file the user can tail, never `| tail -N` or `| head -N` the live
 stream. Truncating the output is optimizing your own legibility at the
 cost of the user's visibility into the run.
 
-The @Makefile is for fast daily driver developer convenience,
-no parameters, just: `make the_thing`
-
----
-
-Write cards in .lua, see: cards/
-
-You can compare alternative versions of a card (cost, stats, effect magnitude),
-`make probe` recognises `variants = { [key] = { overrides } }` blocks on cards.
-
-Don't push probe results at the user. Don't ask them whether to
-probe. Don't probe a single new card — there's nothing to compare.
-
-See @ccg/LUA.md and @ccg/RULES.md. Sim AI + game-runner internals
-in @src/sim/README.md.
-
-Balance, power level, "premium cost", card-economy ratios, win-conditions,
-archetype viability — not chat answers. You have no playtest data and no
-game intuition; don't editorialize. Just write the card or the mechanic.
-If the user asks for balance input, point them at sim output or write
-the analysis.
-
-Same applies to strategy talk: lines of play, optimal sequencing,
-"tempo", matchup analysis,
-deckbuilding heuristics, archetype labels, combo identification. You
-don't play the game and your strategic intuitions are confabulated
-from CCG pattern-matching. Don't generate it. Cards, mechanics, rules,
-engine — yes. Strategy — no.
+Each subproject has its own `Makefile` for fast daily driver developer
+convenience. No parameters, just: `make the_thing` from inside the
+subproject's directory.
