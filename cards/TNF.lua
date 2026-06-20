@@ -2,11 +2,10 @@
 -- host releases on contact during combat. Mechanic: whenever the host
 -- creature attacks, every opposing creature takes 1 damage.
 --
--- Currently dead code until the engine ships #6 (OnAttack iteration over
--- attacker's attached list, parallel to OnDealtDamageToPlayer's existing
--- shape at combat.rs:432). The combat.rs:170 attacker-side fire today
--- targets only the attacker iid; this handler needs the attached-list
--- iteration to receive the trigger.
+-- Wired today. The combat resolver fires `on_attack` on the attacker and
+-- on every card in the attacker's `attached` list (combat.rs declare_attacker,
+-- mirrors the OnDealtDamageToPlayer iteration). TNF's handler receives
+-- `self = the TNF mutation` and damages the opposing creatures.
 return {
   id = "TNF",
   name = "TNF",

@@ -172,9 +172,26 @@ impl GameState {
         let _ = self.open_response_window_empty();
         let _ = self.drive_window_to_close(ctx.as_deref_mut());
 
-        if let Some(c) = ctx {
+        // OnAttack fires on the attacker, then on every card attached to
+        // the attacker. Mirror of the OnDealtDamageToPlayer iteration
+        // below — mutations like TNF / VEGF declare on_attack handlers and
+        // expect to receive `self = the mutation` when the host attacks.
+        // Snapshot attached before firing so a handler that detaches /
+        // moves doesn't desync the iteration.
+        let attached: Vec<InstanceId> = self
+            .card_pool
+            .get(attacker)
+            .map(|i| i.attached.clone())
+            .unwrap_or_default();
+        if let Some(c) = ctx.as_deref_mut() {
             lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker)
                 .map_err(CombatError::ChoicePending)?;
+        }
+        for aid in &attached {
+            if let Some(c) = ctx.as_deref_mut() {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, aid)
+                    .map_err(CombatError::ChoicePending)?;
+            }
         }
 
         Ok(())

@@ -19,7 +19,7 @@ Phase 1 spec is structurally complete. All six events are wired and firing in th
 - [x] `on_blocked_by` (per blocker, in `declare_blocker`) — added beyond the original v1 list as the squirrel-overrun canary
 - [x] `on_die` (in `resolve_combat` death loop, after Board → Graveyard)
 - [x] `on_enter_board` (in `play_card` after board.push + attachment wiring)
-- [x] `on_attack` (in `declare_attacker` after attack recorded)
+- [x] `on_attack` (in `declare_attacker` after attack recorded) — fires on the attacker AND on every card in `attacker.attached`, mirroring `on_dealt_damage_to_player`'s iteration. Mutations like TNF / VEGF declare the handler and receive `self = the mutation` when the host attacks.
 - [x] `on_block` (in `declare_blocker`, blocker-side; per blocker)
 - [x] `on_play` (in `play_card` after validation, before mutations — card still in HAND)
 
@@ -39,10 +39,10 @@ Phase 1 spec is structurally complete. All six events are wired and firing in th
 - [x] `game.print(msg)` — debug; writes `[card] {msg}` to stderr
 - [x] `game.add_status(card_id, kind, duration)` — currently only `"skip_untap"` kind; accumulates with any existing entry of the same kind
 - [x] `game.discard(player_id, n)` — deterministic front-of-hand pending choice API; bumps the same `action_counts["discard"]` as U.10 engine discards
-- [~] `game.choose_card(pool, opts)` — Phase 2 choice: pick one iid from a pool with `{filter, optional, prompt}`. **Call surface only.** The wrapper returns `ChoicePending` as a value instead of yielding the Lua coroutine, so every handler that calls this errors out at the call site (`ERR: lua game.choose_card: oracle returned ChoicePending`). See LIMITATIONS.md `## lua` — needs the asyncify-style suspend in `build_game_table!` at `src/game/lua_api.rs`.
-- [~] `game.confirm(prompt)` — same call-surface-only status as `choose_card`. See LIMITATIONS.md `## lua`.
-- [~] `game.choose_player({exclude, optional, prompt}) → "a"|"b"|nil` — same.
-- [~] `game.choose_int(min, max, prompt) → int` — same; foundation for variable-X costs.
+- [x] `game.choose_card(pool, opts)` — pick one iid from a pool with `{optional, prompt}`. End-to-end via the replay pipeline: wrapper raises `Err(mlua::Error::external(ChoicePending))`, `fire_*` downcasts to `Result<(), ChoicePending>`, each subsystem (`play_card` / `activate_ability` / `declare_attacker` / `declare_blocker` / `next_phase`) lifts via `.map_err(*Error::ChoicePending)?`. The StepEngine catches every variant, rolls back the preview journal, surfaces a `HumanPrompt::ChooseCard`, and re-fires after the user's answer lands in `HumanReplayOracle.replay`. Open downstream gap (per LIMITATIONS.md `## lua`): phase-advance triggers still route through `RandomOracle` rather than `HumanReplayOracle`, so `on_turn_begin` choose-prompts get random AI answers on the human side.
+- [x] `game.confirm(prompt)` — same shape as `choose_card`, returns `bool` after user answer.
+- [x] `game.choose_player({exclude, optional, prompt}) → "a"|"b"|nil` — same shape.
+- [x] `game.choose_int(min, max, prompt) → int` — same shape; foundation for variable-X costs.
 
 **Cards with active handlers:**
 - `tantrum-imp` — `on_blocked_by`: damage blocker 1, mill defender 1 to exile

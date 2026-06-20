@@ -1117,3 +1117,62 @@ fn declare_attacker_returns_choice_pending_when_on_attack_yields() {
         ),
     }
 }
+
+/// Mirrors the existing OnDealtDamageToPlayer attached-iteration contract:
+/// when an attacker has cards in its `attached` list, every attached card's
+/// `on_attack` handler must fire when the attacker is declared. TNF / VEGF
+/// rely on this — both are mutations attached to a host whose on_attack
+/// triggers on the host's attack declaration.
+#[test]
+fn on_attack_handler_fires_on_attached_cards() {
+    let registry = registry_with_fixture(
+        "on_attack_attached",
+        r#"return {
+            id = "fire-on-attack-attached",
+            on_attack = function(game, self)
+                _G.fire_on_attack_attached_count = (_G.fire_on_attack_attached_count or 0) + 1
+            end,
+        }"#,
+    );
+    let fixture = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "fire-on-attack-attached")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let host = s.a.hand[0].clone();
+    let mutation = s.a.hand[1].clone();
+    // Install the on_attack handler on the mutation, leave the host
+    // handler-less. With the fix, the mutation's handler fires when the
+    // host attacks. Without the fix, the iteration over attacker.attached
+    // is missing and the mutation's handler never runs.
+    {
+        let inst = s.card_pool.get_mut(&mutation).unwrap();
+        inst.card.handlers = fixture.handlers.clone();
+        inst.card.id = fixture.id.clone();
+    }
+    put_on_board(&mut s, PlayerId::A, &host);
+    s.add_attached(&host, &mutation);
+    add_ability(&mut s, &host, "haste");
+    enter_combat(&mut s);
+
+    registry
+        .lua()
+        .globals()
+        .set("fire_on_attack_attached_count", 0_i32)
+        .unwrap();
+    s.declare_attacker(&host, Some(&mut crate::game::EventContext::lua_only(registry.lua())))
+        .unwrap();
+
+    let count: i32 = registry
+        .lua()
+        .globals()
+        .get("fire_on_attack_attached_count")
+        .unwrap();
+    assert_eq!(
+        count, 1,
+        "attached card's on_attack handler must fire when host attacks"
+    );
+}

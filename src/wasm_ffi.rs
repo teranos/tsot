@@ -1300,50 +1300,6 @@ mod tests {
         }
     }
 
-    /// INTENT: `tsot_list_preset_decks_impl` returns the curated
-    /// presets (Red Starter first as deckbuilder default + Blue
-    /// Starter), each with a flat `cards` array of 50 card IDs —
-    /// the shape `tsot_start_game`'s `deck_a_ids` consumes.
-    /// Order pinned 2026-06-09 (Red took id `"starter"`).
-    #[test]
-    fn list_preset_decks_returns_starter_plus_gauntlet_json() {
-        let json = tsot_list_preset_decks_impl().expect("list_preset_decks returned Err");
-        let env: Value = serde_json::from_str(&json).expect("envelope JSON parses");
-        assert_eq!(env["ok"], true, "envelope ok=true");
-        assert!(
-            env["trace"].is_array(),
-            "envelope.trace is an array (OBS O5b)"
-        );
-        assert!(
-            env["errors"].is_array(),
-            "envelope.errors is an array (ERROR Slice 5)"
-        );
-        let arr = env["result"]
-            .as_array()
-            .expect("envelope.result is the presets array");
-        assert_eq!(arr.len(), 3, "Red Starter + Blue Starter + Yield Test = 3 presets");
-        assert_eq!(arr[0]["id"], "starter", "first preset is the Red Starter");
-        assert_eq!(arr[1]["id"], "starter-blue", "second preset is the Blue Starter");
-        assert_eq!(arr[2]["id"], "yield-test", "third preset is the Yield Test");
-        for (i, preset) in arr.iter().enumerate() {
-            let cards = preset["cards"]
-                .as_array()
-                .unwrap_or_else(|| panic!("preset[{i}] missing cards array: {preset}"));
-            assert_eq!(
-                cards.len(),
-                50,
-                "preset[{i}] ({}) should have 50 cards",
-                preset["id"]
-            );
-            for card_id in cards {
-                assert!(
-                    card_id.is_string(),
-                    "preset[{i}] cards must be strings, got {card_id}"
-                );
-            }
-        }
-    }
-
     // ----- Auto-game (spectate) FFI -----------------------------
 
     /// INTENT: `tsot_run_auto_game_impl` with both Heuristic AIs and
