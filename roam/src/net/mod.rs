@@ -139,7 +139,7 @@
 //! - **Phase 3b.3** (FFI + bridge wiring + Makefile target): complete. `RustLibp2pProvider::new(bootstrap_addrs)` accepts a Vec of multiaddr strings and dials each one as the Swarm comes up; parse + dial failures route through `NetEvent::Error`. `roam_net_init_rust_libp2p(bootstrap_json: String)` exported (gated by `#[cfg(feature = "rust-libp2p")]`) as a parity drop-in for `roam_net_init`. The JS bridge reads `?provider=rust` from the URL query; on `rust` it skips the createLibp2p path via a `SkipLibp2pInit` sentinel (catch discriminates so `libp2pErr` stays null), then calls `roam_net_init_rust_libp2p(JSON.stringify(bootstrapList))` at the seam-attach site. `make wasm-rust` builds with `--features rust-libp2p` and prints the `?provider=rust` URL. Remaining: end-to-end parity test against a `JsLibp2pProvider` peer over the shared Bun relay + gossipsub topic (manual browser test).
 //! - **Phase 3c** (`RemoteServerProvider`): not started.
 
-pub mod js_libp2p;
+pub mod worker_bridge;
 #[cfg(feature = "rust-libp2p")]
 pub mod rust_libp2p;
 pub mod state;

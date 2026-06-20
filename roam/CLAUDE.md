@@ -16,10 +16,11 @@ a deck from your collection, play TSOT matches against other players
 you encounter automatically.
 
 Architecture: Rust → wasm32-unknown-emscripten (mirrors TSOT). JS owns
-network + render. js-libp2p over WebRTC for cross-browser, BroadcastChannel
-for same-browser fallback. mlua scripting added in v0.4. No centralised
-server. Decentralized substrate (libp2p), eventually-consistent state
-(Lamport timestamps for card-pickup conflicts).
+render and a thin `WorkerBridge` to the network web worker. The Swarm
+(rust-libp2p, gossipsub + identify + ping over WebSocket-WebSys) lives
+in `assets/src/net-worker.js`. No centralised server. Decentralized
+substrate (libp2p), eventually-consistent state (Lamport timestamps
+for card-pickup conflicts). Roadmap lives in `README.md`.
 
 See @README.md for the staged roadmap and @OBSERVABILITY.md for the
 trace bus plan.

@@ -1,71 +1,37 @@
 # roam/src/net — provider seam status
 
-## Current architecture (2026-06-17)
+## Current architecture (0.3.2)
 
-The `NetworkProvider` trait (`mod.rs`) is the seam. Two concrete
-implementations live in this directory:
+The `NetworkProvider` trait (`mod.rs`) is the seam. One concrete
+implementation lives in this directory, plus a thin main-thread
+bridge:
 
-- `js_libp2p.rs` — `JsLibp2pProvider`. Drives the JS-side libp2p
-  instance through five thin callbacks defined in
-  `assets/src/net-shim.js`: `attach`, `publish`, `subscribe`,
-  `unsubscribe`, `selfPeerId`, `drainEvents`. Browser-only.
 - `rust_libp2p.rs` — `RustLibp2pProvider`. Direct rust-libp2p in
   wasm32. Real `Swarm` with `websocket-websys` + `webrtc-websys`
   transports, gossipsub + identify + ping behaviours,
-  `wasm_bindgen_futures::spawn_local` driver task. On non-wasm32
+  `wasm_bindgen_futures::spawn_local` driver task. Runs inside the
+  network web worker (`assets/src/net-worker.js`). On non-wasm32
   builds, a `new_stub` constructor exists so trait surface stays
   exercised by unit tests.
+- `worker_bridge.rs` — `WorkerBridge`. Main-thread provider whose
+  five callbacks `postMessage` commands to the worker and drain
+  events the worker delivers via `onmessage`. Same trait, different
+  transport.
 
-## Runtime selection
+## Field invariant — `Author` / `Forwarder`
 
-`assets/src/js-bridge.js` reads `?provider=` from the URL:
+`NetEvent::Message.from` is typed `Author` (newtype over `PeerId`).
+The libp2p boundary in `rust_libp2p.rs::build_authored_message`
+reads `gossipsub::Message.source` (the signed author), not
+`propagation_source` (the immediate hop). The type forbids ever
+passing a `Forwarder` into the slot. See the F2 test in `mod.rs`
+for the falsifiable invariant.
 
-- `?provider=js` (or absent): `JsLibp2pProvider` is constructed
-  through `roam_net_init` after the JS libp2p instance is created.
-  **This is the production default.**
-- `?provider=rust`: `roam_net_init_rust_libp2p(JSON.stringify(bootstrapList))`
-  is called instead, and the JS libp2p init is skipped via the
-  `SkipLibp2pInit` sentinel. This branch only exists when the wasm
-  binary was built with the `rust-libp2p` Cargo feature.
+## History
 
-## Build feature flag
-
-`Cargo.toml`:
-
-```
-[features]
-default = ["rust-libp2p"]
-rust-libp2p = ["dep:libp2p", "dep:wasm-bindgen-futures", "dep:futures", "dep:getrandom_0_3"]
-```
-
-Default-features-on means the wasm binary includes the
-`RustLibp2pProvider` code path. `make wasm` produces a binary that
-can switch at runtime by URL flag. `cargo build --no-default-features`
-would drop the rust-libp2p code entirely (no `make wasm-js-only`
-target wired today — would need adding if a JS-only bundle is ever
-required).
-
-## Phase status (from rust_libp2p.rs)
-
-- **3a** — Trait + stub: done.
-- **3b.1** — Deps pinned, both feature configs link: done.
-- **3b.2** — Real Swarm + driver task + JS bridge wiring: in file.
-- **3b.3** — End-to-end parity test (rust provider talking to js
-  provider through the deployed relay) + dial bootstrap relay
-  semantics: **VERIFIED** (headless harness, 90s sustained, peer_down=0).
-
-## ~~Why the JS default~~
-
-## To reach "finished" for the Rust provider
-
-1. Boot a browser with `?provider=rust` against `relay.sbvh.nl`.
-2. Boot a second browser with the JS default.
-3. Watch the event log: both should publish position broadcasts on
-   `roam-positions/v1`; both should ingest the other's messages.
-4. Repeat with both browsers on `?provider=rust`.
-5. If all three combinations show round-trip gossip, the switch is
-   verified and `default = ["rust-libp2p"]` can become the runtime
-   default by flipping `PROVIDER` in `js-bridge.js`.
-
-This is a verification step, not a code step. Until it's run, the
-runtime default stays `js`.
+- 0.3.1 — TS Bun relay retired (replaced by `roam/relayers/`).
+  Persistent IndexedDB identity end-to-end. Public SRE-style status
+  page on `relay.sbvh.nl`.
+- 0.3.2 — js-libp2p substrate retired. `?provider=` URL toggle
+  removed. `JsLibp2pProvider` renamed to `WorkerBridge`. All
+  `@libp2p/*` + `@chainsafe/*` + `libp2p` npm deps dropped.

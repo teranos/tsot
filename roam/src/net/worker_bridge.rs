@@ -1,21 +1,20 @@
-//! `JsLibp2pProvider` — the first impl of `NetworkProvider`.
+//! `WorkerBridge` — main-thread `NetworkProvider` whose five
+//! callbacks postMessage commands to the network web worker.
 //!
-//! Wraps the existing js-libp2p instance (which lives in
-//! `assets/src/js-bridge.js`) behind the `NetworkProvider` seam.
-//! Application code never holds this concrete type; it holds
-//! `Box<dyn NetworkProvider>`. Substrate swaps (`RustLibp2pProvider`,
-//! `RemoteServerProvider`) drop in via the same trait.
+//! Architecture: the real libp2p Swarm lives in `assets/src/net-worker.js`
+//! (a Web Worker hosting the wasm module's `RustLibp2pProvider`).
+//! Main-thread Rust holds `Net` parameterised on this `WorkerBridge`;
+//! every `publish` / `subscribe` / `unsubscribe` invokes the
+//! corresponding JS callback (which `postMessage`s to the worker),
+//! and `poll_events` drains a buffer the bridge fills from
+//! `onmessage` from the worker. The seam is the same `NetworkProvider`
+//! trait the worker uses internally — same shape, different transport.
 //!
-//! ## Phase 2b (this commit)
-//!
-//! The provider takes five JS callbacks at construction. The bridge
-//! defines them on top of the existing libp2p instance and hands them
-//! to `roam_net_init` once libp2p is ready. Outgoing publishes flow
-//! Rust → callback → libp2p; incoming events stay in JS for now
-//! (handled in 2c).
-//!
-//! Per-call cost: one wasm→JS function dispatch + arg marshaling.
-//! No new crypto, no new IPC — same wire as today.
+//! Previously called `WorkerBridge` when there was a parallel
+//! js-libp2p substrate in the main thread; that path was retired
+//! when rust-libp2p became the only substrate. The name was kept
+//! around long enough to mislead future readers — renamed in
+//! 0.3.2 to reflect what the type actually is.
 
 use crate::net::{NetError, NetEvent, NetworkProvider, PeerId, Topic};
 
@@ -26,11 +25,11 @@ use wasm_bindgen::JsValue;
 
 /// Five JS callbacks the bridge supplies. Each one is a plain JS
 /// function; the provider invokes them through `js_sys::Function`.
-/// On non-wasm targets we keep `JsLibp2pProvider` compilable for unit
+/// On non-wasm targets we keep `WorkerBridge` compilable for unit
 /// tests by replacing the function fields with no-op closures over a
 /// shared identity string.
 #[cfg(target_arch = "wasm32")]
-pub struct JsLibp2pProvider {
+pub struct WorkerBridge {
     self_peer_id: PeerId,
     publish: Function,
     subscribe: Function,
@@ -39,12 +38,12 @@ pub struct JsLibp2pProvider {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub struct JsLibp2pProvider {
+pub struct WorkerBridge {
     self_peer_id: PeerId,
 }
 
 #[cfg(target_arch = "wasm32")]
-impl JsLibp2pProvider {
+impl WorkerBridge {
     /// Construct from the JS callbacks. `self_peer_id_fn` is invoked
     /// once here to lock the identity; the other four are stored and
     /// invoked per operation.
@@ -70,7 +69,7 @@ impl JsLibp2pProvider {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl JsLibp2pProvider {
+impl WorkerBridge {
     /// Native (test) constructor. No-op publish/subscribe; identity
     /// is whatever the caller passes in.
     pub fn new_for_tests(self_peer_id: PeerId) -> Self {
@@ -79,7 +78,7 @@ impl JsLibp2pProvider {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl NetworkProvider for JsLibp2pProvider {
+impl NetworkProvider for WorkerBridge {
     fn identity(&self) -> PeerId {
         self.self_peer_id.clone()
     }
@@ -180,7 +179,7 @@ struct MessageWire {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl NetworkProvider for JsLibp2pProvider {
+impl NetworkProvider for WorkerBridge {
     fn identity(&self) -> PeerId {
         self.self_peer_id.clone()
     }
@@ -216,13 +215,13 @@ mod tests {
 
     #[test]
     fn provider_returns_supplied_identity() {
-        let p = JsLibp2pProvider::new_for_tests(PeerId("12D3KooWtest".into()));
+        let p = WorkerBridge::new_for_tests(PeerId("12D3KooWtest".into()));
         assert_eq!(p.identity().0, "12D3KooWtest");
     }
 
     #[test]
     fn placeholder_methods_dont_panic() {
-        let mut p = JsLibp2pProvider::new_for_tests(PeerId("12D3KooWtest".into()));
+        let mut p = WorkerBridge::new_for_tests(PeerId("12D3KooWtest".into()));
         let topic = Topic("roam-positions/v1".into());
         assert!(p.publish(&topic, &[1, 2, 3]).is_ok());
         assert!(p.subscribe(&topic).is_ok());
@@ -232,7 +231,7 @@ mod tests {
 
     #[test]
     fn provider_is_object_safe_through_box() {
-        let p: Box<dyn NetworkProvider> = Box::new(JsLibp2pProvider::new_for_tests(PeerId(
+        let p: Box<dyn NetworkProvider> = Box::new(WorkerBridge::new_for_tests(PeerId(
             "12D3KooWtest".into(),
         )));
         assert_eq!(p.identity().0, "12D3KooWtest");

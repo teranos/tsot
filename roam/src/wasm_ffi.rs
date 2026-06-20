@@ -347,7 +347,7 @@ mod wasm_exports {
         unsubscribe: js_sys::Function,
         drain_events: js_sys::Function,
     ) -> Result<(), JsValue> {
-        let provider = crate::net::js_libp2p::JsLibp2pProvider::new(
+        let provider = crate::net::worker_bridge::WorkerBridge::new(
             self_peer_id_fn,
             publish,
             subscribe,
