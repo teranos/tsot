@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::net::{NetError, NetEvent, NetworkProvider, PeerId, Topic};
+use crate::net::{Author, NetError, NetEvent, NetworkProvider, PeerId, Topic};
 
 /// Topic where roam broadcasts player positions. Same string used by
 /// every node — gossipsub treats this as a flat namespace.
@@ -27,7 +27,10 @@ pub const POSITIONS_TOPIC: &str = "roam-positions/v1";
 /// rendering ghosts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RemotePeer {
-    pub peer_id: PeerId,
+    /// The author of the position messages we've been tracking.
+    /// Typed `Author` (not bare `PeerId`) so the table is structurally
+    /// keyable only by signed authorship — never by a forwarder hop.
+    pub peer_id: Author,
     pub x: f32,
     pub y: f32,
     pub facing: u8,
@@ -45,7 +48,7 @@ pub const PEER_TIMEOUT_MS: u64 = 2000;
 /// construction-time choice, not an application-code change.
 pub struct Net {
     provider: Box<dyn NetworkProvider>,
-    peers: BTreeMap<PeerId, RemotePeer>,
+    peers: BTreeMap<Author, RemotePeer>,
     /// Monotonic counter that bumps whenever the peer table changes
     /// — insert, remove, or position update. The render bridge reads
     /// this to feed the dirty-flag fingerprint so peers moving on
@@ -98,7 +101,7 @@ impl Net {
                         tag: "net::recv",
                         msg: format!(
                             "topic={} from={} bytes={} at_ms={}",
-                            topic.0, from.0, bytes.len(), at_ms
+                            topic.0, from.0.0, bytes.len(), at_ms
                         ),
                     });
                     if topic.0 != POSITIONS_TOPIC {
@@ -136,9 +139,13 @@ impl Net {
                         tag: "net::peer_down",
                         msg: format!("peer={} reason={}", peer.0, reason),
                     });
-                    if self.peers.remove(&peer).is_some() {
-                        self.peer_state_seq = self.peer_state_seq.wrapping_add(1);
-                    }
+                    // PeerDown.peer is the immediate connection peer
+                    // (a `Forwarder` semantically — in star topology
+                    // always the relay), NOT the author. The peer
+                    // table is `Author`-keyed; F2's whole point is
+                    // that these are different identities and cannot
+                    // be conflated. Stale authors get evicted by the
+                    // PEER_TIMEOUT_MS pruner below, not here.
                 }
                 NetEvent::PeerUp { peer, addrs } => {
                     crate::trace::emit(crate::trace::TraceEvent::Note {

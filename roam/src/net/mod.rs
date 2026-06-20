@@ -151,6 +151,27 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PeerId(pub String);
 
+/// The peer that *authored* a received gossipsub message — the
+/// cryptographically-signed `source` field. Newtype, not alias: the
+/// compiler refuses to coerce an `Author` from a `Forwarder` (or a
+/// bare `PeerId`), so the F2 class of bug — using the immediate
+/// neighbour-who-handed-it-to-us as the player identity — is
+/// physically unwritable. `serde(transparent)` keeps wire identical
+/// to a `PeerId` so this doesn't break any peer that's still on the
+/// pre-newtype wire.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Author(pub PeerId);
+
+/// The peer that *forwarded* the message to us — gossipsub's
+/// `propagation_source`. In roam's star topology that's always the
+/// relay past the first hop. Kept as a distinct type so it cannot be
+/// substituted for an `Author` at any call site; the only legitimate
+/// use is logging the immediate hop.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Forwarder(pub PeerId);
+
 /// A pubsub topic name. Newtype for the same reason as `PeerId`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Topic(pub String);
@@ -176,12 +197,43 @@ pub enum NetEvent {
     PeerDown { peer: PeerId, reason: String },
     Message {
         topic: Topic,
-        from: PeerId,
+        from: Author,
         bytes: Vec<u8>,
         at_ms: u64,
     },
     SubscriptionChange { topic: Topic, peer: PeerId, joined: bool },
     Error(NetError),
+}
+
+/// F2 boundary, isolated as a pure function so the invariant has a
+/// falsifiable test. The wasm-only `handle_swarm_event` call site
+/// extracts the two PeerId strings from the libp2p `SwarmEvent` and
+/// hands them here; this function is the single place where the
+/// "which one is the author" decision is made.
+///
+/// The invariant: `signed_source_id` (gossipsub's `message.source`,
+/// the cryptographically-signed author) wins. `propagation_source_id`
+/// is the immediate forwarder hop — in a star topology that's the
+/// relay, which is what F2 was silently keying every remote-peer
+/// entry to. The fallback to `propagation_source_id` exists only for
+/// the unsigned-config path the current build never produces.
+///
+/// Pure, native-runnable, no libp2p types in the signature so the
+/// 3-author test in `mod tests` below exercises this exact decision.
+pub fn build_authored_message(
+    propagation_source_id: String,
+    signed_source_id: Option<String>,
+    topic: String,
+    bytes: Vec<u8>,
+    at_ms: u64,
+) -> NetEvent {
+    let author_id = signed_source_id.unwrap_or(propagation_source_id);
+    NetEvent::Message {
+        topic: Topic(topic),
+        from: Author(PeerId(author_id)),
+        bytes,
+        at_ms,
+    }
 }
 
 /// What flows on a pubsub topic. Both sides serialize/deserialize
@@ -215,6 +267,7 @@ pub trait NetworkProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::state::POSITIONS_TOPIC;
     use serde::{Deserialize, Serialize};
 
     fn round_trip<T>(value: T)
@@ -270,7 +323,7 @@ mod tests {
         });
         round_trip(NetEvent::Message {
             topic: Topic("t".into()),
-            from: PeerId("p".into()),
+            from: Author(PeerId("p".into())),
             bytes: vec![1, 2, 3],
             at_ms: 1_700_000_000_000,
         });
@@ -300,5 +353,90 @@ mod tests {
         // application-level holding shape, so the trait must remain
         // object-safe across future revisions.
         fn _accepts(_p: Box<dyn NetworkProvider>) {}
+    }
+
+    /// F2 invariant — the test that would have caught the bug that
+    /// lived 3 days in production. In a star topology every browser
+    /// connects only to the relay, so every received message's
+    /// `propagation_source` is the relay. Three different authors
+    /// (A, B, C) sending positions through the relay must produce
+    /// **three distinct** `Author` values. Collapse to one (the
+    /// relay's PeerId) was the bug.
+    ///
+    /// This test fails on the reverted fix (`build_authored_message`
+    /// ignoring `signed_source_id` and using `propagation_source_id`).
+    /// Verified by mutation: swap the function body to
+    /// `let author_id = propagation_source_id;` — all three asserts
+    /// below trip.
+    #[test]
+    fn three_authors_through_one_relay_are_distinct() {
+        let relay = "12D3KooWRelay".to_string();
+        let a = "12D3KooWAuthorA".to_string();
+        let b = "12D3KooWAuthorB".to_string();
+        let c = "12D3KooWAuthorC".to_string();
+
+        let ev_a = build_authored_message(
+            relay.clone(),
+            Some(a.clone()),
+            POSITIONS_TOPIC.to_string(),
+            vec![1],
+            1_000,
+        );
+        let ev_b = build_authored_message(
+            relay.clone(),
+            Some(b.clone()),
+            POSITIONS_TOPIC.to_string(),
+            vec![2],
+            2_000,
+        );
+        let ev_c = build_authored_message(
+            relay.clone(),
+            Some(c.clone()),
+            POSITIONS_TOPIC.to_string(),
+            vec![3],
+            3_000,
+        );
+
+        let from = |ev: &NetEvent| match ev {
+            NetEvent::Message { from, .. } => from.0 .0.clone(),
+            _ => panic!("expected NetEvent::Message"),
+        };
+        let fa = from(&ev_a);
+        let fb = from(&ev_b);
+        let fc = from(&ev_c);
+
+        // Distinct — the invariant.
+        assert_ne!(fa, fb);
+        assert_ne!(fb, fc);
+        assert_ne!(fa, fc);
+
+        // None collapses to the relay — the specific F2 mode.
+        assert_ne!(fa, relay, "A must not be attributed to the relay");
+        assert_ne!(fb, relay, "B must not be attributed to the relay");
+        assert_ne!(fc, relay, "C must not be attributed to the relay");
+
+        // And each is its actual signed author.
+        assert_eq!(fa, a);
+        assert_eq!(fb, b);
+        assert_eq!(fc, c);
+    }
+
+    /// Unsigned message → fall back to propagation. Current gossipsub
+    /// config (Signed-Strict) never produces unsigned, but the
+    /// fallback shape is explicit and named — no silent swap.
+    #[test]
+    fn unsigned_message_falls_back_to_propagation() {
+        let relay = "12D3KooWRelay".to_string();
+        let ev = build_authored_message(
+            relay.clone(),
+            None,
+            POSITIONS_TOPIC.to_string(),
+            vec![1],
+            1_000,
+        );
+        match ev {
+            NetEvent::Message { from, .. } => assert_eq!(from.0 .0, relay),
+            _ => panic!("expected NetEvent::Message"),
+        }
     }
 }

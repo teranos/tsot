@@ -151,7 +151,12 @@ impl NetworkProvider for JsLibp2pProvider {
                 .into_iter()
                 .map(|m| NetEvent::Message {
                     topic: Topic(m.topic),
-                    from: PeerId(m.from),
+                    // net-shim.js sends the signed gossipsub `from`
+                    // (the message author), not propagation_source.
+                    // Wrap as Author at the boundary so the type
+                    // forbids ever substituting a forwarder peer-id
+                    // at any downstream call site.
+                    from: crate::net::Author(PeerId(m.from)),
                     bytes: m.bytes,
                     at_ms: m.at_ms,
                 })
