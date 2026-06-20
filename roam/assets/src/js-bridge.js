@@ -1360,9 +1360,15 @@ moduleP.then((wasm) => {
     // wasm + persist on first visit. The bytes get passed to the
     // worker so its PeerId stays stable across sessions — same key
     // serves the libp2p identity AND the future v0.4 collection-
-    // owner identity. Failure path: log the error sacredly and fall
-    // back to letting the worker generate fresh; this means the
-    // PeerId is ephemeral that session, but the bridge keeps moving.
+    // owner identity.
+    //
+    // Failure path is HARD-FAIL per "errors are sacred". IDB-locked,
+    // private-browsing quota, schema corruption, or the wasm mint
+    // export missing all land here — the previous fallback was a
+    // silent ephemeral mint, which made a failure look identical to
+    // the working path until someone noticed the PeerId rotating on
+    // every reload. We refuse to bring the network up at all and let
+    // the user see the red dot + the log line; reload retries.
     loadOrMintIdentity()
       .then((identityBytes) => {
         netWorker.postMessage({
@@ -1372,12 +1378,8 @@ moduleP.then((wasm) => {
         });
       })
       .catch((err) => {
-        logError('identity load/mint', err);
-        netWorker.postMessage({
-          cmd: 'init',
-          bootstrap_json: JSON.stringify(bootstrapList),
-          identity_bytes: new Uint8Array(0),
-        });
+        logError('identity load/mint — network NOT started', err);
+        setNetState('error');
       });
 
     // JsLibp2pProvider callbacks routed through the worker.
