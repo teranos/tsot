@@ -45,7 +45,7 @@ enforce it.
 - **M1.** Adopt `did:key` as the project's primary identifier. PeerId becomes the underlying libp2p detail; user-facing surfaces show DID.
 - **M2.** ATProto PDS bridge: a player's ATProto handle can claim their roam identity. Defines a verification flow.
 - **M3.** WebAuthn-wraps-Ed25519: hardware-backed key, never exits the secure enclave. Loses portability for some browsers; gains theft resistance.
-- **M4.** Define the structural meaning of "identified" for `CANONICAL.md`. Concrete runtime criterion. Without this, the canonical/non-canonical split has no implementation path.
+- ~~**M4.** Define the structural meaning of "identified" for `CANONICAL.md`. Concrete runtime criterion. Without this, the canonical/non-canonical split has no implementation path.~~ ✓ `roam::identity::is_identified_self` / `is_identified_peer` (`identity` branch).
 - **M5.** Gossipsub signature verification at the relayer. Relayer rejects wire messages whose claimed source doesn't match the signing key.
 - **M6.** Canonical / non-canonical world-state routing. The actual fork mechanism world transformations route through.
 - **M7.** Promotion flow: non-canonical → canonical with the sandbox-reset axiom enforced.

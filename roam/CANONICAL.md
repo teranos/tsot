@@ -56,8 +56,7 @@ threshold is one-way.
        A4 — read Bluesky/ATProto PDS docs; find where the user's signing key lives.
        A7 — list 5 names per ecosystem who actually ship against each candidate below.
        C1 — once a path is picked, rewrite this "Open" section and remove the candidate list.
-       M2 — ATProto PDS bridge so a player's handle can claim the roam identity.
-       M4 — define the structural meaning of "identified" — concrete runtime criterion. -->
+       M2 — ATProto PDS bridge so a player's handle can claim the roam identity. -->
 
 ## Open
 
