@@ -124,7 +124,15 @@ const realHandler = async (msg) => {
       case 'init': {
         self.postMessage({ kind: 'lifecycle', stage: 'init-msg-received' });
         self.postMessage({ kind: 'lifecycle', stage: 'provider-init-start' });
-        identity = roam.roam_net_worker_provider_init(msg.bootstrap_json);
+        // identity_bytes is a Uint8Array (or empty array if the bridge
+        // had nothing in IndexedDB). Pass through to wasm; empty means
+        // "generate fresh" — the bridge persists the resulting PeerId
+        // by minting via roam_net_generate_identity_bytes first, so
+        // the empty path here is only hit in fault flows.
+        const identityBytes = msg.identity_bytes instanceof Uint8Array
+          ? msg.identity_bytes
+          : new Uint8Array(msg.identity_bytes || []);
+        identity = roam.roam_net_worker_provider_init(msg.bootstrap_json, identityBytes);
         self.postMessage({ kind: 'lifecycle', stage: 'provider-init-done' });
         initialized = true;
         self.postMessage({ kind: 'ready', identity });

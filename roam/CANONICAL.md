@@ -23,6 +23,10 @@ whatever they want — none of it touches the canonical world or any
 other player. They may not even realize they've been demoted. No bans,
 no moderation queue, no enforcement loop required at this layer.
 
+<!-- IDENTITY MENU:
+       M6 — implement canonical vs non-canonical world-state routing (the actual fork).
+       M7 — implement the promotion flow with the reset axiom enforced. -->
+
 ## Transition: non-canonical → canonical
 
 Promotion to canonical **resets** the player's personal world. The
@@ -42,6 +46,14 @@ threshold is one-way.
 - The canonical world's history is shaped only by identified players,
   giving moderation and identity layers direct authority over what
   Teranos becomes.
+
+<!-- IDENTITY MENU (see roam/IDENTITY.md):
+       A1 — read this file cold, write 3 questions it leaves unanswered.
+       A4 — read Bluesky/ATProto PDS docs; find where the user's signing key lives.
+       A7 — list 5 names per ecosystem who actually ship against each candidate below.
+       C1 — once a path is picked, rewrite this "Open" section and remove the candidate list.
+       M2 — ATProto PDS bridge so a player's handle can claim the roam identity.
+       M4 — define the structural meaning of "identified" — concrete runtime criterion. -->
 
 ## Open
 

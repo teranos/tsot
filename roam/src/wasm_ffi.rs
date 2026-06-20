@@ -400,8 +400,15 @@ mod wasm_exports {
                         "roam_net_init_rust_libp2p: bootstrap_json parse failed: {e}"
                     ))
                 })?;
-            let provider = crate::net::rust_libp2p::RustLibp2pProvider::new(bootstrap_addrs)
-                .map_err(|e| JsValue::from_str(&format!("RustLibp2pProvider::new: {e:?}")))?;
+            // Main-thread provider construction. The worker path
+            // gets identity bytes from IndexedDB via the bridge; this
+            // main-thread path is currently only used by the wasm-
+            // bindgen test harness, so `None` is fine — it generates
+            // a fresh keypair. Wire identity-bytes through here too
+            // when the main-thread path becomes user-facing.
+            let provider =
+                crate::net::rust_libp2p::RustLibp2pProvider::new(bootstrap_addrs, None)
+                    .map_err(|e| JsValue::from_str(&format!("RustLibp2pProvider::new: {e:?}")))?;
             let mut net = crate::net::state::Net::new(Box::new(provider));
             if let Err(err) = net.subscribe_positions() {
                 crate::error::emit(
@@ -458,24 +465,68 @@ mod wasm_exports {
     /// bridge captures the returned identity once on worker `ready`
     /// and exposes it through the `selfPeerId` callback to its
     /// `JsLibp2pProvider`.
+    ///
+    /// `identity_bytes` is the libp2p-canonical protobuf-encoded
+    /// keypair the bridge loaded from IndexedDB. An empty slice
+    /// means "no stored identity"; the worker generates a fresh
+    /// keypair, but the bridge is expected to mint identity via
+    /// `roam_net_generate_identity_bytes` first and pass those bytes
+    /// here, so this path should only fire during a fault. PeerId
+    /// derives from the keypair's public bits; passing the same
+    /// bytes across sessions makes PeerId stable.
     #[wasm_bindgen]
-    pub fn roam_net_worker_provider_init(bootstrap_json: String) -> Result<String, JsValue> {
+    pub fn roam_net_worker_provider_init(
+        bootstrap_json: String,
+        identity_bytes: Vec<u8>,
+    ) -> Result<String, JsValue> {
         #[cfg(feature = "rust-libp2p")]
         {
             use crate::net::NetworkProvider;
             let bootstrap_addrs: Vec<String> = serde_json::from_str(&bootstrap_json)
                 .map_err(|e| JsValue::from_str(&format!("bootstrap_json parse: {e}")))?;
-            let provider = crate::net::rust_libp2p::RustLibp2pProvider::new(bootstrap_addrs)
-                .map_err(|e| JsValue::from_str(&format!("provider::new: {e:?}")))?;
+            let identity_opt = if identity_bytes.is_empty() {
+                None
+            } else {
+                Some(identity_bytes.as_slice())
+            };
+            let provider = crate::net::rust_libp2p::RustLibp2pProvider::new(
+                bootstrap_addrs,
+                identity_opt,
+            )
+            .map_err(|e| JsValue::from_str(&format!("provider::new: {e:?}")))?;
             let identity = provider.identity().0;
             WORKER_PROVIDER.with(|p| *p.borrow_mut() = Some(provider));
             Ok(identity)
         }
         #[cfg(not(feature = "rust-libp2p"))]
         {
-            let _ = bootstrap_json;
+            let _ = (bootstrap_json, identity_bytes);
             Err(JsValue::from_str(
                 "roam_net_worker_provider_init: rust-libp2p feature not enabled",
+            ))
+        }
+    }
+
+    // IDENTITY MENU (roam/IDENTITY.md):
+    //   A5 — read UCAN v1.0 spec abstract + invocation envelope shape.
+    //   M8 — UCAN-based capability delegation, cross-device control without key transfer.
+    /// Mint a fresh Ed25519 keypair and return its libp2p-canonical
+    /// protobuf encoding. The bridge calls this once on first visit
+    /// (when IndexedDB has no `roam/identity/v1` entry), persists
+    /// the returned bytes, and passes them to every subsequent
+    /// `roam_net_worker_provider_init` so PeerId is stable across
+    /// sessions and devices that import the same key.
+    #[wasm_bindgen]
+    pub fn roam_net_generate_identity_bytes() -> Result<Vec<u8>, JsValue> {
+        #[cfg(feature = "rust-libp2p")]
+        {
+            crate::net::rust_libp2p::generate_identity_protobuf()
+                .map_err(|e| JsValue::from_str(&format!("identity gen: {e:?}")))
+        }
+        #[cfg(not(feature = "rust-libp2p"))]
+        {
+            Err(JsValue::from_str(
+                "roam_net_generate_identity_bytes: rust-libp2p feature not enabled",
             ))
         }
     }
