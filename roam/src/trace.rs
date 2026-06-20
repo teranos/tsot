@@ -100,6 +100,9 @@ thread_local! {
     static BUS: RefCell<VecDeque<(u64, TraceEvent)>> = const { RefCell::new(VecDeque::new()) };
 }
 
+// IDENTITY MENU (roam/IDENTITY.md):
+//   C5 — emit identity events (mint, load, export, import, rotate, sign, verify)
+//        with dedicated tags so the event log can render them in a distinct color.
 pub fn emit(ev: TraceEvent) {
     let seq = SEQ.fetch_add(1, Ordering::SeqCst);
     BUS.with(|b| {

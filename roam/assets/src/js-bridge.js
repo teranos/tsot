@@ -44,6 +44,7 @@ import initWasm, {
   roam_net_tick,
   roam_net_peer_count,
   roam_net_peer_state_seq,
+  roam_net_generate_identity_bytes,
 } from '/roam.js';
 import * as netShim from './net-shim.js';
 
@@ -315,6 +316,74 @@ function devTap(cls, line) {
       keepalive: true,
     }).catch(() => {});
   } catch {}
+}
+
+// IDENTITY MENU (roam/IDENTITY.md):
+//   A6 — open one browser-based DID wallet UX; note what "verification" looks like.
+//   S1 — surface did:key:z6Mk… in the SELF panel alongside PeerId.
+//   S2 — "rotate identity" action: clean IndexedDB → mint fresh; confirmation gate.
+//   S3 — export keypair: download protobuf-encoded bytes as a text blob.
+//   S4 — import keypair: validate, replace IndexedDB entry, restart worker.
+//   S5 — sketch a second-device pairing flow (QR encoding of the bytes).
+//   M3 — WebAuthn-wraps-Ed25519 so the key never exits the secure enclave.
+//   D1 — show "you are: <short-DID>" in the world HUD next to peer count.
+//   D3 — sparkline of signed-message rate in LIBP2P CONNECTIONS.
+//   D6 — polish rotate-identity confirmation modal copy.
+//   D7 — visible confirmation when import succeeds (peerId line lights up briefly).
+
+// Persistent libp2p identity. Key lives in IndexedDB so the PeerId
+// stays stable across page reloads and browser restarts — without
+// this, every tab regenerates a fresh Ed25519 keypair on every load
+// and the "same player" looks like a different peer every refresh.
+// Schema: `roam` database, `identity` object store, key `v1` holds
+// the libp2p-canonical protobuf-encoded keypair as Uint8Array. The
+// v1 suffix is intentional — if the wire format ever rotates, write
+// `v2` and let `v1` exist for migration.
+const IDENTITY_DB_NAME = 'roam';
+const IDENTITY_STORE_NAME = 'identity';
+const IDENTITY_KEY = 'v1';
+
+async function loadOrMintIdentity() {
+  const db = await new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDENTITY_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const upgrading = req.result;
+      if (!upgrading.objectStoreNames.contains(IDENTITY_STORE_NAME)) {
+        upgrading.createObjectStore(IDENTITY_STORE_NAME);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  try {
+    const existing = await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDENTITY_STORE_NAME, 'readonly');
+      const store = tx.objectStore(IDENTITY_STORE_NAME);
+      const req = store.get(IDENTITY_KEY);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    if (existing instanceof Uint8Array && existing.length > 0) {
+      logEvent('info', `identity: loaded from IndexedDB (${existing.length} bytes)`);
+      return existing;
+    }
+    // First visit (or v1 entry missing / corrupted). Mint via wasm.
+    const minted = roam_net_generate_identity_bytes();
+    if (!(minted instanceof Uint8Array) || minted.length === 0) {
+      throw new Error('roam_net_generate_identity_bytes returned empty');
+    }
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDENTITY_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(IDENTITY_STORE_NAME);
+      const req = store.put(minted, IDENTITY_KEY);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+    logEvent('info', `identity: minted + stored to IndexedDB (${minted.length} bytes)`);
+    return minted;
+  } finally {
+    db.close();
+  }
 }
 
 function logEvent(cls, line, fingerprint) {
@@ -1286,7 +1355,30 @@ moduleP.then((wasm) => {
     });
     netWorker.addEventListener('error', (e) => logError('net-worker onerror', e.error || e.message));
 
-    netWorker.postMessage({ cmd: 'init', bootstrap_json: JSON.stringify(bootstrapList) });
+    // Persistent identity: pull the libp2p-canonical protobuf-encoded
+    // Ed25519 keypair from IndexedDB (`roam/identity/v1`), mint via
+    // wasm + persist on first visit. The bytes get passed to the
+    // worker so its PeerId stays stable across sessions — same key
+    // serves the libp2p identity AND the future v0.4 collection-
+    // owner identity. Failure path: log the error sacredly and fall
+    // back to letting the worker generate fresh; this means the
+    // PeerId is ephemeral that session, but the bridge keeps moving.
+    loadOrMintIdentity()
+      .then((identityBytes) => {
+        netWorker.postMessage({
+          cmd: 'init',
+          bootstrap_json: JSON.stringify(bootstrapList),
+          identity_bytes: identityBytes,
+        });
+      })
+      .catch((err) => {
+        logError('identity load/mint', err);
+        netWorker.postMessage({
+          cmd: 'init',
+          bootstrap_json: JSON.stringify(bootstrapList),
+          identity_bytes: new Uint8Array(0),
+        });
+      });
 
     // JsLibp2pProvider callbacks routed through the worker.
     const selfPeerIdFn = () => workerIdentity;

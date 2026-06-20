@@ -34,7 +34,9 @@
 //! - No UCAN / DID / capability verification (v0.4+)
 //! - No multi-region / federation (later)
 
-use std::time::Duration;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use libp2p::{
@@ -69,10 +71,66 @@ const GOSSIPSUB_HEARTBEAT: Duration = Duration::from_secs(1);
 /// always agree because the same value is referenced.
 const CLOUDWATCH_PUBLISH_INTERVAL: Duration = metrics::INTERVAL_DEFAULT;
 
+/// How many minute-cadence samples the status page's sparklines
+/// retain. 60 × 60s = 1h of in-process history, byte-cheap to keep
+/// and renders in a single SVG polyline per metric.
+const STATS_HISTORY_LEN: usize = 60;
+
+/// In-process operational state the status page reads from. Lives
+/// behind a `std::sync::Mutex` — critical sections are micro-second
+/// scale (push a sample, read counters); no blocking inside async
+/// contexts long enough to matter. CloudWatch keeps the
+/// authoritative long-history; this is the in-process fast-path
+/// snapshot served to every visitor without an AWS round-trip.
+struct RelayerStats {
+    start: Instant,
+    peer_count: u64,
+    conn_count: u64,
+    total_conns_accepted: u64,
+    total_msgs_relayed: u64,
+    peer_history: VecDeque<u64>,
+    msg_rate_history: VecDeque<f64>,
+}
+
+impl RelayerStats {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            peer_count: 0,
+            conn_count: 0,
+            total_conns_accepted: 0,
+            total_msgs_relayed: 0,
+            peer_history: VecDeque::with_capacity(STATS_HISTORY_LEN),
+            msg_rate_history: VecDeque::with_capacity(STATS_HISTORY_LEN),
+        }
+    }
+
+    fn push_sample(&mut self, peers: u64, msg_rate: f64) {
+        self.peer_count = peers;
+        if self.peer_history.len() >= STATS_HISTORY_LEN {
+            self.peer_history.pop_front();
+        }
+        self.peer_history.push_back(peers);
+        if self.msg_rate_history.len() >= STATS_HISTORY_LEN {
+            self.msg_rate_history.pop_front();
+        }
+        self.msg_rate_history.push_back(msg_rate);
+    }
+
+    fn uptime(&self) -> Duration {
+        self.start.elapsed()
+    }
+}
+
 /// Composite behaviour. NetworkBehaviour derive synthesises the
 /// matching event enum. Mirrors the TS relay's `services` block
 /// in `relay.ts`.
 #[derive(libp2p::swarm::NetworkBehaviour)]
+// IDENTITY MENU (roam/IDENTITY.md):
+//   M5 — verify gossipsub message signatures here; reject when the claimed
+//        source PeerId doesn't match the signing key.
+//   D4 — when a status page lands, add a /identity route that exposes
+//        this relayer's own libp2p PeerId / did:key.
 struct RelayerBehaviour {
     gossipsub: gossipsub::Behaviour,
     identify: identify::Behaviour,
@@ -168,11 +226,29 @@ async fn main() -> Result<()> {
     )?;
     info!(topic = POSITIONS_TOPIC, "subscribed");
 
-    let listen_addr: Multiaddr = format!("/ip4/{listen_host}/tcp/{listen_port}/ws")
+    // libp2p binds to loopback on an internal port. The public
+    // `listen_port` is owned by a tiny TCP front (`status_proxy`
+    // below) that either tunnels WebSocket upgrades to libp2p or
+    // returns a status HTML for plain HTTP visitors. This is the
+    // parity replacement for `bun-ws-transport.ts:135-139`, which
+    // returned `426 Upgrade Required` to non-WS GETs; here we go
+    // one step further and surface a tiny info page.
+    let libp2p_loopback_port: u16 = 9002;
+    let libp2p_listen: Multiaddr = format!("/ip4/127.0.0.1/tcp/{libp2p_loopback_port}/ws")
         .parse()
-        .context("listen multiaddr")?;
-    swarm.listen_on(listen_addr.clone())?;
-    info!(addr = %listen_addr, "listening");
+        .context("libp2p loopback multiaddr")?;
+    swarm.listen_on(libp2p_listen.clone())?;
+    info!(addr = %libp2p_listen, "libp2p listening on loopback");
+
+    let stats = Arc::new(Mutex::new(RelayerStats::new()));
+
+    tokio::spawn(status_proxy(
+        listen_host.clone(),
+        listen_port,
+        libp2p_loopback_port,
+        local_peer_id.to_string(),
+        stats.clone(),
+    ));
 
     if let Some(announce) = announce {
         swarm.add_external_address(announce.clone());
@@ -194,28 +270,29 @@ async fn main() -> Result<()> {
         .map(|v| v != "0")
         .unwrap_or(true);
 
-    // Counters for the per-interval rate metric and for the
-    // peer/conn snapshots we publish to CloudWatch. Updated by
-    // `handle_event` on each SwarmEvent.
-    let mut pubsub_msg_count: u64 = 0;
-    let mut last_pubsub_msg_count: u64 = 0;
-    let mut conn_count: u64 = 0;
+    let mut last_total_msgs: u64 = 0;
     // CloudWatch error tracking — surface once on first failure,
-    // then every 60th failure (matches relay.ts:328 backoff).
+    // then every 60th failure (matches the deleted TS relay's backoff).
     let mut cw_consecutive_errors: u64 = 0;
 
     loop {
         tokio::select! {
             event = swarm.select_next_some() => {
-                handle_event(event, &mut pubsub_msg_count, &mut conn_count);
+                handle_event(event, &stats);
             }
             _ = cw_interval.tick(), if publish_metrics => {
                 let interval_secs = CLOUDWATCH_PUBLISH_INTERVAL.as_secs_f64();
-                let msgs_since_last = pubsub_msg_count - last_pubsub_msg_count;
-                last_pubsub_msg_count = pubsub_msg_count;
-                let rate = (msgs_since_last as f64) / interval_secs;
-                let (rss, vms) = metrics::read_proc_memory();
                 let peer_count = swarm.connected_peers().count() as u64;
+                let (rss, vms) = metrics::read_proc_memory();
+
+                let (rate, conn_count) = {
+                    let mut s = stats.lock().expect("stats mutex");
+                    let msgs_since_last = s.total_msgs_relayed - last_total_msgs;
+                    last_total_msgs = s.total_msgs_relayed;
+                    let rate = (msgs_since_last as f64) / interval_secs;
+                    s.push_sample(peer_count, rate);
+                    (rate, s.conn_count)
+                };
 
                 let snapshot = metrics::Snapshot {
                     peers: peer_count,
@@ -299,8 +376,7 @@ async fn load_identity(
 /// the per-interval counters the CloudWatch publisher reads.
 fn handle_event(
     event: SwarmEvent<RelayerBehaviourEvent>,
-    pubsub_msg_count: &mut u64,
-    conn_count: &mut u64,
+    stats: &Arc<Mutex<RelayerStats>>,
 ) {
     match event {
         SwarmEvent::NewListenAddr { address, .. } => {
@@ -309,14 +385,23 @@ fn handle_event(
         SwarmEvent::ConnectionEstablished {
             peer_id, endpoint, ..
         } => {
-            *conn_count = conn_count.saturating_add(1);
-            info!(peer = %peer_id, ?endpoint, conns = *conn_count, "connection:open");
+            let conns = {
+                let mut s = stats.lock().expect("stats mutex");
+                s.conn_count = s.conn_count.saturating_add(1);
+                s.total_conns_accepted = s.total_conns_accepted.saturating_add(1);
+                s.conn_count
+            };
+            info!(peer = %peer_id, ?endpoint, conns = conns, "connection:open");
         }
         SwarmEvent::ConnectionClosed {
             peer_id, cause, ..
         } => {
-            *conn_count = conn_count.saturating_sub(1);
-            info!(peer = %peer_id, cause = ?cause, conns = *conn_count, "connection:close");
+            let conns = {
+                let mut s = stats.lock().expect("stats mutex");
+                s.conn_count = s.conn_count.saturating_sub(1);
+                s.conn_count
+            };
+            info!(peer = %peer_id, cause = ?cause, conns = conns, "connection:close");
         }
         SwarmEvent::IncomingConnectionError { error, .. } => {
             warn!(error = ?error, "incoming connection error");
@@ -332,7 +417,8 @@ fn handle_event(
             // (`relay_pubsub_msgs_per_sec`) which is the load-
             // bearing observation; the per-message granularity is
             // not useful for the relayer's operational view.
-            *pubsub_msg_count = pubsub_msg_count.saturating_add(1);
+            let mut s = stats.lock().expect("stats mutex");
+            s.total_msgs_relayed = s.total_msgs_relayed.saturating_add(1);
         }
         SwarmEvent::Behaviour(RelayerBehaviourEvent::Gossipsub(
             gossipsub::Event::Subscribed { peer_id, topic },
@@ -354,3 +440,393 @@ fn handle_event(
 // call shape lives at the call site so the per-attempt error
 // path (consecutive-error backoff) stays adjacent to the loop
 // state it reads.
+
+/// TCP front on the public port. Each incoming connection gets one
+/// chance to look like a WebSocket upgrade (peek the first chunk,
+/// scan for `Upgrade: websocket`). If yes, splice bytes to the
+/// libp2p loopback listener (which speaks soketto's WS protocol);
+/// if no, write a 200 + status HTML + close. CloudFront's WSS path
+/// goes through the WS branch; a casual browser visitor to
+/// `https://relay.sbvh.nl/` gets the HTML.
+async fn status_proxy(
+    host: String,
+    public_port: u16,
+    libp2p_port: u16,
+    peer_id: String,
+    stats: Arc<Mutex<RelayerStats>>,
+) {
+    let bind_addr = format!("{host}:{public_port}");
+    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(error = %e, addr = %bind_addr, "status_proxy bind failed");
+            return;
+        }
+    };
+    info!(addr = %bind_addr, libp2p_port, "status proxy listening");
+    loop {
+        let (socket, _peer) = match listener.accept().await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "status_proxy accept error");
+                continue;
+            }
+        };
+        let peer_id = peer_id.clone();
+        let stats = stats.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_status_conn(socket, libp2p_port, &peer_id, &stats).await
+            {
+                tracing::debug!(error = %e, "status_proxy connection ended with error");
+            }
+        });
+    }
+}
+
+async fn handle_status_conn(
+    mut socket: tokio::net::TcpStream,
+    libp2p_port: u16,
+    peer_id: &str,
+    stats: &Arc<Mutex<RelayerStats>>,
+) -> std::io::Result<()> {
+    let mut peek_buf = vec![0u8; 8192];
+    let n = socket.peek(&mut peek_buf).await?;
+    if n == 0 {
+        return Ok(());
+    }
+    if looks_like_websocket_upgrade(&peek_buf[..n]) {
+        let mut upstream =
+            tokio::net::TcpStream::connect(("127.0.0.1", libp2p_port)).await?;
+        tokio::io::copy_bidirectional(&mut socket, &mut upstream).await?;
+    } else {
+        use tokio::io::AsyncWriteExt;
+        // Hold the lock only long enough to clone snapshot data; the
+        // HTML render itself runs lock-free.
+        let snapshot = {
+            let s = stats.lock().expect("stats mutex");
+            StatsSnapshot {
+                uptime: s.uptime(),
+                peer_count: s.peer_count,
+                conn_count: s.conn_count,
+                total_conns_accepted: s.total_conns_accepted,
+                total_msgs_relayed: s.total_msgs_relayed,
+                peer_history: s.peer_history.iter().copied().collect(),
+                msg_rate_history: s.msg_rate_history.iter().copied().collect(),
+            }
+        };
+        let body = build_status_html(peer_id, &snapshot);
+        let response = format_status_response(&body);
+        socket.write_all(&response).await?;
+        socket.shutdown().await?;
+    }
+    Ok(())
+}
+
+/// Cheap-to-clone snapshot used by `handle_status_conn`. The lock on
+/// `RelayerStats` is released the moment this is built; the SVG +
+/// HTML render runs against owned data.
+struct StatsSnapshot {
+    uptime: Duration,
+    peer_count: u64,
+    conn_count: u64,
+    total_conns_accepted: u64,
+    total_msgs_relayed: u64,
+    peer_history: Vec<u64>,
+    msg_rate_history: Vec<f64>,
+}
+
+/// Case-insensitive scan for `Upgrade: websocket` in the request
+/// preview. Browsers and CloudFront both send this exact header
+/// when initiating a WS handshake; absence = plain HTTP visitor.
+fn looks_like_websocket_upgrade(bytes: &[u8]) -> bool {
+    let needle = b"upgrade: websocket";
+    let lower: Vec<u8> = bytes.iter().map(|b| b.to_ascii_lowercase()).collect();
+    lower.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Build the public status HTML. Pure function — takes the peer-id
+/// and snapshot, returns markup. CloudFront fronts this; sparklines
+/// move at 60s cadence so a CloudFront default TTL of a few seconds
+/// is already fresh enough without an explicit Cache-Control.
+fn build_status_html(peer_id: &str, snap: &StatsSnapshot) -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let uptime = format_uptime(snap.uptime);
+    let peers_spark = render_sparkline_u64(&snap.peer_history);
+    let msgs_spark = render_sparkline_f64(&snap.msg_rate_history);
+    let msg_rate_now = snap
+        .msg_rate_history
+        .last()
+        .copied()
+        .unwrap_or(0.0);
+    format!(
+        "<!doctype html><html lang=en><head><meta charset=utf-8>\
+<title>roam relay</title>\
+<style>body{{font:14px/1.5 ui-monospace,Menlo,monospace;max-width:42em;\
+margin:3em auto;padding:0 1em;color:#ddd;background:#111}}\
+a{{color:#6cf}}code{{background:#222;padding:0 .3em}}\
+h1{{font-size:1.2em;margin:0 0 1em}}p{{margin:.5em 0}}\
+table{{border-collapse:collapse;margin:1em 0;width:100%}}\
+th,td{{padding:.3em .6em;border-bottom:1px solid #222;text-align:left}}\
+th{{color:#9ad;font-weight:normal;width:14em}}\
+.spark{{height:1.6em;vertical-align:middle}}\
+.spark path{{fill:none;stroke:#6cf;stroke-width:1.4}}\
+.spark .bg{{fill:#1a1a1a;stroke:none}}\
+.muted{{color:#888;font-size:.9em}}</style></head><body>\
+<h1>roam relay</h1>\
+<p>libp2p relayer for <a href=\"https://roam.sbvh.nl/\">roam.sbvh.nl</a>.</p>\
+<p>WebSocket: <code>wss://relay.sbvh.nl/</code></p>\
+<table>\
+<tr><th>PeerId</th><td><code>{peer_id}</code></td></tr>\
+<tr><th>Version</th><td>relayers {version}</td></tr>\
+<tr><th>Uptime</th><td>{uptime}</td></tr>\
+<tr><th>Connected peers</th><td>{peers_now} (open conns: {conns_now})</td></tr>\
+<tr><th>Peers (1h)</th><td>{peers_spark}</td></tr>\
+<tr><th>Pubsub msgs/s</th><td>{rate_now:.2}</td></tr>\
+<tr><th>Pubsub rate (1h)</th><td>{msgs_spark}</td></tr>\
+<tr><th>Connections accepted</th><td>{total_conns}</td></tr>\
+<tr><th>Messages relayed</th><td>{total_msgs}</td></tr>\
+</table>\
+<p class=muted>Sparklines cover the last hour at 60s cadence. \
+Authoritative history (with alarms) lives in CloudWatch namespace \
+<code>CWAgent</code>, dimension <code>InstanceName=roam-relay-eu-2</code>.</p>\
+<p>Source: <a href=\"https://github.com/teranos/tsot/tree/master/roam/relayers\">\
+github.com/teranos/tsot/roam/relayers</a></p>\
+</body></html>",
+        peer_id = peer_id,
+        version = version,
+        uptime = uptime,
+        peers_now = snap.peer_count,
+        conns_now = snap.conn_count,
+        peers_spark = peers_spark,
+        rate_now = msg_rate_now,
+        msgs_spark = msgs_spark,
+        total_conns = snap.total_conns_accepted,
+        total_msgs = snap.total_msgs_relayed,
+    )
+}
+
+/// Format a `Duration` as `2d 03h 14m` style. Days roll up; sub-
+/// minute is just "<1m" — a relayer that hasn't been up a minute
+/// isn't interesting to characterize precisely.
+fn format_uptime(d: Duration) -> String {
+    let total_secs = d.as_secs();
+    if total_secs < 60 {
+        return "<1m".into();
+    }
+    let days = total_secs / 86_400;
+    let hours = (total_secs % 86_400) / 3_600;
+    let mins = (total_secs % 3_600) / 60;
+    if days > 0 {
+        format!("{days}d {hours:02}h {mins:02}m")
+    } else if hours > 0 {
+        format!("{hours}h {mins:02}m")
+    } else {
+        format!("{mins}m")
+    }
+}
+
+/// SVG polyline sparkline over `u64` samples. Empty input renders an
+/// empty rect with a "no data" label so the page layout stays stable
+/// during the first 60s.
+fn render_sparkline_u64(samples: &[u64]) -> String {
+    let as_f64: Vec<f64> = samples.iter().map(|&v| v as f64).collect();
+    render_sparkline_f64(&as_f64)
+}
+
+fn render_sparkline_f64(samples: &[f64]) -> String {
+    let width = 240.0_f64;
+    let height = 24.0_f64;
+    if samples.is_empty() {
+        return format!(
+            "<svg class=spark viewBox=\"0 0 {w} {h}\" width=\"{w}\" \
+height=\"{h}\" preserveAspectRatio=\"none\">\
+<rect class=bg width=\"{w}\" height=\"{h}\"/>\
+<text x=\"{tx}\" y=\"{ty}\" fill=\"#666\" font-size=\"10\" \
+text-anchor=\"middle\">no data yet</text></svg>",
+            w = width,
+            h = height,
+            tx = width / 2.0,
+            ty = height / 2.0 + 3.0,
+        );
+    }
+    let min = samples.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let range = (max - min).max(1e-9);
+    // X step assumes the buffer fills the full width even when partially
+    // populated — this is "Cloudflare-style" right-anchored: 60 slots,
+    // unfilled slots at the left are blank, line starts where data starts.
+    let slots = STATS_HISTORY_LEN.max(samples.len()) as f64;
+    let step = width / (slots - 1.0).max(1.0);
+    let leading_blank = (slots as usize).saturating_sub(samples.len());
+    let mut d = String::new();
+    for (i, v) in samples.iter().enumerate() {
+        let x = (leading_blank + i) as f64 * step;
+        // Invert Y so larger samples sit higher; pad 2px top/bottom.
+        let y = if max <= min {
+            height / 2.0
+        } else {
+            2.0 + (height - 4.0) * (1.0 - (v - min) / range)
+        };
+        if i == 0 {
+            d.push_str(&format!("M{x:.1},{y:.1}"));
+        } else {
+            d.push_str(&format!(" L{x:.1},{y:.1}"));
+        }
+    }
+    format!(
+        "<svg class=spark viewBox=\"0 0 {w} {h}\" width=\"{w}\" \
+height=\"{h}\" preserveAspectRatio=\"none\">\
+<rect class=bg width=\"{w}\" height=\"{h}\"/>\
+<path d=\"{d}\"/></svg>",
+        w = width,
+        h = height,
+        d = d,
+    )
+}
+
+fn format_status_response(body: &str) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
+Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .into_bytes()
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+
+    /// A real Firefox WSS handshake request fragment. The proxy
+    /// must classify this as a WebSocket upgrade so libp2p sees
+    /// the bytes via the loopback splice.
+    #[test]
+    fn classifies_firefox_ws_upgrade() {
+        let req = b"GET / HTTP/1.1\r\nHost: relay.sbvh.nl\r\nUpgrade: websocket\r\n\
+Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: x\r\n\r\n";
+        assert!(looks_like_websocket_upgrade(req));
+    }
+
+    /// Header capitalization varies across clients (CloudFront
+    /// often lowercases). Must still classify as upgrade.
+    #[test]
+    fn classifies_lowercase_upgrade_header() {
+        let req = b"get / http/1.1\r\nhost: relay.sbvh.nl\r\nupgrade: websocket\r\n\r\n";
+        assert!(looks_like_websocket_upgrade(req));
+    }
+
+    /// Plain `curl https://relay.sbvh.nl/` — no Upgrade header.
+    /// Must NOT classify as upgrade (the visitor gets the status HTML).
+    #[test]
+    fn rejects_plain_http_get() {
+        let req = b"GET / HTTP/1.1\r\nHost: relay.sbvh.nl\r\nUser-Agent: curl/8\r\n\r\n";
+        assert!(!looks_like_websocket_upgrade(req));
+    }
+
+    fn fake_snapshot() -> StatsSnapshot {
+        StatsSnapshot {
+            uptime: Duration::from_secs(3725), // 1h 02m 05s
+            peer_count: 4,
+            conn_count: 5,
+            total_conns_accepted: 42,
+            total_msgs_relayed: 9001,
+            peer_history: vec![1, 2, 3, 4],
+            msg_rate_history: vec![0.5, 1.25, 2.0, 1.0],
+        }
+    }
+
+    /// Status HTML must contain the PeerId so a visitor can
+    /// verify which relayer they're looking at, plus the
+    /// SRE-style stats that motivate this view.
+    #[test]
+    fn status_html_embeds_peer_id_and_stats() {
+        let html = build_status_html("12D3KooWtestPeer", &fake_snapshot());
+        assert!(html.contains("12D3KooWtestPeer"));
+        assert!(html.contains("wss://relay.sbvh.nl/"));
+        assert!(html.contains("github.com/teranos/tsot"));
+        // Counters surface.
+        assert!(html.contains("42"), "total_conns_accepted in html");
+        assert!(html.contains("9001"), "total_msgs_relayed in html");
+        // Sparkline SVG markup is inline (no external resources).
+        assert!(html.contains("<svg class=spark"));
+        // Authoritative-store breadcrumb so operators know the page is
+        // a fast-path snapshot, not the source of truth.
+        assert!(html.contains("CWAgent"));
+    }
+
+    /// Empty history must render a placeholder sparkline so the
+    /// first-60s page state still lays out correctly.
+    #[test]
+    fn empty_history_renders_no_data_sparkline() {
+        let svg = render_sparkline_f64(&[]);
+        assert!(svg.contains("no data yet"));
+        assert!(svg.contains("<svg"));
+    }
+
+    /// Sparkline path command count matches sample count (one M, N-1 L's).
+    /// Locks the "Cloudflare-style right-anchored line" shape so a future
+    /// refactor doesn't silently drop samples.
+    #[test]
+    fn sparkline_path_has_one_move_and_rest_lines() {
+        let svg = render_sparkline_f64(&[1.0, 2.0, 3.0, 4.0]);
+        let move_count = svg.matches('M').count();
+        let line_count = svg.matches(" L").count();
+        assert_eq!(move_count, 1, "single M command");
+        assert_eq!(line_count, 3, "N-1 L commands for N samples");
+    }
+
+    /// All-equal samples must not produce NaN/inf paths. Edge case —
+    /// new relayer with peer_count flat at 0 was producing div-by-zero
+    /// before the `range.max(1e-9)` guard.
+    #[test]
+    fn flat_samples_render_without_nan() {
+        let svg = render_sparkline_f64(&[0.0, 0.0, 0.0]);
+        assert!(!svg.contains("NaN"));
+        assert!(!svg.contains("inf"));
+    }
+
+    #[test]
+    fn uptime_under_one_minute_is_terse() {
+        assert_eq!(format_uptime(Duration::from_secs(30)), "<1m");
+    }
+
+    #[test]
+    fn uptime_formats_minutes_hours_days() {
+        assert_eq!(format_uptime(Duration::from_secs(60 * 5)), "5m");
+        assert_eq!(format_uptime(Duration::from_secs(60 * 65)), "1h 05m");
+        assert_eq!(
+            format_uptime(Duration::from_secs(86_400 * 2 + 3_600 * 3 + 60 * 14)),
+            "2d 03h 14m"
+        );
+    }
+
+    /// Ring buffer push must evict oldest beyond the cap. Encodes
+    /// the "60 samples = 1h at 60s cadence" invariant the sparklines
+    /// implicitly assume.
+    #[test]
+    fn stats_history_evicts_at_cap() {
+        let mut s = RelayerStats::new();
+        for i in 0..(STATS_HISTORY_LEN + 10) {
+            s.push_sample(i as u64, i as f64);
+        }
+        assert_eq!(s.peer_history.len(), STATS_HISTORY_LEN);
+        assert_eq!(s.msg_rate_history.len(), STATS_HISTORY_LEN);
+        // Oldest 10 samples evicted; first remaining is index 10.
+        assert_eq!(*s.peer_history.front().expect("non-empty"), 10);
+    }
+
+    /// HTTP response framing must declare Content-Length matching
+    /// the body length and close the connection (no keep-alive
+    /// because the front is single-shot per connection).
+    #[test]
+    fn http_response_framing() {
+        let body = "x".repeat(123);
+        let resp = format_status_response(&body);
+        let resp_str = std::str::from_utf8(&resp).unwrap();
+        assert!(resp_str.starts_with("HTTP/1.1 200 OK"));
+        assert!(resp_str.contains("Content-Length: 123"));
+        assert!(resp_str.contains("Connection: close"));
+        assert!(resp_str.ends_with(&body));
+    }
+}

@@ -1,4 +1,4 @@
-//! CloudWatch metric publishing — parity with `roam/relay/relay.ts`
+//! CloudWatch metric publishing — parity with the deleted TS relay's set
 //! lines 264-334.
 //!
 //! Six metrics, every 60s, namespace `CWAgent`, dimension
@@ -10,8 +10,7 @@
 //! `mem_used_percent` denominator is the systemd `MemoryMax` cap
 //! (default 400 MiB), NOT the box's physical RAM. This is
 //! deliberate: the 80%-threshold alarm has to fire BEFORE
-//! systemd's OOM kill, not after. See `relay.ts:279-290` for the
-//! full rationale.
+//! systemd's OOM kill, not after.
 //!
 //! Failure mode: PutMetricData errors are surfaced once on the
 //! first failure and every 60th failure after that, so the
@@ -62,7 +61,7 @@ pub fn read_proc_memory() -> (u64, u64) {
     (rss_pages * page_size, vms_pages * page_size)
 }
 
-/// Build the 6 MetricDatum values matching `relay.ts:313-320`.
+/// Build the 6 MetricDatum values matching the deleted TS relay's set.
 /// Pure function — takes the snapshot, the instance dimension,
 /// and the cap; returns the data ready to send. Testable.
 pub fn build_metric_data(
@@ -134,12 +133,12 @@ mod tests {
                 "relay_connection_count",
                 "relay_pubsub_msgs_per_sec",
             ],
-            "metric name + order must match relay.ts:313-320 exactly"
+            "metric name + order must match the deleted TS relay's set exactly"
         );
     }
 
     /// Dimension shape must be `[{Name: 'InstanceName', Value: <instance>}]`,
-    /// matching `relay.ts:309`.
+    /// matching what the deleted TS relay published.
     #[test]
     fn dimension_shape_matches_ts_relay() {
         let snap = Snapshot {
@@ -163,10 +162,9 @@ mod tests {
         );
     }
 
-    /// `mem_used_percent` denominator must be the systemd cap,
-    /// not the box's RAM. This is the property `relay.ts:279-290`
-    /// explains in comments — encoded here as a test so the next
-    /// developer can't accidentally swap it.
+    /// `mem_used_percent` denominator must be the systemd cap, not the
+    /// box's RAM — encoded here as a test so the next developer can't
+    /// accidentally swap it.
     #[test]
     fn mem_used_percent_uses_cap_not_box_ram() {
         // 200 MiB RSS, 400 MiB cap → 50%

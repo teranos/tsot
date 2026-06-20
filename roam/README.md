@@ -1,5 +1,9 @@
 # roam
 
+<!-- IDENTITY MENU (roam/IDENTITY.md):
+       C4 — write a player-facing one-pager "what identity means here." UX, not spec.
+       D5 — one-paragraph CHANGELOG-style "the why" for the identity choice. -->
+
 See @CANONICAL.md for the canonical-world axiom (how world transformations are routed by identity).
 
 What i want:
@@ -11,6 +15,9 @@ What i want:
 - each voxel is 0.5M by 0.5M (M = meters; so half a meter on a side) in my imagination, so a door would be 2 voxels wide and 4 high — that's 1M by 2M — making 8 voxels in total.
 - You can chat, but it's proximate, so, think hybrid of habbo and eve online. you can also DM people you know directly. Social component of TSOT is crucial, could even say that it's going to be the main thing that will determine success of the game.
 -
+<!-- IDENTITY MENU (roam/IDENTITY.md):
+       A7 — list 5 names per ecosystem who ship against each of these.
+       C2 — once the path is picked, cut the names that didn't win. -->
 - WebAuthn, did,
 - ActivityPub,
 - ATProto,

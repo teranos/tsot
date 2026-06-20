@@ -58,81 +58,18 @@ Box IP is in `tofu output relay_origin_domain_in_use` (resolves via
 ```bash
 sudo apt update
 sudo apt install -y awscli
-
-# CloudWatch agent (Amazon's .deb, pinned URL):
-wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb
+wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/$(dpkg --print-architecture)/latest/amazon-cloudwatch-agent.deb
 sudo dpkg -i amazon-cloudwatch-agent.deb
 rm amazon-cloudwatch-agent.deb
 ```
 
-(`arm64` if `dpkg --print-architecture` says `arm64`; `amd64`
-otherwise.)
+### 5. Deploy the relay binary
 
-### 5. Write the relay's systemd unit
-
-`/etc/systemd/system/roam-relay.service`:
-
-```ini
-[Unit]
-Description=roam libp2p relay
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/roam
-ExecStart=/home/ubuntu/.bun/bin/bun run relay/relay.ts
-Restart=always
-RestartSec=5
-
-# Logging through journald → picked up by CloudWatch agent's syslog
-# tail (see /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json).
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=roam-relay
-
-# Memory ceiling. The wedge incident showed bun's RSS could grow
-# until the kernel OOM-killed everything; 400 MiB on a 512 MiB box
-# leaves headroom for the OS + the CloudWatch agent. systemd kills
-# the unit if exceeded; Restart=always brings it back.
-MemoryMax=400M
-
-# Production env. Listen on all interfaces (CloudFront origins via
-# origin-relay.sbvh.nl → public IP); announce the public wss
-# multiaddr; skip the dist/ write (CloudFront serves dist/ from S3).
-Environment=ROAM_RELAY_LISTEN_HOST=0.0.0.0
-Environment=ROAM_RELAY_LISTEN_PORT=9001
-Environment=ROAM_RELAY_ANNOUNCE=/dns4/relay.sbvh.nl/tcp/443/wss
-Environment=ROAM_RELAY_WRITE_DIST=0
-
-# Identity persistence (Secrets Manager). Stops box recreation from
-# changing the peer-id; without these env vars set, the relay falls
-# back to ./relay/.peer-key (local file) which is per-box.
-Environment=ROAM_RELAY_IDENTITY_SECRET=<paste tofu output relay_identity_secret_id>
-Environment=AWS_REGION=eu-central-1
-Environment=AWS_ACCESS_KEY_ID=<paste tofu output relay_access_key_id>
-Environment=AWS_SECRET_ACCESS_KEY=<paste tofu output relay_secret_access_key>
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now roam-relay
-journalctl -u roam-relay -f
-```
-
-The first journal lines should include:
-
-- `[relay] loaded identity from Secrets Manager (roam/relay/identity, N bytes)`
-  (on subsequent starts), OR
-- `[relay] secret unreadable as identity (...); generating new key and PUT-ing`
-  (on the very first start where the secret was just created by tofu
-  with no value yet).
+The relay is `roam/relayers/`, a Rust crate. Cross-compile from a
+dev machine; the box is too small to build cargo. See
+`roam/relay/relayers.md` for the deploy mechanics. Identity
+(`ROAM_RELAY_IDENTITY_SECRET`) and AWS env are wired through the
+existing `/etc/systemd/system/roam-relay.service` unit.
 
 ### 6. Wire CloudWatch agent to its SSM config
 
@@ -197,19 +134,16 @@ sudo systemctl restart amazon-cloudwatch-agent
 ## Memory alarm fired — what to do
 
 The alarm `roam-relay-memory-high` triggers at 80% memory for 5
-consecutive minutes. Pre-OOM diagnostic procedure:
+consecutive minutes.
 
-1. `aws cloudwatch get-metric-statistics --namespace CWAgent --metric-name mem_used_percent --dimensions Name=InstanceName,Value=roam-relay-eu-2 --start-time $(date -u -d '1 hour ago' -Iseconds) --end-time $(date -u -Iseconds) --period 60 --statistics Average`
-2. `aws logs tail /roam/relay/journal --since 1h | grep -E 'error|warn|FATAL'`
-3. SSH and run `procstat -p $(pgrep bun)` to see RSS growth pattern.
-4. If RSS is growing monotonically with no plateau, that's a leak in
-   the relay — restart buys time, but the upstream libp2p / gossipsub
-   versions need investigating. Capture a heap dump (`bun --heap-snapshot`)
-   before the restart.
+```
+aws cloudwatch get-metric-statistics --namespace CWAgent --metric-name mem_used_percent --dimensions Name=InstanceName,Value=roam-relay-eu-2 --start-time $(date -u -d '1 hour ago' -Iseconds) --end-time $(date -u -Iseconds) --period 60 --statistics Average
+aws logs tail /roam/relay/journal --since 1h
+```
 
 `systemctl restart roam-relay` is the immediate mitigation;
-`MemoryMax=400M` in the unit means the kernel will kill the process
-before the box wedges, and `Restart=always` brings it back.
+`MemoryMax=400M` in the unit means the kernel kills before the box
+wedges, and `Restart=always` brings it back.
 
 ---
 

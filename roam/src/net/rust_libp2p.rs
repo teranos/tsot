@@ -73,6 +73,47 @@ mod real {
     use std::rc::Rc;
     use std::time::Duration;
 
+    // IDENTITY MENU (roam/IDENTITY.md):
+    //   A2 — read W3C did:key spec; confirm Ed25519 → did:key:z6Mk…
+    //   A3 — PeerId and did:key derive from the same 32-byte pubkey, different encodings.
+    //   A8 — trace from this function to PeerId emission; draw the data flow.
+    //   S6 — wasm-bindgen-test asserting PeerId ↔ did:key round-trip on this keypair.
+    //   S8 — failing native test for this function (extract out of the wasm-only gate).
+    //   M1 — adopt did:key as the project's primary identifier; PeerId becomes detail.
+    //   C3 — move identity code into roam/src/identity/ as its own module.
+    //   C6 — audit every Keypair::generate_ed25519() call site, including the fall-through below.
+    /// Decode the libp2p-canonical protobuf-encoded keypair the JS
+    /// bridge loaded from IndexedDB. None → generate fresh (the
+    /// bridge will persist the bytes after this call returns so the
+    /// next session loads them back). Refusing to fall through to
+    /// "generate fresh" on a decode failure is deliberate: a corrupt
+    /// stored identity should surface as an error, not silently
+    /// rotate the PeerId behind the user's back.
+    fn load_or_generate_keypair(bytes: Option<&[u8]>) -> Result<identity::Keypair, NetError> {
+        match bytes {
+            Some(b) => identity::Keypair::from_protobuf_encoding(b).map_err(|e| {
+                NetError::ProviderInternal {
+                    reason: format!("identity decode: {e}"),
+                }
+            }),
+            None => Ok(identity::Keypair::generate_ed25519()),
+        }
+    }
+
+    /// Compose-up a fresh Ed25519 keypair and return its libp2p-
+    /// canonical protobuf encoding. The JS bridge calls this once on
+    /// first visit (when IndexedDB has no `roam/identity/v1` entry),
+    /// stores the returned bytes, and passes them to every subsequent
+    /// `roam_net_worker_provider_init` call so PeerId is stable
+    /// across sessions.
+    pub fn generate_identity_protobuf() -> Result<Vec<u8>, NetError> {
+        identity::Keypair::generate_ed25519()
+            .to_protobuf_encoding()
+            .map_err(|e| NetError::ProviderInternal {
+                reason: format!("identity encode: {e}"),
+            })
+    }
+
     /// Composite behaviour. The `NetworkBehaviour` derive synthesises
     /// `RoamBehaviourEvent` (one variant per sub-behaviour) which is
     /// what the swarm event loop matches against.
@@ -103,15 +144,20 @@ mod real {
     }
 
     impl RustLibp2pProvider {
-        /// Construct a real provider. Generates a fresh ed25519 identity
-        /// each session (persistent identity is a future concern).
+        /// Construct a real provider. `identity_bytes` is the
+        /// libp2p-canonical protobuf-encoded keypair the JS bridge
+        /// loaded from IndexedDB; pass `None` to generate fresh (the
+        /// bridge does this on first visit then persists the bytes).
         /// `bootstrap_addrs` are dialed by the driver task immediately
         /// after the Swarm starts; failures are surfaced as
         /// `NetEvent::Error` and don't block construction.
         /// Spawns the Swarm driver via `wasm_bindgen_futures::spawn_local`;
         /// the task runs until `cmd_tx` is dropped (provider drop).
-        pub fn new(bootstrap_addrs: Vec<String>) -> Result<Self, NetError> {
-            let keypair = identity::Keypair::generate_ed25519();
+        pub fn new(
+            bootstrap_addrs: Vec<String>,
+            identity_bytes: Option<&[u8]>,
+        ) -> Result<Self, NetError> {
+            let keypair = load_or_generate_keypair(identity_bytes)?;
             let peer_id = libp2p::PeerId::from(keypair.public());
             let self_peer_id = PeerId(peer_id.to_string());
 
@@ -125,7 +171,7 @@ mod real {
             // duplicates DO propagate.
             let gossipsub_config = gossipsub::ConfigBuilder::default()
                 // 1s matches js-libp2p's default and the rate the relay
-                // sets (`heartbeatInterval: 1000` in `relay/relay.ts`).
+                // sets (matches the relayer's `GOSSIPSUB_HEARTBEAT` constant).
                 // 10s left mesh maintenance lagging long enough that the
                 // connection died with BrokenPipe before GRAFT could
                 // settle. Empirically observed via the inspect.ts probe
@@ -607,7 +653,7 @@ mod real {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use real::RustLibp2pProvider;
+pub use real::{generate_identity_protobuf, RustLibp2pProvider};
 
 // ---------- tests (native stub only) ----------------------------------
 

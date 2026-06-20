@@ -40,7 +40,7 @@ libp2p = { version = "=0.56.0", optional = true, default-features = false, featu
 ] }
 # `libp2p-connection-limits` enforces "only the relay" at the swarm
 # level. roam doesn't need a wide mesh — the relay re-broadcasts
-# gossipsub via `relay/relay.ts` (it subscribes to TOPIC itself), so a
+# gossipsub via `roam/relayers/` (it subscribes to TOPIC itself), so a
 # single connected peer is sufficient. Without this cap, libp2p auto-
 # dials peers identify learns about and the bridge surfaces the
 # failures as a high-rate `net::provider_error` stream. Direct dep

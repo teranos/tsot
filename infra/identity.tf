@@ -1,11 +1,8 @@
-# Identity persistence for the libp2p relay.
-#
-# The relay's Ed25519 private key derives its peer-id, which derives
-# its multiaddr. Today the key lives only in `./relay/.peer-key` on
-# the box's filesystem — a box recreation generates a new key, which
-# changes the peer-id, which breaks every client's bootstrap
-# multiaddr. This is the root cause of the "peer-id changed, must
-# update dist/relay-multiaddr.txt every box rebuild" problem.
+# Identity persistence for the libp2p relayers binary
+# (`roam/relayers/`). The relayers's Ed25519 private key derives its
+# peer-id, which derives its multiaddr. Without persistence, a box
+# recreation generates a new key and every client's bootstrap
+# multiaddr breaks.
 #
 # Fix: store the protobuf-encoded private key in AWS Secrets Manager.
 # On startup the relay GET it; on first ever start (or if it doesn't

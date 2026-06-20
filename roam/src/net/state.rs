@@ -186,6 +186,10 @@ impl Net {
     /// pre-2b js-bridge.js code. A postcard wire envelope lands as a
     /// separate slice once incoming messages are routed through the
     /// seam too.
+    //
+    // IDENTITY MENU (roam/IDENTITY.md):
+    //   S7 — sign the broadcast with the identity key; verify on receive.
+    //        Wire-format change is part of this slice.
     pub fn publish_position(
         &mut self,
         x: f32,
