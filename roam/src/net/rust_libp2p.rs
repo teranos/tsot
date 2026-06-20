@@ -82,37 +82,7 @@ mod real {
     //   M1 — adopt did:key as the project's primary identifier; PeerId becomes detail.
     //   C3 — move identity code into roam/src/identity/ as its own module.
     //   C6 — audit every Keypair::generate_ed25519() call site, including the fall-through below.
-    /// Decode the libp2p-canonical protobuf-encoded keypair the JS
-    /// bridge loaded from IndexedDB. None → generate fresh (the
-    /// bridge will persist the bytes after this call returns so the
-    /// next session loads them back). Refusing to fall through to
-    /// "generate fresh" on a decode failure is deliberate: a corrupt
-    /// stored identity should surface as an error, not silently
-    /// rotate the PeerId behind the user's back.
-    fn load_or_generate_keypair(bytes: Option<&[u8]>) -> Result<identity::Keypair, NetError> {
-        match bytes {
-            Some(b) => identity::Keypair::from_protobuf_encoding(b).map_err(|e| {
-                NetError::ProviderInternal {
-                    reason: format!("identity decode: {e}"),
-                }
-            }),
-            None => Ok(identity::Keypair::generate_ed25519()),
-        }
-    }
-
-    /// Compose-up a fresh Ed25519 keypair and return its libp2p-
-    /// canonical protobuf encoding. The JS bridge calls this once on
-    /// first visit (when IndexedDB has no `roam/identity/v1` entry),
-    /// stores the returned bytes, and passes them to every subsequent
-    /// `roam_net_worker_provider_init` call so PeerId is stable
-    /// across sessions.
-    pub fn generate_identity_protobuf() -> Result<Vec<u8>, NetError> {
-        identity::Keypair::generate_ed25519()
-            .to_protobuf_encoding()
-            .map_err(|e| NetError::ProviderInternal {
-                reason: format!("identity encode: {e}"),
-            })
-    }
+    // Keypair handling lives in `crate::identity` per IDENTITY.md C3.
 
     /// Composite behaviour. The `NetworkBehaviour` derive synthesises
     /// `RoamBehaviourEvent` (one variant per sub-behaviour) which is
@@ -157,7 +127,7 @@ mod real {
             bootstrap_addrs: Vec<String>,
             identity_bytes: Option<&[u8]>,
         ) -> Result<Self, NetError> {
-            let keypair = load_or_generate_keypair(identity_bytes)?;
+            let keypair = crate::identity::load_or_generate_keypair(identity_bytes)?;
             let peer_id = libp2p::PeerId::from(keypair.public());
             let self_peer_id = PeerId(peer_id.to_string());
 
@@ -664,7 +634,7 @@ mod real {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use real::{generate_identity_protobuf, RustLibp2pProvider};
+pub use real::RustLibp2pProvider;
 
 // ---------- tests (native stub only) ----------------------------------
 

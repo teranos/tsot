@@ -1,18 +1,69 @@
-//! M4 — runtime predicate for what `CANONICAL.md` means by "identified."
+//! Identity primitives and the M4 predicate.
 //!
+//! M4 — runtime classification of "identified" for `CANONICAL.md`.
 //! Downstream callers (M6 world-state routing, M7 promotion flow,
-//! v0.4 multiplayer pickup write-propagation) read identity classification
-//! from here. Today's rule is the cheapest defensible one: non-empty
-//! persistent bytes on self, "any peer we've heard from" on the peer
-//! side. The 0.3.2 identity hard-fail (`assets/src/identity.js` +
+//! v0.4 multiplayer pickup write-propagation) read identity
+//! classification via `is_identified_self` / `is_identified_peer`.
+//! Today's rule is the cheapest defensible one: non-empty persistent
+//! bytes on self, "any peer we've heard from" on the peer side. The
+//! 0.3.2 identity hard-fail (`assets/src/identity.js` +
 //! `assets/src/js-bridge.js`) makes the self rule strictly stronger
 //! than its surface reads — the network refuses to start without
-//! persistent bytes, so by the time anyone asks at runtime, the bytes
-//! have already round-tripped through IndexedDB. Future identity-stack
-//! picks (did:key, UCAN, WebAuthn, ATProto) tighten the implementation
-//! without changing the signature or call sites.
+//! persistent bytes. Future stack picks (did:key, UCAN, WebAuthn,
+//! ATProto) tighten the implementation without changing signatures
+//! or call sites.
+//!
+//! Keypair handling (`load_or_generate_keypair`, `generate_identity_protobuf`)
+//! consolidated here from `net::rust_libp2p` per IDENTITY.md C3. The
+//! JS bridge calls `roam_net_generate_identity_bytes` on first visit
+//! to mint a fresh Ed25519 keypair, persists the protobuf-encoded
+//! bytes in IndexedDB, and passes them back on every subsequent
+//! `roam_net_worker_provider_init`.
 
 use crate::net::PeerId;
+
+#[cfg(target_arch = "wasm32")]
+mod keypair {
+    use crate::net::NetError;
+    use libp2p::identity;
+
+    /// Decode the libp2p-canonical protobuf-encoded keypair the JS
+    /// bridge loaded from IndexedDB. `None` → generate fresh (the
+    /// bridge will persist the bytes after this call returns so the
+    /// next session loads them back). Refusing to fall through to
+    /// "generate fresh" on a decode failure is deliberate: a corrupt
+    /// stored identity surfaces as an error, not a silent PeerId
+    /// rotation behind the user's back.
+    pub fn load_or_generate_keypair(
+        bytes: Option<&[u8]>,
+    ) -> Result<identity::Keypair, NetError> {
+        match bytes {
+            Some(b) => identity::Keypair::from_protobuf_encoding(b).map_err(|e| {
+                NetError::ProviderInternal {
+                    reason: format!("identity decode: {e}"),
+                }
+            }),
+            None => Ok(identity::Keypair::generate_ed25519()),
+        }
+    }
+
+    /// Mint a fresh Ed25519 keypair and return its libp2p-canonical
+    /// protobuf encoding. Called by the JS bridge on first visit
+    /// (when IndexedDB has no `roam/identity/v1` entry); the bridge
+    /// stores the bytes and passes them back on every subsequent
+    /// `roam_net_worker_provider_init` so PeerId stays stable across
+    /// sessions.
+    pub fn generate_identity_protobuf() -> Result<Vec<u8>, NetError> {
+        identity::Keypair::generate_ed25519()
+            .to_protobuf_encoding()
+            .map_err(|e| NetError::ProviderInternal {
+                reason: format!("identity encode: {e}"),
+            })
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use keypair::{generate_identity_protobuf, load_or_generate_keypair};
 
 /// Are we identified for canonical-world purposes? Today: non-empty
 /// persistent identity bytes. Tightens later (did:key resolution,

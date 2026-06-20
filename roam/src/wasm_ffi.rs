@@ -520,7 +520,7 @@ mod wasm_exports {
     pub fn roam_net_generate_identity_bytes() -> Result<Vec<u8>, JsValue> {
         #[cfg(feature = "rust-libp2p")]
         {
-            crate::net::rust_libp2p::generate_identity_protobuf()
+            crate::identity::generate_identity_protobuf()
                 .map_err(|e| JsValue::from_str(&format!("identity gen: {e:?}")))
         }
         #[cfg(not(feature = "rust-libp2p"))]
