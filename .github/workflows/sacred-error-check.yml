@@ -22,16 +22,16 @@ name: sacred-error-check
 on:
   pull_request:
     paths:
-      - 'src/**'
-      - 'assets/**'
+      - 'ccg/src/**'
+      - 'ccg/assets/**'
       - 'roam/src/**'
       - 'roam/assets/**'
       - '.github/workflows/sacred-error-check.yml'
   push:
     branches: [master]
     paths:
-      - 'src/**'
-      - 'assets/**'
+      - 'ccg/src/**'
+      - 'ccg/assets/**'
       - 'roam/src/**'
       - 'roam/assets/**'
 
@@ -62,11 +62,11 @@ jobs:
           # If you add one, also add a baseline file with the current
           # count so the gate passes on the next PR.
           patterns=(
-            "rust-let-underscore|src/**/*.rs|^[[:space:]]*let _ ="
+            "rust-let-underscore|ccg/src/**/*.rs|^[[:space:]]*let _ ="
             "rust-let-underscore-roam|roam/src/**/*.rs|^[[:space:]]*let _ ="
-            "js-empty-catch-paren|assets/**/*.{js,html}|catch[[:space:]]*\\([^)]*\\)[[:space:]]*\\{[[:space:]]*\\}"
+            "js-empty-catch-paren|ccg/assets/**/*.{js,html}|catch[[:space:]]*\\([^)]*\\)[[:space:]]*\\{[[:space:]]*\\}"
             "js-empty-catch-paren-roam|roam/assets/**/*.{js,html}|catch[[:space:]]*\\([^)]*\\)[[:space:]]*\\{[[:space:]]*\\}"
-            "elm-err-discard|assets/src/**/*.elm|Err _ ->"
+            "elm-err-discard|ccg/assets/src/**/*.elm|Err _ ->"
           )
 
           fail=0

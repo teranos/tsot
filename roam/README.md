@@ -86,6 +86,7 @@ What i want:
 - [x] v0.2 — two tabs see each other via BroadcastChannel (same browser). Proves the protocol round-trip.
 - [~] v0.3 — cross-browser P2P. Players see each other across tabs and browsers.
   - [x] 0.3.1 — identity persists per browser, public relay dashboard.
-  - [~] 0.3.2 — correctness pass: more than 2 players coexist, identity failures fail loud, dashboard stays fresh.
+  - [x] 0.3.2 — correctness pass: more than 2 players coexist, identity failures fail loud, dashboard stays fresh.
+  - [x] 0.3.3 — repo restructure: TSOT card-game content moves into `ccg/` so root holds shared axioms only (cuts the bleed surface that kept making roam architecture descriptions inherit TSOT specifics).
 - [ ] v0.4 — cards on the ground. Pick them up, collection persists.
 - [ ] v0.5 — bump into a player, autobattle.

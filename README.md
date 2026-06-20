@@ -2,7 +2,7 @@
 
 A 1v1 collectible card game. Damage is mill. Costs are paid from your hand, deck, or graveyard.
 
-Monorepo: [roam](roam/) (the game) + tsot (the autobattle engine). See [`roam/README.md`](roam/README.md) for the game, [`LIMITATIONS.md`](LIMITATIONS.md) for engine status, [`EA.md`](EA.md) for the evolutionary deck-search loop and its make targets.
+Monorepo: [roam](roam/) (the game) + [ccg](ccg/) (the autobattle engine — TSOT). See [`roam/README.md`](roam/README.md) for the game, [`ccg/LIMITATIONS.md`](ccg/LIMITATIONS.md) for engine status, [`ccg/EA.md`](ccg/EA.md) for the evolutionary deck-search loop and its make targets.
 
 ## Play roam
 
