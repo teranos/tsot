@@ -35,10 +35,13 @@
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "tsot";
           version = "0.1.0";
-          src = ./.;
+          # TSOT moved to ccg/ in 0.3.3. roam is a separate crate
+          # (build with `nix develop` then `cd roam && cargo build`);
+          # this package builds the TSOT engine only.
+          src = ./ccg;
 
           cargoLock = {
-            lockFile = ./Cargo.lock;
+            lockFile = ./ccg/Cargo.lock;
           };
 
           # mlua's `vendored` feature builds Lua from C source — needs a C toolchain.
