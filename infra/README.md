@@ -11,8 +11,8 @@ relay.sbvh.nl  ── A/AAAA alias ──► CloudFront distribution (relay)  �
 
 - **Static site** (`roam.sbvh.nl`): `dist/` bundled by `make wasm` is
   uploaded to S3, served through CloudFront with an ACM-issued cert.
-- **Relay** (`relay.sbvh.nl`): the libp2p `relay/relay.ts` process
-  runs on a Lightsail nano. CloudFront terminates TLS (ACM cert) and
+- **Relay** (`relay.sbvh.nl`): the libp2p `roam/relayers/` Rust
+  binary runs on a Lightsail nano. CloudFront terminates TLS (ACM cert) and
   forwards the WebSocket over plain HTTP on port 9001. The relay does
   not handle TLS itself.
 

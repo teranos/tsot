@@ -26,47 +26,19 @@ test:
 	fi
 	bun test test/
 
-# Local dev relay (libp2p + circuit-relay v2 + gossipsub). Joins
-# the roam-positions topic so connected browsers can find each other.
-# Writes its multiaddr to dist/relay-multiaddr.txt; the browser
-# fetches that and prepends it to its bootstrap list. Persistent
-# peer key in relay/.peer-key keeps the multiaddr stable across runs.
+# Local dev relayer (Rust libp2p). Joins roam-positions so connected
+# browsers can find each other. Requires AWS env for identity per
+# the deployed shape (`ROAM_RELAY_IDENTITY_SECRET`, `AWS_PROFILE`).
 relay:
-	@command -v bun >/dev/null 2>&1 || { \
-		echo "error: bun not on PATH. Enter nix dev shell or install Bun."; \
-		exit 1; \
-	}
-	@mkdir -p $(WASM_DIST)
-	bun run relay
-
-relay-watch:
-	@command -v bun >/dev/null 2>&1 || { echo "error: bun not on PATH."; exit 1; }
-	@mkdir -p $(WASM_DIST)
-	@while true; do \
-		bun run relay/relay.ts; \
-		ec=$$?; \
-		echo "[relay-watch] exited code=$$ec, restarting in 1s (Ctrl-C to stop)"; \
-		sleep 1; \
-	done
+	cd relayers && cargo run --release
 
 dev:
-	@command -v bun   >/dev/null 2>&1 || { echo "error: bun not on PATH.";   exit 1; }
 	@command -v caddy >/dev/null 2>&1 || { echo "error: caddy not on PATH."; exit 1; }
 	@$(MAKE) -s wasm
 	@trap 'echo; echo "[dev] shutting down"; kill 0' INT TERM EXIT; \
-	( while true; do bun run relay/relay.ts; echo "[relay-watch] restart in 1s"; sleep 1; done ) & \
+	( cd relayers && cargo run --release ) & \
 	( env ROAM_SERVE_PORT=$(ROAM_SERVE_PORT) caddy run --config Caddyfile --adapter caddyfile ) & \
 	wait
-
-# Same relay, run under Node instead of Bun. Used to isolate Bun-vs-Node
-# behavior differences in the libp2p WebSocket server-side path. Bundle
-# relay.ts to ESM JS via bun, then exec node.
-relay-node:
-	@command -v node >/dev/null 2>&1 || { echo "error: node not on PATH."; exit 1; }
-	@command -v bun  >/dev/null 2>&1 || { echo "error: bun not on PATH (used to bundle TS)."; exit 1; }
-	@mkdir -p $(WASM_DIST)
-	bun build relay/relay.ts --outfile $(WASM_DIST)/relay.js --target=node --format=esm --external='node:*'
-	DEBUG='libp2p:*' node $(WASM_DIST)/relay.js
 
 # Bundle assets/src/js-bridge.js (ES module with libp2p imports) into
 # a single dist/js-bridge.js. Browsers can't resolve `import 'libp2p'`

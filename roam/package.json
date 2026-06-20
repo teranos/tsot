@@ -4,12 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build assets/src/js-bridge.js --outfile dist/js-bridge.js --target=browser --external /roam.js",
-    "relay": "bun run relay/relay.ts"
+    "build": "bun build assets/src/js-bridge.js --outfile dist/js-bridge.js --target=browser --external /roam.js"
   },
   "dependencies": {
-    "@aws-sdk/client-cloudwatch": "3.654.0",
-    "@aws-sdk/client-secrets-manager": "3.654.0",
     "libp2p": "2.10.0",
     "@libp2p/webrtc": "5.2.24",
     "@libp2p/websockets": "^9.2",
