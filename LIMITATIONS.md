@@ -11,7 +11,7 @@ T:Sac this, Search your library for a card called Amsterdam and put it on the bo
 
 ## events
 
-- **`OnDealtDamageToPlayer`** — **shipped.** `EventName::OnDealtDamageToPlayer` at `src/card.rs:516` fires per-attacker post-mill at `src/game/combat.rs:421-432`, including for every card attached to the successful attacker (klotho-style mutations declare the handler and receive `self = the mutation`). Corpus-migration pending: `cards/cinder-wurm.lua:10,34` still uses the `on_attack` workaround.
+- **`OnDealtDamageToPlayer`** — **shipped + corpus migrated.** `EventName::OnDealtDamageToPlayer` at `src/card.rs:516` fires per-attacker post-mill at `src/game/combat.rs:421-432`, including for every card attached to the successful attacker (klotho-style mutations declare the handler and receive `self = the mutation`). `OnAttack` also iterates the attacker's attached list as of 2026-06-20 (combat.rs declare_attacker, same iteration shape — TNF / VEGF wired). Cinder Wurm migrated from the on_attack workaround to `on_dealt_damage_to_player` 2026-06-20.
 - **Phase-entry triggers** — `on_turn_end`, `on_upkeep`, `on_untap_step`. Coupled with the delayed-trigger registry; usually wired together.
 - **Delayed-trigger registry** — handlers can't queue future triggers. Required by slow-recall (recurring exile return), attach-shuffler (delayed bounce), bitter-dawn's effect 2 (next-turn sacrifice).
 
