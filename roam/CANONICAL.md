@@ -15,6 +15,10 @@ A player's reality class is determined by their identity. Identified
 players (verified through the identity provider layer) default to
 canonical. Unidentified or unverified players default to non-canonical.
 
+Runtime criterion: `roam::identity::is_identified_self` /
+`is_identified_peer`. Future stack picks (did:key, UCAN, M5 signed-
+message verification) tighten the rule without changing the call site.
+
 ## Anti-grief by structure, not enforcement
 
 Because non-canonical changes never propagate, griefers and spammers
