@@ -84,6 +84,8 @@ What i want:
 
 - [x] v0.1 — local-only ✅ shipped. WASD square, walled map (50×40 tiles), camera follows + clamps, debug HUD.
 - [x] v0.2 — two tabs see each other via BroadcastChannel (same browser). Proves the protocol round-trip.
-- [~] v0.3 — cross-browser P2P via libp2p. `NetworkProvider` trait with two impls (`js_libp2p`, `rust_libp2p`); runtime-switchable via `?provider=` URL param. JS impl is the production default; Rust impl runs its Swarm in a Web Worker (WebSocket-WebSys + gossipsub + identify + ping). Deployed relay at `relay.sbvh.nl` (Bun + js-libp2p, CloudFront-fronted); relay's connection-monitor disabled (was root-cause of prior 11s BrokenPipe).
-- [ ] v0.4 — collection persists.
-- [ ] v0.5 — you bump into a player, autobattle.
+- [~] v0.3 — cross-browser P2P. Players see each other across tabs and browsers.
+  - [x] 0.3.1 — identity persists per browser, public relay dashboard.
+  - [~] 0.3.2 — correctness pass: more than 2 players coexist, identity failures fail loud, dashboard stays fresh.
+- [ ] v0.4 — cards on the ground. Pick them up, collection persists.
+- [ ] v0.5 — bump into a player, autobattle.
