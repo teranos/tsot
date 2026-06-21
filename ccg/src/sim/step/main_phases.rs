@@ -11,7 +11,7 @@ use crate::sim::run::{build_pattern_b_choices, BuildChoiceResult};
 use crate::sim::stats::{bump_played, bump_preview_attempt, bump_preview_rollback};
 use crate::sim::AiKind;
 
-use super::{pending_to_prompt, EngineCursor, StepEngine, StepResult};
+use super::{pending_to_prompt, ActivationContext, EngineCursor, StepEngine, StepResult};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -237,59 +237,15 @@ impl StepEngine {
                 Some(HumanAction::Pass) => None,
                 Some(HumanAction::PlayCard { iid }) => Some(iid),
                 Some(HumanAction::Activate { iid, ability_index, x }) => {
-                    let actor = match active {
-                        PlayerId::A => "A",
-                        PlayerId::B => "B",
-                    };
-                    let name = self
-                        .state
-                        .card_pool
-                        .get(&iid)
-                        .map(|i| i.card.name.clone())
-                        .unwrap_or_else(|| iid.to_string());
-                    let result = self.state.activate_ability(
-                        &iid,
+                    return self.step_activate(
+                        iid,
                         ability_index,
                         x,
-                        crate::game::ActivateChoices::default(),
-                        Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
+                        Vec::new(),
+                        ActivationContext::PatternB {
+                            played_creature,
+                        },
                     );
-                    match result {
-                        Ok(()) => {
-                            self.log.push(format!(
-                                "turn {} ({}) Main1: activate {}[{}]",
-                                self.state.turn, actor, name, ability_index
-                            ));
-                        }
-                        Err(e) => {
-                            self.emit_human_refusal(
-                                active,
-                                "prompt",
-                                "activate-ability",
-                                format!("Activation rejected: {e:?}"),
-                                "The engine refused to fire this activation. \
-                                 Common causes: tapped source, summoning sick, \
-                                 insufficient cost components, or a yield from \
-                                 the effect handler (ChoicePending — Activate \
-                                 doesn't yet carry replay through StepEngine).".into(),
-                            );
-                        }
-                    }
-                    let candidates = crate::sim::ai::enumerate_playable_in_hand(
-                        &self.state,
-                        active,
-                        kind_filter,
-                    );
-                    let activations =
-                        crate::sim::run::enumerate_human_activations(&self.state, active);
-                    let prompt = HumanPrompt::PickCard {
-                        state: crate::sim::snapshot::build_state_view(&self.state, active),
-                        player: active,
-                        candidates,
-                        kind_filter,
-                        activations,
-                    };
-                    return StepResult::NeedHuman(Box::new(prompt));
                 }
                 Some(other) => panic!(
                     "PatternBPick: expected Pass / PlayCard / Activate response, got {other:?}"
@@ -730,61 +686,13 @@ impl StepEngine {
                 });
                 StepResult::Continue
             }
-            Some(HumanAction::Activate { iid, ability_index, x }) => {
-                let actor = match active {
-                    PlayerId::A => "A",
-                    PlayerId::B => "B",
-                };
-                let name = self
-                    .state
-                    .card_pool
-                    .get(&iid)
-                    .map(|i| i.card.name.clone())
-                    .unwrap_or_else(|| iid.to_string());
-                let result = self.state.activate_ability(
-                    &iid,
-                    ability_index,
-                    x,
-                    crate::game::ActivateChoices::default(),
-                    Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
-                );
-                match result {
-                    Ok(()) => {
-                        self.log.push(format!(
-                            "turn {} ({}) Main2: activate {}[{}]",
-                            self.state.turn, actor, name, ability_index
-                        ));
-                    }
-                    Err(e) => {
-                        self.emit_human_refusal(
-                            active,
-                            "prompt",
-                            "activate-ability",
-                            format!("Activation rejected: {e:?}"),
-                            "The engine refused to fire this activation. \
-                             Common causes: tapped source, summoning sick, \
-                             insufficient cost components, or a yield from \
-                             the effect handler (ChoicePending — Activate \
-                             doesn't yet carry replay through StepEngine).".into(),
-                        );
-                    }
-                }
-                let candidates = crate::sim::ai::enumerate_playable_in_hand(
-                    &self.state,
-                    active,
-                    kind_filter,
-                );
-                let activations =
-                    crate::sim::run::enumerate_human_activations(&self.state, active);
-                let prompt = HumanPrompt::PickCard {
-                    state: crate::sim::snapshot::build_state_view(&self.state, active),
-                    player: active,
-                    candidates,
-                    kind_filter,
-                    activations,
-                };
-                StepResult::NeedHuman(Box::new(prompt))
-            }
+            Some(HumanAction::Activate { iid, ability_index, x }) => self.step_activate(
+                iid,
+                ability_index,
+                x,
+                Vec::new(),
+                ActivationContext::Main2 { played_creature },
+            ),
             Some(other) => panic!(
                 "Main2Pick: expected Pass / PlayCard / Activate response, got {other:?}"
             ),
@@ -1033,6 +941,174 @@ impl StepEngine {
         }
 
         StepResult::Continue
+    }
+
+    /// Shared helper: fire an activation with full preview-journal +
+    /// ChoicePending interception. Used by both Main1 (PatternBPick)
+    /// and Main2 (Main2Pick) HumanAction::Activate handlers AND by the
+    /// new `step_activation_resolve` cursor branch.
+    ///
+    /// `history` carries the human's choice answers from prior retries
+    /// (empty on first call); each call seeds the oracle replay with
+    /// it. The preview journal brackets `activate_ability` so a
+    /// suspend-mid-handler rolls back cleanly; on success the preview
+    /// is appended to `replay_journal` for journal-replay parity with
+    /// the PlayCard path.
+    ///
+    /// On `Err(ActivateError::ChoicePending(_))` → roll back, set
+    /// `ActivationResolving` cursor, return `NeedHuman(prompt)`.
+    /// On `Ok(())` → log, return `NeedHuman(PickCard)` with refreshed
+    /// candidates + activations so the human can chain more actions.
+    /// On `Err(other)` → roll back, emit_human_refusal, return
+    /// `NeedHuman(PickCard)`.
+    pub(super) fn step_activate(
+        &mut self,
+        iid: InstanceId,
+        ability_index: usize,
+        x: Option<i32>,
+        history: Vec<crate::choice::ScriptedAnswer>,
+        context: ActivationContext,
+    ) -> StepResult {
+        let active = self.state.active_player;
+        let actor = match active {
+            PlayerId::A => "A",
+            PlayerId::B => "B",
+        };
+        let phase_label = match context {
+            ActivationContext::PatternB { .. } => "Main1",
+            ActivationContext::Main2 { .. } => "Main2",
+        };
+        let name = self
+            .state
+            .card_pool
+            .get(&iid)
+            .map(|i| i.card.name.clone())
+            .unwrap_or_else(|| iid.to_string());
+
+        self.oracle.clear();
+        self.oracle.inner_mut().reset_replay(history.clone());
+
+        // Bracket activate_ability with a preview journal so a
+        // mid-handler suspend can roll the state back cleanly. Mirror
+        // of the play_card pattern in step_resolve.
+        self.state.journal = Some(crate::game::Journal::new());
+        let result = self.state.activate_ability(
+            &iid,
+            ability_index,
+            x,
+            crate::game::ActivateChoices::default(),
+            Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
+        );
+
+        // ChoicePending intercept — mirror of play.rs's arm at
+        // main_phases.rs:462 and ~955. Roll back, set ActivationResolving
+        // cursor (with grown history reset to caller's), surface the
+        // prompt via pending_to_prompt. The next step() lands in
+        // step_activation_resolve which appends the human's answer to
+        // history and re-fires this helper.
+        if let Err(crate::game::ActivateError::ChoicePending(pending)) = &result {
+            let pending = pending.clone();
+            if let Some(journal) = self.state.journal.take() {
+                journal.rollback(&mut self.state);
+            }
+            self.set_cursor(EngineCursor::ActivationResolving {
+                iid,
+                ability_index,
+                x,
+                history,
+                context,
+            });
+            let prompt = pending_to_prompt(&self.state, pending);
+            return StepResult::NeedHuman(Box::new(prompt));
+        }
+
+        // Success: commit the preview journal to the replay journal so
+        // OnTurnBegin / OnPlay replays from a saved-game produce
+        // identical state. Mirror of step_resolve's success arm.
+        if result.is_ok() {
+            if let Some(mut preview) = self.state.journal.take() {
+                if let Some(replay) = self.state.replay_journal.as_mut() {
+                    replay.extend_from(&mut preview);
+                }
+            }
+            self.log.push(format!(
+                "turn {} ({}) {}: activate {}[{}]",
+                self.state.turn, actor, phase_label, name, ability_index
+            ));
+        } else {
+            // Non-pending Err — refusal. Roll back the partial
+            // mutations (if any) and surface a sacred-error so the
+            // human sees WHY the activation didn't fire (tap state,
+            // sickness, cost shortfall, ...).
+            if let Some(journal) = self.state.journal.take() {
+                journal.rollback(&mut self.state);
+            }
+            if let Err(e) = &result {
+                self.emit_human_refusal(
+                    active,
+                    "prompt",
+                    "activate-ability",
+                    format!("Activation rejected: {e:?}"),
+                    "The engine refused to fire this activation. \
+                     Common causes: tapped source, summoning sick, \
+                     insufficient cost components, illegal target."
+                        .into(),
+                );
+            }
+        }
+
+        // Re-prompt PickCard so the human can chain more activations
+        // / casts / pass. Same shape as the inline re-prompt the old
+        // handlers built; PickKindFilter::Any matches both Main1 and
+        // Main2 (the `kind_filter = Any` bindings at lines 174 + 677).
+        let candidates = crate::sim::ai::enumerate_playable_in_hand(
+            &self.state,
+            active,
+            crate::sim::ai::PickKindFilter::Any,
+        );
+        let activations =
+            crate::sim::run::enumerate_human_activations(&self.state, active);
+        let prompt = HumanPrompt::PickCard {
+            state: crate::sim::snapshot::build_state_view(&self.state, active),
+            player: active,
+            candidates,
+            kind_filter: crate::sim::ai::PickKindFilter::Any,
+            activations,
+        };
+        StepResult::NeedHuman(Box::new(prompt))
+    }
+
+    /// Cursor branch for `ActivationResolving`. Mirror of
+    /// `step_resolve` for the activation path: push the human's
+    /// `ChoiceCard / ChoiceConfirm / ChoicePlayer / ChoiceInt` answer
+    /// onto `history`, then re-fire `step_activate` which seeds the
+    /// oracle replay and retries `activate_ability`.
+    pub(super) fn step_activation_resolve(
+        &mut self,
+        iid: InstanceId,
+        ability_index: usize,
+        x: Option<i32>,
+        mut history: Vec<crate::choice::ScriptedAnswer>,
+        context: ActivationContext,
+        pending: Option<HumanAction>,
+    ) -> StepResult {
+        if let Some(act) = pending {
+            let ans = match act {
+                HumanAction::ChoiceCard { iid } => crate::choice::ScriptedAnswer::Card(iid),
+                HumanAction::ChoiceConfirm { yes } => {
+                    crate::choice::ScriptedAnswer::Confirm(yes)
+                }
+                HumanAction::ChoicePlayer { player } => {
+                    crate::choice::ScriptedAnswer::Player(player)
+                }
+                HumanAction::ChoiceInt { value } => crate::choice::ScriptedAnswer::Int(value),
+                other => panic!(
+                    "ActivationResolving: expected Choice* response, got {other:?}"
+                ),
+            };
+            history.push(ans);
+        }
+        self.step_activate(iid, ability_index, x, history, context)
     }
 }
 

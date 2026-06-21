@@ -1033,6 +1033,117 @@
         assert_eq!(covered, total, "coverage gap: {covered}/{total}");
     }
 
+    /// Strict-TDD intent capture for the activation-replay slice. The
+    /// engine's `HumanAction::Activate` handler today calls
+    /// `activate_ability` once and treats every `Err(_)` as a final
+    /// refusal — including `Err(ActivateError::ChoicePending(_))` which
+    /// is raised when the effect handler calls `game.choose_card` /
+    /// `game.confirm` / etc. against an empty `HumanReplayOracle`.
+    /// That's wrong: ChoicePending means "the activation suspended
+    /// mid-handler waiting for a human pick" and the engine should
+    /// rollback the preview journal, transition to a resolving cursor,
+    /// and yield `NeedHuman(ChooseCard{…})` — exactly mirroring the
+    /// PlayCard pattern at `main_phases.rs:462`.
+    ///
+    /// Setup: install a custom activated ability onto a board card.
+    /// Effect: call `game.choose_card({"<some iid>"})` — the wrapper
+    /// short-circuits to Pending because the oracle replay is empty.
+    /// Expectation: `step(Some(HumanAction::Activate{…}))` returns
+    /// `StepResult::NeedHuman(HumanPrompt::ChooseCard{…})` with the
+    /// pool propagated from the Lua side. Before the fix the engine
+    /// would push a sacred-error refusal and return `Continue` with a
+    /// re-prompted PickCard.
+    #[test]
+    fn activation_handler_suspend_yields_choose_card_prompt() {
+        use crate::card::{ActivatedAbility, Timing};
+        use crate::game::Zone;
+        use crate::sim::human::{HumanAction, HumanInterface, HumanPrompt};
+        use std::sync::Arc;
+
+        let (registry, template) = human_test_setup();
+        let deck_a: Vec<_> = (0..50).map(|_| template.clone()).collect();
+        let deck_b = deck_a.clone();
+        let mut state = GameState::new(deck_a, deck_b);
+
+        // Park one card on player A's board with summoning sickness
+        // cleared so the activation's preflight passes.
+        let board_iid = state.a.hand[0].clone();
+        state
+            .move_card(&board_iid, PlayerId::A, Zone::Hand, Zone::Board)
+            .unwrap();
+        state.set_summoning_sick(&board_iid, false);
+
+        // Install an activated ability whose effect calls choose_card
+        // against a 1-element pool. The pool element is some other
+        // iid (any string — the Lua wrapper raises Pending before any
+        // candidate is read).
+        let target_iid = state.b.hand[0].clone();
+        let effect_src = format!(
+            r#"return function(game, self)
+                 local picked = game.choose_card({{ "{target_iid}" }}, {{ prompt = "test-pick" }})
+                 if picked ~= nil then game.damage(picked, 1) end
+               end"#
+        );
+        let effect: mlua::Function = registry.lua().load(&effect_src).eval().unwrap();
+        state
+            .card_pool
+            .get_mut(&board_iid)
+            .unwrap()
+            .card
+            .activated
+            .push(ActivatedAbility {
+                cost_tap: false,
+                cost_components: vec![],
+                text: String::new(),
+                timing: Timing::Instant,
+                validate: None,
+                target: None,
+                effect,
+                from_zones: vec![crate::card::ActivationZone::Board],
+            });
+
+        let (iface, _prompt_rx, _action_tx) = HumanInterface::new();
+        // We have to wrap the registry in Arc — Lua chunks loaded into
+        // it above are still valid because Arc shares the same Lua
+        // instance the engine will use via `registry.lua()`.
+        let registry_arc = Arc::new(registry);
+        let mut engine = StepEngine::new(
+            state,
+            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            registry_arc,
+            0xCAFE,
+        );
+
+        // Drive to the first PickCard yield.
+        loop {
+            match engine.step(None) {
+                StepResult::Continue => continue,
+                StepResult::NeedHuman(_) => break,
+                StepResult::Done(_) => panic!("game ended before first prompt"),
+            }
+        }
+
+        // Fire the activation. Pre-fix this returned Continue with a
+        // sacred-error refusal pushed. Post-fix it yields NeedHuman.
+        let result = engine.step(Some(HumanAction::Activate {
+            iid: board_iid.clone(),
+            ability_index: 0,
+            x: None,
+        }));
+        match result {
+            StepResult::NeedHuman(p) => match *p {
+                HumanPrompt::ChooseCard { pool, prompt, .. } => {
+                    assert_eq!(pool, vec![target_iid.clone()]);
+                    assert_eq!(prompt, "test-pick");
+                }
+                other => panic!("expected ChooseCard, got {other:?}"),
+            },
+            other => panic!(
+                "expected NeedHuman(ChooseCard) after activate-with-suspending-handler, got {other:?}"
+            ),
+        }
+    }
+
     /// Sacred-error sweep coverage — broader than `src/sim/step/`.
     /// Every file that crosses the FFI boundary or fires Lua handlers
     /// must reference the typed Error pipeline (`crate::error::emit`

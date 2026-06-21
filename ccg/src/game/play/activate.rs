@@ -288,15 +288,52 @@ impl GameState {
                 .map_err(ActivateError::ChoicePending)?;
         }
 
-        // P.5: source → EXILE after effect.
+        // P.5: source → EXILE after effect. Must use the iid's actual
+        // current zone — for `from_zones = {Attached}` the source lives
+        // in some host's `attached` list (not Board); for `Graveyard`
+        // it lives in the graveyard; etc. Hardcoding `Zone::Board`
+        // here would emit `NotInZone` on every non-Board activation.
         if self_exiles {
-            let _ = self.move_card_or_emit(
-                iid,
-                controller,
-                Zone::Board,
-                Zone::Exile,
-                "activate-self-exile-cost",
-            );
+            if let Some(host) = self.host_of(iid) {
+                // Attached source: detach first, then place in exile.
+                self.remove_attached(&host, iid);
+                self.add_to_zone(iid, controller, Zone::Exile);
+            } else if self.player(controller).board.contains(iid) {
+                let _ = self.move_card_or_emit(
+                    iid,
+                    controller,
+                    Zone::Board,
+                    Zone::Exile,
+                    "activate-self-exile-cost",
+                );
+            } else if self.player(controller).graveyard.contains(iid) {
+                let _ = self.move_card_or_emit(
+                    iid,
+                    controller,
+                    Zone::Graveyard,
+                    Zone::Exile,
+                    "activate-self-exile-cost",
+                );
+            } else if self.player(controller).hand.contains(iid) {
+                let _ = self.move_card_or_emit(
+                    iid,
+                    controller,
+                    Zone::Hand,
+                    Zone::Exile,
+                    "activate-self-exile-cost",
+                );
+            } else if self.player(controller).deck.contains(iid) {
+                let _ = self.move_card_or_emit(
+                    iid,
+                    controller,
+                    Zone::Deck,
+                    Zone::Exile,
+                    "activate-self-exile-cost",
+                );
+            } else if self.player(controller).exile.contains(iid) {
+                // Already in exile — no-op (rare but legal: a card
+                // could declare SELF-exile from Exile, redundant cost).
+            }
         }
 
         self.current_activation_x = prior_x;

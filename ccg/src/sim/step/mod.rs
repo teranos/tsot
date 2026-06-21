@@ -111,6 +111,31 @@ pub enum EngineCursor {
     /// Game ended; subsequent step() calls return `Done(stats)` with
     /// the final stats snapshot.
     GameOver,
+    /// A human-initiated activation suspended mid-handler: the Lua
+    /// `effect` called `game.choose_card` / `game.confirm` / etc.
+    /// against an empty HumanReplayOracle, surfacing
+    /// `ActivateError::ChoicePending(_)`. Same replay-history protocol
+    /// as `PatternBResolving` — push the human's answer onto `history`,
+    /// seed the oracle replay, re-call `activate_ability` on every
+    /// retry until the activation completes (Ok) or fails (Err other).
+    /// `context` records which Pick-cursor to return to on completion.
+    ActivationResolving {
+        iid: InstanceId,
+        ability_index: usize,
+        x: Option<i32>,
+        history: Vec<crate::choice::ScriptedAnswer>,
+        context: ActivationContext,
+    },
+}
+
+/// Which Pick-cursor an ActivationResolving completion should return
+/// to. Same role as `ResolveContext` for play_card resolves; kept
+/// separate because activations don't carry a `played_creature` flag
+/// and can fire from either Main1 (PatternB) or Main2 contexts.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum ActivationContext {
+    PatternB { played_creature: bool },
+    Main2 { played_creature: bool },
 }
 
 /// What a single step() call did. Caller loops as long as `Continue`
@@ -210,10 +235,16 @@ fn pending_to_prompt(state: &GameState, pending: crate::choice::ChoicePending) -
     match pending {
         ChoicePending::Card(req) => {
             let viewer = req.asker.unwrap_or(state.active_player);
+            let pool_cards: Vec<crate::sim::snapshot::CardView> = req
+                .pool
+                .iter()
+                .map(|iid| crate::sim::snapshot::card_view(state, iid))
+                .collect();
             HumanPrompt::ChooseCard {
                 state: crate::sim::snapshot::build_state_view(state, viewer),
                 asker: viewer,
                 pool: req.pool,
+                pool_cards,
                 host: req.host,
                 optional: req.optional,
                 prompt: req.prompt,
@@ -417,6 +448,13 @@ impl StepEngine {
                 history,
                 played_creature,
             } => self.step_main2_resolve(picked, history, played_creature, pending),
+            EngineCursor::ActivationResolving {
+                iid,
+                ability_index,
+                x,
+                history,
+                context,
+            } => self.step_activation_resolve(iid, ability_index, x, history, context, pending),
             EngineCursor::EndTurn => {
                 // Advance phases until the turn ticks (End → next
                 // Untap on the other side). `state.winner` may be set

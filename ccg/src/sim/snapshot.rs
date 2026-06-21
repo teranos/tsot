@@ -116,7 +116,7 @@ fn build_player_view(state: &GameState, side: PlayerId, viewer: PlayerId) -> Pla
     }
 }
 
-fn card_view(state: &GameState, iid: &InstanceId) -> CardView {
+pub fn card_view(state: &GameState, iid: &InstanceId) -> CardView {
     let inst = state.card_pool.get(iid);
     match inst {
         Some(inst) => {

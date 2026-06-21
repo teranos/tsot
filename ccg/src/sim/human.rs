@@ -99,10 +99,21 @@ pub enum HumanPrompt {
     /// `host` (if any) is the card the choice is being made FOR (e.g.,
     /// the card being played, for hand-payment). `optional=true` means
     /// the human may return `null` to skip.
+    ///
+    /// `pool_cards` carries the resolved CardView for each iid in
+    /// `pool`, regardless of which zone the iid lives in (deck / exile
+    /// / etc. — zones the asker normally cannot see). The act of
+    /// presenting a choice from a hidden zone reveals exactly that
+    /// subset; the UI uses `pool_cards` as the source-of-truth for
+    /// rendering pickable cards so a deck-tutor like the ghost cycle's
+    /// "search your deck for a yellow symbol" can surface its
+    /// candidates without depending on which zones the state view
+    /// exposes.
     ChooseCard {
         state: StateView,
         asker: PlayerId,
         pool: Vec<InstanceId>,
+        pool_cards: Vec<crate::sim::snapshot::CardView>,
         host: Option<InstanceId>,
         optional: bool,
         prompt: String,
@@ -329,10 +340,15 @@ impl HumanInterface {
         optional: bool,
         prompt: String,
     ) -> Option<InstanceId> {
+        let pool_cards: Vec<crate::sim::snapshot::CardView> = pool
+            .iter()
+            .map(|iid| crate::sim::snapshot::card_view(game_state, iid))
+            .collect();
         let p = HumanPrompt::ChooseCard {
             state: build_state_view(game_state, asker),
             asker,
             pool,
+            pool_cards,
             host,
             optional,
             prompt,

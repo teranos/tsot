@@ -243,18 +243,18 @@ pub fn build_preset_decks(_playable: &[Card]) -> Vec<PresetDeck> {
             name: "Golden Egg + Yellow Ghost Test (slices #4 + #5)".to_string(),
             cards: {
                 let mut v: Vec<String> = Vec::with_capacity(50);
-                v.extend(std::iter::repeat_n("golden-egg".to_string(), 23));
-                v.extend(std::iter::repeat_n("yellow-ghost".to_string(), 8));
+                v.extend(std::iter::repeat_n("golden-egg".to_string(), 19));
+                v.extend(std::iter::repeat_n("yellow-ghost".to_string(), 16));
                 v.extend(std::iter::repeat_n("sacred-error".to_string(), 4));
                 v.extend(std::iter::repeat_n("clear-yellow".to_string(), 5));
+                v.extend(std::iter::repeat_n("yellow-am-symbol".to_string(), 2));
                 for sym in [
-                    "yellow-am-symbol",
                     "yellow-ax-symbol",
                     "yellow-ix-symbol",
                     "yellow-pulse-symbol",
                     "yellow-sem-symbol",
                 ] {
-                    v.extend(std::iter::repeat_n(sym.to_string(), 2));
+                    v.push(sym.to_string());
                 }
                 v
             },

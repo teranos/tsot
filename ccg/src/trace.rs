@@ -147,6 +147,15 @@ pub fn cursor_label(cursor: &crate::sim::step::EngineCursor) -> String {
         ),
         E::EndTurn => "EndTurn".into(),
         E::GameOver => "GameOver".into(),
+        E::ActivationResolving {
+            iid,
+            ability_index,
+            history,
+            ..
+        } => format!(
+            "ActivationResolving(iid={iid}, ability_index={ability_index}, history_len={})",
+            history.len()
+        ),
     }
 }
 

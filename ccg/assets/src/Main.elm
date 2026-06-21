@@ -2272,6 +2272,55 @@ renderGameScreen active prompt combat maybeSlice elmButtons =
 
         yourHandCards =
             zoneCardsForPrompt YourHand prompt combat maybeSlice (Maybe.map (.hand << .you) maybeSlice)
+
+        -- ChoiceCard pool overlay: when the engine is asking for a
+        -- choose_card pick, render each pool member as a clickable
+        -- card regardless of which zone the iid actually lives in.
+        -- Necessary for deck-tutors (ghost-cycle, clear-*, durian's
+        -- attached pick) where the candidates live in zones the
+        -- viewer can't normally see — without this they have no DOM
+        -- node to click. Engine ships pool_cards alongside pool so the
+        -- UI doesn't have to guess.
+        choicePoolCards =
+            case prompt of
+                GameScreen.ChooseCardPrompt data ->
+                    List.map
+                        (\c ->
+                            ( Card.key c
+                            , Card.view
+                                { clickable = Just TargetCardClicked
+                                , selected = False
+                                , dim = False
+                                , faceDown = False
+                                , uctBadge = Nothing
+                                , uctChosen = False
+                                , borderColor = Just "#6cf"
+                                , borderStyle = Just "solid"
+                                , overlays = []
+                                , attachedConfig = Nothing
+                                }
+                                c
+                            )
+                        )
+                        data.poolCards
+
+                _ ->
+                    []
+
+        choicePoolRow =
+            case prompt of
+                GameScreen.ChooseCardPrompt _ ->
+                    div [ class "row" ]
+                        [ div [ class "zone", style "flex" "1" ]
+                            [ h2 [] [ text "Choice pool" ]
+                            , Keyed.node "div"
+                                [ class "cards", id "choice-pool-cards" ]
+                                choicePoolCards
+                            ]
+                        ]
+
+                _ ->
+                    text ""
     in
     let
         oppDeckCount =
@@ -2287,7 +2336,8 @@ renderGameScreen active prompt combat maybeSlice elmButtons =
     -- since opp hand is hidden). Deck row's "deck" is the deck-top
     -- back-of-card widget plus a `deck:N` count badge.
     div [ id "game-screen", style "display" displayStyle ]
-        [ div [ class "row" ]
+        [ choicePoolRow
+        , div [ class "row" ]
             [ div [ class "zone opponent", style "flex" "2" ]
                 [ h2 []
                     [ text "Opp hand "

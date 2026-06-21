@@ -45,6 +45,7 @@ Msgs in at the use site.
 
 -}
 
+import Card
 import Dict exposing (Dict)
 import Html exposing (Html, button, div, input, span, text)
 import Html.Attributes as A exposing (class, style)
@@ -120,6 +121,7 @@ type alias PickBlocksData =
 
 type alias ChooseCardData =
     { pool : List String
+    , poolCards : List Card.Card
     , host : Maybe String
     , optional : Bool
     , text : String
@@ -515,8 +517,9 @@ decodePickBlocksData =
 
 decodeChooseCardData : D.Decoder ChooseCardData
 decodeChooseCardData =
-    D.map4 ChooseCardData
+    D.map5 ChooseCardData
         (D.maybe (D.field "pool" (D.list D.string)) |> D.map (Maybe.withDefault []))
+        (D.maybe (D.field "pool_cards" (D.list Card.decode)) |> D.map (Maybe.withDefault []))
         (D.maybe (D.field "host" D.string))
         (D.maybe (D.field "optional" D.bool) |> D.map (Maybe.withDefault False))
         (D.maybe (D.field "prompt" D.string) |> D.map (Maybe.withDefault ""))
