@@ -21,6 +21,9 @@ rust-libp2p = ["dep:libp2p", "dep:libp2p-connection-limits", "dep:wasm-bindgen-f
 sacred-error = { path = "../crates/sacred-error" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Base58btc for did:key encoding (M1). Crate already transitive via
+# libp2p; pinned direct so the import path stays stable.
+bs58 = "=0.5.1"
 
 # rust-libp2p substrate (phase 3). Gated by the `rust-libp2p` feature.
 # Pinned to a specific version per CLAUDE.md — if cargo resolves and

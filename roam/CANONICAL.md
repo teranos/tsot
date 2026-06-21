@@ -15,6 +15,10 @@ A player's reality class is determined by their identity. Identified
 players (verified through the identity provider layer) default to
 canonical. Unidentified or unverified players default to non-canonical.
 
+Runtime criterion: `roam::identity::is_identified_self` /
+`is_identified_peer`. Future stack picks (did:key, UCAN, M5 signed-
+message verification) tighten the rule without changing the call site.
+
 ## Anti-grief by structure, not enforcement
 
 Because non-canonical changes never propagate, griefers and spammers
@@ -52,8 +56,7 @@ threshold is one-way.
        A4 — read Bluesky/ATProto PDS docs; find where the user's signing key lives.
        A7 — list 5 names per ecosystem who actually ship against each candidate below.
        C1 — once a path is picked, rewrite this "Open" section and remove the candidate list.
-       M2 — ATProto PDS bridge so a player's handle can claim the roam identity.
-       M4 — define the structural meaning of "identified" — concrete runtime criterion. -->
+       M2 — ATProto PDS bridge so a player's handle can claim the roam identity. -->
 
 ## Open
 

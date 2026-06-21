@@ -520,7 +520,7 @@ mod wasm_exports {
     pub fn roam_net_generate_identity_bytes() -> Result<Vec<u8>, JsValue> {
         #[cfg(feature = "rust-libp2p")]
         {
-            crate::net::rust_libp2p::generate_identity_protobuf()
+            crate::identity::generate_identity_protobuf()
                 .map_err(|e| JsValue::from_str(&format!("identity gen: {e:?}")))
         }
         #[cfg(not(feature = "rust-libp2p"))]
@@ -528,6 +528,29 @@ mod wasm_exports {
             Err(JsValue::from_str(
                 "roam_net_generate_identity_bytes: rust-libp2p feature not enabled",
             ))
+        }
+    }
+
+    /// Self DID for the SELF panel (S1). Returns `did:key:z6Mk…` for
+    /// the worker's persistent Ed25519 keypair, or an empty string if
+    /// the provider isn't initialised or the keypair isn't Ed25519
+    /// (today's bridge always feeds Ed25519). The worker reads this
+    /// after init and includes it in the `kind: 'ready'` message so
+    /// the bridge can render it alongside the PeerId.
+    #[wasm_bindgen]
+    pub fn roam_net_worker_provider_self_did_key() -> String {
+        #[cfg(feature = "rust-libp2p")]
+        {
+            WORKER_PROVIDER.with(|p| {
+                p.borrow()
+                    .as_ref()
+                    .map(|provider| provider.self_did_key().to_string())
+                    .unwrap_or_default()
+            })
+        }
+        #[cfg(not(feature = "rust-libp2p"))]
+        {
+            String::new()
         }
     }
 

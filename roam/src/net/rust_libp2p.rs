@@ -82,37 +82,7 @@ mod real {
     //   M1 — adopt did:key as the project's primary identifier; PeerId becomes detail.
     //   C3 — move identity code into roam/src/identity/ as its own module.
     //   C6 — audit every Keypair::generate_ed25519() call site, including the fall-through below.
-    /// Decode the libp2p-canonical protobuf-encoded keypair the JS
-    /// bridge loaded from IndexedDB. None → generate fresh (the
-    /// bridge will persist the bytes after this call returns so the
-    /// next session loads them back). Refusing to fall through to
-    /// "generate fresh" on a decode failure is deliberate: a corrupt
-    /// stored identity should surface as an error, not silently
-    /// rotate the PeerId behind the user's back.
-    fn load_or_generate_keypair(bytes: Option<&[u8]>) -> Result<identity::Keypair, NetError> {
-        match bytes {
-            Some(b) => identity::Keypair::from_protobuf_encoding(b).map_err(|e| {
-                NetError::ProviderInternal {
-                    reason: format!("identity decode: {e}"),
-                }
-            }),
-            None => Ok(identity::Keypair::generate_ed25519()),
-        }
-    }
-
-    /// Compose-up a fresh Ed25519 keypair and return its libp2p-
-    /// canonical protobuf encoding. The JS bridge calls this once on
-    /// first visit (when IndexedDB has no `roam/identity/v1` entry),
-    /// stores the returned bytes, and passes them to every subsequent
-    /// `roam_net_worker_provider_init` call so PeerId is stable
-    /// across sessions.
-    pub fn generate_identity_protobuf() -> Result<Vec<u8>, NetError> {
-        identity::Keypair::generate_ed25519()
-            .to_protobuf_encoding()
-            .map_err(|e| NetError::ProviderInternal {
-                reason: format!("identity encode: {e}"),
-            })
-    }
+    // Keypair handling lives in `crate::identity` per IDENTITY.md C3.
 
     /// Composite behaviour. The `NetworkBehaviour` derive synthesises
     /// `RoamBehaviourEvent` (one variant per sub-behaviour) which is
@@ -139,6 +109,10 @@ mod real {
 
     pub struct RustLibp2pProvider {
         self_peer_id: PeerId,
+        /// Pre-computed `did:key:z6Mk…` for the self pubkey, surfaced
+        /// in the SELF panel alongside the PeerId (S1). Computed once
+        /// at construction so the read path doesn't need the keypair.
+        self_did_key: String,
         cmd_tx: mpsc::UnboundedSender<Cmd>,
         events: Rc<RefCell<Vec<NetEvent>>>,
     }
@@ -157,9 +131,22 @@ mod real {
             bootstrap_addrs: Vec<String>,
             identity_bytes: Option<&[u8]>,
         ) -> Result<Self, NetError> {
-            let keypair = load_or_generate_keypair(identity_bytes)?;
+            let keypair = crate::identity::load_or_generate_keypair(identity_bytes)?;
             let peer_id = libp2p::PeerId::from(keypair.public());
             let self_peer_id = PeerId(peer_id.to_string());
+
+            // S1: pre-compute did:key for the SELF panel. Ed25519
+            // pubkey extraction can fail if the keypair somehow
+            // wasn't Ed25519 (today's bridge always feeds Ed25519
+            // bytes; the `else` branch protects against a future
+            // change that introduces a different key type without
+            // updating the did:key surface).
+            let self_did_key = match keypair.public().try_into_ed25519() {
+                Ok(ed25519_pub) => crate::identity::ed25519_pubkey_to_did_key(
+                    &ed25519_pub.to_bytes(),
+                ),
+                Err(_) => String::new(),
+            };
 
             // Gossipsub: use the default message-id function, which
             // combines source peer-id + sequence number. Hashing only
@@ -316,6 +303,7 @@ mod real {
 
             Ok(Self {
                 self_peer_id,
+                self_did_key,
                 cmd_tx,
                 events,
             })
@@ -349,6 +337,14 @@ mod real {
                 });
                 max_gap_ms = 0;
             }
+        }
+    }
+
+    impl RustLibp2pProvider {
+        /// `did:key:z6Mk…` for the self pubkey (S1). Used by the
+        /// SELF panel alongside `identity()` for the PeerId.
+        pub fn self_did_key(&self) -> &str {
+            &self.self_did_key
         }
     }
 
@@ -664,7 +660,7 @@ mod real {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use real::{generate_identity_protobuf, RustLibp2pProvider};
+pub use real::RustLibp2pProvider;
 
 // ---------- tests (native stub only) ----------------------------------
 

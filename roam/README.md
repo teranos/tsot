@@ -15,12 +15,10 @@ What i want:
 - each voxel is 0.5M by 0.5M (M = meters; so half a meter on a side) in my imagination, so a door would be 2 voxels wide and 4 high — that's 1M by 2M — making 8 voxels in total.
 - You can chat, but it's proximate, so, think hybrid of habbo and eve online. you can also DM people you know directly. Social component of TSOT is crucial, could even say that it's going to be the main thing that will determine success of the game.
 -
-<!-- IDENTITY MENU (roam/IDENTITY.md):
-       A7 — list 5 names per ecosystem who ship against each of these.
-       C2 — once the path is picked, cut the names that didn't win. -->
-- WebAuthn, did,
-- ActivityPub,
-- ATProto,
+- Identity is `did:key` (Ed25519 public key, multibase-encoded). The libp2p `PeerId` is the same key in a different encoding — derived, not separate. Persistence is the 32-byte private key in IndexedDB. See `IDENTITY.md` for the menu, `IDENTITY-RESEARCH.md` for the why.
+- Cross-device authority is UCAN, via `rs-ucan`. Capability delegation, not key transfer. Pairing pattern follows Fission ODD (PIN-confirmed handshake; the new device gets its own keypair + a delegated capability).
+- Hardware-backed keys (WebAuthn / secure enclave) are deferred (M3 on the menu). Desirable for theft resistance; loses portability on browsers without WebAuthn.
+- ATProto is the social / moderation layer, not the identifier (M2 on the menu). It binds an ATProto handle to a roam `did:key`. The moderation vision below is independent of the identifier choice — it layers on top.
   - for moderation, we allow for split realities to exist through different labelling,
   - meta-game: you may spend an hour in the labelling-service moderation soc and get rewarded for the audited work that occurred during this period.
   - Auditors audit labelling work.

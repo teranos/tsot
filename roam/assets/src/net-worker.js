@@ -13,7 +13,7 @@
 //     { cmd: 'unsubscribe', topic }
 //
 //   worker → main:
-//     { kind: 'ready', identity }                       // after init succeeds
+//     { kind: 'ready', identity, did_key }              // after init succeeds; did_key is `did:key:z6Mk…` (S1)
 //     { kind: 'error', where, message }                 // any failure
 //     { kind: 'events', messages: [{ topic, from, bytes, at_ms }] }
 //                                                       // periodic, ~50ms cadence
@@ -133,9 +133,10 @@ const realHandler = async (msg) => {
           ? msg.identity_bytes
           : new Uint8Array(msg.identity_bytes || []);
         identity = roam.roam_net_worker_provider_init(msg.bootstrap_json, identityBytes);
+        const didKey = roam.roam_net_worker_provider_self_did_key();
         self.postMessage({ kind: 'lifecycle', stage: 'provider-init-done' });
         initialized = true;
-        self.postMessage({ kind: 'ready', identity });
+        self.postMessage({ kind: 'ready', identity, did_key: didKey });
         startTickLoop();
         break;
       }
