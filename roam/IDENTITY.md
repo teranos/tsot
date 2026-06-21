@@ -26,7 +26,7 @@ enforce it.
 - **A4.** Read Bluesky/ATProto PDS docs; locate where a user's signing key lives and how the handle binds to it.
 - **A5.** Read UCAN v1.0 spec abstract + the invocation envelope shape.
 - **A6.** Open one browser-based DID wallet's UX (e.g. an ATProto client). Note what "verification" looks like to the user, in two sentences.
-- **A7.** List, in 5 names each, who in the wider ecosystem actually ships against: libp2p PeerId, `did:key`, ATProto, ActivityPub, UCAN.
+- ~~**A7.** List, in 5 names each, who in the wider ecosystem actually ships against: libp2p PeerId, `did:key`, ATProto, ActivityPub, UCAN.~~ ✓ findings in `IDENTITY-RESEARCH.md` (ATProto / ActivityPub rows skipped per PL alignment; libp2p ≥5 high confidence; did:key 4 verified + 1 unverified candidate; UCAN 5).
 - ~~**A8.** Trace, from source on disk, the data flow from `roam_net_generate_identity_bytes()` to PeerId emission. Draw it on paper.~~ ✓ Post-C3 the chain is short and lives in one module: `roam_net_generate_identity_bytes → identity::generate_identity_protobuf → bridge persists → next session passes bytes into roam_net_worker_provider_init → identity::load_or_generate_keypair → keypair.public() → PeerId`. Pen-and-paper redundant given the linear path.
 
 ## 🥄 Starters — small concrete work (1–3 hours)
