@@ -930,6 +930,29 @@ impl GameState {
         None
     }
 
+    /// Slice #5: zone-membership check for activation `from_zones`.
+    /// True iff `iid` is in any of the listed zones for `controller`.
+    /// `Attached` is satisfied when `iid` is in some host's attached list
+    /// (host on any board). Mirrors the relative-to-controller pattern
+    /// the play.rs payment paths use for HAND/MILL/GRAVEYARD.
+    pub fn iid_in_any_activation_zone(
+        &self,
+        iid: &InstanceId,
+        controller: PlayerId,
+        zones: &[crate::card::ActivationZone],
+    ) -> bool {
+        use crate::card::ActivationZone;
+        let p = self.player(controller);
+        zones.iter().any(|z| match z {
+            ActivationZone::Board => p.board.contains(iid),
+            ActivationZone::Hand => p.hand.contains(iid),
+            ActivationZone::Graveyard => p.graveyard.contains(iid),
+            ActivationZone::Exile => p.exile.contains(iid),
+            ActivationZone::Deck => p.deck.contains(iid),
+            ActivationZone::Attached => self.host_of(iid).is_some(),
+        })
+    }
+
     pub fn add_attached(&mut self, host: &InstanceId, attached: &InstanceId) {
         let Some(inst) = self.card_pool.get_mut(host) else {
             return;

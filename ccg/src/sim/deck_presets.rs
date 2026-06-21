@@ -232,24 +232,32 @@ pub fn build_preset_decks(_playable: &[Card]) -> Vec<PresetDeck> {
             name: "Faal Test (chaos eng.)".to_string(),
             cards: std::iter::repeat_n("faal".to_string(), 50).collect(),
         },
-        // Slice #4 verifier: 50× Golden Egg. Golden Egg's activated
-        // ability is "T, exile this: draw a card" — the only corpus
-        // card today whose activated cost uses CostSource::SelfExile.
-        // Cast one to board, tap+exile-self to draw. Verifies the
-        // post-effect SelfExile move from `play/activate.rs` runs and
-        // the source actually lands in EXILE.
-        //
-        // Self-sustaining loop: hand starts with 5 eggs; U.10 end-of-
-        // turn discard down to 6 puts a 6th-drawn egg in graveyard on
-        // turn 1, enabling the 1gy cost from turn 2 onward. Each cast
-        // pays 1gy + 4mill — net +3 eggs to graveyard per cast. Each
-        // T-activation draws a fresh egg from deck. The loop runs
-        // until the deck runs out (deck-out loss). Pure non-legal
-        // chaos-eng deck, same pattern as faal-chaos.
+        // Slice #4 + #5 verifier: 25× Golden Egg (SELF activated, slice
+        // #4) + 10× Yellow Ghost + 5× Clear Yellow + 10× yellow symbols
+        // (slice #5 from_zones: yellow ghost's attached + graveyard
+        // activations both tutor a yellow symbol; clear-yellow is the
+        // yellow tutor). Eggs sustain the graveyard pump so milled
+        // ghosts have something to activate from.
         PresetDeck {
             id: "golden-egg-test".to_string(),
-            name: "Golden Egg Test (slice #4 SELF activated)".to_string(),
-            cards: std::iter::repeat_n("golden-egg".to_string(), 50).collect(),
+            name: "Golden Egg + Yellow Ghost Test (slices #4 + #5)".to_string(),
+            cards: {
+                let mut v: Vec<String> = Vec::with_capacity(50);
+                v.extend(std::iter::repeat_n("golden-egg".to_string(), 23));
+                v.extend(std::iter::repeat_n("yellow-ghost".to_string(), 8));
+                v.extend(std::iter::repeat_n("sacred-error".to_string(), 4));
+                v.extend(std::iter::repeat_n("clear-yellow".to_string(), 5));
+                for sym in [
+                    "yellow-am-symbol",
+                    "yellow-ax-symbol",
+                    "yellow-ix-symbol",
+                    "yellow-pulse-symbol",
+                    "yellow-sem-symbol",
+                ] {
+                    v.extend(std::iter::repeat_n(sym.to_string(), 2));
+                }
+                v
+            },
         },
     ]
 }

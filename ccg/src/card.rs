@@ -710,6 +710,22 @@ pub struct Card {
 /// Either, both, or neither can be present. `cost_tap = false` with
 /// empty components is a free activation; `cost_tap = true` with
 /// `[Hand{amount=1}]` is `T, 1 hand: …`.
+/// Where an activated ability can fire from. Default = `[Board]` (mirrors
+/// the pre-#5 behavior). Extending the list lets a card declare an
+/// activation that fires from GRAVEYARD (ghost-style "while in your
+/// graveyard, exile this card: …"), ATTACHED (portable-rider style
+/// "while attached, …"), or other non-BOARD zones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ActivationZone {
+    Board,
+    Hand,
+    Graveyard,
+    Exile,
+    Deck,
+    /// The source is in some host's `attached` list (host on BOARD).
+    Attached,
+}
+
 #[derive(Clone)]
 pub struct ActivatedAbility {
     pub cost_tap: bool,
@@ -731,6 +747,9 @@ pub struct ActivatedAbility {
     /// of category X" pre-check.
     pub target: Option<Target>,
     pub effect: Function,
+    /// Zones from which this ability can be activated. Default
+    /// `[ActivationZone::Board]` matches the pre-#5 implicit behavior.
+    pub from_zones: Vec<ActivationZone>,
 }
 
 impl std::fmt::Debug for ActivatedAbility {

@@ -1510,16 +1510,36 @@ pub fn run_game_continue(
 }
 
 /// Build the activatable-abilities list a human main-phase prompt
-/// surfaces. Walks the player's board, expands each card's
-/// activations, and includes any whose `can_activate` check passes
-/// right now (the same predicate the heuristic activation pass uses).
+/// surfaces. Walks every zone where the player's cards could declare
+/// an activation (board, hand, graveyard, exile, deck, attached-of-
+/// any-host). Each card's activations are filtered by `can_activate`,
+/// which honors the ability's declared `from_zones`.
 pub(crate) fn enumerate_human_activations(
     state: &GameState,
     player: PlayerId,
 ) -> Vec<super::human::ActivationOption> {
     let mut out = Vec::new();
-    let ids: Vec<InstanceId> = state.player(player).board.clone();
-    for iid in &ids {
+    // Candidate iids: every card the player controls across every zone,
+    // plus every attached card whose host is on either player's board
+    // (an attached card's controller can fire its from-attached ability
+    // regardless of which side the host is on).
+    let p = state.player(player);
+    let mut candidates: Vec<InstanceId> = Vec::new();
+    candidates.extend(p.board.iter().cloned());
+    candidates.extend(p.hand.iter().cloned());
+    candidates.extend(p.graveyard.iter().cloned());
+    candidates.extend(p.exile.iter().cloned());
+    candidates.extend(p.deck.iter().cloned());
+    for (_iid, inst) in state.card_pool.iter() {
+        for aid in &inst.attached {
+            if let Some(ainst) = state.card_pool.get(aid) {
+                if ainst.controller == player && !candidates.contains(aid) {
+                    candidates.push(aid.clone());
+                }
+            }
+        }
+    }
+    for iid in &candidates {
         let n = state.activation_count(iid);
         if n == 0 {
             continue;

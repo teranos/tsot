@@ -1698,6 +1698,7 @@ mod suppress_tests {
                 validate: None,
                 target: None,
                 effect,
+                from_zones: vec![crate::card::ActivationZone::Board],
             });
     }
 

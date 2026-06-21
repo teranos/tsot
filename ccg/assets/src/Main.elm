@@ -2447,16 +2447,44 @@ cardOptsForZone zone prompt combat maybeSlice actsByIid (Card.Card c) =
                             Dict.get cIid actsByIid
                                 |> Maybe.withDefault []
                                 |> List.reverse
+
+                        -- An attached card may declare its own activations
+                        -- (slice #5 `from_zones = {"attached"}`). The engine
+                        -- surfaces them via `data.activations` keyed on the
+                        -- attached iid; we look that iid up here so the
+                        -- attached row gets clickable + activation-row
+                        -- overlays of its own. Without this resolver,
+                        -- viewAttachedRow falls back to faceDownConfig and
+                        -- the click never dispatches.
+                        attachedResolver attachedIid =
+                            let
+                                attachedActs =
+                                    Dict.get attachedIid actsByIid
+                                        |> Maybe.withDefault []
+                                        |> List.reverse
+                            in
+                            case attachedActs of
+                                [] ->
+                                    { clickable = Nothing, overlays = [] }
+
+                                first :: _ ->
+                                    { clickable = Just (\_ -> BoardActivationClicked first)
+                                    , overlays = List.map activationRow attachedActs
+                                    }
+
+                        withAttached cfg =
+                            { cfg | attachedConfig = Just attachedResolver }
                     in
                     case acts of
                         [] ->
-                            base
+                            withAttached base
 
                         first :: _ ->
-                            { base
-                                | clickable = Just (\_ -> BoardActivationClicked first)
-                                , overlays = List.map activationRow acts
-                            }
+                            withAttached
+                                { base
+                                    | clickable = Just (\_ -> BoardActivationClicked first)
+                                    , overlays = List.map activationRow acts
+                                }
 
                 _ ->
                     base

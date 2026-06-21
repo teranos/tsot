@@ -589,6 +589,29 @@ fn parse_one_activated_entry(
             }
         },
     };
+    // RULES A.13: activation zone list. Default `[Board]` matches the
+    // pre-#5 implicit behavior. Lua accepts a single string
+    // (`from_zones = "graveyard"`) or a list (`from_zones = {"board", "graveyard"}`).
+    let from_zones = match item.get::<Value>("from_zones")? {
+        Value::Nil => vec![crate::card::ActivationZone::Board],
+        Value::String(s) => vec![parse_activation_zone(s.to_str()?.as_ref(), field_label)?],
+        Value::Table(t) => {
+            let mut out = Vec::new();
+            for entry in t.sequence_values::<String>() {
+                out.push(parse_activation_zone(&entry?, field_label)?);
+            }
+            if out.is_empty() {
+                vec![crate::card::ActivationZone::Board]
+            } else {
+                out
+            }
+        }
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "{field_label} from_zones must be a string or list of strings, got {other:?}"
+            )))
+        }
+    };
     Ok(ActivatedAbility {
         cost_tap,
         cost_components,
@@ -597,7 +620,24 @@ fn parse_one_activated_entry(
         validate,
         target,
         effect,
+        from_zones,
     })
+}
+
+fn parse_activation_zone(s: &str, field_label: &str) -> mlua::Result<crate::card::ActivationZone> {
+    use crate::card::ActivationZone;
+    match s.to_ascii_lowercase().as_str() {
+        "board" => Ok(ActivationZone::Board),
+        "hand" => Ok(ActivationZone::Hand),
+        "graveyard" | "gy" => Ok(ActivationZone::Graveyard),
+        "exile" => Ok(ActivationZone::Exile),
+        "deck" => Ok(ActivationZone::Deck),
+        "attached" | "attach" => Ok(ActivationZone::Attached),
+        other => Err(mlua::Error::runtime(format!(
+            "unknown {field_label} from_zones entry: {other:?} \
+             (allowed: board, hand, graveyard, exile, deck, attached)"
+        ))),
+    }
 }
 
 /// Parse a `ModifierValue` from a Lua value. Accepts either:
@@ -1986,5 +2026,46 @@ mod tests {
         assert_eq!(errors[0].severity, crate::error::Severity::Warn);
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Slice #5 corpus wiring: every ghost in the 6-color cycle plus
+    /// durian-elemental must load with the new `from_zones` schema on
+    /// at least one activated ability. Pins the fact that the engine's
+    /// ActivationZone parse path accepts what these cards declare.
+    #[test]
+    fn ghost_cycle_and_durian_load_with_zoned_activations() {
+        use crate::card::{ActivationZone, CardRegistry};
+        let registry = CardRegistry::load_embedded().expect("embedded registry must load");
+        for id in [
+            "blue-ghost",
+            "green-ghost",
+            "yellow-ghost",
+            "purple-ghost",
+            "red-ghost",
+            "pink-ghost",
+        ] {
+            let c = registry
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} must be in the registry"));
+            assert_eq!(c.activated.len(), 2, "{id} has 2 activated abilities");
+            assert!(
+                c.activated[0].from_zones.contains(&ActivationZone::Attached),
+                "{id} first activation is from attached"
+            );
+            assert!(
+                c.activated[1].from_zones.contains(&ActivationZone::Graveyard),
+                "{id} second activation is from graveyard"
+            );
+        }
+        let durian = registry
+            .get("durian-elemental")
+            .expect("durian-elemental must be in the registry");
+        assert_eq!(durian.activated.len(), 1, "durian has 1 activated ability");
+        assert!(
+            durian.activated[0]
+                .from_zones
+                .contains(&ActivationZone::Graveyard),
+            "durian activation is from graveyard"
+        );
     }
 }

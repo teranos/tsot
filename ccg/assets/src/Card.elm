@@ -305,6 +305,18 @@ type Timing
     | Sorcery
 
 
+{-| Per-attached-card override the host's Config can carry. The
+attached row always uses `faceDownConfig` as its base; the override
+only layers on `clickable` + `overlays`. A small struct rather than
+a full nested `Config msg` because Elm forbids recursive type
+aliases — these two fields are what we need for attached activations.
+-}
+type alias AttachedOverride msg =
+    { clickable : Maybe (String -> msg)
+    , overlays : List (Html msg)
+    }
+
+
 {-| Polymorphic msg config — caller in Main / GameScreen wires in
 their concrete Msg. Mirrors SpectatorBar.Config / LogPanel pattern.
 
@@ -325,6 +337,7 @@ type alias Config msg =
     , borderColor : Maybe String
     , borderStyle : Maybe String
     , overlays : List (Html msg)
+    , attachedConfig : Maybe (String -> AttachedOverride msg)
     }
 
 
@@ -339,6 +352,7 @@ defaultConfig =
     , borderColor = Nothing
     , borderStyle = Nothing
     , overlays = []
+    , attachedConfig = Nothing
     }
 
 
@@ -514,24 +528,47 @@ view cfg (Card d) =
             [ viewSingle cfg d
             , Keyed.node "div"
                 [ class "attached-strip" ]
-                (List.map keyedAttachedRow d.attached)
+                (List.map (keyedAttachedRow cfg) d.attached)
             ]
 
 
-keyedAttachedRow : Card -> ( String, Html msg )
-keyedAttachedRow card =
-    ( key card, viewAttachedRow card )
+keyedAttachedRow : Config msg -> Card -> ( String, Html msg )
+keyedAttachedRow parentCfg card =
+    ( key card, viewAttachedRow parentCfg card )
 
 
-viewAttachedRow : Card -> Html msg
-viewAttachedRow (Card d) =
+viewAttachedRow : Config msg -> Card -> Html msg
+viewAttachedRow parentCfg (Card d) =
     -- ONE element per attached iid. `.attached-row` clips to a thin
     -- visible strip; `:hover` on the row pops it out + reveals face
-    -- via CSS on the same element. No second DOM node. Slice 2 of
-    -- the Axiom roadmap keys the parent .attached-strip on iid so
-    -- the row itself is identity-preserved across renders too.
+    -- via CSS on the same element. No second DOM node.
+    --
+    -- Per-attached config: parent passes `attachedConfig` (a function
+    -- iid -> Config msg). When set, the attached card uses its own
+    -- resolved config — so an attached card with an activation can be
+    -- clickable AND carry its own overlays (the activation row). When
+    -- Nothing, default to faceDownConfig (the strip-only behaviour).
+    let
+        baseCfg =
+            faceDownConfig
+
+        childCfg =
+            case ( parentCfg.attachedConfig, d.iid ) of
+                ( Just resolver, Just iid ) ->
+                    let
+                        override =
+                            resolver iid
+                    in
+                    { baseCfg
+                        | clickable = override.clickable
+                        , overlays = override.overlays
+                    }
+
+                _ ->
+                    baseCfg
+    in
     div [ class "attached-row" ]
-        [ viewSingle faceDownConfig d ]
+        [ viewSingle childCfg d ]
 
 
 {-| All card-internal CSS — the visual contract of the primitive.

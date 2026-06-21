@@ -1,8 +1,5 @@
--- Red Ghost — 1/1 colored ghost. Two printed activated abilities,
--- both currently non-executable: SELF cost in activated abilities and
--- activations from non-BOARD zones (ATTACHED, GRAVEYARD) are deferred
--- per LIMITATIONS.md "Deferred:". The ability text lives in the corpus
--- as design intent until the engine catches up.
+-- Red ghost. Two zoned activations: from attached → tutor to board,
+-- from graveyard → tutor to hand.
 return {
   id = "red-ghost",
   name = "Red Ghost",
@@ -17,7 +14,57 @@ return {
   },
   stats = {x = 1, y = 1},
   abilities = {
-    "while attached, you may exile this card: search your deck for a red symbol card and put it on the board.",
-    "while this card is in your graveyard, you may exile this card: search your deck for a red symbol card and put it in your hand.",
+    "while attached, exile this: search your deck for a red symbol card and put it on the board.",
+    "while in your graveyard, exile this: search your deck for a red symbol card and put it in your hand.",
+  },
+  activated = {
+    {
+      cost = {{source = "self", amount = 1}},
+      text = "while attached, exile this: tutor a red symbol to the board.",
+      timing = "instant",
+      from_zones = {"attached"},
+      effect = function(game, self)
+        local pool = {}
+        for _, iid in ipairs(game.zones(self.owner).deck) do
+          local c = game.card(iid)
+          if c and c.type == "symbol" and c.colors then
+            for _, col in ipairs(c.colors) do
+              if col == "red" then
+                table.insert(pool, iid)
+                break
+              end
+            end
+          end
+        end
+        if #pool == 0 then return end
+        local picked = game.choose_card(pool, {optional = true, prompt = "red symbol → board"})
+        if picked == nil then return end
+        game.move_to(picked, self.owner, "board")
+      end,
+    },
+    {
+      cost = {{source = "self", amount = 1}},
+      text = "while in your graveyard, exile this: tutor a red symbol to hand.",
+      timing = "instant",
+      from_zones = {"graveyard"},
+      effect = function(game, self)
+        local pool = {}
+        for _, iid in ipairs(game.zones(self.owner).deck) do
+          local c = game.card(iid)
+          if c and c.type == "symbol" and c.colors then
+            for _, col in ipairs(c.colors) do
+              if col == "red" then
+                table.insert(pool, iid)
+                break
+              end
+            end
+          end
+        end
+        if #pool == 0 then return end
+        local picked = game.choose_card(pool, {optional = true, prompt = "red symbol → hand"})
+        if picked == nil then return end
+        game.move(picked, "hand")
+      end,
+    },
   },
 }

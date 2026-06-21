@@ -43,6 +43,7 @@ impl GameState {
             validate,
             ability_target,
             allow_x_zero,
+            from_zones,
         ) = {
             let inst = self
                 .card_pool
@@ -64,6 +65,7 @@ impl GameState {
                 ability.validate.clone(),
                 ability.target,
                 inst.card.allow_x_zero,
+                ability.from_zones.clone(),
             )
         };
         // RULES A.9 + P.32: declarative target category. If set and no
@@ -74,9 +76,8 @@ impl GameState {
             }
         }
 
-        // Source must be on its controller's BOARD. v1 doesn't model
-        // activations from hand / graveyard / attached.
-        if !self.player(controller).board.contains(iid) {
+        // Source must be in one of the ability's declared from_zones.
+        if !self.iid_in_any_activation_zone(iid, controller, &from_zones) {
             return Err(ActivateError::NotOnBoard);
         }
 
@@ -330,7 +331,7 @@ impl GameState {
         let Some(ability) = self.activation_at(iid, ability_idx) else {
             return false;
         };
-        if !self.player(inst.controller).board.contains(iid) {
+        if !self.iid_in_any_activation_zone(iid, inst.controller, &ability.from_zones) {
             return false;
         }
         // RULES P.32: declarative target category — refuse if no legal
@@ -456,6 +457,7 @@ mod choice_pending_tests {
                 validate: None,
                 target: None,
                 effect,
+                from_zones: vec![crate::card::ActivationZone::Board],
             });
 
         // Empty replay → the first choose_card call returns Pending.
@@ -539,6 +541,7 @@ mod choice_pending_tests {
                 validate: None,
                 target: None,
                 effect,
+                from_zones: vec![crate::card::ActivationZone::Board],
             });
 
         lua.globals()
@@ -615,6 +618,7 @@ mod choice_pending_tests {
                 validate: None,
                 target: None,
                 effect,
+                from_zones: vec![crate::card::ActivationZone::Board],
             });
 
         let result = {
@@ -643,5 +647,118 @@ mod choice_pending_tests {
             !state.a.board.contains(&source_iid),
             "source must leave board"
         );
+    }
+
+    #[test]
+    fn activate_ability_fires_from_graveyard_when_zone_declared() {
+        use crate::card::ActivationZone;
+        let lua = Lua::new();
+        let mut state = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let card_iid = state.a.hand[0].clone();
+        state
+            .move_card(&card_iid, PlayerId::A, Zone::Hand, Zone::Graveyard)
+            .unwrap();
+
+        let effect: mlua::Function = lua
+            .load(
+                r#"return function(game, self)
+                     _G.gy_activation_count = (_G.gy_activation_count or 0) + 1
+                   end"#,
+            )
+            .eval()
+            .unwrap();
+        state
+            .card_pool
+            .get_mut(&card_iid)
+            .unwrap()
+            .card
+            .activated
+            .push(ActivatedAbility {
+                cost_tap: false,
+                cost_components: vec![],
+                text: String::new(),
+                timing: Timing::Instant,
+                validate: None,
+                target: None,
+                effect,
+                from_zones: vec![ActivationZone::Graveyard],
+            });
+
+        lua.globals().set("gy_activation_count", 0_i32).unwrap();
+        assert!(
+            state.can_activate(&card_iid, 0),
+            "graveyard-zoned activation should pass can_activate"
+        );
+        let result = {
+            let mut ctx = EventContext::lua_only(&lua);
+            state.activate_ability(
+                &card_iid,
+                0,
+                None,
+                ActivateChoices::default(),
+                Some(&mut ctx),
+            )
+        };
+        assert!(result.is_ok(), "activation from graveyard: {result:?}");
+        let fired: i32 = lua.globals().get("gy_activation_count").unwrap();
+        assert_eq!(fired, 1);
+    }
+
+    #[test]
+    fn activate_ability_fires_from_attached_when_zone_declared() {
+        use crate::card::ActivationZone;
+        let lua = Lua::new();
+        let mut state = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let host_iid = state.a.hand[0].clone();
+        let attached_iid = state.a.hand[1].clone();
+        state
+            .move_card(&host_iid, PlayerId::A, Zone::Hand, Zone::Board)
+            .unwrap();
+        state.a.hand.retain(|i| i != &attached_iid);
+        state.add_attached(&host_iid, &attached_iid);
+
+        let effect: mlua::Function = lua
+            .load(
+                r#"return function(game, self)
+                     _G.attached_activation_count = (_G.attached_activation_count or 0) + 1
+                   end"#,
+            )
+            .eval()
+            .unwrap();
+        state
+            .card_pool
+            .get_mut(&attached_iid)
+            .unwrap()
+            .card
+            .activated
+            .push(ActivatedAbility {
+                cost_tap: false,
+                cost_components: vec![],
+                text: String::new(),
+                timing: Timing::Instant,
+                validate: None,
+                target: None,
+                effect,
+                from_zones: vec![ActivationZone::Attached],
+            });
+
+        lua.globals().set("attached_activation_count", 0_i32).unwrap();
+        assert!(
+            state.can_activate(&attached_iid, 0),
+            "attached-zoned activation should pass can_activate"
+        );
+        let result = {
+            let mut ctx = EventContext::lua_only(&lua);
+            state.activate_ability(
+                &attached_iid,
+                0,
+                None,
+                ActivateChoices::default(),
+                Some(&mut ctx),
+            )
+        };
+        assert!(result.is_ok(), "activation from attached: {result:?}");
+        let fired: i32 = lua.globals().get("attached_activation_count").unwrap();
+        assert_eq!(fired, 1);
     }
 }
