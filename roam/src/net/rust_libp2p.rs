@@ -67,7 +67,7 @@ mod real {
     use libp2p::core::transport::Transport as _;
     use libp2p::core::upgrade;
     use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
-    use libp2p::{gossipsub, identify, identity, ping, Swarm, SwarmBuilder};
+    use libp2p::{gossipsub, identify, ping, Swarm, SwarmBuilder};
     use libp2p_connection_limits as connection_limits;
     use std::cell::RefCell;
     use std::rc::Rc;
