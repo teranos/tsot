@@ -21,6 +21,21 @@ use crate::net::{Author, NetError, NetEvent, NetworkProvider, PeerId, Topic};
 /// every node — gossipsub treats this as a flat namespace.
 pub const POSITIONS_TOPIC: &str = "roam-positions/v1";
 
+/// Topic where canonical-class flower pickups propagate. Each message
+/// claims a single `(x, y)` tile in canonical world state; identified
+/// peers consume the claim into their local `canonical_picked` set,
+/// which the renderer reads to hide the flower from every canonical
+/// player's view. Non-canonical players do not publish here — their
+/// pickups stay in `Player.picked` (sandbox-only).
+pub const PICKUPS_TOPIC: &str = "roam-pickups/v1";
+
+/// Every gossipsub topic this node subscribes to. The JS bridge reads
+/// this list via `roam_subscribed_topics_json` on worker-ready and
+/// dispatches one `subscribe` command per topic to the network worker.
+/// Single source of truth: adding a topic is a one-line edit here,
+/// JS never carries topic strings.
+pub const ALL_TOPICS: &[&str] = &[POSITIONS_TOPIC, PICKUPS_TOPIC];
+
 /// One remote peer's last-known state. Rendered as a marker on the
 /// world canvas in phase 2d. Stale entries (peers we haven't heard
 /// from in `PEER_TIMEOUT_MS`) are pruned in `Net::tick` to avoid
@@ -56,6 +71,12 @@ pub struct Net {
     /// still. `wrapping_add` so 32-bit u32 dirty-flag stays cheap to
     /// read across the FFI without BigInt-marshaling at the boundary.
     peer_state_seq: u32,
+    /// Canonical-class pickup claims received via gossipsub, waiting
+    /// for the FFI's per-tick drain to apply them into
+    /// `World.canonical_picked`. Per-tick batching avoids interleaving
+    /// network ingress with frame state in mid-tick, which would race
+    /// the renderer reading `canonical_picked` during viewport build.
+    pending_canonical_pickups: Vec<(i32, i32)>,
 }
 
 impl Net {
@@ -64,6 +85,7 @@ impl Net {
             provider,
             peers: BTreeMap::new(),
             peer_state_seq: 0,
+            pending_canonical_pickups: Vec::new(),
         }
     }
 
@@ -92,18 +114,35 @@ impl Net {
                     bytes,
                     at_ms,
                 } => {
-                    // Diagnostic trace — every incoming gossip event
-                    // surfaces in the event-log panel so cross-substrate
-                    // parity (does tab-rust see tab-js's positions and
-                    // vice versa?) is observable without inspecting
-                    // protocol internals.
-                    crate::trace::emit(crate::trace::TraceEvent::Note {
-                        tag: "net::recv",
-                        msg: format!(
-                            "topic={} from={} bytes={} at_ms={}",
-                            topic.0, from.0.0, bytes.len(), at_ms
-                        ),
-                    });
+                    // Per-message trace removed in 0.3.6: at ~10
+                    // events/sec/peer it bloated localStorage to quota
+                    // exceeded and made the tab unusable. The F2-era
+                    // cross-substrate-parity question it answered is
+                    // settled — positions clearly flow. If a future
+                    // debug need arises, add a rate-limited emit gated
+                    // on a build flag rather than the per-message hot
+                    // path.
+                    if topic.0 == PICKUPS_TOPIC {
+                        match serde_json::from_slice::<PickupWireIn>(&bytes) {
+                            Ok(pick) => {
+                                crate::perf::PICKUP_RECEIVED
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                self.pending_canonical_pickups.push((pick.x, pick.y));
+                            }
+                            Err(e) => {
+                                #[cfg(target_arch = "wasm32")]
+                                crate::error::emit(
+                                    crate::error::Severity::Warn,
+                                    "roam::net::Net::tick",
+                                    "pickup decode failed",
+                                    format!("from={from:?} reason={e}"),
+                                );
+                                #[cfg(not(target_arch = "wasm32"))]
+                                let _ = e;
+                            }
+                        }
+                        continue;
+                    }
                     if topic.0 != POSITIONS_TOPIC {
                         continue;
                     }
@@ -155,13 +194,28 @@ impl Net {
                 }
                 NetEvent::SubscriptionChange { .. } => {}
                 NetEvent::Error(err) => {
-                    // Routine network errors (publish-duplicate, no-peers,
-                    // dial failures during normal operation) belong in the
-                    // log, NOT the cursor popover. Same anti-pattern fix
-                    // as `d21a533` on the JS-libp2p path: visibility yes,
-                    // attention-grab no. The trace bus is the right surface
-                    // — these events flow into the event-log panel the
-                    // user already reads.
+                    // Increment the per-topic delivery_err counter
+                    // when this is an async PublishFailed — this is
+                    // the truthful "publish didn't make it" measure
+                    // that `publish_pickup`/`publish_position`'s
+                    // sync-Ok counter alone couldn't see. The total
+                    // delivered ≈ attempted − sync_err − delivery_err.
+                    if let NetError::PublishFailed { topic, .. } = &err {
+                        if topic.0 == PICKUPS_TOPIC {
+                            crate::perf::PICKUP_PUBLISH_DELIVERY_ERR
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        } else if topic.0 == POSITIONS_TOPIC {
+                            crate::perf::POSITION_PUBLISH_DELIVERY_ERR
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    // Stable-format trace so the JS-side fingerprint
+                    // collapse (tag-based, `js-bridge.js:354`) merges
+                    // repeats into one row with `×N`. Once `net::recv`
+                    // stops interleaving (silenced above this block),
+                    // a flood of `NoPeersSubscribedToTopic` collapses
+                    // to one visible line — visibility preserved, log
+                    // pressure relieved.
                     crate::trace::emit(crate::trace::TraceEvent::Note {
                         tag: "net::provider_error",
                         msg: format!("{err:?}"),
@@ -194,7 +248,7 @@ impl Net {
     /// separate slice once incoming messages are routed through the
     /// seam too.
     //
-    // IDENTITY MENU (roam/IDENTITY.md):
+    // IDENTITY MENU (roam/docs/identity.md):
     //   S7 — sign the broadcast with the identity key; verify on receive.
     //        Wire-format change is part of this slice.
     pub fn publish_position(
@@ -220,16 +274,88 @@ impl Net {
             z,
             f: facing,
         };
-        let bytes = serde_json::to_vec(&msg).map_err(|e| NetError::ProviderInternal {
-            reason: format!("position encode failed: {e}"),
+        crate::perf::POSITION_PUBLISH_ATTEMPTED
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bytes = serde_json::to_vec(&msg).map_err(|e| {
+            crate::perf::POSITION_PUBLISH_ERR
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            NetError::ProviderInternal {
+                reason: format!("position encode failed: {e}"),
+            }
         })?;
-        self.provider.publish(&Topic(POSITIONS_TOPIC.to_string()), &bytes)
+        let result = self
+            .provider
+            .publish(&Topic(POSITIONS_TOPIC.to_string()), &bytes);
+        match &result {
+            Ok(_) => {
+                crate::perf::POSITION_PUBLISH_OK
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            Err(_) => {
+                crate::perf::POSITION_PUBLISH_ERR
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        result
     }
 
     /// Subscribe to the canonical positions topic. Called once from
     /// the FFI's `roam_net_init`.
     pub fn subscribe_positions(&mut self) -> Result<(), NetError> {
         self.provider.subscribe(&Topic(POSITIONS_TOPIC.to_string()))
+    }
+
+    /// M6 — broadcast a canonical flower-pickup claim. Called from
+    /// `World::try_pickup`'s Canonical branch right after the local
+    /// state mutation. Wire is the smallest viable JSON envelope
+    /// (`{x, y}`); the author is the libp2p envelope's signed source,
+    /// recoverable by any identified peer via `Author::did_key` per
+    /// M5 — so the payload doesn't carry the claim of identity
+    /// (libp2p already verified it).
+    pub fn publish_pickup(&mut self, x: i32, y: i32) -> Result<(), NetError> {
+        #[derive(Serialize)]
+        struct PickupWire {
+            x: i32,
+            y: i32,
+        }
+        crate::perf::PICKUP_PUBLISH_ATTEMPTED
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bytes = serde_json::to_vec(&PickupWire { x, y }).map_err(|e| {
+            crate::perf::PICKUP_PUBLISH_ERR
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            NetError::ProviderInternal {
+                reason: format!("pickup encode failed: {e}"),
+            }
+        })?;
+        let result = self
+            .provider
+            .publish(&Topic(PICKUPS_TOPIC.to_string()), &bytes);
+        match &result {
+            Ok(_) => {
+                crate::perf::PICKUP_PUBLISH_OK
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            Err(_) => {
+                crate::perf::PICKUP_PUBLISH_ERR
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        result
+    }
+
+    /// M6 — subscribe to the canonical pickups topic. Called once from
+    /// the FFI's `roam_net_init` alongside `subscribe_positions`.
+    pub fn subscribe_pickups(&mut self) -> Result<(), NetError> {
+        self.provider.subscribe(&Topic(PICKUPS_TOPIC.to_string()))
+    }
+
+    /// M6 — drain the queue of canonical-class pickup claims received
+    /// since the last call. The FFI applies each `(x, y)` to
+    /// `World.canonical_picked` so the renderer hides the flower from
+    /// every identified peer's view. Drain-on-read: a second call
+    /// without new ingress returns empty.
+    pub fn drain_pending_canonical_pickups(&mut self) -> Vec<(i32, i32)> {
+        std::mem::take(&mut self.pending_canonical_pickups)
     }
 }
 
@@ -243,6 +369,14 @@ struct PositionWireIn {
     x: f32,
     y: f32,
     f: u8,
+}
+
+/// Wire shape for incoming canonical pickups. Matches the outbound
+/// `PickupWire` exactly — same struct on both sides of the seam.
+#[derive(Deserialize)]
+struct PickupWireIn {
+    x: i32,
+    y: i32,
 }
 
 #[cfg(test)]
@@ -367,6 +501,50 @@ mod tests {
         assert!(ids.contains("12D3KooWAuthorC"));
     }
 
+    fn pickup_event(author_id: &str, x: i32, y: i32) -> NetEvent {
+        let bytes = serde_json::json!({ "x": x, "y": y }).to_string().into_bytes();
+        NetEvent::Message {
+            topic: Topic(PICKUPS_TOPIC.to_string()),
+            from: Author(PeerId(author_id.to_string())),
+            bytes,
+            at_ms: 1_700_000_000_000,
+        }
+    }
+
+    /// M6 — incoming canonical pickup messages queue into Net so the
+    /// FFI can drain them and apply to `World.canonical_picked` once
+    /// per tick. The pickup topic and the positions topic flow through
+    /// the same `NetEvent::Message` stream; Net.tick discriminates on
+    /// topic and routes accordingly. Falsifies the regression where
+    /// pickups silently land in the peer table (treated as position
+    /// updates) or get discarded with no queue access.
+    #[test]
+    fn net_tick_queues_pickup_messages_for_application() {
+        let mut provider = StubProvider::new("12D3KooWself");
+        provider.events.push(pickup_event("12D3KooWPeerA", 11, 22));
+        provider.events.push(pickup_event("12D3KooWPeerB", -5, 6));
+        let mut net = Net::new(Box::new(provider));
+        net.tick(1_700_000_000_000);
+        let drained = net.drain_pending_canonical_pickups();
+        assert_eq!(drained.len(), 2);
+        assert!(drained.contains(&(11, 22)));
+        assert!(drained.contains(&(-5, 6)));
+    }
+
+    /// M6 — draining the queue empties it. Falsifies the regression
+    /// where pickups stay in the queue across calls (would cause the
+    /// same canonical pickup to be re-applied every tick, exponential
+    /// repeats in the canonical_picked set's churn metrics).
+    #[test]
+    fn drain_pending_canonical_pickups_empties_the_queue() {
+        let mut provider = StubProvider::new("12D3KooWself");
+        provider.events.push(pickup_event("12D3KooWPeerA", 1, 1));
+        let mut net = Net::new(Box::new(provider));
+        net.tick(1_700_000_000_000);
+        assert_eq!(net.drain_pending_canonical_pickups().len(), 1);
+        assert!(net.drain_pending_canonical_pickups().is_empty(), "second drain must be empty");
+    }
+
     /// Re-broadcast of a position from the same author updates the
     /// existing peer entry rather than inserting a duplicate. This
     /// is the "I moved, here's my new (x,y)" path; the table must
@@ -385,5 +563,236 @@ mod tests {
         assert_eq!(peers.len(), 1, "same author across two messages → one peer entry");
         assert!((peers[0].x - 7.5).abs() < 1e-6);
         assert!((peers[0].y - 8.5).abs() < 1e-6);
+    }
+
+    /// `ALL_TOPICS` is the canonical list the JS bridge reads via
+    /// `roam_subscribed_topics_json`. It must contain every topic
+    /// the application publishes to or expects to receive on. A new
+    /// topic that's added to the publish/subscribe paths but missing
+    /// here will silently fail to deliver across peers (gossipsub
+    /// won't announce the subscribe → mesh empty for the topic →
+    /// PublishFailed flood, no propagation). This test pins the
+    /// invariant that every topic the code uses lives in ALL_TOPICS.
+    #[test]
+    fn all_topics_contains_every_topic_the_code_uses() {
+        assert!(ALL_TOPICS.contains(&POSITIONS_TOPIC));
+        assert!(ALL_TOPICS.contains(&PICKUPS_TOPIC));
+    }
+
+    /// No duplicate topic entries — duplicates would double-subscribe
+    /// the same topic which is harmless but signals a list-hygiene
+    /// regression that's cheap to catch here.
+    #[test]
+    fn all_topics_has_no_duplicates() {
+        for (i, a) in ALL_TOPICS.iter().enumerate() {
+            for b in &ALL_TOPICS[i + 1..] {
+                assert_ne!(a, b, "duplicate topic in ALL_TOPICS: {a}");
+            }
+        }
+    }
+
+    // Mock-based M6 propagation test removed: a fake mesh skips the
+    // gossipsub protocol — the layer the production bug (missing
+    // PICKUPS_TOPIC subscribe announcement) actually lives at. The
+    // real-wire equivalent runs in `roam/tests/m6_via_relayer.rs`,
+    // standing up three libp2p swarms over native transports so
+    // subscribe propagation, mesh formation, and fan-out are real.
+    #[test]
+    #[ignore = "superseded by roam/tests/m6_via_relayer.rs — real-wire libp2p test"]
+    fn m6_pickup_propagates_from_picker_to_observer() {
+        use crate::teranos::{flower_at, surface_z, tile_at, TileKind, WORLD_CIRC_X};
+        use crate::world::{World, INPUT_D, PIXELS_PER_TILE};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        /// A's publish lands as a fresh `NetEvent::Message` on B's
+        /// inbound queue. The PeerId in `from` is the sending side's
+        /// identity, matching what gossipsub's signed-source semantics
+        /// would deliver in production.
+        struct MeshProvider {
+            id: PeerId,
+            out_to_peer: Rc<RefCell<Vec<NetEvent>>>,
+            in_from_peer: Rc<RefCell<Vec<NetEvent>>>,
+        }
+        impl NetworkProvider for MeshProvider {
+            fn identity(&self) -> PeerId {
+                self.id.clone()
+            }
+            fn publish(&mut self, topic: &Topic, bytes: &[u8]) -> Result<(), NetError> {
+                self.out_to_peer.borrow_mut().push(NetEvent::Message {
+                    topic: topic.clone(),
+                    from: Author(self.id.clone()),
+                    bytes: bytes.to_vec(),
+                    at_ms: 1_700_000_000_000,
+                });
+                Ok(())
+            }
+            fn subscribe(&mut self, _topic: &Topic) -> Result<(), NetError> {
+                Ok(())
+            }
+            fn unsubscribe(&mut self, _topic: &Topic) -> Result<(), NetError> {
+                Ok(())
+            }
+            fn poll_events(&mut self) -> Vec<NetEvent> {
+                let mut guard = self.in_from_peer.borrow_mut();
+                std::mem::take(&mut *guard)
+            }
+        }
+
+        let mailbox_a_to_b: Rc<RefCell<Vec<NetEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let mailbox_b_to_a: Rc<RefCell<Vec<NetEvent>>> = Rc::new(RefCell::new(Vec::new()));
+
+        let mut world_a = World::new();
+        let mut world_b = World::new();
+        world_a.net = Some(Net::new(Box::new(MeshProvider {
+            id: PeerId("12D3KooWAlice".into()),
+            out_to_peer: Rc::clone(&mailbox_a_to_b),
+            in_from_peer: Rc::clone(&mailbox_b_to_a),
+        })));
+        world_b.net = Some(Net::new(Box::new(MeshProvider {
+            id: PeerId("12D3KooWBob".into()),
+            out_to_peer: Rc::clone(&mailbox_b_to_a),
+            in_from_peer: Rc::clone(&mailbox_a_to_b),
+        })));
+
+        // Find a deterministic flower tile whose WEST neighbor is
+        // walkable (not deep water / polar ocean) and not a cliff
+        // (|Δz| ≤ 1). The realistic scenario is "walk onto a flower
+        // from the adjacent tile" — this guarantees the walk works.
+        let (fx, fy) = (|| {
+            for ty in -5..=5 {
+                for tx in 1..40 {
+                    if flower_at(tx, ty).is_none() {
+                        continue;
+                    }
+                    let sz_west = surface_z(tx - 1, ty);
+                    let sz_flower = surface_z(tx, ty);
+                    if sz_west < 0 || sz_flower < 0 {
+                        continue;
+                    }
+                    if (sz_west - sz_flower).abs() > 1 {
+                        continue;
+                    }
+                    // Confirm both surface tiles are walkable kinds —
+                    // sanity check on top of the column_target_z proxies.
+                    if matches!(tile_at(tx - 1, ty, sz_west.max(0)), TileKind::DeepWater) {
+                        continue;
+                    }
+                    return (tx, ty);
+                }
+            }
+            panic!("no walkable-west flower tile in scan window");
+        })();
+        let cx = fx.rem_euclid(WORLD_CIRC_X);
+
+        // Place A one tile west of the flower, z matched to the
+        // starting tile so try_set_position accepts the eastward step.
+        let west_x_px = ((fx - 1) as f32 + 0.5) * PIXELS_PER_TILE as f32;
+        let row_y_px = (fy as f32 + 0.5) * PIXELS_PER_TILE as f32;
+        world_a.player.x = west_x_px;
+        world_a.player.y = row_y_px;
+        world_a.player.z = surface_z(fx - 1, fy).max(0);
+
+        // === Action — A walks east onto the flower tile. ===
+        // 200ms at SPEED=0.2 px/ms = 40 px east, more than one tile
+        // (32 px). The step crosses the tile boundary, so try_pickup
+        // fires with the player's CURRENT tile = (fx, fy).
+        world_a.step(INPUT_D, 200.0);
+        assert!(
+            (world_a.player.x / PIXELS_PER_TILE as f32).floor() as i32 == fx,
+            "precondition: A walked onto the flower tile",
+        );
+
+        // A2 — inventory grows.
+        assert_eq!(world_a.player.inventory.len(), 1, "A2: A's inventory grows by 1");
+        // A's canonical layer claim.
+        assert!(world_a.canonical_picked.contains(&(cx, fy)), "A claims tile canonically");
+        // A's personal record.
+        assert!(world_a.player.picked.contains(&(cx, fy)), "A records personal pickup");
+        // A4 — exactly one pickup message published.
+        assert_eq!(
+            mailbox_a_to_b.borrow().len(),
+            1,
+            "A4: A publishes exactly one pickup message",
+        );
+        // Wire shape check — the message body decodes as PickupWireIn.
+        if let NetEvent::Message { topic, bytes, .. } = &mailbox_a_to_b.borrow()[0] {
+            assert_eq!(topic.0, PICKUPS_TOPIC, "A publishes on the pickups topic");
+            let decoded: serde_json::Value = serde_json::from_slice(bytes)
+                .expect("A's payload must be valid JSON");
+            assert_eq!(decoded["x"], cx);
+            assert_eq!(decoded["y"], fy);
+        } else {
+            panic!("mailbox entry must be NetEvent::Message");
+        }
+
+        // === Observer side — Net.tick consumes inbound, drain applies
+        // to canonical_picked exactly as the production FFI does in
+        // `roam_net_tick`. ===
+        let net_b = world_b.net.as_mut().expect("B has a Net");
+        net_b.tick(1_700_000_000_000);
+        let pickups = net_b.drain_pending_canonical_pickups();
+        for (x, y) in pickups {
+            world_b.canonical_picked.insert((x, y));
+        }
+
+        // B2 — canonical layer applied.
+        assert!(
+            world_b.canonical_picked.contains(&(cx, fy)),
+            "B2: B's canonical layer accepts the gossipsub-propagated pickup",
+        );
+        // B3 — inventory unchanged.
+        assert_eq!(
+            world_b.player.inventory.len(),
+            0,
+            "B3: B's inventory does NOT change — B did not pick the flower",
+        );
+        // B4 — personal record clean.
+        assert!(
+            !world_b.player.picked.contains(&(cx, fy)),
+            "B4: B's player.picked must not record a peer's pickup",
+        );
+
+        // B5 — the renderer's exclusion condition (mirrors viewport.rs).
+        let cell_flower_excluded = if world_b.player.picked.contains(&(cx, fy))
+            || world_b.canonical_picked.contains(&(cx, fy))
+        {
+            None
+        } else {
+            flower_at(fx, fy)
+        };
+        assert_eq!(
+            cell_flower_excluded, None,
+            "B5: B's renderer must exclude the flower — canonical_picked hides it",
+        );
+
+        // === Stronger end-state proof: B walks to the SAME tile and
+        // tries to pick. canonical_picked must block try_pickup. B's
+        // inventory and personal-picked stay clean.
+        // This is the "A picks first, B can't pick after" invariant. ===
+        world_b.player.x = west_x_px;
+        world_b.player.y = row_y_px;
+        world_b.player.z = surface_z(fx - 1, fy).max(0);
+
+        world_b.step(INPUT_D, 200.0);
+        assert!(
+            (world_b.player.x / PIXELS_PER_TILE as f32).floor() as i32 == fx,
+            "precondition: B walked onto the same flower tile",
+        );
+
+        assert_eq!(
+            world_b.player.inventory.len(),
+            0,
+            "B-blocked: B walks onto the canonical-claimed tile and gets NOTHING",
+        );
+        assert!(
+            !world_b.player.picked.contains(&(cx, fy)),
+            "B-blocked: B's personal picked-set stays clean — try_pickup short-circuited",
+        );
+        assert_eq!(
+            mailbox_b_to_a.borrow().len(),
+            0,
+            "B-blocked: B publishes ZERO messages — no double-claim broadcast",
+        );
     }
 }

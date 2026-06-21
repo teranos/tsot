@@ -22,7 +22,7 @@ in `assets/src/net-worker.js`. No centralised server. Decentralized
 substrate (libp2p), eventually-consistent state (Lamport timestamps
 for card-pickup conflicts). Roadmap lives in `README.md`.
 
-See @README.md for the staged roadmap and @OBSERVABILITY.md for the
+See @README.md for the staged roadmap and @docs/observability.md for the
 trace bus plan.
 
 **Errors are sacred** — first-class citizens, never collapsed, dropped,

@@ -1,6 +1,6 @@
 //! Identity primitives and the M4 predicate.
 //!
-//! M4 — runtime classification of "identified" for `CANONICAL.md`.
+//! M4 — runtime classification of "identified" for `docs/canonical.md`.
 //! Downstream callers (M6 world-state routing, M7 promotion flow,
 //! v0.4 multiplayer pickup write-propagation) read identity
 //! classification via `is_identified_self` / `is_identified_peer`.
@@ -14,7 +14,7 @@
 //! or call sites.
 //!
 //! Keypair handling (`load_or_generate_keypair`, `generate_identity_protobuf`)
-//! consolidated here from `net::rust_libp2p` per IDENTITY.md C3. The
+//! consolidated here from `net::rust_libp2p` per docs/identity.md C3. The
 //! JS bridge calls `roam_net_generate_identity_bytes` on first visit
 //! to mint a fresh Ed25519 keypair, persists the protobuf-encoded
 //! bytes in IndexedDB, and passes them back on every subsequent
@@ -199,6 +199,35 @@ pub use keypair::{generate_identity_protobuf, load_or_generate_keypair};
 /// UCAN proofs) without changing the signature.
 pub fn is_identified_self(identity_bytes: Option<&[u8]>) -> bool {
     identity_bytes.is_some_and(|b| !b.is_empty())
+}
+
+/// Which world layer a transformation routes through.
+///
+/// docs/canonical.md axiom: identified players default to canonical
+/// (mutations propagate to every peer and persist as world history);
+/// unidentified players default to non-canonical (mutations are
+/// local-only; griefers and spammers are silently sandboxed without
+/// an enforcement loop). The runtime criterion is
+/// `is_identified_self` / `is_identified_peer` — fed to
+/// `route_for_actor`, the only place that resolves the fork.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorldClass {
+    Canonical,
+    NonCanonical,
+}
+
+/// The fork. Every world transformation that has identity-dependent
+/// semantics calls this once with the actor's `is_identified_*`
+/// result; the returned class names the branch the mutation routes
+/// through. Centralised so the routing rule has exactly one
+/// implementation — future tightening (did:key resolution at the
+/// receiver, UCAN chain validation) lands here without scattering.
+pub fn route_for_actor(is_identified: bool) -> WorldClass {
+    if is_identified {
+        WorldClass::Canonical
+    } else {
+        WorldClass::NonCanonical
+    }
 }
 
 /// Is this remote peer identified? Today: we've seen them at all.
@@ -417,6 +446,26 @@ mod tests {
         bytes.extend_from_slice(&[0u8; 32]);
         let s = bs58::encode(bytes).into_string();
         assert_eq!(peer_id_to_did_key(&s), Err(PeerIdToDidError::NotEd25519));
+    }
+
+    /// M6 — routing predicate sends identified actors to the canonical
+    /// branch. Identified-class is the canonical-world default per
+    /// docs/canonical.md. Falsifies the regression where the routing
+    /// function collapses to a constant in either direction.
+    #[test]
+    fn identified_actor_routes_canonical() {
+        assert_eq!(route_for_actor(true), WorldClass::Canonical);
+    }
+
+    /// M6 — routing predicate sends unidentified actors to the
+    /// non-canonical sandbox. Anti-grief by structure: their mutations
+    /// don't propagate to other peers. Today's identity hard-fail
+    /// means this branch isn't reachable in production yet, but the
+    /// routing function carries it so the guest-mode entry slice
+    /// can flip the flag without re-litigating the model.
+    #[test]
+    fn unidentified_actor_routes_non_canonical() {
+        assert_eq!(route_for_actor(false), WorldClass::NonCanonical);
     }
 
     /// M5 — EXTERNAL spec-compliance gate. The fixture pair below was

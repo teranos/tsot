@@ -88,3 +88,28 @@ lto = true
 
 [profile.dev]
 panic = "abort"
+
+# Native test dependencies — only built when `cargo test` runs against
+# the lib + tests/ tree, never linked into the wasm bundle or the
+# production binary. The integration test at `tests/m6_via_relayer.rs`
+# uses the same libp2p version the production stack pins (=0.56.0) but
+# with native features (tcp, websocket, tokio, noise, yamux), matching
+# the relayer's transport so the wire is the same protocol the deployed
+# binary speaks. Anything pinned with `=0.x.y` mirrors what
+# `roam/relayers/Cargo.toml` and the main `[dependencies]` already use,
+# to keep one version graph across the workspace.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+libp2p = { version = "=0.56.0", default-features = false, features = [
+    "tokio",
+    "websocket",
+    "tcp",
+    "dns",
+    "noise",
+    "yamux",
+    "gossipsub",
+    "ping",
+    "identify",
+    "macros",
+] }
+tokio = { version = "=1.47.1", features = ["full"] }
+futures = "=0.3.32"

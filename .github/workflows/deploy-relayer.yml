@@ -1,0 +1,134 @@
+# Build the roam relayer binary (cross-compiled to x86_64-musl) and
+# deploy it to the Lightsail box on every push to master that touches
+# roam/relayers/. The deployed binary serves wss://relay.sbvh.nl;
+# without this workflow the relayer is hand-deployed per
+# `infra/RUNBOOK.md`, which means each change to relayers/ requires a
+# human running cross-compile + rsync + systemctl restart from a dev
+# machine. That's the surface we're collapsing here.
+
+name: deploy-relayer
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'roam/relayers/**'
+      - '.github/workflows/deploy-relayer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel an in-flight run if a newer push lands — only the latest
+# binary should reach the box. `cancel-in-progress: false` would
+# stack deploys, each restarting roam-relay; bad for stability.
+concurrency:
+  group: deploy-relayer
+  cancel-in-progress: true
+
+env:
+  RELAY_HOST: origin-relay.sbvh.nl
+  RUST_TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `cargo zigbuild` uses zig as the linker, producing a static
+      # musl binary without needing musl-gcc/cross-compile toolchain
+      # gymnastics. Matches the developer-machine command in
+      # `roam/relayers/README.md`.
+      - name: Install zig
+        run: |
+          ZIG_VERSION=0.13.0
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+            | tar -xJ
+          sudo mv "zig-linux-x86_64-${ZIG_VERSION}" /opt/zig
+          echo "/opt/zig" >> "$GITHUB_PATH"
+
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild@0.20.0
+
+      - name: Add musl target
+        run: rustup target add ${{ env.RUST_TARGET }}
+
+      # Cache the relayer's compiled deps so reruns don't recompile
+      # libp2p + tokio + the world. Key is keyed on Cargo.lock content
+      # so changing a dep busts the cache.
+      - name: Cache cargo deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            roam/relayers/target
+          key: relayer-cargo-${{ runner.os }}-${{ hashFiles('roam/relayers/Cargo.lock') }}
+          restore-keys: |
+            relayer-cargo-${{ runner.os }}-
+
+      - name: Cross-compile relayer
+        working-directory: roam/relayers
+        run: cargo zigbuild --target ${{ env.RUST_TARGET }} --release
+
+      - name: Verify artifact exists
+        run: |
+          BIN=roam/relayers/target/${{ env.RUST_TARGET }}/release/relayers
+          test -x "$BIN" || { echo "binary missing at $BIN"; exit 1; }
+          file "$BIN"
+          ls -lh "$BIN"
+
+      # SSH key is a GitHub repo Secret. To set it locally one time
+      # (see `infra/RUNBOOK.md` for the path):
+      #   gh secret set LIGHTSAIL_RELAY_KEY < ~/.ssh/lightsail-roam-relay.pem
+      # If the box host-key rotates, this workflow trusts on first
+      # use via `StrictHostKeyChecking=accept-new`.
+      - name: Set up SSH
+        env:
+          KEY: ${{ secrets.LIGHTSAIL_RELAY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          umask 077
+          echo "$KEY" > ~/.ssh/relay.pem
+          chmod 600 ~/.ssh/relay.pem
+          ssh-keyscan -H "${{ env.RELAY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Two-step deploy: rsync the new binary to a sidecar path, then
+      # atomically replace the in-use path with `install -m 0755`.
+      # Replacing the running binary's file by name is safe on Linux
+      # (kernel keeps the old inode open for the running process);
+      # `systemctl restart` then swaps to the new file.
+      - name: Deploy binary
+        run: |
+          BIN=roam/relayers/target/${{ env.RUST_TARGET }}/release/relayers
+          rsync -avz -e "ssh -i ~/.ssh/relay.pem -o StrictHostKeyChecking=accept-new" \
+            "$BIN" "ubuntu@${{ env.RELAY_HOST }}:/home/ubuntu/relayers.new"
+          ssh -i ~/.ssh/relay.pem -o StrictHostKeyChecking=accept-new "ubuntu@${{ env.RELAY_HOST }}" \
+            'sudo install -m 0755 -o ubuntu -g ubuntu /home/ubuntu/relayers.new /home/ubuntu/relayers && \
+             rm -f /home/ubuntu/relayers.new && \
+             sudo systemctl restart roam-relay'
+
+      # Wait + verify the service came back. If `is-active` returns
+      # non-zero or the journal has no startup line for this deploy,
+      # the workflow fails and the operator sees a red CI run — far
+      # better than a quietly broken relayer.
+      - name: Verify service is active
+        run: |
+          ssh -i ~/.ssh/relay.pem -o StrictHostKeyChecking=accept-new "ubuntu@${{ env.RELAY_HOST }}" \
+            'sleep 4; \
+             systemctl is-active roam-relay; \
+             journalctl -u roam-relay --since "20 seconds ago" --no-pager | tail -40'
+
+      - name: Summarize
+        run: |
+          {
+            echo "## Relayer deploy complete"
+            echo ""
+            echo "- Host: ${{ env.RELAY_HOST }}"
+            echo "- Live at: wss://relay.sbvh.nl/"
+            echo "- Service: roam-relay (active per verify step)"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -4,10 +4,20 @@
 <meta charset="utf-8" />
 <title>roam</title>
 <style>
-  body { margin: 0; background: #111; color: #ddd; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
-  #wrap { display: flex; gap: 1rem; padding: 0.75rem; align-items: flex-start; }
-  #game { display: flex; flex-direction: column; gap: 0.5rem; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #111; color: #ddd; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+  /* Layout: canvas (square, sized to fit) on the left, info panel on
+     the right. `height: 100vh` clamps the wrap so the inner panels
+     can scroll without growing the page; `box-sizing: border-box`
+     so the 0.75rem padding stays inside the viewport bound. Below
+     720px width the panel stacks under the canvas (mobile-friendly).
+  */
+  #wrap { display: flex; gap: 1rem; padding: 0.75rem; align-items: flex-start; height: 100vh; box-sizing: border-box; overflow: hidden; }
+  #game { display: flex; flex-direction: column; gap: 0.5rem; position: relative; }
   canvas { background: #1a1a1f; border: 1px solid #333; display: block; }
+  @media (max-width: 720px) {
+    #wrap { flex-direction: column; overflow-y: auto; height: auto; }
+    #info { min-width: 0 !important; max-width: 100% !important; width: 100% !important; }
+  }
   /* #status is the legacy bottom-of-game text. It was duplicated by
      the `world-hud` canvas overlay added in 209eb08. Hide it; the
      bridge still writes to it (cheap, no need to also rip the

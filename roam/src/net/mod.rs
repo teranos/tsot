@@ -100,7 +100,7 @@
 //!
 //! - Lamport-timestamped pickup conflict resolution (v0.4) lives in
 //!   Rust next to the world state, not across the FFI.
-//! - Canonical/non-canonical identity routing (see CANONICAL.md)
+//! - Canonical/non-canonical identity routing (see docs/canonical.md)
 //!   sits naturally at message-receive in `Net::tick`, in Rust,
 //!   next to the state it mutates.
 //! - One sacred-error pipeline: network errors flow through the

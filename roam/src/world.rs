@@ -62,7 +62,7 @@ pub struct Player {
     pub z: i32, // voxel z of the tile the player is standing on
     pub facing: Facing,
     /// Tiles this player has already picked a flower from. Personal —
-    /// per CANONICAL.md every player has their own picked-set today;
+    /// per docs/canonical.md every player has their own picked-set today;
     /// gossip-based first-claim-wins lands later. Key is canonical
     /// `(canonical_x_tile, y_tile)` so the cylinder wrap doesn't
     /// double-record.
@@ -80,6 +80,17 @@ pub struct World {
     /// which is async on the JS side. The hot path (frame loop) must
     /// tolerate `net.is_none()` during the bootstrap window.
     pub net: Option<crate::net::state::Net>,
+    /// Canonical layer's claimed flower tiles. Per docs/canonical.md every
+    /// identified player's pickup propagates here; a tile in this set
+    /// is gone from every identified player's view. `Player.picked` is
+    /// distinct — it records what THIS player picked themselves, used
+    /// to skip re-pickup attempts. The two sets overlap for our own
+    /// canonical pickups and diverge for (a) other peers' canonical
+    /// pickups, which land in `canonical_picked` only, and (b) future
+    /// non-canonical players' pickups, which land in `Player.picked`
+    /// only. Reconstructed from gossipsub on join, never persisted in
+    /// the session JSON (the canonical layer is not per-player).
+    pub canonical_picked: BTreeSet<(i32, i32)>,
 }
 
 #[inline]
@@ -151,6 +162,7 @@ impl World {
             spawn_z,
         });
         World {
+            canonical_picked: BTreeSet::new(),
             player: Player {
                 x: spawn_x,
                 y: spawn_y,
@@ -163,24 +175,55 @@ impl World {
         }
     }
 
-    /// Pickup check: if the player's current tile has a flower and
-    /// it isn't in their picked-set, claim it. Personal state —
-    /// see CANONICAL.md.
-    fn try_pickup(&mut self) {
+    /// Pickup check: if the player's current tile has a flower, route
+    /// the pickup through the supplied `class` per docs/canonical.md.
+    ///
+    /// Canonical: the canonical layer's claimed set grows by one;
+    /// downstream gossip (next slice) will propagate. NonCanonical:
+    /// the pickup lands in the personal sandbox; no propagation.
+    /// Either way the player's own `picked` set + `inventory` get
+    /// the update — those are this-player state, not class-dependent.
+    ///
+    /// A tile already in `canonical_picked` is unpickable for anyone
+    /// — that's the canonical layer's first-claim-wins rule. A tile
+    /// already in `Player.picked` is unpickable for this player only
+    /// (prevents re-picking your own claim).
+    pub(crate) fn try_pickup(&mut self, class: crate::identity::WorldClass) {
         let tx = pixel_to_tile(self.player.x);
         let ty = pixel_to_tile(self.player.y);
         let cx = tx.rem_euclid(WORLD_CIRC_X);
         let key = (cx, ty);
-        if self.player.picked.contains(&key) {
+        if self.canonical_picked.contains(&key) || self.player.picked.contains(&key) {
             return;
         }
         if let Some(flower) = flower_at(tx, ty) {
             self.player.picked.insert(key);
-            emit(TraceEvent::Note {
-                tag: "flower_picked",
-                msg: format!("({tx}, {ty}) {flower:?}"),
-            });
             self.player.inventory.push(flower);
+            match class {
+                crate::identity::WorldClass::Canonical => {
+                    self.canonical_picked.insert(key);
+                    emit(TraceEvent::Note {
+                        tag: "flower_picked_canonical",
+                        msg: format!("({tx}, {ty}) {flower:?}"),
+                    });
+                    if let Some(net) = self.net.as_mut() {
+                        if let Err(err) = net.publish_pickup(cx, ty) {
+                            emit_error(
+                                Severity::Warn,
+                                "roam::world::try_pickup",
+                                "canonical pickup publish failed",
+                                format!("({cx}, {ty}) reason={err:?}"),
+                            );
+                        }
+                    }
+                }
+                crate::identity::WorldClass::NonCanonical => {
+                    emit(TraceEvent::Note {
+                        tag: "flower_picked_sandbox",
+                        msg: format!("({tx}, {ty}) {flower:?}"),
+                    });
+                }
+            }
         }
     }
 
@@ -220,8 +263,14 @@ impl World {
         }
 
         // Pickup check on each step — cheap, fires only when the
-        // player's current tile has an unpicked flower.
-        self.try_pickup();
+        // player's current tile has an unpicked flower. M6 routes
+        // by identified-status; today's 0.3.2 hard-fail means the
+        // net only ever initializes when persistent identity bytes
+        // exist, so `net.is_some()` is the runtime proxy for
+        // `is_identified_self`. The proxy collapses to the predicate
+        // once guest-mode entry lands and the two paths diverge.
+        let class = crate::identity::route_for_actor(self.net.is_some());
+        self.try_pickup(class);
 
         // Cylindrical wrap in x.
         let circ = world_circ_px();
@@ -619,6 +668,92 @@ mod tests {
         assert!(
             errs.iter().any(|e| e.why.contains("FlowerColor discriminant out of range")),
             "sacred-error: out-of-range discriminant must say so"
+        );
+    }
+
+    /// Finds the first `(tx, ty)` in a small deterministic window
+    /// that has a flower. Used to position the player on a known
+    /// flower tile without hard-coding a coordinate — if worldgen
+    /// changes the flower pattern, the test still finds one.
+    fn first_flower_tile() -> (i32, i32) {
+        for ty in -10..=10 {
+            for tx in 0..50 {
+                if flower_at(tx, ty).is_some() {
+                    return (tx, ty);
+                }
+            }
+        }
+        panic!("no flowers in the test scan window — worldgen broken?");
+    }
+
+    fn place_player_at_tile(w: &mut World, tx: i32, ty: i32) {
+        w.player.x = (tx as f32 + 0.5) * PIXELS_PER_TILE as f32;
+        w.player.y = (ty as f32 + 0.5) * PIXELS_PER_TILE as f32;
+    }
+
+    /// M6 — identified actor's pickup routes Canonical: the canonical
+    /// layer's picked-set gets the tile, the personal picked-set
+    /// gets the tile (so the player can't re-pick), and inventory
+    /// grows by one. Falsifies the regression where the Canonical
+    /// branch quietly degenerates to NonCanonical behavior (canonical
+    /// layer never updates → other identified peers won't see the
+    /// tile as claimed → duplicate pickups).
+    #[test]
+    fn identified_pickup_routes_canonical_layer() {
+        let mut w = World::new();
+        let (fx, fy) = first_flower_tile();
+        place_player_at_tile(&mut w, fx, fy);
+        let cx = fx.rem_euclid(WORLD_CIRC_X);
+        w.try_pickup(crate::identity::WorldClass::Canonical);
+        assert!(
+            w.canonical_picked.contains(&(cx, fy)),
+            "identified pickup must update canonical layer at ({cx}, {fy})"
+        );
+        assert!(w.player.picked.contains(&(cx, fy)), "personal picked must also record");
+        assert_eq!(w.player.inventory.len(), 1, "inventory grows by one");
+    }
+
+    /// M6 — non-canonical actor's pickup stays in the sandbox: personal
+    /// picked-set gets the tile, inventory grows, but the canonical
+    /// layer does NOT update. Anti-grief by structure: unidentified
+    /// players' world mutations are invisible to identified peers.
+    /// Falsifies the regression where the NonCanonical branch leaks
+    /// into the canonical set (defeats the whole sandbox model).
+    #[test]
+    fn non_canonical_pickup_does_not_touch_canonical_layer() {
+        let mut w = World::new();
+        let (fx, fy) = first_flower_tile();
+        place_player_at_tile(&mut w, fx, fy);
+        let cx = fx.rem_euclid(WORLD_CIRC_X);
+        w.try_pickup(crate::identity::WorldClass::NonCanonical);
+        assert!(
+            w.canonical_picked.is_empty(),
+            "non-canonical pickup must NOT update canonical layer"
+        );
+        assert!(w.player.picked.contains(&(cx, fy)), "sandbox player still remembers");
+        assert_eq!(w.player.inventory.len(), 1, "inventory grows by one");
+    }
+
+    /// M6 — a tile already claimed in the canonical layer is unpickable
+    /// regardless of routing class. Models the "peer X already picked
+    /// this canonically" case: I receive their gossipsub message, my
+    /// canonical_picked gets the tile, and now my own pickup attempt
+    /// must be rejected. Falsifies the regression where canonical
+    /// claims don't block local pickup (would let two players pick
+    /// the same flower because one ingested the other's claim too
+    /// slowly).
+    #[test]
+    fn canonical_claimed_tile_blocks_local_pickup() {
+        let mut w = World::new();
+        let (fx, fy) = first_flower_tile();
+        let cx = fx.rem_euclid(WORLD_CIRC_X);
+        w.canonical_picked.insert((cx, fy));
+        place_player_at_tile(&mut w, fx, fy);
+        w.try_pickup(crate::identity::WorldClass::Canonical);
+        assert_eq!(
+            w.player.inventory.len(),
+            0,
+            "tile already canonically claimed — pickup must be no-op"
         );
     }
 
