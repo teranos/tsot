@@ -109,6 +109,10 @@ mod real {
 
     pub struct RustLibp2pProvider {
         self_peer_id: PeerId,
+        /// Pre-computed `did:key:z6Mk…` for the self pubkey, surfaced
+        /// in the SELF panel alongside the PeerId (S1). Computed once
+        /// at construction so the read path doesn't need the keypair.
+        self_did_key: String,
         cmd_tx: mpsc::UnboundedSender<Cmd>,
         events: Rc<RefCell<Vec<NetEvent>>>,
     }
@@ -130,6 +134,19 @@ mod real {
             let keypair = crate::identity::load_or_generate_keypair(identity_bytes)?;
             let peer_id = libp2p::PeerId::from(keypair.public());
             let self_peer_id = PeerId(peer_id.to_string());
+
+            // S1: pre-compute did:key for the SELF panel. Ed25519
+            // pubkey extraction can fail if the keypair somehow
+            // wasn't Ed25519 (today's bridge always feeds Ed25519
+            // bytes; the `else` branch protects against a future
+            // change that introduces a different key type without
+            // updating the did:key surface).
+            let self_did_key = match keypair.public().try_into_ed25519() {
+                Ok(ed25519_pub) => crate::identity::ed25519_pubkey_to_did_key(
+                    &ed25519_pub.to_bytes(),
+                ),
+                Err(_) => String::new(),
+            };
 
             // Gossipsub: use the default message-id function, which
             // combines source peer-id + sequence number. Hashing only
@@ -286,6 +303,7 @@ mod real {
 
             Ok(Self {
                 self_peer_id,
+                self_did_key,
                 cmd_tx,
                 events,
             })
@@ -319,6 +337,14 @@ mod real {
                 });
                 max_gap_ms = 0;
             }
+        }
+    }
+
+    impl RustLibp2pProvider {
+        /// `did:key:z6Mk…` for the self pubkey (S1). Used by the
+        /// SELF panel alongside `identity()` for the PeerId.
+        pub fn self_did_key(&self) -> &str {
+            &self.self_did_key
         }
     }
 

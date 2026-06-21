@@ -781,6 +781,7 @@ let lastPeerDownReason = '';
 // (gossipsub / transport / dial) lives entirely in the Web Worker
 // (`assets/src/net-worker.js`); this file reads readiness flags here.
 let workerIdentity = '';
+let workerDidKey = '';
 let workerReady = false;
 // PEER_ID: short device label shown in the SELF panel. The real
 // PeerId comes from the worker (`workerIdentity`) once it's ready;
@@ -925,9 +926,10 @@ moduleP.then((wasm) => {
       switch (msg.kind) {
         case 'ready':
           workerIdentity = msg.identity || '';
+          workerDidKey = msg.did_key || '';
           workerReady = true;
           setNetState('ready');
-          logEvent('info', `net: net-worker ready, identity=${workerIdentity}`);
+          logEvent('info', `net: net-worker ready, identity=${workerIdentity} did=${workerDidKey || '(none)'}`);
           // The initial `subscribe` command was sent eagerly (below) at
           // bridge boot, before the worker was ready, and got silently
           // dropped on the worker side (`if (!initialized) break;`).
@@ -1471,6 +1473,7 @@ moduleP.then((wasm) => {
         `display id: ${PEER_ID}\n` +
         `libp2p (rust): ${workerReady ? 'ready' : 'starting'}\n` +
         `worker peerId: ${workerIdentity || '(awaiting ready signal)'}\n` +
+        `did:key:    ${workerDidKey || '(awaiting ready signal)'}\n` +
         `peers: ${rustPeerCount}  conns: ${rustConnCount}  heartbeats: ${rustHeartbeatCount}\n` +
         lastDownLine +
         `tsot bridge: ${__tsotBridge.state}${__tsotBridge.state === 'ready' ? ` (${__tsotBridge.cardCount} cards)` : ''}\n` +
@@ -1493,7 +1496,7 @@ moduleP.then((wasm) => {
     // Peer-table state lives in Rust; a single monotonic counter
     // bumps on every insert / remove / position update / prune. Fold
     // it into the fingerprint instead of walking a JS Map.
-    const peerSeq = libp2p ? roam_net_peer_state_seq() : 0;
+    const peerSeq = workerReady ? roam_net_peer_state_seq() : 0;
     const fp = `${s.x | 0},${s.y | 0},${s.z},${s.f},${zoom},${canvas.width},${canvas.height},${peerSeq}`;
     const idleHeartbeat = now - lastRenderAt > IDLE_RENDER_MIN_MS;
     if (fp === lastRenderFp && !idleHeartbeat) {
