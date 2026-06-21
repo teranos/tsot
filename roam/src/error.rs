@@ -9,7 +9,7 @@
 //!   - the thread-local buffer
 //!   - the `"err-roam-N"` id namespace
 //!   - the placeholder timestamp source (empty string until roam's
-//!     Rust trace bus lands per docs/observability.md Phase 2)
+//!     Rust trace bus lands per docs/OBSERVABILITY.md Phase 2)
 //!
 //! Call sites use `crate::error::{push, drain, reset, next_id,
 //! emit, emit_region, Error, Severity, Context, Anchor}` — the
@@ -69,7 +69,7 @@ pub fn emit(
         trace: vec![],
         raw: None,
         // Placeholder until roam's Rust trace bus lands
-        // (docs/observability.md Phase 2). The Elm decoder accepts any
+        // (docs/OBSERVABILITY.md Phase 2). The Elm decoder accepts any
         // string here; empty is the sentinel for "no engine clock yet".
         at: String::new(),
         source: None,

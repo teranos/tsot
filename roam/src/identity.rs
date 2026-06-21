@@ -1,6 +1,6 @@
 //! Identity primitives and the M4 predicate.
 //!
-//! M4 — runtime classification of "identified" for `docs/canonical.md`.
+//! M4 — runtime classification of "identified" for `docs/CANONICAL.md`.
 //! Downstream callers (M6 world-state routing, M7 promotion flow,
 //! v0.4 multiplayer pickup write-propagation) read identity
 //! classification via `is_identified_self` / `is_identified_peer`.
@@ -14,7 +14,7 @@
 //! or call sites.
 //!
 //! Keypair handling (`load_or_generate_keypair`, `generate_identity_protobuf`)
-//! consolidated here from `net::rust_libp2p` per docs/identity.md C3. The
+//! consolidated here from `net::rust_libp2p` per docs/IDENTITY.md C3. The
 //! JS bridge calls `roam_net_generate_identity_bytes` on first visit
 //! to mint a fresh Ed25519 keypair, persists the protobuf-encoded
 //! bytes in IndexedDB, and passes them back on every subsequent
@@ -203,7 +203,7 @@ pub fn is_identified_self(identity_bytes: Option<&[u8]>) -> bool {
 
 /// Which world layer a transformation routes through.
 ///
-/// docs/canonical.md axiom: identified players default to canonical
+/// docs/CANONICAL.md axiom: identified players default to canonical
 /// (mutations propagate to every peer and persist as world history);
 /// unidentified players default to non-canonical (mutations are
 /// local-only; griefers and spammers are silently sandboxed without
@@ -450,7 +450,7 @@ mod tests {
 
     /// M6 — routing predicate sends identified actors to the canonical
     /// branch. Identified-class is the canonical-world default per
-    /// docs/canonical.md. Falsifies the regression where the routing
+    /// docs/CANONICAL.md. Falsifies the regression where the routing
     /// function collapses to a constant in either direction.
     #[test]
     fn identified_actor_routes_canonical() {

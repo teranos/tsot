@@ -248,7 +248,7 @@ impl Net {
     /// separate slice once incoming messages are routed through the
     /// seam too.
     //
-    // IDENTITY MENU (roam/docs/identity.md):
+    // IDENTITY MENU (roam/docs/IDENTITY.md):
     //   S7 — sign the broadcast with the identity key; verify on receive.
     //        Wire-format change is part of this slice.
     pub fn publish_position(

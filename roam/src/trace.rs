@@ -20,7 +20,7 @@ pub enum TraceEvent {
     /// extraction of the payload (`&str` and `String` payloads are
     /// rendered verbatim; other types degrade to a fixed marker
     /// since `Any` doesn't expose a Display surface). Closes
-    /// docs/observability.md Phase 2's "Rust panics caught via panic_hook,
+    /// docs/OBSERVABILITY.md Phase 2's "Rust panics caught via panic_hook,
     /// surfaced as TraceEvent::Error with file:line" item — panics
     /// in roam's release build (`panic = "abort"`) now land in the
     /// event log BEFORE the wasm module aborts.
@@ -100,7 +100,7 @@ thread_local! {
     static BUS: RefCell<VecDeque<(u64, TraceEvent)>> = const { RefCell::new(VecDeque::new()) };
 }
 
-// IDENTITY MENU (roam/docs/identity.md):
+// IDENTITY MENU (roam/docs/IDENTITY.md):
 //   C5 — emit identity events (mint, load, export, import, rotate, sign, verify)
 //        with dedicated tags so the event log can render them in a distinct color.
 pub fn emit(ev: TraceEvent) {
@@ -162,7 +162,7 @@ pub fn pending_count() -> usize {
 
 // ----- panic hook -----------------------------------------------
 //
-// docs/observability.md Phase 2's last open item: "Rust panics caught via
+// docs/OBSERVABILITY.md Phase 2's last open item: "Rust panics caught via
 // panic_hook, surfaced as TraceEvent::Error with file:line". roam's
 // release + dev profiles both use `panic = "abort"`, so the hook runs
 // once (right before the process aborts) and panics cannot be

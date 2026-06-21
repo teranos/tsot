@@ -20,13 +20,13 @@ enforce it.
 
 ## 🥗 Appetizers — research / exploration (≤ 30 min each)
 
-- **A1.** Read `roam/docs/canonical.md` cold; write down 3 questions it doesn't answer for the current implementation.
+- **A1.** Read `roam/docs/CANONICAL.md` cold; write down 3 questions it doesn't answer for the current implementation.
 - ~~**A2.** Read the W3C `did:key` spec — only the encoding section. Confirm Ed25519 → `did:key:z6Mk…`.~~ ✓ M1 implementation + round-trip / z6Mk-prefix tests cover the encoding section empirically (`identity` branch, 90a4d7e).
 - ~~**A3.** Confirm libp2p Ed25519 `PeerId` and `did:key` derive from the same 32-byte public key in different encodings. Note the conversion.~~ ✓ S1 SELF panel renders both for the same `keypair.public()`; conversion is `try_into_ed25519().to_bytes() → ed25519_pubkey_to_did_key` (`identity` branch, 158c212).
 - **A4.** Read Bluesky/ATProto PDS docs; locate where a user's signing key lives and how the handle binds to it.
 - **A5.** Read UCAN v1.0 spec abstract + the invocation envelope shape.
 - **A6.** Open one browser-based DID wallet's UX (e.g. an ATProto client). Note what "verification" looks like to the user, in two sentences.
-- ~~**A7.** List, in 5 names each, who in the wider ecosystem actually ships against: libp2p PeerId, `did:key`, ATProto, ActivityPub, UCAN.~~ ✓ findings in `research/identity.md` (ATProto / ActivityPub rows skipped per PL alignment; libp2p ≥5 high confidence; did:key 4 verified + 1 unverified candidate; UCAN 5).
+- ~~**A7.** List, in 5 names each, who in the wider ecosystem actually ships against: libp2p PeerId, `did:key`, ATProto, ActivityPub, UCAN.~~ ✓ findings in `research/IDENTITY.md` (ATProto / ActivityPub rows skipped per PL alignment; libp2p ≥5 high confidence; did:key 4 verified + 1 unverified candidate; UCAN 5).
 - ~~**A8.** Trace, from source on disk, the data flow from `roam_net_generate_identity_bytes()` to PeerId emission. Draw it on paper.~~ ✓ Post-C3 the chain is short and lives in one module: `roam_net_generate_identity_bytes → identity::generate_identity_protobuf → bridge persists → next session passes bytes into roam_net_worker_provider_init → identity::load_or_generate_keypair → keypair.public() → PeerId`. Pen-and-paper redundant given the linear path.
 
 ## 🥄 Starters — small concrete work (1–3 hours)
@@ -35,7 +35,7 @@ enforce it.
 - **S2.** Add a "rotate identity" action: clean IndexedDB → mint fresh. Confirmation gate.
 - **S3.** Export keypair: download a small text blob containing the protobuf-encoded keypair.
 - **S4.** Import keypair: paste/upload the blob, validate, replace IndexedDB entry.
-- **S5.** Sketch a "second-device pairing" flow on paper. QR encoding of the bytes. Don't build, just sketch. *Reference: Fission ODD device-link pattern — no key transfer, account UCAN delegated to consumer's agent DID via PIN-confirmed handshake. See `research/identity.md`.*
+- **S5.** Sketch a "second-device pairing" flow on paper. QR encoding of the bytes. Don't build, just sketch. *Reference: Fission ODD device-link pattern — no key transfer, account UCAN delegated to consumer's agent DID via PIN-confirmed handshake. See `research/IDENTITY.md`.*
 - **S6.** Write a wasm-bindgen-test asserting `PeerId == did:key` round-trip for the same keypair.
 - **S7.** Sign one position broadcast with the identity key; verify on receiver. Wire-format change is part of this slice.
 - **S8.** Write a failing test for `load_or_generate_keypair` that runs on native (extract the function out of the wasm-only gate).
@@ -45,15 +45,15 @@ enforce it.
 - ~~**M1.** Adopt `did:key` as the project's primary identifier. PeerId becomes the underlying libp2p detail; user-facing surfaces show DID.~~ ✓ encoding `roam::identity::ed25519_pubkey_to_did_key` + decode + 5 falsifiable tests (`identity` branch). UI surfacing tracked under S1.
 - **M2.** ATProto PDS bridge: a player's ATProto handle can claim their roam identity. Defines a verification flow.
 - **M3.** WebAuthn-wraps-Ed25519: hardware-backed key, never exits the secure enclave. Loses portability for some browsers; gains theft resistance.
-- ~~**M4.** Define the structural meaning of "identified" for `docs/canonical.md`. Concrete runtime criterion. Without this, the canonical/non-canonical split has no implementation path.~~ ✓ `roam::identity::is_identified_self` / `is_identified_peer` (`identity` branch).
+- ~~**M4.** Define the structural meaning of "identified" for `docs/CANONICAL.md`. Concrete runtime criterion. Without this, the canonical/non-canonical split has no implementation path.~~ ✓ `roam::identity::is_identified_self` / `is_identified_peer` (`identity` branch).
 - **M5.** Gossipsub signature verification at the relayer. Relayer rejects wire messages whose claimed source doesn't match the signing key.
 - **M6.** Canonical / non-canonical world-state routing. The actual fork mechanism world transformations route through.
 - **M7.** Promotion flow: non-canonical → canonical with the sandbox-reset axiom enforced.
-- **M8.** UCAN-based capability delegation: cross-device control via signed capability tokens, no key transfer. *Decided: depend on `rs-ucan` directly; not ODD SDK (JS-first, framework-shaped). See `research/identity.md`.*
+- **M8.** UCAN-based capability delegation: cross-device control via signed capability tokens, no key transfer. *Decided: depend on `rs-ucan` directly; not ODD SDK (JS-first, framework-shaped). See `research/IDENTITY.md`.*
 
 ## 🍋 Cleansers — between decisions (doc, refactor, audit)
 
-- **C1.** Rewrite `docs/canonical.md` "Open" section once the identity path is picked. Remove the four-name candidate list.
+- **C1.** Rewrite `docs/CANONICAL.md` "Open" section once the identity path is picked. Remove the four-name candidate list.
 - **C2.** Update `roam/README.md` identity bullets to reflect the picked path. Cut anything that wasn't picked.
 - ~~**C3.** Move identity code into `roam/src/identity/` as a dedicated module. Currently scattered across `rust_libp2p.rs` + `wasm_ffi.rs` + `js-bridge.js`.~~ ✓ `roam::identity` module; keypair handling consolidated, JS bridge already extracted to `assets/src/identity.js` in 0.3.2 (`identity` branch).
 - **C4.** Write a player-facing one-pager: "what identity means in roam." Not a spec — a UX explanation.

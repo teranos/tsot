@@ -1,10 +1,10 @@
 # roam — Identity research notes
 
-Research findings from docs/identity.md menu items A2 / A3 / A7 / A8 and
+Research findings from docs/IDENTITY.md menu items A2 / A3 / A7 / A8 and
 the Fission deep-read. Reference material for the M5 / M6 / M7 / M8
 mains and for S3 / S4 (export / import).
 
-Items in `~~strike~~` in `docs/identity.md` cite this doc as their record.
+Items in `~~strike~~` in `docs/IDENTITY.md` cite this doc as their record.
 
 ---
 

@@ -132,7 +132,7 @@ impl RelayerStats {
 /// matching event enum. Mirrors the TS relay's `services` block
 /// in `relay.ts`.
 #[derive(libp2p::swarm::NetworkBehaviour)]
-// IDENTITY MENU (roam/docs/identity.md):
+// IDENTITY MENU (roam/docs/IDENTITY.md):
 //   M5 — verify gossipsub message signatures here; reject when the claimed
 //        source PeerId doesn't match the signing key.
 //   D4 — when a status page lands, add a /identity route that exposes

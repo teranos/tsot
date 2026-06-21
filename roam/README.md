@@ -1,10 +1,10 @@
 # roam
 
-<!-- IDENTITY MENU (roam/docs/identity.md):
+<!-- IDENTITY MENU (roam/docs/IDENTITY.md):
        C4 — write a player-facing one-pager "what identity means here." UX, not spec.
        D5 — one-paragraph CHANGELOG-style "the why" for the identity choice. -->
 
-See @docs/canonical.md for the canonical-world axiom (how world transformations are routed by identity).
+See @docs/CANONICAL.md for the canonical-world axiom (how world transformations are routed by identity).
 
 What i want:
 
@@ -15,7 +15,7 @@ What i want:
 - each voxel is 0.5M by 0.5M (M = meters; so half a meter on a side) in my imagination, so a door would be 2 voxels wide and 4 high — that's 1M by 2M — making 8 voxels in total.
 - You can chat, but it's proximate, so, think hybrid of habbo and eve online. you can also DM people you know directly. Social component of TSOT is crucial, could even say that it's going to be the main thing that will determine success of the game.
 -
-- Identity is `did:key` (Ed25519 public key, multibase-encoded). The libp2p `PeerId` is the same key in a different encoding — derived, not separate. Persistence is the 32-byte private key in IndexedDB. See `docs/identity.md` for the menu, `research/identity.md` for the why.
+- Identity is `did:key` (Ed25519 public key, multibase-encoded). The libp2p `PeerId` is the same key in a different encoding — derived, not separate. Persistence is the 32-byte private key in IndexedDB. See `docs/IDENTITY.md` for the menu, `research/IDENTITY.md` for the why.
 - Cross-device authority is UCAN, via `rs-ucan`. Capability delegation, not key transfer. Pairing pattern follows Fission ODD (PIN-confirmed handshake; the new device gets its own keypair + a delegated capability).
 - Hardware-backed keys (WebAuthn / secure enclave) are deferred (M3 on the menu). Desirable for theft resistance; loses portability on browsers without WebAuthn.
 - ATProto is the social / moderation layer, not the identifier (M2 on the menu). It binds an ATProto handle to a roam `did:key`. The moderation vision below is independent of the identifier choice — it layers on top.
@@ -86,7 +86,7 @@ What i want:
   - [x] 0.3.1 — identity persists per browser, public relay dashboard.
   - [x] 0.3.2 — correctness pass: more than 2 players coexist, identity failures fail loud, dashboard stays fresh.
   - [x] 0.3.3 — repo restructure: TSOT card-game content moves into `ccg/` so root holds shared axioms only (cuts the bleed surface that kept making roam architecture descriptions inherit TSOT specifics).
-  - [x] 0.3.4 — identity slice: `did:key` as the user-facing identifier (PeerId derived from the same Ed25519 key); `roam::identity` module; `is_identified_self` / `is_identified_peer` predicate is the canonical-class runtime criterion. `research/identity.md` records the rs-ucan / Fission deep-read for the path ahead.
+  - [x] 0.3.4 — identity slice: `did:key` as the user-facing identifier (PeerId derived from the same Ed25519 key); `roam::identity` module; `is_identified_self` / `is_identified_peer` predicate is the canonical-class runtime criterion. `research/IDENTITY.md` records the rs-ucan / Fission deep-read for the path ahead.
   - [ ] 0.3.5 — M5: expose libp2p's already-verified gossipsub `source` to the application layer as a `did:key`; receiver enforces it. The trust line moves from "we believe what the payload says" to "we believe what libp2p signed."
   - [ ] 0.3.6 — M6 + first routed transformation: flower pickup. Picking up a deterministic flower mutates world state for the first time in roam's history; the mutation routes through `WorldClass::{Canonical, NonCanonical}` based on the actor's identified-status. Identified players' pickups propagate via gossipsub and the picked tile stays empty for every other identified player; the non-canonical branch lives in code and unit tests but isn't reachable in production until guest-mode entry lands. M7 promotion deferred to that slice — no non-canonical state exists to discard yet.
 - [ ] v0.4 — cards on the ground. Pick them up, collection persists. Depends on 0.3.6 — cards are world state; without canonical routing the axiom doesn't hold and non-canonical players grief canonical state.

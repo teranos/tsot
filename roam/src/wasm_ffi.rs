@@ -541,7 +541,7 @@ mod wasm_exports {
         }
     }
 
-    // IDENTITY MENU (roam/docs/identity.md):
+    // IDENTITY MENU (roam/docs/IDENTITY.md):
     //   A5 — read UCAN v1.0 spec abstract + invocation envelope shape.
     //   M8 — UCAN-based capability delegation, cross-device control without key transfer.
     /// Mint a fresh Ed25519 keypair and return its libp2p-canonical

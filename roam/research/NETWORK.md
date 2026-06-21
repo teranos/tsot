@@ -5,8 +5,8 @@ Each entry: *what the project is, why it matters for roam, what
 specifically to study, what we don't yet know.*
 
 These are research targets, not decisions. Decisions about substrate
-choices live in `docs/transport.md`. Decisions about identity choices
-live in `docs/identity.md` + `research/identity.md`.
+choices live in `docs/TRANSPORT.md`. Decisions about identity choices
+live in `docs/IDENTITY.md` + `research/IDENTITY.md`.
 
 ---
 
@@ -59,7 +59,7 @@ your mail server is your relay.
   ubiquitous + federated substrate?
 - Their handling of multi-device sync without a central server is
   directly relevant to the device-pairing problem we deferred under
-  M8 in `docs/identity.md`.
+  M8 in `docs/IDENTITY.md`.
 - Their UX patterns for "no account, no signup" are worth studying
   for the guest-mode entry path that M7 needs.
 

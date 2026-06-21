@@ -51,7 +51,7 @@ threshold is one-way.
   giving moderation and identity layers direct authority over what
   Teranos becomes.
 
-<!-- IDENTITY MENU (see roam/docs/identity.md):
+<!-- IDENTITY MENU (see roam/docs/IDENTITY.md):
        A1 — read this file cold, write 3 questions it leaves unanswered.
        A4 — read Bluesky/ATProto PDS docs; find where the user's signing key lives.
        A7 — list 5 names per ecosystem who actually ship against each candidate below.

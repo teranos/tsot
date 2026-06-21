@@ -308,7 +308,7 @@ function devTap(cls, line) {
   } catch {}
 }
 
-// IDENTITY MENU (roam/docs/identity.md):
+// IDENTITY MENU (roam/docs/IDENTITY.md):
 //   A6 — open one browser-based DID wallet UX; note what "verification" looks like.
 //   S1 — surface did:key:z6Mk… in the SELF panel alongside PeerId.
 //   S2 — "rotate identity" action: clean IndexedDB → mint fresh; confirmation gate.
