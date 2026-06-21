@@ -35,7 +35,7 @@ enforce it.
 - **S2.** Add a "rotate identity" action: clean IndexedDB → mint fresh. Confirmation gate.
 - **S3.** Export keypair: download a small text blob containing the protobuf-encoded keypair.
 - **S4.** Import keypair: paste/upload the blob, validate, replace IndexedDB entry.
-- **S5.** Sketch a "second-device pairing" flow on paper. QR encoding of the bytes. Don't build, just sketch.
+- **S5.** Sketch a "second-device pairing" flow on paper. QR encoding of the bytes. Don't build, just sketch. *Reference: Fission ODD device-link pattern — no key transfer, account UCAN delegated to consumer's agent DID via PIN-confirmed handshake. See `IDENTITY-RESEARCH.md`.*
 - **S6.** Write a wasm-bindgen-test asserting `PeerId == did:key` round-trip for the same keypair.
 - **S7.** Sign one position broadcast with the identity key; verify on receiver. Wire-format change is part of this slice.
 - **S8.** Write a failing test for `load_or_generate_keypair` that runs on native (extract the function out of the wasm-only gate).
@@ -49,7 +49,7 @@ enforce it.
 - **M5.** Gossipsub signature verification at the relayer. Relayer rejects wire messages whose claimed source doesn't match the signing key.
 - **M6.** Canonical / non-canonical world-state routing. The actual fork mechanism world transformations route through.
 - **M7.** Promotion flow: non-canonical → canonical with the sandbox-reset axiom enforced.
-- **M8.** UCAN-based capability delegation: cross-device control via signed capability tokens, no key transfer.
+- **M8.** UCAN-based capability delegation: cross-device control via signed capability tokens, no key transfer. *Decided: depend on `rs-ucan` directly; not ODD SDK (JS-first, framework-shaped). See `IDENTITY-RESEARCH.md`.*
 
 ## 🍋 Cleansers — between decisions (doc, refactor, audit)
 
