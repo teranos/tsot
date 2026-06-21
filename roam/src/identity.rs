@@ -22,6 +22,71 @@
 
 use crate::net::PeerId;
 
+/// W3C `did:key` Ed25519 multicodec varint prefix.
+/// Two bytes: `0xed` (low 7 bits of the multicodec code 0xed +
+/// continuation bit), `0x01` (remaining high bits, no continuation).
+/// Together they identify the payload that follows as a raw
+/// Ed25519-public-key per the multicodec table.
+const ED25519_DID_KEY_MULTICODEC: [u8; 2] = [0xed, 0x01];
+
+/// Encode a 32-byte Ed25519 public key as a `did:key` URI per the
+/// W3C did:key spec. The encoding is:
+///   `did:key:` + `z` (multibase prefix for base58btc) +
+///   `base58btc(ed25519_multicodec_varint || pubkey_bytes)`.
+///
+/// The resulting string always starts with the literal prefix
+/// `did:key:z6Mk` for Ed25519 keys — that prefix is the deterministic
+/// base58btc encoding of the multicodec varint `0xed 0x01` followed
+/// by the leading bits of any 32-byte pubkey. It's the W3C-documented
+/// identifier for "this DID uses an Ed25519 public key."
+///
+/// Falsifiable via `ed25519_did_key_round_trip` below — encoding then
+/// decoding yields the original 32 bytes.
+pub fn ed25519_pubkey_to_did_key(pubkey: &[u8; 32]) -> String {
+    let mut payload = Vec::with_capacity(2 + 32);
+    payload.extend_from_slice(&ED25519_DID_KEY_MULTICODEC);
+    payload.extend_from_slice(pubkey);
+    let encoded = bs58::encode(payload).into_string();
+    format!("did:key:z{encoded}")
+}
+
+/// Errors decoding a `did:key` back to its Ed25519 pubkey. Each
+/// variant pins one specific failure mode so the call site can give
+/// the user actionable text rather than a flattened "invalid DID."
+#[derive(Debug, PartialEq, Eq)]
+pub enum DidKeyError {
+    /// String didn't start with `did:key:z` — not a base58btc-encoded
+    /// did:key URI.
+    MissingPrefix,
+    /// The base58btc payload couldn't be decoded.
+    Base58(String),
+    /// Decoded payload was the wrong length for an Ed25519 did:key
+    /// (must be exactly 2 bytes multicodec + 32 bytes pubkey).
+    UnexpectedPayloadLength(usize),
+    /// Multicodec prefix wasn't the Ed25519 marker `0xed 0x01`.
+    NotEd25519,
+}
+
+/// Decode a `did:key:z6Mk…` string back to its raw 32-byte Ed25519
+/// public key. Inverse of `ed25519_pubkey_to_did_key`.
+pub fn did_key_to_ed25519_pubkey(did: &str) -> Result<[u8; 32], DidKeyError> {
+    let body = did
+        .strip_prefix("did:key:z")
+        .ok_or(DidKeyError::MissingPrefix)?;
+    let payload = bs58::decode(body)
+        .into_vec()
+        .map_err(|e| DidKeyError::Base58(e.to_string()))?;
+    if payload.len() != 2 + 32 {
+        return Err(DidKeyError::UnexpectedPayloadLength(payload.len()));
+    }
+    if payload[..2] != ED25519_DID_KEY_MULTICODEC {
+        return Err(DidKeyError::NotEd25519);
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&payload[2..]);
+    Ok(out)
+}
+
 #[cfg(target_arch = "wasm32")]
 mod keypair {
     use crate::net::NetError;
@@ -135,5 +200,71 @@ mod tests {
     fn empty_seen_list_means_no_peer_is_identified() {
         let peer = PeerId("12D3KooWAnyone".into());
         assert!(!is_identified_peer(&[], &peer));
+    }
+
+    /// M1 — encoding shape pinned. Any Ed25519 pubkey through
+    /// `ed25519_pubkey_to_did_key` produces the `did:key:z6Mk…`
+    /// prefix. The `z6Mk` portion is deterministic: it's the
+    /// base58btc encoding of the multicodec varint `0xed 0x01` plus
+    /// the leading bits of any 32-byte pubkey. If the multicodec
+    /// prefix or the multibase encoding ever changes, this trips.
+    #[test]
+    fn ed25519_did_key_has_z6mk_prefix() {
+        let pubkey = [0u8; 32];
+        let did = ed25519_pubkey_to_did_key(&pubkey);
+        assert!(
+            did.starts_with("did:key:z6Mk"),
+            "expected did:key:z6Mk… prefix, got {did}"
+        );
+    }
+
+    /// M1 — round-trip. Encoding and then decoding any 32-byte pubkey
+    /// yields the original 32 bytes. This is the falsifiable check
+    /// that the encoder + decoder are exact inverses; mutate either
+    /// side and this fails immediately.
+    #[test]
+    fn ed25519_did_key_round_trip() {
+        let pubkey = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31, 32,
+        ];
+        let did = ed25519_pubkey_to_did_key(&pubkey);
+        let decoded = did_key_to_ed25519_pubkey(&did).expect("round-trip decode");
+        assert_eq!(decoded, pubkey);
+    }
+
+    /// M1 — distinct pubkeys produce distinct DIDs. Catches a
+    /// regression where the encoder ignores its input and emits a
+    /// fixed string.
+    #[test]
+    fn ed25519_distinct_pubkeys_produce_distinct_did_keys() {
+        let a = [0u8; 32];
+        let b = [1u8; 32];
+        assert_ne!(
+            ed25519_pubkey_to_did_key(&a),
+            ed25519_pubkey_to_did_key(&b),
+        );
+    }
+
+    /// M1 — decode rejects strings without the `did:key:z` prefix.
+    #[test]
+    fn did_key_decode_rejects_missing_prefix() {
+        assert_eq!(
+            did_key_to_ed25519_pubkey("z6MkSomething"),
+            Err(DidKeyError::MissingPrefix),
+        );
+    }
+
+    /// M1 — decode rejects strings whose multicodec prefix isn't
+    /// `0xed 0x01`. Constructed by encoding a wrong multicodec
+    /// prefix (`0x12 0x00`, the multihash for sha2-256) followed
+    /// by 32 bytes; the result is a syntactically-valid did:key URI
+    /// that names a different key type.
+    #[test]
+    fn did_key_decode_rejects_non_ed25519_multicodec() {
+        let mut payload = vec![0x12, 0x00];
+        payload.extend_from_slice(&[0u8; 32]);
+        let bad = format!("did:key:z{}", bs58::encode(payload).into_string());
+        assert_eq!(did_key_to_ed25519_pubkey(&bad), Err(DidKeyError::NotEd25519));
     }
 }
