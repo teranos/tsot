@@ -60,9 +60,14 @@ threshold is one-way.
 
 ## Open
 
-- **Identity provider layer.** ATProto / ActivityPub / WebAuthn / DID
-  are candidates, none built yet. The choice determines what
-  "identified" means and how cheaply a Sybil attack can mint identities.
+- **Identity provider layer.** Picked: `did:key` (Ed25519, libp2p
+  PeerId derived from the same key) as the user-facing identifier;
+  `rs-ucan` for cross-device capability delegation (M8, deferred);
+  WebAuthn-wrapped Ed25519 for hardware-backed enclave (M3, deferred).
+  ATProto reframed as the social / moderation layer that binds an
+  ATProto handle to a `did:key` (M2, deferred) — not the identifier
+  itself. ActivityPub cut. See `docs/IDENTITY.md` for the menu and
+  `research/IDENTITY.md` for the deep read.
 - **Personal overlay storage.** Non-canonical changes have to live
   somewhere — local IndexedDB, federated personal store, or both. Out
   of scope until the identity layer exists.

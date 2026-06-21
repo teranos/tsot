@@ -21,8 +21,8 @@ enforce it.
 ## 🥗 Appetizers — research / exploration (≤ 30 min each)
 
 - **A1.** Read `roam/docs/CANONICAL.md` cold; write down 3 questions it doesn't answer for the current implementation.
-- ~~**A2.** Read the W3C `did:key` spec — only the encoding section. Confirm Ed25519 → `did:key:z6Mk…`.~~ ✓ M1 implementation + round-trip / z6Mk-prefix tests cover the encoding section empirically (`identity` branch, 90a4d7e).
-- ~~**A3.** Confirm libp2p Ed25519 `PeerId` and `did:key` derive from the same 32-byte public key in different encodings. Note the conversion.~~ ✓ S1 SELF panel renders both for the same `keypair.public()`; conversion is `try_into_ed25519().to_bytes() → ed25519_pubkey_to_did_key` (`identity` branch, 158c212).
+- ~~**A2.** Read the W3C `did:key` spec — only the encoding section. Confirm Ed25519 → `did:key:z6Mk…`.~~ ✓ M1 implementation + round-trip / z6Mk-prefix tests cover the encoding section empirically (v0.3.4).
+- ~~**A3.** Confirm libp2p Ed25519 `PeerId` and `did:key` derive from the same 32-byte public key in different encodings. Note the conversion.~~ ✓ S1 SELF panel renders both for the same `keypair.public()`; conversion is `try_into_ed25519().to_bytes() → ed25519_pubkey_to_did_key` (v0.3.4).
 - **A4.** Read Bluesky/ATProto PDS docs; locate where a user's signing key lives and how the handle binds to it.
 - **A5.** Read UCAN v1.0 spec abstract + the invocation envelope shape.
 - **A6.** Open one browser-based DID wallet's UX (e.g. an ATProto client). Note what "verification" looks like to the user, in two sentences.
@@ -31,7 +31,7 @@ enforce it.
 
 ## 🥄 Starters — small concrete work (1–3 hours)
 
-- ~~**S1.** Surface the `did:key:z6Mk…` derivation in the SELF panel alongside PeerId. View-only.~~ ✓ worker precomputes self_did_key, posts in `kind:'ready'`, SELF panel renders the line below `worker peerId` (`identity` branch, 158c212).
+- ~~**S1.** Surface the `did:key:z6Mk…` derivation in the SELF panel alongside PeerId. View-only.~~ ✓ worker precomputes self_did_key, posts in `kind:'ready'`, SELF panel renders the line below `worker peerId` (v0.3.4).
 - **S2.** Add a "rotate identity" action: clean IndexedDB → mint fresh. Confirmation gate.
 - **S3.** Export keypair: download a small text blob containing the protobuf-encoded keypair.
 - **S4.** Import keypair: paste/upload the blob, validate, replace IndexedDB entry.
@@ -42,10 +42,10 @@ enforce it.
 
 ## 🍽️ Main courses — load-bearing implementation (multi-day)
 
-- ~~**M1.** Adopt `did:key` as the project's primary identifier. PeerId becomes the underlying libp2p detail; user-facing surfaces show DID.~~ ✓ encoding `roam::identity::ed25519_pubkey_to_did_key` + decode + 5 falsifiable tests (`identity` branch). UI surfacing tracked under S1.
+- ~~**M1.** Adopt `did:key` as the project's primary identifier. PeerId becomes the underlying libp2p detail; user-facing surfaces show DID.~~ ✓ encoding `roam::identity::ed25519_pubkey_to_did_key` + decode + 5 falsifiable tests (v0.3.4). UI surfacing tracked under S1.
 - **M2.** ATProto PDS bridge: a player's ATProto handle can claim their roam identity. Defines a verification flow.
 - **M3.** WebAuthn-wraps-Ed25519: hardware-backed key, never exits the secure enclave. Loses portability for some browsers; gains theft resistance.
-- ~~**M4.** Define the structural meaning of "identified" for `docs/CANONICAL.md`. Concrete runtime criterion. Without this, the canonical/non-canonical split has no implementation path.~~ ✓ `roam::identity::is_identified_self` / `is_identified_peer` (`identity` branch).
+- ~~**M4.** Define the structural meaning of "identified" for `docs/CANONICAL.md`. Concrete runtime criterion. Without this, the canonical/non-canonical split has no implementation path.~~ ✓ `roam::identity::is_identified_self` / `is_identified_peer` (v0.3.4).
 - **M5.** Gossipsub signature verification at the relayer. Relayer rejects wire messages whose claimed source doesn't match the signing key.
 - **M6.** Canonical / non-canonical world-state routing. The actual fork mechanism world transformations route through.
 - **M7.** Promotion flow: non-canonical → canonical with the sandbox-reset axiom enforced.
@@ -55,7 +55,7 @@ enforce it.
 
 - **C1.** Rewrite `docs/CANONICAL.md` "Open" section once the identity path is picked. Remove the four-name candidate list.
 - **C2.** Update `roam/README.md` identity bullets to reflect the picked path. Cut anything that wasn't picked.
-- ~~**C3.** Move identity code into `roam/src/identity/` as a dedicated module. Currently scattered across `rust_libp2p.rs` + `wasm_ffi.rs` + `js-bridge.js`.~~ ✓ `roam::identity` module; keypair handling consolidated, JS bridge already extracted to `assets/src/identity.js` in 0.3.2 (`identity` branch).
+- ~~**C3.** Move identity code into `roam/src/identity/` as a dedicated module. Currently scattered across `rust_libp2p.rs` + `wasm_ffi.rs` + `js-bridge.js`.~~ ✓ `roam::identity` module; keypair handling consolidated, JS bridge already extracted to `assets/src/identity.js` in 0.3.2 (v0.3.4).
 - **C4.** Write a player-facing one-pager: "what identity means in roam." Not a spec — a UX explanation.
 - **C5.** Emit identity events (mint, load, export, import, rotate, sign, verify) into the trace bus with dedicated tags. Render in event log with a color.
 - **C6.** Audit every `Keypair::generate_ed25519()` call site across the project. Confirm each one either uses the persistent key or has an explicit reason to generate fresh.
