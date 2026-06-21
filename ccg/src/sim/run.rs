@@ -1028,6 +1028,15 @@ pub fn run_game_continue(
                                 &iid,
                                 ability_index,
                                 x,
+                                // Slice #4: SACRIFICE/SELF in activated cost.
+                                // HumanAction::Activate doesn't yet carry
+                                // sacrifice_ids; SACRIFICE-cost activations
+                                // from the human side return
+                                // WrongSacrificeCount until the UI plumbs
+                                // sacrifice picks. SELF-cost activations
+                                // need no extra input — the source is the
+                                // implicit cost.
+                                crate::game::ActivateChoices::default(),
                                 Some(&mut EventContext::new(lua, &mut oracle)),
                             ) {
                                 crate::sim::instrument::tee_log(log, format!(
@@ -1408,6 +1417,10 @@ pub fn run_game_continue(
                             &iid,
                             ability_index,
                             x,
+                            // Slice #4: see Main1 call site above for the
+                            // SACRIFICE-from-human-side caveat. Same gap
+                            // applies on the Main2 side.
+                            crate::game::ActivateChoices::default(),
                             Some(&mut EventContext::new(lua, &mut oracle)),
                         ) {
                             crate::sim::instrument::tee_log(log, format!(
@@ -1607,7 +1620,20 @@ pub(crate) fn run_activation_pass(
             };
             *last_activated = Some((iid.clone(), idx));
             if state
-                .activate_ability(iid, idx, x_value, Some(&mut EventContext::new(lua, oracle)))
+                .activate_ability(
+                    iid,
+                    idx,
+                    x_value,
+                    // Slice #4: AI auto-fire passes empty sacrifice_ids.
+                    // Abilities with SACRIFICE cost return
+                    // WrongSacrificeCount and the AI skips them. Wiring
+                    // the AI to pick a sacrifice target (lowest-value
+                    // creature heuristic) is a follow-up; today
+                    // Reincubator + 156's SACRIFICE-cost activations
+                    // simply aren't exercised by the EA / probe loops.
+                    crate::game::ActivateChoices::default(),
+                    Some(&mut EventContext::new(lua, oracle)),
+                )
                 .is_ok()
             {
                 count += 1;

@@ -25,7 +25,7 @@ pub use combat::{CombatError, CombatOutcome};
 pub use context::EventContext;
 pub use journal::{Journal, JournalEntry};
 pub use movement::MoveError;
-pub use play::{PlayChoices, PlayError};
+pub use play::{ActivateChoices, PlayChoices, PlayError};
 pub use state::{
     AttackDecl, CardInstance, CombatState, GameState, InstanceId, Modifier, Phase, PlayerId,
     PlayerState, PriorityError, PriorityState, StackItem, StatusEffect, Zone,

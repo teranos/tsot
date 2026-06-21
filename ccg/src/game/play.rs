@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 // imports it from this module path.
 #[allow(unused_imports)]
 pub use errors::ActivateError;
-pub use errors::{PlayChoices, PlayError};
+pub use errors::{ActivateChoices, PlayChoices, PlayError};
 
 impl GameState {
     /// Play `instance` from `player`'s HAND, paying its cost via `choices`.

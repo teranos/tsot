@@ -46,6 +46,32 @@ pub enum ActivateError {
     /// RULES P.30: X < 1 on an X-cost activation that doesn't opt
     /// into X = 0 (`Card.allow_x_zero = false`).
     XBelowMinimum,
+    /// SACRIFICE cost: caller's `ActivateChoices.sacrifice_ids` count
+    /// does not match the activation's SACRIFICE component total.
+    /// Mirrors `PlayError::WrongSacrificeCount` for cast paths.
+    WrongSacrificeCount { expected: usize, got: usize },
+    /// SACRIFICE cost: a chosen sacrifice id is not on the controller's
+    /// BOARD, or not controlled by the controller, or fails the cost
+    /// component's `kind` filter. Mirrors
+    /// `PlayError::SacrificePaymentInvalid`.
+    SacrificePaymentInvalid(InstanceId),
+    /// SACRIFICE cost: the same id appears more than once in
+    /// `sacrifice_ids`. Mirrors `PlayError::DuplicateSacrifice`.
+    DuplicateSacrifice(InstanceId),
+}
+
+/// Player-supplied choices for an activation. Parallel to `PlayChoices`
+/// on the cast side. Today carries only the SACRIFICE target list; the
+/// struct shape is the future home for any other choices an activation
+/// needs (e.g., per-activation jewel-tap substitution, ATTACHED
+/// payment lists for activations from ATTACHED zone, etc.).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ActivateChoices {
+    /// One InstanceId per SACRIFICE cost component on the activated
+    /// ability. Each id must be on the controller's BOARD, controlled
+    /// by the controller, and match any `kind` filter declared on the
+    /// SACRIFICE component (same shape as `PlayChoices.sacrifice_ids`).
+    pub sacrifice_ids: Vec<InstanceId>,
 }
 
 /// Player-supplied choices when playing a card.

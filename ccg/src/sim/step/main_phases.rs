@@ -236,22 +236,45 @@ impl StepEngine {
                 }
                 Some(HumanAction::Pass) => None,
                 Some(HumanAction::PlayCard { iid }) => Some(iid),
-                Some(HumanAction::Activate { .. }) => {
-                    // S9 deferred: human activation routing through
-                    // Pattern B isn't implemented yet. Re-prompting
-                    // without telling the user was a silent drop —
-                    // they clicked, nothing happened. Sacred-errors
-                    // sweep: surface the gap instead of pretending.
-                    self.emit_human_refusal(
-                        active,
-                        "prompt",
-                        "activate-ability",
-                        "Activations not yet supported in Main1".into(),
-                        "The engine doesn't yet route human-clicked \
-                         activated abilities through the Pattern B \
-                         (Main1) flow. Cast a card or pass for now; \
-                         this is a known engine gap.".into(),
+                Some(HumanAction::Activate { iid, ability_index, x }) => {
+                    let actor = match active {
+                        PlayerId::A => "A",
+                        PlayerId::B => "B",
+                    };
+                    let name = self
+                        .state
+                        .card_pool
+                        .get(&iid)
+                        .map(|i| i.card.name.clone())
+                        .unwrap_or_else(|| iid.to_string());
+                    let result = self.state.activate_ability(
+                        &iid,
+                        ability_index,
+                        x,
+                        crate::game::ActivateChoices::default(),
+                        Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
                     );
+                    match result {
+                        Ok(()) => {
+                            self.log.push(format!(
+                                "turn {} ({}) Main1: activate {}[{}]",
+                                self.state.turn, actor, name, ability_index
+                            ));
+                        }
+                        Err(e) => {
+                            self.emit_human_refusal(
+                                active,
+                                "prompt",
+                                "activate-ability",
+                                format!("Activation rejected: {e:?}"),
+                                "The engine refused to fire this activation. \
+                                 Common causes: tapped source, summoning sick, \
+                                 insufficient cost components, or a yield from \
+                                 the effect handler (ChoicePending — Activate \
+                                 doesn't yet carry replay through StepEngine).".into(),
+                            );
+                        }
+                    }
                     let candidates = crate::sim::ai::enumerate_playable_in_hand(
                         &self.state,
                         active,
@@ -707,19 +730,45 @@ impl StepEngine {
                 });
                 StepResult::Continue
             }
-            Some(HumanAction::Activate { .. }) => {
-                // S9-extended deferred — human activations through
-                // Main2 aren't routed yet. Sacred-errors sweep:
-                // surface the gap instead of silently re-prompting.
-                self.emit_human_refusal(
-                    active,
-                    "prompt",
-                    "activate-ability",
-                    "Activations not yet supported in Main2".into(),
-                    "The engine doesn't yet route human-clicked \
-                     activated abilities through Main2. Cast a card \
-                     or pass for now; this is a known engine gap.".into(),
+            Some(HumanAction::Activate { iid, ability_index, x }) => {
+                let actor = match active {
+                    PlayerId::A => "A",
+                    PlayerId::B => "B",
+                };
+                let name = self
+                    .state
+                    .card_pool
+                    .get(&iid)
+                    .map(|i| i.card.name.clone())
+                    .unwrap_or_else(|| iid.to_string());
+                let result = self.state.activate_ability(
+                    &iid,
+                    ability_index,
+                    x,
+                    crate::game::ActivateChoices::default(),
+                    Some(&mut EventContext::new(self.registry.lua(), &mut self.oracle)),
                 );
+                match result {
+                    Ok(()) => {
+                        self.log.push(format!(
+                            "turn {} ({}) Main2: activate {}[{}]",
+                            self.state.turn, actor, name, ability_index
+                        ));
+                    }
+                    Err(e) => {
+                        self.emit_human_refusal(
+                            active,
+                            "prompt",
+                            "activate-ability",
+                            format!("Activation rejected: {e:?}"),
+                            "The engine refused to fire this activation. \
+                             Common causes: tapped source, summoning sick, \
+                             insufficient cost components, or a yield from \
+                             the effect handler (ChoicePending — Activate \
+                             doesn't yet carry replay through StepEngine).".into(),
+                        );
+                    }
+                }
                 let candidates = crate::sim::ai::enumerate_playable_in_hand(
                     &self.state,
                     active,

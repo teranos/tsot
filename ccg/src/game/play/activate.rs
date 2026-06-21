@@ -24,6 +24,7 @@ impl GameState {
         iid: &InstanceId,
         ability_idx: usize,
         x_value: Option<i32>,
+        choices: super::ActivateChoices,
         mut ctx: Option<&mut EventContext>,
     ) -> Result<(), ActivateError> {
         // First pass: read everything we need from the card_pool entry
@@ -110,13 +111,25 @@ impl GameState {
         let mut hand_need = 0usize;
         let mut mill_need = 0usize;
         let mut gy_need = 0usize;
+        let mut sacrifice_need = 0usize;
+        let mut self_exiles = false;
         for c in &components {
             let amount = effective_cost_amount(c, x_val);
             match c.source {
                 CostSource::Hand => hand_need += amount,
                 CostSource::Mill => mill_need += amount,
                 CostSource::Graveyard => gy_need += amount,
-                CostSource::Sacrifice | CostSource::SelfExile | CostSource::Attached => {
+                CostSource::Sacrifice => sacrifice_need += amount,
+                CostSource::SelfExile => {
+                    // P.5: source moves BOARD → EXILE after effect.
+                    if c.amount.max(0) > 0 {
+                        self_exiles = true;
+                    }
+                    let _ = amount;
+                }
+                CostSource::Attached => {
+                    // TODO: ATTACHED in activated cost (non-BOARD-zone
+                    // activation slice).
                     return Err(ActivateError::CannotPayComponents);
                 }
             }
@@ -127,6 +140,43 @@ impl GameState {
             || p.graveyard.len() < gy_need
         {
             return Err(ActivateError::CannotPayComponents);
+        }
+
+        // P.16: SACRIFICE validation, i-th-pairing with components.
+        if choices.sacrifice_ids.len() != sacrifice_need {
+            return Err(ActivateError::WrongSacrificeCount {
+                expected: sacrifice_need,
+                got: choices.sacrifice_ids.len(),
+            });
+        }
+        let sac_kinds: Vec<Option<crate::card::CardType>> = components
+            .iter()
+            .filter(|c| matches!(c.source, CostSource::Sacrifice))
+            .flat_map(|c| {
+                let n = effective_cost_amount(c, x_val);
+                std::iter::repeat_n(c.kind, n)
+            })
+            .collect();
+        let mut sac_seen: std::collections::BTreeSet<&InstanceId> =
+            std::collections::BTreeSet::new();
+        for (i, sid) in choices.sacrifice_ids.iter().enumerate() {
+            if !sac_seen.insert(sid) {
+                return Err(ActivateError::DuplicateSacrifice(sid.clone()));
+            }
+            if !self.player(controller).board.contains(sid) {
+                return Err(ActivateError::SacrificePaymentInvalid(sid.clone()));
+            }
+            let Some(sac_inst) = self.card_pool.get(sid) else {
+                return Err(ActivateError::SacrificePaymentInvalid(sid.clone()));
+            };
+            if sac_inst.controller != controller {
+                return Err(ActivateError::SacrificePaymentInvalid(sid.clone()));
+            }
+            if let Some(required_kind) = sac_kinds.get(i).copied().flatten() {
+                if sac_inst.card.kind != required_kind {
+                    return Err(ActivateError::SacrificePaymentInvalid(sid.clone()));
+                }
+            }
         }
 
         // Expose the X value to both validate and effect handlers via
@@ -193,7 +243,32 @@ impl GameState {
                         }
                     }
                 }
-                _ => unreachable!("sacrifice / self-exile rejected at validation"),
+                CostSource::Sacrifice | CostSource::SelfExile => {}
+                CostSource::Attached => {
+                    unreachable!("attached rejected at validation");
+                }
+            }
+        }
+        for sid in &choices.sacrifice_ids {
+            let _ = self.move_card_or_emit(
+                sid,
+                controller,
+                Zone::Board,
+                Zone::Graveyard,
+                "activate-sacrifice-cost",
+            );
+            self.bump_action("sacrificed_as_cost", controller);
+        }
+        if let Some(c) = ctx.as_deref_mut() {
+            for sid in &choices.sacrifice_ids {
+                lua_api::fire_self_only(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    crate::card::EventName::OnDie,
+                    sid,
+                )
+                .map_err(ActivateError::ChoicePending)?;
             }
         }
 
@@ -210,6 +285,17 @@ impl GameState {
         if let Some(c) = ctx {
             lua_api::fire_activated(c.lua, self, c.oracle(), iid, handler)
                 .map_err(ActivateError::ChoicePending)?;
+        }
+
+        // P.5: source → EXILE after effect.
+        if self_exiles {
+            let _ = self.move_card_or_emit(
+                iid,
+                controller,
+                Zone::Board,
+                Zone::Exile,
+                "activate-self-exile-cost",
+            );
         }
 
         self.current_activation_x = prior_x;
@@ -269,19 +355,33 @@ impl GameState {
         let mut hand_need = 0usize;
         let mut mill_need = 0usize;
         let mut gy_need = 0usize;
+        let mut sacrifice_need = 0usize;
         for c in &ability.cost_components {
             let amount = effective_cost_amount(c, x);
             match c.source {
                 CostSource::Hand => hand_need += amount,
                 CostSource::Mill => mill_need += amount,
                 CostSource::Graveyard => gy_need += amount,
-                CostSource::Sacrifice | CostSource::SelfExile | CostSource::Attached => {
+                CostSource::Sacrifice => sacrifice_need += amount,
+                CostSource::SelfExile => {
+                    // P.5: source itself pays — already verified on board.
+                }
+                CostSource::Attached => {
                     return false;
                 }
             }
         }
         let p = self.player(inst.controller);
-        p.hand.len() >= hand_need && p.deck.len() >= mill_need && p.graveyard.len() >= gy_need
+        if p.hand.len() < hand_need || p.deck.len() < mill_need || p.graveyard.len() < gy_need {
+            return false;
+        }
+        // SACRIFICE pre-flight: need at least N controllable BOARD cards.
+        // (Caller supplies the exact sacrifice_ids when firing; the gate
+        // just checks "is there enough to sacrifice.")
+        if sacrifice_need > 0 && p.board.iter().filter(|i| *i != iid).count() < sacrifice_need {
+            return false;
+        }
+        true
     }
 }
 
@@ -366,7 +466,13 @@ mod choice_pending_tests {
 
         let result = {
             let mut ctx = EventContext::new(&lua, &mut oracle);
-            state.activate_ability(&card_iid, 0, None, Some(&mut ctx))
+            state.activate_ability(
+                &card_iid,
+                0,
+                None,
+                crate::game::play::ActivateChoices::default(),
+                Some(&mut ctx),
+            )
         };
 
         match result {
@@ -381,5 +487,161 @@ mod choice_pending_tests {
                 "expected Err(ActivateError::ChoicePending(Card)), got {other:?}"
             ),
         }
+    }
+
+    use crate::card::{CardType, CostComponent, CostSource};
+    use crate::game::play::ActivateChoices;
+
+    #[test]
+    fn activate_ability_with_sacrifice_cost_moves_victim_to_graveyard() {
+        let lua = Lua::new();
+        let mut state = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let source_iid = state.a.hand[0].clone();
+        let victim_iid = state.a.hand[1].clone();
+
+        // Both on BOARD, both controllable + sacrificable. Mark victim as
+        // a creature so the kind filter accepts it.
+        state
+            .move_card(&source_iid, PlayerId::A, Zone::Hand, Zone::Board)
+            .unwrap();
+        state
+            .move_card(&victim_iid, PlayerId::A, Zone::Hand, Zone::Board)
+            .unwrap();
+        state.set_summoning_sick(&source_iid, false);
+        state.set_summoning_sick(&victim_iid, false);
+        state.card_pool.get_mut(&victim_iid).unwrap().card.kind = CardType::Creature;
+
+        // Effect bumps a global so we can pin "effect ran" cleanly.
+        let effect: mlua::Function = lua
+            .load(
+                r#"return function(game, self)
+                     _G.sac_activation_effect_count = (_G.sac_activation_effect_count or 0) + 1
+                   end"#,
+            )
+            .eval()
+            .unwrap();
+        state
+            .card_pool
+            .get_mut(&source_iid)
+            .unwrap()
+            .card
+            .activated
+            .push(ActivatedAbility {
+                cost_tap: false,
+                cost_components: vec![CostComponent {
+                    amount: 1,
+                    source: CostSource::Sacrifice,
+                    is_x: false,
+                    kind: Some(CardType::Creature),
+                }],
+                text: String::new(),
+                timing: Timing::Instant,
+                validate: None,
+                target: None,
+                effect,
+            });
+
+        lua.globals()
+            .set("sac_activation_effect_count", 0_i32)
+            .unwrap();
+
+        let result = {
+            let mut ctx = EventContext::lua_only(&lua);
+            state.activate_ability(
+                &source_iid,
+                0,
+                None,
+                ActivateChoices {
+                    sacrifice_ids: vec![victim_iid.clone()],
+                },
+                Some(&mut ctx),
+            )
+        };
+
+        assert!(result.is_ok(), "activation should succeed: {result:?}");
+        assert!(
+            state.a.graveyard.contains(&victim_iid),
+            "victim must be in controller's graveyard"
+        );
+        assert!(
+            !state.a.board.contains(&victim_iid),
+            "victim must leave board"
+        );
+        let fired: i32 = lua
+            .globals()
+            .get("sac_activation_effect_count")
+            .unwrap();
+        assert_eq!(fired, 1, "activation effect should have run once");
+    }
+
+    #[test]
+    fn activate_ability_with_self_exile_cost_moves_source_to_exile_after_effect() {
+        let lua = Lua::new();
+        let mut state = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+        let source_iid = state.a.hand[0].clone();
+
+        state
+            .move_card(&source_iid, PlayerId::A, Zone::Hand, Zone::Board)
+            .unwrap();
+        state.set_summoning_sick(&source_iid, false);
+
+        // Effect records self.instance_id at fire time so we can verify
+        // the source is still readable during the effect (i.e., the
+        // SelfExile move happens AFTER the effect, not before).
+        let effect: mlua::Function = lua
+            .load(
+                r#"return function(game, self)
+                     _G.self_exile_observed_iid = self.instance_id
+                   end"#,
+            )
+            .eval()
+            .unwrap();
+        state
+            .card_pool
+            .get_mut(&source_iid)
+            .unwrap()
+            .card
+            .activated
+            .push(ActivatedAbility {
+                cost_tap: false,
+                cost_components: vec![CostComponent {
+                    amount: 1,
+                    source: CostSource::SelfExile,
+                    is_x: false,
+                    kind: None,
+                }],
+                text: String::new(),
+                timing: Timing::Instant,
+                validate: None,
+                target: None,
+                effect,
+            });
+
+        let result = {
+            let mut ctx = EventContext::lua_only(&lua);
+            state.activate_ability(
+                &source_iid,
+                0,
+                None,
+                ActivateChoices::default(),
+                Some(&mut ctx),
+            )
+        };
+
+        assert!(result.is_ok(), "activation should succeed: {result:?}");
+        let observed: String = lua.globals().get("self_exile_observed_iid").unwrap();
+        assert_eq!(
+            observed,
+            source_iid.to_string(),
+            "effect must observe self before the SelfExile move",
+        );
+        assert!(
+            state.a.exile.contains(&source_iid),
+            "source must be in exile after activation"
+        );
+        assert!(
+            !state.a.board.contains(&source_iid),
+            "source must leave board"
+        );
     }
 }

@@ -2312,6 +2312,7 @@ fn activate_red_jewel_taps_and_draws_then_discards() {
         &iid,
         0,
         None,
+        crate::game::ActivateChoices::default(),
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     );
     assert_eq!(result, Ok(()));
@@ -2323,7 +2324,7 @@ fn activate_red_jewel_taps_and_draws_then_discards() {
 
     // Second activation must be rejected — jewel is now tapped.
     assert!(!s.can_activate(&iid, 0));
-    let second = s.activate_ability(&iid, 0, None, None);
+    let second = s.activate_ability(&iid, 0, None, crate::game::ActivateChoices::default(), None);
     assert_eq!(second, Err(ActivateError::AlreadyTapped));
 }
 
@@ -2351,7 +2352,7 @@ fn activate_creature_with_summoning_sickness_is_rejected() {
     s.a.board.push(iid.clone());
 
     assert!(!s.can_activate(&iid, 0));
-    let result = s.activate_ability(&iid, 0, None, None);
+    let result = s.activate_ability(&iid, 0, None, crate::game::ActivateChoices::default(), None);
     assert_eq!(result, Err(ActivateError::SummoningSick));
 }
 
@@ -2376,7 +2377,7 @@ fn activate_returns_no_such_ability_for_out_of_range_idx() {
 
     // red-jewel has exactly one activated ability.
     assert!(!s.can_activate(&iid, 1));
-    assert_eq!(s.activate_ability(&iid, 1, None, None), Err(ActivateError::NoSuchAbility));
+    assert_eq!(s.activate_ability(&iid, 1, None, crate::game::ActivateChoices::default(), None), Err(ActivateError::NoSuchAbility));
 }
 
 #[test]
@@ -2413,6 +2414,7 @@ fn vigilant_human_t_ability_no_ops_if_did_not_attack() {
         &iid,
         0,
         None,
+        crate::game::ActivateChoices::default(),
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
     .unwrap();
@@ -2451,6 +2453,7 @@ fn vigilant_human_t_ability_draws_after_attacking() {
         &iid,
         0,
         None,
+        crate::game::ActivateChoices::default(),
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
     .unwrap();
@@ -2490,6 +2493,7 @@ fn blue_monkey_2_hand_activation_discards_two_and_draws_one() {
         &iid,
         0,
         None,
+        crate::game::ActivateChoices::default(),
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
     .unwrap();
@@ -2531,7 +2535,7 @@ fn monkey_cannot_activate_with_insufficient_hand() {
     }
 
     assert!(!s.can_activate(&iid, 0));
-    let result = s.activate_ability(&iid, 0, None, None);
+    let result = s.activate_ability(&iid, 0, None, crate::game::ActivateChoices::default(), None);
     assert_eq!(result, Err(ActivateError::CannotPayComponents));
 }
 
@@ -2578,6 +2582,7 @@ fn white_monkey_grants_plus_2_and_vigilance_eot() {
         &monkey_iid,
         0,
         None,
+        crate::game::ActivateChoices::default(),
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
     .unwrap();
@@ -2633,6 +2638,7 @@ fn validate_hook_refuses_and_charges_no_cost_when_no_target() {
         &iid,
         0,
         None,
+        crate::game::ActivateChoices::default(),
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     );
     assert_eq!(result, Err(ActivateError::NoLegalTarget));
@@ -2689,6 +2695,7 @@ fn validate_hook_passes_and_charges_when_target_exists() {
         &iid,
         0,
         None,
+        crate::game::ActivateChoices::default(),
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     );
     assert_eq!(result, Ok(()));
@@ -2732,6 +2739,7 @@ fn dark_salamander_x_cost_activation_mills_2y() {
         &sala_iid,
         0,
         Some(3),
+        crate::game::ActivateChoices::default(),
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     );
     assert_eq!(result, Ok(()));
@@ -2797,6 +2805,7 @@ fn red_jewel_grants_t_draw_discard_to_attached_host() {
         &host_iid,
         0,
         None,
+        crate::game::ActivateChoices::default(),
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     );
     assert_eq!(result, Ok(()));
@@ -3755,6 +3764,7 @@ fn activation_with_gy_cost_is_not_subject_to_p12a() {
         &sig_iid,
         0,
         None,
+        crate::game::ActivateChoices::default(),
         Some(&mut crate::game::EventContext::new(registry.lua(), &mut oracle)),
     );
     assert!(

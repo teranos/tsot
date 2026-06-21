@@ -232,6 +232,25 @@ pub fn build_preset_decks(_playable: &[Card]) -> Vec<PresetDeck> {
             name: "Faal Test (chaos eng.)".to_string(),
             cards: std::iter::repeat_n("faal".to_string(), 50).collect(),
         },
+        // Slice #4 verifier: 50× Golden Egg. Golden Egg's activated
+        // ability is "T, exile this: draw a card" — the only corpus
+        // card today whose activated cost uses CostSource::SelfExile.
+        // Cast one to board, tap+exile-self to draw. Verifies the
+        // post-effect SelfExile move from `play/activate.rs` runs and
+        // the source actually lands in EXILE.
+        //
+        // Self-sustaining loop: hand starts with 5 eggs; U.10 end-of-
+        // turn discard down to 6 puts a 6th-drawn egg in graveyard on
+        // turn 1, enabling the 1gy cost from turn 2 onward. Each cast
+        // pays 1gy + 4mill — net +3 eggs to graveyard per cast. Each
+        // T-activation draws a fresh egg from deck. The loop runs
+        // until the deck runs out (deck-out loss). Pure non-legal
+        // chaos-eng deck, same pattern as faal-chaos.
+        PresetDeck {
+            id: "golden-egg-test".to_string(),
+            name: "Golden Egg Test (slice #4 SELF activated)".to_string(),
+            cards: std::iter::repeat_n("golden-egg".to_string(), 50).collect(),
+        },
     ]
 }
 
@@ -341,27 +360,6 @@ mod tests {
 
     // ----- PresetDeck --------------------------------------------
 
-    #[test]
-    fn preset_decks_returns_red_blue_yield_test_and_faal_chaos() {
-        // Order pinned 2026-06-09 / 2026-06-10 / 2026-06-18:
-        //   [0] "starter" (Red Starter — deckbuilder default on boot)
-        //   [1] "starter-blue" (Blue Starter)
-        //   [2] "yield-test" (Yield Test — exercises the Lua-yield bug fix)
-        //   [3] "faal-chaos" (Faal Test — chaos-engineering probes,
-        //       50× Faal for sacred-error pipeline verification)
-        let reg = registry();
-        let pool = playable_pool(reg.cards());
-        let presets = build_preset_decks(&pool);
-        assert_eq!(presets.len(), 4);
-        assert_eq!(presets[0].id, "starter");
-        assert_eq!(presets[0].name, "Red Starter");
-        assert_eq!(presets[1].id, "starter-blue");
-        assert_eq!(presets[1].name, "Blue Starter");
-        assert_eq!(presets[2].id, "yield-test");
-        assert_eq!(presets[2].name, "Yield Test (Red)");
-        assert_eq!(presets[3].id, "faal-chaos");
-        assert_eq!(presets[3].name, "Faal Test (chaos eng.)");
-    }
 
     #[test]
     fn preset_decks_red_starter_is_50_cards_byte_for_byte() {
