@@ -87,6 +87,70 @@ pub fn did_key_to_ed25519_pubkey(did: &str) -> Result<[u8; 32], DidKeyError> {
     Ok(out)
 }
 
+/// Errors decoding a libp2p `12D3KooW…` PeerId string to its embedded
+/// Ed25519 pubkey. Ed25519 PeerIds use the identity multihash (codec
+/// 0x00) because the protobuf-encoded pubkey fits in the ≤ 42-byte
+/// limit; the pubkey is literally embedded, not hashed. Larger key
+/// types (RSA) use sha2-256 instead — those are unrecoverable from
+/// the PeerId alone and surface as `NotIdentityMultihash`. Each
+/// variant pins one specific failure mode so the call site can give
+/// the user actionable text rather than a flattened "bad PeerId."
+#[derive(Debug, PartialEq, Eq)]
+pub enum PeerIdToDidError {
+    /// The base58btc payload couldn't be decoded.
+    Base58(String),
+    /// Decoded multihash wasn't 38 bytes (the exact size for an
+    /// identity-multihash-wrapped protobuf Ed25519 PublicKey).
+    UnexpectedLength(usize),
+    /// First multihash byte wasn't `0x00` (identity codec). The key
+    /// is unrecoverable from this PeerId — it's a hash, not the key.
+    NotIdentityMultihash,
+    /// Multihash length byte wasn't 36 (the exact size of the
+    /// protobuf-encoded Ed25519 PublicKey).
+    UnexpectedMultihashLength(u8),
+    /// Protobuf header wasn't the Ed25519 marker `0x08 0x01 0x12 0x20`
+    /// (field 1 = Ed25519 KeyType, field 2 = 32-byte data). Could be
+    /// Secp256k1, ECDSA, or any other small key type that also embeds.
+    NotEd25519,
+}
+
+/// Decode a libp2p `12D3KooW…` PeerId string to the `did:key` of its
+/// embedded Ed25519 pubkey. The trust line: libp2p's gossipsub layer
+/// has already verified that the message's `source` (signed) matches
+/// the key in this PeerId; this function pulls the key back out so
+/// application-layer routing (canonical/non-canonical, future UCAN
+/// chain validation) can act on the same identity that was verified.
+///
+/// libp2p's Ed25519 PeerId construction:
+/// 1. protobuf `PublicKey { type: Ed25519 (=1), data: <32 bytes> }`
+///    → `0x08 0x01 0x12 0x20 <pubkey>` = 36 bytes
+/// 2. identity multihash wrap: `0x00 0x24 <protobuf>` = 38 bytes
+/// 3. base58btc encode → the printable `12D3KooW…` form
+///
+/// We reverse it. Single-byte varint reads suffice because both the
+/// codec (`0x00`) and the length (`36`) fit in 7 bits — any value
+/// requiring continuation is rejected by the size check.
+pub fn peer_id_to_did_key(peer_id: &str) -> Result<String, PeerIdToDidError> {
+    let bytes = bs58::decode(peer_id)
+        .into_vec()
+        .map_err(|e| PeerIdToDidError::Base58(e.to_string()))?;
+    if bytes.len() != 38 {
+        return Err(PeerIdToDidError::UnexpectedLength(bytes.len()));
+    }
+    if bytes[0] != 0x00 {
+        return Err(PeerIdToDidError::NotIdentityMultihash);
+    }
+    if bytes[1] != 36 {
+        return Err(PeerIdToDidError::UnexpectedMultihashLength(bytes[1]));
+    }
+    if bytes[2..6] != [0x08, 0x01, 0x12, 0x20] {
+        return Err(PeerIdToDidError::NotEd25519);
+    }
+    let mut pubkey = [0u8; 32];
+    pubkey.copy_from_slice(&bytes[6..38]);
+    Ok(ed25519_pubkey_to_did_key(&pubkey))
+}
+
 #[cfg(target_arch = "wasm32")]
 mod keypair {
     use crate::net::NetError;
@@ -266,5 +330,118 @@ mod tests {
         payload.extend_from_slice(&[0u8; 32]);
         let bad = format!("did:key:z{}", bs58::encode(payload).into_string());
         assert_eq!(did_key_to_ed25519_pubkey(&bad), Err(DidKeyError::NotEd25519));
+    }
+
+    /// Constructs the libp2p `12D3KooW…` PeerId string an Ed25519
+    /// pubkey would produce. Test-only helper — production code never
+    /// needs to build PeerId strings (libp2p does it via
+    /// `keypair.public().to_peer_id().to_string()`).
+    fn ed25519_pubkey_to_peer_id_string_for_test(pubkey: &[u8; 32]) -> String {
+        let mut protobuf = vec![0x08, 0x01, 0x12, 0x20];
+        protobuf.extend_from_slice(pubkey);
+        let mut multihash = vec![0x00, protobuf.len() as u8];
+        multihash.extend_from_slice(&protobuf);
+        bs58::encode(multihash).into_string()
+    }
+
+    /// M5 — the libp2p `12D3KooW…` form of an Ed25519 PeerId decodes
+    /// to the same `did:key` as the pubkey it embeds. The libp2p
+    /// PeerId construction the test rebuilds (identity multihash +
+    /// protobuf `PublicKey { type: Ed25519, data }`) is the
+    /// documented serialization rust-libp2p produces for ≤ 42-byte
+    /// keys; if our decoder follows the same path in reverse, both
+    /// endpoints produce the same DID. End-to-end compliance against
+    /// the live libp2p version is the SELF-panel display in the
+    /// browser — the persistent PeerId and DID render side-by-side
+    /// from the same `keypair.public()`.
+    #[test]
+    fn peer_id_string_decodes_to_the_did_key_of_its_pubkey() {
+        let pubkey: [u8; 32] = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31, 32,
+        ];
+        let peer_id_str = ed25519_pubkey_to_peer_id_string_for_test(&pubkey);
+
+        let derived = peer_id_to_did_key(&peer_id_str).expect("peer id decode");
+        let direct = ed25519_pubkey_to_did_key(&pubkey);
+        assert_eq!(derived, direct);
+    }
+
+    /// M5 — decode rejects strings that aren't valid base58btc. The
+    /// `0` character is explicitly excluded from the base58btc
+    /// alphabet (avoids confusion with `O`); a string containing it
+    /// can never be a real libp2p PeerId.
+    #[test]
+    fn peer_id_decode_rejects_invalid_base58() {
+        let result = peer_id_to_did_key("not-base58-0OIl");
+        assert!(matches!(result, Err(PeerIdToDidError::Base58(_))));
+    }
+
+    /// M5 — decode rejects payloads whose decoded length isn't 38.
+    /// 38 = 2 multihash header + 4 protobuf header + 32 pubkey. Any
+    /// other length means we're not looking at an identity-multihash
+    /// Ed25519 PeerId. Constructed by base58-encoding a too-short
+    /// blob.
+    #[test]
+    fn peer_id_decode_rejects_wrong_length() {
+        let short = bs58::encode([0u8; 10]).into_string();
+        assert_eq!(
+            peer_id_to_did_key(&short),
+            Err(PeerIdToDidError::UnexpectedLength(10)),
+        );
+    }
+
+    /// M5 — decode rejects PeerIds that use sha2-256 instead of
+    /// identity multihash. RSA pubkeys are too big to embed (>42
+    /// bytes) so libp2p hashes them — there's no Ed25519 pubkey to
+    /// recover. Constructed by replacing the identity codec (0x00)
+    /// with the sha2-256 codec (0x12) while keeping a valid length.
+    #[test]
+    fn peer_id_decode_rejects_non_identity_multihash() {
+        let mut bytes = vec![0x12, 0x24];
+        bytes.extend_from_slice(&[0u8; 36]);
+        let s = bs58::encode(bytes).into_string();
+        assert_eq!(
+            peer_id_to_did_key(&s),
+            Err(PeerIdToDidError::NotIdentityMultihash),
+        );
+    }
+
+    /// M5 — decode rejects Secp256k1, ECDSA, and other non-Ed25519
+    /// key types that also embed under identity multihash. The
+    /// protobuf KeyType discriminator changes from `0x01` (Ed25519)
+    /// to something else; our header check rejects.
+    #[test]
+    fn peer_id_decode_rejects_non_ed25519_key_type() {
+        let mut bytes = vec![0x00, 0x24, 0x08, 0x02, 0x12, 0x20];
+        bytes.extend_from_slice(&[0u8; 32]);
+        let s = bs58::encode(bytes).into_string();
+        assert_eq!(peer_id_to_did_key(&s), Err(PeerIdToDidError::NotEd25519));
+    }
+
+    /// M5 — EXTERNAL spec-compliance gate. The fixture pair below was
+    /// captured from a live roam dev session: rust-libp2p 0.56 (the
+    /// version pinned in `Cargo.toml`) minted the Ed25519 keypair,
+    /// persisted it to IndexedDB, surfaced the PeerId via
+    /// `keypair.public().to_peer_id().to_string()`, and surfaced the
+    /// did:key via the worker's `ed25519_pubkey_to_did_key` path
+    /// (which is independently verified by the round-trip tests
+    /// above). Both strings come from the same `keypair.public()`, so
+    /// if `peer_id_to_did_key(PEER_ID)` doesn't equal `DID_KEY`, the
+    /// decoder has drifted from what real libp2p produces.
+    ///
+    /// This is the test the self-consistent round-trip can't be: it
+    /// pins behavior against an external source of truth, not against
+    /// my own encoder reading my own bytes back.
+    ///
+    /// If you re-mint the keypair (e.g. clear IndexedDB), pin a new
+    /// fixture pair — both strings come from the same SELF panel
+    /// render, both must change together.
+    #[test]
+    fn peer_id_decoder_matches_real_libp2p_output() {
+        const PEER_ID: &str = "12D3KooWKeuGT6Jjba6ApAJEHzVUGV4CzumLGBszbMcjdWjBD6fU";
+        const DID_KEY: &str = "did:key:z6MkpHo9JCyTkDK9WmdWLxhyLnXNL9zYeP3sKnAe5oYJENiv";
+        let derived = peer_id_to_did_key(PEER_ID).expect("real libp2p peer id decodes");
+        assert_eq!(derived, DID_KEY);
     }
 }

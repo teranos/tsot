@@ -39,6 +39,7 @@ import initWasm, {
   roam_net_tick,
   roam_net_peer_count,
   roam_net_peer_state_seq,
+  roam_net_peers_json,
   roam_net_generate_identity_bytes,
 } from '/roam.js';
 
@@ -1465,7 +1466,27 @@ moduleP.then((wasm) => {
         `peers: <b>${rustPeerCount}</b>  conns: <b>${rustConnCount}</b>  heartbeats: ${rustHeartbeatCount}  ticks: ${rustTickDebugCount}\n` +
         sparkRender() +
         lastDown;
-      meshEl.textContent = '(gossipsub mesh detail not yet plumbed from worker)';
+      // M5 — the peer table with did:key per peer. The trust line is
+      // libp2p's gossipsub Strict validation, which already proved
+      // the signed source matches each PeerId; the did:key here is
+      // that same key re-encoded for application-layer routing.
+      // Empty (Err on Rust side) → blank slot + sacred error in log.
+      try {
+        const peersRaw = roam_net_peers_json();
+        const peers = JSON.parse(peersRaw);
+        if (peers.length === 0) {
+          meshEl.textContent = '(no remote peers)';
+        } else {
+          meshEl.textContent = peers.map((p) => {
+            const did = p.did_key ? p.did_key : '(did decode failed)';
+            const age = Math.max(0, Math.floor((Date.now() - p.last_seen_ms) / 100) * 100);
+            return `${did}\n  peerId: ${p.peer_id}\n  pos: (${p.x.toFixed(1)}, ${p.y.toFixed(1)}) facing=${p.facing} last_seen=${age}ms ago`;
+          }).join('\n');
+        }
+      } catch (err) {
+        logError('roam_net_peers_json render', err);
+        meshEl.textContent = '(peers panel error — see log)';
+      }
       const lastDownLine = lastPeerDownReason
         ? `last peer_down: ${lastPeerDownAt}  ${lastPeerDownReason}\n`
         : '';

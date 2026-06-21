@@ -63,7 +63,7 @@ enforce it.
 ## 🍰 Desserts — polish / closure (small, satisfying)
 
 - **D1.** Show `you are: <short-DID>` in the world-HUD next to peer count.
-- **D2.** Tag the version after a main course completion. Annotate with what closed.
+- ~~**D2.** Tag the version after a main course completion. Annotate with what closed.~~ ✓ `v0.3.4` on `1d233bd` — annotation lists M4, C3, M1, S1, C2, A7, A2/A3/A8 + the rs-ucan / ATProto framing.
 - **D3.** Add a sparkline of signed-message rate to the LIBP2P CONNECTIONS panel.
 - **D4.** When the relayer status page lands, add a `/identity` route that explains the relay's own identity.
 - **D5.** Write a one-paragraph "the why" for the identity choice — CHANGELOG-style, public.

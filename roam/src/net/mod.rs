@@ -163,6 +163,23 @@ pub struct PeerId(pub String);
 #[serde(transparent)]
 pub struct Author(pub PeerId);
 
+impl Author {
+    /// The `did:key` of this author, decoded from the Ed25519 pubkey
+    /// embedded in the libp2p PeerId. Trust line: gossipsub Strict
+    /// validation already proved the signed source matches this
+    /// PeerId's key; this method just re-encodes that key in the
+    /// W3C-standard form for application-layer routing decisions
+    /// (M6 canonical/non-canonical, future M8 UCAN chain checks).
+    /// Returns `Err` for the non-Ed25519 case (RSA via sha2-256,
+    /// Secp256k1, ECDSA) — those can't surface today because
+    /// roam mints Ed25519 keys only, but the error is typed so a
+    /// future heterogeneous-key environment surfaces the gap rather
+    /// than silently fallback-defaulting.
+    pub fn did_key(&self) -> Result<String, crate::identity::PeerIdToDidError> {
+        crate::identity::peer_id_to_did_key(&self.0.0)
+    }
+}
+
 /// The peer that *forwarded* the message to us — gossipsub's
 /// `propagation_source`. In roam's star topology that's always the
 /// relay past the first hop. Kept as a distinct type so it cannot be
@@ -419,6 +436,44 @@ mod tests {
         assert_eq!(fa, a);
         assert_eq!(fb, b);
         assert_eq!(fc, c);
+    }
+
+    /// M5 — `Author::did_key()` resolves the libp2p PeerId string to
+    /// the same `did:key` that the underlying Ed25519 pubkey would
+    /// produce directly. Falsifies the regression where a future
+    /// refactor introduces a separate code path for Author DIDs
+    /// (e.g. an internal cache that drifts from the canonical
+    /// `peer_id_to_did_key`). End-to-end check that Author is a
+    /// thin view over the same identity bytes libp2p saw.
+    #[test]
+    fn author_did_key_agrees_with_direct_pubkey_encoding() {
+        let pubkey: [u8; 32] = [
+            42, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+            23, 24, 25, 26, 27, 28, 29, 30, 31,
+        ];
+        let mut protobuf = vec![0x08, 0x01, 0x12, 0x20];
+        protobuf.extend_from_slice(&pubkey);
+        let mut multihash = vec![0x00, protobuf.len() as u8];
+        multihash.extend_from_slice(&protobuf);
+        let peer_id_str = bs58::encode(multihash).into_string();
+        let author = Author(PeerId(peer_id_str));
+
+        let via_author = author.did_key().expect("author did_key");
+        let via_pubkey = crate::identity::ed25519_pubkey_to_did_key(&pubkey);
+        assert_eq!(via_author, via_pubkey);
+    }
+
+    /// M5 — `Author::did_key()` surfaces a typed error for the
+    /// fake-string PeerIds the surrounding tests use. The error path
+    /// can't fire in production (Ed25519 PeerIds always decode) but
+    /// keeping it typed means a future call site can react to a
+    /// genuine future-key-type appearance rather than silently
+    /// rendering an empty DID. Falsifies any refactor that
+    /// downgrades Result to Option or to String-with-fallback.
+    #[test]
+    fn author_did_key_errors_on_non_libp2p_string() {
+        let author = Author(PeerId("12D3KooWAuthorA".into()));
+        assert!(author.did_key().is_err());
     }
 
     /// Unsigned message → fall back to propagation. Current gossipsub

@@ -724,6 +724,58 @@ mod wasm_exports {
         })
     }
 
+    /// JSON snapshot of the peer table for the panel renderer. Shape:
+    /// `[{ peer_id, did_key, x, y, facing, last_seen_ms }, …]`.
+    /// `did_key` is the empty string for any peer whose libp2p PeerId
+    /// can't be decoded as Ed25519 — in production today every PeerId
+    /// is Ed25519 (we mint Ed25519 only), so the empty string is the
+    /// "should never happen" sentinel; the sacred-error path captures
+    /// the actual decode failure for the event log so it can't slip
+    /// past unobserved. Cadence is "whenever the panel renders," not
+    /// per-frame — the renderer reads positions through the packed
+    /// buffer in `roam_render_frame`, not this JSON.
+    #[wasm_bindgen]
+    pub fn roam_net_peers_json() -> String {
+        super::WORLD.with(|w| {
+            let world_ref = w.borrow();
+            let net = match world_ref.as_ref().and_then(|world| world.net.as_ref()) {
+                Some(n) => n,
+                None => return "[]".to_string(),
+            };
+            let mut out = String::from("[");
+            let mut first = true;
+            for p in net.peers() {
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                let did = match p.peer_id.did_key() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        crate::error::emit(
+                            crate::error::Severity::Warn,
+                            "roam::wasm_ffi::roam_net_peers_json",
+                            "peer did:key decode failed",
+                            format!("peer_id={} err={:?}", p.peer_id.0.0, e),
+                        );
+                        String::new()
+                    }
+                };
+                let entry = serde_json::json!({
+                    "peer_id": p.peer_id.0.0,
+                    "did_key": did,
+                    "x": p.x,
+                    "y": p.y,
+                    "facing": p.facing,
+                    "last_seen_ms": p.last_seen_ms,
+                });
+                out.push_str(&entry.to_string());
+            }
+            out.push(']');
+            out
+        })
+    }
+
     /// Monotonic counter that bumps on any peer-table change (add,
     /// remove, position update, timeout). Bridge folds this into the
     /// render dirty-flag fingerprint so peers moving on screen

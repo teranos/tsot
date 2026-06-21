@@ -86,5 +86,8 @@ What i want:
   - [x] 0.3.1 — identity persists per browser, public relay dashboard.
   - [x] 0.3.2 — correctness pass: more than 2 players coexist, identity failures fail loud, dashboard stays fresh.
   - [x] 0.3.3 — repo restructure: TSOT card-game content moves into `ccg/` so root holds shared axioms only (cuts the bleed surface that kept making roam architecture descriptions inherit TSOT specifics).
-- [ ] v0.4 — cards on the ground. Pick them up, collection persists.
-- [ ] v0.5 — bump into a player, autobattle.
+  - [x] 0.3.4 — identity slice: `did:key` as the user-facing identifier (PeerId derived from the same Ed25519 key); `roam::identity` module; `is_identified_self` / `is_identified_peer` predicate is the canonical-class runtime criterion. `IDENTITY-RESEARCH.md` records the rs-ucan / Fission deep-read for the path ahead.
+  - [ ] 0.3.5 — M5: expose libp2p's already-verified gossipsub `source` to the application layer as a `did:key`; receiver enforces it. The trust line moves from "we believe what the payload says" to "we believe what libp2p signed."
+  - [ ] 0.3.6 — M6 + M7: canonical / non-canonical world-state routing + the one-way promotion that resets the personal sandbox. The axiom in `CANONICAL.md` becomes runtime, not aspiration.
+- [ ] v0.4 — cards on the ground. Pick them up, collection persists. Depends on 0.3.6 — cards are world state; without canonical routing the axiom doesn't hold and non-canonical players grief canonical state.
+- [ ] v0.5 — bump into a player, autobattle. M8 (UCAN-based cross-device delegation via `rs-ucan`) lands in this slice — the natural demo is "second device plays as you in canonical Teranos."
