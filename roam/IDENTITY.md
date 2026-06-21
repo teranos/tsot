@@ -21,13 +21,13 @@ enforce it.
 ## 🥗 Appetizers — research / exploration (≤ 30 min each)
 
 - **A1.** Read `roam/CANONICAL.md` cold; write down 3 questions it doesn't answer for the current implementation.
-- **A2.** Read the W3C `did:key` spec — only the encoding section. Confirm Ed25519 → `did:key:z6Mk…`.
-- **A3.** Confirm libp2p Ed25519 `PeerId` and `did:key` derive from the same 32-byte public key in different encodings. Note the conversion.
+- ~~**A2.** Read the W3C `did:key` spec — only the encoding section. Confirm Ed25519 → `did:key:z6Mk…`.~~ ✓ M1 implementation + round-trip / z6Mk-prefix tests cover the encoding section empirically (`identity` branch, 90a4d7e).
+- ~~**A3.** Confirm libp2p Ed25519 `PeerId` and `did:key` derive from the same 32-byte public key in different encodings. Note the conversion.~~ ✓ S1 SELF panel renders both for the same `keypair.public()`; conversion is `try_into_ed25519().to_bytes() → ed25519_pubkey_to_did_key` (`identity` branch, 158c212).
 - **A4.** Read Bluesky/ATProto PDS docs; locate where a user's signing key lives and how the handle binds to it.
 - **A5.** Read UCAN v1.0 spec abstract + the invocation envelope shape.
 - **A6.** Open one browser-based DID wallet's UX (e.g. an ATProto client). Note what "verification" looks like to the user, in two sentences.
 - **A7.** List, in 5 names each, who in the wider ecosystem actually ships against: libp2p PeerId, `did:key`, ATProto, ActivityPub, UCAN.
-- **A8.** Trace, from source on disk, the data flow from `roam_net_generate_identity_bytes()` to PeerId emission. Draw it on paper.
+- ~~**A8.** Trace, from source on disk, the data flow from `roam_net_generate_identity_bytes()` to PeerId emission. Draw it on paper.~~ ✓ Post-C3 the chain is short and lives in one module: `roam_net_generate_identity_bytes → identity::generate_identity_protobuf → bridge persists → next session passes bytes into roam_net_worker_provider_init → identity::load_or_generate_keypair → keypair.public() → PeerId`. Pen-and-paper redundant given the linear path.
 
 ## 🥄 Starters — small concrete work (1–3 hours)
 
