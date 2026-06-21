@@ -50,6 +50,7 @@ ChoicePending propagation is complete across every handler-fire boundary: `PlayE
 ## types
 
 - **Environment** (P.21) → BOARD with P.22 (one at a time, global) + P.23 (can't replace). Displacement question unresolved.
+- **`same_sleeve` semantics not enforced.** RULES.md C.4 defines fused attachments (host + attached share one sleeve, can't be peeled off, leave play with the host). The schema flag `same_sleeve = true` is declared on `cards/APOPTOSIS.lua` and documented in LUA.md, but the loader doesn't read the field and no engine code references it. APOPTOSIS's "strip one attached card per turn → sacrifice host when bare" effect therefore strips itself, firing the sacrifice trigger one turn early. Minimum-viable wire: `Card.same_sleeve: bool` field + loader read + Lua-side card-view exposure so handlers can self-filter. Engine-enforced version (filter `attached_of` by default, couple host-movement, exclude from C.16 counting, decide OnDie behavior for fused attachments) requires the open design questions in the session notes.
 
 ## targeting
 
