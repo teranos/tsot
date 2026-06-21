@@ -363,6 +363,14 @@ mod wasm_exports {
                 format!("{err:?}"),
             );
         }
+        if let Err(err) = net.subscribe_pickups() {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "roam::wasm_ffi::roam_net_init",
+                "subscribe_pickups failed",
+                format!("{err:?}"),
+            );
+        }
         super::WORLD.with(|w| {
             if let Some(world) = w.borrow_mut().as_mut() {
                 world.net = Some(net);
@@ -415,6 +423,14 @@ mod wasm_exports {
                     crate::error::Severity::Error,
                     "roam::wasm_ffi::roam_net_init_rust_libp2p",
                     "subscribe_positions failed",
+                    format!("{err:?}"),
+                );
+            }
+            if let Err(err) = net.subscribe_pickups() {
+                crate::error::emit(
+                    crate::error::Severity::Error,
+                    "roam::wasm_ffi::roam_net_init_rust_libp2p",
+                    "subscribe_pickups failed",
                     format!("{err:?}"),
                 );
             }
@@ -703,12 +719,69 @@ mod wasm_exports {
     #[wasm_bindgen]
     pub fn roam_net_tick(now_ms: f64) {
         super::WORLD.with(|w| {
-            if let Some(world) = w.borrow_mut().as_mut() {
-                if let Some(net) = world.net.as_mut() {
+            let mut wref = w.borrow_mut();
+            let world = match wref.as_mut() {
+                Some(w) => w,
+                None => return,
+            };
+            // M6 — Net.tick processes inbound gossipsub events
+            // (position updates + pickup claims); pickup claims queue
+            // for World-level application. Borrowck split: drain the
+            // queue out of `world.net`, then mutate `world.canonical_picked`
+            // — both touch `world` but only one at a time.
+            let pickups = match world.net.as_mut() {
+                Some(net) => {
                     net.tick(now_ms as u64);
+                    net.drain_pending_canonical_pickups()
                 }
+                None => return,
+            };
+            for (x, y) in pickups {
+                world.canonical_picked.insert((x, y));
+                crate::perf::PICKUP_APPLIED
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         });
+    }
+
+    /// Every gossipsub topic this node subscribes to, as a JSON
+    /// array of strings. The JS bridge calls this once on
+    /// worker-ready and posts one `subscribe` command per topic.
+    /// Single source of truth for the topic list is
+    /// `roam::net::state::ALL_TOPICS`; JS never holds topic strings.
+    #[wasm_bindgen]
+    pub fn roam_subscribed_topics_json() -> String {
+        let mut s = String::from("[");
+        let mut first = true;
+        for t in crate::net::state::ALL_TOPICS {
+            if !first {
+                s.push(',');
+            }
+            first = false;
+            s.push('"');
+            s.push_str(t);
+            s.push('"');
+        }
+        s.push(']');
+        s
+    }
+
+    /// Canvas side length (square) for the given viewport. Layout
+    /// decision lives in `roam::layout::canvas_side_px`; JS passes
+    /// `window.innerWidth/Height` and applies the returned side to
+    /// the canvas.
+    #[wasm_bindgen]
+    pub fn roam_canvas_side_px(window_w: u32, window_h: u32) -> u32 {
+        crate::layout::canvas_side_px(window_w, window_h)
+    }
+
+    /// JSON snapshot of every perf counter. JS polls this once per
+    /// second and computes per-second rates by diffing successive
+    /// snapshots — Rust stays cumulative. Shape lives in
+    /// `roam::perf::snapshot_json`.
+    #[wasm_bindgen]
+    pub fn roam_perf_snapshot_json() -> String {
+        crate::perf::snapshot_json()
     }
 
     /// Number of remote peers currently in the Rust-owned peer table.

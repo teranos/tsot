@@ -41,6 +41,9 @@ import initWasm, {
   roam_net_peer_state_seq,
   roam_net_peers_json,
   roam_net_generate_identity_bytes,
+  roam_perf_snapshot_json,
+  roam_canvas_side_px,
+  roam_subscribed_topics_json,
 } from '/roam.js';
 
 // Network substrate: rust-libp2p in a Web Worker. The dual-path
@@ -266,23 +269,17 @@ function renderInventory(inv) {
 // clipboard / file; the in-page panel can show only the tail but the
 // data is never dropped.
 //
-// localStorage persistence: log survives reloads. Saved every 5s and
-// on visibilitychange (tab hide). LocalStorage limit is ~5MB per
-// origin — if we approach it, we surface an error rather than
-// silently dropping.
-const LOG_STORAGE_KEY = 'roam.log.v1';
-const LOG_RENDER_TAIL = 500; // how many tail lines the panel renders; the buffer is unbounded
-const LOG_PERSIST_INTERVAL_MS = 5000;
+// `logLines` is bounded by construction: push drops the oldest when
+// length hits LOG_RENDER_TAIL. Both freeze causes from the 0.3.6
+// incident are structurally impossible after this design — no
+// unbounded growth, no synchronous localStorage IO on the hot path.
+// The render path still walks the last LOG_RENDER_TAIL entries, so
+// observability is unchanged from the user's POV.
+//
+// Follow-up: kill `logLines` entirely and read from the Rust trace
+// bus (already capped at MAX_BUS_LEN = 10_000) as the single source.
+const LOG_RENDER_TAIL = 500;
 let logLines = [];
-try {
-  const saved = localStorage.getItem(LOG_STORAGE_KEY);
-  if (saved) {
-    logLines = JSON.parse(saved);
-  }
-} catch (e) {
-  // Don't lose info silently; we'll log this after the panel is wired.
-  setTimeout(() => logError('logLines restore', e), 0);
-}
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -357,6 +354,12 @@ function logEvent(cls, line, fingerprint) {
     last.line = line;
   } else {
     logLines.push({ cls, t, line, fingerprint, count: 1 });
+    // Hard cap — drop oldest when at the render-tail size. The buffer
+    // is then bounded by construction; no path leads to unbounded
+    // growth. This is the structural fix for the 0.3.6 freeze.
+    if (logLines.length > LOG_RENDER_TAIL) {
+      logLines.shift();
+    }
   }
   __logDomDirty = true;
   if (!__logFlushScheduled) {
@@ -485,37 +488,14 @@ window.addEventListener('keydown', (e) => {
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
   const n = logLines.length;
   logLines = [];
-  try { localStorage.removeItem(LOG_STORAGE_KEY); } catch (err) { logError('log clear', err); }
   logEvent('info', `log cleared (${n} entries dropped)`);
 });
 
-// Persist log to localStorage every 5s + on tab hide. We never drop
-// entries silently; if storage write fails (quota), log a real error.
-function persistLog() {
-  let lines = logLines;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      localStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(lines));
-      if (attempt > 0) {
-        logEvent('info', `log persisted after halving ${attempt}x (kept ${lines.length} of ${logLines.length})`);
-      }
-      return;
-    } catch (err) {
-      if (err && (err.name === 'QuotaExceededError' || err.code === 22)) {
-        lines = lines.slice(-Math.max(1, Math.floor(lines.length / 2)));
-        continue;
-      }
-      logError('localStorage.setItem(log)', err);
-      return;
-    }
-  }
-  logError('localStorage.setItem(log)', new Error(`quota exceeded; dropped log entries (${logLines.length} → ${lines.length})`));
-}
-setInterval(persistLog, LOG_PERSIST_INTERVAL_MS);
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') persistLog();
-});
-window.addEventListener('beforeunload', persistLog);
+// Persistence pipeline removed — its only purpose was log-survives-reload,
+// and it was the freeze cause (quota-exceeded localStorage writes during
+// high-volume periods). The bounded `logLines` cap above + the Rust trace
+// bus (capped at MAX_BUS_LEN) give us in-session observability without
+// any synchronous IO surface that could overwhelm the page.
 
 // Probe the same host:port the WebSocket tried, via fetch(). The
 // browser WS API deliberately hides connect-failure reasons; fetch
@@ -852,15 +832,20 @@ moduleP.then((wasm) => {
   const wasmMemory = wasm.memory;
   const PIXELS_PER_TILE = roam_pixels_per_tile();
 
-  // Size the canvas explicitly — the Elm template doesn't carry
-  // width/height attrs so the browser default of 300x150 was leaking
-  // through. WebGL's framebuffer comes from this backing-store size;
-  // CSS scaling won't add resolution. 720x720 is a comfortable square
-  // for the M1 + GPU + libp2p combination on the typical dev layout.
-  canvas.width = 1440;
-  canvas.height = 1440;
-  canvas.style.width = '1440px';
-  canvas.style.height = '1440px';
+  // Responsive canvas sizing. JS hands window dimensions to Rust;
+  // Rust returns the side length (Square). JS applies it to the canvas.
+  // No layout decision lives here — constants, mobile threshold, fit
+  // math are all in `roam::layout::canvas_side_px`. The resize listener
+  // is the legitimate JS-side surface (browser API wasm can't reach).
+  function applyCanvasSize() {
+    const side = roam_canvas_side_px(window.innerWidth, window.innerHeight);
+    canvas.width = side;
+    canvas.height = side;
+    canvas.style.width = `${side}px`;
+    canvas.style.height = `${side}px`;
+  }
+  applyCanvasSize();
+  window.addEventListener('resize', applyCanvasSize);
 
   // Status text overlay. The browser renders text well; making Rust
   // load a bitmap font + glyph atlas just so a 12-char debug HUD can
@@ -871,7 +856,7 @@ moduleP.then((wasm) => {
   const worldHud = document.createElement('div');
   worldHud.id = 'world-hud';
   worldHud.style.cssText = [
-    'position: absolute',
+    'position: fixed',
     'top: 6px',
     'left: 10px',
     'font: 12px/1.4 ui-monospace, Menlo, monospace',
@@ -931,13 +916,26 @@ moduleP.then((wasm) => {
           workerReady = true;
           setNetState('ready');
           logEvent('info', `net: net-worker ready, identity=${workerIdentity} did=${workerDidKey || '(none)'}`);
-          // The initial `subscribe` command was sent eagerly (below) at
-          // bridge boot, before the worker was ready, and got silently
-          // dropped on the worker side (`if (!initialized) break;`).
-          // Re-subscribe now that the worker can answer. Gossipsub
-          // tolerates duplicate subscribes; this is the cheap idempotent
-          // catch-up.
-          netWorker.postMessage({ cmd: 'subscribe', topic: 'roam-positions/v1' });
+          // The initial `subscribe` commands were sent eagerly (below)
+          // at bridge boot, before the worker was ready, and got
+          // silently dropped on the worker side
+          // (`if (!initialized) break;` in `net-worker.js:155`). Re-
+          // subscribe now that the worker can answer. Gossipsub
+          // tolerates duplicate subscribes; this is the cheap
+          // idempotent catch-up.
+          //
+          // The topic list is owned by Rust
+          // (`roam::net::state::ALL_TOPICS`). JS pumps each entry to
+          // the worker — no hardcoded topic strings in JS, no two-place
+          // drift. Adding a topic is a one-line edit in `state.rs`.
+          try {
+            const topics = JSON.parse(roam_subscribed_topics_json());
+            for (const topic of topics) {
+              netWorker.postMessage({ cmd: 'subscribe', topic });
+            }
+          } catch (err) {
+            logError('roam_subscribed_topics_json on worker-ready', err);
+          }
           break;
         case 'events':
           for (const m of msg.messages || []) {
@@ -1266,9 +1264,13 @@ moduleP.then((wasm) => {
   const perfHud = document.createElement('div');
   perfHud.id = 'perf-hud';
   perfHud.style.cssText = [
-    'position: absolute',
-    'top: 6px',
-    'right: 10px',
+    // Bottom-left of the viewport — `position: fixed` so it doesn't
+    // scroll off when the page is taller than the window, and the
+    // bottom-left corner doesn't overlap the right info panel or the
+    // top-left worldHud. Always visible regardless of layout shifts.
+    'position: fixed',
+    'bottom: 10px',
+    'left: 10px',
     'font: 12px/1.4 ui-monospace, Menlo, monospace',
     'color: #fff',
     'background: rgba(0, 0, 0, 0.55)',
@@ -1276,8 +1278,8 @@ moduleP.then((wasm) => {
     'border-radius: 4px',
     'pointer-events: none',
     'white-space: pre',
-    'z-index: 5',
-    'text-align: right',
+    'z-index: 10',
+    'text-align: left',
   ].join(';');
   canvas.parentElement?.appendChild(perfHud);
 
@@ -1286,6 +1288,10 @@ moduleP.then((wasm) => {
   let perfRenderCount = 0;
   let perfFrameMsSum = 0;
   let perfRenderMsSum = 0;
+  // Rust-side perf counters. Cumulative; per-second rate = (now - prev) / dt.
+  // `prevPerfSnap` seeds on the first poll so the first second's deltas
+  // start from a baseline, not undefined.
+  let prevPerfSnap = null;
 
   // Day/night cycle mirrors teranos::day_phase + teranos::brightness.
   // Keep these in sync with the Rust constants — they're load-bearing.
@@ -1592,9 +1598,46 @@ moduleP.then((wasm) => {
     const glHz = (perfRenderCount * 1000) / elapsedMs;
     const frameMs = perfRafCount > 0 ? perfFrameMsSum / perfRafCount : 0;
     const glMs = perfRenderCount > 0 ? perfRenderMsSum / perfRenderCount : 0;
+    // Rust counter snapshot. Cumulative on the Rust side; we compute
+    // per-second rates from the delta against the prior snapshot.
+    // Wrapped in try/catch so a wasm-not-ready window doesn't break
+    // the rest of the HUD.
+    let snapBlock = '';
+    try {
+      const snap = JSON.parse(roam_perf_snapshot_json());
+      if (prevPerfSnap !== null) {
+        const dtSec = elapsedMs / 1000;
+        const rate = (k) => ((snap[k] - prevPerfSnap[k]) / dtSec).toFixed(1);
+        const recvRate = rate('emit_net_recv');
+        const errRate = rate('emit_net_provider_error');
+        const pubUpRate = rate('emit_net_peer_up');
+        const pubDownRate = rate('emit_net_peer_down');
+        const pickCanRate = rate('emit_flower_picked_canonical');
+        const pickSbxRate = rate('emit_flower_picked_sandbox');
+        const otherRate = rate('emit_other');
+        snapBlock =
+          `\nemits/s    recv=${recvRate}  perr=${errRate}  ` +
+          `up=${pubUpRate}  down=${pubDownRate}  ` +
+          `pick(c)=${pickCanRate}  pick(s)=${pickSbxRate}  other=${otherRate}\n` +
+          `pickup     pub=${snap.pickup_publish_attempted} ` +
+          `(ok=${snap.pickup_publish_ok} err=${snap.pickup_publish_err} ` +
+          `dErr=${snap.pickup_publish_delivery_err})  ` +
+          `recv=${snap.pickup_received}  applied=${snap.pickup_applied}\n` +
+          `position   pub=${snap.position_publish_attempted} ` +
+          `(ok=${snap.position_publish_ok} err=${snap.position_publish_err} ` +
+          `dErr=${snap.position_publish_delivery_err})\n` +
+          `bus_pending=${snap.bus_pending}  logLines=${logLines.length}`;
+      } else {
+        snapBlock = '\n(perf snapshot — first sample, rates next tick)';
+      }
+      prevPerfSnap = snap;
+    } catch (err) {
+      snapBlock = `\n(perf snapshot error: ${err && err.message ? err.message : String(err)})`;
+    }
     perfHud.textContent =
       `game loop  ${rafHz.toFixed(0)}/s   ${frameMs.toFixed(1)}ms each\n` +
-      `repaints   ${glHz.toFixed(0)}/s   ${glMs.toFixed(1)}ms each`;
+      `repaints   ${glHz.toFixed(0)}/s   ${glMs.toFixed(1)}ms each` +
+      snapBlock;
     perfWindowStartMs = nowMs;
     perfRafCount = 0;
     perfRenderCount = 0;

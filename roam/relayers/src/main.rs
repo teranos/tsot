@@ -53,6 +53,12 @@ mod metrics;
 /// constant and `roam/src/net/state.rs::POSITIONS_TOPIC`.
 const POSITIONS_TOPIC: &str = "roam-positions/v1";
 
+/// Canonical pickups topic. Must match `roam/src/net/state.rs::PICKUPS_TOPIC`.
+/// The relayer subscribes so it appears in clients' mesh views; without
+/// this, identified-class flower-pickup messages (M6) have no peer to
+/// flow through and propagation silently fails.
+const PICKUPS_TOPIC: &str = "roam-pickups/v1";
+
 /// Identify protocol-name advertised on the wire. Must match
 /// browser-side rust_libp2p.rs identify config.
 const IDENTIFY_PROTOCOL: &str = "/roam/1.0.0";
@@ -150,8 +156,19 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let identity_secret_arn = std::env::var("ROAM_RELAY_IDENTITY_SECRET")
-        .context("ROAM_RELAY_IDENTITY_SECRET must be set to the Secrets Manager ARN")?;
+    // Test-mode short-circuit. When `ROAM_RELAY_TEST_RANDOM_IDENTITY=1`
+    // the relayer mints a fresh Ed25519 keypair instead of fetching
+    // from AWS Secrets Manager. The CloudWatch metric loop is
+    // independently gated by `ROAM_RELAY_PUBLISH_METRICS=0`. Together
+    // these let the integration test at
+    // `roam/tests/m6_via_relayer.rs` spawn the binary without any
+    // AWS calls ever happening (the sdk builders are cheap and never
+    // touch the network until used). The libp2p protocol — the layer
+    // whose bugs we care about — is identical between the two modes.
+    let test_random_identity = std::env::var("ROAM_RELAY_TEST_RANDOM_IDENTITY")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
     let listen_host =
         std::env::var("ROAM_RELAY_LISTEN_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let listen_port: u16 = std::env::var("ROAM_RELAY_LISTEN_PORT")
@@ -168,7 +185,14 @@ async fn main() -> Result<()> {
     let secrets = aws_sdk_secretsmanager::Client::new(&aws_config);
     let cloudwatch = aws_sdk_cloudwatch::Client::new(&aws_config);
 
-    let keypair = load_identity(&secrets, &identity_secret_arn).await?;
+    let keypair = if test_random_identity {
+        info!("ROAM_RELAY_TEST_RANDOM_IDENTITY=1 — minting random keypair, skipping Secrets Manager fetch");
+        identity::Keypair::generate_ed25519()
+    } else {
+        let identity_secret_arn = std::env::var("ROAM_RELAY_IDENTITY_SECRET")
+            .context("ROAM_RELAY_IDENTITY_SECRET must be set to the Secrets Manager ARN")?;
+        load_identity(&secrets, &identity_secret_arn).await?
+    };
     let local_peer_id = PeerId::from(keypair.public());
     info!(peer_id = %local_peer_id, "identity loaded");
 
@@ -222,6 +246,10 @@ async fn main() -> Result<()> {
         .build();
 
     swarm.behaviour_mut().gossipsub.subscribe(
+        &gossipsub::IdentTopic::new(PICKUPS_TOPIC),
+    )?;
+    info!(topic = PICKUPS_TOPIC, "subscribed");
+    swarm.behaviour_mut().gossipsub.subscribe(
         &gossipsub::IdentTopic::new(POSITIONS_TOPIC),
     )?;
     info!(topic = POSITIONS_TOPIC, "subscribed");
@@ -233,7 +261,13 @@ async fn main() -> Result<()> {
     // parity replacement for `bun-ws-transport.ts:135-139`, which
     // returned `426 Upgrade Required` to non-WS GETs; here we go
     // one step further and surface a tiny info page.
-    let libp2p_loopback_port: u16 = 9002;
+    // libp2p loopback port — defaults to 9002 (production), overridable
+    // via env so the integration test can pick a free port and avoid
+    // clashing with a running prod-shape relayer.
+    let libp2p_loopback_port: u16 = std::env::var("ROAM_RELAY_LIBP2P_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(9002);
     let libp2p_listen: Multiaddr = format!("/ip4/127.0.0.1/tcp/{libp2p_loopback_port}/ws")
         .parse()
         .context("libp2p loopback multiaddr")?;

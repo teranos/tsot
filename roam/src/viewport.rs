@@ -97,7 +97,9 @@ pub fn write_viewport(world: &World, view_w: u32, view_h: u32) -> u32 {
                 let sz = surface_z(tx, ty);
                 let top_z = sz.max(0);
                 let cx = tx.rem_euclid(WORLD_CIRC_X);
-                let cell_flower = if world.player.picked.contains(&(cx, ty)) {
+                let cell_flower = if world.player.picked.contains(&(cx, ty))
+                    || world.canonical_picked.contains(&(cx, ty))
+                {
                     None
                 } else {
                     flower_at(tx, ty)

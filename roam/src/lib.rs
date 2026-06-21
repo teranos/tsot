@@ -1,6 +1,8 @@
 pub mod error;
 pub mod identity;
+pub mod layout;
 pub mod net;
+pub mod perf;
 #[cfg(target_arch = "wasm32")]
 pub mod render_gl;
 pub mod teranos;

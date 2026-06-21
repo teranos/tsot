@@ -104,6 +104,13 @@ thread_local! {
 //   C5 — emit identity events (mint, load, export, import, rotate, sign, verify)
 //        with dedicated tags so the event log can render them in a distinct color.
 pub fn emit(ev: TraceEvent) {
+    // Per-tag perf counter — `Note` is the only variant with a tag,
+    // and the perf panel's "emits/sec by tag" surface only makes
+    // sense for those. Init / Overflow / Error are infrequent and
+    // visible in the bus directly.
+    if let TraceEvent::Note { tag, .. } = &ev {
+        crate::perf::note_tag_emit(tag);
+    }
     let seq = SEQ.fetch_add(1, Ordering::SeqCst);
     BUS.with(|b| {
         let mut buf = b.borrow_mut();
