@@ -31,7 +31,7 @@ enforce it.
 
 ## 🥄 Starters — small concrete work (1–3 hours)
 
-- **S1.** Surface the `did:key:z6Mk…` derivation in the SELF panel alongside PeerId. View-only.
+- ~~**S1.** Surface the `did:key:z6Mk…` derivation in the SELF panel alongside PeerId. View-only.~~ ✓ worker precomputes self_did_key, posts in `kind:'ready'`, SELF panel renders the line below `worker peerId` (`identity` branch, 158c212).
 - **S2.** Add a "rotate identity" action: clean IndexedDB → mint fresh. Confirmation gate.
 - **S3.** Export keypair: download a small text blob containing the protobuf-encoded keypair.
 - **S4.** Import keypair: paste/upload the blob, validate, replace IndexedDB entry.
