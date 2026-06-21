@@ -73,7 +73,7 @@ mod real {
     use std::rc::Rc;
     use std::time::Duration;
 
-    // IDENTITY MENU (roam/IDENTITY.md):
+    // IDENTITY MENU (roam/docs/identity.md):
     //   A2 — read W3C did:key spec; confirm Ed25519 → did:key:z6Mk…
     //   A3 — PeerId and did:key derive from the same 32-byte pubkey, different encodings.
     //   A8 — trace from this function to PeerId emission; draw the data flow.
@@ -82,7 +82,7 @@ mod real {
     //   M1 — adopt did:key as the project's primary identifier; PeerId becomes detail.
     //   C3 — move identity code into roam/src/identity/ as its own module.
     //   C6 — audit every Keypair::generate_ed25519() call site, including the fall-through below.
-    // Keypair handling lives in `crate::identity` per IDENTITY.md C3.
+    // Keypair handling lives in `crate::identity` per docs/identity.md C3.
 
     /// Composite behaviour. The `NetworkBehaviour` derive synthesises
     /// `RoamBehaviourEvent` (one variant per sub-behaviour) which is
@@ -95,7 +95,7 @@ mod real {
         // Enforces "only the relay" architecturally. roam doesn't
         // need a wide mesh — the relay subscribes to the same topic
         // and re-broadcasts, so a single connected peer is sufficient.
-        // See `CANONICAL.md` for the design (canonical world via
+        // See `docs/canonical.md` for the design (canonical world via
         // relay, non-canonical sandbox local only).
         connection_limits: connection_limits::Behaviour,
     }

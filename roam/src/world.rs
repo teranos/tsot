@@ -62,7 +62,7 @@ pub struct Player {
     pub z: i32, // voxel z of the tile the player is standing on
     pub facing: Facing,
     /// Tiles this player has already picked a flower from. Personal —
-    /// per CANONICAL.md every player has their own picked-set today;
+    /// per docs/canonical.md every player has their own picked-set today;
     /// gossip-based first-claim-wins lands later. Key is canonical
     /// `(canonical_x_tile, y_tile)` so the cylinder wrap doesn't
     /// double-record.
@@ -80,7 +80,7 @@ pub struct World {
     /// which is async on the JS side. The hot path (frame loop) must
     /// tolerate `net.is_none()` during the bootstrap window.
     pub net: Option<crate::net::state::Net>,
-    /// Canonical layer's claimed flower tiles. Per CANONICAL.md every
+    /// Canonical layer's claimed flower tiles. Per docs/canonical.md every
     /// identified player's pickup propagates here; a tile in this set
     /// is gone from every identified player's view. `Player.picked` is
     /// distinct — it records what THIS player picked themselves, used
@@ -176,7 +176,7 @@ impl World {
     }
 
     /// Pickup check: if the player's current tile has a flower, route
-    /// the pickup through the supplied `class` per CANONICAL.md.
+    /// the pickup through the supplied `class` per docs/canonical.md.
     ///
     /// Canonical: the canonical layer's claimed set grows by one;
     /// downstream gossip (next slice) will propagate. NonCanonical:
