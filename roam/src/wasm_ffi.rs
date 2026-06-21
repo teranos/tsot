@@ -246,7 +246,25 @@ pub(crate) fn roam_trace_pending_count_impl() -> u32 {
 
 pub(crate) fn roam_drain_errors_impl() -> String {
     let errors = crate::error::drain();
-    serde_json::to_string(&errors).unwrap_or_else(|_| "[]".to_string())
+    match serde_json::to_string(&errors) {
+        Ok(s) => s,
+        Err(e) => {
+            // Sacred-error rule: never swallow. `serde_json::to_string`
+            // on `Vec<Error>` failing is an internal-shape regression
+            // (the Error struct's serde derive broke) — surface it
+            // through the trace bus so it lands in the event-log
+            // panel, then fall back to `"[]"` so the FFI call
+            // returns something parseable instead of corrupt JSON.
+            crate::trace::emit(crate::trace::TraceEvent::Error {
+                file: file!().to_string(),
+                line: line!(),
+                message: format!(
+                    "roam_drain_errors_impl: serde_json::to_string failed: {e}"
+                ),
+            });
+            "[]".to_string()
+        }
+    }
 }
 
 pub(crate) fn roam_session_snapshot_impl() -> String {
@@ -701,7 +719,23 @@ mod wasm_exports {
                             }
                         }
                     }
-                    serde_json::to_string(&messages).unwrap_or_else(|_| "[]".to_string())
+                    match serde_json::to_string(&messages) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            // Same sacred-error treatment as
+                            // `roam_drain_errors_impl` — surface the
+                            // failure through the trace bus before
+                            // falling back to `"[]"`.
+                            crate::trace::emit(crate::trace::TraceEvent::Error {
+                                file: file!().to_string(),
+                                line: line!(),
+                                message: format!(
+                                    "roam_net_worker_provider_drain_events: serde_json::to_string failed: {e}"
+                                ),
+                            });
+                            "[]".to_string()
+                        }
+                    }
                 }
                 None => "[]".to_string(),
             })
