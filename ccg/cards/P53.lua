@@ -1,15 +1,5 @@
--- P53 — purple spell. The "guardian of the genome": when cellular stress
--- is detected, P53 selects the response. Mechanic: tutor for one of the
--- three P53-mediated stress-response mutations — APOPTOSIS (programmed
--- death), SENESCENCE (permanent growth arrest), or HYPOXIA (oxygen-stress
--- response). Forward-looking — only APOPTOSIS exists in the corpus
--- today; SENESCENCE and HYPOXIA are designed but not yet authored.
--- The pool resolver scans the deck for any of the three ids, so the
--- card works correctly with whichever subset exists at a given moment.
---
--- on_play handler is wired today — the choose_card replay path
--- (lua_api.rs / play.rs PlayError::ChoicePending → StepEngine HumanPrompt)
--- already handles on_play yields. No engine dependency.
+-- Guardian of the genome. Reads cellular stress and selects a response:
+-- APOPTOSIS (death), SENESCENCE (arrest), or HYPOXIA (oxygen-starvation).
 return {
   id = "P53",
   name = "P53",
@@ -22,7 +12,7 @@ return {
   abilities = {
     "search your deck for APOPTOSIS, SENESCENCE, or HYPOXIA and put it in your hand.",
   },
-  flavor = "Guardian of the genome. Reads the damage, picks the response.",
+  flavor = "Reads the damage, picks the response.",
   on_play = function(game, self)
     local targets = {"APOPTOSIS", "SENESCENCE", "HYPOXIA"}
     local pool = {}

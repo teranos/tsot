@@ -1,28 +1,6 @@
--- APOPTOSIS — yellow/purple mutation. Programmed cell death by orderly
--- dismantling: each turn one of the host's attached cards goes to
--- graveyard; when the host has no attached cards left, the host is
--- sacrificed. The mutation itself is inside the sleeve (`same_sleeve`)
--- and is NOT counted as an attached card — it does not strip itself,
--- and once the real attached cards are exhausted the host dies even
--- though the mutation is still "with" it.
---
--- Dependencies:
---   - Slice A3 (TurnError::ChoicePending propagation) shipped — the
---     handler's choose_card no longer errors silently. Downstream gap
---     per LIMITATIONS.md ## lua: phase-advance triggers still use
---     RandomOracle, so AI side gets a random pick of which attached
---     card to strip and human side does NOT receive a HumanPrompt
---     (separate slice: swap the phase-advance oracle).
---   - `same_sleeve` semantic on the mutation (not yet in the engine).
---     Without it, the mutation IS in the attached list, and the "no
---     attached cards remain → sacrifice host" check would either count
---     the mutation as still-attached (host never dies) or strip the
---     mutation as the last attached card (host dies but mutation goes
---     too, violating the sleeve metaphor). With `same_sleeve = true`,
---     the engine excludes this mutation from "is anything attached"
---     checks and from "pick an attached card to move/strip" pools, and
---     keeps the mutation on the host through host death (mutation moves
---     to graveyard with the host, doesn't get exiled per P.8).
+-- Programmed cell death. Strips one attached component per turn; when
+-- nothing is left attached, the host dies. `same_sleeve` keeps this
+-- mutation off the strippable list.
 return {
   id = "APOPTOSIS",
   name = "APOPTOSIS",
@@ -36,5 +14,5 @@ return {
   abilities = {
     "the host creature gets: at the beginning of your turn, move one of this creature's attached cards to your graveyard. if no cards are attached to this creature anymore, sacrifice it.",
   },
-  flavor = "P53 calls it. The cell agrees, then tidies itself out of existence one organelle at a time.",
+  flavor = "P53 calls it. The cell agrees, then tidies itself out one organelle at a time.",
 }

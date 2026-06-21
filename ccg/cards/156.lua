@@ -1,9 +1,5 @@
--- 156 — 0-cost artifact tutor for Amsterdam City. T + self-sacrifice
--- fetches the environment straight to BOARD, bypassing its mill+graveyard
--- cost. SACRIFICE cost components inside activated abilities are not yet
--- supported (see LIMITATIONS.md "Deferred"), so the self-sac is folded
--- into the effect body via game.move(self, "graveyard") rather than
--- declared on the cost line.
+-- 0-cost artifact. Tap and sacrifice it to drop Amsterdam City into play
+-- without paying its cost.
 return {
   id = "156",
   name = "156",
