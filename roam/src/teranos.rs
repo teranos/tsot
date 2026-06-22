@@ -534,6 +534,25 @@ pub struct Flower {
     pub petal_count: u8,
 }
 
+/// What a tile can carry that a player walking over it picks up.
+///
+/// Generic over content kind so the pickup mechanic (try_pickup,
+/// canonical-vs-sandbox routing, gossip) stays kind-agnostic. Today
+/// only `Flower`; v0.4 adds `Card`. Same enum doubles as inventory
+/// item shape — picked-from-the-ground and held-by-the-player are
+/// the same data; if a divergence ever appears, split then.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Pickup {
+    Flower(Flower),
+}
+
+/// Generic pickup probe: what (if anything) is on tile (x, y) for the
+/// player to pick up. For this slice: a thin wrapper around `flower_at`
+/// — adding `Card` later is one more `or_else` line + a new variant.
+pub fn pickup_at(x: i32, y: i32) -> Option<Pickup> {
+    flower_at(x, y).map(Pickup::Flower)
+}
+
 /// Deterministic flower at (x, y). Returns None for water columns,
 /// polar ocean, or tiles where the presence-hash gate doesn't fire.
 /// Once Some, every field of the returned Flower is fully determined —
@@ -888,6 +907,32 @@ mod tests {
         let a = flower_at(123, -456);
         let b = flower_at(123, -456);
         assert_eq!(a, b);
+    }
+
+    /// `pickup_at` is the v0.4 generic surface: a tile may carry a
+    /// `Pickup` (flower today, card next). For this slice — flowers
+    /// only — `pickup_at` must agree with `flower_at` everywhere:
+    /// flower tile → `Some(Pickup::Flower(f))` with the same `f`;
+    /// empty tile → `None`. Falsifies the regression where the
+    /// abstraction silently picks a different presence rule or loses
+    /// fields off the wrapped `Flower`.
+    #[test]
+    fn pickup_at_parity_with_flower_at() {
+        for ty in -20..=20 {
+            for tx in 0..100 {
+                let flower = flower_at(tx, ty);
+                let pickup = pickup_at(tx, ty);
+                match (flower, pickup) {
+                    (Some(f), Some(Pickup::Flower(g))) => assert_eq!(
+                        f, g,
+                        "pickup_at({tx}, {ty}) carried a different Flower than flower_at"
+                    ),
+                    (None, None) => {}
+                    (Some(_), None) => panic!("pickup_at({tx}, {ty}) lost a flower"),
+                    (None, Some(_)) => panic!("pickup_at({tx}, {ty}) invented a pickup"),
+                }
+            }
+        }
     }
 
     #[test]

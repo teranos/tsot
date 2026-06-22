@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{emit as emit_error, Severity};
 use crate::teranos::{
-    flower_at, surface_z, tile_at, CoreEdge, Flower, FlowerColor, FlowerCore, TileKind,
+    pickup_at, surface_z, tile_at, CoreEdge, Flower, FlowerColor, FlowerCore, Pickup, TileKind,
     WORLD_CIRC_X,
 };
 use crate::trace::{count_state_read, count_tick, emit, TraceEvent};
@@ -67,9 +67,12 @@ pub struct Player {
     /// `(canonical_x_tile, y_tile)` so the cylinder wrap doesn't
     /// double-record.
     pub picked: BTreeSet<(i32, i32)>,
-    /// One entry per picked flower. The full typed Flower is preserved;
-    /// rendering and inventory display read the fields directly.
-    pub inventory: Vec<Flower>,
+    /// One entry per picked-up `Pickup`. Generic so cards (v0.4) land
+    /// as a new variant without reshaping inventory; until then every
+    /// entry is `Pickup::Flower(_)`. Wire format still ships flowers
+    /// as `FlowerWire`; the variant tag joins the wire when a second
+    /// variant exists.
+    pub inventory: Vec<Pickup>,
 }
 
 pub struct World {
@@ -196,15 +199,15 @@ impl World {
         if self.canonical_picked.contains(&key) || self.player.picked.contains(&key) {
             return;
         }
-        if let Some(flower) = flower_at(tx, ty) {
+        if let Some(pickup) = pickup_at(tx, ty) {
             self.player.picked.insert(key);
-            self.player.inventory.push(flower);
+            self.player.inventory.push(pickup);
             match class {
                 crate::identity::WorldClass::Canonical => {
                     self.canonical_picked.insert(key);
                     emit(TraceEvent::Note {
                         tag: "flower_picked_canonical",
-                        msg: format!("({tx}, {ty}) {flower:?}"),
+                        msg: format!("({tx}, {ty}) {pickup:?}"),
                     });
                     if let Some(net) = self.net.as_mut() {
                         if let Err(err) = net.publish_pickup(cx, ty) {
@@ -220,7 +223,7 @@ impl World {
                 crate::identity::WorldClass::NonCanonical => {
                     emit(TraceEvent::Note {
                         tag: "flower_picked_sandbox",
-                        msg: format!("({tx}, {ty}) {flower:?}"),
+                        msg: format!("({tx}, {ty}) {pickup:?}"),
                     });
                 }
             }
@@ -349,7 +352,7 @@ impl World {
     pub fn session_snapshot_json(&self) -> String {
         let snap = SessionSnapshot {
             picked: self.player.picked.iter().copied().collect(),
-            inv: self.player.inventory.iter().copied().map(FlowerWire::from).collect(),
+            inv: self.player.inventory.iter().map(pickup_to_wire).collect(),
         };
         serde_json::to_string(&snap).unwrap_or_else(|err| {
             emit_error(
@@ -381,7 +384,7 @@ impl World {
                     match entry {
                         FlowerWire::Named(named) => match named.try_into_flower() {
                             Ok(f) => {
-                                self.player.inventory.push(f);
+                                self.player.inventory.push(Pickup::Flower(f));
                                 parsed += 1;
                             }
                             Err(why) => {
@@ -395,7 +398,7 @@ impl World {
                         },
                         FlowerWire::Legacy(legacy) => match legacy_tuple_to_flower(&legacy) {
                             Ok(f) => {
-                                self.player.inventory.push(f);
+                                self.player.inventory.push(Pickup::Flower(f));
                                 migrated += 1;
                             }
                             Err(why) => {
@@ -436,7 +439,7 @@ impl World {
             y: self.player.y,
             z: self.player.z,
             f: self.player.facing.as_u8(),
-            inv: self.player.inventory.iter().copied().map(FlowerWire::from).collect(),
+            inv: self.player.inventory.iter().map(pickup_to_wire).collect(),
         };
         serde_json::to_string(&state).unwrap_or_else(|err| {
             emit_error(
@@ -510,6 +513,17 @@ impl From<Flower> for FlowerWire {
             ce: f.core_edge as u8,
             n: f.petal_count,
         })
+    }
+}
+
+/// Project a `Pickup` to the on-wire flower shape. Today the only
+/// variant is `Pickup::Flower`; when `Pickup::Card` lands, the wire
+/// format gets a tagged shape and this projection is replaced. Kept
+/// as a single funnel so that future change has one edit site, not
+/// three.
+fn pickup_to_wire(p: &Pickup) -> FlowerWire {
+    match p {
+        Pickup::Flower(f) => FlowerWire::from(*f),
     }
 }
 
@@ -625,13 +639,13 @@ mod tests {
     #[test]
     fn session_round_trip_preserves_inventory() {
         let mut w = World::new();
-        w.player.inventory.push(Flower {
+        w.player.inventory.push(Pickup::Flower(Flower {
             petal_center: FlowerColor::Red,
             petal_edge: FlowerColor::Glow,
             core_center: FlowerCore::Black,
             core_edge: CoreEdge::MatchPetalEdge,
             petal_count: 8,
-        });
+        }));
         w.player.picked.insert((10, -20));
         let snap = w.session_snapshot_json();
         let mut w2 = World::new();
@@ -678,7 +692,7 @@ mod tests {
     fn first_flower_tile() -> (i32, i32) {
         for ty in -10..=10 {
             for tx in 0..50 {
-                if flower_at(tx, ty).is_some() {
+                if pickup_at(tx, ty).is_some() {
                     return (tx, ty);
                 }
             }
@@ -764,7 +778,7 @@ mod tests {
         let legacy = r#"{"picked":[[1,2]],"inv":[[0,2,8,6,2]]}"#;
         w.restore_session_json(legacy);
         assert_eq!(w.player.inventory.len(), 1);
-        let f = w.player.inventory[0];
+        let Pickup::Flower(f) = w.player.inventory[0];
         assert_eq!(f.petal_center, FlowerColor::Red);
         assert_eq!(f.core_center, FlowerCore::Black);
         assert_eq!(f.petal_count, 8);

@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 
-use crate::teranos::{flower_at, surface_z, tile_at, Flower, TileKind, WORLD_CIRC_X};
+use crate::teranos::{pickup_at, surface_z, tile_at, Pickup, TileKind, WORLD_CIRC_X};
 use crate::trace::count_viewport_read;
 use crate::world::{World, PIXELS_PER_TILE};
 
@@ -97,16 +97,16 @@ pub fn write_viewport(world: &World, view_w: u32, view_h: u32) -> u32 {
                 let sz = surface_z(tx, ty);
                 let top_z = sz.max(0);
                 let cx = tx.rem_euclid(WORLD_CIRC_X);
-                let cell_flower = if world.player.picked.contains(&(cx, ty))
+                let cell_pickup = if world.player.picked.contains(&(cx, ty))
                     || world.canonical_picked.contains(&(cx, ty))
                 {
                     None
                 } else {
-                    flower_at(tx, ty)
+                    pickup_at(tx, ty)
                 };
                 let elev_offset =
                     (sz - player_z).clamp(i8::MIN as i32, i8::MAX as i32) as i8;
-                let cell = tile_cell(tile_at(tx, ty, top_z), elev_offset, cell_flower);
+                let cell = tile_cell(tile_at(tx, ty, top_z), elev_offset, cell_pickup);
                 write_struct(
                     &mut buf,
                     VIEWPORT_HEADER_SIZE + i * VIEWPORT_TILE_SIZE,
@@ -124,13 +124,16 @@ pub fn viewport_ptr() -> u32 {
     VIEWPORT_BUFFER.with(|b| b.borrow().as_ptr() as u32)
 }
 
-fn tile_cell(kind: TileKind, elev_offset: i8, flower: Option<Flower>) -> TileCell {
+fn tile_cell(kind: TileKind, elev_offset: i8, pickup: Option<Pickup>) -> TileCell {
     let mut cell = TileCell {
         tile_kind: kind as u8,
         elev_offset,
         ..TileCell::default()
     };
-    if let Some(f) = flower {
+    // Dispatch on the pickup variant. Today only Flower; cards will
+    // add a new arm here writing card-specific fields into TileCell
+    // (and TileCell will grow the bytes to carry them).
+    if let Some(Pickup::Flower(f)) = pickup {
         cell.has_flower = 1;
         cell.petal_center = f.petal_center as u8;
         cell.petal_edge = f.petal_edge as u8;
