@@ -90,5 +90,5 @@ What i want:
   - [x] 0.3.5 — M5: libp2p's verified gossipsub `source` surfaces to the application layer as a `did:key`; trust line moves from "what the payload says" to "what libp2p signed."
   - [x] 0.3.6 — M6 + first routed transformation: flower pickup. Mutations route through `WorldClass::{Canonical, NonCanonical}`; identified players' pickups propagate via gossipsub and the tile stays empty for every other identified peer. End-to-end verified by `tests/m6_via_relayer.rs` (real relayer binary + native libp2p clients). M7 promotion deferred until guest-mode entry exists.
 - [x] v0.4 — cards on the ground. Pick them up, collection persists. Depends on 0.3.6 — cards are world state; without canonical routing the axiom doesn't hold and non-canonical players grief canonical state.
-- [ ] v0.4.1 — eframe owns the canvas; right-click spawn menu + 16-font picker prove it.
+- [x] v0.4.1 — eframe owns the canvas; right-click spawn menu + 16-font picker prove it.
 - [ ] v0.5 — bump into a player, autobattle. M8 (UCAN-based cross-device delegation via `rs-ucan`) lands in this slice — the natural demo is "second device plays as you in canonical Teranos."

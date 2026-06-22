@@ -70,19 +70,51 @@ a persistent render entity, not a per-frame "draw a quad at
 
 ## Status (v0.4.1)
 
-- [x] Read-first audit — ebc-battery-tester source, eframe 0.34.1 WebRunner, egui 0.34.3 changelog + `containers::menu` source, `examples/custom_3d_glow` PaintCallback pattern. Findings folded into this doc.
-- [x] `docs/UI.md` — object-identity axiom recorded, eframe decision recorded, API gotchas written down before they bite again.
-- [ ] Pin `eframe = "=0.34.1"` + `egui = "=0.34.3"` in `roam/Cargo.toml`; boot `eframe::WebRunner::start` on the existing canvas; JS bridge stops driving rAF.
-- [ ] World render moves into a `PaintCallback` inside a fullscreen `egui::CentralPanel`; GL state restore at the callback tail becomes load-bearing.
-- [ ] Parchment theme module — `roam::ui::theme::apply(ctx)` runs once at `App::new()` with the colors pinned below.
-- [ ] Right-click spawn menu via `egui::containers::menu` + `Popup::context_menu(response)`; one item "Spawn (16, 16)"; width-pinned against font-swap wrap.
-- [ ] 16 fonts embedded via `include_bytes!`; picker renders every entry's label in its own `FontFamily::Name`.
+Action-level checklist — each item is a single edit or a single
+verifiable outcome, not a project. Decisions live in the sections
+below; this is execution.
 
-This list is the truth surface for v0.4.1 progress — checkboxes flip as
-tasks land, the corresponding sections below stay frozen as the
-decisions they captured. Once v0.4.1 ships, this section moves to a
-"v0.4.1 — shipped" header and v0.5's UI work (inventory grid,
-deckbuilder, mobile touch) opens a new Status block.
+**Foundation — eframe + egui pinned, WebRunner booting:**
+- [x] Read-first audit (ebc-battery-tester source, eframe 0.34.1 WebRunner, egui 0.34.3 `containers::menu`, `examples/custom_3d_glow` PaintCallback).
+- [x] `docs/UI.md` — object-identity axiom, eframe decision, API gotchas, battery-tester visual decision, canonical-inventory decision.
+- [x] `eframe = "=0.34.1"` + `egui = "=0.34.3"` + `egui_glow = "=0.34.3"` pinned in `roam/Cargo.toml`; `wasm-bindgen-futures` made always-on for wasm32.
+- [x] `cargo check --target wasm32-unknown-unknown --lib` clean post-pin.
+- [x] `roam/src/ui/mod.rs` with `RoamApp` implementing `eframe::App` (the new 0.34 `fn ui(&mut self, ui: &mut Ui, frame: &mut Frame)` signature).
+- [x] Wasm entrypoint `roam_ui_init(canvas)` calls `render_gl::init` then `eframe::WebRunner::new().start(canvas, …, |cc| Ok(Box::new(RoamApp::new(cc))))` inside `spawn_local`.
+- [x] **JS-bridge handoff** — `assets/src/js-bridge.js` flipped: `roam_render_init` + JS rAF `roam_render_frame` loop removed; `roam_ui_init` called at startup; rest of the rAF loop (net tick, peer publish, HUD, save throttle) intact. Browser-verified: world renders, UI alive, peer markers + pickups still work.
+
+**Input — single keyboard map:**
+- [x] `roam::input::FrameInput::read(ctx)` is the sole reader of `egui::InputState`'s keys. No other file in the codebase imports `egui::Key`. WASD + arrow keys + numpad 1-9 (8-way roguelike, diagonals on one key, Num5 = act-on-self → spawn) all funnel here.
+- [x] `WebOptions::should_stop_propagation = false` so surviving JS-side keyboard listeners (zoom +/-, log shortcuts) still fire alongside egui's canvas-target listener.
+- [x] Old JS WASD listener + `inputBits()` helper deleted from `assets/src/js-bridge.js`; the rAF `tick(input, dt)` call gone — `RoamApp::logic` calls `roam_tick_impl` from `FrameInput`.
+
+**World render → `PaintCallback`:** (Rust side complete; visible only after the JS handoff above)
+- [x] `RoamApp::ui` mounts a fullscreen `egui::CentralPanel` (via `show_inside`, the 0.34 non-deprecated path).
+- [x] `ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag())` produces the world rect + response.
+- [x] `egui::PaintCallback` built with `egui_glow::CallbackFn::new(move |_info, _painter| { render_gl::render_frame(…) })`.
+- [x] Callback body calls the existing `render_gl::render_frame` thread-local path (eframe and `render_gl` share the underlying browser WebGL2 context via the shared canvas).
+- [ ] Day brightness Rust-side: v0.4.1 ships a fixed `1.0`; the JS-side longitude → brightness derivation moves to Rust in a follow-up.
+- [ ] Viewport buffer write: currently JS calls `roam_viewport_write` in the rAF loop before render. Until the JS handoff lands, this still drives the buffer; after, `RoamApp::ui` calls `roam_viewport_write_impl` itself before pushing the `PaintCallback`.
+
+**UI surface — single right-click menu (battery-tester three-panel layout removed):**
+- [x] `egui::CentralPanel::default().show_inside(ui, …)` is the only persistent panel and contains the world `PaintCallback`.
+- [x] `egui::Popup::context_menu(&response).show(…)` on the world response holds every UI affordance: Spawn (16, 16) button → Font submenu (16 fonts, each row in its own `FontFamily::Name`) → `egui::widgets::global_theme_preference_buttons` for dark/light.
+- [x] No top bar, no left panel — the earlier battery-tester three-panel transplant was confabulation. Pre-egui JS Spawn button in `assets/play.html` deleted in lockstep.
+- [x] No custom `Visuals` or `Style` overrides — egui defaults stand.
+- [x] Width-pin against font-swap wrap on the Spawn button: `ui.set_min_width(180.0)` + `ui.with_layout(Layout::top_down_justified(Align::LEFT), …)` + `Button::new("Spawn (16, 16)").wrap_mode(TextWrapMode::Extend)`.
+
+**Fonts:**
+- [x] 16 font files under `roam/assets/fonts/` (1.3 MB total): alte_haas_grotesk × 2 (regular + bold), augusta × 2 (plain + shadow), berry_rotunda, cardinal × 2 (plain + alternate), cat_franken_deutsch, fraktur_handschrift, isabella, lyric_poetry, rapscallion, renata_cat, the_art_of_illumina, euphorigenic, x_scale.
+- [x] `RoamApp::new(cc)` builds `egui::FontDefinitions` with one `FontFamily::Name((*name).into())` per font via `include_bytes!`.
+- [x] Font picker is a `ui.collapsing("Font", …)` inside the left controls panel.
+- [x] Each row renders as `egui::RichText::new(name).family(FontFamily::Name(name.into())).size(18.0)` inside a `selectable_label` — the user previews each typeface before picking.
+- [x] On pick: `self.current_font_idx` updates and `write_fonts(&ctx)` re-runs with the selected font prepended to the `Proportional` family list, so subsequent text uses it.
+
+The list is the truth surface for v0.4.1 progress — checkboxes flip
+as items land, the decision sections below stay frozen. Once v0.4.1
+ships, this becomes a "v0.4.1 — shipped" historical header and v0.5
+UI work (inventory grid, deckbuilder, mobile touch) opens a fresh
+Status block.
 
 ## v0.4.1 decision — eframe owns the canvas
 
@@ -135,18 +167,65 @@ open/close lifecycle. Left-click outside the menu closes it
 naturally. Animation time on the popup is forced to `0.0` so the
 fade-in doesn't lag behind the right-click.
 
-## Theme — parchment
+## Visual style — battery-tester defaults
 
-Beige panel background, dark brown text. Source: ebc-battery-tester
-visual reference (egui 0.34.1, `widgets::global_theme_preference_buttons`
-elided — this game has one theme). `roam::ui::theme::apply(ctx)`
-runs once at `App::new()`:
+Adopted directly from ebc-battery-tester (0.34.1, the audit reference):
+**no custom `Visuals` or `Style` overrides — egui defaults stand**.
+Layout is three panels:
 
-- `Visuals::light()` as base.
-- `style.visuals.panel_fill = Color32::from_rgb(228, 210, 175)`.
-- `style.visuals.override_text_color = Some(Color32::from_rgb(48, 28, 14))`.
-- `style.animation_time = 0.0`.
-- Menu `Frame::menu(style)` inner margin = `Margin::same(2.0)`.
+- `egui::TopBottomPanel::top("menu")` containing
+  `egui::MenuBar::new()` for top-level menus + the dark/light toggle
+  via `egui::widgets::global_theme_preference_buttons(ui)`.
+- `egui::SidePanel::left("controls")` for the font picker and
+  whatever the slice after this one adds (inventory, deckbuilder).
+- `egui::CentralPanel::default()` holding the world
+  `PaintCallback`.
+
+The previously-planned parchment theme (beige panel + dark brown
+text + animation_time=0 + Frame::menu margin=2.0) is **dropped**.
+It was a confabulation from before the read-first audit; the audit
+showed battery-tester uses egui defaults, and the user explicitly
+chose the battery-tester look. The `roam::ui::theme` module either
+shrinks to a no-op or doesn't exist — whichever falls out of the
+implementation cleanly.
+
+The dark/light toggle is the only theme affordance the player gets.
+Past that, the visual is whatever egui's default theme renders, and
+that's the deliberate choice.
+
+## Canonical inventory
+
+Inventories are canonical world entities. Decision recorded here
+and in `docs/CANONICAL.md`.
+
+Implication: when player A picks up a card from a tile, the card is
+not "removed from the world and instantiated in A's inventory" — it
+*moves* into A's inventory, and that move is a canonical world
+transformation visible to every observer in render range. The card's
+entity id (deterministic from `world_hash(x, y, …)` while on the
+ground; persistent post-pickup) stays the same; only its `Location`
+changes from `World{x, y, z}` to `Inventory{owner: did:key, slot}`.
+
+For other players in render range, the same card animates from the
+ground tile *into player A's marker*. Same render entity, position
+interpolated. No "card disappears for B while it appears for A" —
+that would violate the object-identity axiom and would be a worse
+user experience besides (B sees the world reshape without
+explanation).
+
+Non-canonical (sandbox, per `docs/CANONICAL.md`) players carry
+inventories that exist only in their local overlay and don't
+replicate. On M7 promotion, the sandbox inventory resets along
+with the rest of the personal overlay — consistent with the
+existing "promotion is one-way and meaningful loss" axiom.
+
+Wire shape: the existing M6 pickup gossipsub message already
+carries the picker's `did:key`. The render layer uses that to
+target the animation. Inventory *contents* gossiped as canonical
+state is a follow-up question — for v0.4.1 the visible move is
+client-side animation off the pickup wire; "what is in A's
+inventory right now" as queryable canonical state is a v0.5+
+concern when trades, robbery, and vendor inventories enter scope.
 
 ## Menu APIs — 0.34, not training-data 0.29
 

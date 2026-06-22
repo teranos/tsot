@@ -15,13 +15,19 @@ path = "src/main.rs"
 # rust-libp2p is the default substrate. `--no-default-features` (or
 # `make wasm-js-only`) builds the JS-libp2p-only fallback bundle.
 default = ["rust-libp2p"]
-rust-libp2p = ["dep:libp2p", "dep:libp2p-connection-limits", "dep:wasm-bindgen-futures", "dep:futures", "dep:futures-timer", "dep:getrandom_0_3"]
+rust-libp2p = ["dep:libp2p", "dep:libp2p-connection-limits", "dep:futures", "dep:futures-timer", "dep:getrandom_0_3"]
 
 [dependencies]
 sacred-error = { path = "../crates/sacred-error" }
 tsot-card = { path = "../crates/tsot-card" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# In-canvas UI — egui pinned at workspace scope (the type is cheap on
+# host even if every consumer is wasm32-only today). eframe + egui_glow
+# moved to the wasm32 cfg-gated deps below because eframe's default
+# features pull wgpu/winit/objc2-* (~50 crates) into the host build
+# for zero runtime benefit — the UI never runs on native.
+egui = "=0.34.3"
 # Base58btc for did:key encoding (M1). Crate already transitive via
 # libp2p; pinned direct so the import path stays stable.
 bs58 = "=0.5.1"
@@ -51,7 +57,11 @@ libp2p = { version = "=0.56.0", optional = true, default-features = false, featu
 # because the libp2p meta-crate doesn't expose this behaviour through
 # a feature flag in 0.56.0 (only `memory-connection-limits` is gated).
 libp2p-connection-limits = { version = "=0.6.0", optional = true }
-wasm-bindgen-futures = { version = "=0.4.71", optional = true }
+# Needed unconditionally on wasm32 — eframe::WebRunner::start is
+# async, and roam_ui_init drives it via wasm_bindgen_futures::spawn_local.
+# The rust-libp2p feature also relies on it (transitively via Net::tick),
+# but the dep is target-gated, not feature-gated, so non-libp2p builds
+# still link it.
 # `futures` (channels + StreamExt + select_biased!) drives the
 # `RustLibp2pProvider` Swarm task. Transitive via libp2p today but
 # pinned as a direct dep so the import path stays stable.
@@ -62,7 +72,19 @@ futures = { version = "=0.3.32", optional = true }
 futures-timer = { version = "=3.0.4", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# eframe owns the canvas + rAF loop on wasm32. Native features
+# (wgpu, winit, wayland, x11, accesskit, persistence) cut via
+# default-features = false; only the `glow` feature stays so eframe
+# can boot the WebGL2 backend. Saves ~50 native crates from the host
+# target dir.
+eframe = { version = "=0.34.1", default-features = false, features = ["glow"] }
+# egui_glow is the WebGL2 painter — wasm32-only same reason as eframe.
+# Shares the underlying browser-side WebGL2 context with render_gl via
+# the shared canvas (`getContext("webgl2")` returns the same object
+# on repeated calls).
+egui_glow = "=0.34.3"
 wasm-bindgen = "=0.2.121"
+wasm-bindgen-futures = "=0.4.71"
 js-sys = "=0.3.98"
 getrandom = { version = "=0.2.15", features = ["js"] }
 # getrandom 0.3 enters the tree transitively via libp2p (the feature

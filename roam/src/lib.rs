@@ -1,12 +1,16 @@
 pub mod catalog;
 pub mod error;
 pub mod identity;
+#[cfg(target_arch = "wasm32")]
+pub mod input;
 pub mod layout;
 pub mod net;
 pub mod perf;
 #[cfg(target_arch = "wasm32")]
 pub mod render_gl;
 pub mod teranos;
+#[cfg(target_arch = "wasm32")]
+pub mod ui;
 pub mod trace;
 pub mod viewport;
 pub mod wasm_ffi;

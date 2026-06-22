@@ -202,11 +202,24 @@ pub fn render_frame(
             ));
         };
 
-        if renderer.canvas.width() != canvas_w {
-            renderer.canvas.set_width(canvas_w);
-        }
-        if renderer.canvas.height() != canvas_h {
-            renderer.canvas.set_height(canvas_h);
+        // Sacred Error: eframe owns the canvas (`docs/UI.md` v0.4.1
+        // decision). render_gl never mutates `canvas.width/height`;
+        // mismatch means the caller and eframe disagree about
+        // dimensions, which is the kind of silent-state-drift this
+        // file used to be guilty of. Surface it, then proceed with
+        // the values the caller passed so the user still sees a
+        // frame and the error tells them why it's the wrong size.
+        let actual_w = renderer.canvas.width();
+        let actual_h = renderer.canvas.height();
+        if actual_w != canvas_w || actual_h != canvas_h {
+            emit_error(
+                Severity::Error,
+                "roam::render_gl::render_frame",
+                "canvas dimensions disagree with caller",
+                format!(
+                    "caller={canvas_w}x{canvas_h} canvas={actual_w}x{actual_h} — eframe owns the canvas, render_gl no longer resizes it; align the caller's source of truth (likely `ctx.content_rect().size()`)"
+                ),
+            );
         }
         renderer.gl.viewport(0, 0, canvas_w as i32, canvas_h as i32);
 

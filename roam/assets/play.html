@@ -83,9 +83,9 @@
 </head>
 <body>
 <div id="clock" style="position: fixed; top: 4px; right: 8px; font-family: ui-monospace, Menlo, monospace; color: #888; font-size: 0.7rem; pointer-events: none; z-index: 100;"></div>
-<div id="teleport-controls" style="position: fixed; top: 4px; left: 8px; display: flex; gap: 4px; z-index: 100; font-family: ui-monospace, Menlo, monospace; font-size: 0.7rem;">
-  <button type="button" onclick="window.roamTeleport && window.roamTeleport(16, 16)" style="background:#1a1a1f; color:#ddd; border:1px solid #444; padding:4px 8px; cursor:pointer; font-family:inherit; font-size:inherit;">Spawn (16, 16)</button>
-</div>
+<!-- Pre-egui teleport button removed v0.4.1; Spawn lives inside the
+     right-click context menu on the world, rendered by egui in
+     `roam::ui::mod::RoamApp`. -->
 <div id="root"></div>
 <script src="build-info.js"></script>
 <script src="elm.js"></script>

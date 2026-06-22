@@ -31,6 +31,7 @@ import initWasm, {
   roam_restore_session,
   roam_render_init,
   roam_render_frame,
+  roam_ui_init,
   roam_player_state_ptr,
   roam_player_state_len,
   roam_net_init,
@@ -599,22 +600,14 @@ const KEY_MAP = {
   w: 'w', a: 'a', s: 's', d: 'd',
   arrowup: 'w', arrowleft: 'a', arrowdown: 's', arrowright: 'd',
 };
-window.addEventListener('keydown', (e) => {
-  const k = KEY_MAP[e.key.toLowerCase()];
-  if (k) { keys.add(k); e.preventDefault(); }
-});
-window.addEventListener('keyup', (e) => {
-  const k = KEY_MAP[e.key.toLowerCase()];
-  if (k) { keys.delete(k); e.preventDefault(); }
-});
-function inputBits() {
-  let i = 0;
-  if (keys.has('w')) i |= INPUT_W;
-  if (keys.has('a')) i |= INPUT_A;
-  if (keys.has('s')) i |= INPUT_S;
-  if (keys.has('d')) i |= INPUT_D;
-  return i;
-}
+// v0.4.1: WASD + arrow keys are owned by Rust. `RoamApp::logic`
+// reads `egui::InputState::key_down` for each direction every
+// frame on eframe's rAF schedule and calls `roam_tick_impl`. The
+// JS keydown/keyup listeners + `keys` Set + `inputBits()` helper
+// are gone. The KEY_MAP constant above stays only because the
+// existing zoom-key listener at line ~1326 still mutates `zoom`
+// from JS — that lives in JS because zoom is a JS-local variable
+// the JS rAF loop reads. Moving zoom to Rust is a follow-up slice.
 
 // Phase 2d: the JS-side `remotePeers` Map and the `ingest` ↦ Map
 // pipeline used to live here. Both are gone. Incoming pubsub
@@ -878,15 +871,19 @@ moduleP.then((wasm) => {
   worldHud.className = `net-${netState}`;
   worldHud.title = NET_STATE_TOOLTIPS[netState] || netState;
 
-  // Hand the world canvas to Rust's WebGL2 renderer. From this point
-  // on, every world-canvas pixel comes from `roam_render_frame`. The
-  // JS bridge issues no draw calls against the world canvas; canvas2D
-  // and WebGL2 are exclusive per canvas, and we've committed to GL.
+  // v0.4.1: eframe owns the canvas. `roam_ui_init` calls
+  // `render_gl::init` internally + boots `eframe::WebRunner::start`
+  // on the same canvas. The world renders inside an egui
+  // PaintCallback on a fullscreen CentralPanel; top + left panels
+  // host the menu bar (theme toggle) + font picker. The JS rAF
+  // loop below no longer calls `roam_render_frame` — eframe drives
+  // its own rAF schedule for paints. Net tick, peer publish, HUD
+  // updates, perf accounting stay in JS for this slice.
   try {
-    roam_render_init(canvas);
-    logEvent('info', `render_gl: WebGL2 attached to world canvas (${canvas.width}x${canvas.height})`);
+    roam_ui_init(canvas);
+    logEvent('info', `eframe: WebRunner attached to world canvas (${canvas.width}x${canvas.height})`);
   } catch (err) {
-    logError('render_gl init', err);
+    logError('roam_ui_init', err);
   }
 
   // Network seam. rust-libp2p Swarm lives in a Web Worker, not the
@@ -1339,7 +1336,8 @@ moduleP.then((wasm) => {
     last = now;
     perfRafCount += 1;
 
-    tick(inputBits(), dt);
+    // tick(input, dt) moved to RoamApp::logic — Rust reads keys
+    // via egui::InputState every eframe frame.
 
     // Drive the Rust-owned network state: drain incoming events,
     // update the peer table, prune stale peers. Cheap when nothing's
@@ -1560,15 +1558,17 @@ moduleP.then((wasm) => {
       return;
     }
 
-    // Phase 2d: Rust owns the entire frame AND the peer table.
-    // `roam_render_frame` reads peers from `Net.peers` internally;
-    // no `roam_set_peers` call from JS. Pixel decisions live in Rust.
-    const dayB = dayBrightness(s.x, PIXELS_PER_TILE);
-    try {
-      roam_render_frame(s.x, s.y, s.f, zoom, canvas.width, canvas.height, dayB);
-    } catch (err) {
-      logError('roam_render_frame', err);
-    }
+    // v0.4.1: eframe drives rendering on its own rAF schedule;
+    // `roam_render_frame` is no longer called from this loop.
+    // The viewport buffer write above still runs because eframe's
+    // PaintCallback reads from it; JS and eframe share the same
+    // single-threaded browser event loop, so the write happens
+    // before eframe's next paint reads it.
+    // dayBrightness derivation lives JS-side for now — RoamApp
+    // passes a fixed 1.0 in v0.4.1. Moving the derivation Rust-side
+    // is a separate follow-up slice.
+    const _dayB_unused = dayBrightness(s.x, PIXELS_PER_TILE);
+    void _dayB_unused;
 
     // Status text overlay: rendered by the browser as DOM, not by GL.
     // Bridge composes the format string from Rust-supplied data only.
