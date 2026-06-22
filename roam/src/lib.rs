@@ -1,3 +1,4 @@
+pub mod build_info;
 pub mod catalog;
 pub mod error;
 pub mod identity;

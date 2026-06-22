@@ -73,6 +73,14 @@ wasm: assets
 		echo "error: wasm-bindgen not on PATH. Enter nix dev shell: \`nix develop\`"; \
 		exit 1; \
 	}
+	@# Build-info env vars are read by `option_env!` in roam::build_info
+	@# at compile time, so the wasm bundle carries its own commit + time.
+	@# The browser-side build-info.js file below is kept for the existing
+	@# error-overlay watermark (Elm-side); the Rust UI no longer depends
+	@# on it. Single source of truth — same shell expansion below.
+	ROAM_BUILD_COMMIT="$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(shell [ -n "$$(git status --porcelain 2>/dev/null)" ] && echo -dirty)" \
+	ROAM_BUILD_TIME="$(shell date -u +%Y-%m-%dT%H:%M:%SZ)" \
+	ROAM_BUILD_PROFILE="release" \
 	cargo build --target $(WASM_TARGET) --release --lib
 	wasm-bindgen $(WASM_OUT)/roam.wasm --target web --out-dir $(WASM_DIST) --no-typescript
 	@printf 'window.__ROAM_BUILD__=%s;\n' '{"profile":"release","builtAt":"$(shell date -u +%Y-%m-%dT%H:%M:%SZ)","commit":"$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(shell [ -n "$$(git status --porcelain 2>/dev/null)" ] && echo -dirty)"}' > $(WASM_DIST)/build-info.js

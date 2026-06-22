@@ -124,6 +124,28 @@ impl eframe::App for RoamApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
+        // Build watermark — bottom-right corner, small monospace gray.
+        // Compile-time constants from roam::build_info; the Makefile
+        // passes git commit + UTC timestamp + profile via env vars.
+        // No JS bridge — the wasm bundle is self-describing.
+        egui::Area::new(egui::Id::new("roam_build_watermark"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::Vec2::new(-6.0, -6.0))
+            .interactable(false)
+            .show(&ctx, |ui| {
+                let txt = format!(
+                    "roam · {} · {} · {}",
+                    crate::build_info::COMMIT,
+                    crate::build_info::PROFILE,
+                    crate::build_info::BUILT_AT,
+                );
+                ui.label(
+                    egui::RichText::new(txt)
+                        .monospace()
+                        .size(11.0)
+                        .color(egui::Color32::from_gray(140)),
+                );
+            });
+
         // No top bar, no left panel — the only UI affordance is the
         // right-click context menu on the world. Theme toggle and font
         // picker both live inside that menu (or its submenus). Battery-

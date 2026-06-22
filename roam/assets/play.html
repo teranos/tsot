@@ -104,13 +104,18 @@
   // Mount Elm BEFORE js-bridge loads so the DOM ids js-bridge queries
   // for (canvas#c, #status, #self, #conns, #mesh, #log) exist by the
   // time the module body runs. Elm renders synchronously during init.
-  const b = window.__ROAM_BUILD__;
-  const buildLabel = b ? `${b.profile} ${b.commit} · ${b.builtAt}` : null;
+  // Build watermark moved into the egui surface
+  // (`roam::ui::mod::RoamApp` renders it bottom-right from compile-time
+  // `option_env!("ROAM_BUILD_*")` constants). Elm's `buildLabel` flag
+  // is force-nulled so the previous top-of-page strip stays empty —
+  // one source of truth lives in Rust now. `window.__ROAM_BUILD__` is
+  // still set by `build-info.js` because the error-overlay watermark
+  // on the Elm side reads it independently.
   const app = Elm.Roam.Main.init({
     node: document.getElementById('root'),
     flags: {
       viewport: { w: window.innerWidth, h: window.innerHeight },
-      buildLabel: buildLabel,
+      buildLabel: null,
     },
   });
   // js-bridge can call this to push a typed Error envelope into Elm.
