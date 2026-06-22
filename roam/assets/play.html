@@ -82,7 +82,9 @@
 </style>
 </head>
 <body>
-<div id="clock" style="position: fixed; top: 4px; right: 8px; font-family: ui-monospace, Menlo, monospace; color: #888; font-size: 0.7rem; pointer-events: none; z-index: 100;"></div>
+<!-- Wall clock moved into the egui surface (roam::ui::mod renders it
+     top-right of the canvas). -->
+
 <!-- Pre-egui teleport button removed v0.4.1; Spawn lives inside the
      right-click context menu on the world, rendered by egui in
      `roam::ui::mod::RoamApp`. -->

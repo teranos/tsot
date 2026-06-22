@@ -145,22 +145,14 @@ const canvas = document.getElementById('c');
 // World canvas now belongs to Rust's WebGL2 renderer. `roam_render_init`
 // is called below once wasm is ready; getContext('2d') is intentionally
 // NOT called on this element — WebGL2 and 2D are exclusive per canvas.
-const clockEl = document.getElementById('clock');
-
-// Live wall-clock so when the user pastes a screenshot we can correlate
-// it with the rest of the world (and with each other's timezones).
-function tickClock() {
-  const d = new Date();
-  const t = d.toISOString().slice(11, 23); // HH:MM:SS.mmm
-  clockEl.textContent = `${t}  ${d.toString().slice(25, 33)}`; // + tz
-}
-tickClock();
-setInterval(tickClock, 100);
+// Wall clock + inventory both render Rust-side in the egui surface
+// now (roam::ui::mod renders the clock top-right, the hotbar +
+// extended grid at the bottom). The `clockEl` / `invEl` refs and
+// the `tickClock` / `setInterval` here are gone.
 const selfEl = document.getElementById('self');
 const connsEl = document.getElementById('conns');
 const meshEl = document.getElementById('mesh');
 const logEl = document.getElementById('log');
-const invEl = document.getElementById('inv');
 
 // Single source of truth for color is roam::teranos via the FFI palette
 // table (read once at init). These arrays exist only as labels for the
@@ -200,68 +192,10 @@ function coreRgb(discriminant) {
   return `rgb(${p[0]},${p[1]},${p[2]})`;
 }
 
-// Inventory rendering — no canvas2D anywhere. Each flower is an inline
-// SVG rendered via the browser's native vector pipeline; no
-// `createRadialGradient` allocation per icon. The bridge writes the
-// markup string once when the inventory changes (cached + change-
-// detected) — Rust still owns every RGB and every discriminant.
-const INV_ICON_SIZE = 24; // px
-const INV_PETAL_R = 3.6;
-const INV_PETAL_DIST = 4.3;
-const INV_CORE_R = 2.4;
-let invLastSignature = '';
-
-function flowerSvg(f, idx) {
-  const petal = petalRgb(f.pc);
-  const edge = petalRgb(f.pe);
-  const core = coreRgb(f.cc);
-  const coreEdge = f.ce === 1 ? petal : f.ce === 2 ? edge : '#fff';
-  const n = f.n || 5;
-  const cx = INV_ICON_SIZE / 2;
-  const cy = INV_ICON_SIZE / 2;
-  const petalGradId = `ip${idx}`;
-  const coreGradId = `ic${idx}`;
-  let petals = '';
-  for (let k = 0; k < n; k++) {
-    const a = -Math.PI / 2 + (k * 2 * Math.PI) / n;
-    const px = cx + Math.cos(a) * INV_PETAL_DIST;
-    const py = cy + Math.sin(a) * INV_PETAL_DIST;
-    petals += `<circle cx="${px.toFixed(2)}" cy="${py.toFixed(2)}" r="${INV_PETAL_R}" fill="url(#${petalGradId})"/>`;
-  }
-  return (
-    `<svg width="${INV_ICON_SIZE}" height="${INV_ICON_SIZE}" viewBox="0 0 ${INV_ICON_SIZE} ${INV_ICON_SIZE}" xmlns="http://www.w3.org/2000/svg">` +
-      `<defs>` +
-        `<radialGradient id="${petalGradId}"><stop offset="0" stop-color="${petal}"/><stop offset="1" stop-color="${edge}"/></radialGradient>` +
-        `<radialGradient id="${coreGradId}"><stop offset="0" stop-color="${core}"/><stop offset="1" stop-color="${coreEdge}"/></radialGradient>` +
-      `</defs>` +
-      petals +
-      `<circle cx="${cx}" cy="${cy}" r="${INV_CORE_R}" fill="url(#${coreGradId})"/>` +
-    `</svg>`
-  );
-}
-
-function renderInventory(inv) {
-  if (!invEl || !wasmMemoryRef) return;
-  const items = Array.isArray(inv) ? inv : [];
-  // Cheap change-detection so we don't rewrite the DOM when nothing
-  // changed. innerHTML assignment is expensive (re-parses markup,
-  // re-creates all child nodes); skip when identical.
-  const sig =
-    items.length +
-    ':' +
-    items.map((f) => `${f.pc},${f.pe},${f.cc},${f.ce},${f.n}`).join('|');
-  if (sig === invLastSignature) return;
-  invLastSignature = sig;
-  if (items.length === 0) {
-    invEl.innerHTML = '';
-    return;
-  }
-  let html = '';
-  for (let i = 0; i < items.length; i++) {
-    html += flowerSvg(items[i], i);
-  }
-  invEl.innerHTML = html;
-}
+// Inventory render lives in roam::ui::mod::RoamApp now — hotbar at
+// bottom-center of the canvas + Tab-toggled extended grid above.
+// The JS-side SVG renderInventory + flowerSvg + INV_* constants used
+// to write into `invEl` (#inv DOM node); they're gone.
 
 
 // --- event log (errors are sacred) ---
@@ -1448,12 +1382,9 @@ moduleP.then((wasm) => {
       } catch (err) {
         logError('wasm state JSON parse (hud)', err);
       }
-      const inv = (sJson && Array.isArray(sJson.inv)) ? sJson.inv : [];
-      try {
-        renderInventory(inv);
-      } catch (err) {
-        logError('renderInventory', err);
-      }
+      // Inventory rendered Rust-side (roam::ui::RoamApp hotbar +
+      // Tab-toggled extended grid). JS no longer renders it.
+      void sJson;
       // Net dot reconciliation (provider-agnostic). Peer count is
       // Rust-owned and reflects whichever substrate is active:
       // JsLibp2pProvider for `?provider=js`, worker proxy for

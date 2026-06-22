@@ -223,6 +223,18 @@ pub fn render_frame(
         }
         renderer.gl.viewport(0, 0, canvas_w as i32, canvas_h as i32);
 
+        // egui_glow's painter sets `blend_func_separate(ONE,
+        // ONE_MINUS_SRC_ALPHA, ONE_MINUS_DST_ALPHA, ONE)` every frame
+        // (egui's vertex colors are premultiplied). Our flower shader
+        // outputs `vec4(col, alpha)` non-premultiplied; under egui's
+        // blend func the soft edges blow out. Re-assert non-
+        // premultiplied SRC_ALPHA blending here so the contract is
+        // per-frame, not per-init.
+        renderer.gl.enable(Gl::BLEND);
+        renderer
+            .gl
+            .blend_func(Gl::SRC_ALPHA, Gl::ONE_MINUS_SRC_ALPHA);
+
         // Read the viewport header out of wasm memory.
         let view_w;
         let view_h;

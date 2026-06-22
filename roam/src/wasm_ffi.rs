@@ -137,6 +137,17 @@ pub(crate) fn roam_player_snapshot_impl() -> (f32, f32, u8) {
     })
 }
 
+/// Snapshot the player's inventory as typed items for the egui-side
+/// inventory panel. Cloning Vec<Pickup> per frame is cheap (inventories
+/// are small for v0.4.x; Pickup::Card carries a String slug which is
+/// the only allocation). Returns empty when WORLD isn't initialized.
+pub(crate) fn roam_inventory_snapshot_impl() -> Vec<crate::teranos::Pickup> {
+    WORLD.with(|w| match w.borrow().as_ref() {
+        Some(world) => world.player.inventory.clone(),
+        None => Vec::new(),
+    })
+}
+
 pub(crate) fn roam_set_position_impl(x: f32, y: f32, facing: u8) {
     WORLD.with(|w| {
         if let Some(world) = w.borrow_mut().as_mut() {

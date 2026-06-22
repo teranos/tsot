@@ -1,20 +1,4 @@
-//! In-canvas UI built on eframe (=0.34.1) + egui (=0.34.3).
-//!
-//! Architecture decisions live in `docs/UI.md`:
-//! - eframe owns the canvas, drives the rAF loop, routes input.
-//! - World render lives inside an `egui::PaintCallback` inside a
-//!   fullscreen `CentralPanel`.
-//! - Visual style follows ebc-battery-tester: egui defaults +
-//!   `global_theme_preference_buttons` for light/dark toggle, three
-//!   panels (top menu, left controls, central world).
-//! - 16 fonts are embedded via `include_bytes!`; the picker renders
-//!   each row in that row's own `FontFamily::Name` so the user
-//!   previews the typeface before picking.
-//! - Right-click on the world opens an `egui::Popup::context_menu`
-//!   with a "Spawn (16, 16)" item — width-pinned via
-//!   `set_min_width` + `Layout::top_down_justified` +
-//!   `Button::wrap_mode(TextWrapMode::Extend)` so font swaps don't
-//!   re-wrap it.
+//! In-canvas UI built on eframe + egui. Decisions live in `docs/UI.md`.
 
 #![cfg(target_arch = "wasm32")]
 
@@ -25,11 +9,9 @@ use web_sys::HtmlCanvasElement;
 
 use crate::error::{emit as emit_error, Severity};
 
-/// 16 fonts embedded at compile time. Stop-gap until the future
-/// fonts-as-gameplay slice (task #49) makes them world drops served
-/// from the relay catalog. Each entry's name is the
-/// `FontFamily::Name` the picker exposes; the bytes are static so
-/// the binary lives in the wasm `data` section once.
+/// Embedded font catalog. Name is the `FontFamily::Name` the picker
+/// exposes; bytes are static so the wasm `data` section holds one
+/// copy.
 const BUNDLED_FONTS: &[(&str, &[u8])] = &[
     ("Alte Haas Grotesk Regular", include_bytes!("../../assets/fonts/alte_haas_grotesk_regular.ttf")),
     ("Alte Haas Grotesk Bold",    include_bytes!("../../assets/fonts/alte_haas_grotesk_bold.ttf")),
@@ -50,27 +32,76 @@ const BUNDLED_FONTS: &[(&str, &[u8])] = &[
 ];
 
 pub struct RoamApp {
-    /// Index into `BUNDLED_FONTS` — the active proportional font.
     current_font_idx: usize,
-    /// View zoom (screen px per world px). 1.0 default; the spawn
-    /// menu doesn't change it for v0.4.1.
     zoom: f32,
+    /// Extended-slots grid above the hotbar. Toggled by Tab.
+    inventory_open: bool,
 }
+
+const HOTBAR_SLOTS: usize = 9;
+const EXTENDED_ROWS: usize = 3;
+const TOTAL_SLOTS: usize = HOTBAR_SLOTS + EXTENDED_ROWS * HOTBAR_SLOTS;
+const SLOT_PX: f32 = 40.0;
+const SLOT_GAP: f32 = 4.0;
+
+const ZOOM_STEP: f32 = 1.25;
+const ZOOM_MIN: f32 = 0.4;
+const ZOOM_MAX: f32 = 4.0;
 
 impl RoamApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let app = Self {
             current_font_idx: 0,
             zoom: 1.0,
+            inventory_open: false,
         };
         app.write_fonts(&cc.egui_ctx);
         app
     }
 
-    /// Rebuild egui's `FontDefinitions`: every bundled font is
-    /// available as its own `FontFamily::Name(name)` (so the picker
-    /// can preview each row in its own typeface), and the selected
-    /// font is prepended to the `Proportional` family so default
+    fn draw_slot(ui: &mut egui::Ui, item: Option<&crate::teranos::Pickup>) {
+        let (rect, _resp) = ui.allocate_exact_size(
+            egui::Vec2::splat(SLOT_PX),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter();
+        let bg = match item {
+            None => egui::Color32::from_rgba_premultiplied(20, 20, 30, 180),
+            Some(crate::teranos::Pickup::Flower(_)) => {
+                egui::Color32::from_rgb(60, 90, 60)
+            }
+            Some(crate::teranos::Pickup::Card(_)) => {
+                egui::Color32::from_rgb(80, 70, 110)
+            }
+        };
+        painter.rect_filled(rect, 4.0, bg);
+        painter.rect_stroke(
+            rect,
+            4.0,
+            egui::Stroke::new(1.0, egui::Color32::from_gray(120)),
+            egui::StrokeKind::Outside,
+        );
+        if let Some(p) = item {
+            let label = match p {
+                crate::teranos::Pickup::Flower(f) => format!("F{}", f.petal_count),
+                crate::teranos::Pickup::Card(id) => {
+                    let s: String = id.0.chars().take(3).collect();
+                    s
+                }
+            };
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::monospace(13.0),
+                egui::Color32::WHITE,
+            );
+        }
+    }
+
+    /// Each bundled font is registered as its own `FontFamily::Name`
+    /// (so the picker can preview each row in its own typeface), and
+    /// the selected font is prepended to `Proportional` so default
     /// text picks it up.
     fn write_fonts(&self, ctx: &egui::Context) {
         let mut defs = egui::FontDefinitions::default();
@@ -107,27 +138,89 @@ impl RoamApp {
 
 impl eframe::App for RoamApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Single keyboard map lives in `roam::input`. eframe captures
-        // keydown on the canvas; this reads pressed state out of
-        // `egui::InputState` once per frame, builds the world's
-        // direction bitmask, and dispatches edge-triggered actions
-        // (Num5 → spawn). The previous JS rAF path
-        // (`tick(inputBits(), dt)` in js-bridge.js) is gone.
         let input = crate::input::FrameInput::read(ctx);
         crate::wasm_ffi::roam_tick_impl(input.move_bits, input.dt_ms);
         if input.spawn_pressed {
             let px = 16.0 * crate::world::PIXELS_PER_TILE as f32;
             crate::wasm_ffi::roam_set_position_impl(px, px, 4);
         }
+        if input.inventory_toggle_pressed {
+            self.inventory_open = !self.inventory_open;
+        }
+        if input.zoom_in_pressed {
+            self.zoom = (self.zoom * ZOOM_STEP).min(ZOOM_MAX);
+        }
+        if input.zoom_out_pressed {
+            self.zoom = (self.zoom / ZOOM_STEP).max(ZOOM_MIN);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        // Build watermark — bottom-right corner, small monospace gray.
-        // Compile-time constants from roam::build_info; the Makefile
-        // passes git commit + UTC timestamp + profile via env vars.
-        // No JS bridge — the wasm bundle is self-describing.
+        let items = crate::wasm_ffi::roam_inventory_snapshot_impl();
+        let slot_for = |idx: usize| -> Option<&crate::teranos::Pickup> { items.get(idx) };
+
+        egui::Area::new(egui::Id::new("roam_hotbar"))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::Vec2::new(0.0, -12.0))
+            .order(egui::Order::Foreground)
+            .show(&ctx, |ui| {
+                ui.spacing_mut().item_spacing.x = SLOT_GAP;
+                ui.horizontal(|ui| {
+                    for i in 0..HOTBAR_SLOTS {
+                        Self::draw_slot(ui, slot_for(i));
+                    }
+                });
+            });
+
+        if self.inventory_open {
+            egui::Area::new(egui::Id::new("roam_inventory_extended"))
+                .anchor(
+                    egui::Align2::CENTER_BOTTOM,
+                    egui::Vec2::new(
+                        0.0,
+                        -(SLOT_PX + SLOT_GAP + 12.0 + SLOT_GAP),
+                    ),
+                )
+                .order(egui::Order::Foreground)
+                .show(&ctx, |ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::splat(SLOT_GAP);
+                    ui.vertical(|ui| {
+                        for row in 0..EXTENDED_ROWS {
+                            ui.horizontal(|ui| {
+                                for col in 0..HOTBAR_SLOTS {
+                                    let idx =
+                                        HOTBAR_SLOTS + row * HOTBAR_SLOTS + col;
+                                    if idx < TOTAL_SLOTS {
+                                        Self::draw_slot(ui, slot_for(idx));
+                                    }
+                                }
+                            });
+                        }
+                    });
+                });
+        }
+
+        // Wall clock — top-right corner. Same 24-hour format the JS-side
+        // strip used ("HH:MM:SS.mmm  GMT±HHMM") so screenshots stay
+        // correlatable with the prior surface.
+        egui::Area::new(egui::Id::new("roam_clock"))
+            .anchor(egui::Align2::RIGHT_TOP, egui::Vec2::new(-6.0, 6.0))
+            .interactable(false)
+            .show(&ctx, |ui| {
+                let d = js_sys::Date::new_0();
+                let iso = d.to_iso_string().as_string().unwrap_or_default();
+                let time = iso.get(11..23).unwrap_or("");
+                let s = d.to_string().as_string().unwrap_or_default();
+                let tz = s.get(25..33).unwrap_or("");
+                ui.label(
+                    egui::RichText::new(format!("{time}  {tz}"))
+                        .monospace()
+                        .size(11.0)
+                        .color(egui::Color32::from_gray(150)),
+                );
+            });
+
         egui::Area::new(egui::Id::new("roam_build_watermark"))
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::Vec2::new(-6.0, -6.0))
             .interactable(false)
@@ -146,26 +239,16 @@ impl eframe::App for RoamApp {
                 );
             });
 
-        // No top bar, no left panel — the only UI affordance is the
-        // right-click context menu on the world. Theme toggle and font
-        // picker both live inside that menu (or its submenus). Battery-
-        // tester's three-panel layout was a confabulation when this
-        // module was first written; the game asked for "font chooser
-        // as a game menu" (i.e. inside the right-click menu) from the
-        // start, not a permanent side panel.
-
         let mut newly_picked: Option<usize> = None;
 
-        // Central panel — world render via PaintCallback, full-canvas.
         egui::CentralPanel::default().show_inside(ui, |ui| {
             let (rect, response) = ui.allocate_exact_size(
                 ui.available_size(),
                 egui::Sense::click_and_drag(),
             );
 
-            // Right-click → context menu. Spawn, font picker, theme
-            // toggle all live here. Width-pin recipe keeps items from
-            // wrapping when fonts swap.
+            // Width-pin recipe keeps menu items from re-wrapping when
+            // the active font changes.
             egui::Popup::context_menu(&response).show(|ui| {
                 ui.set_min_width(180.0);
                 ui.with_layout(
@@ -178,9 +261,6 @@ impl eframe::App for RoamApp {
                             crate::wasm_ffi::roam_set_position_impl(px, px, 4);
                         }
                         ui.separator();
-                        // Font submenu — each row in its own typeface
-                        // so the player previews the font before
-                        // committing. Selection survives the menu close.
                         ui.menu_button("Font", |ui| {
                             for (i, (name, _)) in BUNDLED_FONTS.iter().enumerate() {
                                 let family = egui::FontFamily::Name((*name).into());
@@ -194,8 +274,6 @@ impl eframe::App for RoamApp {
                             }
                         });
                         ui.separator();
-                        // Theme toggle inside the menu — same widget
-                        // egui ships, just relocated.
                         egui::widgets::global_theme_preference_buttons(ui);
                     },
                 );
@@ -211,19 +289,14 @@ impl eframe::App for RoamApp {
                 self.write_fonts(&ctx);
             }
 
-            // Use the FULL content rect, not the central panel rect —
-            // render_gl wants the canvas drawing buffer dimensions
-            // (eframe sizes them from `ctx.content_rect()`), and that's
-            // what the Sacred Error on the canvas boundary demands.
-            // Top + left panels paint on top of the world afterwards.
+            // `content_rect` matches the canvas drawing buffer (eframe
+            // sizes it that way); using the inner panel rect instead
+            // would trip the canvas-dim Sacred Error every frame.
             let content = ctx.content_rect();
             let canvas_w = content.width().max(1.0) as u32;
             let canvas_h = content.height().max(1.0) as u32;
             let (x_px, y_px, facing) = crate::wasm_ffi::roam_player_snapshot_impl();
             let zoom = self.zoom;
-            // Day brightness — v0.4.1 ships a fixed 1.0 (full daylight).
-            // The pre-eframe path computed it JS-side from longitude;
-            // moving that derivation Rust-side is a separate slice.
             let day_brightness = 1.0_f32;
 
             let callback = egui::PaintCallback {
@@ -239,9 +312,6 @@ impl eframe::App for RoamApp {
                             canvas_h,
                             day_brightness,
                         ) {
-                            // Sacred Error: a render failure is the
-                            // user not seeing the world. Surfaces in
-                            // red in the event log; no demotion.
                             emit_error(
                                 Severity::Error,
                                 "roam::ui::paint_callback",
@@ -255,9 +325,8 @@ impl eframe::App for RoamApp {
             ui.painter().add(callback);
         });
 
-        // Drive a continuous repaint so the world animates (peer
-        // markers, day-brightness eventually, etc.) without relying
-        // on egui's input-driven repaint heuristic.
+        // Force continuous repaint — egui's input-driven heuristic
+        // wouldn't animate the world otherwise.
         ctx.request_repaint();
     }
 
@@ -266,27 +335,20 @@ impl eframe::App for RoamApp {
     }
 }
 
-/// Wasm entrypoint — JS hands us the canvas, we boot the eframe
-/// `WebRunner` on it. Replaces the JS-side `requestAnimationFrame`
-/// loop that drove `roam_render_frame`. The world keeps rendering
-/// inside the `PaintCallback`; egui paints menus + controls on top.
-///
-/// `render_gl::init` runs first so the renderer's thread-local
-/// `RENDERER` is populated before any frame fires. Both eframe and
-/// `render_gl` end up holding handles to the same underlying browser
-/// WebGL2 context (the browser returns the same object on repeated
-/// `canvas.getContext("webgl2")` calls).
+/// Wasm entrypoint — boots eframe's `WebRunner` on the canvas.
+/// `render_gl::init` runs first so the renderer's thread-local is
+/// populated before any frame fires; eframe and `render_gl` both
+/// hold handles to the same underlying browser WebGL2 context (the
+/// browser returns the same object on repeated `getContext("webgl2")`).
 #[wasm_bindgen]
 pub fn roam_ui_init(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
     crate::render_gl::init(canvas.clone())?;
 
-    // Default `WebOptions::should_stop_propagation` returns `true` for
-    // every egui event — which means eframe calls `event.stop_propagation()`
-    // on every key that hits the canvas, and the JS WASD listener on
-    // `window` never fires after the canvas takes focus. Override to
-    // `false` so keyboard events continue to bubble; egui still
-    // receives them at the canvas-target phase, the world's JS
-    // listener still sees them at the bubble phase.
+    // egui's default stops propagation on every key, which kills the
+    // JS-side keyboard listeners (zoom +/-, log shortcuts) once the
+    // canvas has focus. Letting events bubble keeps both pipelines
+    // alive — egui handles them at the canvas target phase, JS at
+    // the window bubble phase.
     let web_options = eframe::WebOptions {
         should_stop_propagation: Box::new(|_| false),
         ..Default::default()

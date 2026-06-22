@@ -17,6 +17,14 @@
 pub struct FrameInput {
     pub move_bits: u32,
     pub spawn_pressed: bool,
+    /// Tab key — toggle the full inventory panel above the hotbar.
+    /// Hotbar itself is always visible; this just opens/closes the
+    /// extended grid for the slots beyond the first 9.
+    pub inventory_toggle_pressed: bool,
+    /// `+` / `=` — step zoom in. Edge-triggered.
+    pub zoom_in_pressed: bool,
+    /// `-` — step zoom out. Edge-triggered.
+    pub zoom_out_pressed: bool,
     pub dt_ms: f32,
 }
 
@@ -69,6 +77,9 @@ impl FrameInput {
             FrameInput {
                 move_bits: bits,
                 spawn_pressed: i.key_pressed(Key::Num5),
+                inventory_toggle_pressed: i.key_pressed(Key::Tab),
+                zoom_in_pressed: i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals),
+                zoom_out_pressed: i.key_pressed(Key::Minus),
                 dt_ms: (i.stable_dt * 1000.0).min(100.0),
             }
         })
