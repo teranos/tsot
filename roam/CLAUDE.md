@@ -15,12 +15,11 @@ You roam an open world, gather TSOT cards lying on the ground, build
 a deck from your collection, play TSOT matches against other players
 you encounter automatically.
 
-Architecture: Rust → wasm32-unknown-emscripten (mirrors TSOT). JS owns
-render and a thin `WorkerBridge` to the network web worker. The Swarm
-(rust-libp2p, gossipsub + identify + ping over WebSocket-WebSys) lives
-in `assets/src/net-worker.js`. No centralised server. Decentralized
-substrate (libp2p), eventually-consistent state (Lamport timestamps
-for card-pickup conflicts). Roadmap lives in `README.md`.
+Architecture: Rust → wasm32-unknown-unknown (wasm-bindgen + rust-libp2p).
+JS plays as little role as possible — ideally none. Render and the
+libp2p Swarm (gossipsub + identify + ping over WebSocket-WebSys) are
+Rust. No centralised server. Eventually-consistent state (Lamport
+timestamps for card-pickup conflicts). Roadmap lives in `README.md`.
 
 See @README.md for the staged roadmap and @docs/OBSERVABILITY.md for the
 trace bus plan.
