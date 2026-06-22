@@ -129,8 +129,10 @@ impl TileKind {
 /// What a tile can carry that a player walking over it picks up.
 ///
 /// Generic over content kind so the pickup mechanic (`try_pickup`,
-/// canonical-vs-sandbox routing, gossip) stays kind-agnostic.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// canonical-vs-sandbox routing, gossip) stays kind-agnostic. Not
+/// `Copy` because `CardId` carries an owned `String` (the ccg slug);
+/// `Clone` is cheap-ish (one heap copy per card pickup, rare event).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pickup {
     Flower(Flower),
     Card(CardId),
@@ -139,11 +141,17 @@ pub enum Pickup {
 /// Generic pickup probe: what (if anything) is on tile `(x, y)` for the
 /// player to pick up. Flowers checked first; cards fall through.
 /// Catalog is needed because card identity at a tile depends on the
-/// relayer's published list — see `card_at`.
+/// relayer's published list — see `card_at`. The card branch clones a
+/// `String` (the catalog entry's id); call sites on the per-frame
+/// render path should compose `card_at` + `catalog.seed_at_index`
+/// directly instead, to avoid the allocation.
 pub fn pickup_at(x: i32, y: i32, catalog: &Catalog) -> Option<Pickup> {
-    flower_at(x, y)
-        .map(Pickup::Flower)
-        .or_else(|| card_at(x, y, catalog).map(Pickup::Card))
+    flower_at(x, y).map(Pickup::Flower).or_else(|| {
+        card_at(x, y, catalog.len())
+            .and_then(|idx| catalog.id_at_index(idx))
+            .cloned()
+            .map(Pickup::Card)
+    })
 }
 
 // ----- day cycle -----

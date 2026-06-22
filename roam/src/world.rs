@@ -209,13 +209,14 @@ impl World {
         }
         if let Some(pickup) = pickup_at(tx, ty, &self.catalog) {
             self.player.picked.insert(key);
+            let trace_repr = format!("{pickup:?}");
             self.player.inventory.push(pickup);
             match class {
                 crate::identity::WorldClass::Canonical => {
                     self.canonical_picked.insert(key);
                     emit(TraceEvent::Note {
                         tag: "flower_picked_canonical",
-                        msg: format!("({tx}, {ty}) {pickup:?}"),
+                        msg: format!("({tx}, {ty}) {trace_repr}"),
                     });
                     if let Some(net) = self.net.as_mut() {
                         if let Err(err) = net.publish_pickup(cx, ty) {
@@ -231,7 +232,7 @@ impl World {
                 crate::identity::WorldClass::NonCanonical => {
                     emit(TraceEvent::Note {
                         tag: "flower_picked_sandbox",
-                        msg: format!("({tx}, {ty}) {pickup:?}"),
+                        msg: format!("({tx}, {ty}) {trace_repr}"),
                     });
                 }
             }
@@ -385,16 +386,11 @@ impl World {
         match serde_json::from_str::<SessionSnapshot>(raw) {
             Ok(snap) => {
                 self.player.picked = snap.picked.into_iter().collect();
-                let mut migrated = 0_usize;
-                let mut parsed = 0_usize;
                 self.player.inventory.clear();
                 for entry in snap.inv {
                     match entry {
-                        FlowerWire::Named(named) => match named.try_into_flower() {
-                            Ok(f) => {
-                                self.player.inventory.push(Pickup::Flower(f));
-                                parsed += 1;
-                            }
+                        InventoryItemWire::Flower(fw) => match fw.try_into_flower() {
+                            Ok(f) => self.player.inventory.push(Pickup::Flower(f)),
                             Err(why) => {
                                 emit_error(
                                     Severity::Error,
@@ -404,29 +400,12 @@ impl World {
                                 );
                             }
                         },
-                        FlowerWire::Legacy(legacy) => match legacy_tuple_to_flower(&legacy) {
-                            Ok(f) => {
-                                self.player.inventory.push(Pickup::Flower(f));
-                                migrated += 1;
-                            }
-                            Err(why) => {
-                                emit_error(
-                                    Severity::Error,
-                                    "roam::world::restore_session_json",
-                                    "legacy inventory entry rejected",
-                                    why,
-                                );
-                            }
-                        },
+                        InventoryItemWire::Card(cw) => {
+                            self.player
+                                .inventory
+                                .push(Pickup::Card(crate::teranos::CardId(cw.id)));
+                        } // cw.id is already String — no conversion needed
                     }
-                }
-                if migrated > 0 {
-                    emit(TraceEvent::Note {
-                        tag: "session_migrate_inventory",
-                        msg: format!(
-                            "restored {parsed} named-shape + {migrated} legacy-tuple inventory entries"
-                        ),
-                    });
                 }
             }
             Err(err) => {
@@ -470,41 +449,47 @@ impl World {
 #[derive(Serialize, Deserialize)]
 struct SessionSnapshot {
     picked: Vec<(i32, i32)>,
-    inv: Vec<FlowerWire>,
+    inv: Vec<InventoryItemWire>,
 }
 
 /// State wire format consumed by the JS HUD. Inventory shape matches
-/// `SessionSnapshot::inv`; the bridge reads `f.pc / .pe / .cc / .ce / .n`
-/// for the inventory panel.
+/// `SessionSnapshot::inv` — tagged outer (`{"k":"f","v":...}` for
+/// flowers, `{"k":"c","v":{"id":N}}` for cards) so the panel can
+/// dispatch on kind. Legacy v0.3.x sessions decode via the
+/// `LegacyFlower` arm at restore time.
 #[derive(Serialize)]
 struct PlayerStateJson {
     x: f32,
     y: f32,
     z: i32,
     f: u8,
-    inv: Vec<FlowerWire>,
+    inv: Vec<InventoryItemWire>,
 }
 
-/// On-wire flower representation. Two shapes accepted on decode:
-/// the canonical named-field object and the legacy positional tuple
-/// `[pc, cc, n, pe, ce]`. Encode is always Named (the `From<Flower>`
-/// impl produces only `Named`); the legacy branch is a one-shot
-/// migration for inbound v1 data.
-///
-/// **Variant order is load-bearing for decode.** serde_json can
-/// deserialize a struct from an array if the lengths match — putting
-/// `Legacy([u8; 5])` first means an array `[a,b,c,d,e]` matches
-/// `Legacy` before serde tries to fit it into `FlowerNamed` (which
-/// would silently accept the array with misaligned field semantics).
-#[derive(Serialize, Deserialize, Clone, Copy)]
-#[serde(untagged)]
-enum FlowerWire {
-    Legacy([u8; 5]),
-    Named(FlowerNamed),
+/// One inventory entry on the wire. Tagged: `{"k":"f","v":<flower>}`
+/// or `{"k":"c","v":{"id":"<slug>"}}`. No legacy shape accepted —
+/// pre-v0.4 sessions are dropped on restore.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(tag = "k", content = "v")]
+enum InventoryItemWire {
+    #[serde(rename = "f")]
+    Flower(FlowerWire),
+    #[serde(rename = "c")]
+    Card(CardWire),
 }
 
+/// Card-variant payload. Just the catalog id (ccg's string slug); image
+/// bytes / CDN handles / per-card art come later (or never, per "defer
+/// image fetchcdn until way later").
+#[derive(Serialize, Deserialize, Clone)]
+struct CardWire {
+    id: String,
+}
+
+/// On-wire flower representation: compact u8-per-field object the JS
+/// inventory panel reads as `f.pc / .pe / .cc / .ce / .n`.
 #[derive(Serialize, Deserialize, Clone, Copy)]
-struct FlowerNamed {
+struct FlowerWire {
     pc: u8,
     pe: u8,
     cc: u8,
@@ -514,32 +499,17 @@ struct FlowerNamed {
 
 impl From<Flower> for FlowerWire {
     fn from(f: Flower) -> Self {
-        FlowerWire::Named(FlowerNamed {
+        FlowerWire {
             pc: f.petal_center as u8,
             pe: f.petal_edge as u8,
             cc: f.core_center as u8,
             ce: f.core_edge as u8,
             n: f.petal_count,
-        })
-    }
-}
-
-/// Project a `Pickup` to the on-wire flower shape. The wire format is
-/// still flower-only — Card variant landed in `teranos.rs` but
-/// `card_at` returns None for now, so no Card ever reaches inventory
-/// and the `todo!()` arm is unreachable until worldgen for cards
-/// lands. The next slice extends the wire format to a tagged shape
-/// and replaces this projection.
-fn pickup_to_wire(p: &Pickup) -> FlowerWire {
-    match p {
-        Pickup::Flower(f) => FlowerWire::from(*f),
-        Pickup::Card(_) => {
-            todo!("card wire format pending — card_at returns None this slice")
         }
     }
 }
 
-impl FlowerNamed {
+impl FlowerWire {
     fn try_into_flower(self) -> Result<Flower, String> {
         Ok(Flower {
             petal_center: flower_color_from_u8(self.pc)?,
@@ -551,19 +521,14 @@ impl FlowerNamed {
     }
 }
 
-/// Legacy positional inventory entry from before the named-shape
-/// migration. Order: `[petal_center, core_center, petal_count,
-/// petal_edge, core_edge]`. Only accepted on decode; new writes always
-/// emit the named shape.
-fn legacy_tuple_to_flower(tuple: &[u8; 5]) -> Result<Flower, String> {
-    Ok(Flower {
-        petal_center: flower_color_from_u8(tuple[0])?,
-        petal_edge: flower_color_from_u8(tuple[3])?,
-        core_center: flower_core_from_u8(tuple[1])?,
-        core_edge: core_edge_from_u8(tuple[4])?,
-        petal_count: tuple[2],
-    })
+/// Project a `Pickup` to its on-wire shape.
+fn pickup_to_wire(p: &Pickup) -> InventoryItemWire {
+    match p {
+        Pickup::Flower(f) => InventoryItemWire::Flower(FlowerWire::from(*f)),
+        Pickup::Card(id) => InventoryItemWire::Card(CardWire { id: id.0.clone() }),
+    }
 }
+
 
 fn flower_color_from_u8(v: u8) -> Result<FlowerColor, String> {
     match v {
@@ -667,6 +632,33 @@ mod tests {
         assert!(w2.player.picked.contains(&(10, -20)));
     }
 
+    /// Card persistence: `Pickup::Card`s in inventory survive a
+    /// snapshot/restore round-trip with their ccg string ids intact.
+    /// Falsifies the regression where the wire format silently drops
+    /// cards or where the encoder writes cards but the decoder can't
+    /// read them back.
+    #[test]
+    fn session_round_trip_preserves_card_inventory() {
+        use crate::teranos::CardId;
+        let mut w = World::new();
+        w.player.inventory.push(Pickup::Card(CardId("amsterdam-city".into())));
+        w.player.inventory.push(Pickup::Flower(Flower {
+            petal_center: FlowerColor::Blue,
+            petal_edge: FlowerColor::Yellow,
+            core_center: FlowerCore::White,
+            core_edge: CoreEdge::White,
+            petal_count: 5,
+        }));
+        w.player.inventory.push(Pickup::Card(CardId("anaconda".into())));
+        let snap = w.session_snapshot_json();
+        let mut w2 = World::new();
+        w2.restore_session_json(&snap);
+        assert_eq!(w2.player.inventory.len(), 3);
+        assert_eq!(w2.player.inventory[0], Pickup::Card(CardId("amsterdam-city".into())));
+        assert_eq!(w2.player.inventory[1], w.player.inventory[1]);
+        assert_eq!(w2.player.inventory[2], Pickup::Card(CardId("anaconda".into())));
+    }
+
     #[test]
     fn restore_session_rejects_malformed_input_and_surfaces_error() {
         crate::error::reset();
@@ -682,11 +674,11 @@ mod tests {
     fn restore_session_rejects_out_of_range_discriminant() {
         crate::error::reset();
         let mut w = World::new();
-        // pc=99 is out of FlowerColor range. The named-shape parse
+        // pc=99 is out of FlowerColor range. The tagged-shape parse
         // succeeds at the JSON level, but the discriminant check
         // rejects it; the inventory must stay empty and the error
         // must surface to the sacred-error log.
-        let bad = r#"{"picked":[],"inv":[{"pc":99,"pe":0,"cc":0,"ce":0,"n":5}]}"#;
+        let bad = r#"{"picked":[],"inv":[{"k":"f","v":{"pc":99,"pe":0,"cc":0,"ce":0,"n":5}}]}"#;
         w.restore_session_json(bad);
         assert!(w.player.inventory.is_empty());
         let errs = crate::error::drain();
@@ -786,20 +778,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn restore_session_migrates_legacy_tuple() {
-        let mut w = World::new();
-        // Legacy snapshot: positional tuple inventory.
-        let legacy = r#"{"picked":[[1,2]],"inv":[[0,2,8,6,2]]}"#;
-        w.restore_session_json(legacy);
-        assert_eq!(w.player.inventory.len(), 1);
-        let Pickup::Flower(f) = w.player.inventory[0] else {
-            panic!("legacy tuple must restore as Pickup::Flower")
-        };
-        assert_eq!(f.petal_center, FlowerColor::Red);
-        assert_eq!(f.core_center, FlowerCore::Black);
-        assert_eq!(f.petal_count, 8);
-        assert_eq!(f.petal_edge, FlowerColor::Glow);
-        assert_eq!(f.core_edge, CoreEdge::MatchPetalEdge);
-    }
 }

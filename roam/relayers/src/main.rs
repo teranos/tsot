@@ -59,6 +59,42 @@ const POSITIONS_TOPIC: &str = "roam-positions/v1";
 /// flow through and propagation silently fails.
 const PICKUPS_TOPIC: &str = "roam-pickups/v1";
 
+/// Card-catalog topic. The relayer is the *authority* for which cards
+/// exist in its world — different relayer = different catalog =
+/// different cards on the ground. Clients subscribe; relayer republishes
+/// periodically so freshly-joined peers receive the catalog without
+/// any request/response protocol. Must match
+/// `roam/src/net/state.rs::CATALOG_TOPIC`.
+const CATALOG_TOPIC: &str = "roam-catalog/v1";
+
+/// How often the relayer republishes its catalog. The first publish is
+/// at startup; subsequent ticks catch up new peers that joined after
+/// the previous publish. 30s is comfortably more often than human
+/// reconnect latency, comfortably less often than is wasteful.
+const CATALOG_PUBLISH_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Returns the JSON-encoded catalog this relayer publishes. Hardcoded
+/// stub of real ccg card slugs for now; the real path is a manifest
+/// file generated from `ccg/cards/*.lua` (separate slice) so the
+/// relayer's catalog stays in sync with ccg's bundled cards.
+///
+/// Wire shape matches `roam::catalog::parse_catalog_json`: array of
+/// `{"id": "<ccg-slug>", "name": "<display-name>"}` objects.
+fn catalog_json() -> String {
+    String::from(
+        r#"[
+            {"id":"amsterdam-city","name":"Amsterdam City"},
+            {"id":"anaconda","name":"Anaconda"},
+            {"id":"APOPTOSIS","name":"APOPTOSIS"},
+            {"id":"amber-dragon","name":"Amber Dragon"},
+            {"id":"archer","name":"Archer"},
+            {"id":"avatar-of-greed","name":"Avatar of Greed"},
+            {"id":"axolotl","name":"Axolotl"},
+            {"id":"battle-captain","name":"Battle Captain"}
+        ]"#,
+    )
+}
+
 /// Identify protocol-name advertised on the wire. Must match
 /// browser-side rust_libp2p.rs identify config.
 const IDENTIFY_PROTOCOL: &str = "/roam/1.0.0";
@@ -253,6 +289,10 @@ async fn main() -> Result<()> {
         &gossipsub::IdentTopic::new(POSITIONS_TOPIC),
     )?;
     info!(topic = POSITIONS_TOPIC, "subscribed");
+    swarm.behaviour_mut().gossipsub.subscribe(
+        &gossipsub::IdentTopic::new(CATALOG_TOPIC),
+    )?;
+    info!(topic = CATALOG_TOPIC, "subscribed");
 
     // libp2p binds to loopback on an internal port. The public
     // `listen_port` is owned by a tiny TCP front (`status_proxy`
@@ -292,6 +332,17 @@ async fn main() -> Result<()> {
     let mut cw_interval = tokio::time::interval(CLOUDWATCH_PUBLISH_INTERVAL);
     cw_interval.tick().await; // skip the immediate first tick
 
+    // Catalog interval: publishes at startup (the immediate first
+    // `tick()` returns instantly) and every `CATALOG_PUBLISH_INTERVAL`
+    // thereafter so newly-joined peers catch up.
+    let mut catalog_interval = tokio::time::interval(CATALOG_PUBLISH_INTERVAL);
+    let catalog_payload: Vec<u8> = catalog_json().into_bytes();
+    info!(
+        topic = CATALOG_TOPIC,
+        bytes = catalog_payload.len(),
+        "catalog payload prepared"
+    );
+
     let metric_namespace = std::env::var("ROAM_RELAY_METRIC_NAMESPACE")
         .unwrap_or_else(|_| metrics::NAMESPACE_DEFAULT.to_string());
     let instance_name = std::env::var("ROAM_RELAY_INSTANCE_NAME")
@@ -313,6 +364,23 @@ async fn main() -> Result<()> {
         tokio::select! {
             event = swarm.select_next_some() => {
                 handle_event(event, &stats);
+            }
+            _ = catalog_interval.tick() => {
+                let topic = gossipsub::IdentTopic::new(CATALOG_TOPIC);
+                match swarm.behaviour_mut().gossipsub.publish(topic, catalog_payload.clone()) {
+                    Ok(msg_id) => {
+                        info!(topic = CATALOG_TOPIC, msg_id = ?msg_id, "catalog published");
+                    }
+                    Err(gossipsub::PublishError::NoPeersSubscribedToTopic) | Err(gossipsub::PublishError::AllQueuesFull(_)) => {
+                        // No subscribed peers / no queue capacity — common
+                        // before any clients connect. Downgrade to debug so
+                        // restart doesn't spam the journal.
+                        tracing::debug!(topic = CATALOG_TOPIC, "catalog publish: no peers / full");
+                    }
+                    Err(err) => {
+                        warn!(topic = CATALOG_TOPIC, err = ?err, "catalog publish failed");
+                    }
+                }
             }
             _ = cw_interval.tick(), if publish_metrics => {
                 let interval_secs = CLOUDWATCH_PUBLISH_INTERVAL.as_secs_f64();

@@ -29,12 +29,19 @@ pub const POSITIONS_TOPIC: &str = "roam-positions/v1";
 /// pickups stay in `Player.picked` (sandbox-only).
 pub const PICKUPS_TOPIC: &str = "roam-pickups/v1";
 
+/// Topic where the relayer publishes its card catalog. The relayer is
+/// the authority for which cards exist in its world — different
+/// relayer = different catalog = different cards on the ground. Clients
+/// subscribe; the relayer republishes periodically (no request/response
+/// protocol). See `roam/relayers/src/main.rs::CATALOG_TOPIC`.
+pub const CATALOG_TOPIC: &str = "roam-catalog/v1";
+
 /// Every gossipsub topic this node subscribes to. The JS bridge reads
 /// this list via `roam_subscribed_topics_json` on worker-ready and
 /// dispatches one `subscribe` command per topic to the network worker.
 /// Single source of truth: adding a topic is a one-line edit here,
 /// JS never carries topic strings.
-pub const ALL_TOPICS: &[&str] = &[POSITIONS_TOPIC, PICKUPS_TOPIC];
+pub const ALL_TOPICS: &[&str] = &[POSITIONS_TOPIC, PICKUPS_TOPIC, CATALOG_TOPIC];
 
 /// One remote peer's last-known state. Rendered as a marker on the
 /// world canvas in phase 2d. Stale entries (peers we haven't heard
@@ -77,6 +84,12 @@ pub struct Net {
     /// network ingress with frame state in mid-tick, which would race
     /// the renderer reading `canonical_picked` during viewport build.
     pending_canonical_pickups: Vec<(i32, i32)>,
+    /// Most recent catalog received from the relayer, waiting for the
+    /// FFI's per-tick drain to install it into `World.catalog`. Some =
+    /// freshly received, drained on next tick; None = nothing new.
+    /// The relayer republishes periodically, so a missed message just
+    /// means the next interval picks up. See `CATALOG_TOPIC`.
+    pending_catalog: Option<Vec<crate::catalog::CatalogEntry>>,
 }
 
 impl Net {
@@ -86,6 +99,7 @@ impl Net {
             peers: BTreeMap::new(),
             peer_state_seq: 0,
             pending_canonical_pickups: Vec::new(),
+            pending_catalog: None,
         }
     }
 
@@ -139,6 +153,40 @@ impl Net {
                                 );
                                 #[cfg(not(target_arch = "wasm32"))]
                                 let _ = e;
+                            }
+                        }
+                        continue;
+                    }
+                    if topic.0 == CATALOG_TOPIC {
+                        let raw = match std::str::from_utf8(&bytes) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                #[cfg(target_arch = "wasm32")]
+                                crate::error::emit(
+                                    crate::error::Severity::Warn,
+                                    "roam::net::Net::tick",
+                                    "catalog payload not utf-8",
+                                    format!("from={from:?} reason={e}"),
+                                );
+                                #[cfg(not(target_arch = "wasm32"))]
+                                let _ = (e, &from);
+                                continue;
+                            }
+                        };
+                        match crate::catalog::parse_catalog_json(raw) {
+                            Ok(entries) => {
+                                self.pending_catalog = Some(entries);
+                            }
+                            Err(why) => {
+                                #[cfg(target_arch = "wasm32")]
+                                crate::error::emit(
+                                    crate::error::Severity::Warn,
+                                    "roam::net::Net::tick",
+                                    "catalog decode failed",
+                                    format!("from={from:?} reason={why}"),
+                                );
+                                #[cfg(not(target_arch = "wasm32"))]
+                                let _ = (why, &from);
                             }
                         }
                         continue;
@@ -347,6 +395,18 @@ impl Net {
     /// the FFI's `roam_net_init` alongside `subscribe_positions`.
     pub fn subscribe_pickups(&mut self) -> Result<(), NetError> {
         self.provider.subscribe(&Topic(PICKUPS_TOPIC.to_string()))
+    }
+
+    /// Subscribe to the relayer's catalog topic. Required before the
+    /// relayer's republished catalog can land in `pending_catalog`.
+    pub fn subscribe_catalog(&mut self) -> Result<(), NetError> {
+        self.provider.subscribe(&Topic(CATALOG_TOPIC.to_string()))
+    }
+
+    /// Take the most recently received catalog (or None). FFI calls
+    /// this each tick; if Some, applies into `World.catalog`.
+    pub fn take_pending_catalog(&mut self) -> Option<Vec<crate::catalog::CatalogEntry>> {
+        self.pending_catalog.take()
     }
 
     /// M6 — drain the queue of canonical-class pickup claims received

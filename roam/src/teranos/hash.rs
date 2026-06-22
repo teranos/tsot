@@ -42,11 +42,13 @@ pub(super) enum HashDimension {
     /// Card-presence gate: is there a card on this tile? Independent
     /// of the catalog — same answer every time for the same (x, y).
     CardPresence,
-    /// Card-slot pick: given a non-empty catalog, which entry does this
-    /// tile resolve to? Hash → `% catalog.len()`. Changing the catalog
-    /// changes which card a tile shows; the *presence* of a card does
-    /// not change (CardPresence above).
-    CardSlot,
+    /// Catalog-index pick: given a non-empty catalog, which entry does
+    /// this tile resolve to? Hash → `% catalog.len()`. Changing the
+    /// catalog changes which card a tile shows; the *presence* of a
+    /// card does not change (CardPresence above). Named CardCatalogIndex
+    /// rather than CardSlot to avoid collision with TSOT's `SLOTS.md`
+    /// (the 15-region grid on each card face).
+    CardCatalogIndex,
 }
 
 const FNV_PRIME_64: u64 = 0x0000_0100_0000_01b3;
@@ -75,7 +77,7 @@ impl HashDimension {
             Self::TerrainBreakNoise => b"TerrainBreakNoise",
             Self::TerrainCaveCarve => b"TerrainCaveCarve",
             Self::CardPresence => b"CardPresence",
-            Self::CardSlot => b"CardSlot",
+            Self::CardCatalogIndex => b"CardCatalogIndex",
         }
     }
 
@@ -168,7 +170,7 @@ mod tests {
             HashDimension::TerrainBreakNoise,
             HashDimension::TerrainCaveCarve,
             HashDimension::CardPresence,
-            HashDimension::CardSlot,
+            HashDimension::CardCatalogIndex,
         ];
         for i in 0..dims.len() {
             for j in (i + 1)..dims.len() {
@@ -203,7 +205,7 @@ mod tests {
             HashDimension::TerrainBreakNoise,
             HashDimension::TerrainCaveCarve,
             HashDimension::CardPresence,
-            HashDimension::CardSlot,
+            HashDimension::CardCatalogIndex,
         ] {
             assert_eq!(dim.mult() & 1, 1, "{:?}.mult() must be odd", dim);
         }

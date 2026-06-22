@@ -295,6 +295,43 @@ pub(crate) fn roam_restore_session_impl(raw: String) {
     });
 }
 
+/// Receive a catalog payload from the JS bridge (which got it from the
+/// relayer). Replaces `World.catalog` wholesale on success. On parse
+/// failure: existing catalog stays untouched, error lands in the
+/// sacred-error log — no silent fallback to empty.
+pub(crate) fn roam_set_catalog_impl(raw: String) {
+    WORLD.with(|w| {
+        if let Some(world) = w.borrow_mut().as_mut() {
+            match crate::catalog::parse_catalog_json(&raw) {
+                Ok(entries) => {
+                    let count = entries.len();
+                    world.catalog.set(entries);
+                    emit(TraceEvent::Note {
+                        tag: "catalog_set",
+                        msg: format!("catalog updated: {count} entries"),
+                    });
+                }
+                Err(why) => {
+                    crate::error::emit(
+                        crate::error::Severity::Error,
+                        "roam::wasm_ffi::roam_set_catalog",
+                        "catalog parse failed",
+                        format!(
+                            "{why}; raw[..120]={:?}",
+                            raw.chars().take(120).collect::<String>()
+                        ),
+                    );
+                }
+            }
+        } else {
+            emit(TraceEvent::Note {
+                tag: "roam_set_catalog",
+                msg: "called before roam_init; ignoring".to_string(),
+            });
+        }
+    });
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm_exports {
     use super::*;
@@ -389,6 +426,14 @@ mod wasm_exports {
                 format!("{err:?}"),
             );
         }
+        if let Err(err) = net.subscribe_catalog() {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "roam::wasm_ffi::roam_net_init",
+                "subscribe_catalog failed",
+                format!("{err:?}"),
+            );
+        }
         super::WORLD.with(|w| {
             if let Some(world) = w.borrow_mut().as_mut() {
                 world.net = Some(net);
@@ -449,6 +494,14 @@ mod wasm_exports {
                     crate::error::Severity::Error,
                     "roam::wasm_ffi::roam_net_init_rust_libp2p",
                     "subscribe_pickups failed",
+                    format!("{err:?}"),
+                );
+            }
+            if let Err(err) = net.subscribe_catalog() {
+                crate::error::emit(
+                    crate::error::Severity::Error,
+                    "roam::wasm_ffi::roam_net_init_rust_libp2p",
+                    "subscribe_catalog failed",
                     format!("{err:?}"),
                 );
             }
@@ -763,10 +816,10 @@ mod wasm_exports {
             // for World-level application. Borrowck split: drain the
             // queue out of `world.net`, then mutate `world.canonical_picked`
             // — both touch `world` but only one at a time.
-            let pickups = match world.net.as_mut() {
+            let (pickups, catalog_update) = match world.net.as_mut() {
                 Some(net) => {
                     net.tick(now_ms as u64);
-                    net.drain_pending_canonical_pickups()
+                    (net.drain_pending_canonical_pickups(), net.take_pending_catalog())
                 }
                 None => return,
             };
@@ -774,6 +827,14 @@ mod wasm_exports {
                 world.canonical_picked.insert((x, y));
                 crate::perf::PICKUP_APPLIED
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            if let Some(entries) = catalog_update {
+                let count = entries.len();
+                world.catalog.set(entries);
+                emit(TraceEvent::Note {
+                    tag: "catalog_set",
+                    msg: format!("catalog updated from relayer: {count} entries"),
+                });
             }
         });
     }
@@ -969,6 +1030,16 @@ mod wasm_exports {
         super::roam_restore_session_impl(raw);
     }
 
+    /// Receive the relayer-published card catalog from the JS bridge.
+    /// Wire shape: JSON array of `{"id": <u32>, "name": "<string>"}`
+    /// objects. Replaces `World.catalog` wholesale on success; on parse
+    /// failure the previous catalog stays untouched and the error
+    /// lands in the sacred-error log.
+    #[wasm_bindgen]
+    pub fn roam_set_catalog(raw: String) {
+        super::roam_set_catalog_impl(raw);
+    }
+
     #[wasm_bindgen]
     pub fn roam_drain_errors() -> String {
         super::roam_drain_errors_impl()
@@ -1022,5 +1093,59 @@ mod wasm_exports {
             canvas_h,
             day_brightness,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tsot_card::CardId;
+
+    /// FFI happy path: `roam_set_catalog` parses the JSON wire payload
+    /// and populates `World.catalog`. Falsifies the regression where
+    /// the JSON reaches the parser but never lands in the catalog
+    /// (silent drop between parse and `Catalog::set`).
+    #[test]
+    fn roam_set_catalog_populates_world_catalog() {
+        roam_init_impl();
+        roam_set_catalog_impl(
+            r#"[{"id":"amsterdam-city","name":"Amsterdam City"}]"#.to_string(),
+        );
+        WORLD.with(|w| {
+            let borrow = w.borrow();
+            let world = borrow.as_ref().expect("World init'd by roam_init_impl");
+            assert_eq!(world.catalog.len(), 1);
+            assert_eq!(
+                world
+                    .catalog
+                    .get(&CardId("amsterdam-city".into()))
+                    .map(|e| e.name.as_str()),
+                Some("Amsterdam City")
+            );
+        });
+    }
+
+    /// Sacred-error path: a malformed payload must surface an error
+    /// and leave the existing catalog untouched. Falsifies the
+    /// regression where parse failure silently clears the catalog
+    /// (losing valid state the player was already using).
+    #[test]
+    fn roam_set_catalog_rejects_malformed_and_keeps_existing() {
+        roam_init_impl();
+        roam_set_catalog_impl(r#"[{"id":"a","name":"A"}]"#.to_string());
+        crate::error::reset();
+        roam_set_catalog_impl("garbage".to_string());
+        WORLD.with(|w| {
+            let borrow = w.borrow();
+            let world = borrow.as_ref().expect("init");
+            assert_eq!(
+                world.catalog.len(),
+                1,
+                "malformed payload must not clear the existing catalog"
+            );
+        });
+        let errs = crate::error::drain();
+        assert!(!errs.is_empty(), "sacred-error: malformed catalog must surface");
+        assert_eq!(errs[0].context.surface, "roam::wasm_ffi::roam_set_catalog");
     }
 }
