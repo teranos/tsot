@@ -83,6 +83,7 @@ pub struct Renderer {
     canvas: HtmlCanvasElement,
     tile_prog: TileProgram,
     flower_prog: FlowerProgram,
+    card_prog: CardProgram,
     marker_prog: MarkerProgram,
     line_prog: LineProgram,
     /// Per-frame scratch buffer for tile instance attributes
@@ -93,6 +94,12 @@ pub struct Renderer {
     /// core_center.rgb, core_edge.rgb, petal_count). 15 floats per
     /// visible flower; matches `FlowerProgram::INSTANCE_STRIDE_FLOATS`.
     flower_instance_scratch: Vec<f32>,
+    /// Per-frame scratch buffer for card instance attributes
+    /// (world_tile.xy, color.rgb). 5 floats per visible card; matches
+    /// `CardProgram::INSTANCE_STRIDE_FLOATS`. Cards don't share the
+    /// flower buffer: separate program, separate shader, separate
+    /// geometry (rectangle vs flower).
+    card_instance_scratch: Vec<f32>,
     /// Marker positions populated by `roam_set_peers` from JS and
     /// drained each frame in the marker pass. Storage is
     /// (world_x, world_y, r, g, b, size_world_px) per marker, matching
@@ -131,6 +138,22 @@ struct FlowerProgram {
 
 impl FlowerProgram {
     const INSTANCE_STRIDE_FLOATS: usize = 15;
+}
+
+struct CardProgram {
+    program: WebGlProgram,
+    vao: WebGlVertexArrayObject,
+    instance_buffer: WebGlBuffer,
+    u_camera_px: WebGlUniformLocation,
+    u_canvas_px: WebGlUniformLocation,
+    u_world_px_per_tile: WebGlUniformLocation,
+    u_zoom: WebGlUniformLocation,
+    u_day_brightness: WebGlUniformLocation,
+}
+
+impl CardProgram {
+    /// (world_tx, world_ty, r, g, b) per instance.
+    const INSTANCE_STRIDE_FLOATS: usize = 5;
 }
 
 struct MarkerProgram {
@@ -363,6 +386,68 @@ void main() {
 }
 "#;
 
+// ----- card shader sources -----
+//
+// Placeholder card render: a centered upright rectangle on the tile
+// with a thin dark border, filled with the card-derived color from
+// `card_color_rgb(card_id)` on the Rust side. Visually distinct from
+// flowers (round-ish, multi-color, varied petal counts) so a player
+// can tell at a glance "that's a card." Per-instance attributes are
+// just (world_tx, world_ty, r, g, b). Stride = 20 bytes.
+
+const CARD_VS: &str = r#"#version 300 es
+precision highp float;
+
+layout(location = 0) in vec2 a_unit;       // unit quad corner [0..1]
+layout(location = 1) in vec2 a_world_tile; // per-instance tile coords
+layout(location = 2) in vec3 a_color;      // per-instance card color
+
+uniform vec2 u_camera_px;
+uniform vec2 u_canvas_px;
+uniform float u_world_px_per_tile;
+uniform float u_zoom;
+
+out vec2 v_tile_local;
+flat out vec3 v_color;
+
+void main() {
+    vec2 world_frag_px = (a_world_tile + a_unit) * u_world_px_per_tile;
+    vec2 frag_screen_px = (world_frag_px - u_camera_px) * u_zoom + u_canvas_px * 0.5;
+    vec2 clip = vec2(
+        (frag_screen_px.x / u_canvas_px.x) * 2.0 - 1.0,
+        1.0 - (frag_screen_px.y / u_canvas_px.y) * 2.0
+    );
+    gl_Position = vec4(clip, 0.0, 1.0);
+    v_tile_local = a_unit;
+    v_color = a_color;
+}
+"#;
+
+const CARD_FS: &str = r#"#version 300 es
+precision highp float;
+
+in vec2 v_tile_local;
+flat in vec3 v_color;
+
+uniform float u_day_brightness;
+
+out vec4 out_color;
+
+const float HALF_W = 0.20;
+const float HALF_H = 0.30;
+const float BORDER = 0.025;
+
+void main() {
+    vec2 d = v_tile_local - vec2(0.5);
+    if (abs(d.x) > HALF_W || abs(d.y) > HALF_H) {
+        discard;
+    }
+    bool on_border = abs(d.x) > HALF_W - BORDER || abs(d.y) > HALF_H - BORDER;
+    vec3 col = on_border ? vec3(0.05) : v_color;
+    out_color = vec4(col * u_day_brightness, 1.0);
+}
+"#;
+
 // ----- marker shader sources -----
 //
 // Solid-color squares. Per-instance attributes give world-pixel
@@ -489,6 +574,7 @@ pub fn init(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
 
     let tile_prog = build_tile_program(&gl)?;
     let flower_prog = build_flower_program(&gl)?;
+    let card_prog = build_card_program(&gl)?;
     let marker_prog = build_marker_program(&gl)?;
     let line_prog = build_line_program(&gl)?;
 
@@ -498,10 +584,12 @@ pub fn init(canvas: HtmlCanvasElement) -> Result<(), JsValue> {
             canvas,
             tile_prog,
             flower_prog,
+            card_prog,
             marker_prog,
             line_prog,
             tile_instance_scratch: Vec::new(),
             flower_instance_scratch: Vec::new(),
+            card_instance_scratch: Vec::new(),
             marker_instance_scratch: Vec::new(),
             line_vertex_scratch: Vec::new(),
         });
@@ -628,6 +716,66 @@ fn build_flower_program(gl: &Gl) -> Result<FlowerProgram, JsValue> {
     gl.bind_vertex_array(None);
 
     Ok(FlowerProgram {
+        program,
+        vao,
+        instance_buffer,
+        u_camera_px,
+        u_canvas_px,
+        u_world_px_per_tile,
+        u_zoom,
+        u_day_brightness,
+    })
+}
+
+fn build_card_program(gl: &Gl) -> Result<CardProgram, JsValue> {
+    let program = compile_program(gl, CARD_VS, CARD_FS, "card")?;
+
+    let u_camera_px = get_uniform(gl, &program, "u_camera_px")?;
+    let u_canvas_px = get_uniform(gl, &program, "u_canvas_px")?;
+    let u_world_px_per_tile = get_uniform(gl, &program, "u_world_px_per_tile")?;
+    let u_zoom = get_uniform(gl, &program, "u_zoom")?;
+    let u_day_brightness = get_uniform(gl, &program, "u_day_brightness")?;
+
+    let vao = gl
+        .create_vertex_array()
+        .ok_or_else(|| JsValue::from_str("gl.createVertexArray returned null"))?;
+    gl.bind_vertex_array(Some(&vao));
+
+    let unit_quad: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let unit_buffer = create_buffer_with_data(gl, &unit_quad)?;
+    gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&unit_buffer));
+    gl.vertex_attrib_pointer_with_i32(0, 2, Gl::FLOAT, false, 0, 0);
+    gl.enable_vertex_attrib_array(0);
+
+    let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
+    let idx_buffer = gl
+        .create_buffer()
+        .ok_or_else(|| JsValue::from_str("gl.createBuffer (card idx) returned null"))?;
+    gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&idx_buffer));
+    unsafe {
+        let view = Uint16Array::view(&indices);
+        gl.buffer_data_with_array_buffer_view(Gl::ELEMENT_ARRAY_BUFFER, &view, Gl::STATIC_DRAW);
+    }
+
+    // Per-instance buffer. 5 floats per card; two attribute slots:
+    //   loc 1: vec2 a_world_tile   offset 0, size 8
+    //   loc 2: vec3 a_color        offset 8, size 12
+    // Stride = 20 bytes.
+    let instance_buffer = gl
+        .create_buffer()
+        .ok_or_else(|| JsValue::from_str("gl.createBuffer (card instance) returned null"))?;
+    gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&instance_buffer));
+    let stride = (CardProgram::INSTANCE_STRIDE_FLOATS * 4) as i32;
+    gl.vertex_attrib_pointer_with_i32(1, 2, Gl::FLOAT, false, stride, 0);
+    gl.vertex_attrib_pointer_with_i32(2, 3, Gl::FLOAT, false, stride, 8);
+    for loc in 1..=2 {
+        gl.enable_vertex_attrib_array(loc);
+        gl.vertex_attrib_divisor(loc, 1);
+    }
+
+    gl.bind_vertex_array(None);
+
+    Ok(CardProgram {
         program,
         vao,
         instance_buffer,
@@ -858,6 +1006,8 @@ pub fn render_frame(
         tile_scratch.reserve(tile_count * 2);
         let flower_scratch = &mut renderer.flower_instance_scratch;
         flower_scratch.clear();
+        let card_scratch = &mut renderer.card_instance_scratch;
+        card_scratch.clear();
         let line_scratch = &mut renderer.line_vertex_scratch;
         line_scratch.clear();
         unsafe {
@@ -869,18 +1019,17 @@ pub fn render_frame(
                 tile_scratch.push(tile_kind);
                 tile_scratch.push(elev_offset);
 
-                let has_flower = *ptr.add(off + 2);
-                if has_flower == 1 {
+                let pickup_kind = *ptr.add(off + 2);
+                let vx = (i as i32) % (view_w as i32);
+                let vy = (i as i32) / (view_w as i32);
+                let world_tx = (center_tx + vx - half_w) as f32;
+                let world_ty = (center_ty + vy - half_h) as f32;
+                if pickup_kind == crate::viewport::PICKUP_KIND_FLOWER {
                     let petal_center = *ptr.add(off + 3);
                     let petal_edge = *ptr.add(off + 4);
                     let core_center = *ptr.add(off + 5);
                     let core_edge_kind = *ptr.add(off + 6);
                     let petal_count = *ptr.add(off + 7);
-
-                    let vx = (i as i32) % (view_w as i32);
-                    let vy = (i as i32) / (view_w as i32);
-                    let world_tx = (center_tx + vx - half_w) as f32;
-                    let world_ty = (center_ty + vy - half_h) as f32;
 
                     let pc_rgb = flower_color_rgb(petal_center);
                     let pe_rgb = flower_color_rgb(petal_edge);
@@ -899,15 +1048,22 @@ pub fn render_frame(
                     flower_scratch.extend_from_slice(&cc_rgb);
                     flower_scratch.extend_from_slice(&ce_rgb);
                     flower_scratch.push(petal_count as f32);
+                } else if pickup_kind == crate::viewport::PICKUP_KIND_CARD {
+                    let card_seed = u32::from_le_bytes([
+                        *ptr.add(off + 8),
+                        *ptr.add(off + 9),
+                        *ptr.add(off + 10),
+                        *ptr.add(off + 11),
+                    ]);
+                    let color = card_color_rgb(card_seed);
+                    card_scratch.push(world_tx);
+                    card_scratch.push(world_ty);
+                    card_scratch.extend_from_slice(&color);
                 }
 
                 // Cliff outlines: where the local |Δelev| with the
                 // right or down neighbor exceeds the walkable step
                 // (CLIFF_THRESHOLD), draw a line along that boundary.
-                let vx = (i as i32) % (view_w as i32);
-                let vy = (i as i32) / (view_w as i32);
-                let world_tx = (center_tx + vx - half_w) as f32;
-                let world_ty = (center_ty + vy - half_h) as f32;
                 let world_x0 = world_tx * world_px_per_tile;
                 let world_y0 = world_ty * world_px_per_tile;
                 let world_x1 = world_x0 + world_px_per_tile;
@@ -1027,6 +1183,35 @@ pub fn render_frame(
                 Gl::UNSIGNED_SHORT,
                 0,
                 flower_count as i32,
+            );
+        }
+
+        // ----- card pass -----
+        let card_count = card_scratch.len() / CardProgram::INSTANCE_STRIDE_FLOATS;
+        if card_count > 0 {
+            let card_prog = &renderer.card_prog;
+            gl.bind_vertex_array(Some(&card_prog.vao));
+            gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&card_prog.instance_buffer));
+            unsafe {
+                let view = Float32Array::view(card_scratch);
+                gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &view, Gl::STREAM_DRAW);
+            }
+            gl.use_program(Some(&card_prog.program));
+            gl.uniform2f(Some(&card_prog.u_camera_px), player_x_px, player_y_px);
+            gl.uniform2f(
+                Some(&card_prog.u_canvas_px),
+                canvas_w as f32,
+                canvas_h as f32,
+            );
+            gl.uniform1f(Some(&card_prog.u_world_px_per_tile), world_px_per_tile);
+            gl.uniform1f(Some(&card_prog.u_zoom), zoom);
+            gl.uniform1f(Some(&card_prog.u_day_brightness), day_brightness);
+            gl.draw_elements_instanced_with_i32(
+                Gl::TRIANGLES,
+                6,
+                Gl::UNSIGNED_SHORT,
+                0,
+                card_count as i32,
             );
         }
 
@@ -1219,6 +1404,24 @@ fn core_edge_from_u8(v: u8) -> Option<CoreEdge> {
         2 => Some(CoreEdge::MatchPetalEdge),
         _ => None,
     }
+}
+
+/// Deterministic placeholder color for a card from its seed (a u32
+/// derived from the ccg string id via `Catalog::seed_at_index`). The
+/// actual catalog will eventually carry per-card palette / image bytes;
+/// until then a hash of the seed gives every card a stable,
+/// distinguishable color that follows the card across catalog
+/// reorders. Wrapping_mul + xor-fold keeps the channels uncorrelated.
+fn card_color_rgb(card_seed: u32) -> [f32; 3] {
+    let mut h = (card_seed as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= h >> 32;
+    let r = ((h >> 16) & 0xFF) as u8;
+    let g = ((h >> 8) & 0xFF) as u8;
+    let b = (h & 0xFF) as u8;
+    // Lift each channel into the bright half so the card pops against
+    // grass/rock rather than rendering near-black for low-byte seeds.
+    let lift = |c: u8| 0.5 + (c as f32 / 255.0) * 0.5;
+    [lift(r), lift(g), lift(b)]
 }
 
 /// Push two vertices (one line segment) into the per-frame line

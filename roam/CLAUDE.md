@@ -37,6 +37,17 @@ a structured event into the trace bus. The UI renders the bus. No
 
 **Don't take the path of least resistance.**
 
+**No backwards compatibility until 1.0.** roam is `0.X.Y`. Semver applies
+strictly: only the major version bumping to 1.0.0 makes a promise about
+stability. Until then there is no playerbase, no economy, no schema to
+preserve — one person can keep breaking the world, and the codebase's
+job is to be *good*, not *compatible*. Drop migration code, drop legacy
+wire shapes, drop deprecated fields. Don't write "accept old shape on
+decode" branches. Don't write "default for missing field." The cost of
+backwards-compatibility scaffolding is paid every read; the benefit is
+zero until momentum demands it. When momentum demands it (real users,
+real saved state we can't lose), 1.0 happens and the rules change.
+
 **JS is used in spite, not by choice.** It exists only because the
 browser refuses to let wasm call `gl.drawArrays`, `canvas.getContext`,
 `localStorage.setItem`, `libp2p.dial`, or `addEventListener` directly.

@@ -1155,15 +1155,19 @@ moduleP.then((wasm) => {
   // If those structs change in Rust, the const assertions there fail
   // at compile time before the new bytes can reach this side.
   const VIEWPORT_HEADER_SIZE = 32;
-  const VIEWPORT_TILE_SIZE = 8;
+  const VIEWPORT_TILE_SIZE = 12;
   const VIEWPORT_OFF_TILE_KIND = 0;
   const VIEWPORT_OFF_ELEV = 1;
-  const VIEWPORT_OFF_HAS_FLOWER = 2;
+  const VIEWPORT_OFF_PICKUP_KIND = 2; // 0=none, 1=flower, 2=card
   const VIEWPORT_OFF_PETAL_CENTER = 3;
   const VIEWPORT_OFF_PETAL_EDGE = 4;
   const VIEWPORT_OFF_CORE_CENTER = 5;
   const VIEWPORT_OFF_CORE_EDGE = 6;
   const VIEWPORT_OFF_PETAL_COUNT = 7;
+  const VIEWPORT_OFF_CARD_ID = 8;     // u32 LE, 4 bytes; valid iff pickup_kind == 2
+  const PICKUP_KIND_NONE = 0;
+  const PICKUP_KIND_FLOWER = 1;
+  const PICKUP_KIND_CARD = 2;
 
   const tick     = roam_tick;
   const state    = roam_state;

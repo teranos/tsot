@@ -10,14 +10,16 @@
 //! Engine logic, Lua-loaded handlers, full `Card` definitions — all of
 //! that lives in ccg. World-state, render, networking — lives in roam.
 
-#![no_std]
+extern crate alloc;
 
+use alloc::string::String;
 use serde::{Deserialize, Serialize};
 
-/// Opaque identifier for a TSOT card. The integer's meaning is the
-/// catalog agreement between the two projects; both treat it as an
-/// uninterpreted handle. Zero is reserved as "unset/invalid" by
-/// convention so a default-constructed `CardId` never collides with a
-/// real card.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct CardId(pub u32);
+/// Authoritative identifier for a TSOT card. The string matches ccg's
+/// card slug (`id = "amsterdam-city"` in the Lua source), which is the
+/// canonical handle for that card across the project. Stored as
+/// `String` because cards are constructed at low frequency (pickup,
+/// catalog load) — the per-instance allocation cost is negligible vs.
+/// the clarity of using the same identifier ccg uses end-to-end.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CardId(pub String);
