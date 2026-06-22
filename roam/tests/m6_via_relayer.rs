@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! End-to-end test for M6 flower-pickup propagation across the real
 //! libp2p stack: two native client swarms meshed through the actual
 //! `relayers` binary (test-mode: random keypair, no AWS calls), all on
