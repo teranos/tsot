@@ -11,6 +11,9 @@ description = "TSOT card-level primitives shared at the source level between roa
 crate-type = ["rlib"]
 
 [dependencies]
-# Match the stricter pin used in TSOT root so both projects' lock
-# graphs agree on one version.
-serde = { version = "=1.0.219", features = ["derive"] }
+# Loosened from `=1.0.219` to `1.0.219` (range) to unblock Bevy 0.18
+# adoption in roam — Bevy's transitives want serde ≥1.0.220, and the
+# exact-pin was strictness for its own sake (serde 1.0.x is
+# API-stable). ccg's own Cargo.toml keeps `=1.0.219` so ccg's lock
+# still picks 1.0.219.
+serde = { version = "1.0.219", features = ["derive"] }

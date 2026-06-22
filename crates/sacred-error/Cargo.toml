@@ -10,10 +10,13 @@ description = "The Sacred Error primitive — one typed value that crosses every
 crate-type = ["rlib"]
 
 [dependencies]
-# Pinned to match TSOT root (`serde = "=1.0.219"`). roam pins
-# `serde = "1"` (open), so the version that compiles for both is
-# whatever cargo resolves under TSOT's pin — TSOT is stricter.
-serde = { version = "=1.0.219", features = ["derive"] }
+# Loosened from `=1.0.219` to `1.0.219` (range, not exact) so Bevy
+# 0.18's transitive deps (which want serde ≥1.0.220) can resolve in
+# roam's graph. serde 1.0.x is API-stable; the exact-pin gave us
+# nothing the range doesn't, and blocked the engine adoption. ccg
+# stays pinned at `=1.0.219` in its own Cargo.toml — that constraint
+# still picks 1.0.219 in ccg's graph, no cross-project impact.
+serde = { version = "1.0.219", features = ["derive"] }
 
 [dev-dependencies]
 # Tests pin the wire shape; serde_json is the cross-layer envelope.

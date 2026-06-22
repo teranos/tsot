@@ -85,6 +85,15 @@ eframe = { version = "=0.34.1", default-features = false, features = ["glow"] }
 egui_glow = "=0.34.3"
 wasm-bindgen = "=0.2.121"
 wasm-bindgen-futures = "=0.4.71"
+
+# v0.5.0 spike — Bevy compiles into roam's wasm bundle alongside
+# libp2p + eframe. Target per ADR 0003 is 0.18 (not 0.19): the
+# bevy_voxel_world plugin needed at v0.5.5 currently tracks Bevy 0.18
+# on main; jumping to 0.19 would force us to wait for the plugin to
+# catch up. The 0.18→0.19 migration cost (250 commits, sweeping
+# Resources-as-Components + render-graph-as-systems + parley text
+# overhaul) is paid later, after the voxel plugin lands at 0.19.
+bevy = { version = "0.18", default-features = false, features = ["webgl2"] }
 js-sys = "=0.3.98"
 getrandom = { version = "=0.2.15", features = ["js"] }
 # getrandom 0.3 enters the tree transitively via libp2p (the feature

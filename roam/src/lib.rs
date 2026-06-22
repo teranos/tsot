@@ -1,3 +1,5 @@
+#[cfg(target_arch = "wasm32")]
+pub mod bevy_spike;
 pub mod build_info;
 pub mod catalog;
 pub mod error;
