@@ -534,23 +534,33 @@ pub struct Flower {
     pub petal_count: u8,
 }
 
+pub use tsot_card::CardId;
+
 /// What a tile can carry that a player walking over it picks up.
 ///
 /// Generic over content kind so the pickup mechanic (try_pickup,
-/// canonical-vs-sandbox routing, gossip) stays kind-agnostic. Today
-/// only `Flower`; v0.4 adds `Card`. Same enum doubles as inventory
-/// item shape — picked-from-the-ground and held-by-the-player are
-/// the same data; if a divergence ever appears, split then.
+/// canonical-vs-sandbox routing, gossip) stays kind-agnostic.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Pickup {
     Flower(Flower),
+    Card(CardId),
 }
 
 /// Generic pickup probe: what (if anything) is on tile (x, y) for the
-/// player to pick up. For this slice: a thin wrapper around `flower_at`
-/// — adding `Card` later is one more `or_else` line + a new variant.
+/// player to pick up. Flowers checked first; cards fall through.
 pub fn pickup_at(x: i32, y: i32) -> Option<Pickup> {
-    flower_at(x, y).map(Pickup::Flower)
+    flower_at(x, y)
+        .map(Pickup::Flower)
+        .or_else(|| card_at(x, y).map(Pickup::Card))
+}
+
+/// Deterministic card at (x, y). Returns None for now — the worldgen
+/// rule (density, salt, stub corpus) is the next decision. Signature
+/// is the commit; behavior is intentionally empty so the call sites
+/// (Pickup::Card branch in try_pickup, render arm in viewport) can
+/// land first and worldgen lands after that without churn.
+pub fn card_at(_x: i32, _y: i32) -> Option<CardId> {
+    None
 }
 
 /// Deterministic flower at (x, y). Returns None for water columns,
@@ -909,6 +919,13 @@ mod tests {
         assert_eq!(a, b);
     }
 
+    #[test]
+    fn card_at_deterministic() {
+        let a = card_at(123, -456);
+        let b = card_at(123, -456);
+        assert_eq!(a, b);
+    }
+
     /// `pickup_at` is the v0.4 generic surface: a tile may carry a
     /// `Pickup` (flower today, card next). For this slice — flowers
     /// only — `pickup_at` must agree with `flower_at` everywhere:
@@ -927,9 +944,13 @@ mod tests {
                         f, g,
                         "pickup_at({tx}, {ty}) carried a different Flower than flower_at"
                     ),
-                    (None, None) => {}
+                    (Some(f), Some(Pickup::Card(_))) => panic!(
+                        "pickup_at({tx}, {ty}) returned a Card on a flower tile: {f:?}"
+                    ),
                     (Some(_), None) => panic!("pickup_at({tx}, {ty}) lost a flower"),
-                    (None, Some(_)) => panic!("pickup_at({tx}, {ty}) invented a pickup"),
+                    // No-flower tile: pickup_at may return a Card or None.
+                    // Both are valid; this test pins flower parity only.
+                    (None, _) => {}
                 }
             }
         }

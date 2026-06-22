@@ -516,14 +516,18 @@ impl From<Flower> for FlowerWire {
     }
 }
 
-/// Project a `Pickup` to the on-wire flower shape. Today the only
-/// variant is `Pickup::Flower`; when `Pickup::Card` lands, the wire
-/// format gets a tagged shape and this projection is replaced. Kept
-/// as a single funnel so that future change has one edit site, not
-/// three.
+/// Project a `Pickup` to the on-wire flower shape. The wire format is
+/// still flower-only — Card variant landed in `teranos.rs` but
+/// `card_at` returns None for now, so no Card ever reaches inventory
+/// and the `todo!()` arm is unreachable until worldgen for cards
+/// lands. The next slice extends the wire format to a tagged shape
+/// and replaces this projection.
 fn pickup_to_wire(p: &Pickup) -> FlowerWire {
     match p {
         Pickup::Flower(f) => FlowerWire::from(*f),
+        Pickup::Card(_) => {
+            todo!("card wire format pending — card_at returns None this slice")
+        }
     }
 }
 
@@ -778,7 +782,9 @@ mod tests {
         let legacy = r#"{"picked":[[1,2]],"inv":[[0,2,8,6,2]]}"#;
         w.restore_session_json(legacy);
         assert_eq!(w.player.inventory.len(), 1);
-        let Pickup::Flower(f) = w.player.inventory[0];
+        let Pickup::Flower(f) = w.player.inventory[0] else {
+            panic!("legacy tuple must restore as Pickup::Flower")
+        };
         assert_eq!(f.petal_center, FlowerColor::Red);
         assert_eq!(f.core_center, FlowerCore::Black);
         assert_eq!(f.petal_count, 8);

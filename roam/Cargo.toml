@@ -19,6 +19,7 @@ rust-libp2p = ["dep:libp2p", "dep:libp2p-connection-limits", "dep:wasm-bindgen-f
 
 [dependencies]
 sacred-error = { path = "../crates/sacred-error" }
+tsot-card = { path = "../crates/tsot-card" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Base58btc for did:key encoding (M1). Crate already transitive via

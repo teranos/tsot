@@ -1,0 +1,16 @@
+[package]
+name = "tsot-card"
+version = "0.1.0"
+edition = "2021"
+description = "TSOT card-level primitives shared at the source level between roam and ccg. No engine, no Lua, no FFI — just types that compile to every target."
+
+# Library only. Consumed by `tsot` and `roam` via path dependency.
+# Compiles independently into each project's wasm (they never share a
+# wasm bundle — see roam/docs and ccg/CLAUDE.md).
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+# Match the stricter pin used in TSOT root so both projects' lock
+# graphs agree on one version.
+serde = { version = "=1.0.219", features = ["derive"] }
