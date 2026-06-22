@@ -51,6 +51,36 @@ threshold is one-way.
   giving moderation and identity layers direct authority over what
   Teranos becomes.
 
+## Inventories are canonical world entities
+
+When a canonical player picks up a card (or any object) from a tile,
+the card *moves* into their inventory — same entity identity, new
+`Location`. The move is a canonical world transformation visible to
+every observer in render range; nothing is destroyed and respawned.
+Observers see the card animate from the ground tile into the
+picker's marker.
+
+This falls out of the object-identity axiom in `docs/UI.md` (every
+thing in the universe is one persistent object that keeps identity
+through every transformation) the moment you accept the principle.
+The alternative — private per-player inventories that the canonical
+world doesn't track — would let the card "enter the void" on pickup
+from every other player's perspective, contradicting the axiom and
+making trades, robbery, vendor stocks, and drop-on-death impossible
+to model without inventing a new wire protocol for each.
+
+Non-canonical (sandbox) players carry inventories that exist only in
+their personal overlay and don't replicate, consistent with the rest
+of the sandbox-isolation rule above. On M7 promotion the sandbox
+inventory resets along with everything else in the personal overlay.
+
+Wire shape (current): the M6 pickup gossipsub message already carries
+the picker's `did:key`; the render layer uses that to target the
+"into the marker" animation. Inventory *contents* as queryable
+canonical state (so any peer can ask "what is in A's inventory right
+now") is a v0.5+ concern that lands when trades and vendors enter
+scope.
+
 <!-- IDENTITY MENU (see roam/docs/IDENTITY.md):
        A1 — read this file cold, write 3 questions it leaves unanswered.
        A4 — read Bluesky/ATProto PDS docs; find where the user's signing key lives.

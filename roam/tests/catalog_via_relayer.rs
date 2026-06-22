@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! End-to-end test for catalog publish: the relayer announces its
 //! card catalog on `CATALOG_TOPIC` over the real libp2p stack, and a
 //! native client subscribed to the topic receives the bytes and parses

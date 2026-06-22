@@ -123,6 +123,20 @@ pub(crate) fn roam_player_state_len_impl() -> u32 {
     PLAYER_STATE_LEN
 }
 
+/// Snapshot the player position + facing without going through the
+/// binary FFI buffer. Used by the eframe `RoamApp` (which reads world
+/// state every frame inside `ui()` to feed the world `PaintCallback`).
+/// Returns `(x_px, y_px, facing_byte)` — same units the JS `s.x`,
+/// `s.y` carried in the old rAF path. On a pre-init call, returns
+/// `(0.0, 0.0, 4)` (4 = facing south, matches the `PlayerStateBytes`
+/// init default).
+pub(crate) fn roam_player_snapshot_impl() -> (f32, f32, u8) {
+    WORLD.with(|w| match w.borrow().as_ref() {
+        Some(world) => (world.player.x, world.player.y, world.player.facing.as_u8()),
+        None => (0.0, 0.0, 4),
+    })
+}
+
 pub(crate) fn roam_set_position_impl(x: f32, y: f32, facing: u8) {
     WORLD.with(|w| {
         if let Some(world) = w.borrow_mut().as_mut() {

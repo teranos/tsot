@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Real-wire stress test for the positions topic at production publish
 //! rate (~5 Hz).
 //!
