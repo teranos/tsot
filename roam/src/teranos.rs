@@ -131,6 +131,14 @@ enum HashDimension {
     FlowerPetalCount,
     TerrainBreakNoise,
     TerrainCaveCarve,
+    /// Card-presence gate: is there a card on this tile? Independent
+    /// of the catalog — same answer every time for the same (x, y).
+    CardPresence,
+    /// Card-slot pick: given a non-empty catalog, which entry does this
+    /// tile resolve to? Hash → `% catalog.len()`. Changing the catalog
+    /// changes which card a tile shows; the *presence* of a card does
+    /// not change (CardPresence above).
+    CardSlot,
 }
 
 const FNV_PRIME_64: u64 = 0x0000_0100_0000_01b3;
@@ -158,6 +166,8 @@ impl HashDimension {
             Self::FlowerPetalCount => b"FlowerPetalCount",
             Self::TerrainBreakNoise => b"TerrainBreakNoise",
             Self::TerrainCaveCarve => b"TerrainCaveCarve",
+            Self::CardPresence => b"CardPresence",
+            Self::CardSlot => b"CardSlot",
         }
     }
 
@@ -536,6 +546,13 @@ pub struct Flower {
 
 pub use tsot_card::CardId;
 
+use crate::catalog::Catalog;
+
+/// Density of cards on land: roughly one card per N candidate tiles.
+/// Cards are much rarer than flowers (`FLOWER_DENSITY_DENOM = 600`);
+/// the gameplay is "occasionally find a card", not "tiles littered."
+pub const CARD_DENSITY_DENOM: u64 = 4_800;
+
 /// What a tile can carry that a player walking over it picks up.
 ///
 /// Generic over content kind so the pickup mechanic (try_pickup,
@@ -548,19 +565,40 @@ pub enum Pickup {
 
 /// Generic pickup probe: what (if anything) is on tile (x, y) for the
 /// player to pick up. Flowers checked first; cards fall through.
-pub fn pickup_at(x: i32, y: i32) -> Option<Pickup> {
+/// Catalog is needed because card identity at a tile depends on the
+/// relayer's published list — see `card_at`.
+pub fn pickup_at(x: i32, y: i32, catalog: &Catalog) -> Option<Pickup> {
     flower_at(x, y)
         .map(Pickup::Flower)
-        .or_else(|| card_at(x, y).map(Pickup::Card))
+        .or_else(|| card_at(x, y, catalog).map(Pickup::Card))
 }
 
-/// Deterministic card at (x, y). Returns None for now — the worldgen
-/// rule (density, salt, stub corpus) is the next decision. Signature
-/// is the commit; behavior is intentionally empty so the call sites
-/// (Pickup::Card branch in try_pickup, render arm in viewport) can
-/// land first and worldgen lands after that without churn.
-pub fn card_at(_x: i32, _y: i32) -> Option<CardId> {
-    None
+/// Deterministic card at (x, y). Two stages:
+///
+/// 1. *Presence* — `HashDimension::CardPresence` gate. Doesn't depend
+///    on the catalog; same (x, y) → same yes/no every time.
+/// 2. *Identity* — `HashDimension::CardSlot` modulo `catalog.len()`
+///    picks an entry. If the catalog is empty (relayer hasn't
+///    published yet, or is publishing an empty set), there's no card
+///    to resolve to — return None even on tiles where stage 1 fires.
+///    Once a non-empty catalog is in place, every presence-gated tile
+///    resolves to exactly one `CardId`.
+pub fn card_at(x: i32, y: i32, catalog: &Catalog) -> Option<CardId> {
+    if y.abs() > WORLD_Y_LAT {
+        return None;
+    }
+    if surface_z(x, y) < 0 {
+        return None;
+    }
+    let presence_hash = world_hash(x, y, HashDimension::CardPresence);
+    if !presence_hash.is_multiple_of(CARD_DENSITY_DENOM) {
+        return None;
+    }
+    if catalog.is_empty() {
+        return None;
+    }
+    let slot = (world_hash(x, y, HashDimension::CardSlot) % catalog.len() as u64) as usize;
+    catalog.id_at_index(slot)
 }
 
 /// Deterministic flower at (x, y). Returns None for water columns,
@@ -850,6 +888,8 @@ mod tests {
             HashDimension::FlowerPetalCount,
             HashDimension::TerrainBreakNoise,
             HashDimension::TerrainCaveCarve,
+            HashDimension::CardPresence,
+            HashDimension::CardSlot,
         ];
         for i in 0..dims.len() {
             for j in (i + 1)..dims.len() {
@@ -883,6 +923,8 @@ mod tests {
             HashDimension::FlowerPetalCount,
             HashDimension::TerrainBreakNoise,
             HashDimension::TerrainCaveCarve,
+            HashDimension::CardPresence,
+            HashDimension::CardSlot,
         ] {
             assert_eq!(dim.mult() & 1, 1, "{:?}.mult() must be odd", dim);
         }
@@ -921,9 +963,56 @@ mod tests {
 
     #[test]
     fn card_at_deterministic() {
-        let a = card_at(123, -456);
-        let b = card_at(123, -456);
+        let cat = Catalog::new();
+        let a = card_at(123, -456, &cat);
+        let b = card_at(123, -456, &cat);
         assert_eq!(a, b);
+    }
+
+    /// Stage-1/stage-2 split: an empty catalog → never any cards even
+    /// on tiles where the presence gate fires. Falsifies the regression
+    /// where worldgen invents IDs out of nowhere when the relayer's
+    /// catalog hasn't arrived.
+    #[test]
+    fn card_at_returns_none_when_catalog_empty() {
+        let cat = Catalog::new();
+        for ty in -20..=20 {
+            for tx in 0..200 {
+                assert!(
+                    card_at(tx, ty, &cat).is_none(),
+                    "card_at({tx}, {ty}) returned Some on empty catalog"
+                );
+            }
+        }
+    }
+
+    /// With a non-empty catalog, presence-gated tiles resolve to a
+    /// CardId that's a member of the catalog. Falsifies the regression
+    /// where the slot index can pick out-of-range or return a CardId
+    /// the catalog doesn't actually contain.
+    #[test]
+    fn card_at_id_is_always_in_catalog() {
+        use crate::catalog::CatalogEntry;
+        let mut cat = Catalog::new();
+        cat.set(vec![
+            CatalogEntry { id: CardId(11), name: "A".into() },
+            CatalogEntry { id: CardId(22), name: "B".into() },
+            CatalogEntry { id: CardId(33), name: "C".into() },
+        ]);
+        let mut card_tiles = 0;
+        for ty in -20..=20 {
+            for tx in 0..400 {
+                if let Some(id) = card_at(tx, ty, &cat) {
+                    assert!(
+                        cat.get(id).is_some(),
+                        "card_at returned CardId({}) which isn't in the catalog",
+                        id.0
+                    );
+                    card_tiles += 1;
+                }
+            }
+        }
+        assert!(card_tiles > 0, "no card tiles found in scan window — density too rare?");
     }
 
     /// `pickup_at` is the v0.4 generic surface: a tile may carry a
@@ -935,10 +1024,11 @@ mod tests {
     /// fields off the wrapped `Flower`.
     #[test]
     fn pickup_at_parity_with_flower_at() {
+        let cat = Catalog::new();
         for ty in -20..=20 {
             for tx in 0..100 {
                 let flower = flower_at(tx, ty);
-                let pickup = pickup_at(tx, ty);
+                let pickup = pickup_at(tx, ty, &cat);
                 match (flower, pickup) {
                     (Some(f), Some(Pickup::Flower(g))) => assert_eq!(
                         f, g,

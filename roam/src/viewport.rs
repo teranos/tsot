@@ -102,7 +102,7 @@ pub fn write_viewport(world: &World, view_w: u32, view_h: u32) -> u32 {
                 {
                     None
                 } else {
-                    pickup_at(tx, ty)
+                    pickup_at(tx, ty, &world.catalog)
                 };
                 let elev_offset =
                     (sz - player_z).clamp(i8::MIN as i32, i8::MAX as i32) as i8;

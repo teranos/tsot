@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{emit as emit_error, Severity};
+use crate::catalog::Catalog;
 use crate::teranos::{
     pickup_at, surface_z, tile_at, CoreEdge, Flower, FlowerColor, FlowerCore, Pickup, TileKind,
     WORLD_CIRC_X,
@@ -94,6 +95,12 @@ pub struct World {
     /// only. Reconstructed from gossipsub on join, never persisted in
     /// the session JSON (the canonical layer is not per-player).
     pub canonical_picked: BTreeSet<(i32, i32)>,
+    /// Card catalog as published by the relayer this session is
+    /// connected to. Empty until the relayer publishes; worldgen
+    /// degrades to "no cards on the ground yet" when empty rather
+    /// than inventing IDs locally. Per the v0.4 design: different
+    /// relayer = different world = different catalog.
+    pub catalog: Catalog,
 }
 
 #[inline]
@@ -166,6 +173,7 @@ impl World {
         });
         World {
             canonical_picked: BTreeSet::new(),
+            catalog: Catalog::new(),
             player: Player {
                 x: spawn_x,
                 y: spawn_y,
@@ -199,7 +207,7 @@ impl World {
         if self.canonical_picked.contains(&key) || self.player.picked.contains(&key) {
             return;
         }
-        if let Some(pickup) = pickup_at(tx, ty) {
+        if let Some(pickup) = pickup_at(tx, ty, &self.catalog) {
             self.player.picked.insert(key);
             self.player.inventory.push(pickup);
             match class {
@@ -694,9 +702,12 @@ mod tests {
     /// flower tile without hard-coding a coordinate — if worldgen
     /// changes the flower pattern, the test still finds one.
     fn first_flower_tile() -> (i32, i32) {
+        // Probe via flower_at directly: this helper looks for a flower
+        // tile specifically (M6 routing tests need a tile with a flower
+        // on it), so going through pickup_at + Catalog would add noise.
         for ty in -10..=10 {
             for tx in 0..50 {
-                if pickup_at(tx, ty).is_some() {
+                if crate::teranos::flower_at(tx, ty).is_some() {
                     return (tx, ty);
                 }
             }
