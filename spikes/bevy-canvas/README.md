@@ -10,7 +10,10 @@ Run it from this directory (`spikes/bevy-canvas/`). Open `http://localhost:8085`
 
 Success = magenta canvas. That's the v0.5.0 canvas-attach proof per `roam/docs/adr/0003-bevy.md`.
 
-First cold compile: 3–5 min (Bevy 0.18 + dependencies on wasm32, debug profile). Subsequent saves rebuild in 5–30s.
+Compile time reality on M1 8GB:
+- **Cold** (no sccache, no target dir): ~68 min. The first run pays Bevy's full dep graph at `opt-level=3` for deps + `opt-level=1` for our crate, plus wasm-bindgen download + sccache initialization. Painful but one-time.
+- **Cold after sccache warm** (e.g. after `cargo clean`): ~1m 43s. sccache replays the cached object files; most of the cold cost evaporates.
+- **Incremental** (change one line in `src/main.rs`, save while trunk serves): **~4-5 min**. `DefaultPlugins`'s generic instantiation means a touch on our crate still re-monomorphises a lot.
 
 ## What this is
 
