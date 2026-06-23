@@ -1,0 +1,6 @@
+[build]
+public_url = "./"
+
+[serve]
+# Distinct from roam's 8083 + the common-conflict 8080.
+port = 8085
