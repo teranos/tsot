@@ -26,7 +26,7 @@ dev = [
 ]
 
 [dependencies]
-bevy = { version = "0.18.0", default-features = false, features = [
+bevy = { version = "0.19.0", default-features = false, features = [
     "default_app",
     "2d_api",
     "2d_bevy_render",

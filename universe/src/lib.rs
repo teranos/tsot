@@ -44,7 +44,7 @@ fn setup(mut commands: Commands) {
         Text::new("HH:MM:SS.mmm  GMT±HHMM"),
         ClockText,
         TextFont {
-            font_size: 11.0,
+            font_size: FontSize::Px(11.0),
             ..default()
         },
         TextColor(Color::srgb(0.59, 0.59, 0.59)),
@@ -59,7 +59,7 @@ fn setup(mut commands: Commands) {
     commands.spawn((
         Text::new("universe · dev"),
         TextFont {
-            font_size: 11.0,
+            font_size: FontSize::Px(11.0),
             ..default()
         },
         TextColor(Color::srgb(0.55, 0.55, 0.55)),

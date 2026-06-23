@@ -1,7 +1,6 @@
 # BEVY
 
-- Bevy 0.18 now, because of the ecosystem (`bevy_voxel_world` tracks 0.18). Migrate to 0.19 when `bevy_voxel_world` supports it.
-- 0.18 → 0.19 migration: https://bevy.org/learn/migration-guides/0-18-to-0-19/
+- Bevy 0.19.
 - Started from NiklasEi/bevy_game_template: https://github.com/NiklasEi/bevy_game_template
 - CI needed.
 
