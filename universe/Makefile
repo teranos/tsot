@@ -1,13 +1,17 @@
-# Match the monorepo convention: every subproject's one command is
-#   nix develop -c make wasm-serve
-# Tool underneath (trunk here, caddy in roam) is an implementation
-# detail. The user-facing shape is uniform.
+WASM_TARGET := wasm32-unknown-unknown
+WASM_OUT    := target/$(WASM_TARGET)/release
+WASM_DIST   := dist
 
-.PHONY: wasm-serve clean
+.PHONY: wasm clean
 
-wasm-serve:
-	@command -v trunk >/dev/null 2>&1 || { echo "error: trunk not on PATH. Run via 'nix develop -c make wasm-serve'."; exit 1; }
-	trunk serve
+wasm:
+	@command -v wasm-bindgen >/dev/null 2>&1 || { echo "error: wasm-bindgen not on PATH. Run via 'nix develop -c make wasm'."; exit 1; }
+	cargo build --target $(WASM_TARGET) --release --lib
+	wasm-bindgen $(WASM_OUT)/universe.wasm --target web --out-dir $(WASM_DIST) --no-typescript
+	cp index.html $(WASM_DIST)/index.html
+	@echo ""
+	@echo "staged $(WASM_DIST)/"
+	@ls -lah $(WASM_DIST)/
 
 clean:
 	rm -rf target dist pkg

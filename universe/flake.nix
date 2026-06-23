@@ -1,5 +1,5 @@
 {
-  description = "bevy-canvas-spike — Bevy 0.18 canvas-attach proof, sealed from roam";
+  description = "universe — Bevy 0.18";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -24,12 +24,9 @@
             rust
             rust-analyzer
             wasm-bindgen-cli
-            trunk
             sccache
           ];
 
-          # sccache caches compilation across cargo clean. Without it,
-          # every cleanup re-pays the cold Bevy compile.
           RUSTC_WRAPPER = "sccache";
         };
       });

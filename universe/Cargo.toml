@@ -1,15 +1,12 @@
 [package]
-name = "bevy_canvas_spike"
+name = "universe"
 version = "0.1.0"
 edition = "2024"
 publish = false
 exclude = ["dist"]
 
-# Pattern lifted from NiklasEi/bevy_game_template (the canonical
-# Bevy+trunk starter; 1.1k stars). Stripped of audio (bevy_kira_audio),
-# mobile workspace, asset_loader, icon embedding — none needed for the
-# canvas-attach spike. Profile config kept verbatim because it's the
-# standard Bevy speedup recipe.
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [profile.dev.package."*"]
 opt-level = 3
@@ -43,3 +40,5 @@ bevy = { version = "0.18.0", default-features = false, features = [
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+js-sys = "=0.3.98"
+wasm-bindgen = "=0.2.121"
