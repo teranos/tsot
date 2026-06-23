@@ -1,5 +1,5 @@
 {
-  description = "universe — Bevy 0.18";
+  description = "universe";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

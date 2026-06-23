@@ -10,13 +10,13 @@ Run it from this directory (`universe/`). Open `http://localhost:8085`. The Make
 
 ## What this is
 
-Bevy 0.18 test. No libp2p, no eframe, no roam. Just: does Bevy on WebGL2 attach to an existing `<canvas id="bevy">` and render a clear color.
+Bevy test. No libp2p, no eframe, no roam. Just: does Bevy on WebGL2 attach to an existing `<canvas id="bevy">` and render a clear color.
 
 Layout lifted from `NiklasEi/bevy_game_template`. Stripped of audio, mobile workspace, asset loader, icon embedding.
 
 ## Files
 
-- `Cargo.toml` — Bevy 0.18 with the feature shortcuts NiklasEi uses (`default_app`, `2d_api`, `2d_bevy_render`, `ui_*`, `scene`, `bevy_winit`, `default_font`, `webgl2`). Profile config matches Bevy's official "compile with performance optimizations" recipe.
+- `Cargo.toml` — Bevy with the feature shortcuts NiklasEi uses (`default_app`, `2d_api`, `2d_bevy_render`, `ui_*`, `scene`, `bevy_winit`, `default_font`, `webgl2`). Profile config matches Bevy's official "compile with performance optimizations" recipe.
 - `flake.nix` — nix dev shell with `rust` (wasm32 target), `wasm-bindgen-cli`, `trunk`, `sccache` (set as `RUSTC_WRAPPER`).
 - `Trunk.toml` — `public_url = "./"`, `port = 8085`.
 - `index.html` — minimal page with `<canvas id="bevy">`.

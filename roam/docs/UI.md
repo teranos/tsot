@@ -4,7 +4,7 @@ See @CLAUDE.md for the JS-is-used-in-spite axiom and the sacred-error
 rule. This doc covers the UI layer that lives on top of those.
 
 > **v0.5 supersedes the eframe + egui + render_gl decisions in the
-> sections below.** New direction: Bevy 0.18 owns the frame loop +
+> sections below.** New direction: Bevy owns the frame loop +
 > wgpu render; `bevy_ui` (Flexbox, in-core, ECS-native) replaces
 > egui at v0.5.1; `render_gl` rewrites as Bevy meshes at v0.5.2; 3D
 > voxel rendering lands at v0.5.5. See `docs/adr/0003-bevy.md` and

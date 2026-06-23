@@ -10,12 +10,8 @@ description = "The Sacred Error primitive — one typed value that crosses every
 crate-type = ["rlib"]
 
 [dependencies]
-# Loosened from `=1.0.219` to `1.0.219` (range, not exact) so Bevy
-# 0.18's transitive deps (which want serde ≥1.0.220) can resolve in
-# roam's graph. serde 1.0.x is API-stable; the exact-pin gave us
-# nothing the range doesn't, and blocked the engine adoption. ccg
-# stays pinned at `=1.0.219` in its own Cargo.toml — that constraint
-# still picks 1.0.219 in ccg's graph, no cross-project impact.
+# Range pin (`1.0.219`, not exact) so Bevy's transitives (which want
+# serde ≥1.0.220) can resolve. serde 1.0.x is API-stable.
 serde = { version = "1.0.219", features = ["derive"] }
 
 [dev-dependencies]

@@ -1,8 +1,8 @@
 # BEVY
 
-- Bevy 0.19.
 - Started from NiklasEi/bevy_game_template: https://github.com/NiklasEi/bevy_game_template
 - CI needed.
+- [ ] Bump Bevy when 0.20 ships (current version pinned in `universe/Cargo.toml`).
 
 ## Common Bevy setup
 
@@ -27,14 +27,13 @@ The world model is already 3D-shaped (`tile_at(x, y, z)`, `surface_z`, the voxel
 - [ ] 0.5.2 — rewrite `render_gl` as Bevy meshes + materials. World stays top-down 2D for this slice; visual baseline preserved before the dimensionality shift.
 - [ ] 0.5.3 — `World` migrates to ECS. Player, peers, flowers, cards become entities + components. The object-identity axiom in `roam/docs/UI.md` falls out of one query + one system.
 - [ ] 0.5.4 — click-to-pickup + drag + pickup animation. Falls out of ECS + Bevy input + position interpolation + `bevy_picking`.
-- [ ] 0.5.5 — 3D camera + voxel rendering. `bevy_voxel_world` if 0.18-ready, otherwise `block-mesh-rs` + hand-rolled chunking.
+- [ ] 0.5.5 — 3D camera + voxel rendering. Hand-rolled spherical chunked voxel storage (cube-sphere faces).
 
 ## Decisions
 
 - [ ] camera / projection
 - [ ] voxel approach
 - [ ] flake consolidation
-- [ ] 0.18 → 0.19 timing
 - [ ] bevy_egui yes / no
 
 ## References
