@@ -59,7 +59,10 @@ pub fn run() {
                 update_error_list,
                 toggle_log_drawer,
                 move_player_cell,
+                camera_follow,
+                follow_tether,
                 eat_algae,
+                die_algae,
                 drift_water,
                 wobble_player_cell,
             ),
@@ -86,18 +89,47 @@ struct WaterParticle;
 #[derive(Component)]
 struct Drift(Vec2);
 
+#[derive(Component)]
+struct Velocity(Vec2);
+
+#[derive(Component)]
+struct Tethered(Vec3);
+
+#[derive(Component)]
+struct Dying {
+    progress: f32,
+    duration: f32,
+}
+
 fn setup_cells(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    // Player cell — center of dish
+    // Player cell — center of dish. Velocity-driven; wobbles; eats.
     commands.spawn((
         PlayerCell,
         CellRadius(20.0),
+        Velocity(Vec2::ZERO),
         Mesh2d(meshes.add(Circle::new(20.0))),
-        MeshMaterial2d(materials.add(Color::srgb(0.3, 0.9, 0.5))),
+        MeshMaterial2d(materials.add(Color::srgb(0.35, 0.85, 0.55))),
         Transform::from_xyz(0.0, 0.0, 1.0),
+    ));
+
+    // Halo — tethered to the cell, sits behind, soft glow.
+    commands.spawn((
+        Tethered(Vec3::new(0.0, 0.0, -0.5)),
+        Mesh2d(meshes.add(Circle::new(50.0))),
+        MeshMaterial2d(materials.add(Color::srgba(0.5, 0.95, 0.7, 0.12))),
+        Transform::default(),
+    ));
+
+    // Nucleus — tethered to the cell, sits in front, darker.
+    commands.spawn((
+        Tethered(Vec3::new(0.0, 0.0, 0.5)),
+        Mesh2d(meshes.add(Circle::new(7.0))),
+        MeshMaterial2d(materials.add(Color::srgb(0.15, 0.35, 0.25))),
+        Transform::default(),
     ));
 
     // Algae — scattered around the dish
@@ -137,30 +169,66 @@ fn setup_cells(
     }
 }
 
+// WASD adds acceleration; water resistance is exponential drag on
+// velocity. Releasing keys lets the cell coast and slow naturally —
+// no instant stops. The medium pushes back.
 fn move_player_cell(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-    mut players: Query<&mut Transform, With<PlayerCell>>,
+    mut players: Query<(&mut Transform, &mut Velocity), With<PlayerCell>>,
 ) {
-    let mut dir = Vec2::ZERO;
+    let mut accel = Vec2::ZERO;
     if keys.pressed(KeyCode::KeyW) {
-        dir.y += 1.0;
+        accel.y += 1.0;
     }
     if keys.pressed(KeyCode::KeyS) {
-        dir.y -= 1.0;
+        accel.y -= 1.0;
     }
     if keys.pressed(KeyCode::KeyA) {
-        dir.x -= 1.0;
+        accel.x -= 1.0;
     }
     if keys.pressed(KeyCode::KeyD) {
-        dir.x += 1.0;
+        accel.x += 1.0;
     }
-    let dir = dir.normalize_or_zero();
-    let speed = 200.0;
+    let accel = accel.normalize_or_zero() * 900.0;
+    let drag_per_sec = 2.4;
     let dt = time.delta_secs();
-    for mut t in &mut players {
-        t.translation.x += dir.x * speed * dt;
-        t.translation.y += dir.y * speed * dt;
+    for (mut t, mut v) in &mut players {
+        v.0 += accel * dt;
+        let drag = (1.0 - drag_per_sec * dt).max(0.0);
+        v.0 *= drag;
+        t.translation.x += v.0.x * dt;
+        t.translation.y += v.0.y * dt;
+    }
+}
+
+// Camera2d entity sits on the player. World moves around you, not
+// the other way. You stop being a spectator.
+fn camera_follow(
+    cells: Query<&Transform, (With<PlayerCell>, Without<Camera2d>)>,
+    mut cameras: Query<&mut Transform, With<Camera2d>>,
+) {
+    let Some(cell_t) = cells.iter().next() else {
+        return;
+    };
+    for mut cam_t in &mut cameras {
+        cam_t.translation.x = cell_t.translation.x;
+        cam_t.translation.y = cell_t.translation.y;
+    }
+}
+
+// Halo + nucleus track the cell exactly so they read as part of the
+// same body. The cell's own wobble doesn't propagate (these are
+// siblings, not children) so they keep their shape.
+fn follow_tether(
+    cells: Query<&Transform, (With<PlayerCell>, Without<Tethered>)>,
+    mut followers: Query<(&mut Transform, &Tethered)>,
+) {
+    let Some(cell_t) = cells.iter().next() else {
+        return;
+    };
+    for (mut t, tether) in &mut followers {
+        t.translation = cell_t.translation + tether.0;
     }
 }
 
@@ -194,35 +262,75 @@ fn drift_water(
     }
 }
 
-// Bouncy organic shape — the cell's x and y scale oscillate out of
-// phase so it never looks like a perfect rigid circle. Mild amplitude
-// so it reads as "alive," not "broken."
+// Lumpy organic wobble — three frequencies on each axis with prime-ish
+// ratios and phase offsets, so x and y never return to "perfect
+// circle" at the same instant. CellRadius drives base scale so growth
+// (from eating) reads as the body getting bigger, not the wobble
+// amplifying.
 fn wobble_player_cell(
     time: Res<Time>,
-    mut cells: Query<&mut Transform, With<PlayerCell>>,
+    mut cells: Query<(&mut Transform, &CellRadius), With<PlayerCell>>,
 ) {
     let t = time.elapsed_secs();
-    let sx = 1.0 + (t * 3.5).sin() * 0.09;
-    let sy = 1.0 + (t * 3.5 + std::f32::consts::FRAC_PI_3).sin() * 0.09;
-    for mut tr in &mut cells {
-        tr.scale.x = sx;
-        tr.scale.y = sy;
+    let wx = (t * 3.5).sin() * 0.06 + (t * 5.7).sin() * 0.035 + (t * 2.1).sin() * 0.02;
+    let wy = (t * 3.1 + 1.0).sin() * 0.06
+        + (t * 4.9 + 0.4).sin() * 0.035
+        + (t * 2.7 + 0.8).sin() * 0.02;
+    for (mut tr, r) in &mut cells {
+        let base = r.0 / 20.0;
+        tr.scale.x = base * (1.0 + wx);
+        tr.scale.y = base * (1.0 + wy);
     }
 }
 
+// Eating is a transfer, not a delete. Algae gets a Dying marker
+// (animated away over ~0.25s), the cell's CellRadius grows. Mass
+// conserved — what you ate goes into you.
 fn eat_algae(
     mut commands: Commands,
-    players: Query<(&Transform, &CellRadius), With<PlayerCell>>,
-    algae: Query<(Entity, &Transform, &CellRadius), With<Algae>>,
+    mut players: Query<(&Transform, &mut CellRadius), With<PlayerCell>>,
+    algae: Query<(Entity, &Transform, &CellRadius), (With<Algae>, Without<Dying>)>,
 ) {
-    for (player_t, player_r) in &players {
+    for (player_t, mut player_r) in &mut players {
         for (algae_e, algae_t, algae_r) in &algae {
             let dx = player_t.translation.x - algae_t.translation.x;
             let dy = player_t.translation.y - algae_t.translation.y;
             let dist = (dx * dx + dy * dy).sqrt();
             if dist < player_r.0 + algae_r.0 {
-                commands.entity(algae_e).despawn();
+                commands.entity(algae_e).insert(Dying {
+                    progress: 0.0,
+                    duration: 0.25,
+                });
+                player_r.0 += 0.4;
             }
+        }
+    }
+}
+
+// Animates Dying entities — shrinks scale and fades alpha together,
+// despawn at progress >= 1.
+fn die_algae(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut dying: Query<(
+        Entity,
+        &mut Transform,
+        &MeshMaterial2d<ColorMaterial>,
+        &mut Dying,
+    )>,
+) {
+    let dt = time.delta_secs();
+    for (e, mut t, mat, mut d) in &mut dying {
+        d.progress += dt / d.duration;
+        let s = (1.0 - d.progress).max(0.0);
+        t.scale = Vec3::splat(s);
+        if let Some(m) = materials.get_mut(&mat.0) {
+            let c = m.color.to_srgba();
+            m.color = Color::srgba(c.red, c.green, c.blue, s);
+        }
+        if d.progress >= 1.0 {
+            commands.entity(e).despawn();
         }
     }
 }
