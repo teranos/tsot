@@ -2,6 +2,11 @@ use std::sync::Mutex;
 
 use bevy::asset::AssetMetaCheck;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::log::{
+    tracing::{self, Subscriber},
+    tracing_subscriber::Layer,
+    BoxedLayer, LogPlugin,
+};
 use bevy::prelude::*;
 use bevy::window::WindowPlugin;
 
@@ -12,6 +17,10 @@ use wasm_bindgen::prelude::*;
 // systems, so it can't write the Resource directly. Drain into
 // ErrorLog every frame.
 static PANIC_QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+// Queue from the tracing Layer (Bevy + our own info!/warn!/error!
+// macros) into the ECS. Drain into ErrorLog every frame.
+static LOG_QUEUE: Mutex<Vec<(Severity, String)>> = Mutex::new(Vec::new());
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
@@ -33,19 +42,114 @@ pub fn run() {
                 .set(AssetPlugin {
                     meta_check: AssetMetaCheck::Never,
                     ..default()
+                })
+                .set(LogPlugin {
+                    custom_layer: install_capture_layer,
+                    ..default()
                 }),
         )
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_systems(Startup, (install_panic_hook, setup))
+        .add_systems(Startup, (install_panic_hook, setup, setup_cells))
         .add_systems(
             Update,
-            (drain_panics, update_fps, update_error_list, toggle_log_drawer),
+            (
+                drain_panics,
+                drain_logs,
+                update_fps,
+                update_error_list,
+                toggle_log_drawer,
+                move_player_cell,
+                eat_algae,
+            ),
         );
 
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, update_clock);
 
     app.run();
+}
+
+#[derive(Component)]
+struct PlayerCell;
+
+#[derive(Component)]
+struct Algae;
+
+#[derive(Component)]
+struct CellRadius(f32);
+
+fn setup_cells(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    // Player cell — center of dish
+    commands.spawn((
+        PlayerCell,
+        CellRadius(20.0),
+        Mesh2d(meshes.add(Circle::new(20.0))),
+        MeshMaterial2d(materials.add(Color::srgb(0.3, 0.9, 0.5))),
+        Transform::from_xyz(0.0, 0.0, 1.0),
+    ));
+
+    // Algae — scattered around the dish
+    for i in 0..20 {
+        let angle = (i as f32) * std::f32::consts::TAU / 20.0;
+        let radius = 150.0 + (i as f32) * 8.0;
+        let x = angle.cos() * radius;
+        let y = angle.sin() * radius;
+        commands.spawn((
+            Algae,
+            CellRadius(6.0),
+            Mesh2d(meshes.add(Circle::new(6.0))),
+            MeshMaterial2d(materials.add(Color::srgb(0.7, 0.9, 0.3))),
+            Transform::from_xyz(x, y, 0.0),
+        ));
+    }
+}
+
+fn move_player_cell(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    mut players: Query<&mut Transform, With<PlayerCell>>,
+) {
+    let mut dir = Vec2::ZERO;
+    if keys.pressed(KeyCode::KeyW) {
+        dir.y += 1.0;
+    }
+    if keys.pressed(KeyCode::KeyS) {
+        dir.y -= 1.0;
+    }
+    if keys.pressed(KeyCode::KeyA) {
+        dir.x -= 1.0;
+    }
+    if keys.pressed(KeyCode::KeyD) {
+        dir.x += 1.0;
+    }
+    let dir = dir.normalize_or_zero();
+    let speed = 200.0;
+    let dt = time.delta_secs();
+    for mut t in &mut players {
+        t.translation.x += dir.x * speed * dt;
+        t.translation.y += dir.y * speed * dt;
+    }
+}
+
+fn eat_algae(
+    mut commands: Commands,
+    players: Query<(&Transform, &CellRadius), With<PlayerCell>>,
+    algae: Query<(Entity, &Transform, &CellRadius), With<Algae>>,
+) {
+    for (player_t, player_r) in &players {
+        for (algae_e, algae_t, algae_r) in &algae {
+            let dx = player_t.translation.x - algae_t.translation.x;
+            let dy = player_t.translation.y - algae_t.translation.y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist < player_r.0 + algae_r.0 {
+                commands.entity(algae_e).despawn();
+            }
+        }
+    }
 }
 
 // Runs as a Startup system, AFTER LogPlugin::build has installed its
@@ -56,12 +160,61 @@ pub fn run() {
 fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        // unwrap_or_else recovers from poison — the hook must never
-        // panic, or wasm aborts the page.
         let mut q = PANIC_QUEUE.lock().unwrap_or_else(|p| p.into_inner());
         q.push(format!("{info}"));
         prev(info);
     }));
+}
+
+// LogPlugin's custom_layer hook — called once at plugin build time.
+// Pattern from https://github.com/bevyengine/bevy/blob/v0.19.0/examples/app/log_layers.rs
+fn install_capture_layer(_app: &mut App) -> Option<BoxedLayer> {
+    Some(Box::new(CaptureLayer))
+}
+
+// Captures every tracing event Bevy or our code emits. Only WARN +
+// ERROR levels propagate to the in-canvas drawer; INFO/DEBUG/TRACE
+// would flood it. LogPlugin's default fmt layer still emits everything
+// to the browser console, so the lower-severity events are not lost —
+// they live in the console channel.
+struct CaptureLayer;
+
+impl<S: Subscriber> Layer<S> for CaptureLayer {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: bevy::log::tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let level = *event.metadata().level();
+        let severity = match level {
+            tracing::Level::ERROR => Severity::Error,
+            tracing::Level::WARN => Severity::Warn,
+            _ => return,
+        };
+
+        let target = event.metadata().target();
+        let mut visitor = MessageVisitor::default();
+        event.record(&mut visitor);
+
+        let formatted = format!("{target}: {}", visitor.message);
+        let mut q = LOG_QUEUE.lock().unwrap_or_else(|p| p.into_inner());
+        q.push((severity, formatted));
+    }
+}
+
+// tracing events carry their message as a Debug-formatted "message"
+// field. Visit collects it.
+#[derive(Default)]
+struct MessageVisitor {
+    message: String,
+}
+
+impl tracing::field::Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.message = format!("{value:?}");
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -203,6 +356,13 @@ fn drain_panics(mut log: ResMut<ErrorLog>) {
     let mut q = PANIC_QUEUE.lock().unwrap_or_else(|p| p.into_inner());
     for msg in q.drain(..) {
         log.emit(Severity::Error, format!("PANIC: {msg}"));
+    }
+}
+
+fn drain_logs(mut log: ResMut<ErrorLog>) {
+    let mut q = LOG_QUEUE.lock().unwrap_or_else(|p| p.into_inner());
+    for (sev, msg) in q.drain(..) {
+        log.emit(sev, msg);
     }
 }
 
