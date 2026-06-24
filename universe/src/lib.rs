@@ -25,7 +25,7 @@ static LOG_QUEUE: Mutex<Vec<(Severity, String)>> = Mutex::new(Vec::new());
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
     let mut app = App::new();
-    app.insert_resource(ClearColor(Color::srgb(0.0, 1.0, 0.0)))
+    app.insert_resource(ClearColor(Color::srgb(0.03, 0.12, 0.22)))
         .insert_resource(ErrorLog::default())
         .add_plugins(
             DefaultPlugins
@@ -60,6 +60,8 @@ pub fn run() {
                 toggle_log_drawer,
                 move_player_cell,
                 eat_algae,
+                drift_water,
+                wobble_player_cell,
             ),
         );
 
@@ -77,6 +79,12 @@ struct Algae;
 
 #[derive(Component)]
 struct CellRadius(f32);
+
+#[derive(Component)]
+struct WaterParticle;
+
+#[derive(Component)]
+struct Drift(Vec2);
 
 fn setup_cells(
     mut commands: Commands,
@@ -106,6 +114,27 @@ fn setup_cells(
             Transform::from_xyz(x, y, 0.0),
         ));
     }
+
+    // Water particles — drift around and push away from the player cell.
+    // Deterministic positions so we don't need rand on wasm.
+    let water_material = materials.add(Color::srgba(0.85, 0.92, 1.0, 0.18));
+    let water_mesh = meshes.add(Circle::new(2.0));
+    for i in 0..80 {
+        let i_f = i as f32;
+        let angle = i_f * 0.37 * std::f32::consts::TAU;
+        let radius = 40.0 + (i_f * 13.7) % 480.0;
+        let x = angle.cos() * radius;
+        let y = angle.sin() * radius;
+        let drift_x = (i_f * 0.7).sin() * 10.0;
+        let drift_y = (i_f * 1.3).cos() * 10.0;
+        commands.spawn((
+            WaterParticle,
+            Drift(Vec2::new(drift_x, drift_y)),
+            Mesh2d(water_mesh.clone()),
+            MeshMaterial2d(water_material.clone()),
+            Transform::from_xyz(x, y, -1.0),
+        ));
+    }
 }
 
 fn move_player_cell(
@@ -132,6 +161,52 @@ fn move_player_cell(
     for mut t in &mut players {
         t.translation.x += dir.x * speed * dt;
         t.translation.y += dir.y * speed * dt;
+    }
+}
+
+fn drift_water(
+    time: Res<Time>,
+    players: Query<&Transform, (With<PlayerCell>, Without<WaterParticle>)>,
+    mut particles: Query<(&mut Transform, &Drift), With<WaterParticle>>,
+) {
+    let dt = time.delta_secs();
+    let player_pos = players.iter().next().map(|t| t.translation.truncate());
+    for (mut t, drift) in &mut particles {
+        // Base drift — keeps the field alive even when the player is still.
+        t.translation.x += drift.0.x * dt;
+        t.translation.y += drift.0.y * dt;
+
+        // Repel from player when close — the cell pushes the water aside.
+        if let Some(p) = player_pos {
+            let dx = t.translation.x - p.x;
+            let dy = t.translation.y - p.y;
+            let dist_sq = dx * dx + dy * dy;
+            let near = 90.0;
+            if dist_sq < near * near && dist_sq > 0.001 {
+                let dist = dist_sq.sqrt();
+                let strength = (near - dist) / near * 80.0;
+                let nx = dx / dist;
+                let ny = dy / dist;
+                t.translation.x += nx * strength * dt;
+                t.translation.y += ny * strength * dt;
+            }
+        }
+    }
+}
+
+// Bouncy organic shape — the cell's x and y scale oscillate out of
+// phase so it never looks like a perfect rigid circle. Mild amplitude
+// so it reads as "alive," not "broken."
+fn wobble_player_cell(
+    time: Res<Time>,
+    mut cells: Query<&mut Transform, With<PlayerCell>>,
+) {
+    let t = time.elapsed_secs();
+    let sx = 1.0 + (t * 3.5).sin() * 0.09;
+    let sy = 1.0 + (t * 3.5 + std::f32::consts::FRAC_PI_3).sin() * 0.09;
+    for mut tr in &mut cells {
+        tr.scale.x = sx;
+        tr.scale.y = sy;
     }
 }
 
