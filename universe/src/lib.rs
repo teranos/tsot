@@ -22,10 +22,13 @@ static PANIC_QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 // macros) into the ECS. Drain into ErrorLog every frame.
 static LOG_QUEUE: Mutex<Vec<(Severity, String)>> = Mutex::new(Vec::new());
 
+// Cube extent — world clamps to [-CUBE_HALF, CUBE_HALF] on each axis.
+const CUBE_HALF: f32 = 300.0;
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
     let mut app = App::new();
-    app.insert_resource(ClearColor(Color::srgb(0.03, 0.12, 0.22)))
+    app.insert_resource(ClearColor(Color::srgb(0.01, 0.05, 0.12)))
         .insert_resource(ErrorLog::default())
         .add_plugins(
             DefaultPlugins
@@ -87,10 +90,10 @@ struct CellRadius(f32);
 struct WaterParticle;
 
 #[derive(Component)]
-struct Drift(Vec2);
+struct Drift(Vec3);
 
 #[derive(Component)]
-struct Velocity(Vec2);
+struct Velocity(Vec3);
 
 #[derive(Component)]
 struct Tethered(Vec3);
@@ -104,91 +107,119 @@ struct Dying {
 fn setup_cells(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Player cell — center of dish. Velocity-driven; wobbles; eats.
+    let player_mesh = meshes.add(Sphere::new(20.0));
+    let halo_mesh = meshes.add(Sphere::new(50.0));
+    let nucleus_mesh = meshes.add(Sphere::new(7.0));
+    let algae_mesh = meshes.add(Sphere::new(6.0));
+    let water_mesh = meshes.add(Sphere::new(2.0));
+
+    // Player is translucent so the nucleus inside is visible.
+    let player_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.35, 0.85, 0.55, 0.6),
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    });
+    let halo_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.5, 0.95, 0.7, 0.12),
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    });
+    let nucleus_mat = materials.add(StandardMaterial::from(Color::srgb(0.15, 0.35, 0.25)));
+    let algae_mat = materials.add(StandardMaterial::from(Color::srgb(0.7, 0.9, 0.3)));
+    let water_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.85, 0.92, 1.0, 0.18),
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    });
+
+    // Player cell — center of cube. Velocity-driven; wobbles; eats.
     commands.spawn((
         PlayerCell,
         CellRadius(20.0),
-        Velocity(Vec2::ZERO),
-        Mesh2d(meshes.add(Circle::new(20.0))),
-        MeshMaterial2d(materials.add(Color::srgb(0.35, 0.85, 0.55))),
-        Transform::from_xyz(0.0, 0.0, 1.0),
+        Velocity(Vec3::ZERO),
+        Mesh3d(player_mesh),
+        MeshMaterial3d(player_mat),
+        Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 
-    // Halo — tethered to the cell, sits behind, soft glow.
+    // Halo — bigger translucent envelope at same center.
     commands.spawn((
-        Tethered(Vec3::new(0.0, 0.0, -0.5)),
-        Mesh2d(meshes.add(Circle::new(50.0))),
-        MeshMaterial2d(materials.add(Color::srgba(0.5, 0.95, 0.7, 0.12))),
+        Tethered(Vec3::ZERO),
+        Mesh3d(halo_mesh),
+        MeshMaterial3d(halo_mat),
         Transform::default(),
     ));
 
-    // Nucleus — tethered to the cell, sits in front, darker.
+    // Nucleus — small opaque sphere inside the translucent player.
     commands.spawn((
-        Tethered(Vec3::new(0.0, 0.0, 0.5)),
-        Mesh2d(meshes.add(Circle::new(7.0))),
-        MeshMaterial2d(materials.add(Color::srgb(0.15, 0.35, 0.25))),
+        Tethered(Vec3::ZERO),
+        Mesh3d(nucleus_mesh),
+        MeshMaterial3d(nucleus_mat),
         Transform::default(),
     ));
 
-    // Algae — scattered around the dish
-    for i in 0..20 {
-        let angle = (i as f32) * std::f32::consts::TAU / 20.0;
-        let radius = 150.0 + (i as f32) * 8.0;
-        let x = angle.cos() * radius;
-        let y = angle.sin() * radius;
+    // Algae — deterministically scattered through the cube.
+    for i in 0..40 {
+        let i_f = i as f32;
+        let x = ((i_f * 1.7).sin() * 250.0).clamp(-CUBE_HALF, CUBE_HALF);
+        let y = ((i_f * 2.3 + 0.5).sin() * 250.0).clamp(-CUBE_HALF, CUBE_HALF);
+        let z = ((i_f * 1.1 + 0.9).cos() * 250.0).clamp(-CUBE_HALF, CUBE_HALF);
         commands.spawn((
             Algae,
             CellRadius(6.0),
-            Mesh2d(meshes.add(Circle::new(6.0))),
-            MeshMaterial2d(materials.add(Color::srgb(0.7, 0.9, 0.3))),
-            Transform::from_xyz(x, y, 0.0),
+            Mesh3d(algae_mesh.clone()),
+            MeshMaterial3d(algae_mat.clone()),
+            Transform::from_xyz(x, y, z),
         ));
     }
 
     // Water particles — drift around and push away from the player cell.
-    // Deterministic positions so we don't need rand on wasm.
-    let water_material = materials.add(Color::srgba(0.85, 0.92, 1.0, 0.18));
-    let water_mesh = meshes.add(Circle::new(2.0));
-    for i in 0..80 {
+    for i in 0..200 {
         let i_f = i as f32;
-        let angle = i_f * 0.37 * std::f32::consts::TAU;
-        let radius = 40.0 + (i_f * 13.7) % 480.0;
-        let x = angle.cos() * radius;
-        let y = angle.sin() * radius;
+        let x = ((i_f * 0.37).sin() * 280.0).clamp(-CUBE_HALF, CUBE_HALF);
+        let y = ((i_f * 0.71 + 0.3).cos() * 280.0).clamp(-CUBE_HALF, CUBE_HALF);
+        let z = ((i_f * 0.53 + 0.7).sin() * 280.0).clamp(-CUBE_HALF, CUBE_HALF);
         let drift_x = (i_f * 0.7).sin() * 10.0;
         let drift_y = (i_f * 1.3).cos() * 10.0;
+        let drift_z = (i_f * 0.9 + 0.4).sin() * 10.0;
         commands.spawn((
             WaterParticle,
-            Drift(Vec2::new(drift_x, drift_y)),
-            Mesh2d(water_mesh.clone()),
-            MeshMaterial2d(water_material.clone()),
-            Transform::from_xyz(x, y, -1.0),
+            Drift(Vec3::new(drift_x, drift_y, drift_z)),
+            Mesh3d(water_mesh.clone()),
+            MeshMaterial3d(water_mat.clone()),
+            Transform::from_xyz(x, y, z),
         ));
     }
 }
 
-// WASD adds acceleration; water resistance is exponential drag on
-// velocity. Releasing keys lets the cell coast and slow naturally —
-// no instant stops. The medium pushes back.
+// WASD horizontal plane, Space/Shift vertical. Drag dampens. Cube
+// walls clamp position and zero the perpendicular velocity component —
+// no escape, no bounce.
 fn move_player_cell(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut players: Query<(&mut Transform, &mut Velocity), With<PlayerCell>>,
 ) {
-    let mut accel = Vec2::ZERO;
+    let mut accel = Vec3::ZERO;
     if keys.pressed(KeyCode::KeyW) {
-        accel.y += 1.0;
+        accel.z -= 1.0;
     }
     if keys.pressed(KeyCode::KeyS) {
-        accel.y -= 1.0;
+        accel.z += 1.0;
     }
     if keys.pressed(KeyCode::KeyA) {
         accel.x -= 1.0;
     }
     if keys.pressed(KeyCode::KeyD) {
         accel.x += 1.0;
+    }
+    if keys.pressed(KeyCode::Space) {
+        accel.y += 1.0;
+    }
+    if keys.pressed(KeyCode::ShiftLeft) {
+        accel.y -= 1.0;
     }
     let accel = accel.normalize_or_zero() * 900.0;
     let drag_per_sec = 2.4;
@@ -197,23 +228,34 @@ fn move_player_cell(
         v.0 += accel * dt;
         let drag = (1.0 - drag_per_sec * dt).max(0.0);
         v.0 *= drag;
-        t.translation.x += v.0.x * dt;
-        t.translation.y += v.0.y * dt;
+        t.translation += v.0 * dt;
+        if t.translation.x.abs() > CUBE_HALF {
+            t.translation.x = t.translation.x.clamp(-CUBE_HALF, CUBE_HALF);
+            v.0.x = 0.0;
+        }
+        if t.translation.y.abs() > CUBE_HALF {
+            t.translation.y = t.translation.y.clamp(-CUBE_HALF, CUBE_HALF);
+            v.0.y = 0.0;
+        }
+        if t.translation.z.abs() > CUBE_HALF {
+            t.translation.z = t.translation.z.clamp(-CUBE_HALF, CUBE_HALF);
+            v.0.z = 0.0;
+        }
     }
 }
 
-// Camera2d entity sits on the player. World moves around you, not
-// the other way. You stop being a spectator.
+// Third-person follow — camera trails behind + above the player.
 fn camera_follow(
-    cells: Query<&Transform, (With<PlayerCell>, Without<Camera2d>)>,
-    mut cameras: Query<&mut Transform, With<Camera2d>>,
+    cells: Query<&Transform, (With<PlayerCell>, Without<Camera3d>)>,
+    mut cameras: Query<&mut Transform, With<Camera3d>>,
 ) {
     let Some(cell_t) = cells.iter().next() else {
         return;
     };
+    let offset = Vec3::new(0.0, 80.0, 200.0);
     for mut cam_t in &mut cameras {
-        cam_t.translation.x = cell_t.translation.x;
-        cam_t.translation.y = cell_t.translation.y;
+        cam_t.translation = cell_t.translation + offset;
+        cam_t.look_at(cell_t.translation, Vec3::Y);
     }
 }
 
@@ -238,35 +280,40 @@ fn drift_water(
     mut particles: Query<(&mut Transform, &Drift), With<WaterParticle>>,
 ) {
     let dt = time.delta_secs();
-    let player_pos = players.iter().next().map(|t| t.translation.truncate());
+    let player_pos = players.iter().next().map(|t| t.translation);
     for (mut t, drift) in &mut particles {
-        // Base drift — keeps the field alive even when the player is still.
-        t.translation.x += drift.0.x * dt;
-        t.translation.y += drift.0.y * dt;
+        t.translation += drift.0 * dt;
 
-        // Repel from player when close — the cell pushes the water aside.
         if let Some(p) = player_pos {
-            let dx = t.translation.x - p.x;
-            let dy = t.translation.y - p.y;
-            let dist_sq = dx * dx + dy * dy;
+            let delta = t.translation - p;
+            let dist_sq = delta.length_squared();
             let near = 90.0;
             if dist_sq < near * near && dist_sq > 0.001 {
                 let dist = dist_sq.sqrt();
                 let strength = (near - dist) / near * 80.0;
-                let nx = dx / dist;
-                let ny = dy / dist;
-                t.translation.x += nx * strength * dt;
-                t.translation.y += ny * strength * dt;
+                let n = delta / dist;
+                t.translation += n * strength * dt;
             }
+        }
+
+        // Wrap to opposite face so the medium stays evenly populated.
+        if t.translation.x.abs() > CUBE_HALF {
+            t.translation.x = -t.translation.x.signum() * CUBE_HALF;
+        }
+        if t.translation.y.abs() > CUBE_HALF {
+            t.translation.y = -t.translation.y.signum() * CUBE_HALF;
+        }
+        if t.translation.z.abs() > CUBE_HALF {
+            t.translation.z = -t.translation.z.signum() * CUBE_HALF;
         }
     }
 }
 
-// Lumpy organic wobble — three frequencies on each axis with prime-ish
-// ratios and phase offsets, so x and y never return to "perfect
-// circle" at the same instant. CellRadius drives base scale so growth
-// (from eating) reads as the body getting bigger, not the wobble
-// amplifying.
+// Three-axis lumpy organic wobble — nine sines (three per axis) with
+// prime-ish frequencies + phase offsets so no axis returns to a
+// perfect sphere at the same instant. CellRadius drives base scale so
+// growth (from eating) reads as the body getting bigger, not the
+// wobble amplifying.
 fn wobble_player_cell(
     time: Res<Time>,
     mut cells: Query<(&mut Transform, &CellRadius), With<PlayerCell>>,
@@ -276,10 +323,14 @@ fn wobble_player_cell(
     let wy = (t * 3.1 + 1.0).sin() * 0.06
         + (t * 4.9 + 0.4).sin() * 0.035
         + (t * 2.7 + 0.8).sin() * 0.02;
+    let wz = (t * 2.9 + 0.6).sin() * 0.06
+        + (t * 4.3 + 0.2).sin() * 0.035
+        + (t * 5.1 + 1.4).sin() * 0.02;
     for (mut tr, r) in &mut cells {
         let base = r.0 / 20.0;
         tr.scale.x = base * (1.0 + wx);
         tr.scale.y = base * (1.0 + wy);
+        tr.scale.z = base * (1.0 + wz);
     }
 }
 
@@ -293,9 +344,7 @@ fn eat_algae(
 ) {
     for (player_t, mut player_r) in &mut players {
         for (algae_e, algae_t, algae_r) in &algae {
-            let dx = player_t.translation.x - algae_t.translation.x;
-            let dy = player_t.translation.y - algae_t.translation.y;
-            let dist = (dx * dx + dy * dy).sqrt();
+            let dist = (player_t.translation - algae_t.translation).length();
             if dist < player_r.0 + algae_r.0 {
                 commands.entity(algae_e).insert(Dying {
                     progress: 0.0,
@@ -312,11 +361,11 @@ fn eat_algae(
 fn die_algae(
     mut commands: Commands,
     time: Res<Time>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut dying: Query<(
         Entity,
         &mut Transform,
-        &MeshMaterial2d<ColorMaterial>,
+        &MeshMaterial3d<StandardMaterial>,
         &mut Dying,
     )>,
 ) {
@@ -326,8 +375,9 @@ fn die_algae(
         let s = (1.0 - d.progress).max(0.0);
         t.scale = Vec3::splat(s);
         if let Some(m) = materials.get_mut(&mat.0) {
-            let c = m.color.to_srgba();
-            m.color = Color::srgba(c.red, c.green, c.blue, s);
+            let c = m.base_color.to_srgba();
+            m.base_color = Color::srgba(c.red, c.green, c.blue, s);
+            m.alpha_mode = AlphaMode::Blend;
         }
         if d.progress >= 1.0 {
             commands.entity(e).despawn();
@@ -437,7 +487,22 @@ struct ErrorListText;
 struct LogDrawer;
 
 fn setup(mut commands: Commands) {
-    commands.spawn(Camera2d);
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(0.0, 80.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+
+    // Single point light high above the cube — surface illumination,
+    // simulates sunlight through the water from one direction.
+    commands.spawn((
+        PointLight {
+            shadow_maps_enabled: true,
+            intensity: 8_000_000.0,
+            range: 1000.0,
+            ..default()
+        },
+        Transform::from_xyz(0.0, 500.0, 0.0),
+    ));
 
     commands.spawn((
         Text::new("HH:MM:SS.mmm  GMT±HHMM"),
