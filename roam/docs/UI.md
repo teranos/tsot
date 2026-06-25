@@ -3,16 +3,7 @@
 See @CLAUDE.md for the JS-is-used-in-spite axiom and the sacred-error
 rule. This doc covers the UI layer that lives on top of those.
 
-> **v0.5 supersedes the eframe + egui + render_gl decisions in the
-> sections below.** New direction: Bevy owns the frame loop +
-> wgpu render; `bevy_ui` (Flexbox, in-core, ECS-native) replaces
-> egui at v0.5.1; `render_gl` rewrites as Bevy meshes at v0.5.2; 3D
-> voxel rendering lands at v0.5.5. See `docs/adr/0003-bevy.md` and
-> the v0.5 phased roadmap in `README.md`. The object-identity axiom
-> at the top of this doc carries forward unchanged — it gets *easier*
-> to implement under ECS (entities + Location components + a system
-> that interpolates render position toward target). Everything below
-> stays as the historical record of the v0.4.x eframe-based UI.
+> **roam stays at v0.4.x; new work moved to [`universe/`](../../universe/) — fresh Bevy/ECS code, not a port.** Everything below is the historical record of the v0.4.x eframe + egui + render_gl UI. The object-identity axiom at the top of this doc carries forward into universe unchanged — it gets *easier* to implement under ECS (entities + Location components + a system that interpolates render position toward target). See `docs/adr/0003-bevy.md` and `universe/CLAUDE.md` for the direction.
 
 ## Axiom — object identity is persistent
 

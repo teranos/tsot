@@ -1,30 +1,19 @@
 # universe
 
-**The only command that matters (same shape as roam):**
+Cells-stage game prototype. WASD + drag through tide-pool water. Eat algae (smaller cells) to grow. Camera follows. Press `/` in-canvas for the diagnostic drawer (FPS, captured errors).
 
-```
-nix develop -c make wasm-serve
-```
+Deployed at https://universe.sbvh.nl/ via CI on push to `bevy` or `master` (paths filter `universe/**`). No local dev — Bevy compile cost lives in CI, not on this machine. See `.github/workflows/deploy-universe.yml`.
 
-Run it from this directory (`universe/`). Open `http://localhost:8085`. The Makefile calls `trunk serve` underneath.
-
-## What this is
-
-Bevy test. No libp2p, no eframe, no roam. Just: does Bevy on WebGL2 attach to an existing `<canvas id="bevy">` and render a clear color.
-
-Layout lifted from `NiklasEi/bevy_game_template`. Stripped of audio, mobile workspace, asset loader, icon embedding.
+The eventual direction (deferred — see `roam/README.md` "what i want"): multi-cell tide pool over libp2p, germ-line identity persisting across cell deaths, Spore-style stage progression, ~60-min heat-death universe.
 
 ## Files
 
-- `Cargo.toml` — Bevy with the feature shortcuts NiklasEi uses (`default_app`, `2d_api`, `2d_bevy_render`, `ui_*`, `scene`, `bevy_winit`, `default_font`, `webgl2`). Profile config matches Bevy's official "compile with performance optimizations" recipe.
-- `flake.nix` — nix dev shell with `rust` (wasm32 target), `wasm-bindgen-cli`, `trunk`, `sccache` (set as `RUSTC_WRAPPER`).
-- `Trunk.toml` — `public_url = "./"`, `port = 8085`.
-- `index.html` — minimal page with `<canvas id="bevy">`.
-- `src/main.rs` — `App::new()` + `DefaultPlugins.set(WindowPlugin { canvas: "#bevy", … })` + `ClearColor` + `Camera2d`.
-- `.gitignore` — excludes `target/`, `dist/`, `pkg/`.
+- `Cargo.toml` — Bevy (pinned), wasm-bindgen, js-sys. `crate-type = ["cdylib", "rlib"]`. Profile recipe: `opt-level = 1` self, `opt-level = 3` deps.
+- `flake.nix` — nix dev shell with rust (wasm32 target), `wasm-bindgen-cli`, `sccache`.
+- `Makefile` — `make wasm` runs `cargo build --release --lib` + `wasm-bindgen --target web`. CI calls this.
+- `index.html` — `<canvas id="bevy">` + ES module loading the wasm-bindgen output.
+- `src/lib.rs` — App, components, systems. Sacred-error pipeline (panic hook + LogPlugin custom_layer → in-canvas drawer). Cells: PlayerCell, Algae, WaterParticle, Tethered (halo + nucleus follow), Dying (eat animation).
+- `src/main.rs` — native entry that calls `lib::run()`.
+- `BEVY.md` — open decisions, references, Bevy version bump trigger.
 
-## Constraints
-
-- **Nix flakes only see git-tracked files.** If you add a new file here, `git add` it or `nix develop` won't see it.
-- **trunk lives in `universe/flake.nix`, not in `roam/flake.nix`.** The dev shell here is different from roam's.
-- **`bevy/dynamic_linking` is in the Cargo.toml `dev` feature but does nothing on wasm32.** Native-only speedup; wasm always statically links.
+Nix flakes only see git-tracked files. New files need `git add` before `nix develop` sees them.

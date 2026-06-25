@@ -92,6 +92,4 @@ What i want:
 - [x] v0.4 — cards on the ground. Pick them up, collection persists. Depends on 0.3.6 — cards are world state; without canonical routing the axiom doesn't hold and non-canonical players grief canonical state.
 - [x] v0.4.1 — eframe owns the canvas; right-click spawn menu + 16-font picker prove it.
 - [x] v0.4.2 — Minecraft-shape inventory in egui (hotbar + Tab-toggle extended grid), wall clock + build watermark moved into the egui surface, zoom (-/=/+) wired through Rust, render_gl re-asserts blend func per-frame against egui_glow's premultiplied override.
-- [~] v0.5 — Bevy + 3D voxel. Code lives in [`universe/`](../universe/); roadmap in [`universe/BEVY.md`](../universe/BEVY.md).
-- [ ] v0.6 — bump into a player, autobattle. roam suspends, hands deck states to ccg, plays out, returns the result. The two wasm bundles coexist in one tab via `crates/tsot-card/` (shared `CardId`).
-- [ ] v0.7 — M8 cross-device delegation via `rs-ucan`. PIN-confirmed pairing (Fission ODD), new device gets its own keypair + a delegated capability. Natural demo: "second device plays as you in canonical Teranos."
+- New work moved to [`universe/`](../universe/) — fresh Bevy/ECS code, not a port. roam stays at v0.4.x. See `universe/CLAUDE.md` for the direction. The autobattle (bump-into-player → ccg handoff) and UCAN cross-device delegation ideas carry forward as universe concerns, not roam milestones.
