@@ -372,7 +372,7 @@ fn die_algae(
     let dt = time.delta_secs();
     for (e, mut t, mat, mut d) in &mut dying {
         d.progress += dt / d.duration;
-        let s = (1.0 - d.progress).max(0.0);
+        let s: f32 = (1.0 - d.progress).max(0.0);
         t.scale = Vec3::splat(s);
         if let Some(m) = materials.get_mut(&mat.0) {
             let c = m.base_color.to_srgba();
