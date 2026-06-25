@@ -374,7 +374,7 @@ fn die_algae(
         d.progress += dt / d.duration;
         let s: f32 = (1.0 - d.progress).max(0.0);
         t.scale = Vec3::splat(s);
-        if let Some(m) = materials.get_mut(&mat.0) {
+        if let Some(mut m) = materials.get_mut(&mat.0) {
             let c = m.base_color.to_srgba();
             m.base_color = Color::srgba(c.red, c.green, c.blue, s);
             m.alpha_mode = AlphaMode::Blend;
