@@ -10,6 +10,6 @@ Bevy version is pinned in `Cargo.toml`. One tracker line in `BEVY.md` for the ne
 
 **Observability first** — the drawer is the in-canvas equivalent of devtools. If you can't see it, you don't know about it. Press `/` to toggle.
 
-Direction (deferred, see `roam/README.md` "what i want" for the long arc): multi-cell tide pool with peer cells over libp2p, germ-line identity persisting across cell deaths, Spore-style stage progression, ~60-min heat-death universe.
+Direction (deferred, see `roam/README.md` "what i want" for the long arc): multi-cell tide pool with peer cells over libp2p, germ-line identity persisting across cell deaths, Spore-style stage progression, ~60-min heat-death universe. The last 10 seconds of one universe are the first 10 of the next — Ouroboros. Endgame is retaining as much entropy as possible against the universal flatten, played through to the final 10 seconds.
 
 Single-line git commits, no Claude attribution.
