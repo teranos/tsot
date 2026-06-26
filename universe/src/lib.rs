@@ -13,6 +13,22 @@ use bevy::window::WindowPlugin;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+// Out-of-Bevy error path. Calls window.__universeError defined in
+// index.html — surfaces panics + ERROR-level tracing to the HTML
+// overlay even when Bevy itself is dead. Without this, anything that
+// panics before the first Update tick is silently swallowed: the
+// in-canvas drawer never renders because the systems that update it
+// never run.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = window, js_name = "__universeError")]
+    fn js_universe_error(msg: &str);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn js_universe_error(_msg: &str) {}
+
 // Queue from the panic hook into the ECS. The hook runs outside Bevy
 // systems, so it can't write the Resource directly. Drain into
 // ErrorLog every frame.
@@ -27,6 +43,13 @@ const CUBE_HALF: f32 = 300.0;
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
+    // Pre-App panic hook — catches panics during App::new() and the
+    // first slice of plugin building, before LogPlugin installs its
+    // own hook and overwrites ours.
+    std::panic::set_hook(Box::new(|info| {
+        js_universe_error(&format!("[pre-Bevy panic] {info}"));
+    }));
+
     let mut app = App::new();
     app.insert_resource(ClearColor(Color::srgb(0.01, 0.05, 0.12)))
         .insert_resource(ErrorLog::default())
@@ -50,9 +73,24 @@ pub fn run() {
                     custom_layer: install_capture_layer,
                     ..default()
                 }),
-        )
-        .add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_systems(Startup, (install_panic_hook, setup, setup_cells))
+        );
+
+    // Wrap LogPlugin's panic hook NOW (after LogPlugin built, before
+    // app.run()). Anything panicking from this point on — Startup
+    // systems that can't reach the in-canvas drawer because Update
+    // hasn't run yet, Update systems themselves — still surfaces to
+    // the HTML overlay via __universeError.
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let formatted = format!("{info}");
+        js_universe_error(&format!("[panic] {formatted}"));
+        let mut q = PANIC_QUEUE.lock().unwrap_or_else(|p| p.into_inner());
+        q.push(formatted);
+        prev(info);
+    }));
+
+    app.add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_systems(Startup, (setup, setup_cells))
         .add_systems(
             Update,
             (
@@ -385,20 +423,6 @@ fn die_algae(
     }
 }
 
-// Runs as a Startup system, AFTER LogPlugin::build has installed its
-// own panic hook. Wrapping the previous hook keeps LogPlugin's console
-// output AND adds our in-canvas capture. Pre-App install gets
-// silently overwritten by LogPlugin on wasm — see
-// https://github.com/bevyengine/bevy/issues/12546.
-fn install_panic_hook() {
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let mut q = PANIC_QUEUE.lock().unwrap_or_else(|p| p.into_inner());
-        q.push(format!("{info}"));
-        prev(info);
-    }));
-}
-
 // LogPlugin's custom_layer hook — called once at plugin build time.
 // Pattern from https://github.com/bevyengine/bevy/blob/v0.19.0/examples/app/log_layers.rs
 fn install_capture_layer(_app: &mut App) -> Option<BoxedLayer> {
@@ -430,6 +454,13 @@ impl<S: Subscriber> Layer<S> for CaptureLayer {
         event.record(&mut visitor);
 
         let formatted = format!("{target}: {}", visitor.message);
+
+        // ERROR-level tracing skips the drawer queue and goes straight
+        // to the HTML overlay too — survives the Bevy-never-runs case.
+        if matches!(severity, Severity::Error) {
+            js_universe_error(&format!("[tracing ERROR] {formatted}"));
+        }
+
         let mut q = LOG_QUEUE.lock().unwrap_or_else(|p| p.into_inner());
         q.push((severity, formatted));
     }

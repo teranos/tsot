@@ -7,13 +7,59 @@
     <style>
       html, body { margin: 0; padding: 0; height: 100%; background: #111; }
       canvas { display: block; width: 100vw; height: 100vh; }
+      /* Out-of-Bevy error surface — visible even when wasm fails to
+         instantiate or Bevy panics before its first Update tick.
+         The in-canvas drawer only works if Bevy's render loop is
+         alive; this is the catch-all that doesn't depend on it. */
+      #bevy-error {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        max-height: 60vh;
+        overflow: auto;
+        background: #2a0a0a;
+        color: #ffb0b0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        line-height: 1.4;
+        padding: 8px 12px;
+        white-space: pre-wrap;
+        z-index: 9999;
+        display: none;
+        border-bottom: 1px solid #5a1010;
+      }
     </style>
   </head>
   <body>
     <canvas id="bevy"></canvas>
+    <div id="bevy-error"></div>
     <script type="module">
+      const el = document.getElementById('bevy-error');
+      function showErr(line) {
+        el.style.display = 'block';
+        el.textContent += line + '\n';
+      }
+      // Exposed for wasm to call directly through wasm-bindgen extern.
+      window.__universeError = showErr;
+
+      window.addEventListener('error', (ev) => {
+        const where = ev.filename ? ` @ ${ev.filename}:${ev.lineno}:${ev.colno}` : '';
+        showErr(`[window.error] ${ev.message}${where}`);
+        if (ev.error?.stack) showErr(ev.error.stack);
+      });
+      window.addEventListener('unhandledrejection', (ev) => {
+        showErr(`[unhandledrejection] ${ev.reason}`);
+        if (ev.reason?.stack) showErr(ev.reason.stack);
+      });
+
       import init from './universe.js';
-      init();
+      try {
+        await init();
+      } catch (e) {
+        showErr(`[init failed] ${e}`);
+        if (e?.stack) showErr(e.stack);
+      }
     </script>
   </body>
 </html>
