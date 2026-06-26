@@ -1,6 +1,5 @@
-// Verify session-keyed immediate delivery: this push should trigger
-// deploy-universe CI; the notification should reach this Claude session
-// regardless of cwd at delivery time.
+// Verify session-keyed immediate delivery with cwd fully removed: the row
+// should carry repo + branch + sha parsed from this push's own stdout.
 use std::sync::Mutex;
 
 use bevy::asset::AssetMetaCheck;
