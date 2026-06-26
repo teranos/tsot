@@ -1,5 +1,5 @@
-// Verify session-keyed immediate delivery with cwd fully removed: the row
-// should carry repo + branch + sha parsed from this push's own stdout.
+// Verify adaptive polling: the row should now carry push_time + p50 + p90
+// alongside repo + branch + sha. Watcher picks adaptive sleep when in_progress.
 use std::sync::Mutex;
 
 use bevy::asset::AssetMetaCheck;
