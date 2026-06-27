@@ -154,7 +154,10 @@ pub fn run() {
         // RefCell (the swarm task uses Rc clones for the shared event
         // queue). Inserted as None; the async boot fills it.
         app.insert_non_send_resource::<Option<net::Net>>(None);
-        app.add_systems(Update, (install_pending_net, drain_net_events).chain());
+        app.add_systems(
+            Update,
+            (install_pending_net, drain_net_events, publish_self_position).chain(),
+        );
 
         // Kick off the async boot. Awaits the JS identity bridge,
         // constructs Net, subscribes to the positions topic, stashes
@@ -238,6 +241,48 @@ fn install_pending_net(mut maybe_net: NonSendMut<Option<net::Net>>) {
             *maybe_net = Some(n);
         }
     });
+}
+
+// 10Hz publish of self position to rave-positions/v1. Accumulates
+// delta_secs into a Local until 100ms have passed, then publishes one
+// RavePosition. Publish failures surface as NetEvent::Error via the
+// drain system; no manual error handling needed here.
+#[cfg(target_arch = "wasm32")]
+fn publish_self_position(
+    time: Res<Time>,
+    mut acc: Local<f32>,
+    players: Query<&Transform, With<PlayerCell>>,
+    maybe_net: NonSend<Option<net::Net>>,
+) {
+    let Some(n) = maybe_net.as_ref() else {
+        return;
+    };
+    *acc += time.delta_secs();
+    if *acc < 0.1 {
+        return;
+    }
+    *acc = 0.0;
+
+    let Some(tf) = players.iter().next() else {
+        return;
+    };
+    let pos = net::RavePosition {
+        peer: n.identity().0.clone(),
+        x: tf.translation.x,
+        y: tf.translation.y,
+        z: tf.translation.z,
+        at_ms: js_sys::Date::now() as u64,
+    };
+    let bytes = match serde_json::to_vec(&pos) {
+        Ok(b) => b,
+        Err(e) => {
+            js_rave_error(&format!("[publish_self_position serialize] {e}"));
+            return;
+        }
+    };
+    // publish() returns Result but the only failure path is cmd-channel
+    // send failure (the swarm task died). That surfaces upstream too.
+    let _ = n.publish(&net::Topic(POSITIONS_TOPIC.to_string()), &bytes);
 }
 
 #[cfg(target_arch = "wasm32")]
