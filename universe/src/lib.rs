@@ -28,10 +28,16 @@ use wasm_bindgen::prelude::*;
 extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = "__universeError")]
     fn js_universe_error(msg: &str);
+
+    #[wasm_bindgen(js_namespace = window, js_name = "__universeScreenshot")]
+    fn js_universe_screenshot(filename: &str);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn js_universe_error(_msg: &str) {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn js_universe_screenshot(_filename: &str) {}
 
 // Queue from the panic hook into the ECS. The hook runs outside Bevy
 // systems, so it can't write the Resource directly. Drain into
@@ -103,6 +109,7 @@ pub fn run() {
                 update_fps,
                 update_error_list,
                 toggle_log_drawer,
+                screenshot_on_p,
                 move_player_cell,
                 camera_follow,
                 follow_tether,
@@ -684,6 +691,13 @@ fn update_error_list(
             .map(|e| format!("[{:?}] {}", e.severity, e.message))
             .collect::<Vec<_>>()
             .join("\n");
+    }
+}
+
+// 'P' copies the canvas as a PNG to the system clipboard via the JS side.
+fn screenshot_on_p(keys: Res<ButtonInput<KeyCode>>) {
+    if keys.just_pressed(KeyCode::KeyP) {
+        js_universe_screenshot("");
     }
 }
 

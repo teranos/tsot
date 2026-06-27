@@ -43,6 +43,26 @@
       // Exposed for wasm to call directly through wasm-bindgen extern.
       window.__universeError = showErr;
 
+      // Screenshot — wasm fires this on 'P' press. Grabs the canvas as a
+      // PNG and writes it to the system clipboard via navigator.clipboard.
+      // Sacred-error path on every failure so the user sees what went wrong.
+      window.__universeScreenshot = function(_filename) {
+        const canvas = document.getElementById('bevy');
+        if (!canvas) { showErr('[screenshot] #bevy canvas not found'); return; }
+        if (!navigator.clipboard || !window.ClipboardItem) {
+          showErr('[screenshot] clipboard API unavailable in this browser');
+          return;
+        }
+        canvas.toBlob(function(blob) {
+          if (!blob) { showErr('[screenshot] canvas.toBlob returned null'); return; }
+          navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob })
+          ]).catch(function(err) {
+            showErr(`[screenshot] clipboard.write failed: ${err}`);
+          });
+        }, 'image/png');
+      };
+
       window.addEventListener('error', (ev) => {
         const where = ev.filename ? ` @ ${ev.filename}:${ev.lineno}:${ev.colno}` : '';
         showErr(`[window.error] ${ev.message}${where}`);
