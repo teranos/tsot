@@ -44,6 +44,14 @@ jobs:
         working-directory: rave
         run: nix develop -c cargo check --tests --lib --target wasm32-unknown-unknown
 
+      # Two-browser equivalent — native libp2p clients meshing through
+      # the real relayer binary on loopback. Replaces the manual R11
+      # browser verification. Proves the gossipsub mesh forms and
+      # rave-positions round-trip end-to-end.
+      - name: Integration test — positions via relayer
+        working-directory: rave
+        run: nix develop -c cargo test --test positions_via_relayer --release -- --nocapture
+
       - name: Build wasm bundle
         working-directory: rave
         run: nix develop -c make wasm
