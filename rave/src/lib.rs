@@ -280,9 +280,11 @@ fn publish_self_position(
             return;
         }
     };
-    // publish() returns Result but the only failure path is cmd-channel
-    // send failure (the swarm task died). That surfaces upstream too.
-    let _ = n.publish(&net::Topic(POSITIONS_TOPIC.to_string()), &bytes);
+    // publish() failing means the cmd channel is closed — the swarm
+    // task died. Critical. Surface, don't swallow.
+    if let Err(e) = n.publish(&net::Topic(POSITIONS_TOPIC.to_string()), &bytes) {
+        js_rave_error(&format!("[publish_self_position] {e:?}"));
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
