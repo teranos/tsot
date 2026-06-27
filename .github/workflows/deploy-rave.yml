@@ -19,7 +19,7 @@ concurrency:
 env:
   AWS_REGION: eu-central-1
   STATIC_BUCKET: rave-sbvh-static
-  STATIC_DISTRIBUTION_ID: REPLACE_AFTER_TF_APPLY
+  STATIC_DISTRIBUTION_ID: EY1IQ1DX4OK4A
   DEPLOY_ROLE_ARN: arn:aws:iam::548351057127:role/rave-github-deploy
 
 jobs:

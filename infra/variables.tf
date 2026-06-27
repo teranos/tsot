@@ -70,3 +70,21 @@ variable "universe_deploy_refs" {
   type        = list(string)
   default     = ["refs/heads/master", "refs/heads/bevy"]
 }
+
+variable "rave_subdomain" {
+  description = "Subdomain serving the rave (Bevy + libp2p rave party) wasm bundle through CloudFront."
+  type        = string
+  default     = "rave"
+}
+
+variable "rave_bucket_name" {
+  description = "S3 bucket name for rave's dist/ contents. Global namespace; pick something unique."
+  type        = string
+  default     = "rave-sbvh-static"
+}
+
+variable "rave_deploy_refs" {
+  description = "Git refs allowed to assume the rave-github-deploy IAM role via OIDC. Includes the working branch."
+  type        = list(string)
+  default     = ["refs/heads/master", "refs/heads/rave"]
+}
