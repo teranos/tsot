@@ -25,7 +25,52 @@ pub struct FrameInput {
     pub zoom_in_pressed: bool,
     /// `-` — step zoom out. Edge-triggered.
     pub zoom_out_pressed: bool,
+    /// Virtual-joystick origin (where the active touch / primary press
+    /// went down) in screen pixels, `None` when no press is active.
+    /// Carried so the UI can draw the joystick base where the thumb
+    /// landed; the direction itself is already folded into `move_bits`.
+    pub touch_origin: Option<(f32, f32)>,
+    /// Live position of the active touch / primary press in screen
+    /// pixels — the joystick knob. `None` when no press is active.
+    pub touch_pos: Option<(f32, f32)>,
     pub dt_ms: f32,
+}
+
+/// Below this many screen pixels of drag from the touch origin, the
+/// virtual joystick reads as centred — no movement. Keeps a resting
+/// thumb (or a tap that was meant as a click) from creeping the player.
+pub const TOUCH_DEADZONE_PX: f32 = 16.0;
+
+/// Map a touch-drag vector (current pointer minus the press origin, in
+/// screen pixels with **y pointing down**) onto the same 8-way
+/// direction bitmask the keyboard feeds. This is the mobile analogue
+/// of "which numpad key" — the drag direction picks one of the eight
+/// octants; a drag shorter than `deadzone` reads as centred (`0`).
+///
+/// Pure function (no egui, no FFI) so the octant boundaries are unit-
+/// testable on the host. `read` is the only caller in the wasm build.
+pub fn drag_to_move_bits(dx: f32, dy: f32, deadzone: f32) -> u32 {
+    use crate::world::{INPUT_A, INPUT_D, INPUT_S, INPUT_W};
+
+    if dx * dx + dy * dy < deadzone * deadzone {
+        return 0;
+    }
+    // atan2 with screen-down y: 0° = East, 90° = South, 180° = West,
+    // 270° = North. Bias by half an octant (22.5°) before flooring so
+    // each cardinal sits at the centre of its 45°-wide sector.
+    let deg = (dy.atan2(dx).to_degrees() + 360.0) % 360.0;
+    let sector = (((deg + 22.5) % 360.0) / 45.0) as u32;
+    match sector {
+        0 => INPUT_D,
+        1 => INPUT_D | INPUT_S,
+        2 => INPUT_S,
+        3 => INPUT_S | INPUT_A,
+        4 => INPUT_A,
+        5 => INPUT_A | INPUT_W,
+        6 => INPUT_W,
+        7 => INPUT_W | INPUT_D,
+        _ => 0,
+    }
 }
 
 impl FrameInput {
@@ -74,14 +119,69 @@ impl FrameInput {
                 bits |= INPUT_S | INPUT_D;
             }
 
+            // Touch / pointer-drag movement. A primary press becomes a
+            // virtual joystick: the press position is the origin, the
+            // live position is the stick, and the drag vector picks an
+            // octant via `drag_to_move_bits`. This is how a phone with
+            // no keyboard moves the player; on desktop a left-drag does
+            // the same (right-drag still belongs to the context menu).
+            let (touch_origin, touch_pos) =
+                match (i.pointer.primary_down(), i.pointer.press_origin(), i.pointer.interact_pos()) {
+                    (true, Some(o), Some(p)) => {
+                        bits |= drag_to_move_bits(p.x - o.x, p.y - o.y, TOUCH_DEADZONE_PX);
+                        (Some((o.x, o.y)), Some((p.x, p.y)))
+                    }
+                    _ => (None, None),
+                };
+
             FrameInput {
                 move_bits: bits,
                 spawn_pressed: i.key_pressed(Key::Num5),
                 inventory_toggle_pressed: i.key_pressed(Key::Tab),
                 zoom_in_pressed: i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals),
                 zoom_out_pressed: i.key_pressed(Key::Minus),
+                touch_origin,
+                touch_pos,
                 dt_ms: (i.stable_dt * 1000.0).min(100.0),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::{INPUT_A, INPUT_D, INPUT_S, INPUT_W};
+
+    #[test]
+    fn deadzone_reads_as_centred() {
+        // A drag shorter than the deadzone is no movement at all.
+        assert_eq!(drag_to_move_bits(0.0, 0.0, TOUCH_DEADZONE_PX), 0);
+        assert_eq!(drag_to_move_bits(5.0, -5.0, TOUCH_DEADZONE_PX), 0);
+    }
+
+    #[test]
+    fn cardinals_map_to_single_axis() {
+        // Screen y points down: +y is South, -y is North.
+        assert_eq!(drag_to_move_bits(40.0, 0.0, TOUCH_DEADZONE_PX), INPUT_D);
+        assert_eq!(drag_to_move_bits(-40.0, 0.0, TOUCH_DEADZONE_PX), INPUT_A);
+        assert_eq!(drag_to_move_bits(0.0, 40.0, TOUCH_DEADZONE_PX), INPUT_S);
+        assert_eq!(drag_to_move_bits(0.0, -40.0, TOUCH_DEADZONE_PX), INPUT_W);
+    }
+
+    #[test]
+    fn diagonals_combine_two_axes() {
+        assert_eq!(drag_to_move_bits(40.0, 40.0, TOUCH_DEADZONE_PX), INPUT_D | INPUT_S);
+        assert_eq!(drag_to_move_bits(-40.0, 40.0, TOUCH_DEADZONE_PX), INPUT_S | INPUT_A);
+        assert_eq!(drag_to_move_bits(-40.0, -40.0, TOUCH_DEADZONE_PX), INPUT_A | INPUT_W);
+        assert_eq!(drag_to_move_bits(40.0, -40.0, TOUCH_DEADZONE_PX), INPUT_W | INPUT_D);
+    }
+
+    #[test]
+    fn octant_centres_are_stable_just_off_axis() {
+        // A few degrees off a cardinal still reads as that cardinal,
+        // not a flickering diagonal — the half-octant bias guarantees it.
+        assert_eq!(drag_to_move_bits(40.0, 6.0, TOUCH_DEADZONE_PX), INPUT_D);
+        assert_eq!(drag_to_move_bits(40.0, -6.0, TOUCH_DEADZONE_PX), INPUT_D);
     }
 }

@@ -2,7 +2,6 @@ pub mod build_info;
 pub mod catalog;
 pub mod error;
 pub mod identity;
-#[cfg(target_arch = "wasm32")]
 pub mod input;
 pub mod layout;
 pub mod net;

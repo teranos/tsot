@@ -169,6 +169,28 @@ open/close lifecycle. Left-click outside the menu closes it
 naturally. Animation time on the popup is forced to `0.0` so the
 fade-in doesn't lag behind the right-click.
 
+## Touch movement — virtual joystick on the world
+
+Phones have no keyboard, so the WASD / arrow / numpad map in
+`roam::input` can't move the player there. A primary press (a finger
+on a touchscreen, a left-drag on desktop) becomes a virtual joystick:
+the press position is the origin, the live pointer is the stick, and
+the drag vector is mapped onto the **same** 8-way `move_bits` the
+keyboard feeds — `input::drag_to_move_bits` picks the octant, a drag
+shorter than `TOUCH_DEADZONE_PX` reads as centred. No new movement
+model, no second code path through `world::step`; the joystick is
+just another producer of the existing bitmask.
+
+`drag_to_move_bits` is pure (no egui, no FFI) and host-unit-tested for
+its octant boundaries and deadzone — the reason `roam::input` is no
+longer `#[cfg(target_arch = "wasm32")]`-gated.
+
+The base ring + knob are drawn as a non-interactable foreground
+`egui::Area` while the press is active (`RoamApp::joystick`, fed from
+`FrameInput::{touch_origin, touch_pos}`), so the player can see where
+their thumb is steering. Right-drag is untouched — it still belongs to
+the context menu.
+
 ## Visual style — battery-tester defaults
 
 Adopted directly from ebc-battery-tester (0.34.1, the audit reference):

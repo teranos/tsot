@@ -92,4 +92,5 @@ What i want:
 - [x] v0.4 — cards on the ground. Pick them up, collection persists. Depends on 0.3.6 — cards are world state; without canonical routing the axiom doesn't hold and non-canonical players grief canonical state.
 - [x] v0.4.1 — eframe owns the canvas; right-click spawn menu + 16-font picker prove it.
 - [x] v0.4.2 — Minecraft-shape inventory in egui (hotbar + Tab-toggle extended grid), wall clock + build watermark moved into the egui surface, zoom (-/=/+) wired through Rust, render_gl re-asserts blend func per-frame against egui_glow's premultiplied override.
+- [x] v0.4.3 — mobile movement: touch-drag on the world is a virtual joystick feeding the same 8-way `move_bits` as the keyboard, so phones (no keyboard) can move the player. `input::drag_to_move_bits` is the pure, host-tested octant mapping; an on-screen base ring + knob shows where the thumb is steering.
 - New work moved to [`universe/`](../universe/) — fresh Bevy/ECS code, not a port. roam stays at v0.4.x. See `universe/CLAUDE.md` for the direction. The autobattle (bump-into-player → ccg handoff) and UCAN cross-device delegation ideas carry forward as universe concerns, not roam milestones.

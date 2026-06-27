@@ -36,7 +36,17 @@ pub struct RoamApp {
     zoom: f32,
     /// Extended-slots grid above the hotbar. Toggled by Tab.
     inventory_open: bool,
+    /// Active virtual-joystick `(origin, knob)` in screen points while a
+    /// touch / primary press drags the player, `None` otherwise. Set in
+    /// `logic` from `FrameInput`, drawn in `ui` so a phone player can
+    /// see where their thumb is steering.
+    joystick: Option<(egui::Pos2, egui::Pos2)>,
 }
+
+/// Radius of the joystick base ring drawn around the touch origin.
+const JOY_BASE_R: f32 = 48.0;
+/// Radius of the joystick knob; clamped to stay within the base ring.
+const JOY_KNOB_R: f32 = 22.0;
 
 const HOTBAR_SLOTS: usize = 9;
 const EXTENDED_ROWS: usize = 3;
@@ -54,6 +64,7 @@ impl RoamApp {
             current_font_idx: 0,
             zoom: 1.0,
             inventory_open: false,
+            joystick: None,
         };
         app.write_fonts(&cc.egui_ctx);
         app
@@ -153,6 +164,12 @@ impl eframe::App for RoamApp {
         if input.zoom_out_pressed {
             self.zoom = (self.zoom / ZOOM_STEP).max(ZOOM_MIN);
         }
+        self.joystick = match (input.touch_origin, input.touch_pos) {
+            (Some((ox, oy)), Some((px, py))) => {
+                Some((egui::pos2(ox, oy), egui::pos2(px, py)))
+            }
+            _ => None,
+        };
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -324,6 +341,37 @@ impl eframe::App for RoamApp {
             };
             ui.painter().add(callback);
         });
+
+        // Virtual joystick overlay — only while a touch / press is
+        // dragging. The base ring sits at the touch origin; the knob
+        // tracks the thumb, clamped to the ring so it reads like a
+        // physical stick. `interactable(false)` keeps it from eating
+        // the very press that drives it.
+        if let Some((origin, knob)) = self.joystick {
+            egui::Area::new(egui::Id::new("roam_joystick"))
+                .fixed_pos(egui::Pos2::ZERO)
+                .order(egui::Order::Foreground)
+                .interactable(false)
+                .show(&ctx, |ui| {
+                    let painter = ui.painter();
+                    let offset = knob - origin;
+                    let clamped = if offset.length() > JOY_BASE_R {
+                        origin + offset.normalized() * JOY_BASE_R
+                    } else {
+                        knob
+                    };
+                    painter.circle_stroke(
+                        origin,
+                        JOY_BASE_R,
+                        egui::Stroke::new(2.0, egui::Color32::from_white_alpha(60)),
+                    );
+                    painter.circle_filled(
+                        clamped,
+                        JOY_KNOB_R,
+                        egui::Color32::from_white_alpha(110),
+                    );
+                });
+        }
 
         // Force continuous repaint — egui's input-driven heuristic
         // wouldn't animate the world otherwise.
