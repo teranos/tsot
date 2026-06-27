@@ -3,6 +3,7 @@
 use std::sync::Mutex;
 
 mod build_info;
+mod net;
 
 use bevy::asset::AssetMetaCheck;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};

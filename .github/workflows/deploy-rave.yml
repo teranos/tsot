@@ -40,6 +40,10 @@ jobs:
         with:
           workspaces: rave
 
+      - name: Type-check tests (TDD gate)
+        working-directory: rave
+        run: nix develop -c cargo check --tests --lib --target wasm32-unknown-unknown
+
       - name: Build wasm bundle
         working-directory: rave
         run: nix develop -c make wasm
