@@ -161,6 +161,7 @@ pub fn run() {
         // RefCell (the swarm task uses Rc clones for the shared event
         // queue). Inserted as None; the async boot fills it.
         app.insert_non_send_resource::<Option<net::Net>>(None);
+        app.insert_resource(RemotePlayers::default());
         app.add_systems(
             Update,
             (
@@ -168,6 +169,7 @@ pub fn run() {
                 flush_typed_errors,
                 drain_net_events,
                 publish_self_position,
+                render_remote_players,
             )
                 .chain(),
         );
@@ -370,10 +372,14 @@ fn flush_typed_errors(mut error_log: ResMut<ErrorLog>) {
 fn drain_net_events(
     maybe_net: NonSend<Option<net::Net>>,
     mut error_log: ResMut<ErrorLog>,
+    mut remotes: ResMut<RemotePlayers>,
 ) {
     let Some(n) = maybe_net.as_ref() else {
         return;
     };
+    let self_peer = n.identity().0.clone();
+    let now_ms = js_sys::Date::now() as u64;
+
     for ev in n.poll_events() {
         match ev {
             net::NetEvent::PeerUp { peer, .. } => {
@@ -385,18 +391,31 @@ fn drain_net_events(
                     format!("[net] peer down: {} ({reason})", peer.0),
                 );
             }
-            net::NetEvent::Message {
-                topic, from, bytes, ..
-            } => {
-                error_log.emit(
-                    Severity::Note,
-                    format!(
-                        "[net] msg on {} from {} ({} bytes)",
-                        topic.0,
-                        from.0,
-                        bytes.len()
-                    ),
-                );
+            net::NetEvent::Message { topic, bytes, .. } => {
+                // Route rave-positions traffic into RemotePlayers (R10).
+                // Don't push every gossip message to the drawer — at 10Hz
+                // per peer it floods the text node and tanks FPS.
+                if topic.0 == POSITIONS_TOPIC {
+                    match serde_json::from_slice::<net::RavePosition>(&bytes) {
+                        Ok(pos) => {
+                            if pos.peer != self_peer {
+                                let entry =
+                                    remotes.0.entry(pos.peer.clone()).or_default();
+                                entry.pos = Vec3::new(pos.x, pos.y, pos.z);
+                                entry.last_seen_ms = now_ms;
+                            }
+                        }
+                        Err(e) => {
+                            error::emit_region(
+                                error::Severity::Error,
+                                "decode-rave-position",
+                                "malformed RavePosition wire payload",
+                                format!("{e}"),
+                            );
+                        }
+                    }
+                }
+                // Other topics: silently ignored. Drawer stays quiet.
             }
             net::NetEvent::SubscriptionChange {
                 topic,
@@ -415,6 +434,78 @@ fn drain_net_events(
             }
             net::NetEvent::Error(err) => {
                 error_log.emit(Severity::Error, format!("[net] {err:?}"));
+            }
+        }
+    }
+}
+
+// R10 — one entry per other peer's last-known position. The Bevy
+// Entity is spawned lazily by render_remote_players when we first
+// receive a position; subsequent updates only mutate the Transform.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct RemoteEntry {
+    pos: Vec3,
+    last_seen_ms: u64,
+    entity: Option<Entity>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource, Default)]
+struct RemotePlayers(std::collections::HashMap<String, RemoteEntry>);
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Component)]
+struct RemotePlayerCell;
+
+// R10 render. Uses Sphere — same primitive setup_cells uses, verified
+// working. The aff0554 attempt used Capsule3d and the deploy broke at
+// runtime; sticking with the proven primitive while bisecting variables.
+#[cfg(target_arch = "wasm32")]
+fn render_remote_players(
+    mut commands: Commands,
+    mut remotes: ResMut<RemotePlayers>,
+    mut transforms: Query<&mut Transform, With<RemotePlayerCell>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let now_ms = js_sys::Date::now() as u64;
+    let stale_cutoff = now_ms.saturating_sub(30_000);
+
+    let stale_peers: Vec<String> = remotes
+        .0
+        .iter()
+        .filter(|(_, e)| e.last_seen_ms < stale_cutoff)
+        .map(|(p, _)| p.clone())
+        .collect();
+    for peer in stale_peers {
+        if let Some(entry) = remotes.0.remove(&peer) {
+            if let Some(entity) = entry.entity {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+
+    for (_peer, entry) in remotes.0.iter_mut() {
+        match entry.entity {
+            None => {
+                let mesh = meshes.add(Sphere::new(20.0));
+                let mat = materials
+                    .add(StandardMaterial::from(Color::srgb(0.9, 0.3, 0.85)));
+                let id = commands
+                    .spawn((
+                        Mesh3d(mesh),
+                        MeshMaterial3d(mat),
+                        Transform::from_translation(entry.pos),
+                        RemotePlayerCell,
+                    ))
+                    .id();
+                entry.entity = Some(id);
+            }
+            Some(entity) => {
+                if let Ok(mut tf) = transforms.get_mut(entity) {
+                    tf.translation = entry.pos;
+                }
             }
         }
     }
