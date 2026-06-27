@@ -170,6 +170,7 @@ pub fn run() {
                 drain_net_events,
                 publish_self_position,
                 render_remote_players,
+                update_net_stats,
             )
                 .chain(),
         );
@@ -954,6 +955,10 @@ struct ErrorListText;
 #[derive(Component)]
 struct LogDrawer;
 
+#[cfg(target_arch = "wasm32")]
+#[derive(Component)]
+struct NetStatsText;
+
 fn setup(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
@@ -1020,6 +1025,25 @@ fn setup(mut commands: Commands) {
             Visibility::Hidden,
         ))
         .with_children(|parent| {
+            parent.spawn((
+                Text::new(
+                    "keys: WASD move · Space up · Shift down · `/\\ toggle · P screenshot",
+                ),
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.55, 0.55, 0.55)),
+            ));
+            parent.spawn((
+                Text::new("net: …"),
+                NetStatsText,
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.65, 0.85, 0.65)),
+            ));
             parent.spawn((
                 Text::new("FPS"),
                 FpsText,
@@ -1127,11 +1151,38 @@ fn screenshot_on_p(keys: Res<ButtonInput<KeyCode>>) {
     }
 }
 
+// Condensed network stats line in the drawer: self peer-id (short),
+// remote peer count, and the configured topic. Updated every frame.
+#[cfg(target_arch = "wasm32")]
+fn update_net_stats(
+    maybe_net: NonSend<Option<net::Net>>,
+    remotes: Res<RemotePlayers>,
+    mut texts: Query<&mut Text, With<NetStatsText>>,
+) {
+    let Some(t) = texts.iter_mut().next() else {
+        return;
+    };
+    let mut t = t;
+    match maybe_net.as_ref() {
+        Some(n) => {
+            let id = &n.identity().0;
+            let short = if id.len() > 10 { &id[id.len() - 10..] } else { id };
+            t.0 = format!(
+                "net: …{short} · peers={} · topic={POSITIONS_TOPIC}",
+                remotes.0.len()
+            );
+        }
+        None => {
+            t.0 = "net: booting…".into();
+        }
+    }
+}
+
 fn toggle_log_drawer(
     keys: Res<ButtonInput<KeyCode>>,
     mut drawers: Query<&mut Visibility, With<LogDrawer>>,
 ) {
-    if !keys.just_pressed(KeyCode::Slash) {
+    if !keys.just_pressed(KeyCode::Backquote) && !keys.just_pressed(KeyCode::Backslash) {
         return;
     }
     for mut vis in &mut drawers {
