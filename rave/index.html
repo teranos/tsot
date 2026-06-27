@@ -63,6 +63,55 @@
         }, 'image/png');
       };
 
+      // Identity persistence — IndexedDB-backed. Database 'rave', store
+      // 'identity', key 'self'. The Rust side calls these via
+      // wasm-bindgen externs declared in identity.rs. Errors route
+      // through showErr() so a failure is visible, not silent.
+      function openRaveDb() {
+        return new Promise(function(resolve, reject) {
+          const req = indexedDB.open('rave', 1);
+          req.onupgradeneeded = function(ev) {
+            const db = ev.target.result;
+            if (!db.objectStoreNames.contains('identity')) {
+              db.createObjectStore('identity');
+            }
+          };
+          req.onsuccess = function() { resolve(req.result); };
+          req.onerror = function() { reject(req.error); };
+        });
+      }
+
+      window.__raveLoadIdentity = async function() {
+        try {
+          const db = await openRaveDb();
+          return await new Promise(function(resolve, reject) {
+            const tx = db.transaction('identity', 'readonly');
+            const store = tx.objectStore('identity');
+            const req = store.get('self');
+            req.onsuccess = function() { resolve(req.result || null); };
+            req.onerror = function() { reject(req.error); };
+          });
+        } catch (e) {
+          showErr(`[__raveLoadIdentity] ${e}`);
+          return null;
+        }
+      };
+
+      window.__raveSaveIdentity = async function(bytes) {
+        try {
+          const db = await openRaveDb();
+          await new Promise(function(resolve, reject) {
+            const tx = db.transaction('identity', 'readwrite');
+            const store = tx.objectStore('identity');
+            const req = store.put(bytes, 'self');
+            req.onsuccess = function() { resolve(); };
+            req.onerror = function() { reject(req.error); };
+          });
+        } catch (e) {
+          showErr(`[__raveSaveIdentity] ${e}`);
+        }
+      };
+
       window.addEventListener('error', (ev) => {
         const where = ev.filename ? ` @ ${ev.filename}:${ev.lineno}:${ev.colno}` : '';
         showErr(`[window.error] ${ev.message}${where}`);

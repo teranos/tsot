@@ -9,6 +9,27 @@
 pub use real::{generate_identity_protobuf, load_or_generate_keypair};
 
 #[cfg(target_arch = "wasm32")]
+pub use bridge::{js_rave_load_identity, js_rave_save_identity};
+
+#[cfg(target_arch = "wasm32")]
+mod bridge {
+    use wasm_bindgen::prelude::*;
+
+    // Wasm-bindgen externs for the IndexedDB-backed identity bridge in
+    // index.html. Both return JS Promises; the call site wraps them in
+    // wasm_bindgen_futures::JsFuture to await. Load returns
+    // Uint8Array | null; save accepts a Uint8Array.
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_namespace = window, js_name = "__raveLoadIdentity")]
+        pub fn js_rave_load_identity() -> js_sys::Promise;
+
+        #[wasm_bindgen(js_namespace = window, js_name = "__raveSaveIdentity")]
+        pub fn js_rave_save_identity(bytes: js_sys::Uint8Array) -> js_sys::Promise;
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 mod real {
     use crate::net::NetError;
     use libp2p::identity;
