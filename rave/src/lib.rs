@@ -3,6 +3,7 @@
 use std::sync::Mutex;
 
 mod build_info;
+mod error;
 mod identity;
 mod net;
 
@@ -31,12 +32,18 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = "__raveError")]
     fn js_rave_error(msg: &str);
 
+    #[wasm_bindgen(js_namespace = window, js_name = "__raveErrorTyped")]
+    fn js_rave_error_typed(json: &str);
+
     #[wasm_bindgen(js_namespace = window, js_name = "__raveScreenshot")]
     fn js_rave_screenshot(filename: &str);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn js_rave_error(_msg: &str) {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn js_rave_error_typed(_json: &str) {}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn js_rave_screenshot(_filename: &str) {}
@@ -156,7 +163,13 @@ pub fn run() {
         app.insert_non_send_resource::<Option<net::Net>>(None);
         app.add_systems(
             Update,
-            (install_pending_net, drain_net_events, publish_self_position).chain(),
+            (
+                install_pending_net,
+                flush_typed_errors,
+                drain_net_events,
+                publish_self_position,
+            )
+                .chain(),
         );
 
         // Kick off the async boot. Awaits the JS identity bridge,
@@ -187,7 +200,12 @@ async fn boot_net() {
                     bytes
                 }
                 Err(_) => {
-                    js_rave_error("[__raveLoadIdentity] returned non-Uint8Array value");
+                    error::emit_region(
+                        error::Severity::Error,
+                        "identity-load",
+                        "non-Uint8Array from JS bridge",
+                        "expected Uint8Array (or null), got something else",
+                    );
                     return;
                 }
             }
@@ -199,18 +217,33 @@ async fn boot_net() {
                     let arr = js_sys::Uint8Array::from(fresh.as_slice());
                     let save_promise = identity::js_rave_save_identity(arr);
                     if let Err(e) = wasm_bindgen_futures::JsFuture::from(save_promise).await {
-                        js_rave_error(&format!("[__raveSaveIdentity rejected] {e:?}"));
+                        error::emit_region(
+                            error::Severity::Warn,
+                            "identity-save",
+                            "IndexedDB save rejected",
+                            format!("{e:?}"),
+                        );
                     }
                     fresh
                 }
                 Err(e) => {
-                    js_rave_error(&format!("[generate_identity_protobuf] {e:?}"));
+                    error::emit_region(
+                        error::Severity::Error,
+                        "identity-generate",
+                        "Ed25519 keypair generation failed",
+                        format!("{e:?}"),
+                    );
                     return;
                 }
             }
         }
         Err(e) => {
-            js_rave_error(&format!("[__raveLoadIdentity rejected] {e:?}"));
+            error::emit_region(
+                error::Severity::Error,
+                "identity-load",
+                "IndexedDB load rejected",
+                format!("{e:?}"),
+            );
             return;
         }
     };
@@ -218,13 +251,23 @@ async fn boot_net() {
     let net = match net::Net::new(vec![RELAY_MULTIADDR.to_string()], Some(&identity_bytes)) {
         Ok(n) => n,
         Err(e) => {
-            js_rave_error(&format!("[Net::new] {e:?}"));
+            error::emit_region(
+                error::Severity::Error,
+                "net-new",
+                "Swarm construction failed",
+                format!("{e:?}"),
+            );
             return;
         }
     };
 
     if let Err(e) = net.subscribe(&net::Topic(POSITIONS_TOPIC.to_string())) {
-        js_rave_error(&format!("[Net::subscribe] {e:?}"));
+        error::emit_region(
+            error::Severity::Error,
+            "net-subscribe",
+            "subscribe to rave-positions/v1 failed",
+            format!("{e:?}"),
+        );
         return;
     }
 
@@ -276,14 +319,50 @@ fn publish_self_position(
     let bytes = match serde_json::to_vec(&pos) {
         Ok(b) => b,
         Err(e) => {
-            js_rave_error(&format!("[publish_self_position serialize] {e}"));
+            error::emit_region(
+                error::Severity::Error,
+                "publish-serialize",
+                "RavePosition serialize failed",
+                format!("{e}"),
+            );
             return;
         }
     };
     // publish() failing means the cmd channel is closed — the swarm
     // task died. Critical. Surface, don't swallow.
     if let Err(e) = n.publish(&net::Topic(POSITIONS_TOPIC.to_string()), &bytes) {
-        js_rave_error(&format!("[publish_self_position] {e:?}"));
+        error::emit_region(
+            error::Severity::Error,
+            "publish-send",
+            "publish to rave-positions/v1 failed",
+            format!("{e:?}"),
+        );
+    }
+}
+
+// Pulls every Error from the rave::error thread_local buffer, pushes
+// each to the in-canvas drawer (formatted with severity/region/title)
+// AND to the HTML overlay via __raveErrorTyped (typed JSON, so the
+// receiving JS keeps the structured fields). Single source of truth
+// for typed errors crossing the wasm→JS boundary.
+#[cfg(target_arch = "wasm32")]
+fn flush_typed_errors(mut error_log: ResMut<ErrorLog>) {
+    for err in error::drain() {
+        let region = err.context.region.as_deref().unwrap_or("?");
+        let severity_for_drawer = match err.severity {
+            sacred_error::Severity::Info => Severity::Note,
+            sacred_error::Severity::Warn => Severity::Warn,
+            sacred_error::Severity::Error => Severity::Error,
+            sacred_error::Severity::Panic => Severity::Error,
+        };
+        error_log.emit(
+            severity_for_drawer,
+            format!("[{region}] {} — {}", err.title, err.why),
+        );
+        match serde_json::to_string(&err) {
+            Ok(json) => js_rave_error_typed(&json),
+            Err(e) => js_rave_error(&format!("[flush_typed_errors serialize] {e}")),
+        }
     }
 }
 

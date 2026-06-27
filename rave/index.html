@@ -43,6 +43,21 @@
       // Exposed for wasm to call directly through wasm-bindgen extern.
       window.__raveError = showErr;
 
+      // Typed Error surface (sacred-error pipeline). Wasm calls this
+      // with a JSON-serialized sacred_error::Error. The rendered line
+      // carries severity, surface, region, title, why — the
+      // contextual fields ERROR.md's axiom requires.
+      window.__raveErrorTyped = function(json) {
+        try {
+          const e = JSON.parse(json);
+          const region = (e.context && e.context.region) ? '/' + e.context.region : '';
+          const surface = (e.context && e.context.surface) ? e.context.surface : '?';
+          showErr(`[${e.severity}@${surface}${region}] ${e.title || ''} — ${e.why || ''}`);
+        } catch (parseErr) {
+          showErr(`[__raveErrorTyped parse failed] ${parseErr}: ${json}`);
+        }
+      };
+
       // Screenshot — wasm fires this on 'P' press. Grabs the canvas as a
       // PNG and writes it to the system clipboard via navigator.clipboard.
       // Sacred-error path on every failure so the user sees what went wrong.
