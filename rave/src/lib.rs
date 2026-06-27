@@ -3,6 +3,7 @@
 use std::sync::Mutex;
 
 mod build_info;
+mod identity;
 mod net;
 
 use bevy::asset::AssetMetaCheck;
