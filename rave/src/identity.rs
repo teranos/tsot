@@ -10,9 +10,41 @@ pub use real::{generate_identity_protobuf, load_or_generate_keypair};
 
 #[cfg(target_arch = "wasm32")]
 mod real {
-    // RED: load_or_generate_keypair + generate_identity_protobuf are
-    // referenced by the tests below but not yet defined. GREEN commit
-    // adds the impl here.
+    use crate::net::NetError;
+    use libp2p::identity;
+
+    /// `bytes` carries the libp2p-canonical protobuf-encoded keypair
+    /// the JS bridge loaded from IndexedDB. `None` → generate fresh
+    /// (the bridge persists the bytes after this call returns so the
+    /// next session restores them). Decode failure surfaces as an
+    /// error — refusing to fall through to "generate fresh" is
+    /// deliberate so a corrupt stored identity is visible, not a
+    /// silent PeerId rotation behind the user's back.
+    pub fn load_or_generate_keypair(
+        bytes: Option<&[u8]>,
+    ) -> Result<identity::Keypair, NetError> {
+        match bytes {
+            Some(b) => identity::Keypair::from_protobuf_encoding(b).map_err(|e| {
+                NetError::ProviderInternal {
+                    reason: format!("identity decode: {e}"),
+                }
+            }),
+            None => Ok(identity::Keypair::generate_ed25519()),
+        }
+    }
+
+    /// Mint a fresh Ed25519 keypair and return its libp2p-canonical
+    /// protobuf encoding. JS bridge calls this on first visit when
+    /// IndexedDB has no `rave/identity/v1` entry; the bridge stores
+    /// the bytes and feeds them back to `load_or_generate_keypair`
+    /// next session so PeerId stays stable.
+    pub fn generate_identity_protobuf() -> Result<Vec<u8>, NetError> {
+        identity::Keypair::generate_ed25519()
+            .to_protobuf_encoding()
+            .map_err(|e| NetError::ProviderInternal {
+                reason: format!("identity encode: {e}"),
+            })
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
