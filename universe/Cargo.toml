@@ -1,0 +1,48 @@
+[package]
+name = "universe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+exclude = ["dist"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+
+[features]
+dev = [
+    "bevy/dynamic_linking",
+]
+
+[dependencies]
+bevy = { version = "0.19.0", default-features = false, features = [
+    "default_app",
+    "2d_api",
+    "2d_bevy_render",
+    "3d_api",
+    "3d_bevy_render",
+    "tonemapping_luts",
+    "ui_api",
+    "ui_bevy_render",
+    "scene",
+    "bevy_winit",
+    "default_font",
+    "webgpu",
+    "debug",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+js-sys = "=0.3.98"
+wasm-bindgen = "=0.2.121"

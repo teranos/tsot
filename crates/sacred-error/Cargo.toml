@@ -10,10 +10,9 @@ description = "The Sacred Error primitive — one typed value that crosses every
 crate-type = ["rlib"]
 
 [dependencies]
-# Pinned to match TSOT root (`serde = "=1.0.219"`). roam pins
-# `serde = "1"` (open), so the version that compiles for both is
-# whatever cargo resolves under TSOT's pin — TSOT is stricter.
-serde = { version = "=1.0.219", features = ["derive"] }
+# Range pin (`1.0.219`, not exact) so Bevy's transitives (which want
+# serde ≥1.0.220) can resolve. serde 1.0.x is API-stable.
+serde = { version = "1.0.219", features = ["derive"] }
 
 [dev-dependencies]
 # Tests pin the wire shape; serde_json is the cross-layer envelope.

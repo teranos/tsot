@@ -11,6 +11,6 @@ description = "TSOT card-level primitives shared at the source level between roa
 crate-type = ["rlib"]
 
 [dependencies]
-# Match the stricter pin used in TSOT root so both projects' lock
-# graphs agree on one version.
-serde = { version = "=1.0.219", features = ["derive"] }
+# Range pin (`1.0.219`, not exact) so Bevy's transitives (which want
+# serde ≥1.0.220) can resolve. serde 1.0.x is API-stable.
+serde = { version = "1.0.219", features = ["derive"] }
