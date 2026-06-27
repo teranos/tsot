@@ -53,6 +53,29 @@ static LOG_QUEUE: Mutex<Vec<(Severity, String)>> = Mutex::new(Vec::new());
 // Cube extent — world clamps to [-CUBE_HALF, CUBE_HALF] on each axis.
 const CUBE_HALF: f32 = 300.0;
 
+// Production relay multiaddr — shared with roam, served by the relayer
+// binary at `relay.sbvh.nl`. The 12D3KooW… is the relay's deterministic
+// PeerId derived from its persistent identity secret in AWS Secrets
+// Manager; same value roam's JS bridge uses.
+#[cfg(target_arch = "wasm32")]
+const RELAY_MULTIADDR: &str =
+    "/dns4/relay.sbvh.nl/tcp/443/wss/p2p/12D3KooWMSVxS7ntMVuvVADgZWMZwsjyYmcZvhnyQAJ53PtSJHpN";
+
+#[cfg(target_arch = "wasm32")]
+const POSITIONS_TOPIC: &str = "rave-positions/v1";
+
+// Bridge between the async boot task (spawn_local on the JS microtask
+// loop) and Bevy's Update schedule. The async boot writes Net into this
+// cell once identity is resolved + Swarm is constructed; the Update
+// system `install_pending_net` takes it the next frame and inserts it
+// as a NonSend resource. wasm32 is single-threaded so the RefCell never
+// races.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static PENDING_NET: std::cell::RefCell<Option<net::Net>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
     // Pre-App panic hook — catches panics during App::new() and the
@@ -125,7 +148,150 @@ pub fn run() {
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, update_clock);
 
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Network resource lives as NonSend because Net contains Rc +
+        // RefCell (the swarm task uses Rc clones for the shared event
+        // queue). Inserted as None; the async boot fills it.
+        app.insert_non_send_resource::<Option<net::Net>>(None);
+        app.add_systems(Update, (install_pending_net, drain_net_events).chain());
+
+        // Kick off the async boot. Awaits the JS identity bridge,
+        // constructs Net, subscribes to the positions topic, stashes
+        // it in PENDING_NET for the Update system to pick up next
+        // frame.
+        wasm_bindgen_futures::spawn_local(boot_net());
+    }
+
     app.run();
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn boot_net() {
+    use wasm_bindgen::JsCast;
+
+    // Load identity bytes from IndexedDB, or mint+persist fresh on
+    // first visit. Decode failure surfaces through __raveError; the
+    // boot continues with fresh bytes only if load returned null —
+    // never on decode error (that would silently rotate PeerId).
+    let load_promise = identity::js_rave_load_identity();
+    let identity_bytes: Vec<u8> = match wasm_bindgen_futures::JsFuture::from(load_promise).await {
+        Ok(val) if !val.is_null() && !val.is_undefined() => {
+            match val.dyn_into::<js_sys::Uint8Array>() {
+                Ok(arr) => {
+                    let mut bytes = vec![0u8; arr.length() as usize];
+                    arr.copy_to(&mut bytes);
+                    bytes
+                }
+                Err(_) => {
+                    js_rave_error("[__raveLoadIdentity] returned non-Uint8Array value");
+                    return;
+                }
+            }
+        }
+        Ok(_) => {
+            // null/undefined — first visit. Generate + persist.
+            match identity::generate_identity_protobuf() {
+                Ok(fresh) => {
+                    let arr = js_sys::Uint8Array::from(fresh.as_slice());
+                    let save_promise = identity::js_rave_save_identity(arr);
+                    if let Err(e) = wasm_bindgen_futures::JsFuture::from(save_promise).await {
+                        js_rave_error(&format!("[__raveSaveIdentity rejected] {e:?}"));
+                    }
+                    fresh
+                }
+                Err(e) => {
+                    js_rave_error(&format!("[generate_identity_protobuf] {e:?}"));
+                    return;
+                }
+            }
+        }
+        Err(e) => {
+            js_rave_error(&format!("[__raveLoadIdentity rejected] {e:?}"));
+            return;
+        }
+    };
+
+    let net = match net::Net::new(vec![RELAY_MULTIADDR.to_string()], Some(&identity_bytes)) {
+        Ok(n) => n,
+        Err(e) => {
+            js_rave_error(&format!("[Net::new] {e:?}"));
+            return;
+        }
+    };
+
+    if let Err(e) = net.subscribe(&net::Topic(POSITIONS_TOPIC.to_string())) {
+        js_rave_error(&format!("[Net::subscribe] {e:?}"));
+        return;
+    }
+
+    PENDING_NET.with(|cell| *cell.borrow_mut() = Some(net));
+}
+
+#[cfg(target_arch = "wasm32")]
+fn install_pending_net(mut maybe_net: NonSendMut<Option<net::Net>>) {
+    if maybe_net.is_some() {
+        return;
+    }
+    PENDING_NET.with(|cell| {
+        if let Some(n) = cell.borrow_mut().take() {
+            *maybe_net = Some(n);
+        }
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn drain_net_events(
+    maybe_net: NonSend<Option<net::Net>>,
+    mut error_log: ResMut<ErrorLog>,
+) {
+    let Some(n) = maybe_net.as_ref() else {
+        return;
+    };
+    for ev in n.poll_events() {
+        match ev {
+            net::NetEvent::PeerUp { peer, .. } => {
+                error_log.emit(Severity::Note, format!("[net] peer up: {}", peer.0));
+            }
+            net::NetEvent::PeerDown { peer, reason } => {
+                error_log.emit(
+                    Severity::Warn,
+                    format!("[net] peer down: {} ({reason})", peer.0),
+                );
+            }
+            net::NetEvent::Message {
+                topic, from, bytes, ..
+            } => {
+                error_log.emit(
+                    Severity::Note,
+                    format!(
+                        "[net] msg on {} from {} ({} bytes)",
+                        topic.0,
+                        from.0,
+                        bytes.len()
+                    ),
+                );
+            }
+            net::NetEvent::SubscriptionChange {
+                topic,
+                peer,
+                joined,
+            } => {
+                error_log.emit(
+                    Severity::Note,
+                    format!(
+                        "[net] {} on {} by {}",
+                        if joined { "+sub" } else { "-sub" },
+                        topic.0,
+                        peer.0
+                    ),
+                );
+            }
+            net::NetEvent::Error(err) => {
+                error_log.emit(Severity::Error, format!("[net] {err:?}"));
+            }
+        }
+    }
 }
 
 #[derive(Component)]
