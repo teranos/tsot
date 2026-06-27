@@ -1,0 +1,89 @@
+name: deploy-rave
+
+on:
+  push:
+    branches: [master, rave]
+    paths:
+      - 'rave/**'
+      - '.github/workflows/deploy-rave.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-rave
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  STATIC_BUCKET: rave-sbvh-static
+  STATIC_DISTRIBUTION_ID: REPLACE_AFTER_TF_APPLY
+  DEPLOY_ROLE_ARN: arn:aws:iam::548351057127:role/rave-github-deploy
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rave
+
+      - name: Build wasm bundle
+        working-directory: rave
+        run: nix develop -c make wasm
+
+      - name: Verify dist contents
+        working-directory: rave
+        run: |
+          test -f dist/index.html   || { echo "dist/index.html missing"; exit 1; }
+          test -f dist/rave_bg.wasm || { echo "dist/rave_bg.wasm missing"; exit 1; }
+          test -f dist/rave.js      || { echo "dist/rave.js missing"; exit 1; }
+          ls -la dist/
+
+      - name: Assume deploy role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync dist to S3
+        working-directory: rave
+        run: |
+          aws s3 sync dist/ "s3://${{ env.STATIC_BUCKET }}/" \
+            --delete \
+            --cache-control "public, max-age=300" \
+            --exclude "index.html"
+          aws s3 cp dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --content-type "text/html; charset=utf-8"
+
+      - name: Invalidate CloudFront
+        run: |
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
+            --paths '/*' \
+            --query 'Invalidation.Id' \
+            --output text)
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
+            --id "$INVALIDATION_ID"
+
+      - name: Summarize
+        run: |
+          {
+            echo "## Deploy complete"
+            echo ""
+            echo "- Live at: https://rave.sbvh.nl/"
+          } >> "$GITHUB_STEP_SUMMARY"
