@@ -5,8 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
     <title>rave</title>
     <style>
-      html, body { margin: 0; padding: 0; height: 100%; background: #111; }
-      canvas { display: block; width: 100vw; height: 100vh; }
+      /* overflow:hidden + overscroll-behavior:none stop the page itself
+         from scrolling or pull-to-refreshing on a vertical touch-drag. */
+      html, body { margin: 0; padding: 0; height: 100%; background: #111; overflow: hidden; overscroll-behavior: none; }
+      /* touch-action:none hands every touch on the canvas to the game
+         instead of the browser's scroll/zoom gestures — without it a
+         vertical drag scrolls the viewport (and gets cancelled before it
+         can drive movement) instead of steering the player. */
+      canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
       /* Out-of-Bevy error surface — visible even when wasm fails to
          instantiate or Bevy panics before its first Update tick.
          The in-canvas drawer only works if Bevy's render loop is
