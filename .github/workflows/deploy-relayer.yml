@@ -10,7 +10,7 @@ name: deploy-relayer
 
 on:
   push:
-    branches: [master]
+    branches: [master, rave]
     paths:
       - 'roam/relayers/**'
       - '.github/workflows/deploy-relayer.yml'
