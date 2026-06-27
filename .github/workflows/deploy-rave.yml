@@ -51,9 +51,14 @@ jobs:
       - name: Verify dist contents
         working-directory: rave
         run: |
-          test -f dist/index.html   || { echo "dist/index.html missing"; exit 1; }
-          test -f dist/rave_bg.wasm || { echo "dist/rave_bg.wasm missing"; exit 1; }
-          test -f dist/rave.js      || { echo "dist/rave.js missing"; exit 1; }
+          test -f dist/index.html        || { echo "dist/index.html missing"; exit 1; }
+          ls dist/rave_bg.*.wasm >/dev/null 2>&1 || { echo "dist/rave_bg.*.wasm missing"; exit 1; }
+          ls dist/rave.*.js      >/dev/null 2>&1 || { echo "dist/rave.*.js missing"; exit 1; }
+          # index.html must point at the hashed asset that exists on disk —
+          # the matched-pair guarantee is only worth anything if it holds.
+          grep -oE 'rave\.[0-9a-f]+\.js' dist/index.html | while read -r js; do
+            test -f "dist/$js" || { echo "index.html references missing $js"; exit 1; }
+          done
           ls -la dist/
 
       - name: Assume deploy role
@@ -65,9 +70,11 @@ jobs:
       - name: Sync dist to S3
         working-directory: rave
         run: |
+          # Hashed assets are content-addressed, so they can cache forever
+          # — a new build emits a new filename rather than mutating one.
           aws s3 sync dist/ "s3://${{ env.STATIC_BUCKET }}/" \
             --delete \
-            --cache-control "public, max-age=300" \
+            --cache-control "public, max-age=31536000, immutable" \
             --exclude "index.html"
           aws s3 cp dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
             --cache-control "public, max-age=60, must-revalidate" \
