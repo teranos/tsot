@@ -379,7 +379,7 @@ fn wobble_player_cell(
 // conserved — what you ate goes into you.
 fn eat_algae(
     mut commands: Commands,
-    mut players: Query<(&Transform, &mut CellRadius), With<PlayerCell>>,
+    mut players: Query<(&Transform, &mut CellRadius), (With<PlayerCell>, Without<Algae>)>,
     algae: Query<(Entity, &Transform, &CellRadius), (With<Algae>, Without<Dying>)>,
 ) {
     for (player_t, mut player_r) in &mut players {
