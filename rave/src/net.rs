@@ -5,6 +5,65 @@
 //! `rave-positions/v1`. Errors never collapse — every variant of
 //! NetError pins one cause.
 
+use serde::{Deserialize, Serialize};
+
+/// libp2p PeerId in its base58btc form (`12D3KooW…` for Ed25519 keys).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PeerId(pub String);
+
+/// gossipsub topic name. Single string, no hashing — IdentTopic on the
+/// libp2p side.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Topic(pub String);
+
+/// One cause per variant. No collapse — each carries the context the
+/// drawer needs to surface what the user should do next.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NetError {
+    PublishFailed { topic: Topic, reason: String },
+    SubscribeFailed { topic: Topic, reason: String },
+    NotConnected { reason: String },
+    InvalidTopic { topic: Topic, reason: String },
+    ProviderInternal { reason: String },
+}
+
+/// Asynchronous events the Swarm task accumulates and the Bevy drain
+/// system reads each frame.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NetEvent {
+    PeerUp {
+        peer: PeerId,
+        addrs: Vec<String>,
+    },
+    PeerDown {
+        peer: PeerId,
+        reason: String,
+    },
+    Message {
+        topic: Topic,
+        from: PeerId,
+        bytes: Vec<u8>,
+        at_ms: u64,
+    },
+    SubscriptionChange {
+        topic: Topic,
+        peer: PeerId,
+        joined: bool,
+    },
+    Error(NetError),
+}
+
+/// Wire payload for `rave-positions/v1`. Player XYZ in world units,
+/// peer's libp2p PeerId, wall-clock millis at publish.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RavePosition {
+    pub peer: String,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub at_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
