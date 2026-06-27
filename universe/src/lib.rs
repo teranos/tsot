@@ -2,6 +2,8 @@
 // alongside repo + branch + sha. Watcher picks adaptive sleep when in_progress.
 use std::sync::Mutex;
 
+mod build_info;
+
 use bevy::asset::AssetMetaCheck;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::log::{
@@ -554,7 +556,7 @@ fn setup(mut commands: Commands) {
     ));
 
     commands.spawn((
-        Text::new("universe · dev"),
+        Text::new(format!("universe · {} · {}", build_info::COMMIT, build_info::BUILT_AT)),
         TextFont {
             font_size: FontSize::Px(11.0),
             ..default()
