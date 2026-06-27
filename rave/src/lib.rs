@@ -3,6 +3,7 @@
 use std::sync::Mutex;
 
 mod build_info;
+mod error;
 mod identity;
 mod net;
 
@@ -154,9 +155,16 @@ pub fn run() {
         // RefCell (the swarm task uses Rc clones for the shared event
         // queue). Inserted as None; the async boot fills it.
         app.insert_non_send_resource::<Option<net::Net>>(None);
+        app.insert_resource(RemotePlayers::default());
         app.add_systems(
             Update,
-            (install_pending_net, drain_net_events, publish_self_position).chain(),
+            (
+                install_pending_net,
+                drain_net_events,
+                publish_self_position,
+                render_remote_players,
+            )
+                .chain(),
         );
 
         // Kick off the async boot. Awaits the JS identity bridge,
@@ -287,14 +295,38 @@ fn publish_self_position(
     }
 }
 
+// R10: remote player state. One entry per other peer's last-known
+// position. The Bevy Entity is spawned lazily by render_remote_players
+// the first time we receive a position for that peer; subsequent
+// updates only mutate the Transform.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct RemoteEntry {
+    pos: Vec3,
+    last_seen_ms: u64,
+    entity: Option<Entity>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource, Default)]
+struct RemotePlayers(std::collections::HashMap<String, RemoteEntry>);
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Component)]
+struct RemotePlayerCell;
+
 #[cfg(target_arch = "wasm32")]
 fn drain_net_events(
     maybe_net: NonSend<Option<net::Net>>,
     mut error_log: ResMut<ErrorLog>,
+    mut remotes: ResMut<RemotePlayers>,
 ) {
     let Some(n) = maybe_net.as_ref() else {
         return;
     };
+    let self_peer = n.identity().0.clone();
+    let now_ms = js_sys::Date::now() as u64;
+
     for ev in n.poll_events() {
         match ev {
             net::NetEvent::PeerUp { peer, .. } => {
@@ -306,18 +338,29 @@ fn drain_net_events(
                     format!("[net] peer down: {} ({reason})", peer.0),
                 );
             }
-            net::NetEvent::Message {
-                topic, from, bytes, ..
-            } => {
-                error_log.emit(
-                    Severity::Note,
-                    format!(
-                        "[net] msg on {} from {} ({} bytes)",
-                        topic.0,
-                        from.0,
-                        bytes.len()
-                    ),
-                );
+            net::NetEvent::Message { topic, bytes, .. } => {
+                // Route rave-positions traffic to the RemotePlayers map.
+                // Don't push every gossip message into the drawer — at
+                // 10Hz per peer it floods the text node and tanks FPS.
+                if topic.0 == POSITIONS_TOPIC {
+                    match serde_json::from_slice::<net::RavePosition>(&bytes) {
+                        Ok(pos) => {
+                            if pos.peer != self_peer {
+                                let entry =
+                                    remotes.0.entry(pos.peer.clone()).or_default();
+                                entry.pos = Vec3::new(pos.x, pos.y, pos.z);
+                                entry.last_seen_ms = now_ms;
+                            }
+                        }
+                        Err(e) => {
+                            error_log.emit(
+                                Severity::Error,
+                                format!("[net] decode RavePosition: {e}"),
+                            );
+                        }
+                    }
+                }
+                // Other topics: do nothing for now. Drawer stays quiet.
             }
             net::NetEvent::SubscriptionChange {
                 topic,
@@ -336,6 +379,59 @@ fn drain_net_events(
             }
             net::NetEvent::Error(err) => {
                 error_log.emit(Severity::Error, format!("[net] {err:?}"));
+            }
+        }
+    }
+}
+
+// R10 render: walks the RemotePlayers map. New peers get a Capsule
+// mesh (humanoid placeholder, not a cell). Existing entries get their
+// Transform updated. Entries older than 30s get despawned and removed.
+#[cfg(target_arch = "wasm32")]
+fn render_remote_players(
+    mut commands: Commands,
+    mut remotes: ResMut<RemotePlayers>,
+    mut transforms: Query<&mut Transform, With<RemotePlayerCell>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let now_ms = js_sys::Date::now() as u64;
+    let stale_cutoff = now_ms.saturating_sub(30_000);
+
+    let stale_peers: Vec<String> = remotes
+        .0
+        .iter()
+        .filter(|(_, e)| e.last_seen_ms < stale_cutoff)
+        .map(|(p, _)| p.clone())
+        .collect();
+    for peer in stale_peers {
+        if let Some(entry) = remotes.0.remove(&peer) {
+            if let Some(entity) = entry.entity {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+
+    for (_peer, entry) in remotes.0.iter_mut() {
+        match entry.entity {
+            None => {
+                let mesh = meshes.add(Capsule3d::new(6.0, 18.0));
+                let mat =
+                    materials.add(StandardMaterial::from(Color::srgb(0.9, 0.3, 0.85)));
+                let id = commands
+                    .spawn((
+                        Mesh3d(mesh),
+                        MeshMaterial3d(mat),
+                        Transform::from_translation(entry.pos),
+                        RemotePlayerCell,
+                    ))
+                    .id();
+                entry.entity = Some(id);
+            }
+            Some(entity) => {
+                if let Ok(mut tf) = transforms.get_mut(entity) {
+                    tf.translation = entry.pos;
+                }
             }
         }
     }
@@ -722,12 +818,20 @@ struct ErrorEntry {
 #[derive(Resource, Default)]
 struct ErrorLog(Vec<ErrorEntry>);
 
+// Cap to last N entries so a runaway producer (gossip-flood, panic
+// loop) can't grow the in-canvas text node unbounded and tank FPS.
+const ERROR_LOG_CAP: usize = 50;
+
 impl ErrorLog {
     fn emit(&mut self, severity: Severity, message: impl Into<String>) {
         self.0.push(ErrorEntry {
             severity,
             message: message.into(),
         });
+        if self.0.len() > ERROR_LOG_CAP {
+            let drop = self.0.len() - ERROR_LOG_CAP;
+            self.0.drain(0..drop);
+        }
     }
 }
 
