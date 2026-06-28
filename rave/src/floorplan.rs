@@ -165,7 +165,7 @@ pub fn setup_floor_plan(
                 color,
                 intensity: 0.0,
                 range: 350.0,
-                shadows_enabled: false,
+                shadow_maps_enabled: false,
                 ..default()
             },
             Transform::from_xyz(x, 60.0, z),
