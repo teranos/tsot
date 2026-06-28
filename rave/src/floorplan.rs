@@ -196,7 +196,7 @@ pub fn setup_floor_plan(
                 range: 600.0,
                 outer_angle: 0.35,
                 inner_angle: 0.18,
-                shadows_enabled: false,
+                shadow_maps_enabled: false,
                 ..default()
             },
             Transform::from_xyz(x, truss_y - 8.0, truss_z)
