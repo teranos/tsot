@@ -1,0 +1,27 @@
+[package]
+name = "rave-positions-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native libp2p integration test for rave-positions/v1 — spawns the relayer binary on loopback, two native clients dial, A publishes, B asserts. Lives outside the rave crate so Linux CI never has to compile Bevy."
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+# Mirrors roam/Cargo.toml + the rave wasm32 pin set, native features.
+libp2p = { version = "=0.56.0", default-features = false, features = [
+    "tokio",
+    "websocket",
+    "tcp",
+    "dns",
+    "noise",
+    "yamux",
+    "gossipsub",
+    "ping",
+    "identify",
+    "macros",
+] }
+tokio = { version = "=1.47.1", features = ["full"] }
+futures = "=0.3.32"
+serde_json = "=1.0.143"

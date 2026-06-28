@@ -82,12 +82,15 @@ fn pick_free_port() -> u16 {
 async fn rave_position_propagates_via_real_relayer() {
     // === 1. Build the relayer binary. rave and relayers are separate
     // crates; build from inside the relayers/ dir directly. ===
+    // manifest_dir = .../tsot-roam/crates/rave-positions-test/
+    // repo root    = .../tsot-roam/
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let relayers_dir = manifest_dir
+    let repo_root = manifest_dir
         .parent()
-        .expect("rave/ parent")
-        .join("roam")
-        .join("relayers");
+        .expect("crates/ parent")
+        .parent()
+        .expect("tsot-roam root");
+    let relayers_dir = repo_root.join("roam").join("relayers");
     let status = Command::new("cargo")
         .args(["build", "--release"])
         .current_dir(&relayers_dir)

@@ -26,10 +26,6 @@ dev = [
 ]
 
 [dependencies]
-# Bevy stays in unconditional [dependencies] so its proc-macros (Resource,
-# Component, etc.) can resolve `bevy_ecs` at the workspace level. The
-# `wayland` feature ensures winit gets a working backend on Linux CI
-# without needing X11 system libs.
 bevy = { version = "=0.19.0", default-features = false, features = [
     "default_app",
     "2d_api",
@@ -43,7 +39,6 @@ bevy = { version = "=0.19.0", default-features = false, features = [
     "bevy_winit",
     "default_font",
     "webgpu",
-    "wayland",
     "debug",
 ] }
 serde = { version = "=1.0.228", features = ["derive"] }
@@ -78,23 +73,7 @@ libp2p-connection-limits = "=0.6.0"
 futures = "=0.3.32"
 futures-timer = "=3.0.4"
 
-# Native dev-dependencies for the integration test that spawns the
-# relayer binary and two native libp2p clients. Mirrors roam's pin set
-# in roam/Cargo.toml (same =0.56.0, native features include tcp +
-# websocket + tokio so the test client talks the same wire the deployed
-# relayer + browser bundle speak).
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-libp2p = { version = "=0.56.0", default-features = false, features = [
-    "tokio",
-    "websocket",
-    "tcp",
-    "dns",
-    "noise",
-    "yamux",
-    "gossipsub",
-    "ping",
-    "identify",
-    "macros",
-] }
-tokio = { version = "=1.47.1", features = ["full"] }
-futures = "=0.3.32"
+# The native integration test for rave-positions/v1 lives at
+# `crates/rave-positions-test/` so the Linux CI runner never builds
+# the rave wasm-only Bevy lib. See that crate's Cargo.toml for the
+# native libp2p / tokio pins.
