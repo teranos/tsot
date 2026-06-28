@@ -27,7 +27,9 @@ wasm:
 	  sed -i "s/rave_bg\.wasm/rave_bg.$$wh.wasm/g" rave.js && \
 	  jh=$$(sha256sum rave.js | cut -c1-12) && \
 	  mv rave.js rave.$$jh.js && \
-	  sed "s|\./rave\.js|./rave.$$jh.js|g" ../index.html > index.html
+	  sed -e "s|\./rave\.js|./rave.$$jh.js|g" \
+	      -e "s|WASM_URL_PLACEHOLDER|./rave_bg.$$wh.wasm|g" \
+	      ../index.html > index.html
 	@echo ""
 	@echo "staged $(WASM_DIST)/"
 	@ls -lah $(WASM_DIST)/
