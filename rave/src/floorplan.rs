@@ -12,6 +12,8 @@
 
 use bevy::prelude::*;
 
+use crate::physics::AabbCollider;
+
 /// Half-extent of the clearing — the bounding region within which
 /// the rave's physical structures sit. Trees in `trees.rs` are
 /// excluded from this radius so the dancefloor isn't overgrown.
@@ -74,8 +76,8 @@ pub fn setup_floor_plan(
     let dj_mat = materials.add(StandardMaterial::from(Color::srgb(0.18, 0.10, 0.22)));
     let speaker_mat = materials.add(StandardMaterial::from(Color::srgb(0.04, 0.04, 0.06)));
     let dj_z = -CLEARING_HALF + 60.0;
-    // DJ booth — wide, shallow, waist-high.
-    spawn_box(
+    // DJ booth — wide, shallow, waist-high. Solid: collides.
+    spawn_collider_box(
         &mut commands,
         &mut meshes,
         &dj_mat,
@@ -85,20 +87,27 @@ pub fn setup_floor_plan(
     // Speakers — tall narrow boxes flanking the DJ. Tagged with
     // `Speaker` so the audio system can attach `AudioPlayer` +
     // `PlaybackSettings::SPATIAL` to them in a later startup
-    // system (see `audio::setup_audio`).
+    // system (see `audio::setup_audio`). Also colliders — you can't
+    // walk through a speaker.
     for x in [-130.0_f32, 130.0] {
-        let speaker_mesh = meshes.add(Cuboid::new(50.0, 180.0, 50.0));
+        let speaker_size = Vec3::new(50.0, 180.0, 50.0);
+        let speaker_mesh = meshes.add(Cuboid::new(
+            speaker_size.x,
+            speaker_size.y,
+            speaker_size.z,
+        ));
         commands.spawn((
             Speaker,
             Mesh3d(speaker_mesh),
             MeshMaterial3d(speaker_mat.clone()),
             Transform::from_xyz(x, 90.0, dj_z),
+            AabbCollider::cuboid(speaker_size),
         ));
     }
 
     // ----- Bar (west side of the clearing) -----
     let bar_mat = materials.add(StandardMaterial::from(Color::srgb(0.20, 0.13, 0.07)));
-    spawn_box(
+    spawn_collider_box(
         &mut commands,
         &mut meshes,
         &bar_mat,
@@ -270,6 +279,25 @@ fn spawn_box(
         Mesh3d(mesh),
         MeshMaterial3d(mat.clone()),
         Transform::from_translation(pos),
+    ));
+}
+
+/// Same as `spawn_box` but also attaches an `AabbCollider` so the
+/// physics system stops the player walking through it. Used for the
+/// DJ booth and the bar — anything you can't pass through.
+fn spawn_collider_box(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    mat: &Handle<StandardMaterial>,
+    pos: Vec3,
+    size: Vec3,
+) {
+    let mesh = meshes.add(Cuboid::new(size.x, size.y, size.z));
+    commands.spawn((
+        Mesh3d(mesh),
+        MeshMaterial3d(mat.clone()),
+        Transform::from_translation(pos),
+        AabbCollider::cuboid(size),
     ));
 }
 

@@ -27,6 +27,7 @@ mod identity;
 mod net;
 mod net_glue;
 mod observability;
+mod physics;
 mod room;
 mod trail;
 mod trees;
@@ -146,6 +147,10 @@ pub fn run() {
                 drawer::toggle_log_drawer,
                 screenshot_on_p,
                 room::move_player,
+                // Collisions resolve AFTER move advances position but
+                // BEFORE the camera reads it — so the camera tracks
+                // the post-resolve location, not the penetration.
+                physics::resolve_collisions,
                 room::camera_follow,
                 floorplan::pulse_strobes,
                 floorplan::pulse_truss_lights,
