@@ -28,14 +28,16 @@ libp2p runs through `relay.sbvh.nl` (rust-libp2p 0.56.0 on
 `wasm32-unknown-unknown`, WebSocket-WebSys + noise + yamux + gossipsub
 + identify + ping + connection_limits, single-relay topology — ported
 from roam). Identity is an Ed25519 keypair in IndexedDB (db `rave`,
-store `identity`). Module map + topic list are in `README.md`; don't
-re-state them here.
+store `identity`). Two topics on the wire: `rave-positions/v1` (10Hz
+XYZ) and `rave-chat/v1` (lines of text, Enter to send). Module map is
+in `README.md`; don't re-state it here.
 
-The native integration test at `crates/rave-positions-test/` spins the
-relayer binary on loopback + two libp2p clients and asserts a
-`RavePosition` round-trips. Runs in CI before the wasm build. Replaces
-the "open two browsers and look" manual check — any new gossipsub
-topic gets a sibling test in the same crate.
+The native integration test crate at `crates/rave-positions-test/`
+spins the relayer binary on loopback + two libp2p clients and asserts
+each wire topic round-trips through it (one test file per topic).
+Runs in CI before the wasm build. Replaces the "open two browsers and
+look" manual check — any new gossipsub topic gets a sibling test in
+the same crate.
 
 ## Module discipline
 
@@ -44,11 +46,9 @@ orchestrator, not a feature dump.
 
 ## Open
 
-- **Chatroom** — `rave-chat/v1` gossipsub topic, always-on translucent
-  overlay, Enter-to-focus single-line input, scroll log. Only named
-  pending slice.
 - Humanoid avatars (Poly Pizza models on disk, not wired into
   `room::PlayerCell`).
-- What "a rave" actually means past peers in a room with strobes.
+- What "a rave" actually means past peers in a room with strobes who
+  can wave at each other in text.
 
 Single-line git commits, no Claude attribution.
