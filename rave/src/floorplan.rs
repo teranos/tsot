@@ -29,6 +29,10 @@ pub struct Strobe {
     pub frequency: f32,
     /// Base hue at full intensity.
     pub color: Color,
+    /// Material handle on the fixture mesh — `pulse_strobes` flips its
+    /// emissive in lockstep with the light intensity so the source is
+    /// visible, not just the surface bounce.
+    pub fixture_material: Handle<StandardMaterial>,
 }
 
 /// Truss-mounted moving spotlight. Animation is `pulse_truss_lights`:
@@ -152,7 +156,16 @@ pub fn setup_floor_plan(
     );
 
     // ----- Dancefloor square (in the middle, slightly raised, distinct color) -----
-    let dancefloor_mat = materials.add(StandardMaterial::from(Color::srgb(0.18, 0.10, 0.22)));
+    //
+    // Metallic + low-roughness so the coloured truss spots actually
+    // bounce off it instead of the surface absorbing every photon.
+    let dancefloor_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.18, 0.10, 0.22),
+        metallic: 0.5,
+        perceptual_roughness: 0.25,
+        reflectance: 0.6,
+        ..default()
+    });
     let dancefloor_mesh = meshes.add(
         Plane3d::new(Vec3::Y, Vec2::splat(DANCEFLOOR_HALF))
             .mesh()
@@ -192,15 +205,18 @@ pub fn setup_floor_plan(
         commands.spawn((
             SpotLight {
                 color: Color::srgb(1.0, 1.0, 1.0),
-                intensity: 1_500_000.0,
-                range: 600.0,
-                outer_angle: 0.35,
-                inner_angle: 0.18,
+                intensity: 8_000_000.0,
+                range: 800.0,
+                outer_angle: 0.32,
+                inner_angle: 0.16,
                 shadow_maps_enabled: false,
                 ..default()
             },
+            // Up is world Y. The earlier Z was degenerate when the
+            // forward direction was vertical and produced silent
+            // near-zero cone rotations.
             Transform::from_xyz(x, truss_y - 8.0, truss_z)
-                .looking_at(Vec3::new(x, 0.0, 0.0), Vec3::Z),
+                .looking_at(Vec3::new(x, 0.0, 0.0), Vec3::Y),
             TrussSpot {
                 phase,
                 yaw_freq,
@@ -218,20 +234,32 @@ pub fn setup_floor_plan(
         (DANCEFLOOR_HALF, -DANCEFLOOR_HALF, Color::srgb(1.0, 0.85, 0.2), 0.8, 3.5),
         (-DANCEFLOOR_HALF, -DANCEFLOOR_HALF, Color::srgb(0.5, 0.2, 1.0), 1.2, 2.9),
     ];
+    let strobe_fixture_mesh = meshes.add(Cuboid::new(18.0, 18.0, 18.0));
     for (x, z, color, phase, frequency) in strobe_specs {
+        // Emissive fixture mesh so the strobe SOURCE is visible — a
+        // bright box glows where the light fires. Bloom (in lib.rs's
+        // setup_scene_lights) turns the emissive into a halo.
+        let fixture_mat = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.05, 0.05, 0.05),
+            emissive: LinearRgba::from(color) * 50.0,
+            ..default()
+        });
         commands.spawn((
+            Mesh3d(strobe_fixture_mesh.clone()),
+            MeshMaterial3d(fixture_mat.clone()),
             PointLight {
                 color,
                 intensity: 0.0,
-                range: 350.0,
+                range: 600.0,
                 shadow_maps_enabled: false,
                 ..default()
             },
-            Transform::from_xyz(x, 60.0, z),
+            Transform::from_xyz(x, 90.0, z),
             Strobe {
                 phase,
                 frequency,
                 color,
+                fixture_material: fixture_mat,
             },
         ));
     }
@@ -268,6 +296,7 @@ fn spawn_box(
 pub fn pulse_strobes(
     time: Res<Time>,
     mut lights: Query<(&mut PointLight, &Strobe)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let t = time.elapsed_secs();
     for (mut light, strobe) in &mut lights {
@@ -275,8 +304,15 @@ pub fn pulse_strobes(
         // and the on phase is a quick bright flash, not a slow sweep.
         let raw = ((t + strobe.phase) * strobe.frequency * std::f32::consts::TAU).sin();
         let pulse = if raw > 0.55 { 1.0 } else { 0.0 };
-        light.intensity = pulse * 2_500_000.0;
+        light.intensity = pulse * 12_000_000.0;
         light.color = strobe.color;
+        // Drive the fixture mesh's emissive in lockstep so the strobe
+        // SOURCE is visible (white-hot box when bright; nearly black
+        // when dark). Bloom turns the emissive into a halo around the
+        // box, which is the visual that reads as a strobe.
+        if let Some(mat) = materials.get_mut(&strobe.fixture_material) {
+            mat.emissive = LinearRgba::from(strobe.color) * (pulse * 200.0);
+        }
     }
 }
 

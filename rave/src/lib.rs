@@ -24,6 +24,8 @@ mod observability;
 mod room;
 
 use bevy::asset::AssetMetaCheck;
+use bevy::core_pipeline::bloom::Bloom;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
@@ -173,16 +175,26 @@ pub fn run() {
 /// owns the truss spotlights + strobes that actually light the room,
 /// and they only read if the base level is low.
 fn setup_scene_lights(mut commands: Commands) {
+    // Bloom + AcesFitted tonemapping make bright emissive fixtures + the
+    // colored truss spots actually read as nightclub lights instead of
+    // washing out to white. Without bloom, even high-intensity
+    // PointLights look matte.
     commands.spawn((
         Camera3d::default(),
+        Camera {
+            hdr: true,
+            ..default()
+        },
+        Tonemapping::AcesFitted,
+        Bloom::default(),
         Transform::from_xyz(0.0, 80.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((
         PointLight {
             shadow_maps_enabled: false,
-            intensity: 600_000.0,
+            intensity: 400_000.0,
             range: 1200.0,
-            color: Color::srgb(0.4, 0.4, 0.55),
+            color: Color::srgb(0.35, 0.35, 0.50),
             ..default()
         },
         Transform::from_xyz(0.0, 600.0, 0.0),
