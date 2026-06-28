@@ -132,6 +132,7 @@ pub fn run() {
                 room::move_player,
                 room::camera_follow,
                 floorplan::pulse_strobes,
+                floorplan::pulse_truss_lights,
             ),
         );
 
@@ -168,23 +169,23 @@ pub fn run() {
     app.run();
 }
 
-/// Camera + ambient light. The drawer's text spawns + the room's floor
-/// spawn live in their own modules.
+/// Camera + minimal ambient. Dim on purpose — the floorplan module
+/// owns the truss spotlights + strobes that actually light the room,
+/// and they only read if the base level is low.
 fn setup_scene_lights(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(0.0, 80.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    // Single point light high above the room — ambient illumination so
-    // the strobes pop against a base level rather than a black floor.
     commands.spawn((
         PointLight {
-            shadow_maps_enabled: true,
-            intensity: 8_000_000.0,
-            range: 1000.0,
+            shadow_maps_enabled: false,
+            intensity: 600_000.0,
+            range: 1200.0,
+            color: Color::srgb(0.4, 0.4, 0.55),
             ..default()
         },
-        Transform::from_xyz(0.0, 500.0, 0.0),
+        Transform::from_xyz(0.0, 600.0, 0.0),
     ));
 }
 

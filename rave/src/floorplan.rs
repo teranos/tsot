@@ -31,6 +31,18 @@ pub struct Strobe {
     pub color: Color,
 }
 
+/// Truss-mounted moving spotlight. Animation is `pulse_truss_lights`:
+/// `yaw_amp` radians of sweep across the dancefloor, hue cycles around
+/// a full circle every `color_period_s` seconds.
+#[derive(Component)]
+pub struct TrussSpot {
+    pub phase: f32,
+    pub yaw_freq: f32,
+    pub yaw_amp: f32,
+    pub color_period_s: f32,
+    pub hue_offset: f32,
+}
+
 pub fn setup_floor_plan(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -152,6 +164,53 @@ pub fn setup_floor_plan(
         Transform::from_xyz(0.0, 0.2, 0.0),
     ));
 
+    // ----- Truss — horizontal beam above the dancefloor + 6 moving spots -----
+    //
+    // The truss itself is a thin Cuboid running east-west at the back
+    // of the dancefloor. SpotLights hang below it pointing down, each
+    // sweeping yaw + cycling hue at slightly different rates so the
+    // dancefloor reads as continuously animated.
+    let truss_mat = materials.add(StandardMaterial::from(Color::srgb(0.06, 0.06, 0.08)));
+    let truss_y = 200.0;
+    let truss_z = -60.0;
+    spawn_box(
+        &mut commands,
+        &mut meshes,
+        &truss_mat,
+        Vec3::new(0.0, truss_y, truss_z),
+        Vec3::new(560.0, 14.0, 14.0),
+    );
+    let truss_spot_count = 6;
+    for i in 0..truss_spot_count {
+        let i_f = i as f32;
+        let lane = (i_f / (truss_spot_count as f32 - 1.0)) * 2.0 - 1.0; // [-1, 1]
+        let x = lane * 240.0;
+        let phase = i_f * 0.42;
+        let yaw_freq = 0.45 + (i_f * 0.07);
+        let color_period_s = 6.0 + (i_f * 1.3);
+        let hue_offset = i_f * 60.0;
+        commands.spawn((
+            SpotLight {
+                color: Color::srgb(1.0, 1.0, 1.0),
+                intensity: 1_500_000.0,
+                range: 600.0,
+                outer_angle: 0.35,
+                inner_angle: 0.18,
+                shadows_enabled: false,
+                ..default()
+            },
+            Transform::from_xyz(x, truss_y - 8.0, truss_z)
+                .looking_at(Vec3::new(x, 0.0, 0.0), Vec3::Z),
+            TrussSpot {
+                phase,
+                yaw_freq,
+                yaw_amp: 0.6,
+                color_period_s,
+                hue_offset,
+            },
+        ));
+    }
+
     // ----- Strobes — four animated PointLights at dancefloor corners -----
     let strobe_specs = [
         (DANCEFLOOR_HALF, DANCEFLOOR_HALF, Color::srgb(1.0, 0.2, 0.8), 0.0, 3.1),
@@ -216,7 +275,48 @@ pub fn pulse_strobes(
         // and the on phase is a quick bright flash, not a slow sweep.
         let raw = ((t + strobe.phase) * strobe.frequency * std::f32::consts::TAU).sin();
         let pulse = if raw > 0.55 { 1.0 } else { 0.0 };
-        light.intensity = pulse * 600_000.0;
+        light.intensity = pulse * 2_500_000.0;
         light.color = strobe.color;
     }
+}
+
+/// Per-frame: each truss spotlight cycles its hue around the color
+/// wheel and sweeps its yaw across the dancefloor. The two motions
+/// run at different periods so a spot is rarely the same color at
+/// the same aim point.
+pub fn pulse_truss_lights(
+    time: Res<Time>,
+    mut spots: Query<(&mut SpotLight, &mut Transform, &TrussSpot)>,
+) {
+    let t = time.elapsed_secs();
+    for (mut light, mut transform, spot) in &mut spots {
+        // Yaw sweep — a sinusoid around the spot's mount position.
+        let yaw = ((t + spot.phase) * spot.yaw_freq * std::f32::consts::TAU).sin()
+            * spot.yaw_amp;
+        // Aim downward at the floor offset by yaw radians around Y.
+        let aim_x = transform.translation.x + yaw.sin() * 200.0;
+        let aim_z = yaw.cos() * 200.0;
+        transform.look_at(Vec3::new(aim_x, 0.0, aim_z), Vec3::Z);
+
+        // Hue cycle — convert HSL to RGB by hand to avoid pulling
+        // bevy_color::Hsla import baggage in this slice. Hue 0..360.
+        let hue = ((t / spot.color_period_s) * 360.0 + spot.hue_offset) % 360.0;
+        light.color = hsl_to_color(hue, 1.0, 0.5);
+    }
+}
+
+fn hsl_to_color(hue_deg: f32, sat: f32, light: f32) -> Color {
+    let c = (1.0 - (2.0 * light - 1.0).abs()) * sat;
+    let h_prime = hue_deg / 60.0;
+    let x = c * (1.0 - ((h_prime % 2.0) - 1.0).abs());
+    let (r1, g1, b1) = match h_prime as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = light - c / 2.0;
+    Color::srgb(r1 + m, g1 + m, b1 + m)
 }
