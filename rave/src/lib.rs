@@ -4,6 +4,7 @@ mod build_info;
 mod error;
 mod identity;
 mod net;
+mod room;
 
 use bevy::asset::AssetMetaCheck;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
@@ -55,8 +56,11 @@ static PANIC_QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 // macros) into the ECS. Drain into ErrorLog every frame.
 static LOG_QUEUE: Mutex<Vec<(Severity, String)>> = Mutex::new(Vec::new());
 
-// Cube extent — world clamps to [-CUBE_HALF, CUBE_HALF] on each axis.
-const CUBE_HALF: f32 = 300.0;
+// Floor extent — half-size of the playable XZ square at Y=0. The
+// player can walk anywhere inside [-FLOOR_HALF, FLOOR_HALF] on X and Z.
+// Vertical movement is gone; the rave room is a flat floor, not a
+// 3D cube.
+const FLOOR_HALF: f32 = 500.0;
 
 // Production relay multiaddr — shared with roam, served by the relayer
 // binary at `relay.sbvh.nl`. The 12D3KooW… is the relay's deterministic
@@ -130,7 +134,7 @@ pub fn run() {
     }));
 
     app.add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_systems(Startup, (setup, setup_cells))
+        .add_systems(Startup, (setup, room::setup_room))
         .add_systems(
             Update,
             (
@@ -140,13 +144,8 @@ pub fn run() {
                 update_error_list,
                 toggle_log_drawer,
                 screenshot_on_p,
-                move_player_cell,
-                camera_follow,
-                follow_tether,
-                eat_algae,
-                die_algae,
-                drift_water,
-                wobble_player_cell,
+                room::move_player,
+                room::camera_follow,
             ),
         );
 
@@ -295,7 +294,7 @@ fn install_pending_net(mut maybe_net: NonSendMut<Option<net::Net>>) {
 fn publish_self_position(
     time: Res<Time>,
     mut acc: Local<f32>,
-    players: Query<&Transform, With<PlayerCell>>,
+    players: Query<&Transform, With<room::PlayerCell>>,
     maybe_net: NonSend<Option<net::Net>>,
 ) {
     let Some(n) = maybe_net.as_ref() else {
@@ -457,9 +456,10 @@ struct RemotePlayers(std::collections::HashMap<String, RemoteEntry>);
 #[derive(Component)]
 struct RemotePlayerCell;
 
-// R10 render. Uses Sphere — same primitive setup_cells uses, verified
-// working. The aff0554 attempt used Capsule3d and the deploy broke at
-// runtime; sticking with the proven primitive while bisecting variables.
+// R10 render. Each remote peer becomes a Sphere at the position they
+// last broadcast on rave-positions/v1. Y is taken from the wire so a
+// peer that drifts off the floor will still render where they say
+// they are.
 #[cfg(target_arch = "wasm32")]
 fn render_remote_players(
     mut commands: Commands,
@@ -506,355 +506,6 @@ fn render_remote_players(
                     tf.translation = entry.pos;
                 }
             }
-        }
-    }
-}
-
-#[derive(Component)]
-struct PlayerCell;
-
-#[derive(Component)]
-struct Algae;
-
-#[derive(Component)]
-struct CellRadius(f32);
-
-#[derive(Component)]
-struct WaterParticle;
-
-#[derive(Component)]
-struct Drift(Vec3);
-
-#[derive(Component)]
-struct Velocity(Vec3);
-
-#[derive(Component)]
-struct Tethered(Vec3);
-
-#[derive(Component)]
-struct Dying {
-    progress: f32,
-    duration: f32,
-}
-
-fn setup_cells(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let player_mesh = meshes.add(Sphere::new(20.0));
-    let halo_mesh = meshes.add(Sphere::new(50.0));
-    let nucleus_mesh = meshes.add(Sphere::new(7.0));
-    let algae_mesh = meshes.add(Sphere::new(6.0));
-    let water_mesh = meshes.add(Sphere::new(2.0));
-
-    // Player is translucent so the nucleus inside is visible.
-    let player_mat = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.35, 0.85, 0.55, 0.6),
-        alpha_mode: AlphaMode::Blend,
-        ..default()
-    });
-    let halo_mat = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.5, 0.95, 0.7, 0.12),
-        alpha_mode: AlphaMode::Blend,
-        ..default()
-    });
-    let nucleus_mat = materials.add(StandardMaterial::from(Color::srgb(0.15, 0.35, 0.25)));
-    let algae_mat = materials.add(StandardMaterial::from(Color::srgb(0.7, 0.9, 0.3)));
-    let water_mat = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.85, 0.92, 1.0, 0.18),
-        alpha_mode: AlphaMode::Blend,
-        ..default()
-    });
-
-    // Player cell — center of cube. Velocity-driven; wobbles; eats.
-    commands.spawn((
-        PlayerCell,
-        CellRadius(20.0),
-        Velocity(Vec3::ZERO),
-        Mesh3d(player_mesh),
-        MeshMaterial3d(player_mat),
-        Transform::from_xyz(0.0, 0.0, 0.0),
-    ));
-
-    // Halo — bigger translucent envelope at same center.
-    commands.spawn((
-        Tethered(Vec3::ZERO),
-        Mesh3d(halo_mesh),
-        MeshMaterial3d(halo_mat),
-        Transform::default(),
-    ));
-
-    // Nucleus — small opaque sphere inside the translucent player.
-    commands.spawn((
-        Tethered(Vec3::ZERO),
-        Mesh3d(nucleus_mesh),
-        MeshMaterial3d(nucleus_mat),
-        Transform::default(),
-    ));
-
-    // Algae — deterministically scattered through the cube.
-    for i in 0..40 {
-        let i_f = i as f32;
-        let x = ((i_f * 1.7).sin() * 250.0).clamp(-CUBE_HALF, CUBE_HALF);
-        let y = ((i_f * 2.3 + 0.5).sin() * 250.0).clamp(-CUBE_HALF, CUBE_HALF);
-        let z = ((i_f * 1.1 + 0.9).cos() * 250.0).clamp(-CUBE_HALF, CUBE_HALF);
-        commands.spawn((
-            Algae,
-            CellRadius(6.0),
-            Mesh3d(algae_mesh.clone()),
-            MeshMaterial3d(algae_mat.clone()),
-            Transform::from_xyz(x, y, z),
-        ));
-    }
-
-    // Water particles — drift around and push away from the player cell.
-    for i in 0..200 {
-        let i_f = i as f32;
-        let x = ((i_f * 0.37).sin() * 280.0).clamp(-CUBE_HALF, CUBE_HALF);
-        let y = ((i_f * 0.71 + 0.3).cos() * 280.0).clamp(-CUBE_HALF, CUBE_HALF);
-        let z = ((i_f * 0.53 + 0.7).sin() * 280.0).clamp(-CUBE_HALF, CUBE_HALF);
-        let drift_x = (i_f * 0.7).sin() * 10.0;
-        let drift_y = (i_f * 1.3).cos() * 10.0;
-        let drift_z = (i_f * 0.9 + 0.4).sin() * 10.0;
-        commands.spawn((
-            WaterParticle,
-            Drift(Vec3::new(drift_x, drift_y, drift_z)),
-            Mesh3d(water_mesh.clone()),
-            MeshMaterial3d(water_mat.clone()),
-            Transform::from_xyz(x, y, z),
-        ));
-    }
-}
-
-// Below this many screen pixels from the touch origin, the virtual
-// joystick reads as centred — a resting thumb or a tap-meant-as-tap
-// doesn't creep the cell.
-const TOUCH_DEADZONE_PX: f32 = 18.0;
-// Drag distance at which the joystick is fully deflected. Past it the
-// direction is unchanged and magnitude saturates at 1.
-const TOUCH_JOY_RADIUS_PX: f32 = 90.0;
-
-// Touch-drag (screen pixels, y pointing down) → horizontal-plane move
-// direction. x maps to world +x (east); the screen-down axis maps to
-// world +z (toward the trailing camera) — the same axes `move_player_cell`
-// drives from D and S. Zero inside the deadzone; magnitude clamps to 1
-// past the joystick radius so a long drag never over-drives the summed
-// accel. Pure (no ECS) so the octant/deadzone math is unit-testable
-// without paying the Bevy compile.
-fn touch_drag_to_plane(dx: f32, dy: f32, deadzone: f32, radius: f32) -> Vec2 {
-    let v = Vec2::new(dx, dy);
-    let len = v.length();
-    if len < deadzone {
-        return Vec2::ZERO;
-    }
-    (v / len) * (len / radius).min(1.0)
-}
-
-// WASD horizontal plane, Space/Shift vertical — or, with no keyboard
-// (mobile), a touch-drag virtual joystick driving the same horizontal
-// plane. Drag dampens. Cube walls clamp position and zero the
-// perpendicular velocity component — no escape, no bounce.
-fn move_player_cell(
-    keys: Res<ButtonInput<KeyCode>>,
-    touches: Res<Touches>,
-    time: Res<Time>,
-    mut players: Query<(&mut Transform, &mut Velocity), With<PlayerCell>>,
-) {
-    let mut accel = Vec3::ZERO;
-    if keys.pressed(KeyCode::KeyW) {
-        accel.z -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyS) {
-        accel.z += 1.0;
-    }
-    if keys.pressed(KeyCode::KeyA) {
-        accel.x -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyD) {
-        accel.x += 1.0;
-    }
-    if keys.pressed(KeyCode::Space) {
-        accel.y += 1.0;
-    }
-    if keys.pressed(KeyCode::ShiftLeft) {
-        accel.y -= 1.0;
-    }
-    // First active touch is the joystick: press point is the origin,
-    // live point is the stick. Folds into the same accel the keys feed,
-    // so a phone with no keyboard moves the cell across the plane.
-    if let Some(touch) = touches.iter().next() {
-        let start = touch.start_position();
-        let pos = touch.position();
-        let plane = touch_drag_to_plane(
-            pos.x - start.x,
-            pos.y - start.y,
-            TOUCH_DEADZONE_PX,
-            TOUCH_JOY_RADIUS_PX,
-        );
-        accel.x += plane.x;
-        accel.z += plane.y;
-    }
-    let accel = accel.normalize_or_zero() * 900.0;
-    let drag_per_sec = 2.4;
-    let dt = time.delta_secs();
-    for (mut t, mut v) in &mut players {
-        v.0 += accel * dt;
-        let drag = (1.0 - drag_per_sec * dt).max(0.0);
-        v.0 *= drag;
-        t.translation += v.0 * dt;
-        if t.translation.x.abs() > CUBE_HALF {
-            t.translation.x = t.translation.x.clamp(-CUBE_HALF, CUBE_HALF);
-            v.0.x = 0.0;
-        }
-        if t.translation.y.abs() > CUBE_HALF {
-            t.translation.y = t.translation.y.clamp(-CUBE_HALF, CUBE_HALF);
-            v.0.y = 0.0;
-        }
-        if t.translation.z.abs() > CUBE_HALF {
-            t.translation.z = t.translation.z.clamp(-CUBE_HALF, CUBE_HALF);
-            v.0.z = 0.0;
-        }
-    }
-}
-
-// Third-person follow — camera trails behind + above the player.
-fn camera_follow(
-    cells: Query<&Transform, (With<PlayerCell>, Without<Camera3d>)>,
-    mut cameras: Query<&mut Transform, With<Camera3d>>,
-) {
-    let Some(cell_t) = cells.iter().next() else {
-        return;
-    };
-    let offset = Vec3::new(0.0, 80.0, 200.0);
-    for mut cam_t in &mut cameras {
-        cam_t.translation = cell_t.translation + offset;
-        cam_t.look_at(cell_t.translation, Vec3::Y);
-    }
-}
-
-// Halo + nucleus track the cell exactly so they read as part of the
-// same body. The cell's own wobble doesn't propagate (these are
-// siblings, not children) so they keep their shape.
-fn follow_tether(
-    cells: Query<&Transform, (With<PlayerCell>, Without<Tethered>)>,
-    mut followers: Query<(&mut Transform, &Tethered)>,
-) {
-    let Some(cell_t) = cells.iter().next() else {
-        return;
-    };
-    for (mut t, tether) in &mut followers {
-        t.translation = cell_t.translation + tether.0;
-    }
-}
-
-fn drift_water(
-    time: Res<Time>,
-    players: Query<&Transform, (With<PlayerCell>, Without<WaterParticle>)>,
-    mut particles: Query<(&mut Transform, &Drift), With<WaterParticle>>,
-) {
-    let dt = time.delta_secs();
-    let player_pos = players.iter().next().map(|t| t.translation);
-    for (mut t, drift) in &mut particles {
-        t.translation += drift.0 * dt;
-
-        if let Some(p) = player_pos {
-            let delta = t.translation - p;
-            let dist_sq = delta.length_squared();
-            let near = 90.0;
-            if dist_sq < near * near && dist_sq > 0.001 {
-                let dist = dist_sq.sqrt();
-                let strength = (near - dist) / near * 80.0;
-                let n = delta / dist;
-                t.translation += n * strength * dt;
-            }
-        }
-
-        // Wrap to opposite face so the medium stays evenly populated.
-        if t.translation.x.abs() > CUBE_HALF {
-            t.translation.x = -t.translation.x.signum() * CUBE_HALF;
-        }
-        if t.translation.y.abs() > CUBE_HALF {
-            t.translation.y = -t.translation.y.signum() * CUBE_HALF;
-        }
-        if t.translation.z.abs() > CUBE_HALF {
-            t.translation.z = -t.translation.z.signum() * CUBE_HALF;
-        }
-    }
-}
-
-// Three-axis lumpy organic wobble — nine sines (three per axis) with
-// prime-ish frequencies + phase offsets so no axis returns to a
-// perfect sphere at the same instant. CellRadius drives base scale so
-// growth (from eating) reads as the body getting bigger, not the
-// wobble amplifying.
-fn wobble_player_cell(
-    time: Res<Time>,
-    mut cells: Query<(&mut Transform, &CellRadius), With<PlayerCell>>,
-) {
-    let t = time.elapsed_secs();
-    let wx = (t * 3.5).sin() * 0.06 + (t * 5.7).sin() * 0.035 + (t * 2.1).sin() * 0.02;
-    let wy = (t * 3.1 + 1.0).sin() * 0.06
-        + (t * 4.9 + 0.4).sin() * 0.035
-        + (t * 2.7 + 0.8).sin() * 0.02;
-    let wz = (t * 2.9 + 0.6).sin() * 0.06
-        + (t * 4.3 + 0.2).sin() * 0.035
-        + (t * 5.1 + 1.4).sin() * 0.02;
-    for (mut tr, r) in &mut cells {
-        let base = r.0 / 20.0;
-        tr.scale.x = base * (1.0 + wx);
-        tr.scale.y = base * (1.0 + wy);
-        tr.scale.z = base * (1.0 + wz);
-    }
-}
-
-// Eating is a transfer, not a delete. Algae gets a Dying marker
-// (animated away over ~0.25s), the cell's CellRadius grows. Mass
-// conserved — what you ate goes into you.
-fn eat_algae(
-    mut commands: Commands,
-    mut players: Query<(&Transform, &mut CellRadius), (With<PlayerCell>, Without<Algae>)>,
-    algae: Query<(Entity, &Transform, &CellRadius), (With<Algae>, Without<Dying>)>,
-) {
-    for (player_t, mut player_r) in &mut players {
-        for (algae_e, algae_t, algae_r) in &algae {
-            let dist = (player_t.translation - algae_t.translation).length();
-            if dist < player_r.0 + algae_r.0 {
-                commands.entity(algae_e).insert(Dying {
-                    progress: 0.0,
-                    duration: 0.25,
-                });
-                player_r.0 += 0.4;
-            }
-        }
-    }
-}
-
-// Animates Dying entities — shrinks scale and fades alpha together,
-// despawn at progress >= 1.
-fn die_algae(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut dying: Query<(
-        Entity,
-        &mut Transform,
-        &MeshMaterial3d<StandardMaterial>,
-        &mut Dying,
-    )>,
-) {
-    let dt = time.delta_secs();
-    for (e, mut t, mat, mut d) in &mut dying {
-        d.progress += dt / d.duration;
-        let s: f32 = (1.0 - d.progress).max(0.0);
-        t.scale = Vec3::splat(s);
-        if let Some(mut m) = materials.get_mut(&mat.0) {
-            let c = m.base_color.to_srgba();
-            m.base_color = Color::srgba(c.red, c.green, c.blue, s);
-            m.alpha_mode = AlphaMode::Blend;
-        }
-        if d.progress >= 1.0 {
-            commands.entity(e).despawn();
         }
     }
 }
@@ -1227,46 +878,5 @@ fn update_clock(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn deadzone_reads_as_centred() {
-        assert_eq!(
-            touch_drag_to_plane(0.0, 0.0, TOUCH_DEADZONE_PX, TOUCH_JOY_RADIUS_PX),
-            Vec2::ZERO
-        );
-        // Just inside the deadzone is still no movement.
-        assert_eq!(
-            touch_drag_to_plane(10.0, 10.0, TOUCH_DEADZONE_PX, TOUCH_JOY_RADIUS_PX),
-            Vec2::ZERO
-        );
-    }
-
-    #[test]
-    fn axes_map_screen_to_world_plane() {
-        // Screen +x → world +x (east, the D key axis).
-        let east = touch_drag_to_plane(80.0, 0.0, TOUCH_DEADZONE_PX, TOUCH_JOY_RADIUS_PX);
-        assert!(east.x > 0.9 && east.y.abs() < 1e-3);
-        // Screen +y (down) → world +z (toward camera, the S key axis).
-        let south = touch_drag_to_plane(0.0, 80.0, TOUCH_DEADZONE_PX, TOUCH_JOY_RADIUS_PX);
-        assert!(south.y > 0.9 && south.x.abs() < 1e-3);
-    }
-
-    #[test]
-    fn magnitude_saturates_at_radius() {
-        // A drag well past the radius clamps to unit length, keeping the
-        // summed accel from over-driving normalize_or_zero downstream.
-        let far = touch_drag_to_plane(500.0, 0.0, TOUCH_DEADZONE_PX, TOUCH_JOY_RADIUS_PX);
-        assert!((far.length() - 1.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn partial_deflection_is_proportional() {
-        // Half the radius → roughly half magnitude (direction preserved).
-        let half = TOUCH_JOY_RADIUS_PX / 2.0;
-        let v = touch_drag_to_plane(half, 0.0, TOUCH_DEADZONE_PX, TOUCH_JOY_RADIUS_PX);
-        assert!((v.length() - 0.5).abs() < 1e-3);
-    }
-}
+// Tests for room::touch_drag_to_plane live in room.rs alongside the
+// function under test.
