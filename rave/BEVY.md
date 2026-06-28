@@ -1,38 +1,39 @@
 # BEVY
 
-- Started from NiklasEi/bevy_game_template: https://github.com/NiklasEi/bevy_game_template
-- CI needed.
-- [ ] Bump Bevy when 0.20 ships (current version pinned in `rave/Cargo.toml`).
+Pinned at `=0.19.0` in `rave/Cargo.toml`. CI builds the wasm bundle on
+every rave-branch push and deploys to https://rave.sbvh.nl/.
 
-## Common Bevy setup
+## Pending
 
-- [ ] bevy-inspector-egui
-- [ ] bevy_asset_loader
-- [ ] bevy_kira_audio
-- [ ] avian
-- [ ] sickle_ui
-- [ ] bevy_atmosphere
-- [ ] bevy_water
-- [ ] bevy_mod_outline
-- [ ] bevy diagnostic events → roam trace bus
-- [ ] bevy/dynamic_linking native build
-- [ ] CI
+- [ ] Bump Bevy when 0.20 ships. Watch the migration guide; the
+  asset-loader + Mesh3d/MeshMaterial3d shape often changes between
+  minor versions.
+- [ ] Tree-shake the feature list. `2d_api`, `2d_bevy_render`, `scene`
+  are enabled but no rave code uses them; cutting them shrinks the
+  wasm bundle.
+- [ ] `wasm-opt -O4 --strip-debug` on the release `rave_bg.wasm` to
+  halve the first-load payload.
 
-## Decisions
+## Decisions made
 
-- [ ] camera / projection
-- [ ] voxel approach
-- [ ] flake consolidation
-- [ ] bevy_egui yes / no
+- **Camera / projection** — 3D top-down at ~50° pitch, follow camera
+  trails the player from `(0, 300, 250)` offset. See `rave/src/room.rs`.
+- **Voxel approach** — not voxel. Floor is a single `Plane3d`; props
+  (DJ booth, speakers, bar, dancefloor strobes per R15) will be
+  individual meshes.
+- **`bevy_egui`** — not used. The in-canvas drawer renders via Bevy's
+  own UI plugin (`ui_api` + `ui_bevy_render` features). Text-only,
+  no widgets.
+- **Asset loading** — TBD when the first non-procedural asset lands
+  (Poly Pizza humanoid models for R13/R15 player avatar replacement).
+  `bevy_asset_loader` may earn its keep then; not before.
 
 ## References
 
-- https://bevy.org/learn/migration-guides/0-18-to-0-19/
-- https://bevy.org/learn/quick-start/getting-started/setup/#compile-with-performance-optimizations
-- https://github.com/NiklasEi/bevy_game_template
-- https://github.com/splashdust/bevy_voxel_world
-- https://github.com/bonsairobo/block-mesh-rs
-- https://github.com/UmbraLuminosa/sickle_ui
-- https://github.com/Jondolf/avian
-- https://github.com/NiklasEi/bevy_kira_audio
-- https://github.com/NiklasEi/bevy_asset_loader
+- https://docs.rs/bevy/0.19.0/bevy/ — API docs (authoritative; the
+  pbt control in `controls/local/tsot-roam.pbt` insists on sourcing
+  from here, not training memory)
+- https://github.com/bevyengine/bevy/tree/v0.19.0/examples — examples
+- https://bevy.org/learn/migration-guides/0-18-to-0-19/ — migration
+  notes from the version below ours (kept for context until the 0.20
+  guide ships)
