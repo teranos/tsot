@@ -19,6 +19,16 @@ pub const CLEARING_HALF: f32 = 500.0;
 
 const DANCEFLOOR_HALF: f32 = 160.0;
 
+/// Strobe runtime mode. R24 default is `Off` — strobes only fire when
+/// activated (R30 will add the click-to-cycle interaction).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum StrobeMode {
+    /// Light is dark, fixture is dark. No flash.
+    Off,
+    /// Sinusoid-driven flash, white only.
+    Strobing,
+}
+
 /// Marker on each strobe PointLight so the animation system can find
 /// them without grabbing every PointLight in the world.
 #[derive(Component)]
@@ -28,8 +38,10 @@ pub struct Strobe {
     pub phase: f32,
     /// Pulse frequency in Hz.
     pub frequency: f32,
-    /// Base hue at full intensity.
-    pub color: Color,
+    /// Whether the strobe is currently active. Changeable at runtime
+    /// (R30 click-to-cycle); per-strobe so the user can light one
+    /// corner without lighting all four.
+    pub mode: StrobeMode,
     /// Material handle on the fixture mesh — `pulse_strobes` flips its
     /// emissive in lockstep with the light intensity so the source is
     /// visible, not just the surface bounce.
@@ -167,27 +179,29 @@ pub fn setup_floor_plan(
     }
 
     // ----- Strobes — four animated PointLights at dancefloor corners -----
+    //
+    // White only. Default mode is `StrobeMode::Off` so the dancefloor
+    // is quiet until the user activates them (R24's click-cycle slice
+    // adds the mouse interaction; until then they read as fixture-only
+    // props that don't fire).
     let strobe_specs = [
-        (DANCEFLOOR_HALF, DANCEFLOOR_HALF, Color::srgb(1.0, 0.2, 0.8), 0.0, 3.1),
-        (-DANCEFLOOR_HALF, DANCEFLOOR_HALF, Color::srgb(0.2, 0.9, 1.0), 0.4, 2.7),
-        (DANCEFLOOR_HALF, -DANCEFLOOR_HALF, Color::srgb(1.0, 0.85, 0.2), 0.8, 3.5),
-        (-DANCEFLOOR_HALF, -DANCEFLOOR_HALF, Color::srgb(0.5, 0.2, 1.0), 1.2, 2.9),
+        (DANCEFLOOR_HALF, DANCEFLOOR_HALF, 0.0, 3.1),
+        (-DANCEFLOOR_HALF, DANCEFLOOR_HALF, 0.4, 2.7),
+        (DANCEFLOOR_HALF, -DANCEFLOOR_HALF, 0.8, 3.5),
+        (-DANCEFLOOR_HALF, -DANCEFLOOR_HALF, 1.2, 2.9),
     ];
     let strobe_fixture_mesh = meshes.add(Cuboid::new(18.0, 18.0, 18.0));
-    for (x, z, color, phase, frequency) in strobe_specs {
-        // Emissive fixture mesh so the strobe SOURCE is visible — a
-        // bright box glows where the light fires. Bloom (in lib.rs's
-        // setup_scene_lights) turns the emissive into a halo.
+    for (x, z, phase, frequency) in strobe_specs {
         let fixture_mat = materials.add(StandardMaterial {
             base_color: Color::srgb(0.05, 0.05, 0.05),
-            emissive: LinearRgba::from(color) * 50.0,
+            emissive: LinearRgba::BLACK,
             ..default()
         });
         commands.spawn((
             Mesh3d(strobe_fixture_mesh.clone()),
             MeshMaterial3d(fixture_mat.clone()),
             PointLight {
-                color,
+                color: Color::WHITE,
                 intensity: 0.0,
                 range: 600.0,
                 shadow_maps_enabled: false,
@@ -197,9 +211,49 @@ pub fn setup_floor_plan(
             Strobe {
                 phase,
                 frequency,
-                color,
+                mode: StrobeMode::Off,
                 fixture_material: fixture_mat,
             },
+        ));
+    }
+
+    // ----- Bar lights — magenta + blue PointLights along the bar -----
+    //
+    // The bar runs along x = -CLEARING_HALF + 40 with depth ±180 in z.
+    // Two PointLights at ±90 z give the bar a magenta-and-blue glow
+    // that doesn't bleed across the dancefloor.
+    for (z, color) in [
+        (-90.0_f32, Color::srgb(1.0, 0.15, 0.8)),
+        (90.0, Color::srgb(0.2, 0.4, 1.0)),
+    ] {
+        commands.spawn((
+            PointLight {
+                color,
+                intensity: 1_800_000.0,
+                range: 280.0,
+                shadow_maps_enabled: false,
+                ..default()
+            },
+            Transform::from_xyz(-CLEARING_HALF + 70.0, 80.0, z),
+        ));
+    }
+
+    // ----- Back lights — behind the DJ booth -----
+    //
+    // Two amber spots aimed back at the booth from behind so the DJ
+    // silhouettes against the lit panels instead of disappearing into
+    // the unlit forest beyond.
+    let back_z = -CLEARING_HALF + 20.0;
+    for x in [-120.0_f32, 120.0] {
+        commands.spawn((
+            PointLight {
+                color: Color::srgb(1.0, 0.55, 0.15),
+                intensity: 1_200_000.0,
+                range: 240.0,
+                shadow_maps_enabled: false,
+                ..default()
+            },
+            Transform::from_xyz(x, 110.0, back_z),
         ));
     }
 }
@@ -221,7 +275,8 @@ fn spawn_box(
 
 /// Drives each Strobe's intensity from a sinusoid in time. Frequencies +
 /// phases are deliberately mismatched so the four don't return to bright
-/// at the same instant — the dancefloor reads as alive, not metronome.
+/// at the same instant. Strobes in `StrobeMode::Off` stay dark — the
+/// fixture's emissive + the PointLight's intensity both go to zero.
 pub fn pulse_strobes(
     time: Res<Time>,
     mut lights: Query<(&mut PointLight, &Strobe)>,
@@ -229,18 +284,21 @@ pub fn pulse_strobes(
 ) {
     let t = time.elapsed_secs();
     for (mut light, strobe) in &mut lights {
-        // Square wave-ish — clip the sin so the off phase is fully dark
-        // and the on phase is a quick bright flash, not a slow sweep.
-        let raw = ((t + strobe.phase) * strobe.frequency * std::f32::consts::TAU).sin();
-        let pulse = if raw > 0.55 { 1.0 } else { 0.0 };
+        let pulse = match strobe.mode {
+            StrobeMode::Off => 0.0,
+            StrobeMode::Strobing => {
+                // Square wave-ish — clip the sin so the off phase is
+                // fully dark and the on phase is a quick bright flash.
+                let raw = ((t + strobe.phase) * strobe.frequency
+                    * std::f32::consts::TAU)
+                    .sin();
+                if raw > 0.55 { 1.0 } else { 0.0 }
+            }
+        };
         light.intensity = pulse * 12_000_000.0;
-        light.color = strobe.color;
-        // Drive the fixture mesh's emissive in lockstep so the strobe
-        // SOURCE is visible (white-hot box when bright; nearly black
-        // when dark). Bloom turns the emissive into a halo around the
-        // box, which is the visual that reads as a strobe.
+        light.color = Color::WHITE;
         if let Some(mut mat) = materials.get_mut(&strobe.fixture_material) {
-            mat.emissive = LinearRgba::from(strobe.color) * (pulse * 200.0);
+            mat.emissive = LinearRgba::WHITE * (pulse * 200.0);
         }
     }
 }
