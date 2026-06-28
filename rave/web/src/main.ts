@@ -4,7 +4,6 @@
 // loading indicator hides; Bevy's render loop owns the canvas from
 // that point on.
 
-import "./bridges";
 import { showErr, installGlobalHandlers } from "./overlay";
 import { installErrorBridges } from "./error-bridge";
 import { installIdentityBridges } from "./identity-bridge";
