@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 mod build_info;
 mod error;
+mod floorplan;
 mod identity;
 mod net;
 mod room;
@@ -134,7 +135,10 @@ pub fn run() {
     }));
 
     app.add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_systems(Startup, (setup, room::setup_room))
+        .add_systems(
+            Startup,
+            (setup, room::setup_room, floorplan::setup_floor_plan),
+        )
         .add_systems(
             Update,
             (
@@ -146,6 +150,7 @@ pub fn run() {
                 screenshot_on_p,
                 room::move_player,
                 room::camera_follow,
+                floorplan::pulse_strobes,
             ),
         );
 
