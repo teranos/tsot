@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>rave</title>
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; background: #111; overflow: hidden; overscroll-behavior: none; }
+      canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+      #bevy-error {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        max-height: 60vh;
+        overflow: auto;
+        background: #2a0a0a;
+        color: #ffb0b0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        line-height: 1.4;
+        padding: 8px 12px;
+        white-space: pre-wrap;
+        z-index: 9999;
+        display: none;
+        border-bottom: 1px solid #5a1010;
+      }
+      #rave-loading {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        color: #aaa;
+        text-align: center;
+        z-index: 9998;
+        user-select: none;
+      }
+      #rave-loading progress {
+        display: block;
+        width: 240px;
+        height: 6px;
+        margin: 8px auto 0;
+        appearance: none;
+        background: #222;
+        border: none;
+      }
+      #rave-loading progress::-webkit-progress-bar { background: #222; }
+      #rave-loading progress::-webkit-progress-value { background: #6f9; }
+      #rave-loading progress::-moz-progress-bar { background: #6f9; }
+      body.loaded #rave-loading { display: none; }
+    </style>
+  </head>
+  <body>
+    <canvas id="bevy"></canvas>
+    <div id="bevy-error"></div>
+    <div id="rave-loading">
+      <div id="rave-loading-text">loading rave · 0%</div>
+      <progress value="0" max="1"></progress>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

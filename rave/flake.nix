@@ -25,6 +25,11 @@
             rust-analyzer
             wasm-bindgen-cli
             sccache
+            # bun bundles + type-checks the TypeScript modules under
+            # rave/web/. Picked over node+esbuild because bun has zero
+            # runtime install dance and sub-second cold builds for a
+            # tree this size.
+            bun
           ];
 
           RUSTC_WRAPPER = "sccache";
