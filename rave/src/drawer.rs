@@ -190,7 +190,13 @@ pub fn toggle_log_drawer(
     keys: Res<ButtonInput<KeyCode>>,
     mut drawers: Query<&mut Visibility, With<LogDrawer>>,
 ) {
-    if !keys.just_pressed(KeyCode::Backquote) && !keys.just_pressed(KeyCode::Backslash) {
+    let kb_pressed =
+        keys.just_pressed(KeyCode::Backquote) || keys.just_pressed(KeyCode::Backslash);
+    // Mobile has no keyboard — the JS corner button calls
+    // `rave_drawer_toggle()` which flips a thread-local flag the
+    // wasm side of this module checks here.
+    let js_pressed = take_js_toggle_request();
+    if !kb_pressed && !js_pressed {
         return;
     }
     for mut vis in &mut drawers {
@@ -198,6 +204,37 @@ pub fn toggle_log_drawer(
             Visibility::Hidden => Visibility::Visible,
             _ => Visibility::Hidden,
         };
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn take_js_toggle_request() -> bool {
+    js_toggle::PENDING.with(|c| c.replace(false))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn take_js_toggle_request() -> bool {
+    false
+}
+
+#[cfg(target_arch = "wasm32")]
+mod js_toggle {
+    use std::cell::Cell;
+    use wasm_bindgen::prelude::*;
+
+    thread_local! {
+        pub static PENDING: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// JS → Rust drawer toggle. The corner touch button in
+    /// `web/index.html` calls this once per tap. The next Bevy Update
+    /// tick's `toggle_log_drawer` consumes the flag and flips
+    /// visibility. Without this affordance, mobile users can't see
+    /// FPS / errors / net stats — keyboard is the only other path
+    /// and mobile has no keyboard.
+    #[wasm_bindgen]
+    pub fn rave_drawer_toggle() {
+        PENDING.with(|c| c.set(true));
     }
 }
 

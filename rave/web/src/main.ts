@@ -4,7 +4,7 @@
 // loading indicator hides; Bevy's render loop owns the canvas from
 // that point on.
 
-import { showErr, installGlobalHandlers } from "./overlay";
+import { showErr, dumpError, installGlobalHandlers } from "./overlay";
 import { installErrorBridges } from "./error-bridge";
 import { installIdentityBridges } from "./identity-bridge";
 import { installScreenshotBridge } from "./screenshot";
@@ -22,6 +22,7 @@ interface RaveWasmExports {
   default: (opts: { module_or_path: Uint8Array }) => Promise<unknown>;
   rave_chat_send: (body: string) => void;
   rave_chat_set_focus: (focused: boolean) => void;
+  rave_drawer_toggle: () => void;
 }
 
 installGlobalHandlers();
@@ -44,7 +45,19 @@ try {
     send: (body: string) => wasm.rave_chat_send(body),
     setFocus: (focused: boolean) => wasm.rave_chat_set_focus(focused),
   });
+
+  // Drawer touch toggle — mobile's only path to opening the
+  // diagnostic drawer (keyboard ` / \ still works on desktop). The
+  // button is in index.html; we attach the click handler now that
+  // the wasm export exists.
+  const drawerBtn = document.getElementById(
+    "rave-drawer-toggle",
+  ) as HTMLButtonElement | null;
+  if (drawerBtn) {
+    drawerBtn.addEventListener("click", () => wasm.rave_drawer_toggle());
+  } else {
+    showErr("[main] #rave-drawer-toggle missing — index.html out of sync");
+  }
 } catch (e) {
-  showErr(`[init failed] ${e}`);
-  if (e instanceof Error && e.stack) showErr(e.stack);
+  dumpError("[init failed]", e);
 }

@@ -51,6 +51,29 @@
       #rave-loading progress::-moz-progress-bar { background: #6f9; }
       body.loaded #rave-loading { display: none; }
 
+      /* Drawer toggle — top-right corner. Mobile has no keyboard, so
+         this is the only path to open the diagnostic drawer on touch.
+         Keyboard ` / \ still works on desktop. */
+      #rave-drawer-toggle {
+        position: fixed;
+        top: 6px;
+        right: 6px;
+        width: 36px;
+        height: 36px;
+        border-radius: 18px;
+        border: none;
+        background: rgba(0, 0, 0, 0.55);
+        color: #eaeaea;
+        font: 16px/36px ui-monospace, SFMono-Regular, Menlo, monospace;
+        text-align: center;
+        padding: 0;
+        z-index: 9996;
+        cursor: pointer;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #rave-drawer-toggle:active { background: rgba(0, 0, 0, 0.85); }
+
       /* Chat overlay — bottom-left, always-on, translucent. Container
          is pointer-events: none so canvas drag/touch outside the panel
          is unaffected; the log + input opt back in. */
@@ -118,6 +141,7 @@
         maxlength="512"
       />
     </div>
-    <script type="module" src="./main.js"></script>
+    <button id="rave-drawer-toggle" type="button" aria-label="toggle drawer">≡</button>
+    <script type="module" crossorigin="anonymous" src="./main.js"></script>
   </body>
 </html>
