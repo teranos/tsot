@@ -44,6 +44,15 @@ jobs:
         working-directory: rave
         run: nix develop -c cargo check --tests --lib --target wasm32-unknown-unknown
 
+      # libwayland-dev unblocks Bevy's bevy_winit→winit on the Linux
+      # runner. Bevy never runs on Linux at runtime (rave is wasm32-only),
+      # but `cargo test` here builds the rave lib as a sibling, which
+      # transitively builds winit. The clean fix is workspace-splitting
+      # the integration test into a libp2p-only crate; this is the
+      # short-term unblock.
+      - name: Install libwayland-dev (Bevy winit build dep on Linux)
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev
+
       # Two-browser equivalent — native libp2p clients meshing through
       # the real relayer binary on loopback. Replaces the manual R11
       # browser verification. Proves the gossipsub mesh forms and
