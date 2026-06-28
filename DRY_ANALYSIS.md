@@ -4,9 +4,15 @@ Date: 2026-06-28
 Scope: full monorepo — `ccg/` (~43k LOC Rust + TS/JS), `roam/` (~12k LOC
 Rust + TS/JS), `rave/`, `crates/`, `universe/`.
 
-Subprojects are independent by design (see root `CLAUDE.md`), so this analysis
-targets duplication **within** each subproject. One large **cross-project**
-parallel is noted explicitly at the end and deliberately left unscored.
+This report has two parts: **within-project** duplication (the bulk, below) and
+a dedicated **[cross-project](#cross-project-analysis)** section at the end. The
+root `CLAUDE.md` calls the subprojects independent, but that boundary is worth
+testing empirically — and the cross-project pass found the single largest
+duplication in the whole tree (~370–400 lines of Bevy scaffold shared verbatim
+between `rave` and `universe`), plus byte-identical identity-crypto across `roam`
+and `rave`. Where a parallel is genuinely intentional (different domains,
+different FFI targets, documented axioms), it's labelled as such rather than
+flagged as debt.
 
 Each finding lists concrete `file:line` sites, the extent of repetition, and a
 proposed fix. Severity: **high** = substantial (>15 lines or >3 sites) with a
@@ -70,6 +76,11 @@ Then the **structural extractions** that also remove correctness risk: the
 the GY-anchor picker/resolver split in ccg game. Defer anything entangled with
 deprecated code: ccg `run_game_continue` is slated for D8 deletion, which
 resolves a chunk of the sim duplication for free.
+
+For cross-project work the ranking is separate — see the
+[cross-project section](#cross-project-analysis). The headline there: extract a
+`crates/bevy-observability` plugin (rave+universe), a `crates/p2p-identity` crate
+(roam+rave), one root `flake.nix`, and one reusable deploy workflow.
 
 ---
 
@@ -417,10 +428,212 @@ resolves a chunk of the sim duplication for free.
 ### Verified clean / out of scope
 - `crates/tsot-card` (25-line newtype), `crates/sacred-error` (the canonical
   shared error; rave correctly `pub use`s it — no reimplementation found).
-- **Cross-project (unscored, flagged):** the rave `drawer`/`observability` stack
-  (`setup_drawer`, `CaptureLayer`/`MessageVisitor`, `ErrorLog`/`Severity`, panic
-  hook, `update_fps`/`update_error_list`/`toggle_log_drawer`/`update_clock`,
-  `run()`) is ~200 lines near-identical to `universe/src/lib.rs`. Per `CLAUDE.md`
-  these are independent projects, so this is acceptable today — but it is the
-  single biggest latent duplication in the tree if that stance ever softens.
-  `build_info.rs` parallels (rave/roam/universe) are likewise intentional.
+- **Cross-project parallels** (rave↔universe drawer/scaffold, roam↔rave identity,
+  build_info ×3) are now fully analyzed in the dedicated
+  [cross-project section](#cross-project-analysis) below.
+
+---
+
+## Cross-project analysis
+
+The subprojects do **not** share a workspace (no root `Cargo.toml`; four separate
+`Cargo.lock` files), and the root `CLAUDE.md` frames them as independent. That
+framing holds for *domain* code — and the analysis confirms it (roam's "card"
+files are an unrelated render quad + worldgen index; ccg's engine types live only
+in ccg; the two trace buses share a shape but no code, by design). But it does
+**not** hold for *generic infrastructure*: observability scaffold, identity
+crypto, the error wire-shape, and build/CI config are duplicated across project
+lines, and several copies have already drifted. The team has already set the
+precedent that genuinely-shared infra gets a crate (`crates/sacred-error` is
+consumed by ccg+roam+rave precisely so the wire shape can't drift) — these
+findings extend that same logic.
+
+Each finding is tagged **SHOULD-SHARE** (extract it), **INTENTIONAL-PARALLEL**
+(same shape, divergence is correct — leave it), **SHALLOW** (too small to be
+worth it), or **FALSE-POSITIVE** (coincidental, not real duplication).
+
+### Cross-project opportunities, ranked
+
+| # | What | Projects | Lines | Verdict |
+|---|------|----------|-------|---------|
+| C1 | Bevy drawer + observability + run-scaffold + panic-hooks | rave, universe | ~370–400 | SHOULD-SHARE |
+| C2 | Identity keypair load/mint/encode + IDB persistence | roam, rave | ~90 + did:key ~110 | SHOULD-SHARE |
+| C3 | GitHub Actions deploy workflow (wasm→S3→CloudFront) | rave, universe, roam | ~75% of ~90 ×3 | SHOULD-SHARE |
+| C4 | `flake.nix` boilerplate + `flake.lock` (3 drifted pins) | root, roam, rave, universe | ~21 ×4 + 4 locks | SHOULD-SHARE |
+| C5 | sacred-error 14-field `Error{}` literal / panic helper | ccg, roam, rave | 6 sites | SHOULD-SHARE |
+| C6 | Typed-error wire shape defined independently | ccg, roam, rave | ~10 fields ×3 | SHOULD-SHARE |
+| C7 | libp2p `=0.56.0` pin set hand-synced | roam, rave, relayers, tests | ~10 ×5 | SHOULD-SHARE |
+| C8 | Bevy `[profile.*]` + feature blocks | rave, universe | ~25 ×2 | SHOULD-SHARE |
+| C9 | JS error-shape extraction (`normalizeError`) | ccg, roam (bridges+workers) | ~3 ×~20 | SHOULD-SHARE |
+| C10 | `tsot-card` crate claims dual-consumer, only roam uses it | (ccg), roam | n/a | latent |
+
+### [high] C1 — Bevy drawer/observability/run-scaffold (rave ↔ universe)
+- `rave/src/drawer.rs:1-266` + `rave/src/observability.rs:1-160` vs
+  `universe/src/lib.rs:437-753`; boot scaffold `rave/src/lib.rs:69-144` vs
+  `universe/src/lib.rs:54-127`.
+- Near-verbatim: `CaptureLayer`/`MessageVisitor`/`install_capture_layer`,
+  `Severity`/`ErrorEntry`/`ErrorLog`+`emit`, `PANIC_QUEUE`/`LOG_QUEUE` +
+  `drain_panics`/`drain_logs`, `update_fps`/`update_error_list`/
+  `toggle_log_drawer`/`update_clock`, the `setup_drawer` node tree, and the
+  `#[wasm_bindgen(start)] run()` boot (pre-App panic hook → `App::new()` +
+  identical `ClearColor` → `DefaultPlugins.set(WindowPlugin/AssetPlugin/LogPlugin)`
+  → wrap-after-LogPlugin second hook → diagnostics + Update system tuple).
+- **Already drifting:** rave's `ErrorLog::emit` has an `ERROR_LOG_CAP=50` ring-
+  buffer trim; universe's `ErrorLog` grows unbounded. The subtle two-stage panic-
+  hook ordering is load-bearing and copied by hand.
+- **Verdict: SHOULD-SHARE.** The independence axiom is about roam-vs-ccg
+  *architecture*; it does not forbid two genuine Bevy apps from sharing a Bevy
+  plugin. Extract `crates/bevy-observability` exposing an `ObservabilityPlugin`
+  (owns `ErrorLog`/`Severity`/`CaptureLayer`/queues/drain+update+toggle systems +
+  a `setup_drawer` parameterized by app-name/watermark/toggle-keys) and a boot
+  helper that installs both panic hooks + the LogPlugin custom layer given a JS
+  error-sink namespace. Keep **roam out** — it's egui/WebGL, not Bevy (C-low).
+
+### [high] C2 — Identity keypair handling (roam ↔ rave)
+- Rust: `roam/src/identity.rs:166-191` vs `rave/src/identity.rs:44-68`
+  (`load_or_generate_keypair` + `generate_identity_protobuf` are **byte-identical**,
+  including the `NetError::ProviderInternal` error text and the "no silent
+  ephemeral fallback" rationale comment). JS/TS: `roam/assets/src/identity.js:25-65`
+  vs `rave/web/src/identity-bridge.ts:14-59` (same IDB open→get→mint-Ed25519-
+  protobuf→put flow; only db/store/key names differ).
+- The W3C did:key/PeerId multicodec codec (`roam/src/identity.rs:45-152`, ~110
+  lines + tests) lives only in roam, but `rave/src/identity.rs:5-6` explicitly
+  defers the same did:key surfacing — i.e. it's the next thing to be copy-pasted.
+- **Verdict: SHOULD-SHARE.** Pure generic p2p-identity glue, not domain logic.
+  Extract `crates/p2p-identity` (keypair load/mint/encode + the did:key codec, so
+  rave pulls it in instead of re-deriving) and a shared `idb-identity.js`
+  parameterized by `{dbName, store, key}`.
+
+### [high] C3 — Deploy workflows (rave / universe / roam)
+- `.github/workflows/deploy-rave.yml` vs `deploy-universe.yml` vs `deploy-roam.yml`.
+- ~75% shared: `checkout` → `install-nix-action` (identical config) → `rust-cache`
+  → `nix develop -c make wasm` → verify-dist → `configure-aws-credentials` (OIDC)
+  → `aws s3 sync --delete` + `aws s3 cp index.html` (identical cache-control) →
+  CloudFront create-invalidation + wait. Only bucket/distribution/role values and
+  per-project verify-globs differ; roam adds `bun install`, rave adds the
+  integration-test steps.
+- **Verdict: SHOULD-SHARE.** Largest verbatim infra duplication in the repo.
+  Convert to a reusable `workflow_call` (inputs: bucket/distribution/role/workdir)
+  or a composite action for the build→verify→sync→invalidate tail; per-project
+  extras become conditional steps.
+
+### [high] C4 — flake.nix / flake.lock (root, roam, rave, universe)
+- Four `flake.nix` with **byte-identical** `inputs` blocks (nixpkgs nixos-unstable
+  + flake-utils + rust-overlay) and `eachDefaultSystem`/overlay scaffolding;
+  roam/rave/universe share the same `rust-bin.stable.latest … targets =
+  ["wasm32-unknown-unknown"]`. Four `flake.lock` pin the same input graph but have
+  **already drifted to 3 distinct toolchain pins** (root & roam share nixpkgs but
+  differ on rust-overlay; rave & universe share a newer nixpkgs).
+- **Verdict: SHOULD-SHARE.** One root `flake.nix` exposing per-project devShells
+  (`nix develop .#roam`) collapses 4 lockfiles → 1 and stops the silent toolchain
+  divergence. DevShell *contents* still differ per project — "one flake, multiple
+  shells," not one shell. (ccg has no flake of its own; the root flake is ccg's.)
+
+### [medium] C5 — sacred-error `Error{}` literal + panic helper (ccg, roam, rave)
+- The 14-field `Error { … }` struct literal (9 fixed `None`/`vec![]`/`false`
+  defaults) is hand-built at 6 sites: `ccg/src/error.rs:72-133` (emit/emit_region)
+  + `ccg/src/trace.rs:454-476,499-520` (snapshot_panic/emit_error),
+  `roam/src/error.rs:53-115`, `rave/src/error.rs:50-78`. Only `at:` and
+  region/surface vary. Panic-payload downcast (`payload_to_string`) is identical
+  in `ccg/src/trace.rs:437-443` and `roam/src/trace.rs:202-210`.
+- **Verdict: SHOULD-SHARE (the constructor only).** Add `Error::new(severity,
+  context, title, why)` + `.at()/.region()` setters and a `payload_to_string(&dyn
+  Any)` helper **to the existing `sacred-error` crate**. Removes the lockstep-edit
+  hazard (add a field → 6 hand-edits) without any shared runtime state. The
+  thread-local error *bus* (`push`/`drain`/`next_id`, ~25 lines ×3) stays
+  per-project — `sacred-error/src/lib.rs:8-28` documents why (thread-locals can't
+  be runtime-parameterized; id-prefix + clock differ). That's **INTENTIONAL**.
+
+### [medium] C6 — Typed-error wire shape (ccg, roam, rave)
+- The sacred-error record `{id, severity, context:{surface,region,anchor}, title,
+  why, trace, at}` crossing wasm→JS is described independently three times:
+  `rave/web/src/error-bridge.ts:9-18` (`TypedError` interface),
+  `roam/assets/src/js-bridge.js:380-391`, `ccg/assets/js-bridge.js:582-599` (Elm).
+  ccg internally carries *three* competing vocabularies (legacy
+  `{message,recent_trace}`, unified `{why,trace}`, Elm-typed) — the exact drift
+  the "errors are sacred" axiom exists to prevent.
+- **Verdict: SHOULD-SHARE.** Pin the wire shape once and generate/share a `.d.ts`
+  so a field rename trips a type error in all three consumers. (Pairs naturally
+  with C5: one Rust source of truth, one TS declaration.)
+
+### [medium] C7 — libp2p `=0.56.0` pin set (roam, rave, relayers, tests)
+- `libp2p = "=0.56.0"` + partner pins (`tokio=1.47.1`, `futures=0.3.32`,
+  `futures-timer=3.0.4`) + the browser/native feature shapes are replicated across
+  `roam/Cargo.toml`, `roam/relayers/Cargo.toml`, `rave/Cargo.toml`,
+  `crates/rave-positions-test/Cargo.toml` — with comments that literally say
+  "Mirrors roam/Cargo.toml's pinned versions." Hand-sync is exactly what
+  `[workspace.dependencies]` removes.
+- **Verdict: SHOULD-SHARE** via a narrow workspace over the libp2p-using crates;
+  each keeps only its feature selection (`workspace = true`).
+
+### [medium] C8 — Bevy `[profile.*]` + features (rave, universe)
+- Identical profile stack (`dev.package."*" opt-level=3`, `release opt-level="s"
+  lto codegen-units=1 strip`), `[features] dev=["bevy/dynamic_linking"]`, the same
+  13 Bevy features, and the same wasm dep pins (`js-sys=0.3.98`,
+  `wasm-bindgen=0.2.121`) in `rave/Cargo.toml` vs `universe/Cargo.toml`.
+- **Verdict: SHOULD-SHARE** via a rave+universe workspace inheriting `[profile.*]`
+  + `[workspace.dependencies]` for bevy/serde/wasm-bindgen. (ccg/roam have
+  deliberately different profiles — `panic="abort"`, opt-level "z" — so this is a
+  2-crate workspace, not repo-wide. A single monolithic workspace is the **wrong**
+  shape: ccg is emscripten + build-std, incompatible toolchain.)
+
+### [medium] C9 — JS error-shape extraction (ccg, roam)
+- `x && x.message ? x.message : String(x)` (+ the `.stack` twin) is inlined ~5×
+  in each of `ccg/assets/js-bridge.js`, `roam/assets/src/js-bridge.js`, and both
+  workers (`tsot-worker.js`, `net-worker.js`). No shared `normalizeError` helper.
+- **Verdict: SHOULD-SHARE.** A single `js-glue/error.js` `normalizeError(e) ->
+  {message, stack, name}` (+ an `installGlobalErrorCapture(sink)` for the
+  duplicated `window.onerror`/`unhandledrejection` wiring) imported by both
+  bridges and both workers.
+
+### [low / latent] C10 — `tsot-card` is single-consumer despite claiming otherwise
+- `crates/tsot-card/Cargo.toml:7` + `lib.rs:1-11` say "consumed by `tsot` and
+  `roam`," but only `roam/Cargo.toml:22` depends on it; ccg — the *authority* for
+  the card slug that `CardId(String)` wraps — never imports it (`ccg/src/card.rs:560`
+  stores `id: String` bare). The roam→ccg engine integration ("v0.5 resolves PvP
+  encounters") is not yet wired in code.
+- **Verdict: latent / deferred.** Correct to keep separate until the integration
+  lands; at that point ccg should adopt `tsot_card::CardId` on `Card.id` so the
+  seam shares one definition. For now, fix the crate's doc/description to stop
+  asserting a sharing relationship that doesn't exist. The `{ok, result, log,
+  trace, errors}` envelope roam reads from ccg's wasm
+  (`ccg/src/wasm_ffi.rs:41-52` → `roam/assets/src/js-bridge.js:734-744`) is the
+  one **sanctioned integration seam** — harden it with a shared `.d.ts`, don't
+  collapse it.
+
+### Confirmed INTENTIONAL-PARALLEL / FALSE-POSITIVE (no action)
+- **trace.rs (ccg ~1248 lines vs roam ~278):** same shape, ~0 shared code —
+  domain-specific event vocabularies, serde vs deliberately serde-free FFI, drain
+  vs bounded-ring buffers. roam's CLAUDE.md mandates the mirrored *pattern*.
+- **wasm_ffi.rs structure (ccg vs roam):** emscripten `extern "C"`/`CStr`/JSON
+  envelope vs `wasm-bindgen` native marshalling — converging them would violate
+  roam's "no stringly-typed FFI" axiom. (The ~10 repeated shims are an *internal*
+  ccg macro opportunity, already listed in the ccg FFI section.)
+- **roam "card" files:** `render_gl/card.rs` (a rendered quad) and
+  `teranos/card.rs` (worldgen index) share only the filename with ccg's `Card`
+  schema — FALSE-POSITIVE.
+- **build_info.rs ×3, error.rs thread-local bus ×3, `.cargo/config.toml`,
+  Caddyfile, tsconfig:** SHALLOW — small boilerplate around deliberately divergent
+  content; would only fall out for free under a root workspace/flake, not worth
+  extracting on their own.
+- **roam `perf.rs`:** no ccg analogue (ccg `sim/instrument.rs` is a hang
+  watchdog, different purpose) — not duplication.
+
+### Side observation (not duplication, flagged for safety)
+`universe/Cargo.toml` pins `getrandom 0.3 features=["wasm_js"]` but has **no**
+`.cargo/config.toml` setting `--cfg getrandom_backend="wasm_js"` (roam and rave
+both do). This looks like a latent build inconsistency, not a DRY issue — worth a
+separate check.
+
+### Cross-project verdict
+Domain independence is real and well-kept; **infrastructure** independence is not,
+and three copies have already drifted (universe's uncapped `ErrorLog`, three
+toolchain pins, ccg's three error vocabularies). The high-value, low-risk moves —
+each consistent with the existing `sacred-error` precedent — are: a
+`crates/bevy-observability` plugin (rave+universe, ~370 lines), a
+`crates/p2p-identity` crate (roam+rave, ~90+110 lines), a single root `flake.nix`
+(4 lockfiles → 1), and a reusable deploy workflow (3 → 1). On the Cargo side, do
+**not** make one repo-wide workspace — use two narrow ones (`crates/`, and
+rave+universe) plus `[workspace.dependencies]` for the hand-synced libp2p/Bevy
+pins. Everything else is either intentional parallelism driven by genuinely
+different runtimes/domains, or boilerplate too shallow to be worth extracting.
