@@ -1,21 +1,63 @@
-rave — Bevy + libp2p rave party. Forked from `universe/` at its cells-stage prototype as starting code. The direction is peers in one shared room over libp2p.
+rave — Bevy + libp2p rave party. Walkable 3D club: DJ booth + speakers on
+the north wall, bar along the west, toilets along the east, garderobe +
+entrance gap on the south, dancefloor in the middle with an overhead
+truss carrying 6 colour-cycling spotlights + 4 corner strobes. Peers
+walk through, see each other as spheres, identity persists per browser
+via IndexedDB.
 
-Current (inherited from universe): WASD + drag, eat algae to grow, water particles repel from the player, camera follows. Press `` ` `` in-canvas for the diagnostic drawer (FPS, captured errors). This is scaffold to be replaced as the rave direction takes shape.
+Press `` ` `` or `\` in-canvas for the diagnostic drawer (FPS, error
+list, net stats, clock). Press `P` to copy a screenshot to clipboard.
 
-Workflow: edit, push to `rave` branch, CI builds + deploys to https://rave.sbvh.nl/. No local dev — Bevy compile cost lives in CI, not on this machine.
+Workflow: edit, push to `rave` branch, CI builds + deploys to
+https://rave.sbvh.nl/. No local dev — Bevy compile cost lives in CI,
+not on this machine.
 
-Bevy version is pinned in `Cargo.toml`. One tracker line in `BEVY.md` for the next-minor bump trigger.
+Bevy version pinned in `Cargo.toml`. Open Bevy items in `BEVY.md`.
 
-**Errors are sacred** — panics + Bevy WARN/ERROR tracing events surface in the in-canvas drawer via `LogPlugin.custom_layer`. LogPlugin's console output is preserved (wrapped, not replaced). No silencing.
+**Errors are sacred** — panics + Bevy WARN/ERROR tracing events + typed
+`sacred_error::Error` values all surface in the in-canvas drawer + the
+HTML overlay via the `observability` module. LogPlugin's console output
+is preserved (wrapped, not replaced). No silencing.
 
-**Observability first** — the drawer is the in-canvas equivalent of devtools. If you can't see it, you don't know about it. Press `` ` `` to toggle.
+**Observability first** — the drawer is the in-canvas equivalent of
+devtools. If you can't see it, you don't know about it.
 
-Direction: peers connect over libp2p, end up in one shared room together. Mechanics, identity model, room model — all open.
+## libp2p slice — shipped
 
-## libp2p slice (in progress)
+Two browsers loading rave see each other through `relay.sbvh.nl`. Wire
+topic `rave-positions/v1` carries 10Hz position broadcasts as JSON
+`{peer, x, y, z, at_ms}`. Identity is an Ed25519 keypair persisted in
+IndexedDB (database `rave`, store `identity`); first visit mints it,
+every visit thereafter restores it. The libp2p substrate is ported from
+roam's `rust-libp2p` provider (rust-libp2p 0.56.0 on
+`wasm32-unknown-unknown`, WebSocket-WebSys + noise + yamux + gossipsub +
+identify + ping + connection_limits, single-relay topology).
 
-First multiplayer slice: two browsers running rave see each other as remote player cells, routed through `relay.sbvh.nl` (the relayer that already serves roam). Wire topic `rave-positions/v1` carries 10Hz position broadcasts as JSON `{peer, x, y, z, at_ms}`. Identity is an Ed25519 keypair persisted in IndexedDB (database `rave`, store `identity`); first visit mints it, every visit thereafter restores it.
+The native integration test at `crates/rave-positions-test/` spins the
+relayer binary on loopback + two native libp2p clients and asserts a
+RavePosition round-trips. Runs in CI before the wasm build. Replaces
+the "open two browsers and look" manual check.
 
-The libp2p substrate is ported from roam's `rust-libp2p` provider (rust-libp2p 0.56.0 on `wasm32-unknown-unknown`, WebSocket-WebSys + noise + yamux + gossipsub + identify + ping + connection_limits, single-relay topology). Slice is intentionally small — no canonical/non-canonical class distinction (roam's invariant; rave's world model is different), no did:key surfacing yet. Extraction into a shared crate happens only after this slice runs and the API shape is shown by two real consumers.
+## Module discipline
+
+Add a new concern in a new module. Don't pile into `lib.rs` — it's the
+orchestrator, not a feature dump. The current module map is in
+`README.md`.
+
+## Web layer
+
+`rave/web/` is a bun + TypeScript project. Six small modules (overlay,
+error-bridge, identity-bridge, screenshot, loading, main) plus
+`bridges.d.ts` for the `window.__rave*` extern type declarations.
+`bun build` produces `dist/main.js` which the Makefile content-hashes
+into `main.<h>.js`. Browser sees static JS only — bun is build-time
+only.
+
+## Direction (still open)
+
+Mechanics, chatroom UI, humanoid avatars (PolyPizza models are on
+disk, not yet wired in), what "a rave" actually means past peers in a
+room with strobes — all open. The shipped slice is the substrate; the
+party is what you build on it.
 
 Single-line git commits, no Claude attribution.

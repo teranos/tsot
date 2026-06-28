@@ -1,17 +1,42 @@
 # rave
 
-Bevy + libp2p rave party. Forked from `universe/` at its cells-stage prototype as the starting point. The direction is peers in one shared room over libp2p.
+Bevy + libp2p rave party. Walkable 3D room with a DJ booth, bar, toilets,
+garderobe, dancefloor + truss + strobes. Peers meet, see each other's
+position rendered as spheres, talk through gossipsub (chat slice
+pending).
 
-Deployed at https://rave.sbvh.nl/ via CI on push to `rave` or `master` (paths filter `rave/**`). No local dev — Bevy compile cost lives in CI, not on this machine. See `.github/workflows/deploy-rave.yml`.
+Deployed at https://rave.sbvh.nl/ via CI on push to `rave` or `master`
+(paths filter `rave/**`). No local dev — Bevy compile cost lives in CI,
+not on this machine. See `.github/workflows/deploy-rave.yml`.
 
-## Files
+## Module layout
 
-- `Cargo.toml` — Bevy (pinned), wasm-bindgen, js-sys. `crate-type = ["cdylib", "rlib"]`. Profile recipe: `opt-level = 1` self, `opt-level = 3` deps.
-- `flake.nix` — nix dev shell with rust (wasm32 target), `wasm-bindgen-cli`, `sccache`.
-- `Makefile` — `make wasm` runs `cargo build --release --lib` + `wasm-bindgen --target web`. CI calls this.
-- `index.html` — `<canvas id="bevy">` + ES module loading the wasm-bindgen output.
-- `src/lib.rs` — App, components, systems. Sacred-error pipeline (panic hook + LogPlugin custom_layer → in-canvas drawer). Cells: PlayerCell, Algae, WaterParticle, Tethered (halo + nucleus follow), Dying (eat animation).
-- `src/main.rs` — native entry that calls `lib::run()`.
-- `BEVY.md` — open decisions, references, Bevy version bump trigger.
+| Path | Owns |
+|------|------|
+| `src/lib.rs` | App orchestrator + JS-bridge externs only. ~200 lines. |
+| `src/room.rs` | Floor plane, `PlayerCell`, WASD/touch movement, follow camera. |
+| `src/floorplan.rs` | DJ booth, speakers, bar, toilets, garderobe, walls, dancefloor, truss + 6 sweeping spotlights, 4 corner strobes. |
+| `src/drawer.rs` | In-canvas diagnostic UI: FPS, error list, net stats, clock, build watermark. Toggle with `` ` `` or `\`. |
+| `src/observability.rs` | Panic hook + tracing layer + typed-error pipeline. `ErrorLog` resource. |
+| `src/net_glue.rs` | Bevy ↔ libp2p glue: `boot_net`, `publish_self_position`, `drain_net_events`, `RemotePlayers` + render. wasm32 only. |
+| `src/net.rs` | libp2p Swarm wiring + wire types (`PeerId`, `Topic`, `NetError`, `NetEvent`, `RavePosition`). wasm32 only. |
+| `src/error.rs` | Typed sacred-error helpers (`emit_region`, thread-local buffer, `err-rave-N` id namespace). |
+| `src/identity.rs` | Ed25519 keypair load-from-bytes or generate-fresh, IndexedDB bridge externs. |
+| `src/build_info.rs` | `COMMIT` + `BUILT_AT` consts populated at compile time. |
+| `web/` | Bun + TypeScript modules: overlay, error decoder, IndexedDB bridge, screenshot, streaming wasm fetch. Bundles to `dist/main.<h>.js`. |
+| `tests/` | (none in rave/; the native libp2p integration test lives in `crates/rave-positions-test/`). |
+| `BEVY.md` | Bevy decisions + version-bump tracker. |
 
-Nix flakes only see git-tracked files. New files need `git add` before `nix develop` sees them.
+## Build
+
+```
+nix develop -c make wasm
+```
+
+Calls `cargo build --release --lib`, then `wasm-bindgen`, then
+`bun build` on the TS layer, then content-hashes
+`main.js` + `rave.js` + `rave_bg.wasm` and writes the final
+`dist/index.html`.
+
+Nix flakes only see git-tracked files. New files need `git add` before
+`nix develop` sees them.
