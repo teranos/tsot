@@ -310,7 +310,7 @@ pub fn pulse_strobes(
         // SOURCE is visible (white-hot box when bright; nearly black
         // when dark). Bloom turns the emissive into a halo around the
         // box, which is the visual that reads as a strobe.
-        if let Some(mat) = materials.get_mut(&strobe.fixture_material) {
+        if let Some(mut mat) = materials.get_mut(&strobe.fixture_material) {
             mat.emissive = LinearRgba::from(strobe.color) * (pulse * 200.0);
         }
     }

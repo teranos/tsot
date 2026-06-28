@@ -24,10 +24,10 @@ mod observability;
 mod room;
 
 use bevy::asset::AssetMetaCheck;
-use bevy::core_pipeline::bloom::Bloom;
-use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::camera::Hdr;
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::log::LogPlugin;
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::window::WindowPlugin;
 
@@ -181,11 +181,7 @@ fn setup_scene_lights(mut commands: Commands) {
     // PointLights look matte.
     commands.spawn((
         Camera3d::default(),
-        Camera {
-            hdr: true,
-            ..default()
-        },
-        Tonemapping::AcesFitted,
+        Hdr,
         Bloom::default(),
         Transform::from_xyz(0.0, 80.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
