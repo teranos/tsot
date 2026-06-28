@@ -1,16 +1,22 @@
-//! Room scaffold — the walkable area the rave happens in.
+//! World scaffold — the forest floor the rave happens IN, and the
+//! player marker that walks across it.
 //!
-//! Owns: floor plane, player marker, velocity, WASD/touch movement
-//! clamped to the floor, third-person follow camera. No cells, no
-//! algae, no water — those were the inherited universe prototype
-//! and have been stripped. The room is a flat XZ square at Y=0;
-//! the player stays floor-locked.
+//! Owns: floor plane (forest-coloured), player marker, velocity,
+//! WASD/touch movement clamped to the floor, third-person follow
+//! camera. The clearing (DJ booth, bar, speakers, truss) lives in
+//! `floorplan.rs`. Trees + trail live in `trees.rs` + `trail.rs`.
 
 use bevy::prelude::*;
 
-/// Floor extent — half-size of the playable XZ square at Y=0. The
-/// player clamps to `[-FLOOR_HALF, FLOOR_HALF]` on X and Z.
-pub const FLOOR_HALF: f32 = 500.0;
+/// World half-extent — half-size of the walkable XZ square at Y=0.
+/// 6 km × 6 km of forest floor. The rave clearing sits at the origin;
+/// the player spawns far enough away to be out of earshot until they
+/// walk in along the trail.
+pub const FLOOR_HALF: f32 = 3000.0;
+
+/// Where the player spawns — well south of the clearing. The trail
+/// runs north from here to the clearing edge.
+pub const SPAWN_POS: Vec3 = Vec3::new(0.0, 20.0, 2400.0);
 
 /// Identifies the local player entity. Networking code reads the
 /// transform from the entity carrying this marker.
@@ -20,31 +26,31 @@ pub struct PlayerCell;
 #[derive(Component)]
 pub struct Velocity(pub Vec3);
 
-/// Spawn the floor + player at room boot. Camera is owned by
-/// `crate::setup` (the shared scene setup) so it can sit alongside
-/// the lights without duplicate `Camera3d` entities.
+/// Spawn the forest floor + player at startup.
 pub fn setup_room(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Floor — a flat square at Y=0. Slightly darker than ClearColor
-    // so the edge between floor and "void beyond" reads as a room.
+    // Forest floor — muted earth, slightly green-tinged. Plane stays
+    // a single mesh (vertex-shaded would need a custom material; the
+    // primitive's flat material is fine while we're using placeholder
+    // geometry everywhere).
     let floor_mesh = meshes.add(
         Plane3d::new(Vec3::Y, Vec2::splat(FLOOR_HALF))
             .mesh()
             .build(),
     );
-    let floor_mat = materials.add(StandardMaterial::from(Color::srgb(0.07, 0.09, 0.13)));
+    let floor_mat = materials.add(StandardMaterial::from(Color::srgb(0.06, 0.08, 0.05)));
     commands.spawn((
         Mesh3d(floor_mesh),
         MeshMaterial3d(floor_mat),
         Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 
-    // Player — a placeholder sphere standing on the floor. The
-    // sphere's centre sits at PLAYER_RADIUS above Y=0 so it doesn't
-    // intersect the plane.
+    // Player — placeholder sphere standing on the floor. Spawns at
+    // SPAWN_POS (south of the clearing) so the first thing you do is
+    // walk in.
     const PLAYER_RADIUS: f32 = 20.0;
     let player_mesh = meshes.add(Sphere::new(PLAYER_RADIUS));
     let player_mat = materials.add(StandardMaterial::from(Color::srgb(0.35, 0.85, 0.55)));
@@ -53,7 +59,7 @@ pub fn setup_room(
         Velocity(Vec3::ZERO),
         Mesh3d(player_mesh),
         MeshMaterial3d(player_mat),
-        Transform::from_xyz(0.0, PLAYER_RADIUS, 0.0),
+        Transform::from_translation(SPAWN_POS),
     ));
 }
 

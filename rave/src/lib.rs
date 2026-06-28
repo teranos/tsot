@@ -1,10 +1,13 @@
-//! rave — Bevy + libp2p rave party orchestrator.
+//! rave — Bevy + libp2p forest-rave orchestrator.
 //!
 //! This file owns ONLY the App scaffold + the JS bridges. Every
 //! concern lives in its own module:
 //!
-//!   - `room`         — floor plane, player, WASD/touch, camera
-//!   - `floorplan`    — DJ/speakers/bar/toilets/garderobe/walls + strobes
+//!   - `room`         — forest floor + player + WASD/touch + camera
+//!   - `floorplan`    — clearing structures (DJ, speakers, bar, truss, strobes)
+//!   - `trees`        — Wang-hash placed primitive trees
+//!   - `trail`        — lighter ground strip from spawn → clearing edge
+//!   - `audio`        — spatial music at the speakers; listener on the camera
 //!   - `drawer`       — in-canvas diagnostic UI (FPS, errors, net stats)
 //!   - `observability`— panic hook + tracing layer + typed-error pipeline
 //!   - `net_glue`     — Bevy ↔ libp2p (boot, publish, render peers)
@@ -14,6 +17,7 @@
 //!   - `identity`     — Ed25519 keypair load/generate + IndexedDB bridge
 //!   - `build_info`   — compile-time commit + timestamp
 
+mod audio;
 mod build_info;
 mod chat;
 mod drawer;
@@ -24,6 +28,8 @@ mod net;
 mod net_glue;
 mod observability;
 mod room;
+mod trail;
+mod trees;
 
 use bevy::asset::AssetMetaCheck;
 use bevy::camera::Hdr;
@@ -121,9 +127,15 @@ pub fn run() {
                 setup_scene_lights,
                 room::setup_room,
                 floorplan::setup_floor_plan,
+                trees::setup_trees,
+                trail::setup_trail,
                 drawer::setup_drawer,
             ),
         )
+        // `audio::setup_audio` queries `Speaker` + `Camera3d`. They're
+        // spawned in the Startup set above; this runs once after, when
+        // their entities exist.
+        .add_systems(PostStartup, audio::setup_audio)
         .add_systems(
             Update,
             (
@@ -175,28 +187,33 @@ pub fn run() {
 }
 
 /// Camera + minimal ambient. Dim on purpose — the floorplan module
-/// owns the truss spotlights + strobes that actually light the room,
-/// and they only read if the base level is low.
+/// owns the truss spotlights + strobes that actually light the rave,
+/// and they only read if the base level is low. The forest beyond
+/// the clearing reads as nighttime woodland because of this.
 fn setup_scene_lights(mut commands: Commands) {
-    // Bloom + AcesFitted tonemapping make bright emissive fixtures + the
-    // colored truss spots actually read as nightclub lights instead of
-    // washing out to white. Without bloom, even high-intensity
-    // PointLights look matte.
+    // Bloom + HDR make bright emissive fixtures + the coloured truss
+    // spots actually read as nightclub lights instead of washing out
+    // to white. Without bloom, even high-intensity PointLights look
+    // matte.
     commands.spawn((
         Camera3d::default(),
         Hdr,
         Bloom::default(),
         Transform::from_xyz(0.0, 80.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+    // Moonlight-ish blue, high above the clearing. Enough that the
+    // forest floor + tree silhouettes read as "night under sky", not
+    // "void". Range is large so the entire 6km world catches some
+    // base fill.
     commands.spawn((
         PointLight {
             shadow_maps_enabled: false,
-            intensity: 400_000.0,
-            range: 1200.0,
-            color: Color::srgb(0.35, 0.35, 0.50),
+            intensity: 600_000.0,
+            range: 6000.0,
+            color: Color::srgb(0.35, 0.40, 0.55),
             ..default()
         },
-        Transform::from_xyz(0.0, 600.0, 0.0),
+        Transform::from_xyz(0.0, 1500.0, 0.0),
     ));
 }
 

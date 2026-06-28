@@ -1,21 +1,22 @@
-//! Floor plan — DJ booth, speakers, bar, toilets, entrance + garderobe,
-//! dancefloor, strobes. All spawned at Startup; strobes are animated
-//! every frame by `pulse_strobes` so they flash asynchronously.
+//! The rave clearing — DJ booth, speakers, bar, dancefloor, truss,
+//! strobes. Open-air: no walls, no roof, no toilets, no garderobe.
+//! Sits at the origin of a much larger forest world (`room::FLOOR_HALF`);
+//! the player walks in from the south along the trail in `trail.rs`.
 //!
 //! Coordinate system (camera looks roughly down from +Z, +Y):
-//!   north (back wall) = -Z       south (entrance) = +Z
-//!   west  (bar)       = -X       east  (toilets)  = +X
+//!   north (DJ + stage)  = -Z       south (clearing edge) = +Z
+//!   west  (bar)         = -X       east  (open)          = +X
 //!
-//! All meshes are simple primitives (Cuboid + Plane3d). The PolyPizza
-//! humanoid models are a separate slice — they'll replace the player +
-//! peer spheres without touching this room scaffold.
+//! All meshes are simple primitives (Cuboid + Plane3d). Humanoid
+//! avatars + assets-from-CDN land in later slices.
 
 use bevy::prelude::*;
 
-use crate::room::FLOOR_HALF;
+/// Half-extent of the clearing — the bounding region within which
+/// the rave's physical structures sit. Trees in `trees.rs` are
+/// excluded from this radius so the dancefloor isn't overgrown.
+pub const CLEARING_HALF: f32 = 500.0;
 
-const WALL_HEIGHT: f32 = 80.0;
-const WALL_THICKNESS: f32 = 8.0;
 const DANCEFLOOR_HALF: f32 = 160.0;
 
 /// Marker on each strobe PointLight so the animation system can find
@@ -47,63 +48,20 @@ pub struct TrussSpot {
     pub hue_offset: f32,
 }
 
+/// Marker on the speaker entities so the audio system can find the
+/// two speakers without grabbing every cuboid in the world.
+#[derive(Component)]
+pub struct Speaker;
+
 pub fn setup_floor_plan(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // ----- Perimeter walls -----
-    //
-    // Four low walls clip the floor visually. The south wall has a
-    // gap in the middle for the entrance — built as two segments.
-    let wall_mat = materials.add(StandardMaterial::from(Color::srgb(0.12, 0.13, 0.18)));
-
-    // North (full width)
-    spawn_wall(
-        &mut commands,
-        &mut meshes,
-        &wall_mat,
-        Vec3::new(0.0, WALL_HEIGHT / 2.0, -FLOOR_HALF),
-        Vec3::new(FLOOR_HALF * 2.0, WALL_HEIGHT, WALL_THICKNESS),
-    );
-    // East (full depth)
-    spawn_wall(
-        &mut commands,
-        &mut meshes,
-        &wall_mat,
-        Vec3::new(FLOOR_HALF, WALL_HEIGHT / 2.0, 0.0),
-        Vec3::new(WALL_THICKNESS, WALL_HEIGHT, FLOOR_HALF * 2.0),
-    );
-    // West (full depth)
-    spawn_wall(
-        &mut commands,
-        &mut meshes,
-        &wall_mat,
-        Vec3::new(-FLOOR_HALF, WALL_HEIGHT / 2.0, 0.0),
-        Vec3::new(WALL_THICKNESS, WALL_HEIGHT, FLOOR_HALF * 2.0),
-    );
-    // South — two segments, leaving an 180-wide entrance in the middle.
-    let south_gap_half = 90.0;
-    let south_seg_len = FLOOR_HALF - south_gap_half;
-    spawn_wall(
-        &mut commands,
-        &mut meshes,
-        &wall_mat,
-        Vec3::new(-(south_gap_half + south_seg_len / 2.0), WALL_HEIGHT / 2.0, FLOOR_HALF),
-        Vec3::new(south_seg_len, WALL_HEIGHT, WALL_THICKNESS),
-    );
-    spawn_wall(
-        &mut commands,
-        &mut meshes,
-        &wall_mat,
-        Vec3::new(south_gap_half + south_seg_len / 2.0, WALL_HEIGHT / 2.0, FLOOR_HALF),
-        Vec3::new(south_seg_len, WALL_HEIGHT, WALL_THICKNESS),
-    );
-
-    // ----- DJ booth + speakers (north wall) -----
+    // ----- DJ booth + speakers (north end of the clearing) -----
     let dj_mat = materials.add(StandardMaterial::from(Color::srgb(0.18, 0.10, 0.22)));
     let speaker_mat = materials.add(StandardMaterial::from(Color::srgb(0.04, 0.04, 0.06)));
-    let dj_z = -FLOOR_HALF + 60.0;
+    let dj_z = -CLEARING_HALF + 60.0;
     // DJ booth — wide, shallow, waist-high.
     spawn_box(
         &mut commands,
@@ -112,50 +70,31 @@ pub fn setup_floor_plan(
         Vec3::new(0.0, 30.0, dj_z),
         Vec3::new(160.0, 60.0, 40.0),
     );
-    // Speakers — tall narrow boxes flanking the DJ.
+    // Speakers — tall narrow boxes flanking the DJ. Tagged with
+    // `Speaker` so the audio system can attach `AudioPlayer` +
+    // `PlaybackSettings::SPATIAL` to them in a later startup
+    // system (see `audio::setup_audio`).
     for x in [-130.0_f32, 130.0] {
-        spawn_box(
-            &mut commands,
-            &mut meshes,
-            &speaker_mat,
-            Vec3::new(x, 90.0, dj_z),
-            Vec3::new(50.0, 180.0, 50.0),
-        );
+        let speaker_mesh = meshes.add(Cuboid::new(50.0, 180.0, 50.0));
+        commands.spawn((
+            Speaker,
+            Mesh3d(speaker_mesh),
+            MeshMaterial3d(speaker_mat.clone()),
+            Transform::from_xyz(x, 90.0, dj_z),
+        ));
     }
 
-    // ----- Bar (west wall) -----
+    // ----- Bar (west side of the clearing) -----
     let bar_mat = materials.add(StandardMaterial::from(Color::srgb(0.20, 0.13, 0.07)));
     spawn_box(
         &mut commands,
         &mut meshes,
         &bar_mat,
-        Vec3::new(-FLOOR_HALF + 40.0, 45.0, 0.0),
+        Vec3::new(-CLEARING_HALF + 40.0, 45.0, 0.0),
         Vec3::new(40.0, 90.0, 360.0),
     );
 
-    // ----- Toilets (east wall, two stalls separated by a partition) -----
-    let toilet_mat = materials.add(StandardMaterial::from(Color::srgb(0.10, 0.18, 0.20)));
-    for z in [-90.0_f32, 90.0] {
-        spawn_box(
-            &mut commands,
-            &mut meshes,
-            &toilet_mat,
-            Vec3::new(FLOOR_HALF - 40.0, 35.0, z),
-            Vec3::new(70.0, 70.0, 100.0),
-        );
-    }
-
-    // ----- Garderobe (south, just inside the entrance gap) -----
-    let garderobe_mat = materials.add(StandardMaterial::from(Color::srgb(0.18, 0.16, 0.10)));
-    spawn_box(
-        &mut commands,
-        &mut meshes,
-        &garderobe_mat,
-        Vec3::new(0.0, 35.0, FLOOR_HALF - 60.0),
-        Vec3::new(120.0, 70.0, 30.0),
-    );
-
-    // ----- Dancefloor square (in the middle, slightly raised, distinct color) -----
+    // ----- Dancefloor square (centre, slightly raised, distinct color) -----
     //
     // Metallic + low-roughness so the coloured truss spots actually
     // bounce off it instead of the surface absorbing every photon.
@@ -263,16 +202,6 @@ pub fn setup_floor_plan(
             },
         ));
     }
-}
-
-fn spawn_wall(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    mat: &Handle<StandardMaterial>,
-    pos: Vec3,
-    size: Vec3,
-) {
-    spawn_box(commands, meshes, mat, pos, size);
 }
 
 fn spawn_box(
