@@ -1,5 +1,8 @@
-// Verify adaptive polling: the row should now carry push_time + p50 + p90
-// alongside repo + branch + sha. Watcher picks adaptive sleep when in_progress.
+// rave is a wasm32-only Bevy game; the native target intentionally exposes
+// nothing so that the host-side integration test in tests/ doesn't drag
+// Bevy + winit + wgpu into a build environment that can't satisfy them.
+#![cfg(target_arch = "wasm32")]
+
 use std::sync::Mutex;
 
 mod build_info;
