@@ -29,11 +29,11 @@ pub fn is_chat_focused() -> bool {
     false
 }
 
+// `rave_chat_send` + `rave_chat_set_focus` are NOT re-exported here: they
+// reach JS via `#[wasm_bindgen]` in the inner module; nothing in Rust
+// calls them. Re-exporting tripped `unused_imports`.
 #[cfg(target_arch = "wasm32")]
-pub use wasm::{
-    handle_incoming, is_chat_focused, publish_pending_chat, rave_chat_send,
-    rave_chat_set_focus,
-};
+pub use wasm::{handle_incoming, is_chat_focused, publish_pending_chat};
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
@@ -172,20 +172,24 @@ mod wasm {
                 // sees it.
                 match serde_json::to_string(&msg) {
                     Ok(json) => js_rave_chat_recv(&json),
-                    Err(e) => error::emit_region(
-                        error::Severity::Error,
-                        "chat-reserialize",
-                        "RaveChatMsg re-serialize failed",
-                        format!("{e}"),
-                    ),
+                    Err(e) => {
+                        error::emit_region(
+                            error::Severity::Error,
+                            "chat-reserialize",
+                            "RaveChatMsg re-serialize failed",
+                            format!("{e}"),
+                        );
+                    }
                 }
             }
-            Err(e) => error::emit_region(
-                error::Severity::Error,
-                "chat-decode",
-                "malformed RaveChatMsg wire payload",
-                format!("{e}"),
-            ),
+            Err(e) => {
+                error::emit_region(
+                    error::Severity::Error,
+                    "chat-decode",
+                    "malformed RaveChatMsg wire payload",
+                    format!("{e}"),
+                );
+            }
         }
     }
 }
