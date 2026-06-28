@@ -9,11 +9,13 @@
 //!   - `observability`— panic hook + tracing layer + typed-error pipeline
 //!   - `net_glue`     — Bevy ↔ libp2p (boot, publish, render peers)
 //!   - `net`          — libp2p Swarm wiring + wire types (browser-only)
+//!   - `chat`         — `rave-chat/v1` publish/route + JS bridge
 //!   - `error`        — typed sacred-error helpers
 //!   - `identity`     — Ed25519 keypair load/generate + IndexedDB bridge
 //!   - `build_info`   — compile-time commit + timestamp
 
 mod build_info;
+mod chat;
 mod drawer;
 mod error;
 mod floorplan;
@@ -155,6 +157,7 @@ pub fn run() {
                 observability::flush_typed_errors,
                 net_glue::drain_net_events,
                 net_glue::publish_self_position,
+                chat::publish_pending_chat,
                 net_glue::render_remote_players,
                 drawer::update_net_stats,
             )

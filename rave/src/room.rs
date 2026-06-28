@@ -89,6 +89,12 @@ pub fn move_player(
     time: Res<Time>,
     mut players: Query<(&mut Transform, &mut Velocity), With<PlayerCell>>,
 ) {
+    // While the chat input is focused, WASD belongs to the textbox,
+    // not the player. Without this, typing "w" in chat also moves
+    // the player — Bevy and the DOM input both receive the keystroke.
+    if crate::chat::is_chat_focused() {
+        return;
+    }
     let mut accel = Vec3::ZERO;
     if keys.pressed(KeyCode::KeyW) {
         accel.z -= 1.0;

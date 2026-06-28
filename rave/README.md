@@ -1,9 +1,10 @@
 # rave
 
 Bevy + libp2p rave party. Walkable 3D room with a DJ booth, bar, toilets,
-garderobe, dancefloor + truss + strobes. Peers meet, see each other's
-position rendered as spheres, talk through gossipsub (chat slice
-pending).
+garderobe, dancefloor + truss + strobes. Peers see each other as
+spheres via `rave-positions/v1` (10Hz gossipsub broadcast through
+`relay.sbvh.nl`). Identity is an Ed25519 keypair in IndexedDB. Chat is
+the open slice.
 
 Deployed at https://rave.sbvh.nl/ via CI on push to `rave` or `master`
 (paths filter `rave/**`). No local dev — Bevy compile cost lives in CI,

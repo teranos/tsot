@@ -70,8 +70,14 @@ const CATALOG_TOPIC: &str = "roam-catalog/v1";
 /// rave positions topic. The relayer subscribes so the star topology
 /// works for rave the same way it works for roam — without this every
 /// rave peer's PublishFailed would surface because no other mesh
-/// member knows the topic. Must match `rave/src/lib.rs::POSITIONS_TOPIC`.
+/// member knows the topic. Must match `rave/src/net_glue.rs::POSITIONS_TOPIC`.
 const RAVE_POSITIONS_TOPIC: &str = "rave-positions/v1";
+
+/// rave chat topic. Same star-topology subscription as positions:
+/// without the relayer in the mesh for this topic, every browser's
+/// chat publish would PublishFailed. Must match
+/// `rave/src/chat.rs::CHAT_TOPIC`.
+const RAVE_CHAT_TOPIC: &str = "rave-chat/v1";
 
 /// How often the relayer republishes its catalog. The first publish is
 /// at startup; subsequent ticks catch up new peers that joined after
@@ -303,6 +309,10 @@ async fn main() -> Result<()> {
         &gossipsub::IdentTopic::new(RAVE_POSITIONS_TOPIC),
     )?;
     info!(topic = RAVE_POSITIONS_TOPIC, "subscribed");
+    swarm.behaviour_mut().gossipsub.subscribe(
+        &gossipsub::IdentTopic::new(RAVE_CHAT_TOPIC),
+    )?;
+    info!(topic = RAVE_CHAT_TOPIC, "subscribed");
 
     // libp2p binds to loopback on an internal port. The public
     // `listen_port` is owned by a tiny TCP front (`status_proxy`

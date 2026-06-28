@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::chat;
 use crate::error;
 use crate::identity;
 use crate::net;
@@ -143,6 +144,16 @@ pub async fn boot_net() {
         return;
     }
 
+    if let Err(e) = net.subscribe(&net::Topic(chat::CHAT_TOPIC.to_string())) {
+        error::emit_region(
+            error::Severity::Error,
+            "net-subscribe",
+            "subscribe to rave-chat/v1 failed",
+            format!("{e:?}"),
+        );
+        return;
+    }
+
     PENDING_NET.with(|cell| *cell.borrow_mut() = Some(net));
 }
 
@@ -253,6 +264,12 @@ pub fn drain_net_events(
                             );
                         }
                     }
+                } else if topic.0 == chat::CHAT_TOPIC {
+                    // Hand off to the overlay via __raveChatRecv.
+                    // chat::handle_incoming decodes + filters out
+                    // self-echoes (gossipsub shouldn't echo, but a
+                    // belt-and-braces filter is cheap).
+                    chat::handle_incoming(&bytes, &self_peer);
                 }
                 // Other topics: silently ignored. Drawer stays quiet.
             }

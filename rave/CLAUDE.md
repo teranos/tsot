@@ -22,42 +22,33 @@ is preserved (wrapped, not replaced). No silencing.
 **Observability first** — the drawer is the in-canvas equivalent of
 devtools. If you can't see it, you don't know about it.
 
-## libp2p slice — shipped
+## Substrate
 
-Two browsers loading rave see each other through `relay.sbvh.nl`. Wire
-topic `rave-positions/v1` carries 10Hz position broadcasts as JSON
-`{peer, x, y, z, at_ms}`. Identity is an Ed25519 keypair persisted in
-IndexedDB (database `rave`, store `identity`); first visit mints it,
-every visit thereafter restores it. The libp2p substrate is ported from
-roam's `rust-libp2p` provider (rust-libp2p 0.56.0 on
-`wasm32-unknown-unknown`, WebSocket-WebSys + noise + yamux + gossipsub +
-identify + ping + connection_limits, single-relay topology).
+libp2p runs through `relay.sbvh.nl` (rust-libp2p 0.56.0 on
+`wasm32-unknown-unknown`, WebSocket-WebSys + noise + yamux + gossipsub
++ identify + ping + connection_limits, single-relay topology — ported
+from roam). Identity is an Ed25519 keypair in IndexedDB (db `rave`,
+store `identity`). Module map + topic list are in `README.md`; don't
+re-state them here.
 
 The native integration test at `crates/rave-positions-test/` spins the
-relayer binary on loopback + two native libp2p clients and asserts a
-RavePosition round-trips. Runs in CI before the wasm build. Replaces
-the "open two browsers and look" manual check.
+relayer binary on loopback + two libp2p clients and asserts a
+`RavePosition` round-trips. Runs in CI before the wasm build. Replaces
+the "open two browsers and look" manual check — any new gossipsub
+topic gets a sibling test in the same crate.
 
 ## Module discipline
 
 Add a new concern in a new module. Don't pile into `lib.rs` — it's the
-orchestrator, not a feature dump. The current module map is in
-`README.md`.
+orchestrator, not a feature dump.
 
-## Web layer
+## Open
 
-`rave/web/` is a bun + TypeScript project. Six small modules (overlay,
-error-bridge, identity-bridge, screenshot, loading, main) plus
-`bridges.d.ts` for the `window.__rave*` extern type declarations.
-`bun build` produces `dist/main.js` which the Makefile content-hashes
-into `main.<h>.js`. Browser sees static JS only — bun is build-time
-only.
-
-## Direction (still open)
-
-Mechanics, chatroom UI, humanoid avatars (PolyPizza models are on
-disk, not yet wired in), what "a rave" actually means past peers in a
-room with strobes — all open. The shipped slice is the substrate; the
-party is what you build on it.
+- **Chatroom** — `rave-chat/v1` gossipsub topic, always-on translucent
+  overlay, Enter-to-focus single-line input, scroll log. Only named
+  pending slice.
+- Humanoid avatars (Poly Pizza models on disk, not wired into
+  `room::PlayerCell`).
+- What "a rave" actually means past peers in a room with strobes.
 
 Single-line git commits, no Claude attribution.

@@ -64,6 +64,18 @@ pub struct RavePosition {
     pub at_ms: u64,
 }
 
+/// Wire payload for `rave-chat/v1`. One line of chat from a peer.
+/// `peer` is the libp2p PeerId of the sender (matches the signed
+/// gossipsub source — the field is informational; trust the source).
+/// `body` is UTF-8 plain text capped at 512 bytes by the publish
+/// path. `at_ms` is wall-clock millis at publish.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RaveChatMsg {
+    pub peer: String,
+    pub body: String,
+    pub at_ms: u64,
+}
+
 // Real Swarm wiring — wasm32-only because the WebSocket-WebSys
 // transport, gossipsub, and wasm_bindgen_futures::spawn_local don't
 // compile for native. Adapted from roam/src/net/rust_libp2p.rs's
@@ -527,6 +539,24 @@ mod tests {
             y: 0.0,
             z: -3.2,
             at_ms: 1_700_000_000_000,
+        });
+    }
+
+    #[test]
+    fn rave_chat_msg_round_trips() {
+        round_trip(RaveChatMsg {
+            peer: "12D3KooWPeerSelf".into(),
+            body: "hello from the dancefloor 🪩".into(),
+            at_ms: 1_700_000_000_000,
+        });
+    }
+
+    #[test]
+    fn rave_chat_msg_empty_body_round_trips() {
+        round_trip(RaveChatMsg {
+            peer: "12D3KooWPeerSelf".into(),
+            body: String::new(),
+            at_ms: 0,
         });
     }
 }

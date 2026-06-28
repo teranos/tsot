@@ -11,6 +11,7 @@ declare global {
     __raveLoadIdentity: () => Promise<Uint8Array | null>;
     __raveSaveIdentity: (bytes: Uint8Array) => Promise<void>;
     __raveScreenshot: (filename: string) => void;
+    __raveChatRecv: (json: string) => void;
   }
 }
 

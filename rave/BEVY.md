@@ -19,13 +19,17 @@ every rave-branch push and deploys to https://rave.sbvh.nl/.
 - **Camera / projection** — 3D top-down at ~50° pitch, follow camera
   trails the player from `(0, 300, 250)` offset. See `rave/src/room.rs`.
 - **Voxel approach** — not voxel. Floor is a single `Plane3d`; props
-  (DJ booth, speakers, bar, dancefloor strobes per R15) will be
-  individual meshes.
+  (DJ booth, speakers, bar, walls, truss, strobes) are individual
+  meshes spawned by `floorplan.rs`.
+- **HDR + Bloom** — camera carries `Hdr` + `Bloom::default()` from
+  `bevy::post_process::bloom`. Strobes + truss spots read as nightclub
+  lights, not matte. Base ambient is intentionally dim so the colour
+  cycling actually shows.
 - **`bevy_egui`** — not used. The in-canvas drawer renders via Bevy's
   own UI plugin (`ui_api` + `ui_bevy_render` features). Text-only,
   no widgets.
 - **Asset loading** — TBD when the first non-procedural asset lands
-  (Poly Pizza humanoid models for R13/R15 player avatar replacement).
+  (Poly Pizza humanoid models for player avatar replacement).
   `bevy_asset_loader` may earn its keep then; not before.
 
 ## References
