@@ -238,32 +238,22 @@ mod js_toggle {
     }
 }
 
-/// Condensed network stats line: self peer-id (short), remote peer
-/// count, configured topic. Updated every frame.
 #[cfg(target_arch = "wasm32")]
 pub fn update_net_stats(
-    maybe_net: NonSend<Option<crate::net::Net>>,
-    remotes: Res<crate::net_glue::RemotePlayers>,
+    net: Res<bevy_libp2p::LayeNet>,
+    remotes: Res<crate::remote_players::RemotePlayers>,
     mut texts: Query<&mut Text, With<NetStatsText>>,
 ) {
-    let Some(t) = texts.iter_mut().next() else {
+    let Some(mut t) = texts.iter_mut().next() else {
         return;
     };
-    let mut t = t;
-    match maybe_net.as_ref() {
-        Some(n) => {
-            let id = &n.identity().0;
-            let short = if id.len() > 10 { &id[id.len() - 10..] } else { id };
-            t.0 = format!(
-                "net: …{short} · peers={} · topic={}",
-                remotes.0.len(),
-                crate::net_glue::POSITIONS_TOPIC,
-            );
-        }
-        None => {
-            t.0 = "net: booting…".into();
-        }
-    }
+    let id = &net.identity().0;
+    let short = if id.len() > 10 { &id[id.len() - 10..] } else { id };
+    t.0 = format!(
+        "net: …{short} · peers={} · topic={}",
+        remotes.0.len(),
+        crate::POSITIONS_TOPIC,
+    );
 }
 
 #[cfg(target_arch = "wasm32")]

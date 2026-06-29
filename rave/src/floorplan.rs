@@ -24,10 +24,9 @@ const DANCEFLOOR_HALF: f32 = 160.0;
 /// Strobe runtime mode. R24 default is `Off` — strobes only fire when
 /// activated (R30 will add the click-to-cycle interaction).
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum StrobeMode {
-    /// Light is dark, fixture is dark. No flash.
     Off,
-    /// Sinusoid-driven flash, white only.
     Strobing,
 }
 
