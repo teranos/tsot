@@ -1,3 +1,5 @@
+**Code is being retired.** Ideas carry forward — convert what's worth keeping to `laye` (substrate) or `rave` (consumer app).
+
 roam — top-down P2P Rogue-like Deckbuilder MMO.
 
 **The only command that matters for the developer's workflow is:**
