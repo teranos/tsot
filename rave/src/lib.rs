@@ -50,7 +50,7 @@ pub(crate) fn js_rave_error_typed(_json: &str) {}
 pub(crate) fn js_rave_screenshot(_filename: &str) {}
 
 pub const RELAY_MULTIADDR: &str =
-    "/dns4/relay.sbvh.nl/tcp/443/wss/p2p/12D3KooWMSVxS7ntMVuvVADgZWMZwsjyYmcZvhnyQAJ53PtSJHpN";
+    "/dns4/relaye.sbvh.nl/tcp/443/wss/p2p/12D3KooWC6UBnnmhhv3BAfYKyW1bFBD4GtC5waiEgQWJCb7Hbqaf";
 
 pub const POSITIONS_TOPIC: &str = "rave-positions/v1";
 
