@@ -53,24 +53,6 @@ variable "static_bucket_name" {
   default     = "roam-sbvh-static"
 }
 
-variable "universe_subdomain" {
-  description = "Subdomain serving the universe (Bevy) wasm bundle through CloudFront."
-  type        = string
-  default     = "universe"
-}
-
-variable "universe_bucket_name" {
-  description = "S3 bucket name for universe's dist/ contents. Global namespace; pick something unique."
-  type        = string
-  default     = "universe-sbvh-static"
-}
-
-variable "universe_deploy_refs" {
-  description = "Git refs allowed to assume the universe-github-deploy IAM role via OIDC. Includes the working branch during v0.5 development."
-  type        = list(string)
-  default     = ["refs/heads/master", "refs/heads/bevy"]
-}
-
 variable "rave_subdomain" {
   description = "Subdomain serving the rave (Bevy + libp2p rave party) wasm bundle through CloudFront."
   type        = string
