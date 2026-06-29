@@ -65,8 +65,3 @@ variable "rave_bucket_name" {
   default     = "rave-sbvh-static"
 }
 
-variable "rave_deploy_refs" {
-  description = "Git refs allowed to assume the rave-github-deploy IAM role via OIDC. Includes the working branch."
-  type        = list(string)
-  default     = ["refs/heads/master", "refs/heads/rave"]
-}
