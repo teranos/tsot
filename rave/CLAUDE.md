@@ -21,13 +21,12 @@ devtools. If you can't see it, you don't know about it.
 
 ## Substrate
 
-libp2p runs through `relay.sbvh.nl` (rust-libp2p 0.56.0 on
-`wasm32-unknown-unknown`, WebSocket-WebSys + noise + yamux + gossipsub
-+ identify + ping + connection_limits, single-relay topology — ported
-from roam). Identity is an Ed25519 keypair in IndexedDB (db `rave`,
-store `identity`). Two topics on the wire: `rave-positions/v1` (10Hz
-XYZ) and `rave-chat/v1` (lines of text, Enter to send). Module map is
-in `README.md`; don't re-state it here.
+libp2p runs through `relay.sbvh.nl` via `bevy-libp2p` from the laye
+workspace (single-relay topology — ported from roam). Identity is an
+Ed25519 keypair in IndexedDB (db `rave`, store `identity`). Two
+topics on the wire: `rave-positions/v1` (10Hz XYZ) and
+`rave-chat/v1` (lines of text, Enter to send). Module map is in
+`README.md`; don't re-state it here.
 
 The native integration test crate at `crates/rave-positions-test/`
 spins the relayer binary on loopback + two libp2p clients and asserts
