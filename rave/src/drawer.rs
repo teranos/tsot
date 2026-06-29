@@ -10,7 +10,7 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 
 use crate::build_info;
-use crate::observability::{ErrorLog, Severity};
+use bevy_observability::{ErrorLog, Severity};
 
 #[derive(Component)]
 pub struct ClockText;

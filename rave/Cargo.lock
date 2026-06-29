@@ -499,6 +499,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy-chat"
+version = "0.0.0"
+dependencies = [
+ "bevy-libp2p",
+ "bevy_app",
+ "bevy_ecs",
+ "js-sys",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bevy-drawer"
+version = "0.0.0"
+dependencies = [
+ "bevy-observability",
+ "bevy_app",
+ "bevy_ecs",
+]
+
+[[package]]
 name = "bevy-libp2p"
 version = "0.0.0"
 dependencies = [
@@ -509,6 +530,15 @@ dependencies = [
  "laye-protocol",
  "tokio",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "bevy-observability"
+version = "0.0.0"
+dependencies = [
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_log",
 ]
 
 [[package]]
@@ -5792,7 +5822,10 @@ name = "rave"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy-chat",
+ "bevy-drawer",
  "bevy-libp2p",
+ "bevy-observability",
  "getrandom 0.3.4",
  "js-sys",
  "sacred-error",

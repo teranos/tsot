@@ -8,7 +8,7 @@ use crate::POSITIONS_TOPIC;
 use crate::chat;
 use crate::error;
 use crate::net::RavePosition;
-use crate::observability::{ErrorLog, Severity};
+use bevy_observability::{ErrorLog, Severity};
 use crate::room;
 
 #[derive(Default)]

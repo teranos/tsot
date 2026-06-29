@@ -1,0 +1,11 @@
+[package]
+name = "bevy-observability"
+version = "0.0.0"
+edition = "2024"
+description = "Panic + tracing capture into a Bevy resource, OT-style metrics trait."
+license = "MIT"
+
+[dependencies]
+bevy_app = { version = "=0.19.0", default-features = false }
+bevy_ecs = { version = "=0.19.0", default-features = false }
+bevy_log = { version = "=0.19.0", default-features = false }

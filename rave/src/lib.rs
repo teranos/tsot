@@ -25,7 +25,7 @@ use bevy::window::WindowPlugin;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-use observability::{ErrorLog, PANIC_QUEUE};
+use bevy_observability::{ErrorLog, PANIC_QUEUE};
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
@@ -156,7 +156,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                     ..default()
                 })
                 .set(LogPlugin {
-                    custom_layer: observability::install_capture_layer,
+                    custom_layer: bevy_observability::install_capture_layer,
                     ..default()
                 }),
         );
@@ -186,8 +186,8 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
         .add_systems(
             Update,
             (
-                observability::drain_panics,
-                observability::drain_logs,
+                bevy_observability::drain_panics,
+                bevy_observability::drain_logs,
                 drawer::update_fps,
                 drawer::update_error_list,
                 drawer::toggle_log_drawer,
