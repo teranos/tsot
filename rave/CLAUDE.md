@@ -1,23 +1,20 @@
-rave — Bevy + libp2p rave party. Walkable 3D club: DJ booth + speakers on
-the north wall, bar along the west, toilets along the east, garderobe +
-entrance gap on the south, dancefloor in the middle with an overhead
-truss carrying 6 colour-cycling spotlights + 4 corner strobes. Peers
-walk through, see each other as spheres, identity persists per browser
-via IndexedDB.
+**This is a persistent universe.** Procedurally seeded, peer-editable,
+cycling through heat-death and rebirth — Ouroboros. Germ-line identity
+persists through every cycle. The rave is one thing happening in it
+right now; it isn't the point.
 
-Press `` ` `` or `\` in-canvas for the diagnostic drawer (FPS, error
-list, net stats, clock). Press `P` to copy a screenshot to clipboard.
+Bevy + libp2p on `wasm32-unknown-unknown`, deployed at
+https://rave.sbvh.nl/ via CI on push to `master`. Edit, push, watch
+CI. No local dev — Bevy compile cost lives in CI, not on this
+machine.
 
-Workflow: edit, push to `rave` branch, CI builds + deploys to
-https://rave.sbvh.nl/. No local dev — Bevy compile cost lives in CI,
-not on this machine.
+Press `` ` `` or `\` in-canvas (or the top-right `≡` button on mobile)
+for the diagnostic drawer (FPS, errors, net stats, clock). Press `P`
+for a screenshot.
 
-Bevy version pinned in `Cargo.toml`. Open Bevy items in `BEVY.md`.
-
-**Errors are sacred** — panics + Bevy WARN/ERROR tracing events + typed
-`sacred_error::Error` values all surface in the in-canvas drawer + the
-HTML overlay via the `observability` module. LogPlugin's console output
-is preserved (wrapped, not replaced). No silencing.
+**Errors are sacred** — panics + Bevy WARN/ERROR tracing + typed
+`sacred_error::Error` all surface in the in-canvas drawer + the HTML
+overlay via the `observability` module. No silencing.
 
 **Observability first** — the drawer is the in-canvas equivalent of
 devtools. If you can't see it, you don't know about it.
@@ -44,11 +41,28 @@ the same crate.
 Add a new concern in a new module. Don't pile into `lib.rs` — it's the
 orchestrator, not a feature dump.
 
+## The universe
+
+Procedurally generated from a deterministic seed (Wang-hash style,
+like roam) + a per-peer-writable delta layer on top. First version:
+unlimited write access for everyone. Edits propagate via a future
+`rave-universe/v1` gossipsub topic; persistence path TBD between
+relayer-hosted snapshot, per-peer IndexedDB + re-share on join, and
+libp2p DHT.
+
+The universe lives ~60 minutes before heat-death, then **Ouroboros**
+restarts it. The last 10 seconds of the dying universe are the first
+10 of the next. Germ-line identity persists across the cycle via the
+player's keypair. Endgame: retain as much entropy as possible against
+the universal flatten.
+
+A rave happens in it. So does everything else, eventually.
+
 ## Open
 
 - Humanoid avatars (Poly Pizza models on disk, not wired into
   `room::PlayerCell`).
-- What "a rave" actually means past peers in a room with strobes who
-  can wave at each other in text.
+- Persistence path for universe deltas.
+- What carries through Ouroboros — the meta-game.
 
 Single-line git commits, no Claude attribution.
