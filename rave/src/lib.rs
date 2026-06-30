@@ -1,22 +1,3 @@
-//! rave — Bevy + libp2p forest-rave orchestrator.
-//!
-//! This file owns ONLY the App scaffold + the JS bridges. Every
-//! concern lives in its own module:
-//!
-//!   - `room`         — forest floor + player + WASD/touch + camera
-//!   - `floorplan`    — clearing structures (DJ, speakers, bar, truss, strobes)
-//!   - `trees`        — Wang-hash placed primitive trees
-//!   - `trail`        — lighter ground strip from spawn → clearing edge
-//!   - `audio`        — spatial music at the speakers; listener on the camera
-//!   - `drawer`       — in-canvas diagnostic UI (FPS, errors, net stats)
-//!   - `observability`— panic hook + tracing layer + typed-error pipeline
-//!   - `net_glue`     — Bevy ↔ libp2p (boot, publish, render peers)
-//!   - `net`          — libp2p Swarm wiring + wire types (browser-only)
-//!   - `chat`         — `rave-chat/v1` publish/route + JS bridge
-//!   - `error`        — typed sacred-error helpers
-//!   - `identity`     — Ed25519 keypair load/generate + IndexedDB bridge
-//!   - `build_info`   — compile-time commit + timestamp
-
 mod audio;
 mod build_info;
 mod chat;
@@ -25,9 +6,10 @@ mod error;
 mod floorplan;
 mod identity;
 mod net;
-mod net_glue;
 mod observability;
 mod physics;
+#[cfg(target_arch = "wasm32")]
+mod remote_players;
 mod room;
 mod trail;
 mod trees;
@@ -43,17 +25,11 @@ use bevy::window::WindowPlugin;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-use observability::{ErrorLog, PANIC_QUEUE};
+use bevy_observability::{ErrorLog, PANIC_QUEUE};
 
-// Out-of-Bevy error path. Calls window.__raveError defined in
-// rave/web/. Surfaces panics + ERROR-level tracing to the HTML
-// overlay even when Bevy itself is dead. Without this, anything that
-// panics before the first Update tick is silently swallowed: the
-// in-canvas drawer never renders because the systems that update it
-// never run.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-extern "C" {
+unsafe extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = "__raveError")]
     pub(crate) fn js_rave_error(msg: &str);
 
@@ -73,15 +49,93 @@ pub(crate) fn js_rave_error_typed(_json: &str) {}
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn js_rave_screenshot(_filename: &str) {}
 
+pub const RELAY_MULTIADDR: &str =
+    "/dns4/relaye.sbvh.nl/tcp/443/wss/p2p/12D3KooWC6UBnnmhhv3BAfYKyW1bFBD4GtC5waiEgQWJCb7Hbqaf";
+
+pub const POSITIONS_TOPIC: &str = "rave-positions/v1";
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
-    // Pre-App panic hook — catches panics during App::new() and the
-    // first slice of plugin building, before LogPlugin installs its
-    // own hook and overwrites ours.
     std::panic::set_hook(Box::new(|info| {
         js_rave_error(&format!("[pre-Bevy panic] {info}"));
     }));
 
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(async {
+        let identity_bytes = load_or_mint_identity().await;
+        build_and_run_app(Some(identity_bytes));
+    });
+
+    #[cfg(not(target_arch = "wasm32"))]
+    build_and_run_app(None);
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn load_or_mint_identity() -> Vec<u8> {
+    use wasm_bindgen::JsCast;
+
+    let load_promise = identity::js_rave_load_identity();
+    match wasm_bindgen_futures::JsFuture::from(load_promise).await {
+        Ok(val) if !val.is_null() && !val.is_undefined() => {
+            match val.dyn_into::<js_sys::Uint8Array>() {
+                Ok(arr) => {
+                    let mut bytes = vec![0u8; arr.length() as usize];
+                    arr.copy_to(&mut bytes);
+                    bytes
+                }
+                Err(_) => {
+                    error::emit_region(
+                        error::Severity::Error,
+                        "identity-load",
+                        "non-Uint8Array from JS bridge",
+                        "expected Uint8Array (or null), got something else",
+                    );
+                    mint_and_save_identity().await
+                }
+            }
+        }
+        Ok(_) => mint_and_save_identity().await,
+        Err(e) => {
+            error::emit_region(
+                error::Severity::Error,
+                "identity-load",
+                "IndexedDB load rejected",
+                format!("{e:?}"),
+            );
+            mint_and_save_identity().await
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn mint_and_save_identity() -> Vec<u8> {
+    let fresh = bevy_libp2p::Keypair::generate_ed25519();
+    let bytes = match fresh.to_protobuf_encoding() {
+        Ok(b) => b.to_vec(),
+        Err(e) => {
+            error::emit_region(
+                error::Severity::Error,
+                "identity-generate",
+                "Ed25519 keypair encode failed",
+                format!("{e}"),
+            );
+            return Vec::new();
+        }
+    };
+    let arr = js_sys::Uint8Array::from(bytes.as_slice());
+    let save_promise = identity::js_rave_save_identity(arr);
+    if let Err(e) = wasm_bindgen_futures::JsFuture::from(save_promise).await {
+        error::emit_region(
+            error::Severity::Warn,
+            "identity-save",
+            "IndexedDB save rejected",
+            format!("{e:?}"),
+        );
+    }
+    bytes
+}
+
+fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
     let mut app = App::new();
     app.insert_resource(ClearColor(Color::srgb(0.01, 0.05, 0.12)))
         .insert_resource(ErrorLog::default())
@@ -102,16 +156,11 @@ pub fn run() {
                     ..default()
                 })
                 .set(LogPlugin {
-                    custom_layer: observability::install_capture_layer,
+                    custom_layer: bevy_observability::install_capture_layer,
                     ..default()
                 }),
         );
 
-    // Wrap LogPlugin's panic hook NOW (after LogPlugin built, before
-    // app.run()). Anything panicking from this point on — Startup
-    // systems that can't reach the in-canvas drawer because Update
-    // hasn't run yet, Update systems themselves — still surfaces to
-    // the HTML overlay via __raveError.
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let formatted = format!("{info}");
@@ -133,23 +182,17 @@ pub fn run() {
                 drawer::setup_drawer,
             ),
         )
-        // `audio::setup_audio` queries `Speaker` + `Camera3d`. They're
-        // spawned in the Startup set above; this runs once after, when
-        // their entities exist.
         .add_systems(PostStartup, audio::setup_audio)
         .add_systems(
             Update,
             (
-                observability::drain_panics,
-                observability::drain_logs,
+                bevy_observability::drain_panics,
+                bevy_observability::drain_logs,
                 drawer::update_fps,
                 drawer::update_error_list,
                 drawer::toggle_log_drawer,
                 screenshot_on_p,
                 room::move_player,
-                // Collisions resolve AFTER move advances position but
-                // BEFORE the camera reads it — so the camera tracks
-                // the post-resolve location, not the penetration.
                 physics::resolve_collisions,
                 room::camera_follow,
                 floorplan::pulse_strobes,
@@ -162,54 +205,40 @@ pub fn run() {
 
     #[cfg(target_arch = "wasm32")]
     {
-        // Network resource lives as NonSend because Net contains Rc +
-        // RefCell (the swarm task uses Rc clones for the shared event
-        // queue). Inserted as None; the async boot fills it.
-        app.insert_non_send_resource::<Option<net::Net>>(None);
-        app.insert_resource(net_glue::RemotePlayers::default());
+        app.add_plugins(bevy_libp2p::LibP2PPlugin {
+            bootstrap_addrs: vec![RELAY_MULTIADDR.to_string()],
+            identity_bytes: _identity_bytes,
+            topics: vec![
+                bevy_libp2p::Topic(POSITIONS_TOPIC.to_string()),
+                bevy_libp2p::Topic(chat::CHAT_TOPIC.to_string()),
+            ],
+            identify_protocol: "/rave/1.0.0".to_string(),
+        });
+        app.insert_resource(remote_players::RemotePlayers::default());
         app.add_systems(
             Update,
             (
-                net_glue::install_pending_net,
                 observability::flush_typed_errors,
-                net_glue::drain_net_events,
-                net_glue::publish_self_position,
+                remote_players::drain_net_events,
+                remote_players::publish_self_position,
                 chat::publish_pending_chat,
-                net_glue::render_remote_players,
+                remote_players::render_remote_players,
                 drawer::update_net_stats,
             )
                 .chain(),
         );
-
-        // Kick off the async boot. Awaits the JS identity bridge,
-        // constructs Net, subscribes to the positions topic, stashes
-        // it in PENDING_NET for the Update system to pick up next
-        // frame.
-        wasm_bindgen_futures::spawn_local(net_glue::boot_net());
     }
 
     app.run();
 }
 
-/// Camera + minimal ambient. Dim on purpose — the floorplan module
-/// owns the truss spotlights + strobes that actually light the rave,
-/// and they only read if the base level is low. The forest beyond
-/// the clearing reads as nighttime woodland because of this.
 fn setup_scene_lights(mut commands: Commands) {
-    // Bloom + HDR make bright emissive fixtures + the coloured truss
-    // spots actually read as nightclub lights instead of washing out
-    // to white. Without bloom, even high-intensity PointLights look
-    // matte.
     commands.spawn((
         Camera3d::default(),
         Hdr,
         Bloom::default(),
         Transform::from_xyz(0.0, 80.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    // Moonlight-ish blue, high above the clearing. Enough that the
-    // forest floor + tree silhouettes read as "night under sky", not
-    // "void". Range is large so the entire 6km world catches some
-    // base fill.
     commands.spawn((
         PointLight {
             shadow_maps_enabled: false,
@@ -222,9 +251,6 @@ fn setup_scene_lights(mut commands: Commands) {
     ));
 }
 
-/// 'P' copies the canvas as a PNG to the system clipboard via the JS
-/// side. Small enough to keep in lib.rs; the screenshot bridge is the
-/// only one of the JS externs that ties to a key, not a system tick.
 fn screenshot_on_p(keys: Res<ButtonInput<KeyCode>>) {
     if keys.just_pressed(KeyCode::KeyP) {
         js_rave_screenshot("");

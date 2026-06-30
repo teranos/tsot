@@ -1,5 +1,7 @@
 # roam
 
+**Code is being retired.** Ideas carry forward — convert what's worth keeping to `laye` (substrate) or `rave` (consumer app).
+
 <!-- IDENTITY MENU (roam/docs/IDENTITY.md):
        C4 — write a player-facing one-pager "what identity means here." UX, not spec.
        D5 — one-paragraph CHANGELOG-style "the why" for the identity choice. -->

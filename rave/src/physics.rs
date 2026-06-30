@@ -16,7 +16,7 @@
 use bevy::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-use crate::net_glue::RemotePlayerCell;
+use crate::remote_players::RemotePlayerCell;
 use crate::room::{PlayerCell, Velocity};
 
 /// Local player sphere radius — matches the mesh spawn radius in
@@ -46,6 +46,7 @@ impl AabbCollider {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::type_complexity)]
 pub fn resolve_collisions(
     mut player_q: Query<(&mut Transform, &mut Velocity), With<PlayerCell>>,
     obstacles: Query<

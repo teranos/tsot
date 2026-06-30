@@ -2,7 +2,7 @@ name: deploy-rave
 
 on:
   push:
-    branches: [master, rave]
+    branches: ['**']
     paths:
       - 'rave/**'
       - '.github/workflows/deploy-rave.yml'

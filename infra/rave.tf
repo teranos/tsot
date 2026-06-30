@@ -158,9 +158,7 @@ resource "aws_iam_role" "rave_github_deploy" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = [
-            for ref in var.rave_deploy_refs : "repo:${var.github_repo}:ref:${ref}"
-          ]
+          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:*"
         }
       }
     }]

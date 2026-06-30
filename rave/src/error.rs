@@ -10,7 +10,7 @@
 //! can SEE failures with origin context — surface, region, title, why —
 //! instead of grepping wasm-bindgen function indices.
 
-pub use sacred_error::{Anchor, Context, Error, Severity};
+pub use sacred_error::{Context, Error, Severity};
 
 use std::cell::RefCell;
 
