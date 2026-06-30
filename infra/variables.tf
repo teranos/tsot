@@ -22,31 +22,6 @@ variable "game_subdomain" {
   default     = "roam"
 }
 
-variable "relay_subdomain" {
-  description = "Subdomain that fronts the libp2p relay through CloudFront."
-  type        = string
-  default     = "relay"
-}
-
-variable "relay_origin_domain" {
-  description = <<-EOT
-    Domain name CloudFront talks to when forwarding the relay's
-    WebSocket. Set this to a domain that resolves to the Lightsail
-    public IP (e.g. a separate Route 53 A-record like
-    `origin-relay.sbvh.nl → <lightsail-ip>`) once the box is up.
-    Placeholder by default so the distribution can be planned + created
-    before the Lightsail instance exists.
-  EOT
-  type        = string
-  default     = "origin-relay.sbvh.nl"
-}
-
-variable "relay_origin_port" {
-  description = "TCP port the relay listens on. Plain WS; CloudFront terminates TLS."
-  type        = number
-  default     = 9001
-}
-
 variable "static_bucket_name" {
   description = "S3 bucket name for the static dist/ contents. Global namespace; pick something unique."
   type        = string

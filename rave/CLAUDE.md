@@ -21,8 +21,9 @@ devtools. If you can't see it, you don't know about it.
 
 ## Substrate
 
-libp2p runs through `relay.sbvh.nl` via `bevy-libp2p` from the laye
-workspace (single-relay topology — ported from roam). Identity is an
+libp2p runs through `relaye.sbvh.nl` via `bevy-libp2p` from the laye
+workspace (single-relay topology — ported from roam; the old
+`relay.sbvh.nl` was sunset). Identity is an
 Ed25519 keypair in IndexedDB (db `rave`, store `identity`). Two
 topics on the wire: `rave-positions/v1` (10Hz XYZ) and
 `rave-chat/v1` (lines of text, Enter to send).
