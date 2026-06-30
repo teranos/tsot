@@ -501,7 +501,7 @@ dependencies = [
 [[package]]
 name = "bevy-chat"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
+source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
 dependencies = [
  "bevy-libp2p",
  "bevy_app",
@@ -514,7 +514,7 @@ dependencies = [
 [[package]]
 name = "bevy-drawer"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
+source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
 dependencies = [
  "bevy-observability",
  "bevy_app",
@@ -524,21 +524,23 @@ dependencies = [
 [[package]]
 name = "bevy-libp2p"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
+source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
  "laye-me",
  "laye-net",
  "laye-protocol",
+ "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "wasm-bindgen-futures",
 ]
 
 [[package]]
 name = "bevy-observability"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
+source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -3962,15 +3964,16 @@ dependencies = [
 [[package]]
 name = "laye-me"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
+source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
 dependencies = [
  "libp2p-identity",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "laye-net"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
+source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
 dependencies = [
  "futures",
  "futures-timer",
@@ -3981,13 +3984,14 @@ dependencies = [
  "libp2p",
  "libp2p-connection-limits",
  "serde",
+ "thiserror 2.0.18",
  "wasm-bindgen-futures",
 ]
 
 [[package]]
 name = "laye-protocol"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
+source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
 dependencies = [
  "serde",
 ]

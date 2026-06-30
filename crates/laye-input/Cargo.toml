@@ -1,0 +1,10 @@
+[package]
+name = "laye-input"
+version = "0.1.0"
+edition = "2021"
+description = "Engine-agnostic input concerns for laye consumers — InputClaims arbitration set + Intent enum. No engine dependency; Bevy adapter lives in bevy-input-capture. Incubating in tsot-roam; promoted to laye/crates/ once proven."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
