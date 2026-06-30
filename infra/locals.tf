@@ -1,4 +1,3 @@
 locals {
-  game_fqdn = "${var.game_subdomain}.${var.root_domain}"
   rave_fqdn = "${var.rave_subdomain}.${var.root_domain}"
 }

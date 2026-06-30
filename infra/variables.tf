@@ -16,18 +16,6 @@ variable "root_domain" {
   default     = "sbvh.nl"
 }
 
-variable "game_subdomain" {
-  description = "Subdomain that serves the static game bundle through CloudFront."
-  type        = string
-  default     = "roam"
-}
-
-variable "static_bucket_name" {
-  description = "S3 bucket name for the static dist/ contents. Global namespace; pick something unique."
-  type        = string
-  default     = "roam-sbvh-static"
-}
-
 variable "rave_subdomain" {
   description = "Subdomain serving the rave (Bevy + libp2p rave party) wasm bundle through CloudFront."
   type        = string
