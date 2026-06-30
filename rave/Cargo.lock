@@ -501,6 +501,7 @@ dependencies = [
 [[package]]
 name = "bevy-chat"
 version = "0.0.0"
+source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
 dependencies = [
  "bevy-libp2p",
  "bevy_app",
@@ -513,6 +514,7 @@ dependencies = [
 [[package]]
 name = "bevy-drawer"
 version = "0.0.0"
+source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
 dependencies = [
  "bevy-observability",
  "bevy_app",
@@ -522,6 +524,7 @@ dependencies = [
 [[package]]
 name = "bevy-libp2p"
 version = "0.0.0"
+source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -535,6 +538,7 @@ dependencies = [
 [[package]]
 name = "bevy-observability"
 version = "0.0.0"
+source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -3958,6 +3962,7 @@ dependencies = [
 [[package]]
 name = "laye-me"
 version = "0.0.0"
+source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
 dependencies = [
  "libp2p-identity",
 ]
@@ -3965,6 +3970,7 @@ dependencies = [
 [[package]]
 name = "laye-net"
 version = "0.0.0"
+source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
 dependencies = [
  "futures",
  "futures-timer",
@@ -3981,6 +3987,7 @@ dependencies = [
 [[package]]
 name = "laye-protocol"
 version = "0.0.0"
+source = "git+https://github.com/teranos/laye.git?rev=3ba02eb30f0800a932fae1b33694b6f984683849#3ba02eb30f0800a932fae1b33694b6f984683849"
 dependencies = [
  "serde",
 ]
