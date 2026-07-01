@@ -20,6 +20,8 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::log::LogPlugin;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
+use bevy::render::settings::{Backends, WgpuSettings};
+use bevy::render::RenderPlugin;
 use bevy::window::WindowPlugin;
 
 #[cfg(target_arch = "wasm32")]
@@ -157,6 +159,19 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 })
                 .set(LogPlugin {
                     custom_layer: bevy_observability::install_capture_layer,
+                    ..default()
+                })
+                // Bevy 0.19's default WgpuSettings picks BROWSER_WEBGPU only
+                // when the `webgpu` feature is on (bevy_render/settings.rs:78),
+                // regardless of `webgl2` also being on. Explicitly union both
+                // so wgpu falls through to WebGL2 on browsers without
+                // `navigator.gpu`.
+                .set(RenderPlugin {
+                    render_creation: WgpuSettings {
+                        backends: Some(Backends::BROWSER_WEBGPU | Backends::GL),
+                        ..default()
+                    }
+                    .into(),
                     ..default()
                 }),
         );
