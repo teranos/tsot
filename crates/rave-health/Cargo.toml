@@ -1,0 +1,15 @@
+[package]
+name = "rave-health"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+# Pure Health primitives extracted from rave/src/health.rs so CI can
+# actually run the tests (not just type-check them). Depends only on
+# bevy_ecs for the `Resource` derive — no renderer, no winit, no wgpu.
+# Compiles cheaply on the Linux CI runner.
+[dependencies]
+bevy_ecs = "=0.19.0"

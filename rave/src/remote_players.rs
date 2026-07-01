@@ -1,12 +1,13 @@
 #![cfg(target_arch = "wasm32")]
 
 use bevy::prelude::*;
-use bevy_libp2p::{LayeNet, LibP2PMessage, NetEvent, Topic};
+use bevy_libp2p::{LayeNet, LibP2PMessage, NetError, NetEvent, Topic};
 use std::collections::HashMap;
 
 use crate::POSITIONS_TOPIC;
 use crate::chat;
 use crate::error;
+use crate::health::{self, Health};
 use crate::net::RavePosition;
 use bevy_observability::{ErrorLog, Severity};
 use crate::room;
@@ -73,6 +74,7 @@ pub fn drain_net_events(
     mut reader: MessageReader<LibP2PMessage>,
     mut error_log: ResMut<ErrorLog>,
     mut remotes: ResMut<RemotePlayers>,
+    mut health: ResMut<Health>,
 ) {
     let self_peer = net.identity().0.clone();
     let now_ms = js_sys::Date::now() as u64;
@@ -89,6 +91,10 @@ pub fn drain_net_events(
                 );
             }
             NetEvent::Message { topic, bytes, .. } => {
+                // Any message on the topic — publish OR subscribe path
+                // — proves the mesh works for this topic. Resolves any
+                // active PublishFailing health entry keyed to it.
+                health::record_message_seen(&mut health, &topic.0);
                 if topic.0 == POSITIONS_TOPIC {
                     match serde_json::from_slice::<RavePosition>(bytes) {
                         Ok(pos) => {
@@ -126,8 +132,17 @@ pub fn drain_net_events(
                     ),
                 );
             }
-            NetEvent::Error(err) => {
-                error_log.emit(Severity::Error, format!("[net] {err:?}"));
+            // PublishFailed is a durable condition, not an ephemeral
+            // event — a solo peer on a 10 Hz publish topic emits ~10
+            // of these per second. Route into Health so the panel
+            // shows one live row instead of a red waterfall. Other
+            // NetError variants stay in the log where they belong
+            // (rare, one-shot).
+            NetEvent::Error(NetError::PublishFailed { topic, reason }) => {
+                health::record_publish_failed(&mut health, &topic.0, reason, now_ms);
+            }
+            NetEvent::Error(other) => {
+                error_log.emit(Severity::Error, format!("[net] {other:?}"));
             }
         }
     }

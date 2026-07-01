@@ -4,6 +4,7 @@ mod chat;
 mod drawer;
 mod error;
 mod floorplan;
+mod health;
 mod identity;
 mod net;
 mod observability;
@@ -141,6 +142,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
     let mut app = App::new();
     app.insert_resource(ClearColor(Color::srgb(0.01, 0.05, 0.12)))
         .insert_resource(ErrorLog::default())
+        .insert_resource(health::Health::default())
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
@@ -205,6 +207,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 bevy_observability::drain_logs,
                 drawer::update_fps,
                 drawer::update_error_list,
+                drawer::update_health_text,
                 drawer::toggle_log_drawer,
                 screenshot_on_p,
                 room::move_player,

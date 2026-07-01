@@ -21,6 +21,11 @@ pub struct FpsText;
 #[derive(Component)]
 pub struct ErrorListText;
 
+// Amber row above ErrorList — durable conditions ("what is wrong right
+// now"), not ephemeral events. See `crate::health` for the model.
+#[derive(Component)]
+pub struct HealthText;
+
 #[derive(Component)]
 pub struct LogDrawer;
 
@@ -111,6 +116,15 @@ pub fn setup_drawer(mut commands: Commands) {
             ));
             parent.spawn((
                 Text::new(""),
+                HealthText,
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.75, 0.4)),
+            ));
+            parent.spawn((
+                Text::new(""),
                 ErrorListText,
                 TextFont {
                     font_size: FontSize::Px(11.0),
@@ -167,6 +181,27 @@ pub fn update_fps(
     for mut text in &mut texts {
         **text = display.clone();
     }
+}
+
+pub fn update_health_text(
+    health: Res<crate::health::Health>,
+    mut texts: Query<&mut Text, With<HealthText>>,
+) {
+    let now = now_ms_for_health();
+    for mut text in &mut texts {
+        let lines = health.active_lines(now);
+        **text = lines.join("\n");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn now_ms_for_health() -> u64 {
+    js_sys::Date::now() as u64
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn now_ms_for_health() -> u64 {
+    0
 }
 
 pub fn update_error_list(

@@ -57,6 +57,14 @@ jobs:
         working-directory: crates/rave-positions-test
         run: cargo test --release -- --nocapture
 
+      # Pure Health primitives — durable-condition upsert/resolve
+      # logic used by rave/src/health.rs. Lives in its own crate so
+      # this step compiles + runs on Linux without dragging rave's
+      # wasm-only Bevy renderer deps.
+      - name: Unit tests — rave-health
+        working-directory: crates/rave-health
+        run: cargo test --release -- --nocapture
+
       - name: Build wasm bundle
         working-directory: rave
         run: nix develop -c make wasm
