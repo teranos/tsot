@@ -8,6 +8,7 @@ mod health;
 mod identity;
 mod net;
 mod observability;
+mod runtime_report;
 mod physics;
 #[cfg(target_arch = "wasm32")]
 mod remote_players;
@@ -143,6 +144,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
     app.insert_resource(ClearColor(Color::srgb(0.01, 0.05, 0.12)))
         .insert_resource(ErrorLog::default())
         .insert_resource(health::Health::default())
+        .insert_resource(runtime_report::RuntimeReport::default())
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
@@ -197,6 +199,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 trees::setup_trees,
                 trail::setup_trail,
                 drawer::setup_drawer,
+                runtime_report::capture_runtime_report,
             ),
         )
         .add_systems(PostStartup, audio::setup_audio)
@@ -208,6 +211,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 drawer::update_fps,
                 drawer::update_error_list,
                 drawer::update_health_text,
+                drawer::update_runtime_report_text,
                 drawer::toggle_log_drawer,
                 screenshot_on_p,
                 room::move_player,

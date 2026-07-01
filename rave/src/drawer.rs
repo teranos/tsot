@@ -26,6 +26,13 @@ pub struct ErrorListText;
 #[derive(Component)]
 pub struct HealthText;
 
+// Cyan-tinted block pinned at the very top of the drawer — the RCA
+// packet (backend, adapter, limits, features, canvas, build). Every
+// diagnostic screenshot has to carry this by construction. See
+// `crate::runtime_report`.
+#[derive(Component)]
+pub struct RuntimeReportText;
+
 #[derive(Component)]
 pub struct LogDrawer;
 
@@ -85,6 +92,15 @@ pub fn setup_drawer(mut commands: Commands) {
             Visibility::Hidden,
         ))
         .with_children(|parent| {
+            parent.spawn((
+                Text::new(""),
+                RuntimeReportText,
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.55, 0.85, 1.0)),
+            ));
             parent.spawn((
                 Text::new(
                     "keys: WASD move · `/\\ toggle · P screenshot",
@@ -180,6 +196,18 @@ pub fn update_fps(
     };
     for mut text in &mut texts {
         **text = display.clone();
+    }
+}
+
+pub fn update_runtime_report_text(
+    report: Res<crate::runtime_report::RuntimeReport>,
+    mut texts: Query<&mut Text, With<RuntimeReportText>>,
+) {
+    if !report.is_changed() && !report.is_added() {
+        return;
+    }
+    for mut text in &mut texts {
+        **text = report.lines.join("\n");
     }
 }
 
