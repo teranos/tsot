@@ -9,13 +9,6 @@ pub struct RavePosition {
     pub at_ms: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RaveChatMsg {
-    pub peer: String,
-    pub body: String,
-    pub at_ms: u64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,21 +33,4 @@ mod tests {
         });
     }
 
-    #[test]
-    fn rave_chat_msg_round_trips() {
-        round_trip(RaveChatMsg {
-            peer: "12D3KooWPeerSelf".into(),
-            body: "hello from the dancefloor 🪩".into(),
-            at_ms: 1_700_000_000_000,
-        });
-    }
-
-    #[test]
-    fn rave_chat_msg_empty_body_round_trips() {
-        round_trip(RaveChatMsg {
-            peer: "12D3KooWPeerSelf".into(),
-            body: String::new(),
-            at_ms: 0,
-        });
-    }
 }

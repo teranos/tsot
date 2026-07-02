@@ -501,8 +501,10 @@ dependencies = [
 [[package]]
 name = "bevy-chat"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
+source = "git+https://github.com/teranos/laye.git?rev=1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf#1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf"
 dependencies = [
+ "bevy",
+ "bevy-input-capture",
  "bevy-libp2p",
  "bevy_app",
  "bevy_ecs",
@@ -514,17 +516,30 @@ dependencies = [
 [[package]]
 name = "bevy-drawer"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
+source = "git+https://github.com/teranos/laye.git?rev=1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf#1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf"
 dependencies = [
+ "bevy",
+ "bevy-input-capture",
  "bevy-observability",
  "bevy_app",
  "bevy_ecs",
 ]
 
 [[package]]
+name = "bevy-input-capture"
+version = "0.0.0"
+source = "git+https://github.com/teranos/laye.git?rev=1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf#1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf"
+dependencies = [
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_input",
+ "laye-input",
+]
+
+[[package]]
 name = "bevy-libp2p"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
+source = "git+https://github.com/teranos/laye.git?rev=1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf#1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -540,7 +555,7 @@ dependencies = [
 [[package]]
 name = "bevy-observability"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
+source = "git+https://github.com/teranos/laye.git?rev=1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf#1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -3147,6 +3162,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
+name = "gl_generator"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a95dfc23a2b4a9a2f5ab41d194f8bfda3cabec42af4e39f08c339eb2a0c124d"
+dependencies = [
+ "khronos_api",
+ "log",
+ "xml-rs",
+]
+
+[[package]]
 name = "glam"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3169,6 +3195,18 @@ dependencies = [
  "futures-core",
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "glow"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29038e1c483364cc6bb3cf78feee1816002e127c331a1eec55a4d202b9e1adb5"
+dependencies = [
+ "js-sys",
+ "slotmap",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -3205,6 +3243,15 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
+]
+
+[[package]]
+name = "glutin_wgl_sys"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c4ee00b289aba7a9e5306d57c2d05499b2e5dc427f84ac708bd2c090212cf3e"
+dependencies = [
+ "gl_generator",
 ]
 
 [[package]]
@@ -3953,6 +4000,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "khronos-egl"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6aae1df220ece3c0ada96b8153459b67eebe9ae9212258bb0134ae60416fdf76"
+dependencies = [
+ "libc",
+ "libloading",
+ "pkg-config",
+]
+
+[[package]]
+name = "khronos_api"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
+
+[[package]]
 name = "ktx2"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3962,9 +4026,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "laye-input"
+version = "0.0.0"
+source = "git+https://github.com/teranos/laye.git?rev=1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf#1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf"
+
+[[package]]
 name = "laye-me"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
+source = "git+https://github.com/teranos/laye.git?rev=1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf#1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf"
 dependencies = [
  "libp2p-identity",
  "thiserror 2.0.18",
@@ -3973,7 +4042,7 @@ dependencies = [
 [[package]]
 name = "laye-net"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
+source = "git+https://github.com/teranos/laye.git?rev=1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf#1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf"
 dependencies = [
  "futures",
  "futures-timer",
@@ -3991,7 +4060,7 @@ dependencies = [
 [[package]]
 name = "laye-protocol"
 version = "0.0.0"
-source = "git+https://github.com/teranos/laye.git?rev=06224ee1063afa456beef21deac2eb7ff5f627eb#06224ee1063afa456beef21deac2eb7ff5f627eb"
+source = "git+https://github.com/teranos/laye.git?rev=1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf#1e5bd8183d488b5b1919f6e6ea5e37cdbc7e13bf"
 dependencies = [
  "serde",
 ]
@@ -5835,15 +5904,24 @@ dependencies = [
  "bevy",
  "bevy-chat",
  "bevy-drawer",
+ "bevy-input-capture",
  "bevy-libp2p",
  "bevy-observability",
  "getrandom 0.3.4",
  "js-sys",
+ "rave-health",
  "sacred-error",
  "serde",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "rave-health"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
 ]
 
 [[package]]
@@ -7036,6 +7114,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wayland-sys"
+version = "0.31.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8eab23fefc9e41f8e841df4a9c707e8a8c4ed26e944ef69297184de2785e3be"
+dependencies = [
+ "dlib",
+ "log",
+ "once_cell",
+ "pkg-config",
+]
+
+[[package]]
 name = "weak-table"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7146,6 +7236,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.18",
  "wgpu-core-deps-apple",
+ "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
  "wgpu-naga-bridge",
@@ -7157,6 +7248,15 @@ name = "wgpu-core-deps-apple"
 version = "29.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62e51b5447e144b3dbba4feb01f80f4fa21696fa0cd99afb2c3df1affd6fdb28"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-core-deps-wasm"
+version = "29.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c2f2fb042f36920771deb0b966543c5751b18f3d327760ffc90f74e20b2dcd4"
 dependencies = [
  "wgpu-hal",
 ]
@@ -7185,13 +7285,18 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "cfg_aliases",
+ "glow",
+ "glutin_wgl_sys",
  "gpu-allocator",
  "gpu-descriptor",
  "hashbrown 0.16.1",
+ "js-sys",
+ "khronos-egl",
  "libc",
  "libloading",
  "log",
  "naga",
+ "ndk-sys",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
@@ -7209,10 +7314,14 @@ dependencies = [
  "renderdoc-sys",
  "smallvec",
  "thiserror 2.0.18",
+ "wasm-bindgen",
+ "wayland-sys",
+ "web-sys",
  "wgpu-naga-bridge",
  "wgpu-types",
  "windows",
  "windows-core",
+ "windows-result",
 ]
 
 [[package]]

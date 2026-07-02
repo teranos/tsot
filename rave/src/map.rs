@@ -205,6 +205,7 @@ pub fn update_pin_labels(
 /// chat is focused so typing doesn't toggle the overlay by accident.
 pub fn toggle_pin_overlay(
     keys: Res<ButtonInput<KeyCode>>,
+    cap: Res<bevy_input_capture::InputCapture>,
     mut state: ResMut<PinOverlayVisible>,
     mut marker_vis: Query<&mut Visibility, (With<PinMarker>, Without<PinLabel>)>,
     mut label_vis: Query<&mut Visibility, (With<PinLabel>, Without<PinMarker>)>,
@@ -212,7 +213,7 @@ pub fn toggle_pin_overlay(
     if !keys.just_pressed(KeyCode::KeyM) {
         return;
     }
-    if crate::chat::is_chat_focused() {
+    if cap.is_captured() {
         return;
     }
     state.0 = !state.0;

@@ -93,12 +93,12 @@ pub fn move_player(
     keys: Res<ButtonInput<KeyCode>>,
     touches: Res<Touches>,
     time: Res<Time>,
+    cap: Res<bevy_input_capture::InputCapture>,
     mut players: Query<(&mut Transform, &mut Velocity), With<PlayerCell>>,
 ) {
-    // While the chat input is focused, WASD belongs to the textbox,
-    // not the player. Without this, typing "w" in chat also moves
-    // the player — Bevy and the DOM input both receive the keystroke.
-    if crate::chat::is_chat_focused() {
+    // Any claimant on InputCapture (chat, drawer, etc) owns keyboard input
+    // this frame — WASD belongs to them, not the player.
+    if cap.is_captured() {
         return;
     }
     let mut accel = Vec3::ZERO;

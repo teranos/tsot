@@ -5,7 +5,6 @@ use bevy_libp2p::{LayeNet, LibP2PMessage, NetError, NetEvent, Topic};
 use std::collections::HashMap;
 
 use crate::POSITIONS_TOPIC;
-use crate::chat;
 use crate::error;
 use crate::health::{self, Health};
 use crate::net::RavePosition;
@@ -113,8 +112,6 @@ pub fn drain_net_events(
                             );
                         }
                     }
-                } else if topic.0 == chat::CHAT_TOPIC {
-                    chat::handle_incoming(bytes, &self_peer);
                 }
             }
             NetEvent::SubscriptionChange {

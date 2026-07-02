@@ -50,52 +50,6 @@
       #rave-loading progress::-webkit-progress-value { background: #6f9; }
       #rave-loading progress::-moz-progress-bar { background: #6f9; }
       body.loaded #rave-loading { display: none; }
-
-/* Chat overlay — bottom-left, always-on, translucent. Container
-         is pointer-events: none so canvas drag/touch outside the panel
-         is unaffected; the log + input opt back in. */
-      #rave-chat {
-        position: fixed;
-        left: 12px;
-        bottom: 12px;
-        width: min(380px, calc(100vw - 24px));
-        max-height: 38vh;
-        display: flex;
-        flex-direction: column;
-        pointer-events: none;
-        z-index: 9997;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 12px;
-        color: #eaeaea;
-      }
-      #rave-chat-log {
-        flex: 1 1 auto;
-        overflow-y: auto;
-        background: rgba(10, 12, 20, 0.45);
-        backdrop-filter: blur(6px);
-        -webkit-backdrop-filter: blur(6px);
-        border-radius: 6px 6px 0 0;
-        padding: 6px 8px;
-        line-height: 1.35;
-        pointer-events: auto;
-      }
-      #rave-chat-log .row { word-break: break-word; }
-      #rave-chat-log .peer { color: #9bd5ff; margin-right: 6px; }
-      #rave-chat-log .self .peer { color: #9bff9b; }
-      #rave-chat-input {
-        flex: 0 0 auto;
-        background: rgba(0, 0, 0, 0.55);
-        border: none;
-        border-top: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 0 0 6px 6px;
-        color: #eaeaea;
-        font: inherit;
-        padding: 6px 8px;
-        outline: none;
-        pointer-events: auto;
-      }
-      #rave-chat-input::placeholder { color: #6a7080; }
-      #rave-chat-input:focus { background: rgba(0, 0, 0, 0.75); }
     </style>
   </head>
   <body>
@@ -104,19 +58,6 @@
     <div id="rave-loading">
       <div id="rave-loading-text">loading rave · 0%</div>
       <progress value="0" max="1"></progress>
-    </div>
-    <div id="rave-chat">
-      <div id="rave-chat-log"></div>
-      <input
-        id="rave-chat-input"
-        type="text"
-        autocomplete="off"
-        autocorrect="off"
-        autocapitalize="off"
-        spellcheck="false"
-        placeholder="press Enter to chat"
-        maxlength="512"
-      />
     </div>
     <script>
       // Two build variants ship flat in the same dist/: one for WebGPU,

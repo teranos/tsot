@@ -1,7 +1,6 @@
 mod audio;
 mod build_info;
 mod campfire;
-mod chat;
 mod drawer;
 mod error;
 mod floorplan;
@@ -58,6 +57,7 @@ pub const RELAY_MULTIADDR: &str =
     "/dns4/relaye.sbvh.nl/tcp/443/wss/p2p/12D3KooWC6UBnnmhhv3BAfYKyW1bFBD4GtC5waiEgQWJCb7Hbqaf";
 
 pub const POSITIONS_TOPIC: &str = "rave-positions/v1";
+pub const CHAT_TOPIC: &str = "rave-chat/v1";
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
@@ -178,6 +178,12 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
         prev(info);
     }));
 
+    app.add_plugins((
+        bevy_input_capture::InputCapturePlugin,
+        bevy_input_capture::DefaultBindingsPlugin,
+        bevy_chat::ChatOverlayPlugin::default(),
+    ));
+
     app.add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_systems(
             Startup,
@@ -229,9 +235,13 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
             identity_bytes: _identity_bytes,
             topics: vec![
                 bevy_libp2p::Topic(POSITIONS_TOPIC.to_string()),
-                bevy_libp2p::Topic(chat::CHAT_TOPIC.to_string()),
+                bevy_libp2p::Topic(CHAT_TOPIC.to_string()),
             ],
             identify_protocol: "/rave/1.0.0".to_string(),
+        });
+        app.add_plugins(bevy_chat::ChatPlugin {
+            topic: CHAT_TOPIC.to_string(),
+            max_body_bytes: 512,
         });
         app.insert_resource(remote_players::RemotePlayers::default());
         app.add_systems(
@@ -240,7 +250,6 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 observability::flush_typed_errors,
                 remote_players::drain_net_events,
                 remote_players::publish_self_position,
-                chat::publish_pending_chat,
                 remote_players::render_remote_players,
                 drawer::update_net_stats,
             )
