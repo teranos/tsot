@@ -1,5 +1,6 @@
 mod audio;
 mod build_info;
+mod campfire;
 mod chat;
 mod drawer;
 mod error;
@@ -188,6 +189,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 trail::setup_trail,
                 drawer::setup_drawer,
                 runtime_report::capture_runtime_report,
+                campfire::setup_campfire.after(map::setup_map),
             ),
         )
         .add_systems(PostStartup, audio::setup_audio)
@@ -203,6 +205,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 drawer::toggle_log_drawer,
                 map::toggle_pin_overlay,
                 map::update_pin_labels,
+                campfire::flicker_fire,
                 screenshot_on_p,
                 room::move_player,
                 physics::resolve_collisions,

@@ -54,7 +54,7 @@ pub const TRAIL: Vec3 = Vec3::new(0.0, 0.0, 1470.0);
 /// tree-exclusion buffer. Not yet reified as scene content; the
 /// anchor entity exists so future fixtures can attach under it
 /// without another cross-module coordinate hunt.
-pub const CAMPFIRE: Vec3 = Vec3::new(0.0, 0.0, 520.0);
+pub const CAMPFIRE: Vec3 = Vec3::new(-3000.0, 0.0, 520.0);
 
 /// Debug overlay state. `M` flips this; the flip cascades
 /// `Visibility` to every pin anchor + UI label.
