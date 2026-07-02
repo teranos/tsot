@@ -72,25 +72,24 @@ jobs:
       - name: Verify dist contents
         working-directory: rave
         run: |
-          # Top-level shim — picks a backend at load time.
+          # Single canonical index.html at root. Contains the bootstrap
+          # that picks the backend at load time based on navigator.gpu.
           test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
-          grep -q "navigator.gpu" dist/index.html || { echo "dist/index.html isn't the shim (no navigator.gpu picker)"; exit 1; }
-          # Both backend bundles must exist. Bevy 0.19 shader defines
-          # are compile-time gated per backend (see rave/Cargo.toml
-          # comment on `default = ["backend-webgpu"]`); shipping one
-          # bundle breaks the other class of client.
+          grep -q "navigator" dist/index.html || { echo "dist/index.html has no bootstrap (navigator check missing)"; exit 1; }
+          # Both backend bundles must exist flat in dist/. Bevy 0.19
+          # shader defines are compile-time gated per backend (see
+          # rave/Cargo.toml comment on `default = ["backend-webgpu"]`);
+          # shipping one bundle breaks the other class of client.
           for backend in webgpu webgl2; do
-            test -f dist/$backend/index.html                 || { echo "dist/$backend/index.html missing"; exit 1; }
-            ls dist/$backend/rave_bg.*.wasm >/dev/null 2>&1  || { echo "dist/$backend/rave_bg.*.wasm missing"; exit 1; }
-            ls dist/$backend/rave.*.js      >/dev/null 2>&1  || { echo "dist/$backend/rave.*.js missing"; exit 1; }
-            # index.html must point at the hashed asset that exists on
-            # disk — the matched-pair guarantee is only worth anything
-            # if it holds. Checked per backend subdir.
-            grep -oE 'rave\.[0-9a-f]+\.js' dist/$backend/index.html | while read -r js; do
-              test -f "dist/$backend/$js" || { echo "dist/$backend/index.html references missing $js"; exit 1; }
-            done
+            ls dist/main-$backend.*.js         >/dev/null 2>&1 || { echo "dist/main-$backend.*.js missing"; exit 1; }
+            ls dist/rave-$backend.*.js         >/dev/null 2>&1 || { echo "dist/rave-$backend.*.js missing"; exit 1; }
+            ls dist/rave-$backend-bg.*.wasm    >/dev/null 2>&1 || { echo "dist/rave-$backend-bg.*.wasm missing"; exit 1; }
+            # Bootstrap must reference an actual per-backend main file
+            # that exists on disk — matched-pair guarantee.
+            main_hashed=$(ls -1 dist/main-$backend.*.js | head -1 | xargs basename)
+            grep -q "./$main_hashed" dist/index.html || { echo "dist/index.html doesn't reference $main_hashed"; exit 1; }
           done
-          ls -R dist/
+          ls -la dist/
 
       - name: Assume deploy role
         uses: aws-actions/configure-aws-credentials@v4
@@ -103,23 +102,16 @@ jobs:
         run: |
           # Hashed assets are content-addressed, so they can cache forever
           # — a new build emits a new filename rather than mutating one.
-          # `--exclude "*index.html"` skips index.html at any depth so the
-          # three index.html files (shim + one per backend) get uploaded
-          # separately with must-revalidate cache-control below.
           aws s3 sync dist/ "s3://${{ env.STATIC_BUCKET }}/" \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
-            --exclude "*index.html"
-          # index.html files must revalidate — they're the version-pinning
-          # references to the hashed assets. The shim also swaps between
-          # backends based on `navigator.gpu`, so a stale shim would send
-          # WebGL2 clients to a broken WebGPU build (or vice versa).
-          for html in dist/index.html dist/webgpu/index.html dist/webgl2/index.html; do
-            key="${html#dist/}"
-            aws s3 cp "$html" "s3://${{ env.STATIC_BUCKET }}/$key" \
-              --cache-control "public, max-age=60, must-revalidate" \
-              --content-type "text/html; charset=utf-8"
-          done
+            --exclude "index.html"
+          # Single canonical index.html — the bootstrap that references
+          # the current per-backend main-*.js by hash. Must revalidate
+          # so a stale copy doesn't point at long-deleted assets.
+          aws s3 cp dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
+            --cache-control "public, max-age=60, must-revalidate" \
+            --content-type "text/html; charset=utf-8"
 
       - name: Invalidate CloudFront
         run: |

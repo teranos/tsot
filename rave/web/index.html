@@ -142,6 +142,23 @@
       />
     </div>
     <button id="rave-drawer-toggle" type="button" aria-label="toggle drawer">≡</button>
-    <script type="module" crossorigin="anonymous" src="./main.js"></script>
+    <script>
+      // Two build variants ship flat in the same dist/: one for WebGPU,
+      // one for WebGL2. Bevy 0.19 gates its shader-fallback defines at
+      // compile time on the wgpu feature set (bevy_render
+      // pipeline_cache.rs:237 → `not(feature = "webgpu")` unlocks
+      // NO_CUBE_ARRAY_TEXTURES_SUPPORT + friends), so we can't cover
+      // both backends in one wasm. The bootstrap picks at load-time
+      // based on `navigator.gpu`. URL stays at root — no /webgpu/,
+      // no /webgl2/, no /index.html leak.
+      var main = ('gpu' in navigator)
+        ? 'MAIN_WEBGPU_URL_PLACEHOLDER'
+        : 'MAIN_WEBGL2_URL_PLACEHOLDER';
+      var s = document.createElement('script');
+      s.type = 'module';
+      s.crossOrigin = 'anonymous';
+      s.src = main;
+      document.head.appendChild(s);
+    </script>
   </body>
 </html>
