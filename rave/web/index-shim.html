@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>rave</title>
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; background: #111; color: #888; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+      #picking { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+    </style>
+  </head>
+  <body>
+    <div id="picking">picking rave build…</div>
+    <script>
+      // Two wasm bundles are shipped side-by-side:
+      //   webgpu/  — Bevy compiled with the WebGPU shader-defines path.
+      //   webgl2/  — Bevy compiled with the WebGL2 fallback shader-defines
+      //              (NO_ARRAY_TEXTURES_SUPPORT, NO_CUBE_ARRAY_TEXTURES_SUPPORT,
+      //              SIXTEEN_BYTE_ALIGNMENT — see bevy_render
+      //              pipeline_cache.rs:237).
+      //
+      // Bevy 0.19 gates those defines at compile time on the wgpu feature
+      // set, so a single wasm can't cover both backends. This shim picks
+      // the WebGPU build for clients that expose `navigator.gpu`, and
+      // falls back to WebGL2 for everyone else (every current browser
+      // supports WebGL2, so there's no third case).
+      var dir = ('gpu' in navigator) ? 'webgpu' : 'webgl2';
+      location.replace(dir + '/');
+    </script>
+  </body>
+</html>

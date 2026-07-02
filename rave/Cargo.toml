@@ -21,6 +21,15 @@ codegen-units = 1
 strip = true
 
 [features]
+# Bevy 0.19 gates its WebGL2 shader fallback defines
+# (`NO_CUBE_ARRAY_TEXTURES_SUPPORT`, `NO_ARRAY_TEXTURES_SUPPORT`,
+# `SIXTEEN_BYTE_ALIGNMENT`) at compile time on
+# `not(feature = "webgpu")` (bevy_render 0.19 `pipeline_cache.rs:237`).
+# So the two backends have to be mutually exclusive per build. Ship
+# two wasm bundles from CI, JS shim picks based on `navigator.gpu`.
+default = ["backend-webgpu"]
+backend-webgpu = ["bevy/webgpu"]
+backend-webgl2 = ["bevy/webgl2"]
 dev = [
     "bevy/dynamic_linking",
 ]
@@ -38,8 +47,6 @@ bevy = { version = "=0.19.0", default-features = false, features = [
     "scene",
     "bevy_winit",
     "default_font",
-    "webgpu",
-    "webgl2",
     "debug",
     # R23 forest rave — spatial music at the speakers, listener on the
     # camera. `bevy_audio` is the audio plugin; `vorbis` decodes the
