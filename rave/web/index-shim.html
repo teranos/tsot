@@ -24,8 +24,11 @@
       // the WebGPU build for clients that expose `navigator.gpu`, and
       // falls back to WebGL2 for everyone else (every current browser
       // supports WebGL2, so there's no third case).
+      // Explicit `index.html` path — S3 returns AccessDenied for
+      // requests to `/webgpu/` or `/webgl2/` (no directory listing;
+      // no CloudFront function rewriting subdir requests to index).
       var dir = ('gpu' in navigator) ? 'webgpu' : 'webgl2';
-      location.replace(dir + '/');
+      location.replace(dir + '/index.html');
     </script>
   </body>
 </html>
