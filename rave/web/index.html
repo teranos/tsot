@@ -132,7 +132,17 @@
         : 'MAIN_WEBGL2_URL_PLACEHOLDER';
       var s = document.createElement('script');
       s.type = 'module';
-      s.crossOrigin = 'anonymous';
+      // NO crossorigin attribute. Verified empirically via `curl -I`
+      // on the deployed main-webgpu.*.js: response has no
+      // `access-control-allow-origin` header (S3 + CloudFront serve
+      // without ACAO here). Setting `s.crossOrigin = 'anonymous'`
+      // would flip the browser into CORS mode for the fetch; missing
+      // ACAO in the response is then treated as opaque, and
+      // `window.onerror` receives the CORB-sanitized "Script error."
+      // with `event.error` null instead of the real error + stack.
+      // Without the attribute the load is plain same-origin — full
+      // error details land in `window.onerror`. See ERROR.md; errors
+      // are first-class primitives, sanitization violates the axiom.
       s.src = main;
       document.head.appendChild(s);
     </script>

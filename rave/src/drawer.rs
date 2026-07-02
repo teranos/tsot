@@ -89,7 +89,14 @@ pub fn setup_drawer(mut commands: Commands) {
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
-            Visibility::Hidden,
+            // Ships default-visible per ERROR.md: errors are
+            // first-class primitives; the drawer is where they land
+            // in front of the user. Making it default-hidden meant
+            // a mobile user had to reach the toggle button before
+            // they saw any error state, which on iOS Firefox turned
+            // out to be blocked by the very error state we were
+            // trying to surface. Toggle still works to dismiss.
+            Visibility::Visible,
         ))
         .with_children(|parent| {
             parent.spawn((
