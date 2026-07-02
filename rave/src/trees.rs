@@ -10,6 +10,7 @@
 use bevy::prelude::*;
 
 use crate::floorplan::CLEARING_HALF;
+use crate::physics::AabbCollider;
 use crate::room::FLOOR_HALF;
 
 /// Side length of one Wang-hash placement cell (world units). 80m
@@ -77,10 +78,14 @@ pub fn setup_trees(
             let tx = cell_x + jitter_x;
             let tz = cell_z + jitter_z;
             // Trunk — centre at y=30 puts its base on the floor.
+            // AABB matches the trunk cylinder (radius 6, height 60);
+            // foliage sphere above (y=48-112) sits outside the
+            // player's reach (y=0-40) so no collider on it.
             commands.spawn((
                 Mesh3d(trunk_mesh.clone()),
                 MeshMaterial3d(trunk_mat.clone()),
                 Transform::from_xyz(tx, 30.0, tz),
+                AabbCollider::cuboid(Vec3::new(12.0, 60.0, 12.0)),
             ));
             // Foliage — sphere centred at y=80 sits above the trunk.
             commands.spawn((

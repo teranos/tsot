@@ -1,17 +1,17 @@
 //! Collision — sphere-vs-AABB for the player against the clearing's
-//! solid props (DJ booth, speakers, bar), and sphere-vs-sphere for the
-//! player against other peers (RemotePlayerCell).
+//! solid props (DJ booth, speakers, bar, tree trunks, campfire), and
+//! sphere-vs-sphere for the player against other peers
+//! (RemotePlayerCell).
 //!
-//! No external physics crate. The clearing has a handful of axis-
-//! aligned cuboids and a known list of peer spheres; the per-frame
-//! cost is O(static_colliders + remote_peers), which at human scale
-//! is negligible. Trees aren't checked (hundreds of them; if you walk
-//! into one you walk through it for now — a spatial-hash check
-//! comes later if it matters).
+//! Obstacles are queried by `GlobalTransform` (not local `Transform`)
+//! so colliders can nest under scene-graph parents — e.g. the
+//! campfire collider is a child of `Pin::Campfire`, and its world
+//! position picks up the pin's translation without duplicating the
+//! coordinate in this file.
 //!
-//! Runs AFTER `room::move_player` (which advances position from
-//! velocity) and BEFORE `room::camera_follow` (so the camera reads
-//! the post-resolve position).
+//! No external physics crate. Runs AFTER `room::move_player` (which
+//! advances position from velocity) and BEFORE `room::camera_follow`
+//! (so the camera reads the post-resolve position).
 
 use bevy::prelude::*;
 
@@ -50,7 +50,7 @@ impl AabbCollider {
 pub fn resolve_collisions(
     mut player_q: Query<(&mut Transform, &mut Velocity), With<PlayerCell>>,
     obstacles: Query<
-        (&Transform, &AabbCollider),
+        (&GlobalTransform, &AabbCollider),
         (Without<PlayerCell>, Without<RemotePlayerCell>),
     >,
     remotes: Query<&Transform, (With<RemotePlayerCell>, Without<PlayerCell>)>,
@@ -59,10 +59,12 @@ pub fn resolve_collisions(
         return;
     };
 
-    // Sphere vs each obstacle's AABB.
+    // Sphere vs each obstacle's AABB. `GlobalTransform::translation`
+    // returns the world-space centre — safe for parented colliders.
     for (obs_tf, collider) in obstacles.iter() {
-        let aabb_min = obs_tf.translation - collider.half_extents;
-        let aabb_max = obs_tf.translation + collider.half_extents;
+        let obs_pos = obs_tf.translation();
+        let aabb_min = obs_pos - collider.half_extents;
+        let aabb_max = obs_pos + collider.half_extents;
         let centre = p_tf.translation;
         let closest = Vec3::new(
             centre.x.clamp(aabb_min.x, aabb_max.x),
@@ -113,14 +115,15 @@ pub fn resolve_collisions(
 #[cfg(not(target_arch = "wasm32"))]
 pub fn resolve_collisions(
     mut player_q: Query<(&mut Transform, &mut Velocity), With<PlayerCell>>,
-    obstacles: Query<(&Transform, &AabbCollider), Without<PlayerCell>>,
+    obstacles: Query<(&GlobalTransform, &AabbCollider), Without<PlayerCell>>,
 ) {
     let Some((mut p_tf, mut p_vel)) = player_q.iter_mut().next() else {
         return;
     };
     for (obs_tf, collider) in obstacles.iter() {
-        let aabb_min = obs_tf.translation - collider.half_extents;
-        let aabb_max = obs_tf.translation + collider.half_extents;
+        let obs_pos = obs_tf.translation();
+        let aabb_min = obs_pos - collider.half_extents;
+        let aabb_max = obs_pos + collider.half_extents;
         let centre = p_tf.translation;
         let closest = Vec3::new(
             centre.x.clamp(aabb_min.x, aabb_max.x),

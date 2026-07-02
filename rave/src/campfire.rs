@@ -14,6 +14,7 @@
 use bevy::prelude::*;
 
 use crate::map::Pin;
+use crate::physics::AabbCollider;
 
 /// Marker on the flame Cone so `flicker_fire` can look up its
 /// material handle to modulate the emissive each frame.
@@ -105,6 +106,16 @@ pub fn setup_campfire(
                 ..default()
             },
             Transform::from_translation(OFFSET + Vec3::new(0.0, 30.0, 0.0)),
+        ));
+
+        // Invisible collider covering the log pile + flame column.
+        // Player sphere (radius 20) can't walk into the fire.
+        // Sized 30 wide to encompass the crossed logs (~30-unit
+        // span), 30 tall to cover the flame cone (~28 tall) plus a
+        // bit of the light above it.
+        parent.spawn((
+            AabbCollider::cuboid(Vec3::new(30.0, 30.0, 30.0)),
+            Transform::from_translation(OFFSET + Vec3::new(0.0, 15.0, 0.0)),
         ));
     });
 }
