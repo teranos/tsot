@@ -6,6 +6,7 @@ mod error;
 mod floorplan;
 mod health;
 mod identity;
+mod map;
 mod net;
 mod observability;
 mod runtime_report;
@@ -143,6 +144,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
         .insert_resource(ErrorLog::default())
         .insert_resource(health::Health::default())
         .insert_resource(runtime_report::RuntimeReport::default())
+        .insert_resource(map::PinOverlayVisible::default())
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
@@ -179,6 +181,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
             Startup,
             (
                 setup_scene_lights,
+                map::setup_map,
                 room::setup_room,
                 floorplan::setup_floor_plan,
                 trees::setup_trees,
@@ -198,6 +201,8 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 drawer::update_health_text,
                 drawer::update_runtime_report_text,
                 drawer::toggle_log_drawer,
+                map::toggle_pin_overlay,
+                map::update_pin_labels,
                 screenshot_on_p,
                 room::move_player,
                 physics::resolve_collisions,
