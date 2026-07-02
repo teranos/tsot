@@ -1,7 +1,7 @@
 # rave
 
 Bevy + libp2p rave party. Peers walk, see each other, chat — over
-`relay.sbvh.nl`. Identity in IndexedDB.
+`relaye.sbvh.nl`. Identity in IndexedDB.
 
 Deployed at https://rave.sbvh.nl/ via CI on push to `rave` or `master`
 (paths filter `rave/**`). No local dev — Bevy compile cost lives in
