@@ -46,18 +46,9 @@ try {
     setFocus: (focused: boolean) => wasm.rave_chat_set_focus(focused),
   });
 
-  // Drawer touch toggle — mobile's only path to opening the
-  // diagnostic drawer (keyboard ` / \ still works on desktop). The
-  // button is in index.html; we attach the click handler now that
-  // the wasm export exists.
-  const drawerBtn = document.getElementById(
-    "rave-drawer-toggle",
-  ) as HTMLButtonElement | null;
-  if (drawerBtn) {
-    drawerBtn.addEventListener("click", () => wasm.rave_drawer_toggle());
-  } else {
-    showErr("[main] #rave-drawer-toggle missing — index.html out of sync");
-  }
+  // Drawer touch toggle is now a Bevy-UI ≡ button inside the
+  // minimap (see `rave::minimap::MinimapToggleButton`). No DOM
+  // hook needed here.
 } catch (e) {
   dumpError("[init failed]", e);
 }

@@ -48,6 +48,14 @@ pub struct MinimapPin {
     pub world_pin: Entity,
 }
 
+/// Marker on the ≡ drawer-toggle button inside the minimap header.
+/// The minimap is the container for HUD interaction affordances; the
+/// hamburger sits in its top-right so mobile clients (no keyboard)
+/// can open the diagnostic drawer without a separate DOM button
+/// competing for screen real estate.
+#[derive(Component)]
+pub struct MinimapToggleButton;
+
 /// Startup — spawn the minimap root in the top-right corner, plus a
 /// green player dot at centre and one yellow pin dot per world
 /// `Pin`. Ordered `.after(map::setup_map)` in `lib.rs` so the pin
@@ -104,7 +112,57 @@ pub fn setup_minimap(mut commands: Commands, pins: Query<Entity, With<Pin>>) {
                     Visibility::Visible,
                 ));
             }
+
+            // Drawer toggle (≡) inside the minimap's top-right. Icon
+            // is three horizontal `Node` bars stacked vertically —
+            // font-independent so we don't depend on the default
+            // font shipping U+2261. Handled by
+            // `handle_minimap_toggle_button`.
+            parent
+                .spawn((
+                    Button,
+                    MinimapToggleButton,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        right: Val::Px(4.0),
+                        top: Val::Px(4.0),
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
+                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::SpaceEvenly,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::vertical(Val::Px(5.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+                ))
+                .with_children(|btn| {
+                    for _ in 0..3 {
+                        btn.spawn((
+                            Node {
+                                width: Val::Px(14.0),
+                                height: Val::Px(2.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.9, 0.9, 0.9)),
+                        ));
+                    }
+                });
         });
+}
+
+/// Update — watch the minimap's ≡ button for `Interaction::Pressed`
+/// and forward to `drawer::request_drawer_toggle`, which sets the
+/// same thread-local flag the JS `rave_drawer_toggle` extern used
+/// to. `toggle_log_drawer` consumes it next tick.
+pub fn handle_minimap_toggle_button(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<MinimapToggleButton>)>,
+) {
+    for interaction in &interactions {
+        if matches!(interaction, Interaction::Pressed) {
+            crate::drawer::request_drawer_toggle();
+        }
+    }
 }
 
 /// Update — project each pin's world position into minimap space

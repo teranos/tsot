@@ -301,6 +301,22 @@ mod js_toggle {
     }
 }
 
+/// Request a drawer toggle from anywhere in the crate. Sets the
+/// same thread-local flag the JS `rave_drawer_toggle` extern sets;
+/// `toggle_log_drawer` consumes it next tick and flips visibility.
+/// Used by the Bevy-UI ≡ button that lives inside the minimap so
+/// mobile clients (no keyboard) can open the diagnostic drawer.
+#[cfg(target_arch = "wasm32")]
+pub fn request_drawer_toggle() {
+    js_toggle::PENDING.with(|c| c.set(true));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn request_drawer_toggle() {
+    // No drawer state to touch on native — the toggle only exists in
+    // the wasm build's HTML/DOM shell.
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn update_net_stats(
     net: Res<bevy_libp2p::LayeNet>,

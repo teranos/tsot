@@ -209,6 +209,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 map::update_pin_labels,
                 campfire::flicker_fire,
                 minimap::update_minimap,
+                minimap::handle_minimap_toggle_button,
                 screenshot_on_p,
                 room::move_player,
                 physics::resolve_collisions,
