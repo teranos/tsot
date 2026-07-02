@@ -8,6 +8,7 @@ mod floorplan;
 mod health;
 mod identity;
 mod map;
+mod minimap;
 mod net;
 mod observability;
 mod runtime_report;
@@ -190,6 +191,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 drawer::setup_drawer,
                 runtime_report::capture_runtime_report,
                 campfire::setup_campfire.after(map::setup_map),
+                minimap::setup_minimap.after(map::setup_map),
             ),
         )
         .add_systems(PostStartup, audio::setup_audio)
@@ -206,6 +208,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 map::toggle_pin_overlay,
                 map::update_pin_labels,
                 campfire::flicker_fire,
+                minimap::update_minimap,
                 screenshot_on_p,
                 room::move_player,
                 physics::resolve_collisions,

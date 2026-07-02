@@ -54,7 +54,7 @@ pub const TRAIL: Vec3 = Vec3::new(0.0, 0.0, 1470.0);
 /// tree-exclusion buffer. Not yet reified as scene content; the
 /// anchor entity exists so future fixtures can attach under it
 /// without another cross-module coordinate hunt.
-pub const CAMPFIRE: Vec3 = Vec3::new(-3000.0, 0.0, 520.0);
+pub const CAMPFIRE: Vec3 = Vec3::new(-800.0, 0.0, 0.0);
 
 /// Debug overlay state. `M` flips this; the flip cascades
 /// `Visibility` to every pin anchor + UI label.
@@ -77,6 +77,15 @@ impl Default for PinOverlayVisible {
 pub struct PinLabel {
     pub anchor: Entity,
 }
+
+/// Marker on the debug mesh children of a pin anchor (the yellow
+/// rod + head sphere). Toggled independently of the anchor entity
+/// so `M` hides the debug overlay without cascading through the
+/// transform hierarchy to hide scene content (campfire logs, flame,
+/// etc. — see the `2026-07-02` bug where `M` made the campfire
+/// disappear alongside the pin).
+#[derive(Component)]
+pub struct PinMarker;
 
 /// Startup — for each pin: spawn the anchor entity with its
 /// Transform + `Visibility::Visible` + a two-child mesh (rod +
@@ -117,6 +126,7 @@ pub fn setup_map(
                 // Rod — Cylinder centred at y=30 puts its base on
                 // the ground and its top at y=60.
                 parent.spawn((
+                    PinMarker,
                     Mesh3d(rod_mesh.clone()),
                     MeshMaterial3d(pin_mat.clone()),
                     Transform::from_xyz(0.0, 30.0, 0.0),
@@ -124,6 +134,7 @@ pub fn setup_map(
                 // Head — Sphere centred at y=68 sits just above the
                 // rod's top so the pin reads as rod-plus-ball.
                 parent.spawn((
+                    PinMarker,
                     Mesh3d(head_mesh.clone()),
                     MeshMaterial3d(pin_mat.clone()),
                     Transform::from_xyz(0.0, 68.0, 0.0),
@@ -187,14 +198,16 @@ pub fn update_pin_labels(
 }
 
 /// Update — `M` flips the overlay. Cascades the new `Visibility`
-/// to every pin anchor (its mesh children inherit) and every UI
-/// label. Ignores M while chat is focused so typing doesn't toggle
-/// the overlay by accident.
+/// to the debug marker meshes (`PinMarker`) and UI labels
+/// (`PinLabel`) only — never to the `Pin` anchor entity, so its
+/// scene-content children (campfire, future zone contents) stay
+/// visible regardless of the overlay's state. Ignores `M` while
+/// chat is focused so typing doesn't toggle the overlay by accident.
 pub fn toggle_pin_overlay(
     keys: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<PinOverlayVisible>,
-    mut anchor_vis: Query<&mut Visibility, (With<Pin>, Without<PinLabel>)>,
-    mut label_vis: Query<&mut Visibility, (With<PinLabel>, Without<Pin>)>,
+    mut marker_vis: Query<&mut Visibility, (With<PinMarker>, Without<PinLabel>)>,
+    mut label_vis: Query<&mut Visibility, (With<PinLabel>, Without<PinMarker>)>,
 ) {
     if !keys.just_pressed(KeyCode::KeyM) {
         return;
@@ -208,7 +221,7 @@ pub fn toggle_pin_overlay(
     } else {
         Visibility::Hidden
     };
-    for mut v in &mut anchor_vis {
+    for mut v in &mut marker_vis {
         *v = new_vis;
     }
     for mut v in &mut label_vis {

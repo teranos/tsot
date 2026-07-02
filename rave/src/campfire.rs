@@ -25,6 +25,13 @@ pub struct CampfireFlame;
 #[derive(Component)]
 pub struct CampfireLight;
 
+/// Offset from the `Pin::Campfire` anchor to the campfire's centre
+/// (logs/flame/light). Pin and campfire are separate things at the
+/// same area — pin marks the location, campfire is the actual
+/// fire, sitting a short distance west of the pin so both are
+/// visible without occluding each other.
+const OFFSET: Vec3 = Vec3::new(-50.0, 0.0, 0.0);
+
 /// Baseline PointLight intensity — `flicker_fire` scales this by
 /// `1 ± ~0.25` each frame.
 const BASE_INTENSITY: f32 = 1_500_000.0;
@@ -65,12 +72,14 @@ pub fn setup_campfire(
 
     commands.entity(pin_entity).with_children(|parent| {
         // Three logs crossed at 60° around Y. Base at y=2 so the
-        // bottoms touch the ground.
+        // bottoms touch the ground. All log/flame/light positions
+        // are `OFFSET + local_y_offset` so the whole campfire sits
+        // one anchor-relative offset away from the pin marker.
         for angle_deg in [0.0_f32, 60.0, 120.0] {
             parent.spawn((
                 Mesh3d(log_mesh.clone()),
                 MeshMaterial3d(log_mat.clone()),
-                Transform::from_xyz(0.0, 2.0, 0.0)
+                Transform::from_translation(OFFSET + Vec3::new(0.0, 2.0, 0.0))
                     .with_rotation(Quat::from_rotation_y(angle_deg.to_radians())),
             ));
         }
@@ -80,7 +89,7 @@ pub fn setup_campfire(
             CampfireFlame,
             Mesh3d(flame_mesh.clone()),
             MeshMaterial3d(flame_mat.clone()),
-            Transform::from_xyz(0.0, 16.0, 0.0),
+            Transform::from_translation(OFFSET + Vec3::new(0.0, 16.0, 0.0)),
         ));
 
         // Warm PointLight just above the flame — casts on the logs
@@ -95,7 +104,7 @@ pub fn setup_campfire(
                 shadow_maps_enabled: false,
                 ..default()
             },
-            Transform::from_xyz(0.0, 30.0, 0.0),
+            Transform::from_translation(OFFSET + Vec3::new(0.0, 30.0, 0.0)),
         ));
     });
 }
