@@ -113,8 +113,11 @@ pub fn setup_minimap(mut commands: Commands, pins: Query<Entity, With<Pin>>) {
                 ));
             }
 
-            // Drawer toggle (≡) inside the minimap's top-right. Icon
-            // is three horizontal `Node` bars stacked vertically —
+            // Drawer toggle (≡) inside the minimap's bottom-right —
+            // the `#bevy-error` red overlay at the top of the page
+            // can be tall enough to cover the top of the minimap,
+            // so the button lives below any error state. Icon is
+            // three horizontal `Node` bars stacked vertically —
             // font-independent so we don't depend on the default
             // font shipping U+2261. Handled by
             // `handle_minimap_toggle_button`.
@@ -125,7 +128,7 @@ pub fn setup_minimap(mut commands: Commands, pins: Query<Entity, With<Pin>>) {
                     Node {
                         position_type: PositionType::Absolute,
                         right: Val::Px(4.0),
-                        top: Val::Px(4.0),
+                        bottom: Val::Px(4.0),
                         width: Val::Px(24.0),
                         height: Val::Px(24.0),
                         flex_direction: FlexDirection::Column,
