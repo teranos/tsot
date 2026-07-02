@@ -117,7 +117,7 @@ pub fn flicker_fire(
         light.intensity = BASE_INTENSITY * modulator;
     }
     for flame_mat_handle in &flames {
-        if let Some(mat) = materials.get_mut(&flame_mat_handle.0) {
+        if let Some(mut mat) = materials.get_mut(&flame_mat_handle.0) {
             mat.emissive = LinearRgba::new(
                 BASE_EMISSIVE_R * modulator,
                 BASE_EMISSIVE_G * modulator,
