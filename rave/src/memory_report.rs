@@ -32,12 +32,15 @@ use bevy::image::Image;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 
-/// Sample cadence. First fire happens at `INTERVAL_SECS`, subsequent
-/// fires every `INTERVAL_SECS` afterwards.
+/// Sample cadence — after the first tick, fire every `INTERVAL_SECS`.
+/// The first-tick fire captures state BEFORE any OOM crashes the
+/// render loop, so we see what's loaded even when Bevy dies at ~9s
+/// on constrained iPad Pro Simulator.
 const INTERVAL_SECS: f32 = 15.0;
 
 pub fn report(
     time: Res<Time>,
+    mut ticks: Local<u64>,
     mut last_secs: Local<f32>,
     diagnostics: Res<DiagnosticsStore>,
     meshes: Res<Assets<Mesh>>,
@@ -46,11 +49,12 @@ pub fn report(
     entities: Query<Entity>,
     cameras: Query<(&Camera, Option<&Hdr>, Option<&Msaa>)>,
 ) {
+    *ticks += 1;
     let now = time.elapsed_secs();
-    if *last_secs == 0.0 && now < INTERVAL_SECS {
-        return;
-    }
-    if now - *last_secs < INTERVAL_SECS {
+    // Force fire on the very first Update — captures pre-OOM state.
+    // After that, throttle to every INTERVAL_SECS.
+    let first = *ticks == 1;
+    if !first && now - *last_secs < INTERVAL_SECS {
         return;
     }
     *last_secs = now;
