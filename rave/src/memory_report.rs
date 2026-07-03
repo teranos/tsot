@@ -37,7 +37,7 @@ use bevy::image::Image;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use bevy::render::render_resource::PipelineCache;
-use bevy::render::renderer::{RenderAdapterInfo, RenderDevice};
+use bevy::render::renderer::{RenderAdapterInfo, RenderDevice, RenderInstance};
 use bevy_observability::ErrorLog;
 
 /// Sample cadence — after the first tick, fire every `INTERVAL_SECS`.
@@ -58,6 +58,7 @@ pub fn report(
     cameras: Query<(&Camera, Option<&Hdr>, Option<&Msaa>)>,
     adapter_info: Res<RenderAdapterInfo>,
     device: Res<RenderDevice>,
+    render_instance: Res<RenderInstance>,
     pipeline_cache: Option<Res<PipelineCache>>,
     error_log: Res<ErrorLog>,
     mut last_error_len: Local<usize>,
@@ -139,6 +140,28 @@ pub fn report(
         crate::js_rave_error(&format!(
             "[mem@{t}s] pipelines: cached={cached} waiting={waiting}",
         ));
+    }
+
+    // ------- wgpu Instance::generate_report — per-backend handle
+    // counts (buffers, textures, texture_views, samplers, bind_groups,
+    // render_pipelines, compute_pipelines, command_encoders). Access
+    // is via Arc<WgpuWrapper<Instance>> Deref chain; call on `.0`.
+    // Verified: WgpuWrapper impls Deref/DerefMut; wgpu 29 returns
+    // Option<GlobalReport> where GlobalReport has (surfaces, hub).
+    if first || oom_now {
+        match render_instance.0.generate_report() {
+            Some(report) => {
+                let s = format!("{report:?}");
+                for chunk in s.as_bytes().chunks(180) {
+                    if let Ok(part) = std::str::from_utf8(chunk) {
+                        crate::js_rave_error(&format!("[mem@{t}s] wgpu-report: {part}"));
+                    }
+                }
+            }
+            None => crate::js_rave_error(&format!(
+                "[mem@{t}s] wgpu-report: None (backend doesn't expose)",
+            )),
+        }
     }
 
     // ------- entities + asset counts.
