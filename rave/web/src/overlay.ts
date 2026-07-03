@@ -92,19 +92,33 @@ function tryToString(e: unknown): string {
 // errors are first-class primitives; if they aren't in front of the
 // user, the axiom is violated.
 export function installGlobalHandlers(): void {
-  window.addEventListener("error", (ev: ErrorEvent) => {
-    const where = ev.filename
-      ? ` @ ${ev.filename}:${ev.lineno}:${ev.colno}`
-      : "";
-    showErr(`[window.error] ${ev.message}${where}`);
-    // ev.error carries the real Error object (with stack, cause,
-    // custom fields). For same-origin scripts this is populated;
-    // dumpError walks it thoroughly. Only sanitized when the script
-    // was loaded with `crossorigin="anonymous"` AND the response
-    // lacks `Access-Control-Allow-Origin`.
+  // iOS WebKit sanitises `Script error.` and null `ev.error` even
+  // for same-origin module scripts with ACAO present. Dumping every
+  // own property of the event exposes anything the platform hasn't
+  // decided to strip (vendor extensions, timestamps, event phase).
+  const dumpErrorEvent = (phase: string) => (ev: ErrorEvent): void => {
+    showErr(
+      `[window.error ${phase}] msg=${JSON.stringify(ev.message)} file=${JSON.stringify(ev.filename)} line=${ev.lineno} col=${ev.colno}`,
+    );
+    showErr(
+      `  ev meta: type=${ev.type} isTrusted=${ev.isTrusted} timeStamp=${ev.timeStamp} eventPhase=${ev.eventPhase}`,
+    );
+    for (const key of Object.getOwnPropertyNames(ev)) {
+      try {
+        const v = (ev as unknown as Record<string, unknown>)[key];
+        if (v == null) continue;
+        if (typeof v === "function") continue;
+        if (typeof v === "object") continue;
+        showErr(`  ev.${key} = ${JSON.stringify(v)}`);
+      } catch (accessorThrew) {
+        showErr(`  ev.${key} <accessor threw: ${accessorThrew}>`);
+      }
+    }
     if (ev.error) dumpError("[window.error.error]", ev.error);
-    else showErr(`  <ev.error was null — script was CORB-sanitized>`);
-  });
+    else showErr(`  <ev.error was null — iOS WebKit sanitisation>`);
+  };
+  window.addEventListener("error", dumpErrorEvent("bubble"), false);
+  window.addEventListener("error", dumpErrorEvent("capture"), true);
   window.addEventListener("unhandledrejection", (ev: PromiseRejectionEvent) => {
     dumpError("[unhandledrejection]", ev.reason);
   });

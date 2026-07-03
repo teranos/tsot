@@ -229,6 +229,9 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
     app.add_systems(Update, drawer::update_clock);
 
     #[cfg(target_arch = "wasm32")]
+    app.add_systems(Update, probe_alive);
+
+    #[cfg(target_arch = "wasm32")]
     {
         app.add_plugins(bevy_libp2p::LibP2PPlugin {
             bootstrap_addrs: vec![RELAY_MULTIADDR.to_string()],
@@ -282,5 +285,15 @@ fn setup_scene_lights(mut commands: Commands) {
 fn screenshot_on_p(keys: Res<ButtonInput<KeyCode>>) {
     if keys.just_pressed(KeyCode::KeyP) {
         js_rave_screenshot("");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn probe_alive(mut ticks: Local<u64>) {
+    *ticks += 1;
+    if *ticks == 1 {
+        js_rave_error("[probe] Bevy Update fired for the first time");
+    } else if *ticks % 600 == 0 {
+        js_rave_error(&format!("[probe] Bevy tick {}", *ticks));
     }
 }
