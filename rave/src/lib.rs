@@ -141,33 +141,36 @@ async fn mint_and_save_identity() -> Vec<u8> {
 }
 
 fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
+    js_rave_error("[probe] build_and_run_app entered");
     let mut app = App::new();
     app.insert_resource(ClearColor(Color::srgb(0.01, 0.05, 0.12)))
         .insert_resource(ErrorLog::default())
         .insert_resource(health::Health::default())
         .insert_resource(runtime_report::RuntimeReport::default())
-        .insert_resource(map::PinOverlayVisible::default())
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "rave".to_string(),
-                        canvas: Some("#bevy".to_owned()),
-                        fit_canvas_to_parent: true,
-                        prevent_default_event_handling: false,
-                        ..default()
-                    }),
-                    ..default()
-                })
-                .set(AssetPlugin {
-                    meta_check: AssetMetaCheck::Never,
-                    ..default()
-                })
-                .set(LogPlugin {
-                    custom_layer: bevy_observability::install_capture_layer,
+        .insert_resource(map::PinOverlayVisible::default());
+    js_rave_error("[probe] resources inserted, pre-DefaultPlugins");
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "rave".to_string(),
+                    canvas: Some("#bevy".to_owned()),
+                    fit_canvas_to_parent: true,
+                    prevent_default_event_handling: false,
                     ..default()
                 }),
-        );
+                ..default()
+            })
+            .set(AssetPlugin {
+                meta_check: AssetMetaCheck::Never,
+                ..default()
+            })
+            .set(LogPlugin {
+                custom_layer: bevy_observability::install_capture_layer,
+                ..default()
+            }),
+    );
+    js_rave_error("[probe] post-DefaultPlugins");
 
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -183,6 +186,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
         bevy_input_capture::DefaultBindingsPlugin,
         bevy_chat::ChatOverlayPlugin::default(),
     ));
+    js_rave_error("[probe] post-input+chatoverlay plugins");
 
     app.add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_systems(
@@ -198,9 +202,10 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 runtime_report::capture_runtime_report,
                 campfire::setup_campfire.after(map::setup_map),
                 minimap::setup_minimap.after(map::setup_map),
+                probe_startup,
             ),
         )
-        .add_systems(PostStartup, audio::setup_audio)
+        .add_systems(PostStartup, (audio::setup_audio, probe_post_startup))
         .add_systems(
             Update,
             (
@@ -233,6 +238,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
 
     #[cfg(target_arch = "wasm32")]
     {
+        js_rave_error("[probe] pre-LibP2PPlugin");
         app.add_plugins(bevy_libp2p::LibP2PPlugin {
             bootstrap_addrs: vec![RELAY_MULTIADDR.to_string()],
             identity_bytes: _identity_bytes,
@@ -242,10 +248,12 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
             ],
             identify_protocol: "/rave/1.0.0".to_string(),
         });
+        js_rave_error("[probe] post-LibP2PPlugin");
         app.add_plugins(bevy_chat::ChatPlugin {
             topic: CHAT_TOPIC.to_string(),
             max_body_bytes: 512,
         });
+        js_rave_error("[probe] post-ChatPlugin");
         app.insert_resource(remote_players::RemotePlayers::default());
         app.add_systems(
             Update,
@@ -260,7 +268,16 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
         );
     }
 
+    js_rave_error("[probe] pre-app.run");
     app.run();
+}
+
+fn probe_startup() {
+    js_rave_error("[probe] Startup phase reached");
+}
+
+fn probe_post_startup() {
+    js_rave_error("[probe] PostStartup phase reached");
 }
 
 fn setup_scene_lights(mut commands: Commands) {
