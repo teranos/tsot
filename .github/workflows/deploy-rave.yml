@@ -107,10 +107,14 @@ jobs:
             --cache-control "public, max-age=31536000, immutable" \
             --exclude "index.html"
           # Single canonical index.html — the bootstrap that references
-          # the current per-backend main-*.js by hash. Must revalidate
-          # so a stale copy doesn't point at long-deleted assets.
+          # the current per-backend main-*.js by hash. `no-store` so no
+          # cache layer (browser, CDN, ISP proxy) holds a stale copy —
+          # after a deploy, the very next request MUST hit fresh HTML
+          # and cascade to the new content-hashed imports. Prevents the
+          # class of bug where a mobile screenshot shows an old drawer
+          # long after CI has shipped new code.
           aws s3 cp dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
-            --cache-control "public, max-age=60, must-revalidate" \
+            --cache-control "no-store, no-cache, must-revalidate" \
             --content-type "text/html; charset=utf-8"
 
       - name: Invalidate CloudFront
