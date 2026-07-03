@@ -38,7 +38,7 @@ use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use bevy::ecs::system::SystemParam;
 use bevy::render::render_resource::PipelineCache;
-use bevy::render::renderer::{RenderAdapterInfo, RenderDevice, RenderInstance};
+use bevy::render::renderer::{RenderAdapterInfo, RenderDevice};
 use bevy_observability::ErrorLog;
 
 // Bundled entity-breakdown queries so the outer system stays under
@@ -78,7 +78,6 @@ pub fn report(
     cameras: Query<(&Camera, Option<&Hdr>, Option<&Msaa>)>,
     adapter_info: Res<RenderAdapterInfo>,
     device: Res<RenderDevice>,
-    render_instance: Res<RenderInstance>,
     pipeline_cache: Option<Res<PipelineCache>>,
     error_log: Res<ErrorLog>,
     breakdown: EntityBreakdown,
@@ -151,31 +150,11 @@ pub fn report(
         ));
     }
 
-    // ------- wgpu Instance::generate_report — per-backend handle
-    // counts (buffers, textures, texture_views, samplers, bind_groups,
-    // render_pipelines, compute_pipelines, command_encoders). Access
-    // is via Arc<WgpuWrapper<Instance>> Deref chain; call on `.0`.
-    // Verified: WgpuWrapper impls Deref/DerefMut; wgpu 29 returns
-    // Option<GlobalReport> where GlobalReport has (surfaces, hub).
-    if first || oom_now {
-        // Explicit deref chain: Res<RenderInstance> → .0 gives
-        // &Arc<WgpuWrapper<Instance>>, two `*` peel Arc + WgpuWrapper
-        // to reach Instance where generate_report is inherent. Rust
-        // infers the reference type; no wgpu:: import needed in rave.
-        match (**render_instance.0).generate_report() {
-            Some(report) => {
-                let s = format!("{report:?}");
-                for chunk in s.as_bytes().chunks(180) {
-                    if let Ok(part) = std::str::from_utf8(chunk) {
-                        crate::js_rave_error(&format!("[mem@{t}s] wgpu-report: {part}"));
-                    }
-                }
-            }
-            None => crate::js_rave_error(&format!(
-                "[mem@{t}s] wgpu-report: None (backend doesn't expose)",
-            )),
-        }
-    }
+    // wgpu Instance::generate_report is not available on wasm — it
+    // requires the wgpu_core feature which Bevy doesn't enable in the
+    // wasm target. Dead end for per-backend handle counts through that
+    // API. Alternative introspection would be a wgpu-hal fork with
+    // byte accounting.
 
     // ------- entities + asset counts.
     let entity_count = entities.iter().count();
