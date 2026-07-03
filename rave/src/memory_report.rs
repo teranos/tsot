@@ -56,6 +56,13 @@ pub fn report(
     cameras: Query<(&Camera, Option<&Hdr>, Option<&Msaa>)>,
     adapter_info: Res<RenderAdapterInfo>,
     device: Res<RenderDevice>,
+    // Entity breakdown: which component classes account for the 1704
+    // total we see at first Update? Text/Node = UI, Mesh3d = 3D scene,
+    // PointLight = lights. Rest is Bevy internals.
+    text_q: Query<Entity, With<bevy::text::Text>>,
+    node_q: Query<Entity, With<bevy::ui::Node>>,
+    mesh_q: Query<Entity, With<Mesh3d>>,
+    light_q: Query<Entity, With<PointLight>>,
 ) {
     *ticks += 1;
     let now = time.elapsed_secs();
@@ -93,13 +100,22 @@ pub fn report(
     let material_count = materials.iter().count();
     let image_count = images.iter().count();
 
-    // ------- image CPU bytes (real pixel data on Rust side).
+    // ------- image CPU bytes + per-image size list. If one image is
+    // giant (e.g. font atlas), it stands out.
     let mut image_bytes: usize = 0;
+    let mut per_image: Vec<usize> = Vec::new();
     for (_, img) in images.iter() {
-        if let Some(data) = &img.data {
-            image_bytes += data.len();
-        }
+        let n = img.data.as_ref().map(|d| d.len()).unwrap_or(0);
+        image_bytes += n;
+        per_image.push(n);
     }
+    per_image.sort_by(|a, b| b.cmp(a));
+    let biggest_images: String = per_image
+        .iter()
+        .take(5)
+        .map(|b| format!("{:.2}MB", *b as f64 / 1_048_576.0))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     // ------- mesh vertex + index bytes. GPU upload matches this
     // exactly at first (no mipmap-style alignment inflation on VBOs).
@@ -157,14 +173,26 @@ pub fn report(
         .and_then(|d| d.smoothed())
         .unwrap_or(-1.0);
 
+    // ------- entity breakdown.
+    let text_ents = text_q.iter().count();
+    let node_ents = node_q.iter().count();
+    let mesh_ents = mesh_q.iter().count();
+    let light_ents = light_q.iter().count();
+    let other_ents = entity_count
+        .saturating_sub(text_ents)
+        .saturating_sub(node_ents)
+        .saturating_sub(mesh_ents)
+        .saturating_sub(light_ents);
+
     // ------- report.
     crate::js_rave_error(&format!(
-        "[mem@{t}s] entities={entity_count} meshes={mesh_count} materials={material_count} images={image_count} fps={:.1}",
+        "[mem@{t}s] entities={entity_count} (text={text_ents} nodes={node_ents} mesh3d={mesh_ents} pointlights={light_ents} other={other_ents}) meshes={mesh_count} materials={material_count} images={image_count} fps={:.1}",
         fps,
     ));
     crate::js_rave_error(&format!(
-        "[mem@{t}s]   images CPU  = {:.2} MB",
+        "[mem@{t}s]   images CPU  = {:.2} MB (top 5 by size: [{}])",
         image_bytes as f64 / 1_048_576.0,
+        biggest_images,
     ));
     crate::js_rave_error(&format!(
         "[mem@{t}s]   mesh VBOs   = {:.2} MB (vertex {:.2} + index {:.2})",
