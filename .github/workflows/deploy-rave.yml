@@ -165,11 +165,12 @@ jobs:
         id: boot
         run: |
           set -e
-          # Prefer iPad Pro (M-series, WebGPU-supporting on iOS 26+),
-          # fall back to any iPhone. The iPad-Pro-first ordering means
-          # CI actually exercises the WebGPU codepath instead of always
-          # getting `requestAdapter returned null` from an iPhone
-          # Simulator whose WebGPU implementation is incomplete.
+          # Prefer iPhone — iPad Pro Simulator boot has been hanging
+          # for the entire 25min job timeout in observed runs. Both
+          # iPad and iPhone Simulators return `requestAdapter=null`
+          # for WebGPU anyway (fallback to WebGL2 bundle), so there is
+          # zero WebGPU-coverage tradeoff by preferring the faster-
+          # booting iPhone tier.
           DEVICE_ID=$(xcrun simctl list devices available -j | \
             python3 -c "
           import json, sys
@@ -180,9 +181,12 @@ jobs:
               for d in devices:
                   if not d.get('isAvailable', False): continue
                   name = d.get('name', '')
-                  if 'iPad Pro' in name: candidates.append((0, d['udid'], name))
-                  elif 'iPad' in name:   candidates.append((1, d['udid'], name))
-                  elif 'iPhone' in name: candidates.append((2, d['udid'], name))
+                  if 'iPhone' in name and 'Pro' not in name:
+                      candidates.append((0, d['udid'], name))
+                  elif 'iPhone' in name:
+                      candidates.append((1, d['udid'], name))
+                  elif 'iPad' in name:
+                      candidates.append((2, d['udid'], name))
           if not candidates:
               sys.exit(1)
           candidates.sort()
