@@ -176,31 +176,69 @@ jobs:
           echo "Booting device UDID: $DEVICE_ID"
           xcrun simctl boot "$DEVICE_ID"
           xcrun simctl bootstatus "$DEVICE_ID" -b
+          # Disable Safari's first-launch onboarding tooltip
+          # ("View Bookmarks, Share Menu, and Open Tabs") which
+          # otherwise covers the bottom half of every screenshot. Keys
+          # come from Safari's plist; setting them all covers the
+          # different iOS Safari onboarding variants across versions.
+          xcrun simctl spawn "$DEVICE_ID" defaults write com.apple.mobilesafari \
+              DidShowContinuityMigrationExperience -bool YES || true
+          xcrun simctl spawn "$DEVICE_ID" defaults write com.apple.mobilesafari \
+              TutorialHasBeenShown -bool YES || true
+          xcrun simctl spawn "$DEVICE_ID" defaults write com.apple.mobilesafari \
+              SBFirstLaunchCompleted -bool YES || true
+          xcrun simctl spawn "$DEVICE_ID" defaults write com.apple.mobilesafari \
+              SafariBaselinesOnboardingComplete -bool YES || true
           echo "device_id=$DEVICE_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Open rave.sbvh.nl in Mobile Safari
+      - name: Capture screenshots — auto backend
         run: |
           xcrun simctl launch "${{ steps.boot.outputs.device_id }}" com.apple.mobilesafari
           sleep 2
-          xcrun simctl openurl "${{ steps.boot.outputs.device_id }}" https://rave.sbvh.nl
-
-      - name: Capture screenshots over time
-        run: |
-          mkdir -p screenshots
+          xcrun simctl openurl "${{ steps.boot.outputs.device_id }}" 'https://rave.sbvh.nl/'
+          mkdir -p screenshots/auto
           shoot() {
-              xcrun simctl io "${{ steps.boot.outputs.device_id }}" screenshot "screenshots/t${1}s.png"
-              echo "captured t=${1}s → screenshots/t${1}s.png"
+              xcrun simctl io "${{ steps.boot.outputs.device_id }}" screenshot "screenshots/auto/t${1}s.png"
+              echo "auto t=${1}s"
           }
-          # Dense early to catch init + first-throw, sparser later to
-          # catch reload cycles + longer-running errors.
-          sleep 3;   shoot 3
-          sleep 2;   shoot 5
-          sleep 5;   shoot 10
-          sleep 5;   shoot 15
-          sleep 10;  shoot 25
-          sleep 10;  shoot 35
-          sleep 15;  shoot 50
-          sleep 20;  shoot 70
+          sleep 3;  shoot 3
+          sleep 2;  shoot 5
+          sleep 5;  shoot 10
+          sleep 10; shoot 20
+          sleep 15; shoot 35
+          sleep 20; shoot 55
+
+      - name: Capture screenshots — forced webgpu
+        run: |
+          # Fresh URL bypasses in-page cache; ?backend=webgpu forces the
+          # bootstrap to pick that bundle regardless of navigator.gpu.
+          xcrun simctl openurl "${{ steps.boot.outputs.device_id }}" 'https://rave.sbvh.nl/?backend=webgpu'
+          mkdir -p screenshots/webgpu
+          shoot() {
+              xcrun simctl io "${{ steps.boot.outputs.device_id }}" screenshot "screenshots/webgpu/t${1}s.png"
+              echo "webgpu t=${1}s"
+          }
+          sleep 3;  shoot 3
+          sleep 2;  shoot 5
+          sleep 5;  shoot 10
+          sleep 10; shoot 20
+          sleep 15; shoot 35
+          sleep 20; shoot 55
+
+      - name: Capture screenshots — forced webgl2
+        run: |
+          xcrun simctl openurl "${{ steps.boot.outputs.device_id }}" 'https://rave.sbvh.nl/?backend=webgl2'
+          mkdir -p screenshots/webgl2
+          shoot() {
+              xcrun simctl io "${{ steps.boot.outputs.device_id }}" screenshot "screenshots/webgl2/t${1}s.png"
+              echo "webgl2 t=${1}s"
+          }
+          sleep 3;  shoot 3
+          sleep 2;  shoot 5
+          sleep 5;  shoot 10
+          sleep 10; shoot 20
+          sleep 15; shoot 35
+          sleep 20; shoot 55
 
       - name: Upload screenshots
         if: always()

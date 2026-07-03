@@ -68,9 +68,23 @@
       // both backends in one wasm. The bootstrap picks at load-time
       // based on `navigator.gpu`. URL stays at root — no /webgpu/,
       // no /webgl2/, no /index.html leak.
-      var main = ('gpu' in navigator)
-        ? 'MAIN_WEBGPU_URL_PLACEHOLDER'
-        : 'MAIN_WEBGL2_URL_PLACEHOLDER';
+      // `?backend=webgpu` or `?backend=webgl2` forces the bundle for
+      // that backend regardless of `navigator.gpu`. Used by the CI
+      // mobile-screenshot job to exercise both paths and by developers
+      // debugging a specific backend on hardware where the other one
+      // would win the auto-select.
+      var params = new URLSearchParams(window.location.search);
+      var backendOverride = params.get('backend');
+      var main;
+      if (backendOverride === 'webgpu') {
+        main = 'MAIN_WEBGPU_URL_PLACEHOLDER';
+      } else if (backendOverride === 'webgl2') {
+        main = 'MAIN_WEBGL2_URL_PLACEHOLDER';
+      } else {
+        main = ('gpu' in navigator)
+          ? 'MAIN_WEBGPU_URL_PLACEHOLDER'
+          : 'MAIN_WEBGL2_URL_PLACEHOLDER';
+      }
       var s = document.createElement('script');
       s.type = 'module';
       // NO crossorigin attribute. Verified empirically via `curl -I`
