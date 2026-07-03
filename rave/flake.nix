@@ -30,6 +30,12 @@
             # runtime install dance and sub-second cold builds for a
             # tree this size.
             bun
+            # `make wasm-audio` runs tools/gen-rave-ogg.py (stdlib only,
+            # no numpy) then pipes to ffmpeg for the aecho reverb chain
+            # + OGG Vorbis encode. Both needed on PATH inside the nix
+            # shell CI uses.
+            python3
+            ffmpeg
           ];
 
           RUSTC_WRAPPER = "sccache";
