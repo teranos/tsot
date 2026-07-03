@@ -242,6 +242,17 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
     app.add_systems(Update, probe_alive);
 
     #[cfg(target_arch = "wasm32")]
+    app.add_systems(
+        Update,
+        mirror_errorlog_to_overlay
+            .after(bevy_observability::drain_panics)
+            .after(bevy_observability::drain_logs),
+    );
+
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(Update, mirror_libp2p_init_error);
+
+    #[cfg(target_arch = "wasm32")]
     {
         js_rave_error("[probe] pre-LibP2PPlugin");
         app.add_plugins(bevy_libp2p::LibP2PPlugin {
@@ -318,4 +329,50 @@ fn probe_alive(mut ticks: Local<u64>) {
     } else if *ticks % 600 == 0 {
         js_rave_error(&format!("[probe] Bevy tick {}", *ticks));
     }
+}
+
+// If LibP2PPlugin::build failed, it inserts LayeNetInitError. Surface
+// once to the HTML overlay so the developer sees which stage failed
+// (identity vs net) and why. Otherwise silenced — the resource just
+// sits in the world unread.
+#[cfg(target_arch = "wasm32")]
+fn mirror_libp2p_init_error(
+    err: Option<Res<bevy_libp2p::LayeNetInitError>>,
+    mut fired: Local<bool>,
+) {
+    if *fired {
+        return;
+    }
+    if let Some(e) = err {
+        js_rave_error(&format!("[libp2p_init_error] {}", *e));
+        *fired = true;
+    }
+}
+
+// Every ErrorLog entry mirrors to the HTML overlay via `js_rave_error`.
+// The Bevy in-canvas LogDrawer only shows when the render loop is
+// alive; if the tab reloads or the canvas fails to render steadily,
+// runtime errors silence themselves visually. Mirroring here lands the
+// same content on the sessionStorage-persistent HTML overlay so every
+// error survives every reload cycle. ERROR.md axiom: never silence.
+#[cfg(target_arch = "wasm32")]
+fn mirror_errorlog_to_overlay(
+    error_log: Res<bevy_observability::ErrorLog>,
+    mut mirrored_count: Local<usize>,
+) {
+    let current = error_log.0.len();
+    // Ring-buffer eviction: if len shrinks, reset and re-emit whatever
+    // remains so we don't skip forward past evicted-then-refilled slots.
+    if current < *mirrored_count {
+        *mirrored_count = 0;
+    }
+    for entry in &error_log.0[*mirrored_count..] {
+        let sev = match entry.severity {
+            bevy_observability::Severity::Note => "note",
+            bevy_observability::Severity::Warn => "warn",
+            bevy_observability::Severity::Error => "error",
+        };
+        js_rave_error(&format!("[error_log:{sev}] {}", entry.message));
+    }
+    *mirrored_count = current;
 }
