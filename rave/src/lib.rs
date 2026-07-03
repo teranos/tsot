@@ -61,6 +61,11 @@ pub const CHAT_TOPIC: &str = "rave-chat/v1";
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
+    js_rave_error(&format!(
+        "[build_info] commit={} built_at={}",
+        build_info::COMMIT,
+        build_info::BUILT_AT
+    ));
     std::panic::set_hook(Box::new(|info| {
         js_rave_error(&format!("[pre-Bevy panic] {info}"));
     }));

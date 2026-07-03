@@ -2,14 +2,76 @@
 // instantiate or Bevy panics before its first Update tick. The
 // in-canvas drawer only works if Bevy's render loop is alive;
 // this is the catch-all that doesn't depend on it.
+//
+// State survives reload cycles via sessionStorage. If the tab is
+// reloading itself (memory pressure, WebGPU context loss, whatever)
+// the previous cycle's log gets restored at page load, so we see
+// what happened before the reset. Every line carries `[+Nms]`
+// since page load — that plus the `load#N` header makes the timeline
+// unambiguous.
 
 const el = document.getElementById("bevy-error") as HTMLDivElement | null;
+const T0 = performance.now();
+const LOG_STORAGE_KEY = "rave-drawer-log";
+const LOAD_COUNTER_KEY = "rave-load-counter";
+
+function nextLoadNumber(): number {
+  try {
+    const prev = parseInt(sessionStorage.getItem(LOAD_COUNTER_KEY) ?? "0", 10);
+    const next = Number.isFinite(prev) ? prev + 1 : 1;
+    sessionStorage.setItem(LOAD_COUNTER_KEY, String(next));
+    return next;
+  } catch {
+    return -1;
+  }
+}
+
+function navigationType(): string {
+  try {
+    const entries = performance.getEntriesByType(
+      "navigation",
+    ) as PerformanceNavigationTiming[];
+    return entries[0]?.type ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+const LOAD_NUMBER = nextLoadNumber();
+const NAV_TYPE = navigationType();
+
+if (el) {
+  el.style.display = "block";
+  // Restore any log from a previous load cycle so a reload loop leaves
+  // its footprint. sessionStorage is scoped to the tab and survives
+  // reloads; it clears when the tab closes.
+  try {
+    const previous = sessionStorage.getItem(LOG_STORAGE_KEY);
+    if (previous) {
+      el.textContent = previous + `--- reload boundary ---\n`;
+    }
+  } catch {
+    /* storage disabled — proceed with empty */
+  }
+}
 
 export function showErr(line: string): void {
   if (!el) return;
-  el.style.display = "block";
-  el.textContent = (el.textContent ?? "") + line + "\n";
+  const stamped = `[+${Math.round(performance.now() - T0)}ms] ${line}\n`;
+  el.textContent = (el.textContent ?? "") + stamped;
+  try {
+    sessionStorage.setItem(LOG_STORAGE_KEY, el.textContent ?? "");
+  } catch {
+    /* quota exceeded or storage disabled — line still visible on-screen */
+  }
 }
+
+// First entry on every load. Puts load number + navigation type + wall
+// clock at the top so the drawer identifies itself before any init step
+// runs. A rapidly-climbing load# is proof of a reload loop.
+showErr(
+  `=== load#${LOAD_NUMBER} nav=${NAV_TYPE} @ ${new Date().toISOString()} ===`,
+);
 
 // Dumps every own property of an error-like object — including
 // non-enumerable ones browsers attach (`stack`, `code`, `name`,

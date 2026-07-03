@@ -26,6 +26,7 @@ interface RaveWasmExports {
 // milestone before any failure — no need to rely on window.onerror
 // which iOS WebKit CORB-sanitises for module errors. Each `showErr`
 // writes to the visible overlay directly.
+showErr(`[build] wasm=${WASM_URL} glue=${WASM_BINDGEN_JS}`);
 showErr(`[init] step 0 — user-agent: ${navigator.userAgent}`);
 showErr(`[init] step 0 — navigator.gpu present: ${'gpu' in navigator}`);
 
