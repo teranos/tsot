@@ -196,11 +196,8 @@ pub fn update_minimap(
         let left = centre + dx - half_marker;
         let top = centre + dz - half_marker;
 
-        if left < 0.0
-            || left > MINIMAP_SIZE_PX - MARKER_SIZE_PX
-            || top < 0.0
-            || top > MINIMAP_SIZE_PX - MARKER_SIZE_PX
-        {
+        let bound = 0.0..=MINIMAP_SIZE_PX - MARKER_SIZE_PX;
+        if !bound.contains(&left) || !bound.contains(&top) {
             *vis = Visibility::Hidden;
             continue;
         }
