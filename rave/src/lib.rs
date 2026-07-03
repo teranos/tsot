@@ -299,6 +299,13 @@ fn probe_post_startup() {
 fn setup_scene_lights(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
+        // WebGPU on mobile only supports 1 or 4 MSAA samples per the
+        // spec, and some iOS Safari WebGPU adapters reject 4x MSAA
+        // depending on the texture format Bevy asks for. `Msaa::Off`
+        // takes MSAA off the table entirely — one less variable in the
+        // muted-throw investigation, smaller GPU memory footprint on
+        // mobile too.
+        Msaa::Off,
         Hdr,
         Bloom::default(),
         Transform::from_xyz(0.0, 80.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
