@@ -156,9 +156,10 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
         .insert_resource(runtime_report::RuntimeReport::default())
         .insert_resource(map::PinOverlayVisible::default());
     js_rave_error("[probe] resources inserted, pre-DefaultPlugins");
-    // Plugin disables reverted — `DefaultPlugins.disable::<T>()` doesn't
-    // exist directly on DefaultPlugins in Bevy 0.19 the way I wrote it.
-    // Need to verify the correct API before reintroducing.
+    // Disable unused Bevy render plugins to shrink the wgpu pipeline
+    // cache footprint. Rave uses PBR mesh rendering + UI + text; every
+    // plugin below adds pipelines to the cache without the game using
+    // them.
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin {
@@ -186,7 +187,13 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 // filter dropped.
                 filter: "wgpu=trace,naga=warn,rave=info,bevy=info".into(),
                 ..default()
-            }),
+            })
+            .disable::<bevy::core_pipeline::oit::OrderIndependentTransparencyPlugin>()
+            .disable::<bevy::pbr::ScreenSpaceAmbientOcclusionPlugin>()
+            .disable::<bevy::pbr::ScreenSpaceReflectionsPlugin>()
+            .disable::<bevy::pbr::ContactShadowsPlugin>()
+            .disable::<bevy::pbr::VolumetricFogPlugin>()
+            .disable::<bevy::pbr::ClusteredDecalPlugin>()
     );
     js_rave_error("[probe] post-DefaultPlugins");
 
