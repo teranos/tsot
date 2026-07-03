@@ -218,13 +218,7 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 probe_startup,
             ),
         )
-        // audio::setup_audio temporarily removed — muted-throw
-        // investigation. iOS Safari's Web Audio autoplay policy is a
-        // plausible backend-agnostic throw source; skipping our
-        // AudioPlayer spawns eliminates it as a suspect while leaving
-        // Bevy's AudioPlugin loaded (its finish() doesn't depend on
-        // our code). Add back once cleared.
-        .add_systems(PostStartup, probe_post_startup)
+        .add_systems(PostStartup, (audio::setup_audio, probe_post_startup))
         .add_systems(
             Update,
             (
@@ -318,13 +312,12 @@ fn setup_scene_lights(mut commands: Commands) {
         // depending on the texture format Bevy asks for. `Msaa::Off`
         // takes MSAA off the table entirely.
         Msaa::Off,
-        // Hdr + Bloom disabled — user reports the muted throw is
-        // backend-agnostic (fires on WebGL2 too), so Rgba16Float
-        // render targets aren't the trigger. Keeping them off anyway:
-        // mobile doesn't benefit visibly and it shrinks the pipeline
-        // surface.
-        // Hdr,
-        // Bloom::default(),
+        // Hdr back on — muted throw resolved without it needing to
+        // stay off. Scene was too dark without HDR headroom + PointLight
+        // tuned for it. Bloom stays off for now (extra pipeline surface
+        // + mobile GPU cost); re-add if the scene wants highlight
+        // bloom back.
+        Hdr,
         Transform::from_xyz(0.0, 80.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((

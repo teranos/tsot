@@ -104,24 +104,6 @@ try {
 
   hideLoadingIndicator();
   showErr("[init] step 11 — loading indicator hidden");
-
-  // Synthetic legibility anchor. Two deliberate throws so the next
-  // mobile screenshot resolves whether iOS WebKit strips ALL
-  // same-origin script errors from window.error (making all of them
-  // `Script error.` with null details) or only some specific path.
-  // Caught throw goes through the same dumper — proves in-JS
-  // catches see full details. Uncaught setTimeout throw goes through
-  // window.error — tells us what the browser boundary strips.
-  setTimeout(() => {
-    try {
-      throw new Error("SYNTHETIC-CAUGHT — legibility anchor: caught in try");
-    } catch (caught) {
-      dumpError("[synthetic-caught]", caught);
-    }
-    setTimeout(() => {
-      throw new Error("SYNTHETIC-UNCAUGHT — legibility anchor: hits window.error");
-    }, 100);
-  }, 3000);
 } catch (e) {
   showErr("[init] CAUGHT ERROR in try block — dumping now");
   dumpError("[init failed]", e);
