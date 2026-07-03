@@ -57,9 +57,12 @@ pub fn report(
     adapter_info: Res<RenderAdapterInfo>,
     device: Res<RenderDevice>,
     // Entity breakdown: which component classes account for the 1704
-    // total we see at first Update? Text/Node = UI, Mesh3d = 3D scene,
-    // PointLight = lights. Rest is Bevy internals.
-    text_q: Query<Entity, With<bevy::text::Text>>,
+    // total we see at first Update? TextSpan = text hierarchy nodes,
+    // Node = UI layout, Mesh3d = 3D scene, PointLight = lights. Rest
+    // is Bevy internals (visibility, render, transform system entities).
+    // Note: Bevy 0.15+ doesn't spawn per-glyph entities — text renders
+    // as vertices in one draw call per TextLayoutInfo.
+    text_q: Query<Entity, With<bevy::text::TextSpan>>,
     node_q: Query<Entity, With<bevy::ui::Node>>,
     mesh_q: Query<Entity, With<Mesh3d>>,
     light_q: Query<Entity, With<PointLight>>,
