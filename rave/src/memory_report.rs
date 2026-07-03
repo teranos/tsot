@@ -36,9 +36,30 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::image::Image;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
+use bevy::ecs::system::SystemParam;
 use bevy::render::render_resource::PipelineCache;
 use bevy::render::renderer::{RenderAdapterInfo, RenderDevice, RenderInstance};
 use bevy_observability::ErrorLog;
+
+// Bundled entity-breakdown queries so the outer system stays under
+// Bevy's 16-param limit for system functions.
+#[derive(SystemParam)]
+pub struct EntityBreakdown<'w, 's> {
+    text: Query<'w, 's, Entity, With<bevy::text::TextSpan>>,
+    node: Query<'w, 's, Entity, With<bevy::ui::Node>>,
+    mesh: Query<'w, 's, Entity, With<Mesh3d>>,
+    light: Query<'w, 's, Entity, With<PointLight>>,
+}
+
+// Bundled Local state so we spend one system-param slot instead of
+// four for ticks/last_secs/last_error_len/oom_dumped.
+#[derive(Default)]
+pub struct ReportState {
+    ticks: u64,
+    last_secs: f32,
+    last_error_len: usize,
+    oom_dumped: bool,
+}
 
 /// Sample cadence — after the first tick, fire every `INTERVAL_SECS`.
 /// The first-tick fire captures state BEFORE any OOM crashes the
@@ -48,8 +69,7 @@ const INTERVAL_SECS: f32 = 15.0;
 
 pub fn report(
     time: Res<Time>,
-    mut ticks: Local<u64>,
-    mut last_secs: Local<f32>,
+    mut state: Local<ReportState>,
     diagnostics: Res<DiagnosticsStore>,
     meshes: Res<Assets<Mesh>>,
     materials: Res<Assets<StandardMaterial>>,
@@ -61,46 +81,35 @@ pub fn report(
     render_instance: Res<RenderInstance>,
     pipeline_cache: Option<Res<PipelineCache>>,
     error_log: Res<ErrorLog>,
-    mut last_error_len: Local<usize>,
-    mut oom_dumped: Local<bool>,
-    // Entity breakdown: which component classes account for the 1704
-    // total we see at first Update? TextSpan = text hierarchy nodes,
-    // Node = UI layout, Mesh3d = 3D scene, PointLight = lights. Rest
-    // is Bevy internals (visibility, render, transform system entities).
-    // Note: Bevy 0.15+ doesn't spawn per-glyph entities — text renders
-    // as vertices in one draw call per TextLayoutInfo.
-    text_q: Query<Entity, With<bevy::text::TextSpan>>,
-    node_q: Query<Entity, With<bevy::ui::Node>>,
-    mesh_q: Query<Entity, With<Mesh3d>>,
-    light_q: Query<Entity, With<PointLight>>,
+    breakdown: EntityBreakdown,
 ) {
-    *ticks += 1;
+    state.ticks += 1;
     let now = time.elapsed_secs();
-    let first = *ticks == 1;
+    let first = state.ticks == 1;
     // OOM trigger: any new ErrorLog entry mentioning "Out of Memory"
     // or "DeviceLost" fires the report immediately, regardless of
     // the 15s throttle. Once we've dumped on OOM once, don't re-dump
     // — the state after DeviceLost is invalid anyway.
     let current_error_len = error_log.0.len();
     let mut oom_now = false;
-    if !*oom_dumped && current_error_len > *last_error_len {
-        for entry in &error_log.0[*last_error_len..] {
+    if !state.oom_dumped && current_error_len > state.last_error_len {
+        for entry in &error_log.0[state.last_error_len..] {
             let m = &entry.message;
             if m.contains("Out of Memory")
                 || m.contains("Out of memory")
                 || m.contains("DeviceLost")
             {
                 oom_now = true;
-                *oom_dumped = true;
+                state.oom_dumped = true;
                 break;
             }
         }
     }
-    *last_error_len = current_error_len;
-    if !first && !oom_now && now - *last_secs < INTERVAL_SECS {
+    state.last_error_len = current_error_len;
+    if !first && !oom_now && now - state.last_secs < INTERVAL_SECS {
         return;
     }
-    *last_secs = now;
+    state.last_secs = now;
     let t = now as u32;
     if oom_now {
         crate::js_rave_error(&format!(
@@ -149,7 +158,11 @@ pub fn report(
     // Verified: WgpuWrapper impls Deref/DerefMut; wgpu 29 returns
     // Option<GlobalReport> where GlobalReport has (surfaces, hub).
     if first || oom_now {
-        match render_instance.0.generate_report() {
+        // Explicit deref chain: Res<RenderInstance> → .0 gives
+        // &Arc<WgpuWrapper<Instance>>, two `*` peel Arc + WgpuWrapper
+        // to reach Instance where generate_report is inherent.
+        let instance: &wgpu::Instance = &**render_instance.0;
+        match instance.generate_report() {
             Some(report) => {
                 let s = format!("{report:?}");
                 for chunk in s.as_bytes().chunks(180) {
@@ -244,10 +257,10 @@ pub fn report(
         .unwrap_or(-1.0);
 
     // ------- entity breakdown.
-    let text_ents = text_q.iter().count();
-    let node_ents = node_q.iter().count();
-    let mesh_ents = mesh_q.iter().count();
-    let light_ents = light_q.iter().count();
+    let text_ents = breakdown.text.iter().count();
+    let node_ents = breakdown.node.iter().count();
+    let mesh_ents = breakdown.mesh.iter().count();
+    let light_ents = breakdown.light.iter().count();
     let other_ents = entity_count
         .saturating_sub(text_ents)
         .saturating_sub(node_ents)
