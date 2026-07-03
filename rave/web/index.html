@@ -14,7 +14,11 @@
         right: 0;
         max-height: 60vh;
         overflow: auto;
-        background: #2a0a0a;
+        /* Semi-transparent so the Bevy scene stays visible behind
+           the drawer — errors are sacred but they shouldn't hide the
+           game rendering to the point the developer can't see if the
+           scene is up. rgba over hex to get the alpha. */
+        background: rgba(42, 10, 10, 0.75);
         color: #ffb0b0;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 11px;
@@ -24,6 +28,9 @@
         z-index: 9999;
         display: none;
         border-bottom: 1px solid #5a1010;
+        /* text-shadow keeps error text readable on top of whatever
+           the scene renders underneath. */
+        text-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
       }
       #rave-loading {
         position: fixed;
