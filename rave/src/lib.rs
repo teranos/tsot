@@ -7,6 +7,8 @@ mod floorplan;
 mod health;
 mod identity;
 mod map;
+#[cfg(target_arch = "wasm32")]
+mod memory_report;
 mod minimap;
 mod net;
 mod observability;
@@ -261,6 +263,9 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
     app.add_systems(Update, mirror_libp2p_init_error);
 
     #[cfg(target_arch = "wasm32")]
+    app.add_systems(Update, memory_report::report);
+
+    #[cfg(target_arch = "wasm32")]
     {
         js_rave_error("[probe] pre-LibP2PPlugin");
         app.add_plugins(bevy_libp2p::LibP2PPlugin {
@@ -312,12 +317,14 @@ fn setup_scene_lights(mut commands: Commands) {
         // depending on the texture format Bevy asks for. `Msaa::Off`
         // takes MSAA off the table entirely.
         Msaa::Off,
-        // Hdr back on — muted throw resolved without it needing to
-        // stay off. Scene was too dark without HDR headroom + PointLight
-        // tuned for it. Bloom stays off for now (extra pipeline surface
-        // + mobile GPU cost); re-add if the scene wants highlight
-        // bloom back.
-        Hdr,
+        // Hdr temporarily off — Out of Memory surfaced via
+        // wgpu=trace mirror on iPad Pro Sim (bevy_render::error_handler:
+        // Caught DeviceLost error: Unknown: Out of Memory). HDR doubles
+        // render-target byte width per pixel. Off-then-on bisect: if
+        // OOM clears in the next CI artifact, HDR is (a) contributor.
+        // If it doesn't, the OOM is elsewhere (textures, meshes,
+        // pipeline count).
+        // Hdr,
         Transform::from_xyz(0.0, 80.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((
