@@ -156,16 +156,11 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
         .insert_resource(runtime_report::RuntimeReport::default())
         .insert_resource(map::PinOverlayVisible::default());
     js_rave_error("[probe] resources inserted, pre-DefaultPlugins");
-    // Disable Bevy render plugins rave doesn't use. Each of these
-    // registers its own pipeline(s) into the wgpu cache even when
-    // unused. Cutting them shrinks GPU memory demand — the direct
-    // fix for the DeviceLost: Out of Memory the memory report bracketed.
+    // Plugin disables reverted — `DefaultPlugins.disable::<T>()` doesn't
+    // exist directly on DefaultPlugins in Bevy 0.19 the way I wrote it.
+    // Need to verify the correct API before reintroducing.
     app.add_plugins(
         DefaultPlugins
-            .disable::<bevy::core_pipeline::oit::OrderIndependentTransparencyPlugin>()
-            .disable::<bevy::pbr::ScreenSpaceAmbientOcclusionPlugin>()
-            .disable::<bevy::pbr::AtmospherePlugin>()
-            .disable::<bevy::core_pipeline::motion_blur::MotionBlurPlugin>()
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "rave".to_string(),

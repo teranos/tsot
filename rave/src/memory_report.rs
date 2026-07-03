@@ -36,7 +36,7 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::image::Image;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
-use bevy::render::renderer::{RenderAdapterInfo, RenderDevice, RenderInstance};
+use bevy::render::renderer::{RenderAdapterInfo, RenderDevice};
 
 /// Sample cadence — after the first tick, fire every `INTERVAL_SECS`.
 /// The first-tick fire captures state BEFORE any OOM crashes the
@@ -56,7 +56,6 @@ pub fn report(
     cameras: Query<(&Camera, Option<&Hdr>, Option<&Msaa>)>,
     adapter_info: Res<RenderAdapterInfo>,
     device: Res<RenderDevice>,
-    render_instance: Res<RenderInstance>,
     // Entity breakdown: which component classes account for the 1704
     // total we see at first Update? TextSpan = text hierarchy nodes,
     // Node = UI layout, Mesh3d = 3D scene, PointLight = lights. Rest
@@ -84,24 +83,9 @@ pub fn report(
         info.name, info.device_type, info.backend, info.vendor, info.device,
     ));
 
-    // ------- wgpu instance report — handle counts per backend. Dumps
-    // Debug format so we see whatever wgpu 29's GlobalReport exposes
-    // without pre-locking to a specific field layout.
-    if first {
-        match render_instance.generate_report() {
-            Some(report) => {
-                let s = format!("{report:?}");
-                for chunk in s.as_bytes().chunks(180) {
-                    if let Ok(part) = std::str::from_utf8(chunk) {
-                        crate::js_rave_error(&format!("[mem@{t}s] wgpu-report: {part}"));
-                    }
-                }
-            }
-            None => crate::js_rave_error(&format!(
-                "[mem@{t}s] wgpu-report: None (backend doesn't expose one)",
-            )),
-        }
-    }
+    // wgpu Instance::generate_report call reverted — Res<RenderInstance>
+    // doesn't have `generate_report()` reachable that way in Bevy 0.19.
+    // Correct API requires reading Bevy source first.
 
     // ------- device limits. These are the ceilings wgpu enforces. A
     // single allocation exceeding one of these → OOM. Print the ones
