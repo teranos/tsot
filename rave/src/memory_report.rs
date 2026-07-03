@@ -160,9 +160,9 @@ pub fn report(
     if first || oom_now {
         // Explicit deref chain: Res<RenderInstance> → .0 gives
         // &Arc<WgpuWrapper<Instance>>, two `*` peel Arc + WgpuWrapper
-        // to reach Instance where generate_report is inherent.
-        let instance: &wgpu::Instance = &**render_instance.0;
-        match instance.generate_report() {
+        // to reach Instance where generate_report is inherent. Rust
+        // infers the reference type; no wgpu:: import needed in rave.
+        match (**render_instance.0).generate_report() {
             Some(report) => {
                 let s = format!("{report:?}");
                 for chunk in s.as_bytes().chunks(180) {
