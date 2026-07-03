@@ -172,6 +172,14 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
             })
             .set(LogPlugin {
                 custom_layer: bevy_observability::install_capture_layer,
+                // Default is `wgpu=error,naga=warn` — bumping wgpu to
+                // `trace` so any wgpu validation error, warning, or
+                // notice lands in the tracing bus → CaptureLayer →
+                // LOG_QUEUE → drain_logs → ErrorLog → HTML overlay
+                // mirror. Backend-agnostic muted throws often have a
+                // matching wgpu tracing event that the previous
+                // filter dropped.
+                filter: "wgpu=trace,naga=warn,rave=info,bevy=info".into(),
                 ..default()
             }),
     );
@@ -210,7 +218,13 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 probe_startup,
             ),
         )
-        .add_systems(PostStartup, (audio::setup_audio, probe_post_startup))
+        // audio::setup_audio temporarily removed — muted-throw
+        // investigation. iOS Safari's Web Audio autoplay policy is a
+        // plausible backend-agnostic throw source; skipping our
+        // AudioPlayer spawns eliminates it as a suspect while leaving
+        // Bevy's AudioPlugin loaded (its finish() doesn't depend on
+        // our code). Add back once cleared.
+        .add_systems(PostStartup, probe_post_startup)
         .add_systems(
             Update,
             (
@@ -302,12 +316,15 @@ fn setup_scene_lights(mut commands: Commands) {
         // WebGPU on mobile only supports 1 or 4 MSAA samples per the
         // spec, and some iOS Safari WebGPU adapters reject 4x MSAA
         // depending on the texture format Bevy asks for. `Msaa::Off`
-        // takes MSAA off the table entirely — one less variable in the
-        // muted-throw investigation, smaller GPU memory footprint on
-        // mobile too.
+        // takes MSAA off the table entirely.
         Msaa::Off,
-        Hdr,
-        Bloom::default(),
+        // Hdr + Bloom disabled — user reports the muted throw is
+        // backend-agnostic (fires on WebGL2 too), so Rgba16Float
+        // render targets aren't the trigger. Keeping them off anyway:
+        // mobile doesn't benefit visibly and it shrinks the pipeline
+        // surface.
+        // Hdr,
+        // Bloom::default(),
         Transform::from_xyz(0.0, 80.0, 200.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((
