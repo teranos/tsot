@@ -18,6 +18,21 @@ resource "aws_s3_bucket_public_access_block" "rave_static" {
   restrict_public_buckets = true
 }
 
+# CORS on the bucket so responses to module-script fetches (which
+# are always in CORS mode) can carry the ACAO header the browser
+# needs to un-CORB the error reporting on the viewer side.
+resource "aws_s3_bucket_cors_configuration" "rave_static" {
+  bucket = aws_s3_bucket.rave_static.id
+
+  cors_rule {
+    allowed_origins = ["*"]
+    allowed_methods = ["GET", "HEAD"]
+    allowed_headers = ["*"]
+    expose_headers  = []
+    max_age_seconds = 3000
+  }
+}
+
 resource "aws_cloudfront_origin_access_control" "rave_static" {
   name                              = "${var.rave_bucket_name}-oac"
   description                       = "OAC for rave static bucket"
@@ -108,7 +123,8 @@ resource "aws_cloudfront_distribution" "rave_static" {
     allowed_methods = ["GET", "HEAD"]
     cached_methods  = ["GET", "HEAD"]
 
-    cache_policy_id = data.aws_cloudfront_cache_policy.caching_optimized.id
+    cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
+    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.simple_cors.id
 
     compress = true
   }

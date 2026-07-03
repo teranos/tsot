@@ -16,3 +16,11 @@ data "aws_cloudfront_cache_policy" "caching_disabled" {
 data "aws_cloudfront_origin_request_policy" "all_viewer" {
   name = "Managed-AllViewer"
 }
+
+# CORS on responses so module scripts (always fetched in CORS mode
+# per the HTML spec) get `Access-Control-Allow-Origin` and browsers
+# stop CORB-sanitising `window.onerror` details. See ERROR.md — errors
+# are first-class primitives; sanitisation violates the axiom.
+data "aws_cloudfront_response_headers_policy" "simple_cors" {
+  name = "Managed-SimpleCORS"
+}
