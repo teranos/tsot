@@ -85,6 +85,14 @@
           ? 'MAIN_WEBGPU_URL_PLACEHOLDER'
           : 'MAIN_WEBGL2_URL_PLACEHOLDER';
       }
+      // `?verbose=1` lifts the drawer's max-height cap so every line
+      // is visible in a single screenshot. CI uses this so the mobile
+      // artifact captures the full drawer state, not just the top of
+      // it under the 60vh clip.
+      if (params.get('verbose') === '1') {
+        var errEl = document.getElementById('bevy-error');
+        if (errEl) errEl.style.maxHeight = 'none';
+      }
       var s = document.createElement('script');
       s.type = 'module';
       // NO crossorigin attribute. Verified empirically via `curl -I`

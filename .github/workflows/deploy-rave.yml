@@ -161,17 +161,31 @@ jobs:
         id: boot
         run: |
           set -e
+          # Prefer iPad Pro (M-series, WebGPU-supporting on iOS 26+),
+          # fall back to any iPhone. The iPad-Pro-first ordering means
+          # CI actually exercises the WebGPU codepath instead of always
+          # getting `requestAdapter returned null` from an iPhone
+          # Simulator whose WebGPU implementation is incomplete.
           DEVICE_ID=$(xcrun simctl list devices available -j | \
             python3 -c "
           import json, sys
           data = json.load(sys.stdin)
+          candidates = []
           for runtime, devices in sorted(data['devices'].items(), reverse=True):
               if 'iOS' not in runtime: continue
               for d in devices:
-                  if 'iPhone' in d.get('name', '') and d.get('isAvailable', False):
-                      print(d['udid'])
-                      sys.exit(0)
-          sys.exit(1)
+                  if not d.get('isAvailable', False): continue
+                  name = d.get('name', '')
+                  if 'iPad Pro' in name: candidates.append((0, d['udid'], name))
+                  elif 'iPad' in name:   candidates.append((1, d['udid'], name))
+                  elif 'iPhone' in name: candidates.append((2, d['udid'], name))
+          if not candidates:
+              sys.exit(1)
+          candidates.sort()
+          rank, udid, name = candidates[0]
+          print(udid, file=sys.stderr)
+          print(name, file=sys.stderr)
+          print(udid)
           ")
           echo "Booting device UDID: $DEVICE_ID"
           xcrun simctl boot "$DEVICE_ID"
@@ -195,7 +209,7 @@ jobs:
         run: |
           xcrun simctl launch "${{ steps.boot.outputs.device_id }}" com.apple.mobilesafari
           sleep 2
-          xcrun simctl openurl "${{ steps.boot.outputs.device_id }}" 'https://rave.sbvh.nl/'
+          xcrun simctl openurl "${{ steps.boot.outputs.device_id }}" 'https://rave.sbvh.nl/?verbose=1'
           mkdir -p screenshots/auto
           shoot() {
               xcrun simctl io "${{ steps.boot.outputs.device_id }}" screenshot "screenshots/auto/t${1}s.png"
@@ -212,7 +226,7 @@ jobs:
         run: |
           # Fresh URL bypasses in-page cache; ?backend=webgpu forces the
           # bootstrap to pick that bundle regardless of navigator.gpu.
-          xcrun simctl openurl "${{ steps.boot.outputs.device_id }}" 'https://rave.sbvh.nl/?backend=webgpu'
+          xcrun simctl openurl "${{ steps.boot.outputs.device_id }}" 'https://rave.sbvh.nl/?backend=webgpu&verbose=1'
           mkdir -p screenshots/webgpu
           shoot() {
               xcrun simctl io "${{ steps.boot.outputs.device_id }}" screenshot "screenshots/webgpu/t${1}s.png"
@@ -227,7 +241,7 @@ jobs:
 
       - name: Capture screenshots — forced webgl2
         run: |
-          xcrun simctl openurl "${{ steps.boot.outputs.device_id }}" 'https://rave.sbvh.nl/?backend=webgl2'
+          xcrun simctl openurl "${{ steps.boot.outputs.device_id }}" 'https://rave.sbvh.nl/?backend=webgl2&verbose=1'
           mkdir -p screenshots/webgl2
           shoot() {
               xcrun simctl io "${{ steps.boot.outputs.device_id }}" screenshot "screenshots/webgl2/t${1}s.png"
