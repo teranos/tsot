@@ -69,22 +69,11 @@
       // based on `navigator.gpu`. URL stays at root — no /webgpu/,
       // no /webgl2/, no /index.html leak.
       // `?backend=webgpu` or `?backend=webgl2` forces the bundle for
-      // that backend regardless of `navigator.gpu`. Used by the CI
-      // mobile-screenshot job to exercise both paths and by developers
+      // that backend regardless of the runtime GPU check. Used by CI
+      // mobile-screenshot to exercise both codepaths and by developers
       // debugging a specific backend on hardware where the other one
       // would win the auto-select.
       var params = new URLSearchParams(window.location.search);
-      var backendOverride = params.get('backend');
-      var main;
-      if (backendOverride === 'webgpu') {
-        main = 'MAIN_WEBGPU_URL_PLACEHOLDER';
-      } else if (backendOverride === 'webgl2') {
-        main = 'MAIN_WEBGL2_URL_PLACEHOLDER';
-      } else {
-        main = ('gpu' in navigator)
-          ? 'MAIN_WEBGPU_URL_PLACEHOLDER'
-          : 'MAIN_WEBGL2_URL_PLACEHOLDER';
-      }
       // `?verbose=1` lifts the drawer's max-height cap so every line
       // is visible in a single screenshot. CI uses this so the mobile
       // artifact captures the full drawer state, not just the top of
@@ -93,21 +82,35 @@
         var errEl = document.getElementById('bevy-error');
         if (errEl) errEl.style.maxHeight = 'none';
       }
-      var s = document.createElement('script');
-      s.type = 'module';
-      // NO crossorigin attribute. Verified empirically via `curl -I`
-      // on the deployed main-webgpu.*.js: response has no
-      // `access-control-allow-origin` header (S3 + CloudFront serve
-      // without ACAO here). Setting `s.crossOrigin = 'anonymous'`
-      // would flip the browser into CORS mode for the fetch; missing
-      // ACAO in the response is then treated as opaque, and
-      // `window.onerror` receives the CORB-sanitized "Script error."
-      // with `event.error` null instead of the real error + stack.
-      // Without the attribute the load is plain same-origin — full
-      // error details land in `window.onerror`. See ERROR.md; errors
-      // are first-class primitives, sanitization violates the axiom.
-      s.src = main;
-      document.head.appendChild(s);
+      // Honest bundle picker: presence of `navigator.gpu` is API
+      // surface only — some environments (iOS Simulator via Metal
+      // emulation) expose the surface but `requestAdapter()` returns
+      // null, meaning WebGPU is not actually usable. The previous
+      // shim `'gpu' in navigator ? ... : ...` picked the WebGPU bundle
+      // in that case and failed at device init. Await `requestAdapter`
+      // and let the answer be based on reality, not on presence.
+      async function pickMain() {
+        var override = params.get('backend');
+        if (override === 'webgpu') return 'MAIN_WEBGPU_URL_PLACEHOLDER';
+        if (override === 'webgl2') return 'MAIN_WEBGL2_URL_PLACEHOLDER';
+        if (!('gpu' in navigator)) return 'MAIN_WEBGL2_URL_PLACEHOLDER';
+        try {
+          var adapter = await navigator.gpu.requestAdapter();
+          return adapter
+            ? 'MAIN_WEBGPU_URL_PLACEHOLDER'
+            : 'MAIN_WEBGL2_URL_PLACEHOLDER';
+        } catch (e) {
+          return 'MAIN_WEBGL2_URL_PLACEHOLDER';
+        }
+      }
+      pickMain().then(function(main) {
+        var s = document.createElement('script');
+        s.type = 'module';
+        // NO crossorigin attribute — see git history + ERROR.md for
+        // the CORB-sanitisation trap that setting it re-enables.
+        s.src = main;
+        document.head.appendChild(s);
+      });
     </script>
   </body>
 </html>
