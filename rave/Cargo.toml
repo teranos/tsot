@@ -35,19 +35,23 @@ dev = [
 ]
 
 [dependencies]
+# Minimal Bevy feature set — no `default_app` bundle. The features
+# below cover exactly what rave uses (3D scene, UI, text, winit, audio,
+# PBR, tonemapping). Removed: `2d_*` (no sprites), `scene` (no
+# .scn.ron loading), `debug` (dev tools not needed at runtime). Each
+# unused Bevy plugin still contributes to the wgpu pipeline cache
+# (unused shaders compile anyway) — cutting them shrinks GPU memory.
 bevy = { version = "=0.19.0", default-features = false, features = [
-    "default_app",
-    "2d_api",
-    "2d_bevy_render",
     "3d_api",
     "3d_bevy_render",
     "tonemapping_luts",
     "ui_api",
     "ui_bevy_render",
-    "scene",
     "bevy_winit",
     "default_font",
-    "debug",
+    "bevy_asset",
+    "bevy_state",
+    "png",
     # R23 forest rave — spatial music at the speakers, listener on the
     # camera. `bevy_audio` is the audio plugin; `vorbis` decodes the
     # bundled .ogg track. Drop them if rave ever moves to a streaming-
