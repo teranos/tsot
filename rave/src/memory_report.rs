@@ -36,7 +36,9 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::image::Image;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
+use bevy::render::render_resource::PipelineCache;
 use bevy::render::renderer::{RenderAdapterInfo, RenderDevice};
+use bevy_observability::ErrorLog;
 
 /// Sample cadence — after the first tick, fire every `INTERVAL_SECS`.
 /// The first-tick fire captures state BEFORE any OOM crashes the
@@ -56,6 +58,10 @@ pub fn report(
     cameras: Query<(&Camera, Option<&Hdr>, Option<&Msaa>)>,
     adapter_info: Res<RenderAdapterInfo>,
     device: Res<RenderDevice>,
+    pipeline_cache: Option<Res<PipelineCache>>,
+    error_log: Res<ErrorLog>,
+    mut last_error_len: Local<usize>,
+    mut oom_dumped: Local<bool>,
     // Entity breakdown: which component classes account for the 1704
     // total we see at first Update? TextSpan = text hierarchy nodes,
     // Node = UI layout, Mesh3d = 3D scene, PointLight = lights. Rest
@@ -70,11 +76,36 @@ pub fn report(
     *ticks += 1;
     let now = time.elapsed_secs();
     let first = *ticks == 1;
-    if !first && now - *last_secs < INTERVAL_SECS {
+    // OOM trigger: any new ErrorLog entry mentioning "Out of Memory"
+    // or "DeviceLost" fires the report immediately, regardless of
+    // the 15s throttle. Once we've dumped on OOM once, don't re-dump
+    // — the state after DeviceLost is invalid anyway.
+    let current_error_len = error_log.0.len();
+    let mut oom_now = false;
+    if !*oom_dumped && current_error_len > *last_error_len {
+        for entry in &error_log.0[*last_error_len..] {
+            let m = &entry.message;
+            if m.contains("Out of Memory")
+                || m.contains("Out of memory")
+                || m.contains("DeviceLost")
+            {
+                oom_now = true;
+                *oom_dumped = true;
+                break;
+            }
+        }
+    }
+    *last_error_len = current_error_len;
+    if !first && !oom_now && now - *last_secs < INTERVAL_SECS {
         return;
     }
     *last_secs = now;
     let t = now as u32;
+    if oom_now {
+        crate::js_rave_error(&format!(
+            "[mem@{t}s] === OOM TRIGGERED MEMORY DUMP ==="
+        ));
+    }
 
     // ------- adapter identity: name + device_type + backend + vendor.
     let info = &**adapter_info;
@@ -98,6 +129,17 @@ pub fn report(
         limits.max_bind_groups,
         limits.max_uniform_buffer_binding_size / 1024,
     ));
+
+    // ------- pipeline cache count. Each pipeline is a compiled shader
+    // program held in wgpu. Bytes-per-pipeline aren't exposed but the
+    // count is, and it's the closest proxy for pipeline-cache footprint.
+    if let Some(pc) = &pipeline_cache {
+        let cached = pc.pipelines().count();
+        let waiting = pc.waiting_pipelines().count();
+        crate::js_rave_error(&format!(
+            "[mem@{t}s] pipelines: cached={cached} waiting={waiting}",
+        ));
+    }
 
     // ------- entities + asset counts.
     let entity_count = entities.iter().count();
