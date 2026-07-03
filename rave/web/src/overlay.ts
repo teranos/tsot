@@ -177,7 +177,7 @@ export function installGlobalHandlers(): void {
       }
     }
     if (ev.error) dumpError("[window.error.error]", ev.error);
-    else showErr(`  <ev.error was null — iOS WebKit sanitisation>`);
+    else showErr(`  <ev.error was null — browser refused to attribute; likely wasm-originated throw>`);
   };
   window.addEventListener("error", dumpErrorEvent("bubble"), false);
   window.addEventListener("error", dumpErrorEvent("capture"), true);

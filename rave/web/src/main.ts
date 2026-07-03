@@ -46,6 +46,47 @@ showErr("[init] step 3 — identity bridges installed");
 installScreenshotBridge();
 showErr("[init] step 4 — screenshot bridge installed");
 
+// WebGPU preflight in JS BEFORE wasm loads. Same-origin JS catches see
+// full error detail — bypasses the WebKit muting that hides wasm-
+// originated throws. If Bevy's later WebGPU request is what mutes as
+// `Script error.`, this preflight surfaces the same failure with real
+// message, name, and cause. Deliberate destroy() at the end so we
+// don't hold a device handle Bevy then can't get.
+async function preflightWebGPU(): Promise<void> {
+  if (!("gpu" in navigator)) {
+    showErr("[preflight] navigator.gpu missing — no WebGPU on this browser");
+    return;
+  }
+  try {
+    showErr("[preflight] requesting GPU adapter...");
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) {
+      showErr("[preflight] requestAdapter returned null — no compatible adapter");
+      return;
+    }
+    showErr(
+      `[preflight] adapter received: features=${adapter.features.size} limits.maxTextureDim2D=${adapter.limits.maxTextureDimension2D}`,
+    );
+    showErr("[preflight] requesting GPU device...");
+    const device = await adapter.requestDevice();
+    showErr(
+      `[preflight] device received OK: features=${device.features.size} label=${JSON.stringify(device.label)}`,
+    );
+    // Wire uncapturederror on the preflight device so any subsequent
+    // validation error before we destroy it also lands in the drawer.
+    device.addEventListener("uncapturederror", (ev) => {
+      const err = (ev as GPUUncapturedErrorEvent).error;
+      showErr(`[preflight.uncaptured] ${err.constructor.name}: ${err.message}`);
+    });
+    device.destroy();
+    showErr("[preflight] device destroyed cleanly");
+  } catch (e) {
+    showErr("[preflight] WebGPU preflight threw:");
+    dumpError("[preflight.error]", e);
+  }
+}
+await preflightWebGPU();
+
 try {
   showErr(`[init] step 5 — fetching wasm from ${WASM_URL}`);
   const wasmBytes = await streamWasmBytes(WASM_URL);
