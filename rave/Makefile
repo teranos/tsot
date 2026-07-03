@@ -30,7 +30,7 @@ wasm-webgpu:
 	$(BUILD_ENV) cargo build --target $(WASM_TARGET) --release --lib --no-default-features --features backend-webgpu
 	wasm-bindgen $(WASM_OUT)/rave.wasm --target web --out-dir $(WASM_DIST) --no-typescript
 	cd web && bun build src/main.ts --outdir=../$(WASM_DIST) --target=browser --minify --entry-naming "main.js"
-	bash web/hash-and-stage.sh $(WASM_DIST) webgpu
+	$(BUILD_ENV) bash web/hash-and-stage.sh $(WASM_DIST) webgpu
 
 wasm-webgl2:
 	@command -v wasm-bindgen >/dev/null 2>&1 || { echo "error: wasm-bindgen not on PATH. Run via 'nix develop -c make wasm'."; exit 1; }
@@ -40,7 +40,7 @@ wasm-webgl2:
 	$(BUILD_ENV) cargo build --target $(WASM_TARGET) --release --lib --no-default-features --features backend-webgl2
 	wasm-bindgen $(WASM_OUT)/rave.wasm --target web --out-dir $(WASM_DIST) --no-typescript
 	cd web && bun build src/main.ts --outdir=../$(WASM_DIST) --target=browser --minify --entry-naming "main.js"
-	bash web/hash-and-stage.sh $(WASM_DIST) webgl2
+	$(BUILD_ENV) bash web/hash-and-stage.sh $(WASM_DIST) webgl2
 
 wasm-index:
 	@# The two backend builds each produced a `main-<backend>.<hash>.js`.

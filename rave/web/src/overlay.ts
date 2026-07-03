@@ -15,6 +15,12 @@ const T0 = performance.now();
 const LOG_STORAGE_KEY = "rave-drawer-log";
 const LOAD_COUNTER_KEY = "rave-load-counter";
 
+// Substituted at bundle time by `rave/web/hash-and-stage.sh` from
+// `RAVE_BUILD_COMMIT` + `RAVE_BUILD_TIME` env vars the Makefile sets.
+// Stays as the literal token at source-time so bundlers don't choke.
+const RAVE_COMMIT = "RAVE_COMMIT_PLACEHOLDER";
+const RAVE_BUILT_AT = "RAVE_BUILT_AT_PLACEHOLDER";
+
 function nextLoadNumber(): number {
   try {
     const prev = parseInt(sessionStorage.getItem(LOAD_COUNTER_KEY) ?? "0", 10);
@@ -66,9 +72,14 @@ export function showErr(line: string): void {
   }
 }
 
-// First entry on every load. Puts load number + navigation type + wall
-// clock at the top so the drawer identifies itself before any init step
-// runs. A rapidly-climbing load# is proof of a reload loop.
+// Absolute first drawer line — commit + build time, distinct enough
+// that no screenshot can hide which bundle is running. Placed BEFORE
+// the load header so it's the very top of every screenshot, even
+// truncated ones. Substituted at build time by hash-and-stage.sh.
+showErr(`=== rave ${RAVE_COMMIT} · built ${RAVE_BUILT_AT} ===`);
+
+// Second line — load number + navigation type + wall clock. A rapidly
+// climbing load# is proof of a reload loop.
 showErr(
   `=== load#${LOAD_NUMBER} nav=${NAV_TYPE} @ ${new Date().toISOString()} ===`,
 );

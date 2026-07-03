@@ -26,6 +26,13 @@ jh=$(sha256sum rave.js | cut -c1-12)
 mv rave.js "rave-${BACKEND}.${jh}.js"
 sed -i "s|\./rave\.js|./rave-${BACKEND}.${jh}.js|g" main.js
 sed -i "s|WASM_URL_PLACEHOLDER|./rave-${BACKEND}-bg.${wh}.wasm|g" main.js
+# Build identity substituted at bundle time so the JS side knows the
+# commit + build time without depending on the wasm loading first.
+# The Makefile exports both env vars before invoking make wasm.
+: "${RAVE_BUILD_COMMIT:=unknown}"
+: "${RAVE_BUILD_TIME:=unknown}"
+sed -i "s|RAVE_COMMIT_PLACEHOLDER|${RAVE_BUILD_COMMIT}|g" main.js
+sed -i "s|RAVE_BUILT_AT_PLACEHOLDER|${RAVE_BUILD_TIME}|g" main.js
 
 mh=$(sha256sum main.js | cut -c1-12)
 mv main.js "main-${BACKEND}.${mh}.js"
