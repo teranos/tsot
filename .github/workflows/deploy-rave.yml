@@ -145,7 +145,11 @@ jobs:
   mobile-screenshot:
     needs: build-and-deploy
     runs-on: macos-15
-    timeout-minutes: 15
+    # 25 min ceiling — Simulator boot + Safari launch + three sequential
+    # URL loads (auto/webgpu/webgl2) each with a 55s screenshot cadence
+    # runs close to 15 min on slow runner allocations. bcc7923 timed
+    # out at exactly the old 15-min limit.
+    timeout-minutes: 25
     steps:
       - name: Environment inventory
         run: |
