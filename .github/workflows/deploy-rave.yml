@@ -144,11 +144,13 @@ jobs:
   # unlimited macOS runner minutes so this always runs.
   mobile-screenshot:
     needs: build-and-deploy
-    runs-on: macos-15
-    # 25 min ceiling — Simulator boot + Safari launch + three sequential
-    # URL loads (auto/webgpu/webgl2) each with a 55s screenshot cadence
-    # runs close to 15 min on slow runner allocations. bcc7923 timed
-    # out at exactly the old 15-min limit.
+    # macos-26-arm64: newest available runner. Ships iOS Simulator
+    # 26.0-26.5 with WebGPU enabled by default in Mobile Safari — same
+    # environment real users have on iOS 26. macos-15 (previous) shipped
+    # iOS 18.5 which has no WebGPU adapter, forces WebGL2 fallback, and
+    # was observed hanging Bevy between Startup and PostStartup on this
+    # environment.
+    runs-on: macos-26-arm64
     timeout-minutes: 25
     steps:
       - name: Environment inventory
