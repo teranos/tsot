@@ -1,8 +1,10 @@
 import { getBucketTotals } from "./gpu-alloc";
 import { showErr } from "./overlay";
 
-const WIDTH = 320;
-const HEIGHT = 200;
+const WIDTH = 640;
+const HEIGHT = 220;
+const LEGEND_WIDTH = 240;
+const PLOT_WIDTH = WIDTH - LEGEND_WIDTH;
 const MAX_SAMPLES = 120;
 const SAMPLE_MS = 500;
 
@@ -47,14 +49,9 @@ function maxOfAll(): number {
 function draw(canvas: HTMLCanvasElement): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  ctx.fillStyle = "rgba(0, 0, 0, 0.82)";
-  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  ctx.clearRect(0, 0, WIDTH, HEIGHT);
   const max = maxOfAll();
-  const xStep = WIDTH / MAX_SAMPLES;
-
-  ctx.fillStyle = "#888";
-  ctx.font = "10px ui-monospace, monospace";
-  ctx.fillText(`${max.toFixed(1)} MB max`, WIDTH - 90, 12);
+  const xStep = PLOT_WIDTH / MAX_SAMPLES;
 
   const sortedKeys = Array.from(seriesMap.keys()).sort((a, b) => {
     const av = (seriesMap.get(a)?.data.slice(-1)[0] ?? 0);
@@ -67,26 +64,37 @@ function draw(canvas: HTMLCanvasElement): void {
     if (!s || s.data.length === 0) continue;
     ctx.strokeStyle = s.color;
     ctx.lineWidth = 1.5;
+    ctx.shadowColor = "rgba(0,0,0,0.8)";
+    ctx.shadowBlur = 3;
     ctx.beginPath();
     s.data.forEach((v, i) => {
       const x = i * xStep;
-      const y = HEIGHT - (v / max) * (HEIGHT - 8) - 4;
+      const y = HEIGHT - (v / max) * (HEIGHT - 12) - 6;
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
     ctx.stroke();
   }
+  ctx.shadowBlur = 0;
 
-  let ly = 24;
+  ctx.fillStyle = "#888";
+  ctx.font = "10px ui-monospace, monospace";
+  ctx.shadowColor = "rgba(0,0,0,0.9)";
+  ctx.shadowBlur = 3;
+  ctx.fillText(`${max.toFixed(1)} MB max`, PLOT_WIDTH - 90, 12);
+
+  const legendX = PLOT_WIDTH + 10;
+  let ly = 14;
   for (const key of sortedKeys) {
     const s = seriesMap.get(key);
     if (!s || s.data.length === 0) continue;
     const last = s.data[s.data.length - 1];
     ctx.fillStyle = s.color;
-    ctx.fillText(`${key}: ${last.toFixed(2)}MB`, 6, ly);
-    ly += 12;
+    ctx.fillText(`${key}: ${last.toFixed(2)}MB`, legendX, ly);
+    ly += 13;
     if (ly > HEIGHT - 6) break;
   }
+  ctx.shadowBlur = 0;
 }
 
 export function installMemGraph(getWasmBytes: () => number): void {
@@ -95,11 +103,14 @@ export function installMemGraph(getWasmBytes: () => number): void {
   canvas.height = HEIGHT;
   canvas.id = "mem-graph";
   canvas.style.position = "fixed";
-  canvas.style.bottom = "88px";
-  canvas.style.right = "6px";
+  canvas.style.top = "0";
+  canvas.style.right = "0";
+  canvas.style.width = `${WIDTH}px`;
+  canvas.style.height = `${HEIGHT}px`;
+  canvas.style.maxWidth = "calc(100vw - 4px)";
   canvas.style.zIndex = "10000";
-  canvas.style.border = "1px solid #555";
   canvas.style.pointerEvents = "none";
+  canvas.style.background = "transparent";
   document.body.appendChild(canvas);
 
   window.setInterval(() => {
@@ -109,5 +120,5 @@ export function installMemGraph(getWasmBytes: () => number): void {
     draw(canvas);
   }, SAMPLE_MS);
 
-  showErr("[mem-graph] installed 320x200 bottom-right");
+  showErr(`[mem-graph] installed ${WIDTH}x${HEIGHT} top-right, transparent, legend right`);
 }
