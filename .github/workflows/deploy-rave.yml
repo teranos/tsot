@@ -192,6 +192,22 @@ jobs:
               SafariBaselinesOnboardingComplete -bool YES || true
           echo "device_id=$DEVICE_ID" >> "$GITHUB_OUTPUT"
 
+      - name: Start OS RSS sampler
+        run: |
+          mkdir -p screenshots
+          (
+            while true; do
+              ts=$(date +%s)
+              ps -A -o pid,rss,command 2>/dev/null | \
+                grep -E 'WebContent|MobileSafari|com\.apple\.WebKit\.GPU|com\.apple\.WebKit\.Networking' | \
+                grep -v grep | \
+                awk -v ts=$ts '{printf "%s\t%s\t%s\t", ts, $1, $2; for (i=3; i<=NF; i++) printf "%s ", $i; printf "\n"}' \
+                >> screenshots/rss.log
+              sleep 2
+            done
+          ) &
+          echo $! > /tmp/rss.pid
+
       - name: Capture screenshots — auto backend
         run: |
           xcrun simctl launch "${{ steps.boot.outputs.device_id }}" com.apple.mobilesafari
@@ -240,6 +256,15 @@ jobs:
           sleep 10; shoot 20
           sleep 15; shoot 35
           sleep 20; shoot 55
+
+      - name: Stop OS RSS sampler
+        if: always()
+        run: |
+          if [ -f /tmp/rss.pid ]; then
+            kill "$(cat /tmp/rss.pid)" 2>/dev/null || true
+          fi
+          echo "== rss.log tail =="
+          tail -50 screenshots/rss.log || true
 
       - name: Upload screenshots
         if: always()
