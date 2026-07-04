@@ -274,6 +274,13 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, memory_report::report);
 
+    // Also run memory_report on PostStartup — if the Update schedule
+    // hangs (which happened on some iPhone Sim runs) but PostStartup
+    // fires, we still get one memory dump. Complements the on-first-
+    // Update fire.
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(PostStartup, memory_report::report);
+
     #[cfg(target_arch = "wasm32")]
     {
         js_rave_error("[probe] pre-LibP2PPlugin");
