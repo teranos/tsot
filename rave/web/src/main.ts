@@ -103,10 +103,26 @@ try {
   showErr("[init] step 8 — wasm-bindgen glue imported");
 
   showErr("[init] step 9 — calling wasm.default() to instantiate");
-  await wasm.default({ module_or_path: wasmBytes });
+  const initResult = await wasm.default({ module_or_path: wasmBytes });
   showErr("[init] step 10 — wasm instantiated, Bevy owns the canvas");
 
-  const wasmMemory = (wasm as unknown as { memory?: WebAssembly.Memory }).memory;
+  let wasmMemory: WebAssembly.Memory | undefined;
+  const candidates: Array<[string, unknown]> = [
+    ...Object.entries(wasm),
+    ...Object.entries(initResult ?? {}),
+  ];
+  for (const [key, val] of candidates) {
+    if (val instanceof WebAssembly.Memory) {
+      wasmMemory = val;
+      showErr(`[wasm-mem] memory export found: key="${key}"`);
+      break;
+    }
+  }
+  if (!wasmMemory) {
+    const keys = candidates.map(([k]) => k).join(",");
+    showErr(`[wasm-mem] no WebAssembly.Memory found; candidates: ${keys}`);
+  }
+
   if (wasmMemory) {
     const logMem = (label: string): void => {
       const bytes = wasmMemory.buffer.byteLength;
@@ -116,7 +132,6 @@ try {
     window.setInterval(() => logMem(`@${Math.round(performance.now() / 1000)}s`), 5000);
     installMemGraph(() => wasmMemory.buffer.byteLength);
   } else {
-    showErr("[wasm-mem] no memory export found on wasm module");
     installMemGraph(() => 0);
   }
 
