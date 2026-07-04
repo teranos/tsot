@@ -61,6 +61,20 @@ if (el) {
   }
 }
 
+let scrollPending = false;
+function scheduleScrollToBottom(): void {
+  if (scrollPending) return;
+  scrollPending = true;
+  requestAnimationFrame(() => {
+    scrollPending = false;
+    try {
+      window.scrollTo(0, document.body.scrollHeight);
+    } catch {
+      /* ignore */
+    }
+  });
+}
+
 export function showErr(line: string): void {
   if (!el) return;
   const stamped = `[+${Math.round(performance.now() - T0)}ms] ${line}\n`;
@@ -70,15 +84,11 @@ export function showErr(line: string): void {
   } catch {
     /* quota exceeded or storage disabled — line still visible on-screen */
   }
-  // Auto-scroll the document so the latest line is always in the
-  // viewport. Without this, the drawer with max-height:none extends
-  // past the visible viewport and CI screenshots always capture the
-  // TOP of the drawer — never the [mem@Ns] lines that fire later.
-  try {
-    window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
-  } catch {
-    /* older browsers — behavior:instant unsupported, ignore */
-  }
+  // Auto-scroll is now RAF-throttled — one scroll per animation frame
+  // regardless of how many showErr calls happen. Previous per-call
+  // sync scrollTo blocked the JS main thread during wasm-bindgen
+  // callback chains and stalled Bevy between Startup and PostStartup.
+  scheduleScrollToBottom();
 }
 
 // Absolute first drawer line — commit + build time, distinct enough
