@@ -17,6 +17,78 @@ let allocCallsSinceLastSummary = 0;
 
 const bufferSizeMap = new WeakMap<object, { label: string; bytes: number; usageBucket: string }>();
 
+interface Sample { time: number; bytes: number }
+const bucketHistory = new Map<string, Sample[]>();
+const RATE_WINDOW_MS = 15_000;
+const LEAK_RATE_MB_PER_SEC = 5;
+const LEAK_MIN_ABS_MB = 100;
+let leakTriggered = false;
+
+interface RaveWasmExports {
+  rave_crash_with_leak_report?: (msg: string) => void;
+}
+
+function checkLeakThreshold(): void {
+  if (leakTriggered) return;
+  const now = performance.now();
+  for (const [key, b] of buckets) {
+    let hist = bucketHistory.get(key);
+    if (!hist) {
+      hist = [];
+      bucketHistory.set(key, hist);
+    }
+    hist.push({ time: now, bytes: b.bytes });
+    const cutoff = now - RATE_WINDOW_MS;
+    while (hist.length > 0 && hist[0].time < cutoff) hist.shift();
+    if (hist.length < 2) continue;
+    const first = hist[0];
+    const last = hist[hist.length - 1];
+    const durationSec = (last.time - first.time) / 1000;
+    if (durationSec < 5) continue;
+    const deltaMB = (last.bytes - first.bytes) / 1_048_576;
+    const rateMBps = deltaMB / durationSec;
+    const currentMB = b.bytes / 1_048_576;
+    if (rateMBps > LEAK_RATE_MB_PER_SEC && currentMB > LEAK_MIN_ABS_MB) {
+      leakTriggered = true;
+      const topLabels: Array<[string, number]> = [];
+      for (const [k, v] of labelBuckets) topLabels.push([k, v.bytes]);
+      topLabels.sort((a, b) => b[1] - a[1]);
+      const topStr = topLabels.slice(0, 8)
+        .map(([k, v]) => `${k}=${(v / 1_048_576).toFixed(2)}MB`)
+        .join(" | ");
+      const buildCommit = (window as unknown as { __RAVE_BUILD_COMMIT?: string }).__RAVE_BUILD_COMMIT ?? "unknown";
+      const record = {
+        kind: "leak",
+        bucket: key,
+        rate_mb_per_sec: rateMBps,
+        current_mb: currentMB,
+        top_labels: topLabels.slice(0, 8).map(([k, v]) => ({ label: k, bytes: v })),
+        commit: buildCommit,
+        user_agent: navigator.userAgent,
+        wall_time: new Date().toISOString(),
+        wall_time_since_load_ms: Math.round(now),
+      };
+      const report = `bucket="${key}" rate=${rateMBps.toFixed(2)}MB/sec current=${currentMB.toFixed(2)}MB · top-labels: ${topStr} · commit=${buildCommit}`;
+      try {
+        console.error("[LEAK]", JSON.stringify(record));
+      } catch { /* ignore */ }
+      try {
+        const beaconEndpoint = (window as unknown as { __RAVE_TELEMETRY_URL?: string }).__RAVE_TELEMETRY_URL;
+        if (beaconEndpoint) {
+          navigator.sendBeacon?.(beaconEndpoint, JSON.stringify(record));
+        }
+      } catch { /* ignore */ }
+      const exports = (window as unknown as { __rave_wasm_exports?: RaveWasmExports }).__rave_wasm_exports;
+      try {
+        exports?.rave_crash_with_leak_report?.(report);
+      } catch (e) {
+        showErr(`[leak-detector] rave_crash_with_leak_report threw: ${String(e)}`);
+      }
+      break;
+    }
+  }
+}
+
 function bump(key: string, bytes: number, detail: string, label: string): void {
   const b = buckets.get(key) ?? { count: 0, bytes: 0, liveBytes: 0, liveCount: 0 };
   b.count += 1;
@@ -358,7 +430,10 @@ function emitSummary(reason: string): void {
 export function installGpuAllocProbe(): void {
   installWebGPUProbe();
   installWebGL2Probe();
-  window.setInterval(() => emitSummary("tick"), 5000);
+  window.setInterval(() => {
+    emitSummary("tick");
+    checkLeakThreshold();
+  }, 5000);
 }
 
 export function forceEmitSummary(reason: string): void {

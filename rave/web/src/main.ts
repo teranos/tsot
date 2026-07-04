@@ -106,6 +106,8 @@ try {
   const initResult = await wasm.default({ module_or_path: wasmBytes });
   showErr("[init] step 10 — wasm instantiated, Bevy owns the canvas");
 
+  (window as unknown as { __rave_wasm_exports?: unknown }).__rave_wasm_exports = initResult ?? wasm;
+
   let wasmMemory: WebAssembly.Memory | undefined;
   const candidates: Array<[string, unknown]> = [
     ...Object.entries(wasm),

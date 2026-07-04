@@ -30,16 +30,28 @@ pub struct PublishFailingEntry {
     pub occurrences: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeakDetectedEntry {
+    pub bucket: String,
+    pub rate_mb_per_sec: u32,
+    pub current_mb: u32,
+    pub top_label: String,
+    pub first_at_ms: u64,
+    pub last_at_ms: u64,
+    pub occurrences: u32,
+}
+
 // BTreeMap keeps render order deterministic (topic-sorted) — matters
 // for tests and for a stable panel when multiple topics fail at once.
 #[derive(Resource, Default, Debug, Clone)]
 pub struct Health {
     pub publish_failing: BTreeMap<String, PublishFailingEntry>,
+    pub leak_detected: Option<LeakDetectedEntry>,
 }
 
 impl Health {
     pub fn active_lines(&self, now_ms: u64) -> Vec<String> {
-        self.publish_failing
+        let mut lines: Vec<String> = self.publish_failing
             .iter()
             .map(|(topic, e)| {
                 let age_s = now_ms.saturating_sub(e.first_at_ms) / 1000;
@@ -48,8 +60,50 @@ impl Health {
                     e.occurrences, age_s, e.reason
                 )
             })
-            .collect()
+            .collect();
+        if let Some(leak) = &self.leak_detected {
+            let age_s = now_ms.saturating_sub(leak.first_at_ms) / 1000;
+            lines.push(format!(
+                "LeakDetected bucket={} rate={}MB/s current={}MB top-label={} age={}s ×{}",
+                leak.bucket, leak.rate_mb_per_sec, leak.current_mb,
+                leak.top_label, age_s, leak.occurrences
+            ));
+        }
+        lines
     }
+}
+
+pub fn record_leak_detected(
+    health: &mut Health,
+    bucket: &str,
+    rate_mb_per_sec: u32,
+    current_mb: u32,
+    top_label: &str,
+    now_ms: u64,
+) {
+    if let Some(existing) = health.leak_detected.as_mut() {
+        if existing.bucket == bucket {
+            existing.last_at_ms = now_ms;
+            existing.occurrences = existing.occurrences.saturating_add(1);
+            existing.rate_mb_per_sec = rate_mb_per_sec;
+            existing.current_mb = current_mb;
+            existing.top_label = top_label.to_string();
+            return;
+        }
+    }
+    health.leak_detected = Some(LeakDetectedEntry {
+        bucket: bucket.to_string(),
+        rate_mb_per_sec,
+        current_mb,
+        top_label: top_label.to_string(),
+        first_at_ms: now_ms,
+        last_at_ms: now_ms,
+        occurrences: 1,
+    });
+}
+
+pub fn record_leak_resolved(health: &mut Health) {
+    health.leak_detected = None;
 }
 
 pub fn record_publish_failed(health: &mut Health, topic: &str, reason: &str, now_ms: u64) {

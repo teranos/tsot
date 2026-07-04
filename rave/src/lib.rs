@@ -92,6 +92,12 @@ pub fn rave_rust_alloc_count() -> usize {
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
+pub fn rave_crash_with_leak_report(report: &str) {
+    panic!("[LEAK] {report}");
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
 unsafe extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = "__raveError")]
     pub(crate) fn js_rave_error(msg: &str);
