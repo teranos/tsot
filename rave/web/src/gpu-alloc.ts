@@ -6,17 +6,26 @@ interface Bucket {
 }
 
 const buckets = new Map<string, Bucket>();
+let firstCallsLogged = 0;
+const FIRST_N_INDIVIDUAL = 30;
 let allocCallsSinceLastSummary = 0;
 
-function bump(key: string, bytes: number): void {
+function bump(key: string, bytes: number, detail: string): void {
   const b = buckets.get(key) ?? { count: 0, bytes: 0 };
   b.count += 1;
   b.bytes += bytes;
   buckets.set(key, b);
   allocCallsSinceLastSummary += 1;
-  if (allocCallsSinceLastSummary >= 20) {
-    emitSummary("burst");
+  if (firstCallsLogged < FIRST_N_INDIVIDUAL) {
+    firstCallsLogged += 1;
+    const t = Math.round(performance.now());
+    showErr(`[gpu-alloc.${key}@${t}ms] ${fmtMB(bytes)} ${detail}`);
   }
+  if (allocCallsSinceLastSummary >= 20) emitSummary("burst");
+}
+
+function fmtMB(bytes: number): string {
+  return `${(bytes / 1_048_576).toFixed(3)}MB`;
 }
 
 const WGPU_BPP: Record<string, number> = {
@@ -46,9 +55,7 @@ function mipPyramidFactor(mips: number): number {
 interface Extent3D { width: number; height?: number; depthOrArrayLayers?: number }
 
 function extentTo3(size: GPUTextureDescriptor["size"]): [number, number, number] {
-  if (Array.isArray(size)) {
-    return [size[0], size[1] ?? 1, size[2] ?? 1];
-  }
+  if (Array.isArray(size)) return [size[0], size[1] ?? 1, size[2] ?? 1];
   const e = size as Extent3D;
   return [e.width, e.height ?? 1, e.depthOrArrayLayers ?? 1];
 }
@@ -60,8 +67,7 @@ function textureBytes(desc: GPUTextureDescriptor): { bytes: number; note: string
   const bpp = WGPU_BPP[desc.format as string];
   const note = `${w}x${h}x${d} fmt=${desc.format} samples=${samples} mips=${mips}`;
   if (bpp === undefined) return { bytes: 0, note };
-  const bytes = Math.round(w * h * d * bpp * samples * mipPyramidFactor(mips));
-  return { bytes, note };
+  return { bytes: Math.round(w * h * d * bpp * samples * mipPyramidFactor(mips)), note };
 }
 
 function wgpuBufferTag(usage: number): string {
@@ -81,50 +87,54 @@ function wgpuTextureTag(usage: number): string {
 }
 
 function wrapDevice(device: GPUDevice): void {
-  const origBuf = device.createBuffer.bind(device);
-  const origTex = device.createTexture.bind(device);
-  (device as { createBuffer: typeof device.createBuffer }).createBuffer = ((
-    desc: GPUBufferDescriptor,
-  ) => {
-    bump(wgpuBufferTag(desc.usage), desc.size);
-    return origBuf(desc);
-  }) as typeof device.createBuffer;
-  (device as { createTexture: typeof device.createTexture }).createTexture = ((
-    desc: GPUTextureDescriptor,
-  ) => {
+  const origBuf = device.createBuffer;
+  const origTex = device.createTexture;
+  const origShader = device.createShaderModule;
+
+  (device as { createBuffer: unknown }).createBuffer = function (this: GPUDevice, ...args: unknown[]) {
+    const desc = args[0] as GPUBufferDescriptor;
+    bump(wgpuBufferTag(desc.usage), desc.size, `usage=0x${desc.usage.toString(16)} label=${desc.label ?? "-"}`);
+    return (origBuf as (...a: unknown[]) => GPUBuffer).apply(device, args);
+  };
+
+  (device as { createTexture: unknown }).createTexture = function (this: GPUDevice, ...args: unknown[]) {
+    const desc = args[0] as GPUTextureDescriptor;
     const { bytes, note } = textureBytes(desc);
-    if (bytes === 0) showErr(`[gpu-alloc.wgpu.tex.unknown] ${note}`);
-    bump(wgpuTextureTag(desc.usage), bytes);
-    return origTex(desc);
-  }) as typeof device.createTexture;
+    if (bytes === 0) showErr(`[gpu-alloc.wgpu.tex.unknown] ${note} label=${desc.label ?? "-"}`);
+    bump(wgpuTextureTag(desc.usage), bytes, `${note} label=${desc.label ?? "-"}`);
+    return (origTex as (...a: unknown[]) => GPUTexture).apply(device, args);
+  };
+
+  (device as { createShaderModule: unknown }).createShaderModule = function (this: GPUDevice, ...args: unknown[]) {
+    const desc = args[0] as GPUShaderModuleDescriptor;
+    const size = desc.code.length;
+    bump("wgpu.shader", size, `label=${desc.label ?? "-"} code_len=${size}`);
+    return (origShader as (...a: unknown[]) => GPUShaderModule).apply(device, args);
+  };
 }
 
 function wrapAdapter(adapter: GPUAdapter): void {
-  const orig = adapter.requestDevice.bind(adapter);
-  (adapter as { requestDevice: typeof adapter.requestDevice }).requestDevice = (async (
-    desc?: GPUDeviceDescriptor,
-  ) => {
-    const dev = await orig(desc);
+  const orig = adapter.requestDevice;
+  (adapter as { requestDevice: unknown }).requestDevice = async function (this: GPUAdapter, ...args: unknown[]) {
+    const dev = await (orig as (...a: unknown[]) => Promise<GPUDevice>).apply(adapter, args);
     wrapDevice(dev);
     showErr("[gpu-alloc] wgpu device wrapped");
     return dev;
-  }) as typeof adapter.requestDevice;
+  };
 }
 
 function installWebGPUProbe(): void {
   if (!("gpu" in navigator)) return;
   const gpu = navigator.gpu;
-  const orig = gpu.requestAdapter.bind(gpu);
-  (gpu as { requestAdapter: typeof gpu.requestAdapter }).requestAdapter = (async (
-    opts?: GPURequestAdapterOptions,
-  ) => {
-    const a = await orig(opts);
+  const orig = gpu.requestAdapter;
+  (gpu as { requestAdapter: unknown }).requestAdapter = async function (this: GPU, ...args: unknown[]) {
+    const a = await (orig as (...a: unknown[]) => Promise<GPUAdapter | null>).apply(gpu, args);
     if (a) {
       wrapAdapter(a);
       showErr("[gpu-alloc] wgpu adapter wrapped");
     }
     return a;
-  }) as typeof gpu.requestAdapter;
+  };
   showErr("[gpu-alloc] webgpu probe armed");
 }
 
@@ -148,89 +158,108 @@ function glTexBytes(fmt: number, w: number, h: number): { bytes: number; known: 
 }
 
 function wrapWebGL2(gl: WebGL2RenderingContext): void {
-  const origBuf = gl.bufferData.bind(gl);
-  (gl as { bufferData: WebGL2RenderingContext["bufferData"] }).bufferData = ((
-    target: number,
-    sizeOrData: number | ArrayBufferView | ArrayBuffer | null,
-    usage: number,
-  ) => {
+  const origBuf = gl.bufferData;
+  gl.bufferData = function (this: WebGL2RenderingContext, ...args: unknown[]): void {
+    const target = args[0] as number;
     let size = 0;
-    if (typeof sizeOrData === "number") size = sizeOrData;
-    else if (sizeOrData) {
-      const bv = sizeOrData as ArrayBufferView;
-      const ab = sizeOrData as ArrayBuffer;
-      size = bv.byteLength ?? ab.byteLength ?? 0;
+    const src = args[1];
+    if (typeof src === "number") {
+      size = src;
+    } else if (src && typeof src === "object") {
+      const bv = src as ArrayBufferView;
+      size = typeof bv.byteLength === "number" ? bv.byteLength : 0;
     }
-    const tag =
-      target === 0x8893 ? "gl.buf.index" :
-      target === 0x8892 ? "gl.buf.vertex" :
-      target === 0x8A11 ? "gl.buf.uniform" :
-      "gl.buf.other";
-    bump(tag, size);
-    return origBuf(target, sizeOrData as ArrayBufferView, usage);
-  }) as WebGL2RenderingContext["bufferData"];
+    if (args.length >= 5) {
+      const length = args[4] as number;
+      const bv = args[1] as ArrayBufferView & { BYTES_PER_ELEMENT?: number };
+      const bpe = bv && typeof bv.BYTES_PER_ELEMENT === "number" ? bv.BYTES_PER_ELEMENT : 1;
+      if (typeof length === "number" && length > 0) size = length * bpe;
+    }
+    const tag = target === 0x8893 ? "gl.buf.index"
+      : target === 0x8892 ? "gl.buf.vertex"
+      : target === 0x8A11 ? "gl.buf.uniform"
+      : `gl.buf.t${target.toString(16)}`;
+    bump(tag, size, `argc=${args.length}`);
+    return (origBuf as (...a: unknown[]) => void).apply(gl, args);
+  } as unknown as WebGL2RenderingContext["bufferData"];
 
-  const origStore = gl.texStorage2D.bind(gl);
-  (gl as { texStorage2D: WebGL2RenderingContext["texStorage2D"] }).texStorage2D = ((
-    target: number, levels: number, internalformat: number, width: number, height: number,
-  ) => {
+  const origStore = gl.texStorage2D;
+  gl.texStorage2D = function (this: WebGL2RenderingContext, ...args: unknown[]): void {
+    const levels = args[1] as number;
+    const internalformat = args[2] as number;
+    const width = args[3] as number;
+    const height = args[4] as number;
     const { bytes, known } = glTexBytes(internalformat, width, height);
     if (!known) showErr(`[gpu-alloc.gl.tex.unknown] fmt=0x${internalformat.toString(16)} w=${width} h=${height}`);
-    bump("gl.tex.storage", Math.round(bytes * mipPyramidFactor(levels)));
-    return origStore(target, levels, internalformat, width, height);
-  }) as WebGL2RenderingContext["texStorage2D"];
+    bump("gl.tex.storage", Math.round(bytes * mipPyramidFactor(levels)), `fmt=0x${internalformat.toString(16)} ${width}x${height} levels=${levels}`);
+    return (origStore as (...a: unknown[]) => void).apply(gl, args);
+  } as unknown as WebGL2RenderingContext["texStorage2D"];
 
-  const origImg2D = gl.texImage2D.bind(gl);
-  const wrappedImg = function (...args: unknown[]): void {
-    if (args.length >= 5) {
+  const origImg = gl.texImage2D;
+  gl.texImage2D = function (this: WebGL2RenderingContext, ...args: unknown[]): void {
+    let bytes = 0;
+    let detail = `argc=${args.length}`;
+    if (args.length >= 9) {
       const internalformat = args[2] as number;
       const width = args[3] as number;
       const height = args[4] as number;
-      const { bytes } = glTexBytes(internalformat, width, height);
-      if (bytes > 0) bump("gl.tex.image", bytes);
+      const r = glTexBytes(internalformat, width, height);
+      bytes = r.bytes;
+      detail = `9arg fmt=0x${internalformat.toString(16)} ${width}x${height}`;
+    } else if (args.length === 6) {
+      const source = args[5] as { width?: number; height?: number };
+      const internalformat = args[2] as number;
+      const w = source?.width ?? 0;
+      const h = source?.height ?? 0;
+      const r = glTexBytes(internalformat, w, h);
+      bytes = r.bytes;
+      detail = `6arg fmt=0x${internalformat.toString(16)} ${w}x${h}`;
     }
-    return (origImg2D as (...a: unknown[]) => void)(...args);
-  };
-  (gl as unknown as { texImage2D: unknown }).texImage2D = wrappedImg;
+    if (bytes > 0) bump("gl.tex.image", bytes, detail);
+    return (origImg as (...a: unknown[]) => void).apply(gl, args);
+  } as unknown as WebGL2RenderingContext["texImage2D"];
 
-  const origRB = gl.renderbufferStorage.bind(gl);
-  (gl as { renderbufferStorage: WebGL2RenderingContext["renderbufferStorage"] }).renderbufferStorage = ((
-    target: number, internalformat: number, width: number, height: number,
-  ) => {
+  const origRB = gl.renderbufferStorage;
+  gl.renderbufferStorage = function (this: WebGL2RenderingContext, ...args: unknown[]): void {
+    const internalformat = args[1] as number;
+    const width = args[2] as number;
+    const height = args[3] as number;
     const { bytes } = glTexBytes(internalformat, width, height);
-    bump("gl.rb", bytes);
-    return origRB(target, internalformat, width, height);
-  }) as WebGL2RenderingContext["renderbufferStorage"];
+    bump("gl.rb", bytes, `fmt=0x${internalformat.toString(16)} ${width}x${height}`);
+    return (origRB as (...a: unknown[]) => void).apply(gl, args);
+  } as unknown as WebGL2RenderingContext["renderbufferStorage"];
 
-  const origRBMS = gl.renderbufferStorageMultisample.bind(gl);
-  (gl as { renderbufferStorageMultisample: WebGL2RenderingContext["renderbufferStorageMultisample"] }).renderbufferStorageMultisample = ((
-    target: number, samples: number, internalformat: number, width: number, height: number,
-  ) => {
+  const origRBMS = gl.renderbufferStorageMultisample;
+  gl.renderbufferStorageMultisample = function (this: WebGL2RenderingContext, ...args: unknown[]): void {
+    const samples = args[1] as number;
+    const internalformat = args[2] as number;
+    const width = args[3] as number;
+    const height = args[4] as number;
     const { bytes } = glTexBytes(internalformat, width, height);
-    bump("gl.rb.ms", bytes * samples);
-    return origRBMS(target, samples, internalformat, width, height);
-  }) as WebGL2RenderingContext["renderbufferStorageMultisample"];
+    bump("gl.rb.ms", bytes * samples, `fmt=0x${internalformat.toString(16)} ${width}x${height} samples=${samples}`);
+    return (origRBMS as (...a: unknown[]) => void).apply(gl, args);
+  } as unknown as WebGL2RenderingContext["renderbufferStorageMultisample"];
+
+  const origShaderSource = gl.shaderSource;
+  gl.shaderSource = function (this: WebGL2RenderingContext, ...args: unknown[]): void {
+    const src = args[1] as string;
+    const size = typeof src === "string" ? src.length : 0;
+    bump("gl.shader", size, `code_len=${size}`);
+    return (origShaderSource as (...a: unknown[]) => void).apply(gl, args);
+  } as unknown as WebGL2RenderingContext["shaderSource"];
 }
 
 function installWebGL2Probe(): void {
   const orig = HTMLCanvasElement.prototype.getContext;
-  HTMLCanvasElement.prototype.getContext = function (
-    this: HTMLCanvasElement,
-    id: string,
-    opts?: unknown,
-  ): unknown {
-    const ctx = (orig as (id: string, opts?: unknown) => unknown).call(this, id, opts);
-    if (id === "webgl2" && ctx) {
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, ...args: unknown[]): unknown {
+    const ctx = (orig as (...a: unknown[]) => unknown).apply(this, args);
+    if (args[0] === "webgl2" && ctx) {
       wrapWebGL2(ctx as WebGL2RenderingContext);
       showErr("[gpu-alloc] webgl2 context wrapped");
     }
     return ctx;
   } as typeof HTMLCanvasElement.prototype.getContext;
   showErr("[gpu-alloc] webgl2 probe armed");
-}
-
-function fmtMB(bytes: number): string {
-  return `${(bytes / 1_048_576).toFixed(2)}MB`;
 }
 
 function emitSummary(reason: string): void {
@@ -242,13 +271,27 @@ function emitSummary(reason: string): void {
     total += v.bytes;
     entries.push([k, v]);
   }
+  if (entries.length === 0) {
+    showErr(`[gpu-alloc@${t}s ${reason}] total=0.000MB (no allocations yet)`);
+    return;
+  }
   entries.sort((a, b) => b[1].bytes - a[1].bytes);
-  const parts = entries.map(([k, v]) => `${k}=${fmtMB(v.bytes)}/${v.count}`).join(" ");
+  const parts = entries
+    .map(([k, v]) => `${k}=${fmtMB(v.bytes)}/${v.count}`)
+    .join(" ");
+  const pcts = entries
+    .map(([k, v]) => `${k}=${((v.bytes / total) * 100).toFixed(1)}%`)
+    .join(" ");
   showErr(`[gpu-alloc@${t}s ${reason}] total=${fmtMB(total)} · ${parts}`);
+  showErr(`[gpu-alloc@${t}s ${reason} %] ${pcts}`);
 }
 
 export function installGpuAllocProbe(): void {
   installWebGPUProbe();
   installWebGL2Probe();
   window.setInterval(() => emitSummary("tick"), 5000);
+}
+
+export function forceEmitSummary(reason: string): void {
+  emitSummary(reason);
 }

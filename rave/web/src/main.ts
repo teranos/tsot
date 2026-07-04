@@ -105,6 +105,18 @@ try {
   await wasm.default({ module_or_path: wasmBytes });
   showErr("[init] step 10 — wasm instantiated, Bevy owns the canvas");
 
+  const wasmMemory = (wasm as unknown as { memory?: WebAssembly.Memory }).memory;
+  if (wasmMemory) {
+    const logMem = (label: string): void => {
+      const bytes = wasmMemory.buffer.byteLength;
+      showErr(`[wasm-mem${label}] linear=${(bytes / 1_048_576).toFixed(2)}MB`);
+    };
+    logMem(":post-init");
+    window.setInterval(() => logMem(`@${Math.round(performance.now() / 1000)}s`), 5000);
+  } else {
+    showErr("[wasm-mem] no memory export found on wasm module");
+  }
+
   hideLoadingIndicator();
   showErr("[init] step 11 — loading indicator hidden");
 } catch (e) {
