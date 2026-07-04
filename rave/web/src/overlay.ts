@@ -70,6 +70,15 @@ export function showErr(line: string): void {
   } catch {
     /* quota exceeded or storage disabled — line still visible on-screen */
   }
+  // Auto-scroll the document so the latest line is always in the
+  // viewport. Without this, the drawer with max-height:none extends
+  // past the visible viewport and CI screenshots always capture the
+  // TOP of the drawer — never the [mem@Ns] lines that fire later.
+  try {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+  } catch {
+    /* older browsers — behavior:instant unsupported, ignore */
+  }
 }
 
 // Absolute first drawer line — commit + build time, distinct enough
