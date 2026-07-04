@@ -188,12 +188,11 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
                 filter: "wgpu=trace,naga=warn,rave=info,bevy=info".into(),
                 ..default()
             })
-            .disable::<bevy::core_pipeline::oit::OrderIndependentTransparencyPlugin>()
-            .disable::<bevy::pbr::ScreenSpaceAmbientOcclusionPlugin>()
-            .disable::<bevy::pbr::ScreenSpaceReflectionsPlugin>()
-            .disable::<bevy::pbr::ContactShadowsPlugin>()
-            .disable::<bevy::pbr::VolumetricFogPlugin>()
-            .disable::<bevy::pbr::ClusteredDecalPlugin>()
+            // No plugin disables — with default_app stripped from
+            // Cargo.toml, the render/pbr plugins we tried to disable
+            // aren't in the group in the first place, and Bevy's
+            // `.disable::<T>()` panics when T isn't present. Reintroduce
+            // per-plugin after confirming presence in the reduced group.
     );
     js_rave_error("[probe] post-DefaultPlugins");
 
