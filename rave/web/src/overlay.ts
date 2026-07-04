@@ -75,19 +75,27 @@ function scheduleScrollToBottom(): void {
   });
 }
 
+const SESSION_STORAGE_MAX = 1_000_000;
+let sessionStorageBroken = false;
+let approxCharCount = 0;
+
 export function showErr(line: string): void {
-  if (!el) return;
   const stamped = `[+${Math.round(performance.now() - T0)}ms] ${line}\n`;
-  el.textContent = (el.textContent ?? "") + stamped;
   try {
-    sessionStorage.setItem(LOG_STORAGE_KEY, el.textContent ?? "");
+    console.log(stamped.trimEnd());
   } catch {
-    /* quota exceeded or storage disabled — line still visible on-screen */
+    /* ignore */
   }
-  // Auto-scroll is now RAF-throttled — one scroll per animation frame
-  // regardless of how many showErr calls happen. Previous per-call
-  // sync scrollTo blocked the JS main thread during wasm-bindgen
-  // callback chains and stalled Bevy between Startup and PostStartup.
+  if (!el) return;
+  el.appendChild(document.createTextNode(stamped));
+  approxCharCount += stamped.length;
+  if (!sessionStorageBroken && approxCharCount < SESSION_STORAGE_MAX) {
+    try {
+      sessionStorage.setItem(LOG_STORAGE_KEY, el.textContent ?? "");
+    } catch {
+      sessionStorageBroken = true;
+    }
+  }
   scheduleScrollToBottom();
 }
 
