@@ -133,7 +133,7 @@ jobs:
 
   mobile-screenshot:
     needs: build-and-deploy
-    runs-on: macos-26-arm64
+    runs-on: macos-26
     timeout-minutes: 25
     steps:
       - name: Environment inventory
