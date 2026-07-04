@@ -9,6 +9,7 @@ import { installErrorBridges } from "./error-bridge";
 import { installIdentityBridges } from "./identity-bridge";
 import { installScreenshotBridge } from "./screenshot";
 import { streamWasmBytes, hideLoadingIndicator } from "./loading";
+import { installGpuAllocProbe } from "./gpu-alloc";
 
 // `WASM_URL_PLACEHOLDER` is substituted by the rave Makefile after the
 // content-hashed wasm filename is known. Stays as the literal token
@@ -26,6 +27,8 @@ interface RaveWasmExports {
 // init step, so the top of every screenshot self-identifies which
 // bundle is running. No inference from wasm content-hashes required.
 showErr(`[build] wasm=${WASM_URL} glue=${WASM_BINDGEN_JS}`);
+
+installGpuAllocProbe();
 
 // Step-by-step trace so the drawer shows the exact last-successful
 // milestone before any failure — no need to rely on window.onerror
