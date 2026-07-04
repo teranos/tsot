@@ -10,6 +10,7 @@ import { installIdentityBridges } from "./identity-bridge";
 import { installScreenshotBridge } from "./screenshot";
 import { streamWasmBytes, hideLoadingIndicator } from "./loading";
 import { installGpuAllocProbe } from "./gpu-alloc";
+import { installMemGraph } from "./mem-graph";
 
 // `WASM_URL_PLACEHOLDER` is substituted by the rave Makefile after the
 // content-hashed wasm filename is known. Stays as the literal token
@@ -113,8 +114,10 @@ try {
     };
     logMem(":post-init");
     window.setInterval(() => logMem(`@${Math.round(performance.now() / 1000)}s`), 5000);
+    installMemGraph(() => wasmMemory.buffer.byteLength);
   } else {
     showErr("[wasm-mem] no memory export found on wasm module");
+    installMemGraph(() => 0);
   }
 
   hideLoadingIndicator();

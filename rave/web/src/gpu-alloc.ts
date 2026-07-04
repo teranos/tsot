@@ -295,3 +295,9 @@ export function installGpuAllocProbe(): void {
 export function forceEmitSummary(reason: string): void {
   emitSummary(reason);
 }
+
+export function getBucketTotals(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of buckets) out[k] = v.bytes;
+  return out;
+}
