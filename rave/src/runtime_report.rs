@@ -8,10 +8,9 @@
 //! deploy-and-guess. With it, the screenshot itself is the diagnosis.
 //!
 //! Reads render resources that Bevy inserts into the main World during
-//! `RenderPlugin::finish()` (bevy_render 0.19 `settings.rs:195-198`).
-//! By the time Startup fires, those resources are already there — or
-//! they aren't coming at all, which is itself diagnostic and the
-//! report says so.
+//! `RenderPlugin::finish()`. By the time Startup fires, those resources
+//! are already there — or they aren't coming at all, which is itself
+//! diagnostic and the report says so.
 
 use bevy::prelude::*;
 use bevy::render::renderer::{RenderAdapter, RenderAdapterInfo, RenderDevice};
