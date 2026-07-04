@@ -82,6 +82,7 @@ pub fn report(
     error_log: Res<ErrorLog>,
     breakdown: EntityBreakdown,
 ) {
+    crate::js_rave_error("[mem-probe] report system entered");
     state.ticks += 1;
     let now = time.elapsed_secs();
     let first = state.ticks == 1;
