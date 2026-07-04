@@ -43,6 +43,7 @@ pub fn report(
     pipeline_cache: Option<Res<PipelineCache>>,
     error_log: Res<ErrorLog>,
     breakdown: EntityBreakdown,
+    mesh_users: Query<&Mesh3d>,
 ) {
     crate::js_rave_error("[mem-probe] report system entered");
     state.ticks += 1;
@@ -118,14 +119,32 @@ pub fn report(
         .collect::<Vec<_>>()
         .join(", ");
 
+    use std::collections::HashMap;
+    let mut mesh_use_count: HashMap<bevy::asset::AssetId<Mesh>, usize> = HashMap::new();
+    for Mesh3d(handle) in mesh_users.iter() {
+        *mesh_use_count.entry(handle.id()).or_insert(0) += 1;
+    }
     let mut mesh_vertex_bytes: usize = 0;
     let mut mesh_index_bytes: usize = 0;
-    for (_, mesh) in meshes.iter() {
-        mesh_vertex_bytes += mesh.get_vertex_size() as usize * mesh.count_vertices();
-        if let Some(indices) = mesh.indices() {
-            mesh_index_bytes += indices.len() * 4;
-        }
+    let mut per_mesh_lines: Vec<(usize, String)> = Vec::new();
+    for (id, mesh) in meshes.iter() {
+        let vbytes = mesh.get_vertex_size() as usize * mesh.count_vertices();
+        let ibytes = mesh.indices().map(|i| i.len() * 4).unwrap_or(0);
+        mesh_vertex_bytes += vbytes;
+        mesh_index_bytes += ibytes;
+        let users = mesh_use_count.get(&id).copied().unwrap_or(0);
+        let total_kb = (vbytes + ibytes) as f64 / 1024.0;
+        per_mesh_lines.push((
+            vbytes + ibytes,
+            format!(
+                "vcount={} users={} bytes={:.2}KB",
+                mesh.count_vertices(),
+                users,
+                total_kb,
+            ),
+        ));
     }
+    per_mesh_lines.sort_by(|a, b| b.0.cmp(&a.0));
 
     let mut camera_lines: Vec<String> = Vec::new();
     let mut rt_color_actual: usize = 0;
@@ -193,6 +212,9 @@ pub fn report(
         mesh_vertex_bytes as f64 / 1_048_576.0,
         mesh_index_bytes as f64 / 1_048_576.0,
     ));
+    for (_, line) in per_mesh_lines.iter().take(10) {
+        crate::js_rave_error(&format!("[mem@{t}s]     mesh {line}"));
+    }
     for line in &camera_lines {
         crate::js_rave_error(&format!("[mem@{t}s]   camera {line}"));
     }
