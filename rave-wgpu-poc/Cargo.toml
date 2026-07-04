@@ -1,0 +1,57 @@
+[package]
+name = "rave-wgpu-poc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Proof-of-concept: render a minimal slice of the rave world
+# (forest floor + Wang-hash trees + follow camera) with wgpu 29
+# DIRECTLY — no Bevy, no winit. The question this crate exists to
+# answer: does a plain, hand-rolled LDR wgpu scene render on the
+# phone at real device resolution where Bevy-rave goes black, and
+# can ONE wasm binary hold both the WebGPU and WebGL2 backends with
+# runtime selection (Bevy could not — it gates WebGL2 shader defines
+# at compile time and needs two bundles).
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+
+[dependencies]
+# Pinned to the exact wgpu Bevy 0.19 resolves, so it is known to
+# build for wasm32 in this toolchain. `webgpu` + `webgl` in the SAME
+# build is the thing we are testing — if it fails to compile, that is
+# a first-class finding (wgpu would then also need two bundles).
+wgpu = { version = "=29.0.3", default-features = false, features = [
+    "std",
+    "webgpu",
+    "webgl",
+    "wgsl",
+] }
+glam = "=0.32.1"
+bytemuck = { version = "=1.25.0", features = ["derive"] }
+log = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.121"
+wasm-bindgen-futures = "=0.4.71"
+js-sys = "=0.3.98"
+console_error_panic_hook = "=0.1.7"
+console_log = "=1.0.0"
+web-sys = { version = "=0.3.98", features = [
+    "Window",
+    "Location",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlCanvasElement",
+    "Performance",
+    "Navigator",
+    "Gpu",
+    "CssStyleDeclaration",
+] }

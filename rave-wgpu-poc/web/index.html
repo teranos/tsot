@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+    />
+    <title>rave-wgpu-poc</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #02040a;
+        overflow: hidden;
+      }
+      /* Canvas id is #bevy on purpose — the Rust looks it up by that id
+         so this POC is a drop-in for rave's existing page harness. */
+      #bevy {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        touch-action: none;
+      }
+      /* Self-reporting overlay, same spirit as rave's drawer: a still
+         screenshot then carries backend / adapter / resolution / fps. */
+      #status {
+        position: fixed;
+        left: 0;
+        top: 0;
+        right: 0;
+        margin: 0;
+        padding: 6px 10px;
+        font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+        color: #b8f7c8;
+        background: rgba(0, 0, 0, 0.55);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        z-index: 10;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <pre id="status">[poc] loading wasm…</pre>
+    <canvas id="bevy"></canvas>
+    <script type="module">
+      // Size the canvas to the REAL device pixel grid — this is the
+      // whole point: reproduce the 3840x2160 @ dpr=3 target that OOM'd
+      // Bevy-rave, and see whether hand-rolled wgpu survives it.
+      const canvas = document.getElementById("bevy");
+      const dpr = window.devicePixelRatio || 1;
+      function size() {
+        canvas.width = Math.floor(window.innerWidth * dpr);
+        canvas.height = Math.floor(window.innerHeight * dpr);
+      }
+      size();
+
+      const statusEl = document.getElementById("status");
+      window.addEventListener("error", (e) => {
+        statusEl.textContent =
+          "[poc] window.error: " + (e.message || "(muted)") + " @ " + e.filename;
+      });
+      window.addEventListener("unhandledrejection", (e) => {
+        statusEl.textContent = "[poc] promise rejected: " + e.reason;
+      });
+
+      import init from "./rave_wgpu_poc.js";
+      init().catch((err) => {
+        statusEl.textContent = "[poc] init threw: " + err;
+      });
+    </script>
+  </body>
+</html>
