@@ -76,6 +76,15 @@ pub fn report(
         ));
     }
 
+    let rust_used = crate::rave_rust_alloc_bytes();
+    let rust_peak = crate::rave_rust_peak_alloc_bytes();
+    let rust_count = crate::rave_rust_alloc_count();
+    crate::js_rave_error(&format!(
+        "[mem@{t}s] rust-alloc: used={:.2}MB peak={:.2}MB count={rust_count}",
+        rust_used as f64 / 1_048_576.0,
+        rust_peak as f64 / 1_048_576.0,
+    ));
+
     let info = &**adapter_info;
     crate::js_rave_error(&format!(
         "[mem@{t}s] adapter: name={:?} type={:?} backend={:?} vendor=0x{:x} device=0x{:x}",

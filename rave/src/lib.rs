@@ -34,6 +34,63 @@ use wasm_bindgen::prelude::*;
 use bevy_observability::{ErrorLog, PANIC_QUEUE};
 
 #[cfg(target_arch = "wasm32")]
+use std::alloc::{GlobalAlloc, Layout, System};
+#[cfg(target_arch = "wasm32")]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(target_arch = "wasm32")]
+static RUST_ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
+#[cfg(target_arch = "wasm32")]
+static RUST_ALLOC_PEAK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(target_arch = "wasm32")]
+static RUST_ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(target_arch = "wasm32")]
+struct CountingAlloc;
+
+#[cfg(target_arch = "wasm32")]
+unsafe impl GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let n = RUST_ALLOC_BYTES.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
+        RUST_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+        let mut peak = RUST_ALLOC_PEAK.load(Ordering::Relaxed);
+        while n > peak {
+            match RUST_ALLOC_PEAK.compare_exchange_weak(peak, n, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(x) => peak = x,
+            }
+        }
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        RUST_ALLOC_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[global_allocator]
+static GLOBAL: CountingAlloc = CountingAlloc;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn rave_rust_alloc_bytes() -> usize {
+    RUST_ALLOC_BYTES.load(Ordering::Relaxed)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn rave_rust_peak_alloc_bytes() -> usize {
+    RUST_ALLOC_PEAK.load(Ordering::Relaxed)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn rave_rust_alloc_count() -> usize {
+    RUST_ALLOC_COUNT.load(Ordering::Relaxed)
+}
+
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 unsafe extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = "__raveError")]

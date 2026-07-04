@@ -3,25 +3,63 @@ import { showErr } from "./overlay";
 interface Bucket {
   count: number;
   bytes: number;
+  liveBytes: number;
+  liveCount: number;
 }
 
 const buckets = new Map<string, Bucket>();
+const labelBuckets = new Map<string, Bucket>();
+const seenLabels = new Set<string>();
+const prevLabelBytes = new Map<string, number>();
 let firstCallsLogged = 0;
 const FIRST_N_INDIVIDUAL = 30;
 let allocCallsSinceLastSummary = 0;
 
-function bump(key: string, bytes: number, detail: string): void {
-  const b = buckets.get(key) ?? { count: 0, bytes: 0 };
+const bufferSizeMap = new WeakMap<object, { label: string; bytes: number; usageBucket: string }>();
+
+function bump(key: string, bytes: number, detail: string, label: string): void {
+  const b = buckets.get(key) ?? { count: 0, bytes: 0, liveBytes: 0, liveCount: 0 };
   b.count += 1;
   b.bytes += bytes;
+  b.liveBytes += bytes;
+  b.liveCount += 1;
   buckets.set(key, b);
+  const labelKey = label || "-";
+  const lb = labelBuckets.get(labelKey) ?? { count: 0, bytes: 0, liveBytes: 0, liveCount: 0 };
+  lb.count += 1;
+  lb.bytes += bytes;
+  lb.liveBytes += bytes;
+  lb.liveCount += 1;
+  labelBuckets.set(labelKey, lb);
   allocCallsSinceLastSummary += 1;
-  if (firstCallsLogged < FIRST_N_INDIVIDUAL) {
+  const t = Math.round(performance.now());
+  if (!seenLabels.has(labelKey)) {
+    seenLabels.add(labelKey);
+    showErr(`[gpu-alloc.new-label@${t}ms] ${key} label="${labelKey}" ${fmtMB(bytes)}`);
+  }
+  if (bytes >= 1_048_576) {
+    showErr(`[gpu-alloc.large@${t}ms] ${key} ${fmtMB(bytes)} label="${labelKey}" ${detail}`);
+  } else if (firstCallsLogged < FIRST_N_INDIVIDUAL) {
     firstCallsLogged += 1;
-    const t = Math.round(performance.now());
     showErr(`[gpu-alloc.${key}@${t}ms] ${fmtMB(bytes)} ${detail}`);
   }
-  if (allocCallsSinceLastSummary >= 20) emitSummary("burst");
+  if (allocCallsSinceLastSummary >= 100) emitSummary("burst");
+}
+
+function unbump(key: string, bytes: number, label: string): void {
+  const b = buckets.get(key);
+  if (b) {
+    b.liveBytes -= bytes;
+    b.liveCount -= 1;
+    buckets.set(key, b);
+  }
+  const labelKey = label || "-";
+  const lb = labelBuckets.get(labelKey);
+  if (lb) {
+    lb.liveBytes -= bytes;
+    lb.liveCount -= 1;
+    labelBuckets.set(labelKey, lb);
+  }
 }
 
 function fmtMB(bytes: number): string {
@@ -93,22 +131,35 @@ function wrapDevice(device: GPUDevice): void {
 
   (device as { createBuffer: unknown }).createBuffer = function (this: GPUDevice, ...args: unknown[]) {
     const desc = args[0] as GPUBufferDescriptor;
-    bump(wgpuBufferTag(desc.usage), desc.size, `usage=0x${desc.usage.toString(16)} label=${desc.label ?? "-"}`);
-    return (origBuf as (...a: unknown[]) => GPUBuffer).apply(device, args);
+    const label = desc.label ?? "-";
+    const usageBucket = wgpuBufferTag(desc.usage);
+    bump(usageBucket, desc.size, `usage=0x${desc.usage.toString(16)} label=${label}`, label);
+    const buf = (origBuf as (...a: unknown[]) => GPUBuffer).apply(device, args);
+    bufferSizeMap.set(buf as object, { label, bytes: desc.size, usageBucket });
+    const origDestroy = (buf as GPUBuffer).destroy;
+    (buf as { destroy: unknown }).destroy = function (this: GPUBuffer, ...a: unknown[]) {
+      const info = bufferSizeMap.get(this as object);
+      if (info) {
+        unbump(info.usageBucket, info.bytes, info.label);
+        bufferSizeMap.delete(this as object);
+      }
+      return (origDestroy as (...x: unknown[]) => void).apply(this, a);
+    };
+    return buf;
   };
 
   (device as { createTexture: unknown }).createTexture = function (this: GPUDevice, ...args: unknown[]) {
     const desc = args[0] as GPUTextureDescriptor;
     const { bytes, note } = textureBytes(desc);
     if (bytes === 0) showErr(`[gpu-alloc.wgpu.tex.unknown] ${note} label=${desc.label ?? "-"}`);
-    bump(wgpuTextureTag(desc.usage), bytes, `${note} label=${desc.label ?? "-"}`);
+    bump(wgpuTextureTag(desc.usage), bytes, `${note} label=${desc.label ?? "-"}`, desc.label ?? "-");
     return (origTex as (...a: unknown[]) => GPUTexture).apply(device, args);
   };
 
   (device as { createShaderModule: unknown }).createShaderModule = function (this: GPUDevice, ...args: unknown[]) {
     const desc = args[0] as GPUShaderModuleDescriptor;
     const size = desc.code.length;
-    bump("wgpu.shader", size, `label=${desc.label ?? "-"} code_len=${size}`);
+    bump("wgpu.shader", size, `label=${desc.label ?? "-"} code_len=${size}`, desc.label ?? "-");
     return (origShader as (...a: unknown[]) => GPUShaderModule).apply(device, args);
   };
 }
@@ -179,7 +230,7 @@ function wrapWebGL2(gl: WebGL2RenderingContext): void {
       : target === 0x8892 ? "gl.buf.vertex"
       : target === 0x8A11 ? "gl.buf.uniform"
       : `gl.buf.t${target.toString(16)}`;
-    bump(tag, size, `argc=${args.length}`);
+    bump(tag, size, `argc=${args.length}`, `gl.bufferData.t${target.toString(16)}`);
     return (origBuf as (...a: unknown[]) => void).apply(gl, args);
   } as unknown as WebGL2RenderingContext["bufferData"];
 
@@ -191,7 +242,7 @@ function wrapWebGL2(gl: WebGL2RenderingContext): void {
     const height = args[4] as number;
     const { bytes, known } = glTexBytes(internalformat, width, height);
     if (!known) showErr(`[gpu-alloc.gl.tex.unknown] fmt=0x${internalformat.toString(16)} w=${width} h=${height}`);
-    bump("gl.tex.storage", Math.round(bytes * mipPyramidFactor(levels)), `fmt=0x${internalformat.toString(16)} ${width}x${height} levels=${levels}`);
+    bump("gl.tex.storage", Math.round(bytes * mipPyramidFactor(levels)), `fmt=0x${internalformat.toString(16)} ${width}x${height} levels=${levels}`, `gl.texStorage2D.fmt${internalformat.toString(16)}`);
     return (origStore as (...a: unknown[]) => void).apply(gl, args);
   } as unknown as WebGL2RenderingContext["texStorage2D"];
 
@@ -215,7 +266,7 @@ function wrapWebGL2(gl: WebGL2RenderingContext): void {
       bytes = r.bytes;
       detail = `6arg fmt=0x${internalformat.toString(16)} ${w}x${h}`;
     }
-    if (bytes > 0) bump("gl.tex.image", bytes, detail);
+    if (bytes > 0) bump("gl.tex.image", bytes, detail, "gl.texImage2D");
     return (origImg as (...a: unknown[]) => void).apply(gl, args);
   } as unknown as WebGL2RenderingContext["texImage2D"];
 
@@ -225,7 +276,7 @@ function wrapWebGL2(gl: WebGL2RenderingContext): void {
     const width = args[2] as number;
     const height = args[3] as number;
     const { bytes } = glTexBytes(internalformat, width, height);
-    bump("gl.rb", bytes, `fmt=0x${internalformat.toString(16)} ${width}x${height}`);
+    bump("gl.rb", bytes, `fmt=0x${internalformat.toString(16)} ${width}x${height}`, `gl.renderbufferStorage.fmt${internalformat.toString(16)}`);
     return (origRB as (...a: unknown[]) => void).apply(gl, args);
   } as unknown as WebGL2RenderingContext["renderbufferStorage"];
 
@@ -236,7 +287,7 @@ function wrapWebGL2(gl: WebGL2RenderingContext): void {
     const width = args[3] as number;
     const height = args[4] as number;
     const { bytes } = glTexBytes(internalformat, width, height);
-    bump("gl.rb.ms", bytes * samples, `fmt=0x${internalformat.toString(16)} ${width}x${height} samples=${samples}`);
+    bump("gl.rb.ms", bytes * samples, `fmt=0x${internalformat.toString(16)} ${width}x${height} samples=${samples}`, `gl.renderbufferStorageMultisample.fmt${internalformat.toString(16)}`);
     return (origRBMS as (...a: unknown[]) => void).apply(gl, args);
   } as unknown as WebGL2RenderingContext["renderbufferStorageMultisample"];
 
@@ -244,7 +295,7 @@ function wrapWebGL2(gl: WebGL2RenderingContext): void {
   gl.shaderSource = function (this: WebGL2RenderingContext, ...args: unknown[]): void {
     const src = args[1] as string;
     const size = typeof src === "string" ? src.length : 0;
-    bump("gl.shader", size, `code_len=${size}`);
+    bump("gl.shader", size, `code_len=${size}`, "gl.shaderSource");
     return (origShaderSource as (...a: unknown[]) => void).apply(gl, args);
   } as unknown as WebGL2RenderingContext["shaderSource"];
 }
@@ -266,9 +317,11 @@ function emitSummary(reason: string): void {
   allocCallsSinceLastSummary = 0;
   const t = Math.round(performance.now() / 1000);
   let total = 0;
+  let liveTotal = 0;
   const entries: Array<[string, Bucket]> = [];
   for (const [k, v] of buckets) {
     total += v.bytes;
+    liveTotal += v.liveBytes;
     entries.push([k, v]);
   }
   if (entries.length === 0) {
@@ -277,13 +330,29 @@ function emitSummary(reason: string): void {
   }
   entries.sort((a, b) => b[1].bytes - a[1].bytes);
   const parts = entries
-    .map(([k, v]) => `${k}=${fmtMB(v.bytes)}/${v.count}`)
+    .map(([k, v]) => `${k}=${fmtMB(v.bytes)}(live ${fmtMB(v.liveBytes)})/${v.count}(live ${v.liveCount})`)
     .join(" ");
-  const pcts = entries
-    .map(([k, v]) => `${k}=${((v.bytes / total) * 100).toFixed(1)}%`)
-    .join(" ");
-  showErr(`[gpu-alloc@${t}s ${reason}] total=${fmtMB(total)} · ${parts}`);
-  showErr(`[gpu-alloc@${t}s ${reason} %] ${pcts}`);
+  showErr(`[gpu-alloc@${t}s ${reason}] cumulative=${fmtMB(total)} live=${fmtMB(liveTotal)} · ${parts}`);
+
+  const labelEntries: Array<[string, Bucket]> = [];
+  for (const [k, v] of labelBuckets) labelEntries.push([k, v]);
+  labelEntries.sort((a, b) => b[1].bytes - a[1].bytes);
+  const topLabels = labelEntries.slice(0, 15);
+  const topStr = topLabels
+    .map(([k, v]) => `"${k}"=${fmtMB(v.bytes)}(live ${fmtMB(v.liveBytes)})/${v.count}`)
+    .join(" | ");
+  showErr(`[gpu-alloc@${t}s top-labels] ${topStr}`);
+
+  const deltas: Array<{ label: string; delta: number }> = [];
+  for (const [k, v] of labelBuckets) {
+    const prev = prevLabelBytes.get(k) ?? 0;
+    const d = v.bytes - prev;
+    if (d > 0) deltas.push({ label: k, delta: d });
+    prevLabelBytes.set(k, v.bytes);
+  }
+  deltas.sort((a, b) => b.delta - a.delta);
+  const deltaStr = deltas.slice(0, 10).map(d => `"${d.label}"+${fmtMB(d.delta)}`).join(" ");
+  showErr(`[gpu-alloc@${t}s delta-labels-since-last] ${deltaStr || "(none)"}`);
 }
 
 export function installGpuAllocProbe(): void {
