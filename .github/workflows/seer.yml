@@ -49,6 +49,9 @@ jobs:
 
       - name: Build seer-native
         working-directory: seer
+        env:
+          SEER_BUILD_COMMIT: ${{ github.sha }}
+          SEER_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
         run: cargo build --release --bin seer-native
 
       - name: Run seer-native
@@ -105,6 +108,9 @@ jobs:
 
       - name: Build seer.wasm
         working-directory: seer
+        env:
+          SEER_BUILD_COMMIT: ${{ github.sha }}
+          SEER_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
         run: cargo build --release --lib --target wasm32-unknown-unknown
 
       - name: Build seer-host

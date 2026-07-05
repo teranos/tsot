@@ -11,6 +11,7 @@
 // host that observes the wasm boundary. Bevy plugs into this spine in
 // the next commit; wgpu wrapper the one after; game logic after that.
 
+pub mod build_info;
 pub mod obs;
 pub mod physics;
 pub mod room;
@@ -85,6 +86,11 @@ fn frame_budget() -> u32 {
 }
 
 fn setup(mut commands: Commands) {
+    obs::emit(&format!(
+        "[seer.build_info] commit={} built_at={}",
+        build_info::COMMIT,
+        build_info::BUILT_AT
+    ));
     obs::emit("[bevy.setup] Startup schedule running");
     commands.insert_resource(FrameCount::default());
     commands.insert_resource(Retained::default());
