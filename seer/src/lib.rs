@@ -13,6 +13,9 @@
 
 pub mod obs;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gpu;
+
 #[global_allocator]
 static ALLOC: obs::InstrumentedAlloc = obs::InstrumentedAlloc;
 
@@ -125,6 +128,81 @@ fn _run() {
     for _ in 0..FRAMES {
         app.update();
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    native_wgpu_demo();
+
     obs::emit("[seer.done] final report:");
     obs::dump_report();
+    obs::dump_gpu_inventory();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_wgpu_demo() {
+    obs::emit("[gpu.native] initializing wgpu instance");
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::PRIMARY,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+
+    let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    })) {
+        Ok(a) => a,
+        Err(e) => {
+            obs::emit(&format!(
+                "[gpu.native] no adapter available: {e:?} — skipping real wgpu demo"
+            ));
+            return;
+        }
+    };
+    let info = adapter.get_info();
+    obs::emit(&format!(
+        "[gpu.native] adapter name={:?} backend={:?} device_type={:?}",
+        info.name, info.backend, info.device_type,
+    ));
+
+    let (device, _queue) = match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("seer-native-device"),
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits::downlevel_defaults(),
+        memory_hints: wgpu::MemoryHints::default(),
+        experimental_features: wgpu::ExperimentalFeatures::default(),
+        trace: wgpu::Trace::Off,
+    })) {
+        Ok(d) => d,
+        Err(e) => {
+            obs::emit(&format!(
+                "[gpu.native] request_device failed: {e:?} — skipping"
+            ));
+            return;
+        }
+    };
+
+    let dev = gpu::SeerDevice::new(device);
+    obs::emit("[gpu.native] SeerDevice ready — allocating real wgpu buffers");
+
+    let mut churned: Vec<gpu::SeerBuffer> = Vec::new();
+    for i in 0..5 {
+        let size = 128 * 1024 * (i + 1);
+        let label = format!("seer-native-demo-{i}");
+        let buf = dev.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&label),
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        churned.push(buf);
+    }
+    obs::emit(&format!(
+        "[gpu.native] created {} real wgpu buffers — inventory:",
+        churned.len()
+    ));
+    obs::dump_gpu_inventory();
+
+    drop(churned);
+    obs::emit("[gpu.native] dropped all real buffers — SeerBuffer::drop should have emitted destroyed events:");
+    obs::dump_gpu_inventory();
 }
