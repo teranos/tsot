@@ -1,15 +1,16 @@
 name: seer-browser
 
-# Browser deploy build for seer. Compiles the same seer.wasm that
-# seer-host runs under wasmtime, packages it alongside a small HTML +
-# JS bootstrap that provides the three env.* imports the wasm expects.
+# Browser deploy for seer. Builds the same seer.wasm that seer-host
+# runs under wasmtime, packages it alongside a small HTML + JS
+# bootstrap that provides the three env.* imports, then syncs to S3
+# behind CloudFront at https://seer.sbvh.nl/.
 #
 # No wasm-bindgen, no bundler, no npm. The dist is: seer.wasm +
 # index.html. That's the whole surface.
 #
-# For now uploads as a CI artifact; wiring an S3 deploy comes later
-# when the bucket + IAM role exist (mirroring deploy-rave.yml's
-# pattern).
+# Also uploads any per-commit perf report artifact that the seer.yml
+# workflow produced for this SHA, so https://seer.sbvh.nl/perf/<sha>/
+# resolves to the diagnostic HTML from the same commit.
 
 on:
   push:
@@ -19,8 +20,24 @@ on:
       - '.github/workflows/seer-browser.yml'
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: seer-browser
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: eu-central-1
+  STATIC_BUCKET: seer-sbvh-static
+  # Set by `terraform apply` — see infra/seer.tf output `seer_distribution_id`.
+  # Hardcode after the first apply, same pattern as deploy-rave.yml.
+  STATIC_DISTRIBUTION_ID: ${{ vars.SEER_DISTRIBUTION_ID }}
+  DEPLOY_ROLE_ARN: arn:aws:iam::548351057127:role/seer-github-deploy
+
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -46,20 +63,61 @@ jobs:
           echo "== wasm size =="
           wc -c dist/seer.wasm
 
-      - name: Upload dist
+      - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
           name: seer-browser-${{ github.sha }}
           path: dist/
           retention-days: 30
 
+      - name: Assume deploy role
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync dist to S3
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        run: |
+          # seer.wasm can cache forever — its content changes ->
+          # different bytes but same filename. Reasonable to bust the
+          # cache manually via CloudFront invalidation on new deploy.
+          aws s3 sync dist/ "s3://${{ env.STATIC_BUCKET }}/" \
+            --delete \
+            --exclude "perf/*" \
+            --cache-control "public, max-age=300"
+          # index.html: no-store — always fetch fresh so a new bundle
+          # is picked up on next tab reload.
+          aws s3 cp dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
+            --cache-control "no-store, no-cache, must-revalidate" \
+            --content-type "text/html; charset=utf-8"
+
+      - name: Invalidate CloudFront
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        run: |
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
+            --paths '/index.html' '/seer.wasm' \
+            --query 'Invalidation.Id' \
+            --output text)
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
+            --id "$INVALIDATION_ID"
+
       - name: Summarize
         run: |
           {
-            echo "## seer-browser dist"
+            echo "## seer-browser"
             echo ""
-            echo "Download \`seer-browser-${{ github.sha }}\` and serve"
-            echo "\`dist/\` behind any static server; open index.html."
+            if [ -n "${{ env.STATIC_DISTRIBUTION_ID }}" ]; then
+              echo "- Live at: https://seer.sbvh.nl/"
+            else
+              echo "- SEER_DISTRIBUTION_ID not set → skipped S3 deploy."
+              echo "- Run \`terraform apply\` in \`infra/\`, then set the"
+              echo "  \`SEER_DISTRIBUTION_ID\` repo variable to the value"
+              echo "  from \`seer_distribution_id\` output."
+            fi
             echo ""
-            echo "Same seer.wasm the seer-host job runs under wasmtime."
+            echo "- Artifact: \`seer-browser-${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

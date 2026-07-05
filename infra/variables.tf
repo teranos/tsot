@@ -28,3 +28,15 @@ variable "rave_bucket_name" {
   default     = "rave-sbvh-static"
 }
 
+variable "seer_subdomain" {
+  description = "Subdomain serving seer's wasm bundle + per-commit perf reports through CloudFront."
+  type        = string
+  default     = "seer"
+}
+
+variable "seer_bucket_name" {
+  description = "S3 bucket name for seer's dist/ + perf reports. Global namespace; pick something unique."
+  type        = string
+  default     = "seer-sbvh-static"
+}
+
