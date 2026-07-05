@@ -12,6 +12,7 @@
 // the next commit; wgpu wrapper the one after; game logic after that.
 
 pub mod build_info;
+pub mod error;
 pub mod obs;
 pub mod physics;
 pub mod room;
@@ -99,6 +100,19 @@ fn setup(mut commands: Commands) {
     obs::emit(&format!(
         "[seer.setup] created shader id={sid} for demo — stays live forever"
     ));
+
+    // Demonstrate the sacred-error bus is live: emit one Info-severity
+    // record at startup so the report has evidence the drain path
+    // works even in the no-real-errors baseline case.
+    error::emit_region(
+        error::Severity::Info,
+        "seer.setup",
+        "seer booted",
+        format!(
+            "commit={} — sacred-error bus armed",
+            build_info::COMMIT
+        ),
+    );
 
     // Ported from rave: spawn a player + 5 static obstacles that the
     // resolve_collisions system iterates every frame. Real ECS query
@@ -190,6 +204,15 @@ fn tick(
         ));
         obs::dump_report();
         obs::dump_gpu_inventory();
+
+        // Drain any sacred-errors captured this window onto the obs
+        // bus. Axiom: never swallow. No-op if nothing pushed.
+        for e in error::drain() {
+            obs::emit(&format!(
+                "[seer.error id={} sev={:?} region={:?}] {} — {}",
+                e.id, e.severity, e.context.region, e.title, e.why
+            ));
+        }
     }
 }
 
