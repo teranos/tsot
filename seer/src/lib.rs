@@ -254,7 +254,7 @@ fn native_wgpu_demo() {
         info.name, info.backend, info.device_type,
     ));
 
-    let (device, _queue) = match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+    let (device, _queue): (wgpu::Device, wgpu::Queue) = match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("seer-native-device"),
         required_features: wgpu::Features::empty(),
         required_limits: wgpu::Limits::downlevel_defaults(),
@@ -293,6 +293,179 @@ fn native_wgpu_demo() {
     obs::dump_gpu_inventory();
 
     drop(churned);
-    obs::emit("[gpu.native] dropped all real buffers — SeerBuffer::drop should have emitted destroyed events:");
+    obs::emit(
+        "[gpu.native] dropped all real buffers — SeerBuffer::drop should have emitted destroyed events:",
+    );
     obs::dump_gpu_inventory();
+
+    // Real render: draw a triangle to a 512x512 texture, read back,
+    // encode PNG. Proves the render path end-to-end + gives the CI
+    // report a visible artifact.
+    if let Ok(out_path) = std::env::var("SEER_FRAME_PATH") {
+        match render_triangle_png(dev.wgpu(), &_queue, &out_path) {
+            Ok(_) => obs::emit(&format!("[gpu.native] rendered frame to {out_path}")),
+            Err(e) => obs::emit(&format!("[gpu.native] render failed: {e}")),
+        }
+    } else {
+        obs::emit("[gpu.native] SEER_FRAME_PATH not set — skipping PNG render");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const TRIANGLE_WGSL: &str = r#"
+struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) col: vec3<f32> };
+
+@vertex
+fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {
+    var o: VSOut;
+    let a = f32(i) * 2.09439 + 1.5708;
+    o.pos = vec4<f32>(sin(a) * 0.75, cos(a) * 0.75, 0.0, 1.0);
+    o.col = vec3<f32>(
+        select(0.15, 0.85, i == 0u),
+        select(0.15, 0.85, i == 1u),
+        select(0.55, 0.95, i == 2u),
+    );
+    return o;
+}
+
+@fragment
+fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(in.col, 1.0);
+}
+"#;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn render_triangle_png(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    out_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let size = 512u32;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("seer.render-target"),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("seer.triangle-shader"),
+        source: wgpu::ShaderSource::Wgsl(TRIANGLE_WGSL.into()),
+    });
+
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("seer.triangle-pipeline"),
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
+    let bytes_per_row = size * 4;
+    let staging_size = (bytes_per_row * size) as u64;
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render-readback"),
+        size: staging_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("seer.render-encoder"),
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("seer.render-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.040,
+                        g: 0.055,
+                        b: 0.075,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.draw(0..3, 0..1);
+    }
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(size),
+            },
+        },
+        wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    device.poll(wgpu::PollType::wait_indefinitely())?;
+    let _ = rx.recv();
+
+    let pixels: Vec<u8> = staging.slice(..).get_mapped_range().to_vec();
+    staging.unmap();
+
+    let file = std::fs::File::create(out_path)?;
+    let bw = std::io::BufWriter::new(file);
+    let mut encoder = png::Encoder::new(bw, size, size);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(&pixels)?;
+    Ok(())
 }

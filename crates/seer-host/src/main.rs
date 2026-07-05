@@ -456,6 +456,18 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
     }
 
     let sha = std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local".to_string());
+    let short_sha: String = sha.chars().take(7).collect();
+    let repo = std::env::var("GITHUB_REPOSITORY").unwrap_or_else(|_| "teranos/tsot".to_string());
+    let branch = std::env::var("GITHUB_REF_NAME").unwrap_or_default();
+    let commit_url = format!("https://github.com/{repo}/commit/{sha}");
+    let sha_link = format!(
+        r#"<a href="{commit_url}" title="{sha}">{short_sha}</a>"#,
+    );
+    let branch_html = if branch.is_empty() {
+        String::new()
+    } else {
+        format!(" · branch: <code>{branch}</code>")
+    };
     let build_ts = std::env::var("GITHUB_RUN_STARTED_AT")
         .unwrap_or_else(|_| chrono_like_now());
 
@@ -536,8 +548,11 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
 </head><body>
   <h1>seer diagnostic report</h1>
   <div class="banner">
-    build: <code>{sha}</code> · started: <code>{build_ts}</code> · metrics: <code>{n}</code> frames · last frame: <code>{last_frame}</code> · leak: <code>{leak_str}</code>
+    commit: {sha_link}{branch_html} · started: <code>{build_ts}</code> · metrics: <code>{n}</code> frames · last frame: <code>{last_frame}</code> · leak: <code>{leak_str}</code>
   </div>
+
+  <h2>Rendered scene</h2>
+  <div class="banner"><img src="frame.png" alt="rendered scene from seer-native this commit" style="max-width: 512px; border-radius: 4px; display: block;" onerror="this.replaceWith(Object.assign(document.createElement('span'),{{textContent:'frame.png not uploaded yet',className:'delta'}}));" /></div>
 
   <h2>Recent runs</h2>
   {history_html}
@@ -571,7 +586,8 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
   {bt_html}
 </body></html>
 "##,
-        sha = sha,
+        sha_link = sha_link,
+        branch_html = branch_html,
         build_ts = build_ts,
         n = n,
         leak_str = if current.leak_enabled { "ON" } else { "off" },

@@ -56,9 +56,33 @@ jobs:
         env:
           RUST_BACKTRACE: full
           SEER_FRAMES: '180'
+          SEER_FRAME_PATH: out/frame.png
         run: |
           mkdir -p out
           cargo run --release --bin seer-native 2>&1 | tee out/seer-native.log
+          ls -la out/
+
+      - name: Assume deploy role
+        if: success() && vars.SEER_DISTRIBUTION_ID != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::548351057127:role/seer-github-deploy
+          aws-region: eu-central-1
+
+      - name: Upload frame.png to S3
+        if: success() && vars.SEER_DISTRIBUTION_ID != ''
+        run: |
+          if [ -f seer/out/frame.png ]; then
+            for prefix in "perf/${{ github.sha }}" "perf/latest"; do
+              aws s3 cp seer/out/frame.png "s3://seer-sbvh-static/$prefix/frame.png" \
+                --cache-control "public, max-age=300" \
+                --content-type "image/png"
+            done
+            aws cloudfront create-invalidation \
+              --distribution-id "${{ vars.SEER_DISTRIBUTION_ID }}" \
+              --paths '/perf/latest/frame.png' \
+              --query 'Invalidation.Id' --output text
+          fi
 
       - name: Upload native log
         if: always()

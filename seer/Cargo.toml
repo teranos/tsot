@@ -34,3 +34,4 @@ bevy_math = "=0.19.0"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wgpu = { version = "=29.0.3", default-features = false, features = ["wgsl", "metal", "vulkan"] }
 pollster = "=0.4.0"
+png = "=0.17.16"
