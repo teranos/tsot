@@ -293,11 +293,11 @@ pub fn render_html_report(
         )
     };
 
-    // Rendered scene gallery — the last N runs' frame.png images, oldest
-    // on the left (start of the slice), newest on the right (current
-    // run). Frame URL is derived from each history entry's report_url
-    // by swapping /report.html → /frame.png. Grid uses auto-fit so the
-    // row adapts to screen width — 4 cols wide, 2-3 narrow.
+    // Commit cards — each is the full outcome of one commit: frame,
+    // sha, verdict, all three deltas, CI run link, seer-host duration,
+    // leak flag. Oldest-left, newest-right, current outlined. This
+    // section supersedes the old "Recent runs" table and "Before/After"
+    // pair — one canonical, data-dense per-commit view.
     const FRAME_GALLERY_MAX: usize = 6;
     let recent: &[RunSummary] = if history.len() > FRAME_GALLERY_MAX {
         &history[history.len() - FRAME_GALLERY_MAX..]
@@ -309,13 +309,41 @@ pub fn render_html_report(
         let frame_url = h.report_url.replace("/report.html", "/frame.png");
         let is_current = h.sha == current.sha && h.when_unix == current.when_unix;
         let cls = if is_current { " current-frame" } else { "" };
-        let label = if is_current {
-            format!("<strong>{}</strong>", h.sha)
+        let verdict_tag = if h.verdict_passed {
+            r#"<span class="verdict-tag pass">PASS</span>"#
         } else {
-            h.sha.clone()
+            r#"<span class="verdict-tag fail">FAIL</span>"#
         };
+        let ci_bit = if h.ci_run_url.is_empty() {
+            String::new()
+        } else {
+            format!(r#"<a href="{}">CI</a>"#, h.ci_run_url)
+        };
+        let dur_bit = if h.duration_secs > 0 {
+            format!(r#"<span>{}</span>"#, fmt_duration(h.duration_secs))
+        } else {
+            String::new()
+        };
+        let leak_bit = if h.leak_enabled {
+            r#"<span class="tag-leak">leak</span>"#
+        } else {
+            ""
+        };
+        // Absolute levels — the current values, not deltas.
+        let heap_abs = format!(
+            r#"heap: {:.2} MB <span class="delta">({})</span>"#,
+            h.heap_end_mb,
+            fmt_delta_mb(h.d_heap_mb)
+        );
+        let gpu_abs = format!(
+            r#"gpu: {} · {:.2} MB <span class="delta">({} · {})</span>"#,
+            h.gpu_live_end,
+            h.gpu_bytes_end_mb,
+            fmt_delta_count(h.d_gpu_live),
+            fmt_delta_mb(h.d_gpu_bytes_mb)
+        );
         frame_gallery_html.push_str(&format!(
-            r#"<div class="frame-cell{cls}"><a href="{report}"><img src="{frame}" alt="frame from {sha}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{{textContent:'no frame',className:'delta'}}));" /></a><span class="frame-label"><a href="{report}">{label}</a></span></div>"#,
+            r#"<div class="commit-card{cls}"><a href="{report}"><img src="{frame}" alt="frame from {sha}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{{textContent:'no frame',className:'delta'}}));" /></a><div class="card-body"><div class="card-row header"><a class="sha" href="{report}">{sha}</a>{verdict_tag}</div><div class="card-row">{heap_abs}</div><div class="card-row">{gpu_abs}</div><div class="card-row footer">{ci_bit}{dur_bit}{leak_bit}</div></div></div>"#,
             report = h.report_url,
             frame = frame_url,
             sha = h.sha,
@@ -323,7 +351,7 @@ pub fn render_html_report(
     }
     if frame_gallery_html.is_empty() {
         frame_gallery_html.push_str(
-            r#"<div class="banner">No frames in history yet.</div>"#,
+            r#"<div class="banner">No commit history yet.</div>"#,
         );
     }
 
@@ -391,11 +419,19 @@ pub fn render_html_report(
   tr.current td:first-child {{ color: var(--accent); font-weight: bold; }}
   a {{ color: var(--accent); text-decoration: none; }}
   a:hover {{ text-decoration: underline; }}
-  .frame-row {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 8px 0; }}
-  .frame-cell {{ background: var(--panel); padding: 10px; border-radius: 4px; }}
-  .frame-cell img {{ width: 100%; height: auto; display: block; border-radius: 3px; }}
-  .frame-cell .frame-label {{ display: block; text-align: center; margin-top: 6px; font-size: 11px; color: var(--dim); }}
-  .frame-cell.current-frame {{ outline: 2px solid var(--accent); }}
+  .frame-row {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 8px 0; }}
+  .commit-card {{ background: var(--panel); padding: 10px; border-radius: 4px; display: flex; flex-direction: column; gap: 6px; }}
+  .commit-card img {{ width: 100%; height: auto; display: block; border-radius: 3px; }}
+  .commit-card.current-frame {{ outline: 2px solid var(--accent); }}
+  .card-body {{ font-size: 12px; display: flex; flex-direction: column; gap: 3px; }}
+  .card-row {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; }}
+  .card-row.header {{ font-size: 13px; }}
+  .card-row.footer {{ color: var(--dim); font-size: 11px; gap: 12px; justify-content: flex-start; }}
+  .verdict-tag {{ font-size: 10px; padding: 2px 6px; border-radius: 3px; letter-spacing: 0.06em; }}
+  .verdict-tag.pass {{ background: rgba(34, 197, 94, 0.14); color: var(--down); }}
+  .verdict-tag.fail {{ background: rgba(248, 113, 113, 0.14); color: var(--up); }}
+  .tag-leak {{ font-size: 10px; padding: 2px 6px; border-radius: 3px; background: rgba(234, 179, 8, 0.14); color: var(--accent3); }}
+  .sha {{ font-weight: 600; }}
   svg {{ display: block; background: var(--panel); border-radius: 4px; margin: 8px 0; }}
   .legend {{ display: flex; gap: 20px; font-size: 12px; margin: 4px 0 12px 0; }}
   .swatch {{ display: inline-block; width: 12px; height: 3px; margin-right: 6px; vertical-align: middle; }}
@@ -411,16 +447,10 @@ pub fn render_html_report(
     commit: {sha_link}{branch_html}{ci_banner} · started: <code>{build_ts}</code> · metrics: <code>{n}</code> frames · last frame: <code>{last_frame}</code> · leak: <code>{leak_str}</code>
   </div>
 
-  <h2>Rendered scene (older → newer)</h2>
+  <h2>Commit history (older → newer)</h2>
   <div class="frame-row">
     {frame_gallery_html}
   </div>
-
-  <h2>Recent runs</h2>
-  {history_html}
-
-  <h2>Before / After</h2>
-  {before_after_html}
 
   <h2>Time series (each series normalised to its own max)</h2>
   <div class="legend">
@@ -484,6 +514,11 @@ pub fn render_html_report(
         gpu_stacks_html = gpu_stacks_html,
         bt_html = bt_html,
     );
+
+    // Silence unused-variable warnings for state we no longer render
+    // (Before/After + Recent runs replaced by commit cards).
+    let _ = before_after_html;
+    let _ = history_html;
 
     std::fs::write(path, html)?;
     Ok(())
