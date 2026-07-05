@@ -12,6 +12,7 @@
 // the next commit; wgpu wrapper the one after; game logic after that.
 
 pub mod obs;
+pub mod physics;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gpu;
@@ -44,6 +45,10 @@ pub fn run() {
 
 use bevy_app::{App, Startup, Update};
 use bevy_ecs::prelude::*;
+use bevy_ecs::schedule::IntoScheduleConfigs;
+use bevy_math::Vec3;
+
+use physics::{AabbCollider, PlayerMarker, Position, Velocity};
 
 #[derive(Resource, Default)]
 struct FrameCount(u32);
@@ -67,11 +72,37 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(FrameCount::default());
     commands.insert_resource(Retained::default());
     commands.insert_resource(GpuHandles::default());
-    // Simulated one-time shader compile at startup.
     let sid = obs::shader_created(4096, "seer.pbr");
     obs::emit(&format!(
         "[seer.setup] created shader id={sid} for demo — stays live forever"
     ));
+
+    // Ported from rave: spawn a player + 5 static obstacles that the
+    // resolve_collisions system iterates every frame. Real ECS query
+    // pattern with With<PlayerMarker> / Without<PlayerMarker> filters.
+    commands.spawn((
+        PlayerMarker,
+        Position(Vec3::new(0.0, 0.0, 0.0)),
+        Velocity(Vec3::new(1.5, 0.0, 0.7)),
+    ));
+    for (i, offset) in [
+        Vec3::new(80.0, 0.0, 0.0),
+        Vec3::new(-80.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 80.0),
+        Vec3::new(0.0, 0.0, -80.0),
+        Vec3::new(40.0, 0.0, 40.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        commands.spawn((
+            Position(offset),
+            AabbCollider::cuboid(Vec3::new(30.0, 40.0, 30.0)),
+        ));
+        obs::emit(&format!(
+            "[seer.setup] spawned obstacle {i} at {offset:?}"
+        ));
+    }
 }
 
 fn tick(
@@ -119,11 +150,33 @@ fn tick(
     }
 }
 
+fn report_player_pos(
+    frame: Res<FrameCount>,
+    q: Query<&Position, With<PlayerMarker>>,
+) {
+    if !frame.0.is_multiple_of(REPORT_EVERY) {
+        return;
+    }
+    if let Ok(p) = q.single() {
+        obs::emit(&format!(
+            "[physics.player] frame={} pos=({:.2}, {:.2}, {:.2})",
+            frame.0, p.0.x, p.0.y, p.0.z
+        ));
+    }
+}
+
 fn _run() {
     obs::emit("[seer.boot] entering run()");
     let mut app = App::new();
-    app.add_systems(Startup, setup)
-        .add_systems(Update, tick);
+    app.add_systems(Startup, setup).add_systems(
+        Update,
+        (
+            physics::advance_player,
+            physics::resolve_collisions.after(physics::advance_player),
+            tick.after(physics::resolve_collisions),
+            report_player_pos.after(tick),
+        ),
+    );
     obs::emit("[seer.boot] Bevy App built, entering update loop");
     for _ in 0..FRAMES {
         app.update();

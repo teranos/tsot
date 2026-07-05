@@ -25,6 +25,7 @@ debug = 1
 [dependencies]
 bevy_app = "=0.19.0"
 bevy_ecs = "=0.19.0"
+bevy_math = "=0.19.0"
 
 # Native-only. wgpu on wasm-in-browser requires wasm-bindgen glue we
 # haven't wired yet; wgpu under wasmtime has no host anyway — the
