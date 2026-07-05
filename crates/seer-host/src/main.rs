@@ -301,11 +301,8 @@ fn main() -> Result<()> {
 
     // Write single-run summary JSON.
     if let Ok(out_path) = std::env::var("SEER_SUMMARY_OUT_PATH") {
-        match serde_json::to_string_pretty(&summary) {
-            Ok(s) => {
-                let _ = std::fs::write(&out_path, s);
-            }
-            Err(_) => {}
+        if let Ok(s) = serde_json::to_string_pretty(&summary) {
+            let _ = std::fs::write(&out_path, s);
         }
     }
 
