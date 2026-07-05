@@ -36,7 +36,9 @@ use bevy_observability::{ErrorLog, PANIC_QUEUE};
 #[cfg(target_arch = "wasm32")]
 use std::alloc::{GlobalAlloc, Layout, System};
 #[cfg(target_arch = "wasm32")]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+#[cfg(target_arch = "wasm32")]
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[cfg(target_arch = "wasm32")]
 static RUST_ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -45,20 +47,73 @@ static RUST_ALLOC_PEAK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(target_arch = "wasm32")]
 static RUST_ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+// Per-large-allocation attribution: on every heap alloc >= 1 MB we
+// capture the wasm-side JS stack (via `new Error().stack`), which
+// resolves to Rust identifiers thanks to the wasm name section preserved
+// by wasm-bindgen. Rust's own `std::backtrace::Backtrace::force_capture`
+// returns "disabled" on wasm32-unknown-unknown without unwind support, so
+// the JS-Error route is the reliable stack source from inside the wasm.
+//
+// Reentrancy guard: if the capture itself triggers a >= 1 MB allocation,
+// the swap-guard makes the inner call skip its own capture, preventing
+// unbounded recursion. Small inner allocations (JsValue wrappers, String
+// growth) go through the normal aggregate-counter path with no guard.
+//
+// WASM_BINDGEN_READY: js_sys::Error::new is a JS boundary call. Before
+// the wasm-bindgen `start` fn runs, that import table isn't wired.
+// Setting the flag first thing inside `run()` gates capture until then.
+#[cfg(target_arch = "wasm32")]
+static IN_HEAVY_ALLOC: AtomicBool = AtomicBool::new(false);
+#[cfg(target_arch = "wasm32")]
+static WASM_BINDGEN_READY: AtomicBool = AtomicBool::new(false);
+#[cfg(target_arch = "wasm32")]
+static ALLOC_HOTSPOTS: Mutex<Vec<AllocRecord>> = Mutex::new(Vec::new());
+#[cfg(target_arch = "wasm32")]
+const HOTSPOT_SIZE_THRESHOLD: usize = 65_536;
+#[cfg(target_arch = "wasm32")]
+const HOTSPOT_CAPACITY: usize = 128;
+
+#[cfg(target_arch = "wasm32")]
+struct AllocRecord {
+    size: usize,
+    align: usize,
+    seq: usize,
+    stack: String,
+}
+
 #[cfg(target_arch = "wasm32")]
 struct CountingAlloc;
 
 #[cfg(target_arch = "wasm32")]
 unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let n = RUST_ALLOC_BYTES.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
-        RUST_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+        let size = layout.size();
+        let n = RUST_ALLOC_BYTES.fetch_add(size, Ordering::Relaxed) + size;
+        let seq = RUST_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         let mut peak = RUST_ALLOC_PEAK.load(Ordering::Relaxed);
         while n > peak {
             match RUST_ALLOC_PEAK.compare_exchange_weak(peak, n, Ordering::Relaxed, Ordering::Relaxed) {
                 Ok(_) => break,
                 Err(x) => peak = x,
             }
+        }
+        if size >= HOTSPOT_SIZE_THRESHOLD
+            && WASM_BINDGEN_READY.load(Ordering::Relaxed)
+            && !IN_HEAVY_ALLOC.swap(true, Ordering::Relaxed)
+        {
+            let err = js_sys::Error::new("__rave-alloc-stack__");
+            let stack = js_sys::Reflect::get(&err, &wasm_bindgen::JsValue::from_str("stack"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
+            let rec = AllocRecord { size, align: layout.align(), seq, stack };
+            if let Ok(mut hs) = ALLOC_HOTSPOTS.lock() {
+                if hs.len() >= HOTSPOT_CAPACITY {
+                    hs.remove(0);
+                }
+                hs.push(rec);
+            }
+            IN_HEAVY_ALLOC.store(false, Ordering::Relaxed);
         }
         unsafe { System.alloc(layout) }
     }
@@ -97,6 +152,52 @@ pub fn rave_crash_with_leak_report(report: &str) {
 }
 
 #[cfg(target_arch = "wasm32")]
+fn dump_alloc_hotspots() {
+    let hs = match ALLOC_HOTSPOTS.lock() {
+        Ok(hs) => hs,
+        Err(_) => {
+            js_rave_error("[alloc-hotspots] mutex poisoned");
+            return;
+        }
+    };
+    if hs.is_empty() {
+        js_rave_error("[alloc-hotspots] (none captured — no allocations above 1 MB threshold since last dump)");
+        return;
+    }
+    let mut sorted: Vec<&AllocRecord> = hs.iter().collect();
+    sorted.sort_by(|a, b| b.size.cmp(&a.size));
+    let top_n = sorted.len().min(20);
+    js_rave_error(&format!(
+        "[alloc-hotspots] captured={} live_in_ring={} — top {top_n} by size:",
+        RUST_ALLOC_COUNT.load(Ordering::Relaxed),
+        hs.len(),
+    ));
+    for r in sorted.iter().take(top_n) {
+        let mb = r.size as f64 / 1_048_576.0;
+        js_rave_error(&format!(
+            "[alloc-hotspot] seq={} size={mb:.2}MB align={} stack:\n{}",
+            r.seq, r.align, r.stack
+        ));
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn rave_dump_alloc_hotspots() {
+    dump_alloc_hotspots();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn tick_alloc_hotspots(time: Res<Time>, mut last_secs: Local<f32>) {
+    let now = time.elapsed_secs();
+    if now - *last_secs < 15.0 {
+        return;
+    }
+    *last_secs = now;
+    dump_alloc_hotspots();
+}
+
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 unsafe extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = "__raveError")]
@@ -126,6 +227,8 @@ pub const CHAT_TOPIC: &str = "rave-chat/v1";
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
+    #[cfg(target_arch = "wasm32")]
+    WASM_BINDGEN_READY.store(true, Ordering::Relaxed);
     js_rave_error(&format!(
         "[build_info] commit={} built_at={}",
         build_info::COMMIT,
@@ -336,6 +439,9 @@ fn build_and_run_app(_identity_bytes: Option<Vec<u8>>) {
 
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, memory_report::report);
+
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(Update, tick_alloc_hotspots);
 
     // Also run memory_report on PostStartup — if the Update schedule
     // hangs (which happened on some iPhone Sim runs) but PostStartup

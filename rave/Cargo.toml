@@ -18,7 +18,8 @@ opt-level = 1
 opt-level = "s"
 lto = true
 codegen-units = 1
-strip = true
+strip = false
+debug = 1
 
 [features]
 default = ["backend-webgpu"]
