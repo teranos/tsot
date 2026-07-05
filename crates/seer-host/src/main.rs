@@ -62,21 +62,28 @@ fn main() -> Result<()> {
     }
 
     println!(
-        "[host.hotspot-backtraces] {} distinct seq entries:",
-        st.hotspot_backtraces.len()
+        "[host.hotspot-records] {} distinct seq entries:",
+        st.hotspot_records.len()
     );
-    for (seq, bt) in st.hotspot_backtraces.iter() {
-        println!("[host.hotspot seq={seq}]");
-        println!("{bt}");
+    for (seq, r) in st.hotspot_records.iter() {
+        println!(
+            "[host.hotspot seq={seq}] size={} align={}",
+            r.size, r.align
+        );
+        println!("{}", r.backtrace);
     }
 
     println!(
-        "[host.gpu-backtraces] {} distinct gpu id entries:",
-        st.gpu_backtraces.len()
+        "[host.gpu-records] {} distinct gpu id entries:",
+        st.gpu_records.len()
     );
-    for (id, bt) in st.gpu_backtraces.iter() {
-        println!("[host.gpu id={id}]");
-        println!("{bt}");
+    for (id, r) in st.gpu_records.iter() {
+        println!(
+            "[host.gpu id={id}] kind={} size={}",
+            state::kind_name(r.kind),
+            r.size
+        );
+        println!("{}", r.backtrace);
     }
 
     let sha = std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local".to_string());

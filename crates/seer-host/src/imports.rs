@@ -8,7 +8,7 @@ use rustc_demangle::demangle;
 use std::sync::{Arc, Mutex};
 use wasmtime::*;
 
-use crate::state::{HostState, Metric};
+use crate::state::{GpuRecord, HostState, HotspotRecord, Metric, kind_name};
 
 pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
     linker.func_wrap(
@@ -40,14 +40,20 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         "seer_record_hotspot",
         |caller: Caller<'_, Arc<Mutex<HostState>>>, seq: u32, size: u32, align: u32| -> Result<()> {
             let bt = WasmBacktrace::force_capture(&caller);
-            let rendered = render_wasm_backtrace(&bt);
+            let backtrace = render_wasm_backtrace(&bt);
+            let frames_len = bt.frames().len();
             let state = caller.data().clone();
             if let Ok(mut st) = state.lock() {
-                st.hotspot_backtraces
-                    .insert(seq, format!("size={size} align={align}\n{rendered}"));
+                st.hotspot_records.insert(
+                    seq,
+                    HotspotRecord {
+                        size,
+                        align,
+                        backtrace,
+                    },
+                );
                 st.ledger.push(format!(
-                    "seer_record_hotspot seq={seq} size={size} align={align} frames={}",
-                    bt.frames().len()
+                    "seer_record_hotspot seq={seq} size={size} align={align} frames={frames_len}"
                 ));
             }
             Ok(())
@@ -61,20 +67,21 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         "seer_record_gpu_event",
         |caller: Caller<'_, Arc<Mutex<HostState>>>, id: u32, kind: u32, size: u32| -> Result<()> {
             let bt = WasmBacktrace::force_capture(&caller);
-            let rendered = render_wasm_backtrace(&bt);
-            let kind_name = match kind {
-                1 => "buffer",
-                2 => "texture",
-                3 => "shader",
-                _ => "?",
-            };
+            let backtrace = render_wasm_backtrace(&bt);
+            let frames_len = bt.frames().len();
+            let kname = kind_name(kind);
             let state = caller.data().clone();
             if let Ok(mut st) = state.lock() {
-                st.gpu_backtraces
-                    .insert(id, format!("kind={kind_name} size={size}\n{rendered}"));
+                st.gpu_records.insert(
+                    id,
+                    GpuRecord {
+                        kind,
+                        size,
+                        backtrace,
+                    },
+                );
                 st.ledger.push(format!(
-                    "seer_record_gpu_event id={id} kind={kind_name} size={size} frames={}",
-                    bt.frames().len()
+                    "seer_record_gpu_event id={id} kind={kname} size={size} frames={frames_len}"
                 ));
             }
             Ok(())

@@ -4,8 +4,9 @@
 // expandables into one self-contained file.
 
 use anyhow::Result;
+use std::collections::BTreeMap;
 
-use crate::state::{HostState, Metric};
+use crate::state::{HostState, Metric, kind_name};
 use crate::summary::{RunSummary, env_f64, env_i64};
 
 pub fn render_html_report(
@@ -147,13 +148,82 @@ pub fn render_html_report(
         }
     }
 
-    // Backtraces block.
+    // Backtraces block — legacy per-id detail. Superseded by the
+    // aggregation tables above for scanning; kept as ground truth.
     let mut bt_html = String::new();
-    for (id, bt) in st.gpu_backtraces.iter().take(15) {
+    for (id, r) in st.gpu_records.iter().take(15) {
         bt_html.push_str(&format!(
-            r#"<details><summary>gpu id={id}</summary><pre>{}</pre></details>"#,
-            html_escape(bt)
+            r#"<details><summary>gpu id={id} · {} · {} bytes</summary><pre>{}</pre></details>"#,
+            kind_name(r.kind),
+            r.size,
+            html_escape(&r.backtrace)
         ));
+    }
+
+    // Aggregation: heap hotspots grouped by identical backtrace.
+    // Same stack = same allocation call site; counting them together
+    // turns "480 individual >=1 MB allocations" into "this Rust
+    // function allocated N MB across K calls."
+    let mut heap_agg: BTreeMap<String, (u32, u64)> = BTreeMap::new();
+    for r in st.hotspot_records.values() {
+        let e = heap_agg.entry(r.backtrace.clone()).or_insert((0, 0));
+        e.0 += 1;
+        e.1 += r.size as u64;
+    }
+    let mut heap_stacks: Vec<(String, u32, u64)> = heap_agg
+        .into_iter()
+        .map(|(bt, (c, t))| (bt, c, t))
+        .collect();
+    heap_stacks.sort_by_key(|r| std::cmp::Reverse(r.2));
+    let mut heap_stacks_html = String::new();
+    for (i, (stack, count, total)) in heap_stacks.iter().take(10).enumerate() {
+        let mb = *total as f64 / 1_048_576.0;
+        let avg_mb = mb / *count as f64;
+        heap_stacks_html.push_str(&format!(
+            r#"<details><summary>#{i} · {mb:.2} MB across {count} allocation{s} (avg {avg_mb:.2} MB)</summary><pre>{stack}</pre></details>"#,
+            i = i + 1,
+            s = if *count == 1 { "" } else { "s" },
+            stack = html_escape(stack),
+        ));
+    }
+    if heap_stacks.is_empty() {
+        heap_stacks_html.push_str(
+            r#"<div class="banner">No heap hotspots captured (no allocations above threshold).</div>"#,
+        );
+    }
+
+    // Aggregation: GPU resources grouped by (kind, backtrace). Same
+    // kind + same stack = same call site emitting the same class of
+    // resource. Turns 60 GpuGlobalsBuffer rows into one summary row
+    // "buffer · this stack · 60 instances · 3.8 MB".
+    let mut gpu_agg: BTreeMap<(u32, String), (u32, u64)> = BTreeMap::new();
+    for r in st.gpu_records.values() {
+        let e = gpu_agg
+            .entry((r.kind, r.backtrace.clone()))
+            .or_insert((0, 0));
+        e.0 += 1;
+        e.1 += r.size as u64;
+    }
+    let mut gpu_stacks: Vec<(u32, String, u32, u64)> = gpu_agg
+        .into_iter()
+        .map(|((k, bt), (c, t))| (k, bt, c, t))
+        .collect();
+    gpu_stacks.sort_by_key(|r| std::cmp::Reverse(r.3));
+    let mut gpu_stacks_html = String::new();
+    for (i, (kind, stack, count, total)) in gpu_stacks.iter().take(10).enumerate() {
+        let mb = *total as f64 / 1_048_576.0;
+        let avg_mb = mb / *count as f64;
+        gpu_stacks_html.push_str(&format!(
+            r#"<details><summary>#{i} · {kname} · {count} instance{s} · {mb:.3} MB total (avg {avg_mb:.3} MB)</summary><pre>{stack}</pre></details>"#,
+            i = i + 1,
+            kname = kind_name(*kind),
+            s = if *count == 1 { "" } else { "s" },
+            stack = html_escape(stack),
+        ));
+    }
+    if gpu_stacks.is_empty() {
+        gpu_stacks_html
+            .push_str(r#"<div class="banner">No GPU allocations captured.</div>"#);
     }
 
     let sha = std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local".to_string());
@@ -327,7 +397,13 @@ pub fn render_html_report(
     {table_rows}
   </table>
 
-  <h2>GPU allocation call stacks (from wasmtime WasmBacktrace)</h2>
+  <h2>Top heap call sites</h2>
+  {heap_stacks_html}
+
+  <h2>GPU resources grouped by kind + stack</h2>
+  {gpu_stacks_html}
+
+  <h2>GPU allocation call stacks (per-id detail)</h2>
   {bt_html}
 </body></html>
 "##,
@@ -356,6 +432,8 @@ pub fn render_html_report(
         mgb = max_gpu_bytes as f64 / 1_048_576.0,
         mgl = max_gpu_live,
         table_rows = table_rows,
+        heap_stacks_html = heap_stacks_html,
+        gpu_stacks_html = gpu_stacks_html,
         bt_html = bt_html,
     );
 
