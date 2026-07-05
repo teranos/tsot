@@ -57,3 +57,77 @@ getrandom = { version = "=0.3.4", features = ["wasm_js"] }
 js-sys = "=0.3.98"
 wasm-bindgen = "=0.2.121"
 wasm-bindgen-futures = "=0.4.71"
+
+[patch.crates-io]
+# Fork of bevy 0.19.0 with a targeted fix in bevy_render:
+# StorageBuffer / RawBufferVec / UninitBufferVec / AtomicRawBufferVec all
+# call .destroy() on the old GPU buffer before replacing it. On the wgpu
+# WebGPU wasm backend, `impl Drop for WebBuffer` is a no-op (gfx-rs/wgpu#4092),
+# so a plain drop leaks the browser-side GPUBuffer. Bevy's mesh clustering,
+# batching, and sparse mesh uniform uploads all reallocate storage buffers
+# per frame — without this patch, those old buffers accumulate in the
+# WebKit.GPU process until the tab OOMs.
+#
+# All 60 bevy crates are patched to the same rev so path-based sibling
+# deps inside the bevy workspace resolve to the fork instead of picking
+# up an unpatched crates.io copy.
+bevy = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_a11y = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_android = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_animation = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_anti_alias = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_app = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_asset = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_audio = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_camera = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_camera_controller = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_clipboard = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_color = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_core_pipeline = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_derive = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_dev_tools = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_diagnostic = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_dylib = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_ecs = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_encase_derive = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_feathers = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_gilrs = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_gizmos = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_gizmos_render = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_gltf = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_image = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_input = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_input_focus = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_internal = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_light = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_log = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_macro_utils = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_material = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_math = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_mesh = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_pbr = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_picking = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_platform = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_post_process = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_ptr = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_reflect = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_remote = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_render = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_scene = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_settings = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_shader = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_solari = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_sprite = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_sprite_render = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_state = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_tasks = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_text = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_time = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_transform = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_ui = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_ui_render = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_ui_widgets = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_utils = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_window = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_winit = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
+bevy_world_serialization = { git = "https://github.com/teranos/bevy.git", rev = "2cb8eaf62f2baccb7d29ab71c3bcc25e613917c2" }
