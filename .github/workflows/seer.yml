@@ -117,16 +117,34 @@ jobs:
         working-directory: crates/seer-host
         run: cargo build --release
 
-      - name: Fetch prior history from S3
+      - name: Fetch prior history + metrics from S3
         if: vars.SEER_DISTRIBUTION_ID != ''
         continue-on-error: true
         run: |
-          mkdir -p out
-          # Assume role BEFORE fetching (config is separate step); this
-          # runs unauthenticated against a public GET which CloudFront
-          # serves. Falls back to empty history on 404 or perm issue.
+          mkdir -p out out/prior-metrics
+          # Public GETs against CloudFront — no auth needed.
           curl -sSf -o out/history-in.json https://seer.sbvh.nl/perf/history.json || echo '[]' > out/history-in.json
           echo "prior history entries: $(python3 -c 'import json,sys;print(len(json.load(open("out/history-in.json"))))' 2>/dev/null || echo 0)"
+          # Pull metrics.json for each prior sha so the report can
+          # render inline sparklines for every gallery card. Deriving
+          # each URL from the history entry's own report_url (which
+          # embeds the FULL sha the objects were uploaded under);
+          # saved locally keyed by SHORT sha (matches history.sha for
+          # the lookup on the report side).
+          python3 -c '
+          import json, sys
+          for e in json.load(open("out/history-in.json")):
+              short = e["sha"]
+              url = "https://seer.sbvh.nl" + e["report_url"].replace("/report.html", "/metrics.json")
+              print(f"{short}\t{url}")
+          ' | while IFS=$'\t' read -r short url; do
+            if curl -sSf -o "out/prior-metrics/${short}.json" "$url"; then
+              echo "fetched metrics for $short from $url"
+            else
+              echo "no metrics for $short (will render placeholder)"
+            fi
+          done
+          ls -la out/prior-metrics/ || true
 
       - name: Run seer-host on seer.wasm
         env:
@@ -136,6 +154,8 @@ jobs:
           SEER_HISTORY_OUT_PATH: out/history.json
           SEER_SUMMARY_OUT_PATH: out/summary.json
           SEER_VERDICT_OUT_PATH: out/verdict.json
+          SEER_METRICS_OUT_PATH: out/metrics.json
+          SEER_METRICS_DIR: out/prior-metrics
         run: |
           mkdir -p out
           [ -f out/history-in.json ] || echo '[]' > out/history-in.json
@@ -173,6 +193,11 @@ jobs:
               --content-type "text/plain; charset=utf-8"
             if [ -f out/summary.json ]; then
               aws s3 cp out/summary.json "s3://seer-sbvh-static/$prefix/summary.json" \
+                --cache-control "public, max-age=300" \
+                --content-type "application/json"
+            fi
+            if [ -f out/metrics.json ]; then
+              aws s3 cp out/metrics.json "s3://seer-sbvh-static/$prefix/metrics.json" \
                 --cache-control "public, max-age=300" \
                 --content-type "application/json"
             fi

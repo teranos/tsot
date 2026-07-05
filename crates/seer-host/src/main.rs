@@ -159,9 +159,25 @@ fn main() -> Result<()> {
         let _ = std::fs::write(&out_path, s);
     }
 
+    // Write metrics.json for THIS run — the workflow uploads it to
+    // /perf/<sha>/metrics.json so future runs' reports can embed
+    // sparklines for each historical commit in the gallery.
+    if let Ok(out_path) = std::env::var("SEER_METRICS_OUT_PATH")
+        && let Ok(s) = serde_json::to_string(&st.metrics)
+    {
+        let _ = std::fs::write(&out_path, s);
+    }
+
+    // Load prior commits' metrics from SEER_METRICS_DIR (populated by
+    // the workflow via `aws s3 cp` of /perf/<sha>/metrics.json files
+    // for the last N entries in history). Missing entries render as
+    // no-sparkline placeholders — graceful across first-run and
+    // history-truncation scenarios.
+    let prior_metrics = load_prior_metrics();
+
     let report_path =
         std::env::var("SEER_REPORT_PATH").unwrap_or_else(|_| "report.html".to_string());
-    match render_html_report(&st, &report_path, &history, &summary) {
+    match render_html_report(&st, &report_path, &history, &summary, &prior_metrics) {
         Ok(_) => println!(
             "[host] wrote HTML report: {report_path} ({} metrics)",
             st.metrics.len()
@@ -170,4 +186,35 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Read prior commits' metrics from `SEER_METRICS_DIR/<short_sha>.json`.
+/// Empty map if the env var is unset or the directory is missing.
+/// Each entry: short_sha → Vec<Metric> for that commit's run.
+fn load_prior_metrics() -> std::collections::BTreeMap<String, Vec<state::Metric>> {
+    let mut map: std::collections::BTreeMap<String, Vec<state::Metric>> =
+        std::collections::BTreeMap::new();
+    let Ok(dir) = std::env::var("SEER_METRICS_DIR") else {
+        return map;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return map;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Ok(metrics) = serde_json::from_str::<Vec<state::Metric>>(&text) {
+            map.insert(stem.to_string(), metrics);
+        }
+    }
+    println!("[host] loaded prior metrics for {} shas from {dir}", map.len());
+    map
 }

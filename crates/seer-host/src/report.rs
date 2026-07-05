@@ -14,6 +14,7 @@ pub fn render_html_report(
     path: &str,
     history: &[RunSummary],
     current: &RunSummary,
+    prior_metrics: &std::collections::BTreeMap<String, Vec<crate::state::Metric>>,
 ) -> Result<()> {
     let m = &st.metrics;
     let n = m.len();
@@ -358,17 +359,12 @@ pub fn render_html_report(
 
     // Commit cards — each is the full outcome of one commit: frame,
     // sha, verdict, all three deltas, CI run link, seer-host duration,
-    // leak flag. Oldest-left, newest-right, current outlined. This
-    // section supersedes the old "Recent runs" table and "Before/After"
-    // pair — one canonical, data-dense per-commit view.
-    const FRAME_GALLERY_MAX: usize = 6;
-    let recent: &[RunSummary] = if history.len() > FRAME_GALLERY_MAX {
-        &history[history.len() - FRAME_GALLERY_MAX..]
-    } else {
-        history
-    };
+    // leak flag, inline sparkline (if metrics.json available for that
+    // sha via prior_metrics). Oldest-left, newest-right, current
+    // outlined. Full history (up to 20) rendered; < > buttons scroll
+    // the horizontally-overflowing container.
     let mut frame_gallery_html = String::new();
-    for h in recent.iter() {
+    for h in history.iter() {
         let frame_url = h.report_url.replace("/report.html", "/frame.png");
         let is_current = h.sha == current.sha && h.when_unix == current.when_unix;
         let cls = if is_current { " current-frame" } else { "" };
@@ -405,8 +401,12 @@ pub fn render_html_report(
             fmt_delta_count(h.d_gpu_live),
             fmt_delta_mb(h.d_gpu_bytes_mb)
         );
+        let sparkline_svg = prior_metrics
+            .get(&h.sha)
+            .map(|m| render_sparkline_svg(m))
+            .unwrap_or_default();
         frame_gallery_html.push_str(&format!(
-            r#"<div class="commit-card{cls}"><a href="{report}"><img src="{frame}" alt="frame from {sha}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{{textContent:'no frame',className:'delta'}}));" /></a><div class="card-body"><div class="card-row header"><a class="sha" href="{report}">{sha}</a>{verdict_tag}</div><div class="card-row">{heap_abs}</div><div class="card-row">{gpu_abs}</div><div class="card-row footer">{ci_bit}{dur_bit}{leak_bit}</div></div></div>"#,
+            r#"<div class="commit-card{cls}"><a href="{report}"><img src="{frame}" alt="frame from {sha}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{{textContent:'no frame',className:'delta'}}));" /></a>{sparkline_svg}<div class="card-body"><div class="card-row header"><a class="sha" href="{report}">{sha}</a>{verdict_tag}</div><div class="card-row">{heap_abs}</div><div class="card-row">{gpu_abs}</div><div class="card-row footer">{ci_bit}{dur_bit}{leak_bit}</div></div></div>"#,
             report = h.report_url,
             frame = frame_url,
             sha = h.sha,
@@ -484,8 +484,15 @@ pub fn render_html_report(
   tr.current td:first-child {{ color: var(--accent); font-weight: bold; }}
   a {{ color: var(--accent); text-decoration: none; }}
   a:hover {{ text-decoration: underline; }}
-  .frame-row {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 8px 0; }}
-  .commit-card {{ background: var(--panel); padding: 10px; border-radius: 4px; display: flex; flex-direction: column; gap: 6px; }}
+  .frame-row {{ display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 12px; margin: 8px 0; padding-bottom: 8px; scroll-snap-type: x proximity; }}
+  .frame-row::-webkit-scrollbar {{ height: 8px; }}
+  .frame-row::-webkit-scrollbar-track {{ background: var(--panel); border-radius: 4px; }}
+  .frame-row::-webkit-scrollbar-thumb {{ background: var(--line); border-radius: 4px; }}
+  .gallery-controls {{ display: flex; gap: 6px; margin: 4px 0; }}
+  .gallery-controls button {{ background: var(--panel); color: var(--fg); border: 1px solid var(--line); padding: 4px 12px; font-family: inherit; font-size: 14px; cursor: pointer; border-radius: 3px; }}
+  .gallery-controls button:hover {{ background: var(--line); }}
+  .commit-card {{ background: var(--panel); padding: 10px; border-radius: 4px; display: flex; flex-direction: column; gap: 6px; flex: 0 0 260px; scroll-snap-align: start; }}
+  .commit-card .sparkline {{ display: block; width: 100%; height: 40px; background: var(--bg); border-radius: 3px; }}
   .commit-card img {{ width: 100%; height: auto; display: block; border-radius: 3px; }}
   .commit-card.current-frame {{ outline: 2px solid var(--accent); }}
   .card-body {{ font-size: 12px; display: flex; flex-direction: column; gap: 3px; }}
@@ -514,7 +521,11 @@ pub fn render_html_report(
   </div>
 
   <h2>Commit history (older → newer)</h2>
-  <div class="frame-row">
+  <div class="gallery-controls">
+    <button type="button" onclick="document.getElementById('gallery').scrollBy({{left:-320,behavior:'smooth'}});" aria-label="scroll older">&lt;</button>
+    <button type="button" onclick="document.getElementById('gallery').scrollBy({{left:320,behavior:'smooth'}});" aria-label="scroll newer">&gt;</button>
+  </div>
+  <div class="frame-row" id="gallery">
     {frame_gallery_html}
   </div>
 
@@ -645,6 +656,46 @@ fn delta_class(d: i64) -> &'static str {
     } else {
         "flat"
     }
+}
+
+/// Compact SVG sparkline for one commit's metric time series.
+/// Three lines (heap, gpu bytes, gpu live) each normalised to its own
+/// max. No axes, no labels — one glance says "flat" or "climbing."
+fn render_sparkline_svg(metrics: &[crate::state::Metric]) -> String {
+    if metrics.is_empty() {
+        return String::new();
+    }
+    let w = 240.0f32;
+    let h = 40.0f32;
+    let last_frame = metrics.last().map(|m| m.frame).unwrap_or(1).max(1) as f32;
+    let max_heap = metrics.iter().map(|m| m.heap_bytes).max().unwrap_or(1).max(1) as f32;
+    let max_gpu_b = metrics.iter().map(|m| m.gpu_bytes).max().unwrap_or(1).max(1) as f32;
+    let max_gpu_l = metrics.iter().map(|m| m.gpu_live).max().unwrap_or(1).max(1) as f32;
+
+    let path = |extract: &dyn Fn(&crate::state::Metric) -> f32, max: f32| -> String {
+        let mut s = String::new();
+        for (i, m) in metrics.iter().enumerate() {
+            let x = (m.frame as f32 / last_frame) * w;
+            let y = h - (extract(m) / max).clamp(0.0, 1.0) * (h - 2.0) - 1.0;
+            if i == 0 {
+                s.push_str(&format!("M {x:.1} {y:.1}"));
+            } else {
+                s.push_str(&format!(" L {x:.1} {y:.1}"));
+            }
+        }
+        s
+    };
+    let heap = path(&|m| m.heap_bytes as f32, max_heap);
+    let gpu_b = path(&|m| m.gpu_bytes as f32, max_gpu_b);
+    let gpu_l = path(&|m| m.gpu_live as f32, max_gpu_l);
+    // r##"..."## (double-hash delimiter) — `"#` inside the SVG (from
+    // `stroke="#22d3ee"`) would otherwise terminate a `r#"..."#`
+    // raw string and leave the hex digits floating as bare tokens.
+    format!(
+        r##"<svg class="sparkline" viewBox="0 0 {w} {h}" preserveAspectRatio="none"><path d="{heap}" stroke="#22d3ee" fill="none" stroke-width="1"/><path d="{gpu_b}" stroke="#f472b6" fill="none" stroke-width="1"/><path d="{gpu_l}" stroke="#eab308" fill="none" stroke-width="1"/></svg>"##,
+        w = w as u32,
+        h = h as u32,
+    )
 }
 
 fn fmt_duration(secs: u64) -> String {

@@ -2,9 +2,10 @@
 // boundary crossing mutates this via one of the linker.func_wrap
 // bodies in imports.rs. Read at end of run by summary + report.
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Metric {
     pub frame: u32,
     pub heap_bytes: u32,
