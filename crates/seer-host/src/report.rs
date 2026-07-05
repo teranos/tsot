@@ -293,6 +293,50 @@ pub fn render_html_report(
         )
     };
 
+    // Activity log tail — last N high-signal lines from the wasm's
+    // seer_emit stream. Filters out per-frame metric spam + per-alloc
+    // hotspot detail (each of those has its own dedicated section);
+    // keeps setup, tick summaries, inventories, notes, errors,
+    // physics player pos, etc. Renders the actual line, not the
+    // "seer_emit len=N: " ledger wrapper.
+    let noisy_prefixes = [
+        "[obs.metric",
+        "[obs.hotspots",
+        "[obs.hotspot]",
+        "[obs.gpu.live]",
+        "[obs.gpu.inventory]",
+        "[live-buf",
+        "[gpu-alloc",
+    ];
+    let is_signal = |line: &str| -> bool {
+        let stripped = line
+            .strip_prefix("seer_emit len=")
+            .and_then(|s| s.split_once(": "))
+            .map(|(_, rest)| rest)
+            .unwrap_or(line);
+        !noisy_prefixes.iter().any(|p| stripped.starts_with(p))
+    };
+    let signal_lines: Vec<&String> = st.ledger.iter().filter(|l| is_signal(l)).collect();
+    let log_tail_max = 50usize;
+    let tail: Vec<&&String> = signal_lines
+        .iter()
+        .rev()
+        .take(log_tail_max)
+        .rev()
+        .collect();
+    let ledger_total = st.ledger.len();
+    let log_tail_shown = tail.len();
+    let mut log_tail_html = String::new();
+    for line in &tail {
+        let display = line
+            .strip_prefix("seer_emit len=")
+            .and_then(|s| s.split_once(": "))
+            .map(|(_, rest)| rest)
+            .unwrap_or(line.as_str());
+        log_tail_html.push_str(&html_escape(display));
+        log_tail_html.push('\n');
+    }
+
     // Sacred errors captured from the wasm-side bus during this run.
     // Axiom: never dropped. Highlighted in the report so any
     // Error/Panic surfaces immediately without grepping the log.
@@ -459,6 +503,7 @@ pub fn render_html_report(
   details {{ background: var(--panel); padding: 8px 12px; margin: 4px 0; border-radius: 3px; }}
   summary {{ cursor: pointer; font-size: 12px; color: var(--dim); }}
   pre {{ font-size: 11px; overflow-x: auto; color: var(--fg); margin: 8px 0 0 0; }}
+  pre.log-tail {{ background: var(--panel); padding: 12px 16px; border-radius: 4px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; }}
   code {{ color: var(--accent); }}
 </style>
 </head><body>
@@ -498,6 +543,9 @@ pub fn render_html_report(
   <h2>Errors captured this run</h2>
   {errors_html}
 
+  <h2>Activity log (last {log_tail_shown} of {ledger_total} entries, filtered)</h2>
+  <pre class="log-tail">{log_tail_html}</pre>
+
   <h2>Top heap call sites</h2>
   {heap_stacks_html}
 
@@ -533,6 +581,9 @@ pub fn render_html_report(
         table_rows = table_rows,
         frame_gallery_html = frame_gallery_html,
         errors_html = errors_html,
+        log_tail_html = log_tail_html,
+        log_tail_shown = log_tail_shown,
+        ledger_total = ledger_total,
         heap_stacks_html = heap_stacks_html,
         gpu_stacks_html = gpu_stacks_html,
         bt_html = bt_html,

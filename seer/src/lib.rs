@@ -114,17 +114,6 @@ fn setup(mut commands: Commands) {
         ),
     );
 
-    // PLANTED REGRESSION — emits an Error-severity record so the
-    // sacred-error surface can be observed end-to-end in the report.
-    // Remove in a follow-up commit to demonstrate the error going
-    // away in the next row of the commit cards. Axiom test:
-    // errors land in front of the developer, never swallowed.
-    error::emit_region(
-        error::Severity::Error,
-        "seer.setup",
-        "planted regression",
-        "this commit intentionally emits an Error-severity record to prove sacred-error surfaces it in the report; the next commit removes it",
-    );
 
     // Ported from rave: spawn a player + 5 static obstacles that the
     // resolve_collisions system iterates every frame. Real ECS query
@@ -217,11 +206,17 @@ fn tick(
         obs::dump_report();
         obs::dump_gpu_inventory();
 
-        // Drain any sacred-errors captured this window onto the obs
-        // bus. Axiom: never swallow. No-op if nothing pushed.
+        // Drain sacred-errors captured this window. Axiom: never
+        // swallow. Info records use `[seer.note` (log-only); Warn /
+        // Error / Panic use `[seer.error` so the host bucks them into
+        // the report's Errors section. Same bus, different urgency.
         for e in error::drain() {
+            let prefix = match e.severity {
+                error::Severity::Info => "[seer.note",
+                _ => "[seer.error",
+            };
             obs::emit(&format!(
-                "[seer.error id={} sev={:?} region={:?}] {} — {}",
+                "{prefix} id={} sev={:?} region={:?}] {} - {}",
                 e.id, e.severity, e.context.region, e.title, e.why
             ));
         }
