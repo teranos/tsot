@@ -1,0 +1,18 @@
+[package]
+name = "rave-mem-diagnostic"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native wgpu diagnostic that runs on Linux CI in seconds — instruments Device::create_buffer / GPUBuffer::destroy from inside the same process, captures Rust Backtrace::force_capture() per allocation, emits per-buffer live inventory with source-path stacks to stdout. Reproduces the buffer-lifecycle question without a browser."
+
+[[bin]]
+name = "rave-mem-diagnostic"
+path = "src/main.rs"
+
+[profile.release]
+debug = 1
+
+[dependencies]
+wgpu = { version = "=29.0.3", default-features = false, features = ["wgsl", "vulkan"] }
+pollster = "=0.4.0"
+sysinfo = "=0.32.1"
