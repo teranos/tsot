@@ -293,6 +293,25 @@ pub fn render_html_report(
         )
     };
 
+    // Sacred errors captured from the wasm-side bus during this run.
+    // Axiom: never dropped. Highlighted in the report so any
+    // Error/Panic surfaces immediately without grepping the log.
+    let mut errors_html = String::new();
+    if st.errors_captured.is_empty() {
+        errors_html.push_str(r#"<div class="banner">No sacred errors captured this run.</div>"#);
+    } else {
+        errors_html.push_str(r#"<div class="banner leak">"#);
+        errors_html.push_str(&format!(
+            "<strong>{} error{}:</strong><ul>",
+            st.errors_captured.len(),
+            if st.errors_captured.len() == 1 { "" } else { "s" }
+        ));
+        for e in st.errors_captured.iter() {
+            errors_html.push_str(&format!("<li><code>{}</code></li>", html_escape(e)));
+        }
+        errors_html.push_str("</ul></div>");
+    }
+
     // Commit cards — each is the full outcome of one commit: frame,
     // sha, verdict, all three deltas, CI run link, seer-host duration,
     // leak flag. Oldest-left, newest-right, current outlined. This
@@ -399,6 +418,8 @@ pub fn render_html_report(
   h2 {{ color: #f1f5f9; font-size: 15px; margin: 32px 0 12px 0; text-transform: uppercase; letter-spacing: 0.06em; }}
   h3 {{ color: var(--dim); font-size: 12px; margin: 0 0 8px 0; letter-spacing: 0.08em; text-transform: uppercase; }}
   .banner {{ background: var(--panel); padding: 12px 16px; border-left: 3px solid var(--accent); font-size: 13px; }}
+  .banner.leak {{ border-left-color: var(--up); background: rgba(248, 113, 113, 0.06); }}
+  .banner ul {{ margin: 6px 0 0 0; padding-left: 20px; }}
   .grid2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
   .card {{ background: var(--panel); padding: 16px; border-radius: 4px; }}
   .stat {{ font-size: 14px; margin: 4px 0; }}
@@ -474,6 +495,9 @@ pub fn render_html_report(
     {table_rows}
   </table>
 
+  <h2>Errors captured this run</h2>
+  {errors_html}
+
   <h2>Top heap call sites</h2>
   {heap_stacks_html}
 
@@ -491,9 +515,7 @@ pub fn render_html_report(
         build_ts = build_ts,
         n = n,
         leak_str = if current.leak_enabled { "ON" } else { "off" },
-        history_html = history_html,
         last_frame = last_frame,
-        before_after_html = before_after_html,
         w = w,
         h = h,
         pad_l = pad_l,
@@ -510,15 +532,15 @@ pub fn render_html_report(
         mgl = max_gpu_live,
         table_rows = table_rows,
         frame_gallery_html = frame_gallery_html,
+        errors_html = errors_html,
         heap_stacks_html = heap_stacks_html,
         gpu_stacks_html = gpu_stacks_html,
         bt_html = bt_html,
     );
 
-    // Silence unused-variable warnings for state we no longer render
-    // (Before/After + Recent runs replaced by commit cards).
     let _ = before_after_html;
     let _ = history_html;
+    let _ = history_rows;
 
     std::fs::write(path, html)?;
     Ok(())

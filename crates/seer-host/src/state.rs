@@ -31,6 +31,11 @@ pub struct HostState {
     pub hotspot_records: BTreeMap<u32, HotspotRecord>,
     pub gpu_records: BTreeMap<u32, GpuRecord>,
     pub metrics: Vec<Metric>,
+    /// Sacred errors captured from the wasm-side bus. Populated by
+    /// `seer_emit` when it sees a line starting with "[seer.error".
+    /// Report surfaces these prominently so the axiom "errors are
+    /// sacred, never dropped" is visibly enforced.
+    pub errors_captured: Vec<String>,
 }
 
 impl HostState {
@@ -40,6 +45,7 @@ impl HostState {
             hotspot_records: BTreeMap::new(),
             gpu_records: BTreeMap::new(),
             metrics: Vec::new(),
+            errors_captured: Vec::new(),
         }
     }
 }

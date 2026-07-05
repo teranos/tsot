@@ -114,6 +114,18 @@ fn setup(mut commands: Commands) {
         ),
     );
 
+    // PLANTED REGRESSION — emits an Error-severity record so the
+    // sacred-error surface can be observed end-to-end in the report.
+    // Remove in a follow-up commit to demonstrate the error going
+    // away in the next row of the commit cards. Axiom test:
+    // errors land in front of the developer, never swallowed.
+    error::emit_region(
+        error::Severity::Error,
+        "seer.setup",
+        "planted regression",
+        "this commit intentionally emits an Error-severity record to prove sacred-error surfaces it in the report; the next commit removes it",
+    );
+
     // Ported from rave: spawn a player + 5 static obstacles that the
     // resolve_collisions system iterates every frame. Real ECS query
     // pattern with With<PlayerMarker> / Without<PlayerMarker> filters.

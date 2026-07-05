@@ -25,6 +25,9 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
             println!("[host.emit] {s}");
             let state = caller.data().clone();
             if let Ok(mut st) = state.lock() {
+                if s.starts_with("[seer.error") {
+                    st.errors_captured.push(s.clone());
+                }
                 st.ledger.push(format!("seer_emit len={len}: {s}"));
             }
             Ok(())
