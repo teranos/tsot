@@ -33,20 +33,48 @@ pub fn run() {
 fn _run() {
     obs::emit("[seer.boot] entering run()");
 
-    // Foundation-commit workload: allocate a small variety of buffer
-    // sizes to exercise the aggregate counters AND the per-alloc
-    // hotspot ring. In commit #2+ this becomes actual game work
-    // (Bevy ECS, wgpu resources).
+    // Simulated frame loop with a grow-over-time pattern that stands in
+    // for a real rendering workload with a slow leak. Sizes chosen to
+    // resemble the categories observed in rave sessions:
+    //   - Cluster storage buffer (~200 KB) replaced every frame (churn)
+    //   - Uniform buffer (~64 KB) replaced every frame (churn)
+    //   - Mesh instance chunk (~512 KB) retained every 5th frame
+    //   - Scene texture buffer (~1 MB) retained every 10th frame
+    // The retained allocations model a system that fails to release
+    // resources — RSS keeps rising while churn stays flat.
+    //
+    // Real Bevy + wgpu wiring lands in commit #2. Until then, this
+    // stresses the obs bus with a workload it can actually reason
+    // about, and gives seer-host a real ledger of many boundary
+    // crossings to record.
     let mut retained: Vec<Vec<u8>> = Vec::new();
-    for i in 0..5 {
-        let size = 128 * 1024 * (i + 1);
-        obs::emit(&format!("[seer.step] allocating {size} bytes"));
-        retained.push(vec![0u8; size]);
+    const FRAMES: u32 = 300;
+    const REPORT_EVERY: u32 = 30;
+
+    for frame in 0..FRAMES {
+        let _cluster = vec![0u8; 200 * 1024];
+        let _uniform = vec![0u8; 64 * 1024];
+
+        if frame % 5 == 0 {
+            retained.push(vec![0u8; 512 * 1024]);
+        }
+        if frame % 10 == 0 {
+            retained.push(vec![0u8; 1024 * 1024]);
+        }
+
+        if frame % REPORT_EVERY == 0 {
+            obs::emit(&format!(
+                "[seer.frame] frame={frame} retained_bufs={}",
+                retained.len()
+            ));
+            obs::dump_report();
+        }
     }
 
+    obs::emit("[seer.done] final report:");
     obs::dump_report();
     obs::emit(&format!(
-        "[seer.done] retained {} buffers, exiting",
+        "[seer.done] retained {} buffers over {FRAMES} frames",
         retained.len()
     ));
 }

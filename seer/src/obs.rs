@@ -102,6 +102,7 @@ pub fn emit(line: &str) {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn seer_emit(ptr: *const u8, len: usize);
 }
