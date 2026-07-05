@@ -262,7 +262,44 @@ fn _run() {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    native_wgpu_demo();
+    {
+        native_wgpu_demo();
+
+        // After the tick loop, snapshot the world's entity state and
+        // rasterize it as a minimap PNG. Replaces the earlier static
+        // WGSL triangle — the frame in each commit card now shows the
+        // scene as of end-of-run, and drift across commits becomes
+        // visually obvious in the gallery.
+        if let Ok(out_path) = std::env::var("SEER_FRAME_PATH") {
+            let world = app.world_mut();
+            let mut tree_q = world.query_filtered::<&physics::Position, bevy_ecs::prelude::With<trees::TreeTrunk>>();
+            let trees_vec: Vec<bevy_math::Vec3> =
+                tree_q.iter(world).map(|p| p.0).collect();
+            let mut obs_q = world.query_filtered::<&physics::Position, (
+                bevy_ecs::prelude::With<physics::AabbCollider>,
+                bevy_ecs::prelude::Without<physics::PlayerMarker>,
+                bevy_ecs::prelude::Without<trees::TreeTrunk>,
+            )>();
+            let obstacles_vec: Vec<bevy_math::Vec3> =
+                obs_q.iter(world).map(|p| p.0).collect();
+            let mut player_q = world.query_filtered::<&physics::Position, bevy_ecs::prelude::With<physics::PlayerMarker>>();
+            let player_pos: bevy_math::Vec3 = player_q
+                .iter(world)
+                .next()
+                .map(|p| p.0)
+                .unwrap_or(bevy_math::Vec3::ZERO);
+            match render_scene_minimap(&trees_vec, &obstacles_vec, player_pos, &out_path) {
+                Ok(_) => obs::emit(&format!(
+                    "[gpu.native] rendered minimap ({} trees, {} obstacles, player at {:.0},{:.0}) → {out_path}",
+                    trees_vec.len(),
+                    obstacles_vec.len(),
+                    player_pos.x,
+                    player_pos.z,
+                )),
+                Err(e) => obs::emit(&format!("[gpu.native] minimap render failed: {e}")),
+            }
+        }
+    }
 
     obs::emit("[seer.done] final report:");
     obs::dump_report();
@@ -340,21 +377,101 @@ fn native_wgpu_demo() {
     );
     obs::dump_gpu_inventory();
 
-    // Render one frame per commit. Report side composes a gallery of
-    // the last N commits' frames (from history.json) into a
-    // responsive row — newest on the right, older to the left,
-    // adaptive to screen width.
-    if let Ok(out_path) = std::env::var("SEER_FRAME_PATH") {
-        match render_triangle_png(dev.wgpu(), &_queue, &out_path, 0.0) {
-            Ok(_) => obs::emit(&format!("[gpu.native] rendered frame to {out_path}")),
-            Err(e) => obs::emit(&format!("[gpu.native] render failed: {e}")),
-        }
-    } else {
-        obs::emit("[gpu.native] SEER_FRAME_PATH not set — skipping PNG render");
-    }
+    // Frame rendering handled by caller via render_scene_minimap;
+    // this function proves wgpu wrapper + SeerDevice work but doesn't
+    // own the frame output any more.
+    let _ = dev;
+    let _ = _queue;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub fn render_scene_minimap(
+    trees: &[bevy_math::Vec3],
+    obstacles: &[bevy_math::Vec3],
+    player: bevy_math::Vec3,
+    out_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let w = 512u32;
+    let h = 512u32;
+    let mut pixels: Vec<u8> = Vec::with_capacity((w * h * 4) as usize);
+    // Dark background matching the report page (--bg #0a0e14).
+    let (bg_r, bg_g, bg_b) = (0x0a, 0x0e, 0x14);
+    for _ in 0..(w * h) {
+        pixels.extend_from_slice(&[bg_r, bg_g, bg_b, 0xff]);
+    }
+
+    // World XZ → image pixel. FLOOR_HALF is 3000 (rave's world). Fit
+    // [-3000, +3000] into [0, 512]. Scale = 512/6000 ≈ 0.0853.
+    let floor_half = crate::room::FLOOR_HALF;
+    let world_to_px = |world_xz: f32| -> i32 {
+        ((world_xz / floor_half + 1.0) * 0.5 * w as f32) as i32
+    };
+    let plot = |pixels: &mut [u8], cx: i32, cy: i32, radius: i32, rgb: (u8, u8, u8)| {
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                let x = cx + dx;
+                let y = cy + dy;
+                if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+                    continue;
+                }
+                let idx = (y as usize * w as usize + x as usize) * 4;
+                pixels[idx] = rgb.0;
+                pixels[idx + 1] = rgb.1;
+                pixels[idx + 2] = rgb.2;
+                pixels[idx + 3] = 0xff;
+            }
+        }
+    };
+
+    // World-axis lines (subtle) — vertical + horizontal through origin.
+    let (line_r, line_g, line_b) = (0x33, 0x41, 0x55);
+    let cx = w as i32 / 2;
+    let cy = h as i32 / 2;
+    for i in 0..w as i32 {
+        let idx = (cy as usize * w as usize + i as usize) * 4;
+        pixels[idx] = line_r;
+        pixels[idx + 1] = line_g;
+        pixels[idx + 2] = line_b;
+    }
+    for j in 0..h as i32 {
+        let idx = (j as usize * w as usize + cx as usize) * 4;
+        pixels[idx] = line_r;
+        pixels[idx + 1] = line_g;
+        pixels[idx + 2] = line_b;
+    }
+
+    // Trees as small green dots (matching --down accent #22c55e).
+    let tree_rgb = (0x22, 0xc5, 0x5e);
+    for t in trees {
+        let px = world_to_px(t.x);
+        let py = world_to_px(t.z);
+        plot(&mut pixels, px, py, 1, tree_rgb);
+    }
+    // Obstacles as amber dots (--accent3 #eab308).
+    let obs_rgb = (0xea, 0xb3, 0x08);
+    for o in obstacles {
+        let px = world_to_px(o.x);
+        let py = world_to_px(o.z);
+        plot(&mut pixels, px, py, 2, obs_rgb);
+    }
+    // Player as cyan cross (--accent #22d3ee), larger.
+    let player_rgb = (0x22, 0xd3, 0xee);
+    let ppx = world_to_px(player.x);
+    let ppy = world_to_px(player.z);
+    plot(&mut pixels, ppx, ppy, 4, player_rgb);
+
+    let file = std::fs::File::create(out_path)?;
+    let bw = std::io::BufWriter::new(file);
+    let mut encoder = png::Encoder::new(bw, w, h);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(&pixels)?;
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 fn triangle_wgsl(phase: f32) -> String {
     format!(
         r#"
@@ -382,6 +499,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {{
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 fn render_triangle_png(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
