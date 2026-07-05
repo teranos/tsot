@@ -18,6 +18,7 @@ use wasmtime::*;
 struct HostState {
     ledger: Vec<String>,
     hotspot_backtraces: BTreeMap<u32, String>,
+    gpu_backtraces: BTreeMap<u32, String>,
 }
 
 fn main() -> Result<()> {
@@ -34,6 +35,7 @@ fn main() -> Result<()> {
     let state = Arc::new(Mutex::new(HostState {
         ledger: Vec::new(),
         hotspot_backtraces: BTreeMap::new(),
+        gpu_backtraces: BTreeMap::new(),
     }));
     let mut store: Store<Arc<Mutex<HostState>>> = Store::new(&engine, state.clone());
     let mut linker: Linker<Arc<Mutex<HostState>>> = Linker::new(&engine);
@@ -64,6 +66,38 @@ fn main() -> Result<()> {
     // line carries the seq; correlate with this ledger for the stack.
     // This is the "source attribution from inside the wasm" closed via
     // the wasmtime host — the founding principle made concrete.
+    // Same host-ledger pattern as seer_record_hotspot, keyed by gpu id.
+    // Partitions the ledger by event type so seq spaces don't collide.
+    linker.func_wrap(
+        "env",
+        "seer_record_gpu_event",
+        |caller: Caller<'_, Arc<Mutex<HostState>>>, id: u32, kind: u32, size: u32| -> Result<()> {
+            let bt = WasmBacktrace::force_capture(&caller);
+            let mut rendered = String::new();
+            for (i, frame) in bt.frames().iter().enumerate() {
+                let name = frame.func_name().unwrap_or("<anonymous>");
+                let func_idx = frame.func_index();
+                rendered.push_str(&format!("  {i:>3}: {name} (func_index={func_idx})\n"));
+            }
+            let kind_name = match kind {
+                1 => "buffer",
+                2 => "texture",
+                3 => "shader",
+                _ => "?",
+            };
+            let state = caller.data().clone();
+            if let Ok(mut st) = state.lock() {
+                st.gpu_backtraces
+                    .insert(id, format!("kind={kind_name} size={size}\n{rendered}"));
+                st.ledger.push(format!(
+                    "seer_record_gpu_event id={id} kind={kind_name} size={size} frames={}",
+                    bt.frames().len()
+                ));
+            }
+            Ok(())
+        },
+    )?;
+
     linker.func_wrap(
         "env",
         "seer_record_hotspot",
@@ -114,6 +148,15 @@ fn main() -> Result<()> {
     );
     for (seq, bt) in st.hotspot_backtraces.iter() {
         println!("[host.hotspot seq={seq}]");
+        println!("{bt}");
+    }
+
+    println!(
+        "[host.gpu-backtraces] {} distinct gpu id entries:",
+        st.gpu_backtraces.len()
+    );
+    for (id, bt) in st.gpu_backtraces.iter() {
+        println!("[host.gpu id={id}]");
         println!("{bt}");
     }
 
