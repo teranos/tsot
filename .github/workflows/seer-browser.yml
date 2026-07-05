@@ -1,0 +1,65 @@
+name: seer-browser
+
+# Browser deploy build for seer. Compiles the same seer.wasm that
+# seer-host runs under wasmtime, packages it alongside a small HTML +
+# JS bootstrap that provides the three env.* imports the wasm expects.
+#
+# No wasm-bindgen, no bundler, no npm. The dist is: seer.wasm +
+# index.html. That's the whole surface.
+#
+# For now uploads as a CI artifact; wiring an S3 deploy comes later
+# when the bucket + IAM role exist (mirroring deploy-rave.yml's
+# pattern).
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'seer/**'
+      - '.github/workflows/seer-browser.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: seer
+
+      - name: Build seer.wasm
+        working-directory: seer
+        run: cargo build --release --lib --target wasm32-unknown-unknown
+
+      - name: Assemble dist
+        run: |
+          mkdir -p dist
+          cp seer/target/wasm32-unknown-unknown/release/seer.wasm dist/seer.wasm
+          cp seer/web/index.html dist/index.html
+          ls -la dist/
+          echo "== wasm size =="
+          wc -c dist/seer.wasm
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: seer-browser-${{ github.sha }}
+          path: dist/
+          retention-days: 30
+
+      - name: Summarize
+        run: |
+          {
+            echo "## seer-browser dist"
+            echo ""
+            echo "Download \`seer-browser-${{ github.sha }}\` and serve"
+            echo "\`dist/\` behind any static server; open index.html."
+            echo ""
+            echo "Same seer.wasm the seer-host job runs under wasmtime."
+          } >> "$GITHUB_STEP_SUMMARY"

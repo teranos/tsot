@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<!--
+    seer browser bootstrap. Loads seer.wasm — the SAME wasm module
+    seer-host runs under wasmtime — and provides the three env.*
+    imports it expects: seer_emit, seer_record_hotspot, seer_record_gpu_event.
+
+    No wasm-bindgen, no bundler, no npm. The wasm module imports are
+    deliberately scoped so a plain <script> block can wire them up.
+    That's the design principle from commit #1 paying off: browser
+    deploy is a small file, not a thousand generated glue lines.
+
+    On this bootstrap, each seer_record_* import captures a JS-side
+    Error().stack for the wasm→JS boundary, matching the ledger the
+    wasmtime host builds in native dev. Correlate seq/id fields
+    between the two artifacts to see the same allocation from two
+    runtime perspectives.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>seer</title>
+  <style>
+    body { margin: 0; background: #0a0e14; color: #cbd5e1; font-family: ui-monospace, monospace; }
+    #log { padding: 12px; white-space: pre-wrap; font-size: 12px; line-height: 1.4; max-height: 100vh; overflow-y: auto; }
+    .banner { background: #1e293b; padding: 8px 12px; border-bottom: 1px solid #334155; color: #94a3b8; }
+    .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="banner">seer — observability-first Bevy wasm target, browser bootstrap</div>
+  <div id="log"></div>
+  <script>
+    const logEl = document.getElementById('log');
+    let memory;
+
+    function decodeString(ptr, len) {
+      const bytes = new Uint8Array(memory.buffer, ptr, len);
+      return new TextDecoder('utf-8').decode(bytes);
+    }
+
+    function line(s, cls) {
+      const el = document.createElement('div');
+      if (cls) el.className = cls;
+      el.textContent = s;
+      logEl.appendChild(el);
+    }
+
+    const imports = {
+      env: {
+        seer_emit: (ptr, len) => {
+          const s = decodeString(ptr, len);
+          console.log(s);
+          line(s);
+        },
+        seer_record_hotspot: (seq, size, align) => {
+          const stack = (new Error()).stack || '';
+          const msg = `[browser.hotspot] seq=${seq} size=${size} align=${align}`;
+          console.log(msg, '\n' + stack);
+          line(msg + '\n' + stack.split('\n').slice(0, 6).join('\n'));
+        },
+        seer_record_gpu_event: (id, kind, size) => {
+          const kindName = { 1: 'buffer', 2: 'texture', 3: 'shader' }[kind] || `?(${kind})`;
+          const stack = (new Error()).stack || '';
+          const msg = `[browser.gpu] id=${id} kind=${kindName} size=${size}`;
+          console.log(msg, '\n' + stack);
+          line(msg + '\n' + stack.split('\n').slice(0, 6).join('\n'));
+        },
+      },
+    };
+
+    fetch('seer.wasm')
+      .then(r => {
+        if (!r.ok) throw new Error(`fetch seer.wasm: ${r.status} ${r.statusText}`);
+        return r.arrayBuffer();
+      })
+      .then(bytes => WebAssembly.instantiate(bytes, imports))
+      .then(({ instance }) => {
+        memory = instance.exports.memory;
+        line(`[browser.boot] wasm instantiated. exports: ${Object.keys(instance.exports).join(', ')}`);
+        if (typeof instance.exports.run === 'function') {
+          instance.exports.run();
+          line('[browser.boot] run() returned');
+        } else {
+          line('[browser.boot] no run() export found', 'err');
+        }
+      })
+      .catch(e => {
+        console.error(e);
+        line(`[browser.error] ${e}`, 'err');
+      });
+  </script>
+</body>
+</html>
