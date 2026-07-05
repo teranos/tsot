@@ -12,9 +12,32 @@
 
 use anyhow::{Context, Result, anyhow};
 use rustc_demangle::demangle;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use wasmtime::*;
+
+#[derive(Serialize, Deserialize, Clone)]
+struct RunSummary {
+    sha: String,
+    when_unix: u64,
+    frames: u32,
+    first_frame: u32,
+    last_frame: u32,
+    heap_start_mb: f64,
+    heap_end_mb: f64,
+    d_heap_mb: f64,
+    gpu_live_start: u32,
+    gpu_live_end: u32,
+    d_gpu_live: i64,
+    gpu_bytes_start_mb: f64,
+    gpu_bytes_end_mb: f64,
+    d_gpu_bytes_mb: f64,
+    leak_enabled: bool,
+    report_url: String,
+}
+
+const HISTORY_CAP: usize = 20;
 
 fn render_wasm_backtrace(bt: &WasmBacktrace) -> String {
     let mut out = String::new();
@@ -139,6 +162,7 @@ fn main() -> Result<()> {
         },
     )?;
 
+
     linker.func_wrap(
         "env",
         "seer_record_hotspot",
@@ -196,10 +220,99 @@ fn main() -> Result<()> {
         println!("{bt}");
     }
 
+    // Build this run's summary + load prior history + append + cap.
+    let leak_enabled = std::env::var("SEER_LEAK")
+        .ok()
+        .is_some_and(|v| v == "1" || v == "true");
+    let sha = std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local".to_string());
+    let short_sha = sha.chars().take(7).collect::<String>();
+    let when_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let summary = if !st.metrics.is_empty() {
+        let first = &st.metrics[0];
+        let last = &st.metrics[st.metrics.len() - 1];
+        let mb = |b: u32| b as f64 / 1_048_576.0;
+        RunSummary {
+            sha: short_sha.clone(),
+            when_unix,
+            frames: st.metrics.len() as u32,
+            first_frame: first.frame,
+            last_frame: last.frame,
+            heap_start_mb: mb(first.heap_bytes),
+            heap_end_mb: mb(last.heap_bytes),
+            d_heap_mb: mb(last.heap_bytes) - mb(first.heap_bytes),
+            gpu_live_start: first.gpu_live,
+            gpu_live_end: last.gpu_live,
+            d_gpu_live: last.gpu_live as i64 - first.gpu_live as i64,
+            gpu_bytes_start_mb: mb(first.gpu_bytes),
+            gpu_bytes_end_mb: mb(last.gpu_bytes),
+            d_gpu_bytes_mb: mb(last.gpu_bytes) - mb(first.gpu_bytes),
+            leak_enabled,
+            report_url: format!("/perf/{sha}/report.html"),
+        }
+    } else {
+        RunSummary {
+            sha: short_sha.clone(),
+            when_unix,
+            frames: 0,
+            first_frame: 0,
+            last_frame: 0,
+            heap_start_mb: 0.0,
+            heap_end_mb: 0.0,
+            d_heap_mb: 0.0,
+            gpu_live_start: 0,
+            gpu_live_end: 0,
+            d_gpu_live: 0,
+            gpu_bytes_start_mb: 0.0,
+            gpu_bytes_end_mb: 0.0,
+            d_gpu_bytes_mb: 0.0,
+            leak_enabled,
+            report_url: format!("/perf/{sha}/report.html"),
+        }
+    };
+
+    let mut history: Vec<RunSummary> = if let Ok(path) = std::env::var("SEER_HISTORY_IN_PATH") {
+        match std::fs::read_to_string(&path) {
+            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    history.push(summary.clone());
+    if history.len() > HISTORY_CAP {
+        let n = history.len();
+        history.drain(0..n - HISTORY_CAP);
+    }
+
+    // Write history JSON (workflow uploads it back to S3).
+    if let Ok(out_path) = std::env::var("SEER_HISTORY_OUT_PATH") {
+        match serde_json::to_string_pretty(&history) {
+            Ok(s) => match std::fs::write(&out_path, s) {
+                Ok(_) => println!("[host] wrote history: {out_path} ({} entries)", history.len()),
+                Err(e) => println!("[host] history write failed: {e}"),
+            },
+            Err(e) => println!("[host] history serialize failed: {e}"),
+        }
+    }
+
+    // Write single-run summary JSON.
+    if let Ok(out_path) = std::env::var("SEER_SUMMARY_OUT_PATH") {
+        match serde_json::to_string_pretty(&summary) {
+            Ok(s) => {
+                let _ = std::fs::write(&out_path, s);
+            }
+            Err(_) => {}
+        }
+    }
+
     // Write the HTML report if SEER_REPORT_PATH is set, else default
     // to ./report.html next to the log.
     let report_path = std::env::var("SEER_REPORT_PATH").unwrap_or_else(|_| "report.html".to_string());
-    match render_html_report(&st, &report_path) {
+    match render_html_report(&st, &report_path, &history, &summary) {
         Ok(_) => println!("[host] wrote HTML report: {report_path} ({} metrics)", st.metrics.len()),
         Err(e) => println!("[host] HTML report write failed: {e}"),
     }
@@ -207,7 +320,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn render_html_report(st: &HostState, path: &str) -> Result<()> {
+fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], current: &RunSummary) -> Result<()> {
     let m = &st.metrics;
     let n = m.len();
 
@@ -349,6 +462,41 @@ fn render_html_report(st: &HostState, path: &str) -> Result<()> {
     let build_ts = std::env::var("GITHUB_RUN_STARTED_AT")
         .unwrap_or_else(|_| chrono_like_now());
 
+    // Recent runs table — newest-first, one row per prior run.
+    let mut history_rows = String::new();
+    let mut rev_hist: Vec<&RunSummary> = history.iter().collect();
+    rev_hist.reverse();
+    for h in rev_hist.iter().take(15) {
+        let is_current = h.sha == current.sha && h.when_unix == current.when_unix;
+        let mark = if is_current { "→" } else { " " };
+        let leak_marker = if h.leak_enabled { " · leak=on" } else { "" };
+        history_rows.push_str(&format!(
+            r#"<tr class="{cls}"><td>{mark}</td><td><a href="{url}">{sha}</a></td><td>{when}</td><td class="{dhc}">{dh}</td><td class="{dgc}">{dgl}</td><td class="{dbc}">{dgb}</td><td class="dim">{leak}</td></tr>"#,
+            cls = if is_current { "current" } else { "" },
+            mark = mark,
+            url = h.report_url,
+            sha = h.sha,
+            when = h.when_unix,
+            dhc = delta_class(h.d_heap_mb as i64),
+            dh = fmt_delta_mb(h.d_heap_mb),
+            dgc = delta_class(h.d_gpu_live),
+            dgl = fmt_delta_count(h.d_gpu_live),
+            dbc = delta_class(h.d_gpu_bytes_mb as i64),
+            dgb = fmt_delta_mb(h.d_gpu_bytes_mb),
+            leak = leak_marker,
+        ));
+    }
+    let history_html = if history.is_empty() {
+        String::from(r#"<div class="banner">No prior history (first run).</div>"#)
+    } else {
+        format!(
+            r#"<table>
+    <tr><th></th><th>sha</th><th>when (unix)</th><th>Δheap</th><th>Δgpu live</th><th>Δgpu bytes</th><th>flags</th></tr>
+    {history_rows}
+</table>"#
+        )
+    };
+
     let html = format!(
         r##"<!DOCTYPE html>
 <html lang="en"><head>
@@ -375,6 +523,11 @@ fn render_html_report(st: &HostState, path: &str) -> Result<()> {
   td.up {{ color: var(--up); }}
   td.down {{ color: var(--down); }}
   td.flat {{ color: var(--flat); }}
+  td.dim {{ color: var(--dim); }}
+  tr.current {{ background: rgba(34, 211, 238, 0.08); }}
+  tr.current td:first-child {{ color: var(--accent); font-weight: bold; }}
+  a {{ color: var(--accent); text-decoration: none; }}
+  a:hover {{ text-decoration: underline; }}
   svg {{ display: block; background: var(--panel); border-radius: 4px; margin: 8px 0; }}
   .legend {{ display: flex; gap: 20px; font-size: 12px; margin: 4px 0 12px 0; }}
   .swatch {{ display: inline-block; width: 12px; height: 3px; margin-right: 6px; vertical-align: middle; }}
@@ -386,8 +539,11 @@ fn render_html_report(st: &HostState, path: &str) -> Result<()> {
 </head><body>
   <h1>seer diagnostic report</h1>
   <div class="banner">
-    build: <code>{sha}</code> · started: <code>{build_ts}</code> · metrics: <code>{n}</code> frames · last frame: <code>{last_frame}</code>
+    build: <code>{sha}</code> · started: <code>{build_ts}</code> · metrics: <code>{n}</code> frames · last frame: <code>{last_frame}</code> · leak: <code>{leak_str}</code>
   </div>
+
+  <h2>Recent runs</h2>
+  {history_html}
 
   <h2>Before / After</h2>
   {before_after_html}
@@ -421,6 +577,8 @@ fn render_html_report(st: &HostState, path: &str) -> Result<()> {
         sha = sha,
         build_ts = build_ts,
         n = n,
+        leak_str = if current.leak_enabled { "ON" } else { "off" },
+        history_html = history_html,
         last_frame = last_frame,
         before_after_html = before_after_html,
         w = w,
@@ -455,6 +613,16 @@ fn fmt_delta_bytes(d: i64) -> String {
         } else {
             format!("-{mb:.2} MB")
         }
+    }
+}
+
+fn fmt_delta_mb(d: f64) -> String {
+    if d.abs() < 0.005 {
+        "flat".to_string()
+    } else if d > 0.0 {
+        format!("+{d:.2} MB")
+    } else {
+        format!("{d:.2} MB")
     }
 }
 

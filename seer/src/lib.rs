@@ -60,8 +60,7 @@ struct Retained(Vec<Vec<u8>>);
 struct GpuHandles {
     // Per-frame churn resources — recreated each frame, destroyed at end.
     cluster: Vec<u64>,
-    // Retained handles — the "leak" pattern for GPU resources.
-    retained: Vec<u64>,
+    uniform: Vec<u64>,
 }
 
 const DEFAULT_FRAMES: u32 = 300;
@@ -123,37 +122,47 @@ fn setup(mut commands: Commands) {
 
 fn tick(
     mut count: ResMut<FrameCount>,
-    mut retained: ResMut<Retained>,
+    retained: ResMut<Retained>,
     mut gpu: ResMut<GpuHandles>,
 ) {
     count.0 += 1;
     let frame = count.0;
 
-    // Per-frame heap churn.
+    // Per-frame heap churn — dropped at end of system.
     let _cluster_cpu = vec![0u8; 200 * 1024];
     let _uniform_cpu = vec![0u8; 64 * 1024];
 
-    // GPU resources: every frame allocates a cluster storage buffer +
-    // uniform buffer. We DESTROY the previous frame's cluster (churn)
-    // but retain the uniform (leak pattern — the exact rave signature).
+    // Base workload: both cluster storage AND uniform buffer churn
+    // per frame. Destroy previous, create current. Steady state = flat.
     for id in gpu.cluster.drain(..) {
         obs::resource_destroyed(id);
     }
-    let cluster_id = obs::buffer_created(200 * 1024, 0x80 /* STORAGE */, "GpuClusterableObjectIndexListsStorage");
+    for id in gpu.uniform.drain(..) {
+        obs::resource_destroyed(id);
+    }
+    let cluster_id = obs::buffer_created(
+        200 * 1024,
+        0x80, /* STORAGE */
+        "GpuClusterableObjectIndexListsStorage",
+    );
     let uniform_id = obs::buffer_created(64 * 1024, 0x40 /* UNIFORM */, "GpuGlobalsBuffer");
     gpu.cluster.push(cluster_id);
-    gpu.retained.push(uniform_id);
+    gpu.uniform.push(uniform_id);
 
-    // Retained CPU heap allocations (Phase 2 pattern retained).
-    if frame.is_multiple_of(5) {
-        retained.0.push(vec![0u8; 512 * 1024]);
-    }
-    if frame.is_multiple_of(10) {
-        retained.0.push(vec![0u8; 1024 * 1024]);
-        // Every 10 frames also create a retained GPU texture (real scene texture pattern).
-        let tid = obs::texture_created(1024 * 1024, 0x04 /* SAMPLED */, "scene.diffuse");
-        gpu.retained.push(tid);
-    }
+    // ---- Leak-by-construction workload — commented out. ----
+    // Uncomment to reproduce the growing-memory chart the report
+    // showed at commit 400cc37. Retains CPU buffers on 5th/10th
+    // frames + a scene texture every 10. The exact rave-style
+    // signature; kept here as a controllable regression case.
+    //
+    // if frame.is_multiple_of(5) {
+    //     retained.0.push(vec![0u8; 512 * 1024]);
+    // }
+    // if frame.is_multiple_of(10) {
+    //     retained.0.push(vec![0u8; 1024 * 1024]);
+    //     let tid = obs::texture_created(1024 * 1024, 0x04 /* SAMPLED */, "scene.diffuse");
+    //     gpu.retained.push(tid);
+    // }
 
     // Metric emission every frame — cheap host call (4 numbers), gives
     // the HTML report a dense time series for the chart. Detailed
@@ -165,9 +174,10 @@ fn tick(
 
     if frame.is_multiple_of(REPORT_EVERY) {
         obs::emit(&format!(
-            "[bevy.tick] frame={frame} retained_cpu_bufs={} retained_gpu_handles={}",
+            "[bevy.tick] frame={frame} retained_cpu_bufs={} live_cluster={} live_uniform={}",
             retained.0.len(),
-            gpu.retained.len(),
+            gpu.cluster.len(),
+            gpu.uniform.len(),
         ));
         obs::dump_report();
         obs::dump_gpu_inventory();

@@ -87,12 +87,27 @@ jobs:
         working-directory: crates/seer-host
         run: cargo build --release
 
+      - name: Fetch prior history from S3
+        if: vars.SEER_DISTRIBUTION_ID != ''
+        continue-on-error: true
+        run: |
+          mkdir -p out
+          # Assume role BEFORE fetching (config is separate step); this
+          # runs unauthenticated against a public GET which CloudFront
+          # serves. Falls back to empty history on 404 or perm issue.
+          curl -sSf -o out/history-in.json https://seer.sbvh.nl/perf/history.json || echo '[]' > out/history-in.json
+          echo "prior history entries: $(python3 -c 'import json,sys;print(len(json.load(open("out/history-in.json"))))' 2>/dev/null || echo 0)"
+
       - name: Run seer-host on seer.wasm
         env:
           SEER_FRAMES: '180'
           SEER_REPORT_PATH: out/report.html
+          SEER_HISTORY_IN_PATH: out/history-in.json
+          SEER_HISTORY_OUT_PATH: out/history.json
+          SEER_SUMMARY_OUT_PATH: out/summary.json
         run: |
           mkdir -p out
+          [ -f out/history-in.json ] || echo '[]' > out/history-in.json
           ./crates/seer-host/target/release/seer-host \
             seer/target/wasm32-unknown-unknown/release/seer.wasm \
             2>&1 | tee out/seer-host.log
@@ -125,9 +140,20 @@ jobs:
             aws s3 cp out/seer-host.log "s3://seer-sbvh-static/$prefix/seer-host.log" \
               --cache-control "public, max-age=300" \
               --content-type "text/plain; charset=utf-8"
+            if [ -f out/summary.json ]; then
+              aws s3 cp out/summary.json "s3://seer-sbvh-static/$prefix/summary.json" \
+                --cache-control "public, max-age=300" \
+                --content-type "application/json"
+            fi
           done
+          # Global rolling history — no per-sha prefix.
+          if [ -f out/history.json ]; then
+            aws s3 cp out/history.json "s3://seer-sbvh-static/perf/history.json" \
+              --cache-control "public, max-age=60" \
+              --content-type "application/json"
+          fi
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.SEER_DISTRIBUTION_ID }}" \
-            --paths '/perf/latest/*' \
+            --paths '/perf/latest/*' '/perf/history.json' \
             --query 'Invalidation.Id' \
             --output text

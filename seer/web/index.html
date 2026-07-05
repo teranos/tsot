@@ -45,6 +45,10 @@
       logEl.appendChild(el);
     }
 
+    // These names must match the wasm's env.* imports 1:1. If a new
+    // one lands in seer/src/obs.rs, add it here — instantiation
+    // hard-fails with LinkError otherwise (that's the design: no
+    // silent boundary drift).
     const imports = {
       env: {
         seer_emit: (ptr, len) => {
@@ -64,6 +68,11 @@
           const msg = `[browser.gpu] id=${id} kind=${kindName} size=${size}`;
           console.log(msg, '\n' + stack);
           line(msg + '\n' + stack.split('\n').slice(0, 6).join('\n'));
+        },
+        seer_report_metric: (frame, heap_bytes, gpu_live, gpu_bytes) => {
+          // Per-frame structured metric. Browser-side: no S3 upload,
+          // just render inline so a live tab is a live diagnostic.
+          console.log(`[browser.metric] frame=${frame} heap=${heap_bytes} gpu_live=${gpu_live} gpu_bytes=${gpu_bytes}`);
         },
       },
     };
