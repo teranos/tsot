@@ -69,7 +69,7 @@ jobs:
           role-to-assume: arn:aws:iam::548351057127:role/seer-github-deploy
           aws-region: eu-central-1
 
-      - name: Upload frame.png to S3
+      - name: Upload rendered frame to S3
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
         run: |
           if [ -f seer/out/frame.png ]; then

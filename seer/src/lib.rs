@@ -300,11 +300,12 @@ fn native_wgpu_demo() {
     );
     obs::dump_gpu_inventory();
 
-    // Real render: draw a triangle to a 512x512 texture, read back,
-    // encode PNG. Proves the render path end-to-end + gives the CI
-    // report a visible artifact.
+    // Render one frame per commit. Report side composes a gallery of
+    // the last N commits' frames (from history.json) into a
+    // responsive row — newest on the right, older to the left,
+    // adaptive to screen width.
     if let Ok(out_path) = std::env::var("SEER_FRAME_PATH") {
-        match render_triangle_png(dev.wgpu(), &_queue, &out_path) {
+        match render_triangle_png(dev.wgpu(), &_queue, &out_path, 0.0) {
             Ok(_) => obs::emit(&format!("[gpu.native] rendered frame to {out_path}")),
             Err(e) => obs::emit(&format!("[gpu.native] render failed: {e}")),
         }
@@ -314,13 +315,15 @@ fn native_wgpu_demo() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const TRIANGLE_WGSL: &str = r#"
-struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) col: vec3<f32> };
+fn triangle_wgsl(phase: f32) -> String {
+    format!(
+        r#"
+struct VSOut {{ @builtin(position) pos: vec4<f32>, @location(0) col: vec3<f32> }};
 
 @vertex
-fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {
+fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {{
     var o: VSOut;
-    let a = f32(i) * 2.09439 + 1.5708;
+    let a = f32(i) * 2.09439 + 1.5708 + {phase};
     o.pos = vec4<f32>(sin(a) * 0.75, cos(a) * 0.75, 0.0, 1.0);
     o.col = vec3<f32>(
         select(0.15, 0.85, i == 0u),
@@ -328,19 +331,22 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {
         select(0.55, 0.95, i == 2u),
     );
     return o;
-}
+}}
 
 @fragment
-fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VSOut) -> @location(0) vec4<f32> {{
     return vec4<f32>(in.col, 1.0);
+}}
+"#
+    )
 }
-"#;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn render_triangle_png(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     out_path: &str,
+    phase: f32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let size = 512u32;
     let format = wgpu::TextureFormat::Rgba8Unorm;
@@ -363,7 +369,7 @@ fn render_triangle_png(
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("seer.triangle-shader"),
-        source: wgpu::ShaderSource::Wgsl(TRIANGLE_WGSL.into()),
+        source: wgpu::ShaderSource::Wgsl(triangle_wgsl(phase).into()),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
