@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 struct LiveBuf {
     id: u64,
@@ -51,7 +51,11 @@ fn track_destroy(id: u64) {
 }
 
 fn emit_inventory(t: u64, sys: &mut System, pid: Pid) {
-    sys.refresh_process_specifics(pid, ProcessRefreshKind::everything());
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::everything(),
+    );
     let rss_mb = sys
         .process(pid)
         .map(|p| p.memory() as f64 / 1_048_576.0)
@@ -108,9 +112,9 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(30);
 
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN | wgpu::Backends::SECONDARY,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -131,6 +135,7 @@ fn main() {
         required_features: wgpu::Features::empty(),
         required_limits: wgpu::Limits::downlevel_defaults(),
         memory_hints: wgpu::MemoryHints::default(),
+        experimental_features: wgpu::ExperimentalFeatures::default(),
         trace: wgpu::Trace::Off,
     }))
     .expect("request_device failed");
