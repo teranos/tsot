@@ -82,11 +82,12 @@ let approxCharCount = 0;
 export function showErr(line: string): void {
   const stamped = `[+${Math.round(performance.now() - T0)}ms] ${line}\n`;
   try {
-    console.log(stamped.trimEnd());
+    console.error(stamped.trimEnd());
   } catch {
     /* ignore */
   }
   if (!el) return;
+  el.style.display = "block";
   el.appendChild(document.createTextNode(stamped));
   approxCharCount += stamped.length;
   if (!sessionStorageBroken && approxCharCount < SESSION_STORAGE_MAX) {
@@ -99,15 +100,17 @@ export function showErr(line: string): void {
   scheduleScrollToBottom();
 }
 
-// Absolute first drawer line — commit + build time, distinct enough
-// that no screenshot can hide which bundle is running. Placed BEFORE
-// the load header so it's the very top of every screenshot, even
-// truncated ones. Substituted at build time by hash-and-stage.sh.
-showErr(`=== rave ${RAVE_COMMIT} · built ${RAVE_BUILT_AT} ===`);
+export function showLog(line: string): void {
+  const stamped = `[+${Math.round(performance.now() - T0)}ms] ${line}`;
+  try {
+    console.log(stamped);
+  } catch {
+    /* ignore */
+  }
+}
 
-// Second line — load number + navigation type + wall clock. A rapidly
-// climbing load# is proof of a reload loop.
-showErr(
+showLog(`=== rave ${RAVE_COMMIT} · built ${RAVE_BUILT_AT} ===`);
+showLog(
   `=== load#${LOAD_NUMBER} nav=${NAV_TYPE} @ ${new Date().toISOString()} ===`,
 );
 

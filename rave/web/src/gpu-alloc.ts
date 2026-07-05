@@ -15,7 +15,18 @@ let firstCallsLogged = 0;
 const FIRST_N_INDIVIDUAL = 30;
 let allocCallsSinceLastSummary = 0;
 
-const bufferSizeMap = new WeakMap<object, { label: string; bytes: number; usageBucket: string }>();
+const bufferSizeMap = new WeakMap<object, { id: number; label: string; bytes: number; usageBucket: string }>();
+
+interface LiveBuf {
+  id: number;
+  label: string;
+  bytes: number;
+  usageBucket: string;
+  createdAtMs: number;
+}
+const liveBuffers = new Map<number, LiveBuf>();
+let nextBufId = 0;
+const INVENTORY_TOP_N = 20;
 
 interface Sample { time: number; bytes: number }
 const bucketHistory = new Map<string, Sample[]>();
@@ -207,12 +218,16 @@ function wrapDevice(device: GPUDevice): void {
     const usageBucket = wgpuBufferTag(desc.usage);
     bump(usageBucket, desc.size, `usage=0x${desc.usage.toString(16)} label=${label}`, label);
     const buf = (origBuf as (...a: unknown[]) => GPUBuffer).apply(device, args);
-    bufferSizeMap.set(buf as object, { label, bytes: desc.size, usageBucket });
+    const id = nextBufId++;
+    const createdAtMs = performance.now();
+    liveBuffers.set(id, { id, label, bytes: desc.size, usageBucket, createdAtMs });
+    bufferSizeMap.set(buf as object, { id, label, bytes: desc.size, usageBucket });
     const origDestroy = (buf as GPUBuffer).destroy;
     (buf as { destroy: unknown }).destroy = function (this: GPUBuffer, ...a: unknown[]) {
       const info = bufferSizeMap.get(this as object);
       if (info) {
         unbump(info.usageBucket, info.bytes, info.label);
+        liveBuffers.delete(info.id);
         bufferSizeMap.delete(this as object);
       }
       return (origDestroy as (...x: unknown[]) => void).apply(this, a);
@@ -427,11 +442,42 @@ function emitSummary(reason: string): void {
   showErr(`[gpu-alloc@${t}s delta-labels-since-last] ${deltaStr || "(none)"}`);
 }
 
+function emitInventory(t: number): void {
+  if (liveBuffers.size === 0) {
+    showErr(`[gpu-alloc@${t}s inventory] (no live buffers)`);
+    return;
+  }
+  const now = performance.now();
+  const rows: LiveBuf[] = [];
+  for (const r of liveBuffers.values()) rows.push(r);
+  rows.sort((a, b) => b.bytes - a.bytes);
+  let inventorySum = 0;
+  for (const r of rows) inventorySum += r.bytes;
+  const topN = Math.min(INVENTORY_TOP_N, rows.length);
+  for (let i = 0; i < topN; i++) {
+    const r = rows[i];
+    const ageSec = Math.round((now - r.createdAtMs) / 1000);
+    showErr(`[live-buf #${r.id}] ${fmtMB(r.bytes)} usage=${r.usageBucket} label="${r.label}" age=${ageSec}s`);
+  }
+  if (rows.length > INVENTORY_TOP_N) {
+    let tailBytes = 0;
+    for (let i = INVENTORY_TOP_N; i < rows.length; i++) tailBytes += rows[i].bytes;
+    showErr(`[live-buf tail] ${rows.length - INVENTORY_TOP_N} more totaling ${fmtMB(tailBytes)}`);
+  }
+  let bucketBufLive = 0;
+  for (const [k, b] of buckets) if (k.startsWith("wgpu.buf.")) bucketBufLive += b.liveBytes;
+  const diff = Math.abs(bucketBufLive - inventorySum);
+  const okStr = diff < 1024 ? "OK" : `MISMATCH diff=${fmtMB(diff)}`;
+  showErr(`[live-buf sum] count=${rows.length} inventory=${fmtMB(inventorySum)} buckets_live=${fmtMB(bucketBufLive)} ${okStr}`);
+}
+
 export function installGpuAllocProbe(): void {
   installWebGPUProbe();
   installWebGL2Probe();
   window.setInterval(() => {
+    const t = Math.round(performance.now() / 1000);
     emitSummary("tick");
+    emitInventory(t);
     checkLeakThreshold();
   }, 5000);
 }
