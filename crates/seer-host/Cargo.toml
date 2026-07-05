@@ -1,0 +1,17 @@
+[package]
+name = "seer-host"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Wasmtime host for the seer wasm module. Provides deliberately scoped host imports, records every wasm→host boundary crossing to a ledger, prints observability output to stdout. Every import is a Rust host function you own — no wasm-bindgen bloat, no browser platform surface. The wasmtime dev environment for the browser-deploy game."
+
+[[bin]]
+name = "seer-host"
+path = "src/main.rs"
+
+[profile.release]
+debug = 1
+
+[dependencies]
+wasmtime = "=25.0.2"
+anyhow = "=1.0.100"

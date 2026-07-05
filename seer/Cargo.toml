@@ -1,0 +1,25 @@
+[package]
+name = "seer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Observability-first cross-target Rust. Same source compiles to (a) native binary and (b) wasm32-unknown-unknown module hosted by seer-host (wasmtime). Every allocation attributed with source. Every boundary crossing recorded by the host. Founding architectural constraint from commit #1; not a subsystem retrofitted later."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "seer-native"
+path = "src/main.rs"
+
+# Release profile keeps debug info + wasm name section so backtraces on
+# native are Rust source paths and, when we add browser deploy, wasm
+# frames still name their Rust identifiers instead of function offsets.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = false
+debug = 1
+
+[dependencies]

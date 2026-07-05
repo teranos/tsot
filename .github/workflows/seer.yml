@@ -1,0 +1,93 @@
+name: seer
+
+# Two jobs, one workflow. Both prove the same code compiles for both
+# targets and runs under both runtimes with full observability output.
+#
+#   seer-native — runs the game as a native binary. Rust backtrace
+#                 support gives Rust source paths on every >= 64 KB
+#                 allocation. Fastest dev cycle: build + run in seconds.
+#
+#   seer-host   — builds the game as wasm32-unknown-unknown, then loads
+#                 it into the wasmtime host binary (crates/seer-host).
+#                 Every wasm→host boundary crossing is a recorded event.
+#                 This is what the "wasmtime as primary diagnostic
+#                 environment" requirement means concretely: total
+#                 host-side introspection of a real wasm running the
+#                 same source that will later deploy to the browser.
+#
+# No browser, no simulator, no headless Chrome. Both jobs upload their
+# stdout as artifacts for inspection.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'seer/**'
+      - 'crates/seer-host/**'
+      - '.github/workflows/seer.yml'
+  workflow_dispatch:
+
+jobs:
+  seer-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: seer
+
+      - name: Build seer-native
+        working-directory: seer
+        run: cargo build --release --bin seer-native
+
+      - name: Run seer-native
+        working-directory: seer
+        env:
+          RUST_BACKTRACE: full
+        run: |
+          mkdir -p out
+          cargo run --release --bin seer-native 2>&1 | tee out/seer-native.log
+
+      - name: Upload native log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seer-native-${{ github.sha }}
+          path: seer/out/
+          retention-days: 30
+
+  seer-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build seer.wasm
+        working-directory: seer
+        run: cargo build --release --lib --target wasm32-unknown-unknown
+
+      - name: Build seer-host
+        working-directory: crates/seer-host
+        run: cargo build --release
+
+      - name: Run seer-host on seer.wasm
+        run: |
+          mkdir -p out
+          ./crates/seer-host/target/release/seer-host \
+            seer/target/wasm32-unknown-unknown/release/seer.wasm \
+            2>&1 | tee out/seer-host.log
+
+      - name: Upload host log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seer-host-${{ github.sha }}
+          path: out/
+          retention-days: 30
