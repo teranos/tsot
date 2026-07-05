@@ -23,3 +23,5 @@ strip = false
 debug = 1
 
 [dependencies]
+bevy_app = "=0.19.0"
+bevy_ecs = "=0.19.0"
