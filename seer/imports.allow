@@ -1,0 +1,16 @@
+# Every wasm import allowed in seer.wasm.
+#
+# CI runs `seer-imports-check` on each build: extracts the wasm's
+# import section, sorts, diffs against this file, fails on drift.
+#
+# Adding an import means editing this file — a visible, reviewable
+# act. wasm-bindgen adds thousands of imports; any commit that pulls
+# it in transitively (via a Bevy plugin, a new dep, whatever) makes
+# the diff explode. That's the point.
+#
+# Empty lines and #-comments are ignored. Each entry is module.name.
+
+env.seer_emit
+env.seer_record_hotspot
+env.seer_record_gpu_event
+env.seer_report_metric

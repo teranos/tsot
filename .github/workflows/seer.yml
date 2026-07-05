@@ -113,6 +113,14 @@ jobs:
           SEER_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
         run: cargo build --release --lib --target wasm32-unknown-unknown
 
+      - name: Check wasm imports against allow list
+        working-directory: crates/seer-imports-check
+        run: |
+          cargo build --release
+          ./target/release/seer-imports-check \
+            ../../seer/target/wasm32-unknown-unknown/release/seer.wasm \
+            ../../seer/imports.allow
+
       - name: Build seer-host
         working-directory: crates/seer-host
         run: cargo build --release

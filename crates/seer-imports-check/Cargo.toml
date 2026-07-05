@@ -1,0 +1,17 @@
+[package]
+name = "seer-imports-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Wasm imports allow-list checker. Reads seer.wasm's import section, diffs against seer/imports.allow, exits non-zero on drift. Guards against wasm-bindgen creep — any dep that adds a JS-glue import breaks the check, forcing the developer to acknowledge the boundary expansion in a visible reviewable file."
+
+[[bin]]
+name = "seer-imports-check"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[dependencies]
+wasmparser = "=0.217.1"
