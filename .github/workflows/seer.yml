@@ -129,6 +129,7 @@ jobs:
           SEER_HISTORY_IN_PATH: out/history-in.json
           SEER_HISTORY_OUT_PATH: out/history.json
           SEER_SUMMARY_OUT_PATH: out/summary.json
+          SEER_VERDICT_OUT_PATH: out/verdict.json
         run: |
           mkdir -p out
           [ -f out/history-in.json ] || echo '[]' > out/history-in.json
@@ -181,3 +182,19 @@ jobs:
             --paths '/perf/latest/*' '/perf/history.json' \
             --query 'Invalidation.Id' \
             --output text
+
+      - name: Enforce verdict
+        if: always()
+        run: |
+          # Check verdict AFTER upload — a failing report is still a
+          # useful report and needs to be visible. This step is what
+          # actually turns the job red on threshold violation.
+          if [ -f out/verdict.json ]; then
+            PASSED=$(python3 -c 'import json,sys;print(json.load(open("out/verdict.json"))["passed"])')
+            echo "verdict.passed = $PASSED"
+            if [ "$PASSED" != "True" ]; then
+              echo "::error::seer threshold violated — see report + verdict.json artifact"
+              cat out/verdict.json
+              exit 1
+            fi
+          fi

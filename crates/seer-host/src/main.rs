@@ -40,6 +40,74 @@ struct RunSummary {
     // history.json entries that predate this field.
     #[serde(default)]
     ci_run_url: String,
+    #[serde(default = "default_true")]
+    verdict_passed: bool,
+    #[serde(default)]
+    verdict_violations: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Serialize)]
+struct Verdict {
+    passed: bool,
+    violations: Vec<String>,
+    thresholds: VerdictThresholds,
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct VerdictThresholds {
+    max_d_heap_mb: f64,
+    max_d_gpu_live: i64,
+    max_d_gpu_bytes_mb: f64,
+}
+
+fn compute_verdict(summary: &RunSummary) -> Verdict {
+    let t = VerdictThresholds {
+        max_d_heap_mb: env_f64("SEER_MAX_D_HEAP_MB", 1.0),
+        max_d_gpu_live: env_i64("SEER_MAX_D_GPU_LIVE", 5),
+        max_d_gpu_bytes_mb: env_f64("SEER_MAX_D_GPU_BYTES_MB", 0.5),
+    };
+    let mut violations: Vec<String> = Vec::new();
+    if summary.d_heap_mb > t.max_d_heap_mb {
+        violations.push(format!(
+            "Δheap = {:.3} MB > threshold {:.3} MB",
+            summary.d_heap_mb, t.max_d_heap_mb
+        ));
+    }
+    if summary.d_gpu_live > t.max_d_gpu_live {
+        violations.push(format!(
+            "Δgpu_live = +{} > threshold {}",
+            summary.d_gpu_live, t.max_d_gpu_live
+        ));
+    }
+    if summary.d_gpu_bytes_mb > t.max_d_gpu_bytes_mb {
+        violations.push(format!(
+            "Δgpu_bytes = {:.3} MB > threshold {:.3} MB",
+            summary.d_gpu_bytes_mb, t.max_d_gpu_bytes_mb
+        ));
+    }
+    Verdict {
+        passed: violations.is_empty(),
+        violations,
+        thresholds: t,
+    }
+}
+
+fn env_f64(name: &str, default: f64) -> f64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_i64(name: &str, default: i64) -> i64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 const HISTORY_CAP: usize = 20;
@@ -266,6 +334,8 @@ fn main() -> Result<()> {
             leak_enabled,
             report_url: format!("/perf/{sha}/report.html"),
             ci_run_url: ci_run_url.clone(),
+            verdict_passed: true,
+            verdict_violations: Vec::new(),
         }
     } else {
         RunSummary {
@@ -286,8 +356,39 @@ fn main() -> Result<()> {
             leak_enabled,
             report_url: format!("/perf/{sha}/report.html"),
             ci_run_url: ci_run_url.clone(),
+            verdict_passed: true,
+            verdict_violations: Vec::new(),
         }
     };
+
+    // Verdict — thresholds gated at end of run. Report + history embed
+    // the pass/fail so a red row in the recent-runs table = regression
+    // catchable at a glance.
+    let verdict = compute_verdict(&summary);
+    let mut summary = summary;
+    summary.verdict_passed = verdict.passed;
+    summary.verdict_violations = verdict.violations.clone();
+
+    // Verdict JSON — workflow reads this after uploading and sets its
+    // own exit code accordingly. seer-host itself always exits 0 so the
+    // failing report still uploads (that's the whole point).
+    if let Ok(out_path) = std::env::var("SEER_VERDICT_OUT_PATH")
+        && let Ok(s) = serde_json::to_string_pretty(&verdict)
+    {
+        let _ = std::fs::write(&out_path, s);
+    }
+
+    if verdict.passed {
+        println!("[host.verdict] PASS");
+    } else {
+        println!(
+            "[host.verdict] FAIL ({} violations):",
+            verdict.violations.len()
+        );
+        for v in &verdict.violations {
+            println!("  - {v}");
+        }
+    }
 
     let mut history: Vec<RunSummary> = if let Ok(path) = std::env::var("SEER_HISTORY_IN_PATH") {
         match std::fs::read_to_string(&path) {
@@ -499,8 +600,13 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
         } else {
             format!(r#"<td><a href="{}">run</a></td>"#, h.ci_run_url)
         };
+        let status_cell = if h.verdict_passed {
+            r#"<td class="down">PASS</td>"#.to_string()
+        } else {
+            r#"<td class="up">FAIL</td>"#.to_string()
+        };
         history_rows.push_str(&format!(
-            r#"<tr class="{cls}"><td>{mark}</td><td><a href="{url}">{sha}</a></td><td>{when}</td><td class="{dhc}">{dh}</td><td class="{dgc}">{dgl}</td><td class="{dbc}">{dgb}</td>{ci_cell}<td class="dim">{leak}</td></tr>"#,
+            r#"<tr class="{cls}"><td>{mark}</td><td><a href="{url}">{sha}</a></td><td>{when}</td><td class="{dhc}">{dh}</td><td class="{dgc}">{dgl}</td><td class="{dbc}">{dgb}</td>{ci_cell}{status_cell}<td class="dim">{leak}</td></tr>"#,
             cls = if is_current { "current" } else { "" },
             mark = mark,
             url = h.report_url,
@@ -513,6 +619,7 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
             dbc = delta_class(h.d_gpu_bytes_mb as i64),
             dgb = fmt_delta_mb(h.d_gpu_bytes_mb),
             ci_cell = ci_cell,
+            status_cell = status_cell,
             leak = leak_marker,
         ));
     }
@@ -521,9 +628,31 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
     } else {
         format!(
             r#"<table>
-    <tr><th></th><th>sha</th><th>when (unix)</th><th>Δheap</th><th>Δgpu live</th><th>Δgpu bytes</th><th>CI</th><th>flags</th></tr>
+    <tr><th></th><th>sha</th><th>when (unix)</th><th>Δheap</th><th>Δgpu live</th><th>Δgpu bytes</th><th>CI</th><th>verdict</th><th>flags</th></tr>
     {history_rows}
 </table>"#
+        )
+    };
+
+    // Verdict banner — always present, colored by outcome.
+    let verdict_html = if current.verdict_passed {
+        format!(
+            r#"<div class="verdict pass"><strong>VERDICT: PASS</strong> · thresholds: Δheap ≤ {:.3} MB, Δgpu_live ≤ {}, Δgpu_bytes ≤ {:.3} MB · this run: Δheap {:.3} MB · Δgpu_live {} · Δgpu_bytes {:.3} MB</div>"#,
+            env_f64("SEER_MAX_D_HEAP_MB", 1.0),
+            env_i64("SEER_MAX_D_GPU_LIVE", 5),
+            env_f64("SEER_MAX_D_GPU_BYTES_MB", 0.5),
+            current.d_heap_mb,
+            current.d_gpu_live,
+            current.d_gpu_bytes_mb,
+        )
+    } else {
+        let list = current
+            .verdict_violations
+            .iter()
+            .map(|v| format!("<li>{}</li>", html_escape(v)))
+            .collect::<String>();
+        format!(
+            r#"<div class="verdict fail"><strong>VERDICT: FAIL</strong><ul>{list}</ul></div>"#
         )
     };
 
@@ -560,6 +689,11 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
   td.down {{ color: var(--down); }}
   td.flat {{ color: var(--flat); }}
   td.dim {{ color: var(--dim); }}
+  .verdict {{ padding: 14px 18px; margin: 16px 0; border-radius: 4px; font-size: 14px; }}
+  .verdict.pass {{ background: rgba(34, 197, 94, 0.10); border-left: 3px solid var(--down); }}
+  .verdict.fail {{ background: rgba(248, 113, 113, 0.10); border-left: 3px solid var(--up); color: #fecaca; }}
+  .verdict strong {{ font-size: 15px; }}
+  .verdict ul {{ margin: 8px 0 0 0; padding-left: 20px; }}
   tr.current {{ background: rgba(34, 211, 238, 0.08); }}
   tr.current td:first-child {{ color: var(--accent); font-weight: bold; }}
   a {{ color: var(--accent); text-decoration: none; }}
@@ -574,6 +708,7 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
 </style>
 </head><body>
   <h1>seer diagnostic report</h1>
+  {verdict_html}
   <div class="banner">
     commit: {sha_link}{branch_html}{ci_banner} · started: <code>{build_ts}</code> · metrics: <code>{n}</code> frames · last frame: <code>{last_frame}</code> · leak: <code>{leak_str}</code>
   </div>
@@ -616,6 +751,7 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
         sha_link = sha_link,
         branch_html = branch_html,
         ci_banner = ci_banner,
+        verdict_html = verdict_html,
         build_ts = build_ts,
         n = n,
         leak_str = if current.leak_enabled { "ON" } else { "off" },
