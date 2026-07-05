@@ -35,6 +35,11 @@ struct RunSummary {
     d_gpu_bytes_mb: f64,
     leak_enabled: bool,
     report_url: String,
+    // Populated only when running in GitHub Actions; empty otherwise.
+    // #[serde(default)] keeps deserialization working against older
+    // history.json entries that predate this field.
+    #[serde(default)]
+    ci_run_url: String,
 }
 
 const HISTORY_CAP: usize = 20;
@@ -231,6 +236,14 @@ fn main() -> Result<()> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
+    let ci_run_url = match (
+        std::env::var("GITHUB_REPOSITORY"),
+        std::env::var("GITHUB_RUN_ID"),
+    ) {
+        (Ok(repo), Ok(run_id)) => format!("https://github.com/{repo}/actions/runs/{run_id}"),
+        _ => String::new(),
+    };
+
     let summary = if !st.metrics.is_empty() {
         let first = &st.metrics[0];
         let last = &st.metrics[st.metrics.len() - 1];
@@ -252,6 +265,7 @@ fn main() -> Result<()> {
             d_gpu_bytes_mb: mb(last.gpu_bytes) - mb(first.gpu_bytes),
             leak_enabled,
             report_url: format!("/perf/{sha}/report.html"),
+            ci_run_url: ci_run_url.clone(),
         }
     } else {
         RunSummary {
@@ -271,6 +285,7 @@ fn main() -> Result<()> {
             d_gpu_bytes_mb: 0.0,
             leak_enabled,
             report_url: format!("/perf/{sha}/report.html"),
+            ci_run_url: ci_run_url.clone(),
         }
     };
 
@@ -479,8 +494,13 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
         let is_current = h.sha == current.sha && h.when_unix == current.when_unix;
         let mark = if is_current { "→" } else { " " };
         let leak_marker = if h.leak_enabled { " · leak=on" } else { "" };
+        let ci_cell = if h.ci_run_url.is_empty() {
+            String::from(r#"<td class="dim">—</td>"#)
+        } else {
+            format!(r#"<td><a href="{}">run</a></td>"#, h.ci_run_url)
+        };
         history_rows.push_str(&format!(
-            r#"<tr class="{cls}"><td>{mark}</td><td><a href="{url}">{sha}</a></td><td>{when}</td><td class="{dhc}">{dh}</td><td class="{dgc}">{dgl}</td><td class="{dbc}">{dgb}</td><td class="dim">{leak}</td></tr>"#,
+            r#"<tr class="{cls}"><td>{mark}</td><td><a href="{url}">{sha}</a></td><td>{when}</td><td class="{dhc}">{dh}</td><td class="{dgc}">{dgl}</td><td class="{dbc}">{dgb}</td>{ci_cell}<td class="dim">{leak}</td></tr>"#,
             cls = if is_current { "current" } else { "" },
             mark = mark,
             url = h.report_url,
@@ -492,6 +512,7 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
             dgl = fmt_delta_count(h.d_gpu_live),
             dbc = delta_class(h.d_gpu_bytes_mb as i64),
             dgb = fmt_delta_mb(h.d_gpu_bytes_mb),
+            ci_cell = ci_cell,
             leak = leak_marker,
         ));
     }
@@ -500,10 +521,16 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
     } else {
         format!(
             r#"<table>
-    <tr><th></th><th>sha</th><th>when (unix)</th><th>Δheap</th><th>Δgpu live</th><th>Δgpu bytes</th><th>flags</th></tr>
+    <tr><th></th><th>sha</th><th>when (unix)</th><th>Δheap</th><th>Δgpu live</th><th>Δgpu bytes</th><th>CI</th><th>flags</th></tr>
     {history_rows}
 </table>"#
         )
+    };
+
+    let ci_banner = if current.ci_run_url.is_empty() {
+        String::new()
+    } else {
+        format!(r#" · CI: <a href="{}">run</a>"#, current.ci_run_url)
     };
 
     let html = format!(
@@ -548,7 +575,7 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
 </head><body>
   <h1>seer diagnostic report</h1>
   <div class="banner">
-    commit: {sha_link}{branch_html} · started: <code>{build_ts}</code> · metrics: <code>{n}</code> frames · last frame: <code>{last_frame}</code> · leak: <code>{leak_str}</code>
+    commit: {sha_link}{branch_html}{ci_banner} · started: <code>{build_ts}</code> · metrics: <code>{n}</code> frames · last frame: <code>{last_frame}</code> · leak: <code>{leak_str}</code>
   </div>
 
   <h2>Rendered scene</h2>
@@ -588,6 +615,7 @@ fn render_html_report(st: &HostState, path: &str, history: &[RunSummary], curren
 "##,
         sha_link = sha_link,
         branch_html = branch_html,
+        ci_banner = ci_banner,
         build_ts = build_ts,
         n = n,
         leak_str = if current.leak_enabled { "ON" } else { "off" },
