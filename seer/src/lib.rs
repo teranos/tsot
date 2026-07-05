@@ -64,8 +64,24 @@ struct GpuHandles {
     retained: Vec<u64>,
 }
 
-const FRAMES: u32 = 300;
+const DEFAULT_FRAMES: u32 = 300;
 const REPORT_EVERY: u32 = 30;
+
+fn frame_budget() -> u32 {
+    // SEER_FRAMES env var lets CI keep the runtime bounded and the
+    // build log short. Local dev sticks with the default.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::var("SEER_FRAMES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_FRAMES)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        DEFAULT_FRAMES
+    }
+}
 
 fn setup(mut commands: Commands) {
     obs::emit("[bevy.setup] Startup schedule running");
@@ -177,8 +193,11 @@ fn _run() {
             report_player_pos.after(tick),
         ),
     );
-    obs::emit("[seer.boot] Bevy App built, entering update loop");
-    for _ in 0..FRAMES {
+    let frames = frame_budget();
+    obs::emit(&format!(
+        "[seer.boot] Bevy App built, entering update loop for {frames} frames"
+    ));
+    for _ in 0..frames {
         app.update();
     }
 

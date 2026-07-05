@@ -82,9 +82,15 @@ unsafe impl GlobalAlloc for InstrumentedAlloc {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn capture_source_for(_seq: usize, _size: usize, _align: usize) -> String {
-    // Native: unwind is real, `debug = 1` in the release profile keeps
-    // enough info for Rust identifiers with file:line:column.
-    std::backtrace::Backtrace::force_capture().to_string()
+    // std::backtrace::Backtrace::force_capture().to_string() does full
+    // DWARF symbolication per frame — running that from a GlobalAlloc
+    // hook thousands of times per Bevy frame hangs the process
+    // indefinitely (verified: 30-frame run doesn't complete in 60s
+    // locally, 10-min CI timeout). The native binary's role is fast
+    // ECS iteration; source attribution lives in the wasmtime-host
+    // path (Phase 1: seer_record_hotspot -> WasmBacktrace) which is
+    // essentially free because wasmtime tracks the wasm stack anyway.
+    String::new()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -105,7 +111,10 @@ fn capture_source_for(seq: usize, size: usize, align: usize) -> String {
 pub fn emit(line: &str) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        println!("{}", line);
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
     }
     #[cfg(target_arch = "wasm32")]
     unsafe {
@@ -187,7 +196,11 @@ pub fn resource_destroyed(id: u64) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn capture_gpu_source(_id: u64, _kind: GpuResourceKind, _size: u64) -> String {
-    std::backtrace::Backtrace::force_capture().to_string()
+    // Same reasoning as capture_source_for: native full backtraces
+    // are prohibitively expensive from ECS hot paths. Wasmtime host
+    // captures WasmBacktrace via seer_record_gpu_event at effectively
+    // zero cost; that's the diagnostic channel.
+    String::new()
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -30,13 +30,18 @@ on:
 jobs:
   seer-native:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: seer
+
+      - name: Install Mesa software Vulkan (lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
 
       - name: Build seer-native
         working-directory: seer
@@ -46,6 +51,7 @@ jobs:
         working-directory: seer
         env:
           RUST_BACKTRACE: full
+          SEER_FRAMES: '60'
         run: |
           mkdir -p out
           cargo run --release --bin seer-native 2>&1 | tee out/seer-native.log
