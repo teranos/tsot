@@ -13,6 +13,7 @@
 
 pub mod obs;
 pub mod physics;
+pub mod trees;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gpu;
@@ -202,15 +203,16 @@ fn report_player_pos(
 fn _run() {
     obs::emit("[seer.boot] entering run()");
     let mut app = App::new();
-    app.add_systems(Startup, setup).add_systems(
-        Update,
-        (
-            physics::advance_player,
-            physics::resolve_collisions.after(physics::advance_player),
-            tick.after(physics::resolve_collisions),
-            report_player_pos.after(tick),
-        ),
-    );
+    app.add_systems(Startup, (setup, trees::setup_trees.after(setup)))
+        .add_systems(
+            Update,
+            (
+                physics::advance_player,
+                physics::resolve_collisions.after(physics::advance_player),
+                tick.after(physics::resolve_collisions),
+                report_player_pos.after(tick),
+            ),
+        );
     let frames = frame_budget();
     obs::emit(&format!(
         "[seer.boot] Bevy App built, entering update loop for {frames} frames"
