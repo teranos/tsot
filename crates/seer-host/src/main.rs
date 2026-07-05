@@ -11,11 +11,13 @@
 // wasm module itself is unchanged.
 
 use anyhow::{Context, Result, anyhow};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use wasmtime::*;
 
 struct HostState {
     ledger: Vec<String>,
+    hotspot_backtraces: BTreeMap<u32, String>,
 }
 
 fn main() -> Result<()> {
@@ -29,7 +31,10 @@ fn main() -> Result<()> {
     let module = Module::from_file(&engine, &wasm_path)
         .with_context(|| format!("loading module from {wasm_path}"))?;
 
-    let state = Arc::new(Mutex::new(HostState { ledger: Vec::new() }));
+    let state = Arc::new(Mutex::new(HostState {
+        ledger: Vec::new(),
+        hotspot_backtraces: BTreeMap::new(),
+    }));
     let mut store: Store<Arc<Mutex<HostState>>> = Store::new(&engine, state.clone());
     let mut linker: Linker<Arc<Mutex<HostState>>> = Linker::new(&engine);
 
@@ -53,6 +58,36 @@ fn main() -> Result<()> {
         },
     )?;
 
+    // Every wasm-side allocation >= 64 KB calls this — the host
+    // captures the wasm-side call stack at the boundary and files it
+    // under `seq`. Later, when the wasm dumps its hotspot ring, each
+    // line carries the seq; correlate with this ledger for the stack.
+    // This is the "source attribution from inside the wasm" closed via
+    // the wasmtime host — the founding principle made concrete.
+    linker.func_wrap(
+        "env",
+        "seer_record_hotspot",
+        |caller: Caller<'_, Arc<Mutex<HostState>>>, seq: u32, size: u32, align: u32| -> Result<()> {
+            let bt = WasmBacktrace::force_capture(&caller);
+            let mut rendered = String::new();
+            for (i, frame) in bt.frames().iter().enumerate() {
+                let name = frame.func_name().unwrap_or("<anonymous>");
+                let func_idx = frame.func_index();
+                rendered.push_str(&format!("  {i:>3}: {name} (func_index={func_idx})\n"));
+            }
+            let state = caller.data().clone();
+            if let Ok(mut st) = state.lock() {
+                st.hotspot_backtraces
+                    .insert(seq, format!("size={size} align={align}\n{rendered}"));
+                st.ledger.push(format!(
+                    "seer_record_hotspot seq={seq} size={size} align={align} frames={}",
+                    bt.frames().len()
+                ));
+            }
+            Ok(())
+        },
+    )?;
+
     println!("[host] instantiating");
     let instance = linker.instantiate(&mut store, &module)?;
 
@@ -71,6 +106,15 @@ fn main() -> Result<()> {
     );
     for entry in st.ledger.iter() {
         println!("  {entry}");
+    }
+
+    println!(
+        "[host.hotspot-backtraces] {} distinct seq entries:",
+        st.hotspot_backtraces.len()
+    );
+    for (seq, bt) in st.hotspot_backtraces.iter() {
+        println!("[host.hotspot seq={seq}]");
+        println!("{bt}");
     }
 
     Ok(())

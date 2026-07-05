@@ -57,7 +57,7 @@ unsafe impl GlobalAlloc for InstrumentedAlloc {
             }
         }
         if size >= HOTSPOT_THRESHOLD && !IN_HEAVY_ALLOC.swap(true, Ordering::Relaxed) {
-            let source = capture_source();
+            let source = capture_source_for(seq, size, layout.align());
             if let Ok(mut hs) = HOTSPOTS.lock() {
                 if hs.len() >= HOTSPOT_CAPACITY {
                     hs.remove(0);
@@ -81,13 +81,25 @@ unsafe impl GlobalAlloc for InstrumentedAlloc {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn capture_source() -> String {
+fn capture_source_for(_seq: usize, _size: usize, _align: usize) -> String {
+    // Native: unwind is real, `debug = 1` in the release profile keeps
+    // enough info for Rust identifiers with file:line:column.
     std::backtrace::Backtrace::force_capture().to_string()
 }
 
 #[cfg(target_arch = "wasm32")]
-fn capture_source() -> String {
-    String::from("<wasm: source attribution via seer-host boundary ledger>")
+fn capture_source_for(seq: usize, size: usize, align: usize) -> String {
+    // Wasm has no unwind info; the wasm-side hotspot ring cannot
+    // capture a Rust backtrace itself. Instead the wasm calls a host
+    // import at this exact site — `seer_record_hotspot` — and the host
+    // (seer-host) captures a `wasmtime::WasmBacktrace` at that
+    // boundary crossing, keyed by seq. The wasm's own record here just
+    // carries the seq; the host ledger has the wasm-side stack. This
+    // is what "wasmtime as the primary diagnostic environment" buys.
+    unsafe {
+        seer_record_hotspot(seq as u32, size as u32, align as u32);
+    }
+    format!("<host-ledger seq={seq}>")
 }
 
 pub fn emit(line: &str) {
@@ -105,6 +117,7 @@ pub fn emit(line: &str) {
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn seer_emit(ptr: *const u8, len: usize);
+    fn seer_record_hotspot(seq: u32, size: u32, align: u32);
 }
 
 pub fn dump_report() {
