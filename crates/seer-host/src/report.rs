@@ -253,13 +253,18 @@ pub fn render_html_report(
         } else {
             format!(r#"<td><a href="{}">run</a></td>"#, h.ci_run_url)
         };
+        let duration_cell = if h.duration_secs == 0 {
+            String::from(r#"<td class="dim">—</td>"#)
+        } else {
+            format!(r#"<td class="dim">{}</td>"#, fmt_duration(h.duration_secs))
+        };
         let status_cell = if h.verdict_passed {
             r#"<td class="down">PASS</td>"#.to_string()
         } else {
             r#"<td class="up">FAIL</td>"#.to_string()
         };
         history_rows.push_str(&format!(
-            r#"<tr class="{cls}"><td>{mark}</td><td><a href="{url}">{sha}</a></td><td>{when}</td><td class="{dhc}">{dh}</td><td class="{dgc}">{dgl}</td><td class="{dbc}">{dgb}</td>{ci_cell}{status_cell}<td class="dim">{leak}</td></tr>"#,
+            r#"<tr class="{cls}"><td>{mark}</td><td><a href="{url}">{sha}</a></td><td>{when}</td><td class="{dhc}">{dh}</td><td class="{dgc}">{dgl}</td><td class="{dbc}">{dgb}</td>{ci_cell}{duration_cell}{status_cell}<td class="dim">{leak}</td></tr>"#,
             cls = if is_current { "current" } else { "" },
             mark = mark,
             url = h.report_url,
@@ -272,6 +277,7 @@ pub fn render_html_report(
             dbc = delta_class(h.d_gpu_bytes_mb as i64),
             dgb = fmt_delta_mb(h.d_gpu_bytes_mb),
             ci_cell = ci_cell,
+            duration_cell = duration_cell,
             status_cell = status_cell,
             leak = leak_marker,
         ));
@@ -281,7 +287,7 @@ pub fn render_html_report(
     } else {
         format!(
             r#"<table>
-    <tr><th></th><th>sha</th><th>when (unix)</th><th>Δheap</th><th>Δgpu live</th><th>Δgpu bytes</th><th>CI</th><th>verdict</th><th>flags</th></tr>
+    <tr><th></th><th>sha</th><th>when (unix)</th><th>Δheap</th><th>Δgpu live</th><th>Δgpu bytes</th><th>CI</th><th>dur</th><th>verdict</th><th>flags</th></tr>
     {history_rows}
 </table>"#
         )
@@ -496,8 +502,15 @@ fn fmt_delta_bytes(d: i64) -> String {
     }
 }
 
+/// A run-over-run delta below FLAT_MB_THRESHOLD reads as noise
+/// (Bevy internal accounting churn, small vec-growth, allocator
+/// alignment). Above it is signal worth investigating. 0.02 MB
+/// = 20 KB — coarser than the previous 0.005 MB, so a genuinely
+/// steady run reports "flat" instead of "+0.01 MB flicker" noise.
+const FLAT_MB_THRESHOLD: f64 = 0.02;
+
 fn fmt_delta_mb(d: f64) -> String {
-    if d.abs() < 0.005 {
+    if d.abs() < FLAT_MB_THRESHOLD {
         "flat".to_string()
     } else if d > 0.0 {
         format!("+{d:.2} MB")
@@ -523,6 +536,16 @@ fn delta_class(d: i64) -> &'static str {
         "down"
     } else {
         "flat"
+    }
+}
+
+fn fmt_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        let m = secs / 60;
+        let s = secs % 60;
+        format!("{m}m{s:02}s")
     }
 }
 

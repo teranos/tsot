@@ -13,6 +13,7 @@
 
 pub mod obs;
 pub mod physics;
+pub mod room;
 pub mod trees;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -96,9 +97,10 @@ fn setup(mut commands: Commands) {
     // Ported from rave: spawn a player + 5 static obstacles that the
     // resolve_collisions system iterates every frame. Real ECS query
     // pattern with With<PlayerMarker> / Without<PlayerMarker> filters.
+    // Player spawns at rave's canonical SPAWN_POS.
     commands.spawn((
         PlayerMarker,
-        Position(Vec3::new(0.0, 0.0, 0.0)),
+        Position(room::SPAWN_POS),
         Velocity(Vec3::new(1.5, 0.0, 0.7)),
     ));
     for (i, offset) in [
@@ -209,7 +211,8 @@ fn _run() {
             (
                 physics::advance_player,
                 physics::resolve_collisions.after(physics::advance_player),
-                tick.after(physics::resolve_collisions),
+                room::world_bounds_clamp.after(physics::resolve_collisions),
+                tick.after(room::world_bounds_clamp),
                 report_player_pos.after(tick),
             ),
         );

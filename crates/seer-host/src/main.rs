@@ -23,6 +23,7 @@ use crate::summary::{build_summary, compute_verdict};
 const HISTORY_CAP: usize = 20;
 
 fn main() -> Result<()> {
+    let host_start = std::time::Instant::now();
     let wasm_path = std::env::args()
         .nth(1)
         .ok_or_else(|| anyhow!("usage: seer-host <path-to-seer.wasm>"))?;
@@ -97,6 +98,7 @@ fn main() -> Result<()> {
     };
 
     let mut summary = build_summary(&st, &sha, &short_sha, &ci_run_url);
+    summary.duration_secs = host_start.elapsed().as_secs();
     let verdict = compute_verdict(&summary);
     summary.verdict_passed = verdict.passed;
     summary.verdict_violations = verdict.violations.clone();

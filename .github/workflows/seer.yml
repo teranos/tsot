@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -64,7 +64,7 @@ jobs:
 
       - name: Assume deploy role
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: arn:aws:iam::548351057127:role/seer-github-deploy
           aws-region: eu-central-1
@@ -86,7 +86,7 @@ jobs:
 
       - name: Upload native log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: seer-native-${{ github.sha }}
           path: seer/out/
@@ -96,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install wasm32 target
         run: rustup target add wasm32-unknown-unknown
@@ -140,7 +140,7 @@ jobs:
 
       - name: Upload host log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: seer-host-${{ github.sha }}
           path: out/
@@ -148,7 +148,7 @@ jobs:
 
       - name: Assume deploy role
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: arn:aws:iam::548351057127:role/seer-github-deploy
           aws-region: eu-central-1

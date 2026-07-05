@@ -34,6 +34,10 @@ pub struct RunSummary {
     pub verdict_passed: bool,
     #[serde(default)]
     pub verdict_violations: Vec<String>,
+    /// Wall-clock seconds seer-host spent running (from main() entry
+    /// to end). Approximates CI job duration for the seer-host step.
+    #[serde(default)]
+    pub duration_secs: u64,
 }
 
 fn default_true() -> bool {
@@ -159,5 +163,6 @@ pub fn build_summary(st: &HostState, sha: &str, short_sha: &str, ci_run_url: &st
         ci_run_url: ci_run_url.to_string(),
         verdict_passed: true,
         verdict_violations: Vec::new(),
+        duration_secs: 0,
     }
 }
