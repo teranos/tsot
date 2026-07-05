@@ -51,7 +51,7 @@ jobs:
         working-directory: seer
         env:
           RUST_BACKTRACE: full
-          SEER_FRAMES: '60'
+          SEER_FRAMES: '180'
         run: |
           mkdir -p out
           cargo run --release --bin seer-native 2>&1 | tee out/seer-native.log
@@ -84,11 +84,15 @@ jobs:
         run: cargo build --release
 
       - name: Run seer-host on seer.wasm
+        env:
+          SEER_FRAMES: '180'
+          SEER_REPORT_PATH: out/report.html
         run: |
           mkdir -p out
           ./crates/seer-host/target/release/seer-host \
             seer/target/wasm32-unknown-unknown/release/seer.wasm \
             2>&1 | tee out/seer-host.log
+          ls -la out/
 
       - name: Upload host log
         if: always()

@@ -128,6 +128,36 @@ unsafe extern "C" {
     fn seer_emit(ptr: *const u8, len: usize);
     fn seer_record_hotspot(seq: u32, size: u32, align: u32);
     fn seer_record_gpu_event(id: u32, kind: u32, size: u32);
+    fn seer_report_metric(frame: u32, heap_bytes: u32, gpu_live: u32, gpu_bytes: u32);
+}
+
+/// Structured metric snapshot for the HTML report artifact.
+/// Host collects these into a time series and renders a chart.
+pub fn emit_metric(frame: u32, heap_bytes: u64, gpu_live: u32, gpu_bytes: u64) {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        seer_report_metric(
+            frame,
+            heap_bytes.min(u32::MAX as u64) as u32,
+            gpu_live,
+            gpu_bytes.min(u32::MAX as u64) as u32,
+        );
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        emit(&format!(
+            "[obs.metric] frame={frame} heap={heap_bytes} gpu_live={gpu_live} gpu_bytes={gpu_bytes}"
+        ));
+    }
+}
+
+pub fn gpu_totals() -> (u32, u64) {
+    let live = match GPU_LIVE.lock() {
+        Ok(l) => l,
+        Err(_) => return (0, 0),
+    };
+    let bytes: u64 = live.iter().map(|r| r.size).sum();
+    (live.len() as u32, bytes)
 }
 
 // ============================================================

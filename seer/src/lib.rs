@@ -155,6 +155,14 @@ fn tick(
         gpu.retained.push(tid);
     }
 
+    // Metric emission every frame — cheap host call (4 numbers), gives
+    // the HTML report a dense time series for the chart. Detailed
+    // text dumps stay at REPORT_EVERY intervals to keep the log
+    // readable.
+    let heap = obs::ALLOC_BYTES.load(std::sync::atomic::Ordering::Relaxed) as u64;
+    let (gpu_live, gpu_bytes) = obs::gpu_totals();
+    obs::emit_metric(frame, heap, gpu_live, gpu_bytes);
+
     if frame.is_multiple_of(REPORT_EVERY) {
         obs::emit(&format!(
             "[bevy.tick] frame={frame} retained_cpu_bufs={} retained_gpu_handles={}",
