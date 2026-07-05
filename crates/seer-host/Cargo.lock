@@ -854,6 +854,7 @@ name = "seer-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "rustc-demangle",
  "wasmtime",
 ]
 

@@ -11,9 +11,21 @@
 // wasm module itself is unchanged.
 
 use anyhow::{Context, Result, anyhow};
+use rustc_demangle::demangle;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use wasmtime::*;
+
+fn render_wasm_backtrace(bt: &WasmBacktrace) -> String {
+    let mut out = String::new();
+    for (i, frame) in bt.frames().iter().enumerate() {
+        let name = frame.func_name().unwrap_or("<anonymous>");
+        let demangled = demangle(name);
+        let func_idx = frame.func_index();
+        out.push_str(&format!("  {i:>3}: {demangled:#} (func_index={func_idx})\n"));
+    }
+    out
+}
 
 struct HostState {
     ledger: Vec<String>,
@@ -73,12 +85,7 @@ fn main() -> Result<()> {
         "seer_record_gpu_event",
         |caller: Caller<'_, Arc<Mutex<HostState>>>, id: u32, kind: u32, size: u32| -> Result<()> {
             let bt = WasmBacktrace::force_capture(&caller);
-            let mut rendered = String::new();
-            for (i, frame) in bt.frames().iter().enumerate() {
-                let name = frame.func_name().unwrap_or("<anonymous>");
-                let func_idx = frame.func_index();
-                rendered.push_str(&format!("  {i:>3}: {name} (func_index={func_idx})\n"));
-            }
+            let rendered = render_wasm_backtrace(&bt);
             let kind_name = match kind {
                 1 => "buffer",
                 2 => "texture",
@@ -103,12 +110,7 @@ fn main() -> Result<()> {
         "seer_record_hotspot",
         |caller: Caller<'_, Arc<Mutex<HostState>>>, seq: u32, size: u32, align: u32| -> Result<()> {
             let bt = WasmBacktrace::force_capture(&caller);
-            let mut rendered = String::new();
-            for (i, frame) in bt.frames().iter().enumerate() {
-                let name = frame.func_name().unwrap_or("<anonymous>");
-                let func_idx = frame.func_index();
-                rendered.push_str(&format!("  {i:>3}: {name} (func_index={func_idx})\n"));
-            }
+            let rendered = render_wasm_backtrace(&bt);
             let state = caller.data().clone();
             if let Ok(mut st) = state.lock() {
                 st.hotspot_backtraces
