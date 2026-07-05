@@ -1112,6 +1112,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rave-health"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+]
+
+[[package]]
 name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1187,6 +1194,7 @@ dependencies = [
  "bevy_math",
  "png",
  "pollster",
+ "rave-health",
  "sacred-error",
  "wgpu",
 ]

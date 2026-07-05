@@ -13,6 +13,7 @@
 
 pub mod build_info;
 pub mod error;
+pub mod health;
 pub mod obs;
 pub mod physics;
 pub mod room;
