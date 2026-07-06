@@ -1,7 +1,6 @@
-// Wasm-boundary surface. All four env.* imports the wasm module
-// expects live here. If a new one lands in seer/src/obs.rs, wire it
-// in wire_imports — the seer.wasm module fails to instantiate
-// otherwise, by design.
+// Wasm-boundary surface. All env.* imports the game module expects
+// live here. If a new one lands in crates/seer-obs, wire it in
+// wire_imports — game.wasm fails to instantiate otherwise.
 
 use anyhow::{Result, anyhow};
 use rustc_demangle::demangle;

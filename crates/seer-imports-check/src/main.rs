@@ -1,6 +1,6 @@
-// Wasm imports allow-list checker for seer.wasm.
+// Wasm imports allow-list checker for game.wasm.
 //
-// Usage: seer-imports-check <path-to-seer.wasm> <path-to-imports.allow>
+// Usage: seer-imports-check <path-to-game.wasm> <path-to-imports.allow>
 //
 // Reads the wasm's import section, sorts + dedupes, compares to the
 // allow-list. Exit 0 = imports match. Exit 1 = drift (added, missing,

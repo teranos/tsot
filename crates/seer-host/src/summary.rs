@@ -38,7 +38,7 @@ pub struct RunSummary {
     /// to end). Approximates CI job duration for the seer-host step.
     #[serde(default)]
     pub duration_secs: u64,
-    /// Size of the seer.wasm module in bytes, measured at the boundary
+    /// Size of the game.wasm module in bytes, measured at the boundary
     /// where seer-host loads it. Regression signal for bloat: every
     /// commit records its wasm size; the recent-runs table shows the
     /// delta so wasm-bindgen creep, added deps, or lost optimisation

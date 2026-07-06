@@ -2,16 +2,10 @@
   import { wasmUrl } from './lib/fetch'
 
   // Per-column "run this commit's wasm in your browser now" panel.
-  // Fetches /perf/<sha>/seer.wasm, wires the same four env.* imports
-  // that seer-host provides under wasmtime and that seer/web/index.html
-  // used to provide under the browser bootstrap. Streams the wasm's
-  // seer_emit output into a scrollable pre so the reader gets ground
-  // truth from THIS commit's binary — not an interpretation of it.
-  //
-  // Only expected to work for shas whose seer.wasm still lives on S3;
-  // seer-browser.yml GCs everything beyond the newest 4 (see
-  // 'we should always keep 4 recent versions alive'). Older shas get
-  // a 404 on click and surface the honest error.
+  // Fetches /perf/<sha>/game.wasm, wires the env.* imports that
+  // seer-host provides under wasmtime. Streams the wasm's seer_emit
+  // output into a scrollable pre — ground truth from THIS commit's
+  // binary. Older shas whose game.wasm has been GC'd surface a 404.
 
   let { sha }: { sha: string } = $props()
 

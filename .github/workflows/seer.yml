@@ -1,28 +1,15 @@
 name: seer
 
-# Two jobs, one workflow. Both prove the same code compiles for both
-# targets and runs under both runtimes with full observability output.
-#
-#   seer-native — runs the game as a native binary. Rust backtrace
-#                 support gives Rust source paths on every >= 64 KB
-#                 allocation. Fastest dev cycle: build + run in seconds.
-#
-#   seer-host   — builds the game as wasm32-unknown-unknown, then loads
-#                 it into the wasmtime host binary (crates/seer-host).
-#                 Every wasm→host boundary crossing is a recorded event.
-#                 This is what the "wasmtime as primary diagnostic
-#                 environment" requirement means concretely: total
-#                 host-side introspection of a real wasm running the
-#                 same source that will later deploy to the browser.
-#
-# No browser, no simulator, no headless Chrome. Both jobs upload their
-# stdout as artifacts for inspection.
+# Two jobs. game-native runs the game as a native binary (fast dev
+# cycle, Rust backtraces). seer-host builds game.wasm and runs it
+# under wasmtime, recording every boundary crossing. Both upload
+# stdout as artifacts.
 
 on:
   push:
     branches: ['**']
     paths:
-      - 'seer/**'
+      - 'game/**'
       - 'crates/seer-host/**'
       - '.github/workflows/seer.yml'
   workflow_dispatch:
@@ -32,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  seer-native:
+  game-native:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -40,22 +27,22 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: seer
+          workspaces: game
 
       - name: Install Mesa software Vulkan (lavapipe)
         run: |
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers libvulkan1
 
-      - name: Build seer-native
-        working-directory: seer
+      - name: Build game-native
+        working-directory: game
         env:
           SEER_BUILD_COMMIT: ${{ github.sha }}
           SEER_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
-        run: cargo build --release --bin seer-native
+        run: cargo build --release --bin game-native
 
-      - name: Run seer-native
-        working-directory: seer
+      - name: Run game-native
+        working-directory: game
         env:
           RUST_BACKTRACE: full
           SEER_FRAMES: '180'
@@ -64,7 +51,7 @@ jobs:
           SEER_MULTI_FRAME_DIR: out
         run: |
           mkdir -p out
-          cargo run --release --bin seer-native 2>&1 | tee out/seer-native.log
+          cargo run --release --bin game-native 2>&1 | tee out/game-native.log
           ls -la out/
 
       - name: Assume deploy role
@@ -78,17 +65,17 @@ jobs:
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
         run: |
           # frame.png + frame-{0..3}.png both may exist; upload each.
-          if [ -f seer/out/frame.png ]; then
+          if [ -f game/out/frame.png ]; then
             for prefix in "perf/${{ github.sha }}" "perf/latest"; do
-              aws s3 cp seer/out/frame.png "s3://seer-sbvh-static/$prefix/frame.png" \
+              aws s3 cp game/out/frame.png "s3://seer-sbvh-static/$prefix/frame.png" \
                 --cache-control "public, max-age=300" \
                 --content-type "image/png"
             done
           fi
           for i in 0 1 2 3; do
-            if [ -f "seer/out/frame-$i.png" ]; then
+            if [ -f "game/out/frame-$i.png" ]; then
               for prefix in "perf/${{ github.sha }}" "perf/latest"; do
-                aws s3 cp "seer/out/frame-$i.png" "s3://seer-sbvh-static/$prefix/frame-$i.png" \
+                aws s3 cp "game/out/frame-$i.png" "s3://seer-sbvh-static/$prefix/frame-$i.png" \
                   --cache-control "public, max-age=300" \
                   --content-type "image/png"
               done
@@ -103,8 +90,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: seer-native-${{ github.sha }}
-          path: seer/out/
+          name: game-native-${{ github.sha }}
+          path: game/out/
           retention-days: 30
 
   seer-p2p-test:
@@ -132,8 +119,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build seer.wasm
-        working-directory: seer
+      - name: Build game.wasm
+        working-directory: game
         env:
           SEER_BUILD_COMMIT: ${{ github.sha }}
           SEER_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
@@ -144,8 +131,8 @@ jobs:
         run: |
           cargo build --release
           ./target/release/seer-imports-check \
-            ../../seer/target/wasm32-unknown-unknown/release/seer.wasm \
-            ../../seer/imports.allow
+            ../../game/target/wasm32-unknown-unknown/release/game.wasm \
+            ../../game/imports.allow
 
       - name: Build seer-host
         working-directory: crates/seer-host
@@ -162,7 +149,7 @@ jobs:
           curl -sSf -o out/history-in.json https://seer.sbvh.nl/perf/history.json || echo '[]' > out/history-in.json
           echo "prior history entries: $(python3 -c 'import json,sys;print(len(json.load(open("out/history-in.json"))))' 2>/dev/null || echo 0)"
 
-      - name: Run seer-host on seer.wasm
+      - name: Run seer-host on game.wasm
         env:
           SEER_FRAMES: '180'
           SEER_HISTORY_IN_PATH: out/history-in.json
@@ -176,7 +163,7 @@ jobs:
           mkdir -p out
           [ -f out/history-in.json ] || echo '[]' > out/history-in.json
           ./crates/seer-host/target/release/seer-host \
-            seer/target/wasm32-unknown-unknown/release/seer.wasm \
+            game/target/wasm32-unknown-unknown/release/game.wasm \
             2>&1 | tee out/seer-host.log
           ls -la out/
 

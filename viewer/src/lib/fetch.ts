@@ -26,7 +26,7 @@ async function loadJson<T>(url: string): Promise<T> {
 export const DATA_BASE = '/perf'
 
 export function wasmUrl(sha: string): string {
-  return `${DATA_BASE}/${sha}/seer.wasm`
+  return `${DATA_BASE}/${sha}/game.wasm`
 }
 
 export function frameUrl(sha: string): string {

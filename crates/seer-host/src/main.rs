@@ -16,7 +16,7 @@ fn main() -> Result<()> {
     let host_start = std::time::Instant::now();
     let wasm_path = std::env::args()
         .nth(1)
-        .ok_or_else(|| anyhow!("usage: seer-host <path-to-seer.wasm>"))?;
+        .ok_or_else(|| anyhow!("usage: seer-host <path-to-game.wasm>"))?;
 
     println!("[host] engine init");
     let engine = Engine::default();
@@ -34,7 +34,7 @@ fn main() -> Result<()> {
 
     let run = instance
         .get_typed_func::<(), ()>(&mut store, "run")
-        .context("seer.wasm must export a `run` function")?;
+        .context("game.wasm must export a `run` function")?;
 
     println!("[host] calling run()");
     run.call(&mut store, ())?;

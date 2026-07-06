@@ -1,4 +1,4 @@
-# Every wasm import allowed in seer.wasm.
+# Every wasm import allowed in game.wasm.
 #
 # CI runs `seer-imports-check` on each build: extracts the wasm's
 # import section, sorts, diffs against this file, fails on drift.

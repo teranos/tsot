@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * seer/viewer dev server
+ * seer viewer dev server
  *
  * Serves the built frontend from dist/ with live reload. For data
  * requests (/history.json, /<sha>/<file>) it either:
@@ -138,7 +138,7 @@ const server = Bun.serve({
   },
 })
 
-console.log(`seer/viewer dev: http://localhost:${server.port}`)
+console.log(`seer viewer dev: http://localhost:${server.port}`)
 if (DATA_DIR) {
   console.log(`data: local ${DATA_DIR}`)
 } else {

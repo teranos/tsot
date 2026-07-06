@@ -1,5 +1,5 @@
 /**
- * seer/viewer builder
+ * seer viewer builder
  *
  * Compiles Svelte 5 via Bun.build() plugin.
  * Outputs bundled JS + index.html + tokens.css + font.css to dist/.
@@ -57,4 +57,4 @@ await copyFile(join(srcDir, 'font.css'), join(outDir, 'font.css'))
 const html = await Bun.file(join(import.meta.dir, 'index.html')).text()
 await Bun.write(join(outDir, 'index.html'), html.replace('/src/main.ts', '/main.js'))
 
-console.log('seer/viewer built -> dist/')
+console.log('seer viewer built -> dist/')
