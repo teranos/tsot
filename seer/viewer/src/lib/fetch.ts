@@ -22,8 +22,22 @@ async function loadJson<T>(url: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+// Common prefix for every data artifact seer-host produces. Kept
+// in one constant so a future flattening (drop /perf/) is a single
+// edit here, and so LiveRun composes URLs the same way as JSON
+// loaders. Matches S3 upload prefix in seer.yml / seer-browser.yml.
+export const DATA_BASE = '/perf'
+
+export function wasmUrl(sha: string): string {
+  return `${DATA_BASE}/${sha}/seer.wasm`
+}
+
+export function frameUrl(sha: string): string {
+  return `${DATA_BASE}/${sha}/frame.png`
+}
+
 export async function loadHistory(): Promise<RunSummary[]> {
-  return loadJson<RunSummary[]>('/history.json')
+  return loadJson<RunSummary[]>(`${DATA_BASE}/history.json`)
 }
 
 export interface CommitData {
@@ -38,8 +52,8 @@ export interface CommitData {
 // state — each field renders differently downstream.
 export async function loadCommitData(sha: string): Promise<CommitData> {
   const [metricsRes, reportRes] = await Promise.allSettled([
-    loadJson<Metric[]>(`/${sha}/metrics.json`),
-    loadJson<CommitReport>(`/${sha}/report.json`),
+    loadJson<Metric[]>(`${DATA_BASE}/${sha}/metrics.json`),
+    loadJson<CommitReport>(`${DATA_BASE}/${sha}/report.json`),
   ])
   return {
     metrics: metricsRes.status === 'fulfilled' ? metricsRes.value : null,

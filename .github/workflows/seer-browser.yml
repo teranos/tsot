@@ -1,16 +1,25 @@
 name: seer-browser
 
-# Browser deploy for seer. Builds the same seer.wasm that seer-host
-# runs under wasmtime, packages it alongside a small HTML + JS
-# bootstrap that provides the three env.* imports, then syncs to S3
-# behind CloudFront at https://seer.sbvh.nl/.
+# Browser deploy for seer. Two outputs to S3, both behind CloudFront
+# at https://seer.sbvh.nl/:
 #
-# No wasm-bindgen, no bundler, no npm. The dist is: seer.wasm +
-# index.html. That's the whole surface.
+#   1. seer/viewer/dist/ syncs to the bucket root — this is the seer
+#      reporting UI itself. Loads /perf/history.json, renders one
+#      column per commit, each column pulls its per-sha JSONs from
+#      /perf/<sha>/*.
 #
-# Also uploads any per-commit perf report artifact that the seer.yml
-# workflow produced for this SHA, so https://seer.sbvh.nl/perf/<sha>/
-# resolves to the diagnostic HTML from the same commit.
+#   2. seer.wasm uploads to /perf/<sha>/seer.wasm — the exact binary
+#      seer-host just ran under wasmtime. The viewer's LiveRun panel
+#      per column fetches this and re-instantiates it in the browser
+#      with the same four env.* imports, so the reader can run the
+#      historical commit's wasm directly.
+#
+# GC keeps only the newest 4 shas' seer.wasm on S3 — older commits
+# retain their JSONs (small, forever) but lose the wasm blob. LiveRun
+# for those columns surfaces the honest 404.
+#
+# No wasm-bindgen, no npm/wasm-pack. The 4 imports are hand-wired in
+# LiveRun.svelte; imports.allow enforces the boundary.
 
 on:
   push:
@@ -31,8 +40,6 @@ concurrency:
 env:
   AWS_REGION: eu-central-1
   STATIC_BUCKET: seer-sbvh-static
-  # Set by `terraform apply` — see infra/seer.tf output `seer_distribution_id`.
-  # Hardcode after the first apply, same pattern as deploy-rave.yml.
   STATIC_DISTRIBUTION_ID: ${{ vars.SEER_DISTRIBUTION_ID }}
   DEPLOY_ROLE_ARN: arn:aws:iam::548351057127:role/seer-github-deploy
 
@@ -50,6 +57,10 @@ jobs:
         with:
           workspaces: seer
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.9'
+
       - name: Build seer.wasm
         working-directory: seer
         env:
@@ -65,20 +76,21 @@ jobs:
             ../../seer/target/wasm32-unknown-unknown/release/seer.wasm \
             ../../seer/imports.allow
 
-      - name: Assemble dist
+      - name: Build seer/viewer
+        working-directory: seer/viewer
         run: |
-          mkdir -p dist
-          cp seer/target/wasm32-unknown-unknown/release/seer.wasm dist/seer.wasm
-          cp seer/web/index.html dist/index.html
+          bun install --frozen-lockfile
+          bun run build.ts
+          echo "== viewer dist =="
           ls -la dist/
           echo "== wasm size =="
-          wc -c dist/seer.wasm
+          wc -c ../target/wasm32-unknown-unknown/release/seer.wasm
 
-      - name: Upload dist artifact
+      - name: Upload viewer dist artifact
         uses: actions/upload-artifact@v5
         with:
-          name: seer-browser-${{ github.sha }}
-          path: dist/
+          name: seer-viewer-${{ github.sha }}
+          path: seer/viewer/dist/
           retention-days: 30
 
       - name: Assume deploy role
@@ -88,28 +100,101 @@ jobs:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Sync dist to S3
+      - name: Sync viewer to S3 root
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
-          # seer.wasm can cache forever — its content changes ->
-          # different bytes but same filename. Reasonable to bust the
-          # cache manually via CloudFront invalidation on new deploy.
-          aws s3 sync dist/ "s3://${{ env.STATIC_BUCKET }}/" \
+          # Root of the bucket = the viewer. --delete cleans out the
+          # OLD seer/web/index.html + root seer.wasm from previous
+          # deploys of this workflow. --exclude "perf/*" is critical
+          # — /perf/ holds every commit's diagnostic artifacts and
+          # must NOT be touched by this deploy.
+          aws s3 sync seer/viewer/dist/ "s3://${{ env.STATIC_BUCKET }}/" \
             --delete \
             --exclude "perf/*" \
             --cache-control "public, max-age=300"
-          # index.html: no-store — always fetch fresh so a new bundle
-          # is picked up on next tab reload.
-          aws s3 cp dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
+          # index.html always fresh so the newest bundle loads on
+          # next tab reload.
+          aws s3 cp seer/viewer/dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
             --cache-control "no-store, no-cache, must-revalidate" \
             --content-type "text/html; charset=utf-8"
+
+      - name: Upload seer.wasm to /perf/<sha>/
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        run: |
+          # Per-commit wasm. Named the same at every prefix so the
+          # LiveRun component composes its URL from just the sha.
+          aws s3 cp \
+            seer/target/wasm32-unknown-unknown/release/seer.wasm \
+            "s3://${{ env.STATIC_BUCKET }}/perf/${{ github.sha }}/seer.wasm" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "application/wasm"
+
+      - name: GC old seer.wasm (keep newest 4)
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        run: |
+          # Read the current history.json, pick the 4 newest shas by
+          # when_unix, union with the sha we just uploaded (belt-and-
+          # -suspenders against races if seer.yml hasn't yet appended
+          # this run's entry). Then list every /perf/<sha>/seer.wasm
+          # on S3 and delete anything whose sha isn't in the keep set.
+          # JSONs and frame.png are left alone — small, useful forever.
+          CURRENT="${{ github.sha }}"
+          curl -sSf https://seer.sbvh.nl/perf/history.json -o history.json || echo '[]' > history.json
+          KEEP=$(python3 -c "
+          import json
+          h = json.load(open('history.json'))
+          h.sort(key=lambda e: e.get('when_unix', 0), reverse=True)
+          shas = set()
+          for entry in h[:4]:
+              # sha field is full 40-char on new entries, 7-char on
+              # older ones — either way, we also derive the full sha
+              # from report_url which embeds the S3 upload prefix.
+              url = entry.get('report_url', '')
+              u = url.replace('/report.html', '').rstrip('/')
+              parts = [p for p in u.split('/') if p]
+              if parts:
+                  shas.add(parts[-1])
+              shas.add(entry.get('sha', ''))
+          shas.add('$CURRENT')
+          shas.discard('')
+          print(' '.join(shas))
+          ")
+          echo "keep shas: $KEEP"
+          # List every /perf/<sha>/seer.wasm on S3. Anything with
+          # a sha not in KEEP gets deleted. Empty KEEP would delete
+          # everything — guard against that.
+          if [ -z "$KEEP" ]; then
+            echo "empty keep set — refusing to GC"
+            exit 0
+          fi
+          aws s3 ls "s3://${{ env.STATIC_BUCKET }}/perf/" --recursive \
+            | awk '{print $4}' \
+            | while read -r path; do
+                case "$path" in
+                  perf/*/seer.wasm)
+                    sha=$(echo "$path" | cut -d/ -f2)
+                    case " $KEEP " in
+                      *" $sha "*)
+                        echo "keep $path"
+                        ;;
+                      *)
+                        echo "gc   $path"
+                        aws s3 rm "s3://${{ env.STATIC_BUCKET }}/$path"
+                        ;;
+                    esac
+                    ;;
+                esac
+              done
 
       - name: Invalidate CloudFront
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
+          # Root paths (viewer) + this commit's wasm. Per-sha JSONs
+          # invalidate via seer.yml's own step; they're that workflow's
+          # responsibility.
           INVALIDATION_ID=$(aws cloudfront create-invalidation \
             --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
-            --paths '/index.html' '/seer.wasm' \
+            --paths '/index.html' '/main.js' '/tokens.css' '/font.css' "/perf/${{ github.sha }}/seer.wasm" \
             --query 'Invalidation.Id' \
             --output text)
           aws cloudfront wait invalidation-completed \
@@ -123,12 +208,10 @@ jobs:
             echo ""
             if [ -n "${{ env.STATIC_DISTRIBUTION_ID }}" ]; then
               echo "- Live at: https://seer.sbvh.nl/"
+              echo "- This commit's wasm: /perf/${{ github.sha }}/seer.wasm"
             else
               echo "- SEER_DISTRIBUTION_ID not set → skipped S3 deploy."
-              echo "- Run \`terraform apply\` in \`infra/\`, then set the"
-              echo "  \`SEER_DISTRIBUTION_ID\` repo variable to the value"
-              echo "  from \`seer_distribution_id\` output."
             fi
             echo ""
-            echo "- Artifact: \`seer-browser-${{ github.sha }}\`"
+            echo "- Artifact: \`seer-viewer-${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

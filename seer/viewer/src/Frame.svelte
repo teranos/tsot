@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { frameUrl } from './lib/fetch'
+
   let { sha }: { sha: string } = $props()
   let ok = $state(true)
 </script>
@@ -6,7 +8,7 @@
 <div class="frame">
   {#if ok}
     <img
-      src={`/${sha}/frame.png`}
+      src={frameUrl(sha)}
       alt={`scene minimap for ${sha}`}
       onerror={() => { ok = false }}
     />

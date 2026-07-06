@@ -9,6 +9,7 @@
   import GpuRecords from './GpuRecords.svelte'
   import Hotspots from './Hotspots.svelte'
   import LogTail from './LogTail.svelte'
+  import LiveRun from './LiveRun.svelte'
 
   let {
     entry,
@@ -46,6 +47,7 @@
     <GpuRecords records={report?.gpu_records ?? {}} {loading} />
     <Hotspots records={report?.hotspot_records ?? {}} {loading} />
     <LogTail lines={report?.log_tail ?? []} total={report?.ledger_total ?? 0} {loading} />
+    <LiveRun {sha} />
   </div>
 </div>
 

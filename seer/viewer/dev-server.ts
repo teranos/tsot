@@ -23,10 +23,10 @@ import { join } from 'path'
 const execAsync = promisify(exec)
 
 const DEV_PORT = Number(process.env.SEER_DEV_PORT || 5180)
-// Default proxies to the current S3 layout, where all diagnostic
-// artifacts still live under /perf/. M5 flattens this to the root;
-// once done, the trailing /perf goes away.
-const PROD_ORIGIN = process.env.SEER_PROD_ORIGIN || 'https://seer.sbvh.nl/perf'
+// Frontend fetches /perf/<sha>/<file> directly (see lib/fetch.ts
+// DATA_BASE constant). Dev-server just forwards the same pathname
+// to the proxy origin, no rewriting.
+const PROD_ORIGIN = process.env.SEER_PROD_ORIGIN || 'https://seer.sbvh.nl'
 const DATA_DIR = process.env.SEER_DEV_DATA || ''
 const distDir = join(import.meta.dir, 'dist')
 
@@ -65,12 +65,11 @@ watch(join(import.meta.dir, 'index.html'), () => {
 
 await build()
 
-// A data path is either /history.json or /<something>/<file>. No regex —
-// split on `/` and check shape. Anything else falls through to static.
+// All data artifacts live under /perf/. If a request matches that
+// prefix and it isn't a locally-served static file, we route it to
+// the local mirror (SEER_DEV_DATA) or proxy through to production.
 function isDataPath(pathname: string): boolean {
-  if (pathname === '/history.json') return true
-  const parts = pathname.split('/')
-  return parts.length >= 3 && parts[1].length > 0 && parts[2].length > 0
+  return pathname.startsWith('/perf/')
 }
 
 async function serveData(pathname: string): Promise<Response> {
