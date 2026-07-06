@@ -60,9 +60,13 @@
           seer_record_hotspot: (seq: number, size: number, align: number) => {
             pushEmit(`[browser.hotspot] seq=${seq} size=${size} align=${align}`)
           },
-          seer_record_gpu_event: (id: number, kind: number, size: number) => {
+          seer_record_gpu_event: (id: number, kind: number, size: number, labelPtr: number, labelLen: number) => {
             const kindName = kind === 1 ? 'buffer' : kind === 2 ? 'texture' : kind === 3 ? 'shader' : `?(${kind})`
-            pushEmit(`[browser.gpu] id=${id} kind=${kindName} size=${size}`)
+            const label = decodeString(labelPtr, labelLen)
+            pushEmit(`[browser.gpu] id=${id} kind=${kindName} size=${size} label=${label}`)
+          },
+          seer_record_gpu_destroyed: (id: number) => {
+            pushEmit(`[browser.gpu.destroyed] id=${id}`)
           },
           seer_report_metric: (frame: number, heap: number, live: number, gpuBytes: number) => {
             // Metric emits are frequent — kept out of the on-screen

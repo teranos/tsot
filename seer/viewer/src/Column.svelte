@@ -7,6 +7,7 @@
   import Sparklines from './Sparklines.svelte'
   import Errors from './Errors.svelte'
   import GpuRecords from './GpuRecords.svelte'
+  import GpuLifetimeHistogram from './GpuLifetimeHistogram.svelte'
   import Hotspots from './Hotspots.svelte'
   import LogTail from './LogTail.svelte'
   import LiveRun from './LiveRun.svelte'
@@ -45,6 +46,7 @@
     <Sparklines {metrics} error={metricsError} />
     <Errors errors={report?.errors_captured ?? []} {loading} error={reportError} />
     <GpuRecords records={report?.gpu_records ?? {}} {loading} />
+    <GpuLifetimeHistogram records={report?.gpu_records ?? {}} {loading} />
     <Hotspots records={report?.hotspot_records ?? {}} {loading} />
     <LogTail lines={report?.log_tail ?? []} total={report?.ledger_total ?? 0} {loading} />
     <LiveRun {sha} />

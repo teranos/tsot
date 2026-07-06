@@ -45,6 +45,12 @@ export interface GpuRecord {
   kind: number   // 1=buffer 2=texture 3=shader
   size: number
   backtrace: string
+  /** Added Task 6 — resource name crossed from wasm side to host. */
+  label: string
+  /** Added Task 7 — ledger index at create time. */
+  created_at_seq: number
+  /** Added Task 7 — ledger index at destroy time; null if still live at end of run. */
+  destroyed_at_seq: number | null
 }
 
 export interface CommitReport {

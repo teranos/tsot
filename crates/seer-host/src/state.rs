@@ -25,6 +25,20 @@ pub struct GpuRecord {
     pub kind: u32, // 1=buffer 2=texture 3=shader
     pub size: u32,
     pub backtrace: String,
+    /// Resource name carried across the boundary. Empty on records
+    /// deserialized from a pre-Task-6 report.json (`#[serde(default)]`).
+    #[serde(default)]
+    pub label: String,
+    /// Ledger index at the moment this resource was recorded — i.e.
+    /// the sequence number of the seer_record_gpu_event that created
+    /// it. Used with `destroyed_at_seq` to derive lifetimes for the
+    /// per-commit histogram. 0 on pre-Task-7 entries.
+    #[serde(default)]
+    pub created_at_seq: usize,
+    /// Ledger index at destroy time. `None` for resources still live
+    /// at end of run. Also `None` for pre-Task-7 records.
+    #[serde(default)]
+    pub destroyed_at_seq: Option<usize>,
 }
 
 pub struct HostState {
@@ -186,6 +200,9 @@ mod tests {
                 kind: 1,
                 size: 4096,
                 backtrace: "gpu-frame".to_string(),
+                label: "test-buffer".to_string(),
+                created_at_seq: 0,
+                destroyed_at_seq: Some(50),
             },
         );
 

@@ -64,28 +64,69 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
     )?;
 
     // Same host-ledger pattern, keyed by gpu id, partitioned by kind
-    // so seq spaces don't collide.
+    // so seq spaces don't collide. `label_ptr`/`label_len` (added for
+    // Task 6) point into wasm memory at the resource name; decoded
+    // utf-8 lands in `GpuRecord.label`.
     linker.func_wrap(
         "env",
         "seer_record_gpu_event",
-        |caller: Caller<'_, Arc<Mutex<HostState>>>, id: u32, kind: u32, size: u32| -> Result<()> {
+        |mut caller: Caller<'_, Arc<Mutex<HostState>>>,
+         id: u32,
+         kind: u32,
+         size: u32,
+         label_ptr: i32,
+         label_len: i32|
+         -> Result<()> {
+            let memory = caller
+                .get_export("memory")
+                .and_then(|e| e.into_memory())
+                .ok_or_else(|| anyhow!("wasm module has no 'memory' export"))?;
+            let mut buf = vec![0u8; label_len as usize];
+            memory.read(&caller, label_ptr as usize, &mut buf)?;
+            let label = String::from_utf8_lossy(&buf).into_owned();
+
             let bt = WasmBacktrace::force_capture(&caller);
             let backtrace = render_wasm_backtrace(&bt);
             let frames_len = bt.frames().len();
             let kname = kind_name(kind);
             let state = caller.data().clone();
             if let Ok(mut st) = state.lock() {
+                let created_at_seq = st.ledger.len();
                 st.gpu_records.insert(
                     id,
                     GpuRecord {
                         kind,
                         size,
                         backtrace,
+                        label: label.clone(),
+                        created_at_seq,
+                        destroyed_at_seq: None,
                     },
                 );
                 st.ledger.push(format!(
-                    "seer_record_gpu_event id={id} kind={kname} size={size} frames={frames_len}"
+                    "seer_record_gpu_event id={id} kind={kname} size={size} label={label:?} frames={frames_len}"
                 ));
+            }
+            Ok(())
+        },
+    )?;
+
+    // Destroy counterpart (Task 7). No backtrace here — the destroy
+    // site is less interesting than the create site, and skipping
+    // WasmBacktrace keeps the boundary crossing cheap. Pairs with
+    // the earlier gpu_records entry to fill in destroyed_at_seq.
+    linker.func_wrap(
+        "env",
+        "seer_record_gpu_destroyed",
+        |caller: Caller<'_, Arc<Mutex<HostState>>>, id: u32| -> Result<()> {
+            let state = caller.data().clone();
+            if let Ok(mut st) = state.lock() {
+                let destroyed_at_seq = st.ledger.len();
+                if let Some(rec) = st.gpu_records.get_mut(&id) {
+                    rec.destroyed_at_seq = Some(destroyed_at_seq);
+                }
+                st.ledger
+                    .push(format!("seer_record_gpu_destroyed id={id}"));
             }
             Ok(())
         },
