@@ -1,0 +1,67 @@
+/* Design Tokens — copied from levi/pnui/src/tokens.css. Kept as a
+   local copy (not a symlink) so seer/viewer/ is self-contained; if
+   pnui's tokens diverge, we resync manually and keep intentional. */
+
+:root {
+    /* Typography */
+    --font-mono: 'JetBrains Mono', 'SF Mono', 'Monaco', 'Fira Code', 'Consolas', monospace;
+    --font-size-xs: 10px;
+    --font-size-sm: 11px;
+    --font-size-md: 13px;
+    --font-size-lg: 14px;
+
+    /* Spacing & Shape */
+    --gap: 7px;
+    --panel-padding-sm: 8px 12px;
+    --panel-padding-md: 12px 16px;
+    --panel-padding-lg: 16px 20px;
+    --border-radius: 3px;
+    --border-radius-lg: 7px;
+
+    /* Core Colors */
+    --panel-border: 1px solid var(--border);
+    --text-primary: #333433;
+    --text-secondary: #656766;
+    --text-tertiary: #989a99;
+    --text-emphasis: #000;
+    --bg-primary: #fcffff;
+    --bg-almost-white: #f7f9f8;
+    --bg-hover: #f0f1f1;
+    --bg-gray: #999;
+    --bg-dark: #202523;
+    --border: #dcdedd;
+    --border-light: #dfe1e0;
+    --border-divider: #eee;
+    --accent-color: #5a9a6a;
+    --accent-hover: #4a8559;
+
+    /* Dark mode colors */
+    --bg-almost-black: #1a1b1a;
+    --text-on-dark: #dfe1e0;
+    --text-on-dark-secondary: #a9abaa;
+    --text-on-dark-tertiary: #868787;
+    --text-on-dark-emphasis: #fefffe;
+    --bg-dark-hover: #2a2b2a;
+    --bg-canvas: #2d2e36;
+    --bg-dark-light: #343534;
+    --bg-secondary: #252625;
+    --bg-tertiary: #2e2f2e;
+    --border-on-dark: #3f4140;
+    --accent-on-dark: #7dba8a;
+    --accent-on-dark-hover: #9acca5;
+
+    /* Status Colors */
+    --color-success: #22c65e;
+    --color-error: #e44747;
+    --color-warning: #ffab00;
+    --color-info: #3b83f6;
+    --color-scheduled: #7b20a2;
+    --color-burnt-orange: #e07840;
+
+    /* Glyph Status Colors */
+    --glyph-status-success-text: #a8e6a1;
+    --glyph-status-error-text: #ff6b6b;
+    --glyph-status-running-text: #6394d5;
+
+    --accent-lavender: #d4b8ff;
+}

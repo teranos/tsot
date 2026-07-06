@@ -163,6 +163,7 @@ jobs:
           SEER_SUMMARY_OUT_PATH: out/summary.json
           SEER_VERDICT_OUT_PATH: out/verdict.json
           SEER_METRICS_OUT_PATH: out/metrics.json
+          SEER_COMMIT_REPORT_OUT_PATH: out/report.json
           SEER_METRICS_DIR: out/prior-metrics
         run: |
           mkdir -p out
@@ -206,6 +207,11 @@ jobs:
             fi
             if [ -f out/metrics.json ]; then
               aws s3 cp out/metrics.json "s3://seer-sbvh-static/$prefix/metrics.json" \
+                --cache-control "public, max-age=300" \
+                --content-type "application/json"
+            fi
+            if [ -f out/report.json ]; then
+              aws s3 cp out/report.json "s3://seer-sbvh-static/$prefix/report.json" \
                 --cache-control "public, max-age=300" \
                 --content-type "application/json"
             fi

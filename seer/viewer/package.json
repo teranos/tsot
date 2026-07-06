@@ -1,0 +1,13 @@
+{
+  "name": "seer-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run dev-server.ts",
+    "build": "bun run build.ts"
+  },
+  "dependencies": {
+    "svelte": "5.53.11"
+  }
+}

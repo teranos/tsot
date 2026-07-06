@@ -111,10 +111,21 @@ pub fn env_i64(name: &str, default: i64) -> i64 {
         .unwrap_or(default)
 }
 
+/// Truncate a full 40-char SHA to the conventional 7-char display
+/// form. Safe against already-short input (returns as-is if shorter).
+pub fn short_sha(sha: &str) -> &str {
+    let end = sha.len().min(7);
+    &sha[..end]
+}
+
 /// Build the RunSummary from the host state at end of run.
 /// Verdict fields are left at their defaults; caller runs
 /// compute_verdict and patches them in.
-pub fn build_summary(st: &HostState, sha: &str, short_sha: &str, ci_run_url: &str) -> RunSummary {
+///
+/// `sha` is the full 40-char sha and is what gets stored in the
+/// summary + used in URLs. Display code calls `short_sha(&summary.sha)`
+/// when it wants the 7-char form.
+pub fn build_summary(st: &HostState, sha: &str, ci_run_url: &str) -> RunSummary {
     let leak_enabled = std::env::var("SEER_LEAK")
         .ok()
         .is_some_and(|v| v == "1" || v == "true");
@@ -151,7 +162,7 @@ pub fn build_summary(st: &HostState, sha: &str, short_sha: &str, ci_run_url: &st
         (0, 0, 0, 0.0, 0.0, 0, 0, 0.0, 0.0)
     };
     RunSummary {
-        sha: short_sha.to_string(),
+        sha: sha.to_string(),
         when_unix,
         frames,
         first_frame,

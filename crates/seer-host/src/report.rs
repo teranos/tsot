@@ -7,7 +7,7 @@ use anyhow::Result;
 use std::collections::BTreeMap;
 
 use crate::state::{HostState, Metric, kind_name};
-use crate::summary::{RunSummary, env_f64, env_i64};
+use crate::summary::{RunSummary, env_f64, env_i64, short_sha};
 
 pub fn render_html_report(
     st: &HostState,
@@ -228,12 +228,14 @@ pub fn render_html_report(
     }
 
     let sha = std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local".to_string());
-    let short_sha: String = sha.chars().take(7).collect();
     let repo =
         std::env::var("GITHUB_REPOSITORY").unwrap_or_else(|_| "teranos/tsot".to_string());
     let branch = std::env::var("GITHUB_REF_NAME").unwrap_or_default();
     let commit_url = format!("https://github.com/{repo}/commit/{sha}");
-    let sha_link = format!(r#"<a href="{commit_url}" title="{sha}">{short_sha}</a>"#);
+    let sha_link = format!(
+        r#"<a href="{commit_url}" title="{sha}">{}</a>"#,
+        short_sha(&sha)
+    );
     let branch_html = if branch.is_empty() {
         String::new()
     } else {
@@ -269,7 +271,7 @@ pub fn render_html_report(
             cls = if is_current { "current" } else { "" },
             mark = mark,
             url = h.report_url,
-            sha = h.sha,
+            sha = short_sha(&h.sha),
             when = h.when_unix,
             dhc = delta_class(h.d_heap_mb as i64),
             dh = fmt_delta_mb(h.d_heap_mb),
@@ -441,7 +443,7 @@ pub fn render_html_report(
             r#"<div class="commit-card{cls}" data-page="{page}"><a href="{report}"><img src="{frame}" alt="frame from {sha}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{{textContent:'no frame',className:'delta'}}));" /></a>{sparkline_svg}<div class="card-body"><div class="card-row header"><a class="sha" href="{report}">{sha}</a>{verdict_tag}</div><div class="card-row">{heap_abs}</div><div class="card-row">{gpu_abs}</div>{wasm_row}<div class="card-row footer">{ci_bit}{dur_bit}{leak_bit}</div></div></div>"#,
             report = h.report_url,
             frame = frame_url,
-            sha = h.sha,
+            sha = short_sha(&h.sha),
         ));
     }
     if frame_gallery_html.is_empty() {

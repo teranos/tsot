@@ -17,7 +17,7 @@ use wasmtime::*;
 
 use crate::imports::wire_imports;
 use crate::report::render_html_report;
-use crate::state::HostState;
+use crate::state::{CommitReport, HostState};
 use crate::summary::{build_summary, compute_verdict};
 
 const HISTORY_CAP: usize = 20;
@@ -88,7 +88,6 @@ fn main() -> Result<()> {
     }
 
     let sha = std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local".to_string());
-    let short_sha: String = sha.chars().take(7).collect();
     let ci_run_url = match (
         std::env::var("GITHUB_REPOSITORY"),
         std::env::var("GITHUB_RUN_ID"),
@@ -97,7 +96,7 @@ fn main() -> Result<()> {
         _ => String::new(),
     };
 
-    let mut summary = build_summary(&st, &sha, &short_sha, &ci_run_url);
+    let mut summary = build_summary(&st, &sha, &ci_run_url);
     summary.duration_secs = host_start.elapsed().as_secs();
     // Measure the wasm module's size at the same path the runtime
     // loaded — captures whatever the workflow just built + uploaded.
@@ -173,6 +172,28 @@ fn main() -> Result<()> {
         let _ = std::fs::write(&out_path, s);
     }
 
+    // Write report.json — the per-commit structured artifact the
+    // frontend renders. Bundles hotspot records, gpu records, sacred
+    // errors, and the filtered log tail from this run. Emitted only
+    // when the env var is set (CI does; local dev opts in).
+    if let Ok(out_path) = std::env::var("SEER_COMMIT_REPORT_OUT_PATH") {
+        let report = CommitReport::from_state(&st);
+        match serde_json::to_string_pretty(&report) {
+            Ok(s) => match std::fs::write(&out_path, s) {
+                Ok(_) => println!(
+                    "[host] wrote commit report: {out_path} ({} hotspots, {} gpu, {} errors, log_tail={}/{})",
+                    report.hotspot_records.len(),
+                    report.gpu_records.len(),
+                    report.errors_captured.len(),
+                    report.log_tail.len(),
+                    report.ledger_total,
+                ),
+                Err(e) => println!("[host] report write failed: {e}"),
+            },
+            Err(e) => println!("[host] report serialize failed: {e}"),
+        }
+    }
+
     // Load prior commits' metrics from SEER_METRICS_DIR (populated by
     // the workflow via `aws s3 cp` of /perf/<sha>/metrics.json files
     // for the last N entries in history). Missing entries render as
@@ -193,9 +214,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Read prior commits' metrics from `SEER_METRICS_DIR/<short_sha>.json`.
+/// Read prior commits' metrics from `SEER_METRICS_DIR/<sha>.json`.
 /// Empty map if the env var is unset or the directory is missing.
-/// Each entry: short_sha → Vec<Metric> for that commit's run.
+/// Each entry: full-sha → Vec<Metric> for that commit's run. Keyed
+/// by whatever the workflow named the file — currently the same
+/// full sha the workflow uses for S3 upload paths, which matches
+/// `RunSummary.sha`.
 fn load_prior_metrics() -> std::collections::BTreeMap<String, Vec<state::Metric>> {
     let mut map: std::collections::BTreeMap<String, Vec<state::Metric>> =
         std::collections::BTreeMap::new();
