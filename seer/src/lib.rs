@@ -288,12 +288,16 @@ fn _run() {
     #[cfg(not(target_arch = "wasm32"))]
     let mut snapshots: Vec<SceneSnapshot> = Vec::with_capacity(checkpoints.len());
 
+    #[cfg(not(target_arch = "wasm32"))]
     for frame_idx in 1..=frames {
         app.update();
-        #[cfg(not(target_arch = "wasm32"))]
         if checkpoints.contains(&frame_idx) {
             snapshots.push(snapshot_scene(&mut app));
         }
+    }
+    #[cfg(target_arch = "wasm32")]
+    for _ in 0..frames {
+        app.update();
     }
 
     #[cfg(not(target_arch = "wasm32"))]

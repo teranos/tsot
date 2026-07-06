@@ -1203,8 +1203,13 @@ dependencies = [
  "pollster",
  "rave-health",
  "sacred-error",
+ "seer-obs",
  "wgpu",
 ]
+
+[[package]]
+name = "seer-obs"
+version = "0.1.0"
 
 [[package]]
 name = "semver"
