@@ -26,6 +26,9 @@ export interface RunSummary {
   verdict_violations: string[]
   duration_secs: number
   wasm_bytes: number
+  /** Head-commit message subject line (see summary.rs). Empty on
+   * older entries without this field. */
+  commit_message: string
 }
 
 export interface Metric {

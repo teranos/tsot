@@ -3,19 +3,38 @@
   import { shortSha, timeAgo, fmtDuration } from './lib/format'
 
   let { entry, sha }: { entry: RunSummary, sha: string } = $props()
+
+  // The GitHub repo lives at teranos/tsot (not tsot-roam). Hardcoded
+  // so the "commit" link doesn't 404 and the "checks" link lands on
+  // the aggregated CI-runs view for this sha — both workflows
+  // (seer.yml + seer-browser.yml) show up in one place.
+  const REPO = 'teranos/tsot'
+  const commitUrl = `https://github.com/${REPO}/commit/${sha}`
+  const checksUrl = `https://github.com/${REPO}/commit/${sha}/checks`
+
+  // commit_message may include a full multi-paragraph body; the
+  // subject line (first line) is what fits in the header. Anything
+  // after the first newline lives in a native title tooltip so the
+  // reader can hover to see more without clicking through.
+  const subject = $derived(entry.commit_message.split('\n')[0] || '')
+  const body = $derived(entry.commit_message)
 </script>
 
 <div class="hd">
   <div class="row">
-    <a class="sha" href={`https://github.com/teranos/tsot-roam/commit/${sha}`} title={sha}>{shortSha(sha)}</a>
+    <a class="sha" href={commitUrl} title={sha}>{shortSha(sha)}</a>
     <span class="verdict" class:pass={entry.verdict_passed} class:fail={!entry.verdict_passed}>
       {entry.verdict_passed ? 'PASS' : 'FAIL'}
     </span>
   </div>
+  {#if subject}
+    <div class="subject" title={body}>{subject}</div>
+  {/if}
   <div class="row meta">
     <span>{timeAgo(entry.when_unix)}</span>
+    <a href={checksUrl} title="all CI runs for this commit">checks</a>
     {#if entry.ci_run_url}
-      <a href={entry.ci_run_url}>CI</a>
+      <a href={entry.ci_run_url} title="the seer-host CI run that produced this data">seer-host run</a>
     {/if}
     {#if entry.duration_secs > 0}
       <span>{fmtDuration(entry.duration_secs)}</span>
@@ -63,6 +82,12 @@
   }
   .pass { background: var(--glyph-status-success-text); color: var(--bg-almost-black); }
   .fail { background: var(--glyph-status-error-text); color: var(--bg-almost-black); }
+  .subject {
+    font-size: var(--font-size-sm);
+    color: var(--text-on-dark);
+    line-height: 1.3;
+    word-break: break-word;
+  }
   .meta {
     color: var(--text-on-dark-tertiary);
     font-size: var(--font-size-xs);

@@ -1,0 +1,27 @@
+[package]
+name = "seer-p2p-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Integration test for seer-p2p — spawns publisher + subscriber swarms on loopback, asserts a RunSummary published on seer-summary/v1 lands on the subscriber. Native only; mirrors the rave-positions-test structure so any topic drift surfaces in CI."
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+seer-p2p = { path = "../seer-p2p" }
+anyhow = "=1.0.100"
+futures = "=0.3.32"
+libp2p = { version = "=0.56.0", default-features = false, features = [
+    "tokio",
+    "websocket",
+    "tcp",
+    "noise",
+    "yamux",
+    "gossipsub",
+    "ping",
+    "identify",
+    "macros",
+] }
+tokio = { version = "=1.47.1", features = ["full"] }
+serde_json = "=1.0.143"

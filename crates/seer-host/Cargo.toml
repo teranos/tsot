@@ -18,3 +18,11 @@ anyhow = "=1.0.100"
 rustc-demangle = "=0.1.27"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.143"
+
+# Task 13 — libp2p publish path for the per-run RunSummary onto the
+# seer-summary/v1 gossipsub topic through the existing relaye
+# deployment at relaye.sbvh.nl. Extracted to a sibling crate so the
+# integration test at seer-p2p-test can drive publish_summary
+# directly against a loopback subscriber.
+seer-p2p = { path = "../seer-p2p" }
+tokio = { version = "=1.47.1", features = ["rt", "macros", "time"] }

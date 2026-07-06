@@ -112,6 +112,23 @@ jobs:
           path: seer/out/
           retention-days: 30
 
+  seer-p2p-test:
+    # Task 13 — proves seer-summary/v1 gossipsub topic + payload
+    # round-trip on native. Spawns publisher + subscriber swarms on
+    # loopback, asserts the subscriber sees the RunSummary the
+    # publisher sent. No relayer binary required — the two swarms
+    # mesh each other directly.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/seer-p2p-test
+      - name: Run seer-p2p integration test
+        working-directory: crates/seer-p2p-test
+        run: cargo test --release -- --nocapture
+
   seer-host:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -162,6 +179,9 @@ jobs:
           SEER_VERDICT_OUT_PATH: out/verdict.json
           SEER_METRICS_OUT_PATH: out/metrics.json
           SEER_COMMIT_REPORT_OUT_PATH: out/report.json
+          # Task 13 / column header — carry the head-commit subject
+          # into summary.json so the viewer column shows it inline.
+          SEER_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           mkdir -p out
           [ -f out/history-in.json ] || echo '[]' > out/history-in.json

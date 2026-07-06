@@ -45,6 +45,14 @@ pub struct RunSummary {
     /// becomes obvious in one column.
     #[serde(default)]
     pub wasm_bytes: u64,
+    /// Head-commit subject line for this sha. Populated from the
+    /// `SEER_COMMIT_MESSAGE` env var in CI (workflow reads it from
+    /// `github.event.head_commit.message`). Empty on local dev or when
+    /// unset. Renders in each column header of the viewer so the
+    /// reader sees WHY a commit changed the metrics without needing
+    /// to click through to GitHub.
+    #[serde(default)]
+    pub commit_message: String,
 }
 
 fn default_true() -> bool {
@@ -183,6 +191,7 @@ pub fn build_summary(st: &HostState, sha: &str, ci_run_url: &str) -> RunSummary 
         verdict_violations: Vec::new(),
         duration_secs: 0,
         wasm_bytes: 0,
+        commit_message: std::env::var("SEER_COMMIT_MESSAGE").unwrap_or_default(),
     }
 }
 

@@ -194,5 +194,22 @@ fn main() -> Result<()> {
         }
     }
 
+    // Task 13 — best-effort libp2p publish of the RunSummary onto the
+    // seer-summary/v1 gossipsub topic. Only fires when
+    // SEER_P2P_BOOTSTRAP is set (a multiaddr for relaye.sbvh.nl or a
+    // local dev relayer). Failure is logged and swallowed so a flaky
+    // network never blocks the diagnostic.
+    if let Ok(bootstrap) = std::env::var("SEER_P2P_BOOTSTRAP") {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("build tokio runtime for p2p publish")?;
+        let deadline = std::time::Duration::from_secs(6);
+        match rt.block_on(seer_p2p::publish_summary(&summary, &bootstrap, deadline)) {
+            Ok(_) => println!("[host.p2p] summary published to {}", seer_p2p::SEER_SUMMARY_TOPIC),
+            Err(e) => println!("[host.p2p] publish skipped: {e}"),
+        }
+    }
+
     Ok(())
 }
