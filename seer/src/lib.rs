@@ -22,6 +22,9 @@ pub mod trees;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gpu;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod render;
+
 #[global_allocator]
 static ALLOC: obs::InstrumentedAlloc = obs::InstrumentedAlloc;
 
@@ -263,40 +266,10 @@ fn _run() {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        native_wgpu_demo();
-
-        // After the tick loop, snapshot the world's entity state and
-        // rasterize it as a minimap PNG. Replaces the earlier static
-        // WGSL triangle — the frame in each commit card now shows the
-        // scene as of end-of-run, and drift across commits becomes
-        // visually obvious in the gallery.
         if let Ok(out_path) = std::env::var("SEER_FRAME_PATH") {
-            let world = app.world_mut();
-            let mut tree_q = world.query_filtered::<&physics::Position, bevy_ecs::prelude::With<trees::TreeTrunk>>();
-            let trees_vec: Vec<bevy_math::Vec3> =
-                tree_q.iter(world).map(|p| p.0).collect();
-            let mut obs_q = world.query_filtered::<&physics::Position, (
-                bevy_ecs::prelude::With<physics::AabbCollider>,
-                bevy_ecs::prelude::Without<physics::PlayerMarker>,
-                bevy_ecs::prelude::Without<trees::TreeTrunk>,
-            )>();
-            let obstacles_vec: Vec<bevy_math::Vec3> =
-                obs_q.iter(world).map(|p| p.0).collect();
-            let mut player_q = world.query_filtered::<&physics::Position, bevy_ecs::prelude::With<physics::PlayerMarker>>();
-            let player_pos: bevy_math::Vec3 = player_q
-                .iter(world)
-                .next()
-                .map(|p| p.0)
-                .unwrap_or(bevy_math::Vec3::ZERO);
-            match render_scene_minimap(&trees_vec, &obstacles_vec, player_pos, &out_path) {
-                Ok(_) => obs::emit(&format!(
-                    "[gpu.native] rendered minimap ({} trees, {} obstacles, player at {:.0},{:.0}) → {out_path}",
-                    trees_vec.len(),
-                    obstacles_vec.len(),
-                    player_pos.x,
-                    player_pos.z,
-                )),
-                Err(e) => obs::emit(&format!("[gpu.native] minimap render failed: {e}")),
+            match native_render_frame(&mut app, &out_path) {
+                Ok(_) => obs::emit(&format!("[gpu.native] rendered {out_path}")),
+                Err(e) => obs::emit(&format!("[gpu.native] render failed: {e}")),
             }
         }
     }
@@ -307,331 +280,97 @@ fn _run() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn native_wgpu_demo() {
-    obs::emit("[gpu.native] initializing wgpu instance");
+fn native_render_frame(
+    app: &mut App,
+    out_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    obs::emit("[gpu.native] initializing wgpu");
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::PRIMARY,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
-
-    let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
         compatible_surface: None,
         force_fallback_adapter: false,
-    })) {
-        Ok(a) => a,
-        Err(e) => {
-            obs::emit(&format!(
-                "[gpu.native] no adapter available: {e:?} — skipping real wgpu demo"
-            ));
-            return;
-        }
-    };
+    }))?;
     let info = adapter.get_info();
     obs::emit(&format!(
         "[gpu.native] adapter name={:?} backend={:?} device_type={:?}",
         info.name, info.backend, info.device_type,
     ));
-
-    let (device, _queue): (wgpu::Device, wgpu::Queue) = match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("seer-native-device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
-        memory_hints: wgpu::MemoryHints::default(),
-        experimental_features: wgpu::ExperimentalFeatures::default(),
-        trace: wgpu::Trace::Off,
-    })) {
-        Ok(d) => d,
-        Err(e) => {
-            obs::emit(&format!(
-                "[gpu.native] request_device failed: {e:?} — skipping"
-            ));
-            return;
-        }
-    };
-
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("seer-native-device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            memory_hints: wgpu::MemoryHints::default(),
+            experimental_features: wgpu::ExperimentalFeatures::default(),
+            trace: wgpu::Trace::Off,
+        }))?;
     let dev = gpu::SeerDevice::new(device);
-    obs::emit("[gpu.native] SeerDevice ready — allocating real wgpu buffers");
 
-    let mut churned: Vec<gpu::SeerBuffer> = Vec::new();
-    for i in 0..5 {
-        let size = 128 * 1024 * (i + 1);
-        let label = format!("seer-native-demo-{i}");
-        let buf = dev.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&label),
-            size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+    // Snapshot the ECS world at end-of-run. Each of these queries is
+    // filtered to the marker component the spawner assigned, so we
+    // never mis-classify an obstacle as a tree or vice versa.
+    let world = app.world_mut();
+    let mut tree_q =
+        world.query_filtered::<&physics::Position, bevy_ecs::prelude::With<trees::TreeTrunk>>();
+    let trees_vec: Vec<bevy_math::Vec3> = tree_q.iter(world).map(|p| p.0).collect();
+    let mut obs_q = world.query_filtered::<&physics::Position, (
+        bevy_ecs::prelude::With<physics::AabbCollider>,
+        bevy_ecs::prelude::Without<physics::PlayerMarker>,
+        bevy_ecs::prelude::Without<trees::TreeTrunk>,
+    )>();
+    let obstacles_vec: Vec<bevy_math::Vec3> = obs_q.iter(world).map(|p| p.0).collect();
+    let mut player_q = world
+        .query_filtered::<&physics::Position, bevy_ecs::prelude::With<physics::PlayerMarker>>();
+    let player_pos: bevy_math::Vec3 = player_q
+        .iter(world)
+        .next()
+        .map(|p| p.0)
+        .unwrap_or(bevy_math::Vec3::ZERO);
+
+    // Every scene element = one instance of the shared unit cube.
+    // Ground first (drawn under everything by virtue of Y position),
+    // then trees, obstacles, and finally the player.
+    let floor_half = room::FLOOR_HALF;
+    let mut instances: Vec<render::SceneInstance> = Vec::with_capacity(
+        1 + trees_vec.len() + obstacles_vec.len() + 1,
+    );
+    instances.push(render::SceneInstance {
+        pos: [0.0, -50.0, 0.0],
+        color: [0.09, 0.11, 0.15],
+        scale: [floor_half * 2.0, 100.0, floor_half * 2.0],
+    });
+    for t in &trees_vec {
+        instances.push(render::SceneInstance {
+            pos: [t.x, 60.0, t.z],
+            color: [0.13, 0.77, 0.37],
+            scale: [40.0, 130.0, 40.0],
         });
-        churned.push(buf);
     }
+    for o in &obstacles_vec {
+        instances.push(render::SceneInstance {
+            pos: [o.x, 40.0, o.z],
+            color: [0.92, 0.70, 0.03],
+            scale: [60.0, 80.0, 60.0],
+        });
+    }
+    instances.push(render::SceneInstance {
+        pos: [player_pos.x, 60.0, player_pos.z],
+        color: [0.13, 0.83, 0.93],
+        scale: [70.0, 140.0, 70.0],
+    });
+
+    let camera = render::SceneCamera::default_for_floor(floor_half);
+    render::render_scene(&dev, &queue, &camera, &instances, out_path)?;
     obs::emit(&format!(
-        "[gpu.native] created {} real wgpu buffers — inventory:",
-        churned.len()
+        "[gpu.native] scene rendered: {} trees + {} obstacles + player @ ({:.0},{:.0})",
+        trees_vec.len(),
+        obstacles_vec.len(),
+        player_pos.x,
+        player_pos.z,
     ));
-    obs::dump_gpu_inventory();
-
-    drop(churned);
-    obs::emit(
-        "[gpu.native] dropped all real buffers — SeerBuffer::drop should have emitted destroyed events:",
-    );
-    obs::dump_gpu_inventory();
-
-    // Frame rendering handled by caller via render_scene_minimap;
-    // this function proves wgpu wrapper + SeerDevice work but doesn't
-    // own the frame output any more.
-    let _ = dev;
-    let _ = _queue;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn render_scene_minimap(
-    trees: &[bevy_math::Vec3],
-    obstacles: &[bevy_math::Vec3],
-    player: bevy_math::Vec3,
-    out_path: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let w = 512u32;
-    let h = 512u32;
-    let mut pixels: Vec<u8> = Vec::with_capacity((w * h * 4) as usize);
-    // Dark background matching the report page (--bg #0a0e14).
-    let (bg_r, bg_g, bg_b) = (0x0a, 0x0e, 0x14);
-    for _ in 0..(w * h) {
-        pixels.extend_from_slice(&[bg_r, bg_g, bg_b, 0xff]);
-    }
-
-    // World XZ → image pixel. FLOOR_HALF is 3000 (rave's world). Fit
-    // [-3000, +3000] into [0, 512]. Scale = 512/6000 ≈ 0.0853.
-    let floor_half = crate::room::FLOOR_HALF;
-    let world_to_px = |world_xz: f32| -> i32 {
-        ((world_xz / floor_half + 1.0) * 0.5 * w as f32) as i32
-    };
-    let plot = |pixels: &mut [u8], cx: i32, cy: i32, radius: i32, rgb: (u8, u8, u8)| {
-        for dy in -radius..=radius {
-            for dx in -radius..=radius {
-                let x = cx + dx;
-                let y = cy + dy;
-                if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
-                    continue;
-                }
-                let idx = (y as usize * w as usize + x as usize) * 4;
-                pixels[idx] = rgb.0;
-                pixels[idx + 1] = rgb.1;
-                pixels[idx + 2] = rgb.2;
-                pixels[idx + 3] = 0xff;
-            }
-        }
-    };
-
-    // World-axis lines (subtle) — vertical + horizontal through origin.
-    let (line_r, line_g, line_b) = (0x33, 0x41, 0x55);
-    let cx = w as i32 / 2;
-    let cy = h as i32 / 2;
-    for i in 0..w as i32 {
-        let idx = (cy as usize * w as usize + i as usize) * 4;
-        pixels[idx] = line_r;
-        pixels[idx + 1] = line_g;
-        pixels[idx + 2] = line_b;
-    }
-    for j in 0..h as i32 {
-        let idx = (j as usize * w as usize + cx as usize) * 4;
-        pixels[idx] = line_r;
-        pixels[idx + 1] = line_g;
-        pixels[idx + 2] = line_b;
-    }
-
-    // Trees as small green dots (matching --down accent #22c55e).
-    let tree_rgb = (0x22, 0xc5, 0x5e);
-    for t in trees {
-        let px = world_to_px(t.x);
-        let py = world_to_px(t.z);
-        plot(&mut pixels, px, py, 1, tree_rgb);
-    }
-    // Obstacles as amber dots (--accent3 #eab308).
-    let obs_rgb = (0xea, 0xb3, 0x08);
-    for o in obstacles {
-        let px = world_to_px(o.x);
-        let py = world_to_px(o.z);
-        plot(&mut pixels, px, py, 2, obs_rgb);
-    }
-    // Player as cyan cross (--accent #22d3ee), larger.
-    let player_rgb = (0x22, 0xd3, 0xee);
-    let ppx = world_to_px(player.x);
-    let ppy = world_to_px(player.z);
-    plot(&mut pixels, ppx, ppy, 4, player_rgb);
-
-    let file = std::fs::File::create(out_path)?;
-    let bw = std::io::BufWriter::new(file);
-    let mut encoder = png::Encoder::new(bw, w, h);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header()?;
-    writer.write_image_data(&pixels)?;
-    Ok(())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
-fn triangle_wgsl(phase: f32) -> String {
-    format!(
-        r#"
-struct VSOut {{ @builtin(position) pos: vec4<f32>, @location(0) col: vec3<f32> }};
-
-@vertex
-fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {{
-    var o: VSOut;
-    let a = f32(i) * 2.09439 + 1.5708 + {phase};
-    o.pos = vec4<f32>(sin(a) * 0.75, cos(a) * 0.75, 0.0, 1.0);
-    o.col = vec3<f32>(
-        select(0.15, 0.85, i == 0u),
-        select(0.15, 0.85, i == 1u),
-        select(0.55, 0.95, i == 2u),
-    );
-    return o;
-}}
-
-@fragment
-fn fs_main(in: VSOut) -> @location(0) vec4<f32> {{
-    return vec4<f32>(in.col, 1.0);
-}}
-"#
-    )
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
-fn render_triangle_png(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    out_path: &str,
-    phase: f32,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let size = 512u32;
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("seer.render-target"),
-        size: wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("seer.triangle-shader"),
-        source: wgpu::ShaderSource::Wgsl(triangle_wgsl(phase).into()),
-    });
-
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("seer.triangle-pipeline"),
-        layout: None,
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    let bytes_per_row = size * 4;
-    let staging_size = (bytes_per_row * size) as u64;
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("seer.render-readback"),
-        size: staging_size,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("seer.render-encoder"),
-    });
-    {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("seer.render-pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.040,
-                        g: 0.055,
-                        b: 0.075,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&pipeline);
-        pass.draw(0..3, 0..1);
-    }
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &staging,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(size),
-            },
-        },
-        wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit(std::iter::once(encoder.finish()));
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    device.poll(wgpu::PollType::wait_indefinitely())?;
-    let _ = rx.recv();
-
-    let pixels: Vec<u8> = staging.slice(..).get_mapped_range().to_vec();
-    staging.unmap();
-
-    let file = std::fs::File::create(out_path)?;
-    let bw = std::io::BufWriter::new(file);
-    let mut encoder = png::Encoder::new(bw, size, size);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header()?;
-    writer.write_image_data(&pixels)?;
     Ok(())
 }
