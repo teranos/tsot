@@ -270,14 +270,46 @@ fn _run() {
     obs::emit(&format!(
         "[seer.boot] Bevy App built, entering update loop for {frames} frames"
     ));
-    for _ in 0..frames {
+
+    // Multi-frame render (Task 9). If SEER_MULTI_FRAME_DIR is set,
+    // snapshot the world at 25/50/75/100% of the tick loop; renders
+    // land as frame-0..3.png inside that dir. Otherwise fall back to
+    // single-frame SEER_FRAME_PATH behavior at 100%. Snapshots are
+    // cheap (position vectors), so we take them during the loop and
+    // render all at end when wgpu is set up.
+    #[cfg(not(target_arch = "wasm32"))]
+    let multi_dir = std::env::var("SEER_MULTI_FRAME_DIR").ok();
+    #[cfg(not(target_arch = "wasm32"))]
+    let checkpoints: Vec<u32> = if multi_dir.is_some() {
+        vec![frames / 4, frames / 2, 3 * frames / 4, frames]
+    } else {
+        vec![frames]
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut snapshots: Vec<SceneSnapshot> = Vec::with_capacity(checkpoints.len());
+
+    for frame_idx in 1..=frames {
         app.update();
+        #[cfg(not(target_arch = "wasm32"))]
+        if checkpoints.contains(&frame_idx) {
+            snapshots.push(snapshot_scene(&mut app));
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Ok(out_path) = std::env::var("SEER_FRAME_PATH") {
-            match native_render_frame(&mut app, &out_path) {
+        if let Some(dir) = multi_dir {
+            match render_snapshots(&snapshots, &dir) {
+                Ok(paths) => obs::emit(&format!(
+                    "[gpu.native] multi-frame render: {}",
+                    paths.join(", ")
+                )),
+                Err(e) => obs::emit(&format!("[gpu.native] multi-frame render failed: {e}")),
+            }
+        } else if let Ok(out_path) = std::env::var("SEER_FRAME_PATH")
+            && let Some(snap) = snapshots.last()
+        {
+            match render_single(snap, &out_path) {
                 Ok(_) => obs::emit(&format!("[gpu.native] rendered {out_path}")),
                 Err(e) => obs::emit(&format!("[gpu.native] render failed: {e}")),
             }
@@ -290,10 +322,89 @@ fn _run() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn native_render_frame(
-    app: &mut App,
-    out_path: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+struct SceneSnapshot {
+    trees: Vec<bevy_math::Vec3>,
+    obstacles: Vec<bevy_math::Vec3>,
+    fires: Vec<(bevy_math::Vec3, f32)>,
+    player: bevy_math::Vec3,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn snapshot_scene(app: &mut App) -> SceneSnapshot {
+    let world = app.world_mut();
+    let mut tree_q =
+        world.query_filtered::<&physics::Position, bevy_ecs::prelude::With<trees::TreeTrunk>>();
+    let trees: Vec<bevy_math::Vec3> = tree_q.iter(world).map(|p| p.0).collect();
+    let mut obs_q = world.query_filtered::<&physics::Position, (
+        bevy_ecs::prelude::With<physics::AabbCollider>,
+        bevy_ecs::prelude::Without<physics::PlayerMarker>,
+        bevy_ecs::prelude::Without<trees::TreeTrunk>,
+        bevy_ecs::prelude::Without<campfire::Campfire>,
+    )>();
+    let obstacles: Vec<bevy_math::Vec3> = obs_q.iter(world).map(|p| p.0).collect();
+    let mut fire_q = world.query::<(&physics::Position, &campfire::Campfire)>();
+    let fires: Vec<(bevy_math::Vec3, f32)> = fire_q
+        .iter(world)
+        .map(|(p, f)| (p.0, f.intensity))
+        .collect();
+    let mut player_q = world
+        .query_filtered::<&physics::Position, bevy_ecs::prelude::With<physics::PlayerMarker>>();
+    let player = player_q
+        .iter(world)
+        .next()
+        .map(|p| p.0)
+        .unwrap_or(bevy_math::Vec3::ZERO);
+    SceneSnapshot {
+        trees,
+        obstacles,
+        fires,
+        player,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<render::SceneInstance> {
+    let floor_half = room::FLOOR_HALF;
+    let mut instances: Vec<render::SceneInstance> = Vec::with_capacity(
+        1 + snap.trees.len() + snap.obstacles.len() + snap.fires.len() + 1,
+    );
+    instances.push(render::SceneInstance {
+        pos: [0.0, -50.0, 0.0],
+        color: [0.09, 0.11, 0.15],
+        scale: [floor_half * 2.0, 100.0, floor_half * 2.0],
+    });
+    for t in &snap.trees {
+        instances.push(render::SceneInstance {
+            pos: [t.x, 60.0, t.z],
+            color: [0.13, 0.77, 0.37],
+            scale: [40.0, 130.0, 40.0],
+        });
+    }
+    for o in &snap.obstacles {
+        instances.push(render::SceneInstance {
+            pos: [o.x, 40.0, o.z],
+            color: [0.92, 0.70, 0.03],
+            scale: [60.0, 80.0, 60.0],
+        });
+    }
+    for (fire_pos, intensity) in &snap.fires {
+        let i = intensity.clamp(0.5, 1.5);
+        instances.push(render::SceneInstance {
+            pos: [fire_pos.x, 30.0, fire_pos.z],
+            color: [1.0 * i, 0.45 * i, 0.08 * i],
+            scale: [50.0, 60.0, 50.0],
+        });
+    }
+    instances.push(render::SceneInstance {
+        pos: [snap.player.x, 60.0, snap.player.z],
+        color: [0.13, 0.83, 0.93],
+        scale: [70.0, 140.0, 70.0],
+    });
+    instances
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn init_wgpu() -> Result<(gpu::SeerDevice, wgpu::Queue), Box<dyn std::error::Error>> {
     obs::emit("[gpu.native] initializing wgpu");
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::PRIMARY,
@@ -318,93 +429,44 @@ fn native_render_frame(
             experimental_features: wgpu::ExperimentalFeatures::default(),
             trace: wgpu::Trace::Off,
         }))?;
-    let dev = gpu::SeerDevice::new(device);
+    Ok((gpu::SeerDevice::new(device), queue))
+}
 
-    // Snapshot the ECS world at end-of-run. Each of these queries is
-    // filtered to the marker component the spawner assigned, so we
-    // never mis-classify an obstacle as a tree or vice versa.
-    let world = app.world_mut();
-    let mut tree_q =
-        world.query_filtered::<&physics::Position, bevy_ecs::prelude::With<trees::TreeTrunk>>();
-    let trees_vec: Vec<bevy_math::Vec3> = tree_q.iter(world).map(|p| p.0).collect();
-    let mut obs_q = world.query_filtered::<&physics::Position, (
-        bevy_ecs::prelude::With<physics::AabbCollider>,
-        bevy_ecs::prelude::Without<physics::PlayerMarker>,
-        bevy_ecs::prelude::Without<trees::TreeTrunk>,
-        bevy_ecs::prelude::Without<campfire::Campfire>,
-    )>();
-    let obstacles_vec: Vec<bevy_math::Vec3> = obs_q.iter(world).map(|p| p.0).collect();
-    let mut fire_q = world.query::<(&physics::Position, &campfire::Campfire)>();
-    let fires_vec: Vec<(bevy_math::Vec3, f32)> = fire_q
-        .iter(world)
-        .map(|(p, f)| (p.0, f.intensity))
-        .collect();
-    let mut player_q = world
-        .query_filtered::<&physics::Position, bevy_ecs::prelude::With<physics::PlayerMarker>>();
-    let player_pos: bevy_math::Vec3 = player_q
-        .iter(world)
-        .next()
-        .map(|p| p.0)
-        .unwrap_or(bevy_math::Vec3::ZERO);
-
-    // Every scene element = one instance of the shared unit cube.
-    // Ground first (drawn under everything by virtue of Y position),
-    // then trees, obstacles, and finally the player.
-    let floor_half = room::FLOOR_HALF;
-    let mut instances: Vec<render::SceneInstance> = Vec::with_capacity(
-        1 + trees_vec.len() + obstacles_vec.len() + 1,
-    );
-    instances.push(render::SceneInstance {
-        pos: [0.0, -50.0, 0.0],
-        color: [0.09, 0.11, 0.15],
-        scale: [floor_half * 2.0, 100.0, floor_half * 2.0],
-    });
-    for t in &trees_vec {
-        instances.push(render::SceneInstance {
-            pos: [t.x, 60.0, t.z],
-            color: [0.13, 0.77, 0.37],
-            scale: [40.0, 130.0, 40.0],
-        });
-    }
-    for o in &obstacles_vec {
-        instances.push(render::SceneInstance {
-            pos: [o.x, 40.0, o.z],
-            color: [0.92, 0.70, 0.03],
-            scale: [60.0, 80.0, 60.0],
-        });
-    }
-    // Campfires: warm orange cube whose color scales with the current
-    // flicker intensity. Wider than tall to read as a log pile rather
-    // than a totem. Since seer's shader has one directional light and
-    // no point-light channel, the fire doesn't illuminate its
-    // surroundings — it just self-emits by way of a brighter/dimmer
-    // color multiplier.
-    for (fire_pos, intensity) in &fires_vec {
-        let i = intensity.clamp(0.5, 1.5);
-        instances.push(render::SceneInstance {
-            pos: [fire_pos.x, 30.0, fire_pos.z],
-            color: [1.0 * i, 0.45 * i, 0.08 * i],
-            scale: [50.0, 60.0, 50.0],
-        });
-    }
-    instances.push(render::SceneInstance {
-        pos: [player_pos.x, 60.0, player_pos.z],
-        color: [0.13, 0.83, 0.93],
-        scale: [70.0, 140.0, 70.0],
-    });
-
+#[cfg(not(target_arch = "wasm32"))]
+fn render_single(
+    snap: &SceneSnapshot,
+    out_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (dev, queue) = init_wgpu()?;
+    let instances = snapshot_to_instances(snap);
     let camera = render::SceneCamera::follow(
-        [player_pos.x, player_pos.y, player_pos.z],
-        floor_half,
+        [snap.player.x, snap.player.y, snap.player.z],
+        room::FLOOR_HALF,
     );
     render::render_scene(&dev, &queue, &camera, &instances, out_path)?;
-    obs::emit(&format!(
-        "[gpu.native] scene rendered: {} trees + {} obstacles + {} campfires + player @ ({:.0},{:.0})",
-        trees_vec.len(),
-        obstacles_vec.len(),
-        fires_vec.len(),
-        player_pos.x,
-        player_pos.z,
-    ));
     Ok(())
+}
+
+/// Multi-frame path — renders each snapshot as `<dir>/frame-N.png`
+/// with wgpu initialized once and reused across all N renders.
+/// Returns the list of paths written for the caller's log line.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_snapshots(
+    snapshots: &[SceneSnapshot],
+    dir: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(dir)?;
+    let (dev, queue) = init_wgpu()?;
+    let mut out_paths = Vec::with_capacity(snapshots.len());
+    for (i, snap) in snapshots.iter().enumerate() {
+        let out_path = format!("{dir}/frame-{i}.png");
+        let instances = snapshot_to_instances(snap);
+        let camera = render::SceneCamera::follow(
+            [snap.player.x, snap.player.y, snap.player.z],
+            room::FLOOR_HALF,
+        );
+        render::render_scene(&dev, &queue, &camera, &instances, &out_path)?;
+        out_paths.push(out_path);
+    }
+    Ok(out_paths)
 }

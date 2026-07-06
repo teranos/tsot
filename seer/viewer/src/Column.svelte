@@ -4,6 +4,7 @@
   import ColumnHeader from './ColumnHeader.svelte'
   import DeltasRow from './DeltasRow.svelte'
   import Frame from './Frame.svelte'
+  import FrameStrip from './FrameStrip.svelte'
   import Sparklines from './Sparklines.svelte'
   import Errors from './Errors.svelte'
   import GpuRecords from './GpuRecords.svelte'
@@ -41,7 +42,7 @@
 <div class="col" class:current data-sha={sha} onclick={() => onSelect(sha)}>
   <ColumnHeader {entry} {sha} />
   <div class="body">
-    <Frame {sha} />
+    <FrameStrip {sha} />
     <DeltasRow {entry} />
     <Sparklines {metrics} error={metricsError} />
     <Errors errors={report?.errors_captured ?? []} {loading} error={reportError} />
