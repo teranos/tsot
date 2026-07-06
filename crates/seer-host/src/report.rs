@@ -357,14 +357,20 @@ pub fn render_html_report(
         errors_html.push_str("</ul></div>");
     }
 
-    // Commit cards — each is the full outcome of one commit: frame,
-    // sha, verdict, all three deltas, CI run link, seer-host duration,
-    // leak flag, inline sparkline (if metrics.json available for that
-    // sha via prior_metrics). Oldest-left, newest-right, current
-    // outlined. Full history (up to 20) rendered; < > buttons scroll
-    // the horizontally-overflowing container.
+    // Commit cards — 4-column grid, newest 4 visible by default (last
+    // 4 of history, rightmost = current commit). < > buttons swap in
+    // older windows of 4 via JS. Each card is tagged data-page from
+    // the newest end (page 0 = newest 4, page 1 = next 4 older, etc.).
+    // No horizontal scrolling — the current commit is always in the
+    // default view without any interaction.
+    let n_history = history.len();
     let mut frame_gallery_html = String::new();
-    for h in history.iter() {
+    for (i, h) in history.iter().enumerate() {
+        let page = if n_history == 0 {
+            0
+        } else {
+            (n_history - 1 - i) / 4
+        };
         let frame_url = h.report_url.replace("/report.html", "/frame.png");
         let is_current = h.sha == current.sha && h.when_unix == current.when_unix;
         let cls = if is_current { " current-frame" } else { "" };
@@ -432,7 +438,7 @@ pub fn render_html_report(
             .map(|m| render_sparkline_svg(m))
             .unwrap_or_default();
         frame_gallery_html.push_str(&format!(
-            r#"<div class="commit-card{cls}"><a href="{report}"><img src="{frame}" alt="frame from {sha}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{{textContent:'no frame',className:'delta'}}));" /></a>{sparkline_svg}<div class="card-body"><div class="card-row header"><a class="sha" href="{report}">{sha}</a>{verdict_tag}</div><div class="card-row">{heap_abs}</div><div class="card-row">{gpu_abs}</div>{wasm_row}<div class="card-row footer">{ci_bit}{dur_bit}{leak_bit}</div></div></div>"#,
+            r#"<div class="commit-card{cls}" data-page="{page}"><a href="{report}"><img src="{frame}" alt="frame from {sha}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{{textContent:'no frame',className:'delta'}}));" /></a>{sparkline_svg}<div class="card-body"><div class="card-row header"><a class="sha" href="{report}">{sha}</a>{verdict_tag}</div><div class="card-row">{heap_abs}</div><div class="card-row">{gpu_abs}</div>{wasm_row}<div class="card-row footer">{ci_bit}{dur_bit}{leak_bit}</div></div></div>"#,
             report = h.report_url,
             frame = frame_url,
             sha = h.sha,
@@ -510,14 +516,13 @@ pub fn render_html_report(
   tr.current td:first-child {{ color: var(--accent); font-weight: bold; }}
   a {{ color: var(--accent); text-decoration: none; }}
   a:hover {{ text-decoration: underline; }}
-  .frame-row {{ display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 12px; margin: 8px 0; padding-bottom: 8px; scroll-snap-type: x proximity; }}
-  .frame-row::-webkit-scrollbar {{ height: 8px; }}
-  .frame-row::-webkit-scrollbar-track {{ background: var(--panel); border-radius: 4px; }}
-  .frame-row::-webkit-scrollbar-thumb {{ background: var(--line); border-radius: 4px; }}
-  .gallery-controls {{ display: flex; gap: 6px; margin: 4px 0; }}
+  .frame-row {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 8px 0; }}
+  .gallery-controls {{ display: flex; align-items: center; gap: 8px; margin: 4px 0; }}
   .gallery-controls button {{ background: var(--panel); color: var(--fg); border: 1px solid var(--line); padding: 4px 12px; font-family: inherit; font-size: 14px; cursor: pointer; border-radius: 3px; }}
-  .gallery-controls button:hover {{ background: var(--line); }}
-  .commit-card {{ background: var(--panel); padding: 10px; border-radius: 4px; display: flex; flex-direction: column; gap: 6px; flex: 0 0 260px; scroll-snap-align: start; }}
+  .gallery-controls button:hover:not(:disabled) {{ background: var(--line); }}
+  .gallery-controls button:disabled {{ opacity: 0.35; cursor: not-allowed; }}
+  .page-indicator {{ font-size: 12px; color: var(--dim); }}
+  .commit-card {{ background: var(--panel); padding: 10px; border-radius: 4px; display: flex; flex-direction: column; gap: 6px; }}
   .commit-card .sparkline {{ display: block; width: 100%; height: 40px; background: var(--bg); border-radius: 3px; }}
   .commit-card img {{ width: 100%; height: auto; display: block; border-radius: 3px; }}
   .commit-card.current-frame {{ outline: 2px solid var(--accent); }}
@@ -548,12 +553,35 @@ pub fn render_html_report(
 
   <h2>Commit history (older → newer)</h2>
   <div class="gallery-controls">
-    <button type="button" onclick="document.getElementById('gallery').scrollBy({{left:-320,behavior:'smooth'}});" aria-label="scroll older">&lt;</button>
-    <button type="button" onclick="document.getElementById('gallery').scrollBy({{left:320,behavior:'smooth'}});" aria-label="scroll newer">&gt;</button>
+    <button type="button" id="page-older" onclick="pageOlder()" aria-label="older window">&lt;</button>
+    <span id="page-indicator" class="page-indicator">newest</span>
+    <button type="button" id="page-newer" onclick="pageNewer()" aria-label="newer window">&gt;</button>
   </div>
   <div class="frame-row" id="gallery">
     {frame_gallery_html}
   </div>
+  <script>
+    (function() {{
+      let currentPage = 0;
+      const cards = document.querySelectorAll('#gallery .commit-card');
+      const pages = Array.from(cards).map(c => parseInt(c.dataset.page || '0', 10));
+      const maxPage = pages.length ? Math.max.apply(null, pages) : 0;
+      const indicator = document.getElementById('page-indicator');
+      const olderBtn = document.getElementById('page-older');
+      const newerBtn = document.getElementById('page-newer');
+      function apply() {{
+        cards.forEach(c => {{
+          c.style.display = (parseInt(c.dataset.page || '0', 10) === currentPage) ? '' : 'none';
+        }});
+        indicator.textContent = currentPage === 0 ? 'newest' : ('page -' + currentPage);
+        olderBtn.disabled = currentPage >= maxPage;
+        newerBtn.disabled = currentPage <= 0;
+      }}
+      window.pageOlder = function() {{ if (currentPage < maxPage) {{ currentPage++; apply(); }} }};
+      window.pageNewer = function() {{ if (currentPage > 0) {{ currentPage--; apply(); }} }};
+      apply();
+    }})();
+  </script>
 
   <h2>Time series (each series normalised to its own max)</h2>
   <div class="legend">
