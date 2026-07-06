@@ -42,6 +42,37 @@ pub fn advance_player(mut q: Query<(&mut Position, &Velocity), With<PlayerMarker
     }
 }
 
+/// Player speed magnitude — units per tick. Chosen so the 180-tick
+/// CI run covers a visible fraction of the world (~500 units of
+/// path length) without leaving the follow-cam's zoom radius.
+pub const WANDER_SPEED: f32 = 3.0;
+/// Radians per tick the wander direction rotates. Small positive
+/// value: the player traces a smooth curve, not a straight line, so
+/// the follow-cam has motion to react to and cross-commit drift in
+/// the player system produces a visibly different trajectory.
+pub const WANDER_TURN_RATE: f32 = 0.02;
+
+/// Input surrogate — until seer wires a real keyboard/touch source
+/// (headless-CI has neither), the player's velocity direction rotates
+/// deterministically at WANDER_TURN_RATE per tick with fixed
+/// WANDER_SPEED magnitude. Same commit → same trajectory.
+///
+/// `Local<u32>` carries the per-system tick counter so we don't need
+/// a global FrameCount resource; ordering guarantees this runs before
+/// advance_player, so the freshly-rotated velocity is what advance
+/// integrates.
+pub fn wander_input(
+    mut q: Query<&mut Velocity, With<PlayerMarker>>,
+    mut tick: Local<u32>,
+) {
+    *tick += 1;
+    let angle = (*tick as f32) * WANDER_TURN_RATE;
+    let dir = Vec3::new(angle.cos(), 0.0, angle.sin());
+    for mut v in q.iter_mut() {
+        v.0 = dir * WANDER_SPEED;
+    }
+}
+
 pub fn resolve_collisions(
     mut player_q: Query<(&mut Position, &mut Velocity), With<PlayerMarker>>,
     obstacles: Query<(&Position, &AabbCollider), Without<PlayerMarker>>,
@@ -70,6 +101,27 @@ pub fn resolve_collisions(
             if v_along < 0.0 {
                 p_vel.0 -= normal * v_along;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wander_direction_is_unit_scaled_by_speed() {
+        // The direction vector at any tick has magnitude ==
+        // WANDER_SPEED (within f32 noise). Not a Bevy-driven test —
+        // just verifies the math the system embeds.
+        for tick in 0..500 {
+            let angle = tick as f32 * WANDER_TURN_RATE;
+            let v = Vec3::new(angle.cos(), 0.0, angle.sin()) * WANDER_SPEED;
+            let mag = v.length();
+            assert!(
+                (mag - WANDER_SPEED).abs() < 1e-4,
+                "tick {tick}: |v| = {mag}, expected {WANDER_SPEED}"
+            );
         }
     }
 }

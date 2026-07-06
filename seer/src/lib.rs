@@ -257,7 +257,8 @@ fn _run() {
     .add_systems(
         Update,
         (
-            physics::advance_player,
+            physics::wander_input,
+            physics::advance_player.after(physics::wander_input),
             physics::resolve_collisions.after(physics::advance_player),
             room::world_bounds_clamp.after(physics::resolve_collisions),
             campfire::flicker_fire.after(room::world_bounds_clamp),
@@ -392,7 +393,10 @@ fn native_render_frame(
         scale: [70.0, 140.0, 70.0],
     });
 
-    let camera = render::SceneCamera::default_for_floor(floor_half);
+    let camera = render::SceneCamera::follow(
+        [player_pos.x, player_pos.y, player_pos.z],
+        floor_half,
+    );
     render::render_scene(&dev, &queue, &camera, &instances, out_path)?;
     obs::emit(&format!(
         "[gpu.native] scene rendered: {} trees + {} obstacles + {} campfires + player @ ({:.0},{:.0})",

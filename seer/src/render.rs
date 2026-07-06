@@ -56,6 +56,27 @@ impl SceneCamera {
         }
     }
 
+    /// Follow-cam anchored on the player position. Eye sits above +
+    /// slightly Z-forward of the target (same tilt as default_for_floor);
+    /// zoom is tighter than the full-floor default so the player
+    /// occupies a meaningful chunk of the frame while still showing
+    /// its immediate tree/obstacle neighbourhood. `floor_half` still
+    /// bounds the near/far frustum so distant trees stay unclipped.
+    pub fn follow(player: [f32; 3], floor_half: f32) -> Self {
+        Self {
+            eye: [
+                player[0],
+                player[1] + floor_half * 2.0,
+                player[2] + floor_half * 0.8,
+            ],
+            target: player,
+            up: [0.0, 1.0, 0.0],
+            half_extent: floor_half * 0.6,
+            near: 100.0,
+            far: floor_half * 5.0,
+        }
+    }
+
     /// view_proj packed row-major → matches WGSL mat4x4<f32> upload.
     fn view_proj(&self) -> [[f32; 4]; 4] {
         let eye = bevy_math::Vec3::new(self.eye[0], self.eye[1], self.eye[2]);
@@ -490,5 +511,24 @@ mod tests {
         assert!(cx.abs() < 1.0, "origin should be in-frustum x: {cx}");
         assert!(cy.abs() < 1.0, "origin should be in-frustum y: {cy}");
         assert!((0.0..=1.0).contains(&cz), "origin should be in-frustum z: {cz}");
+    }
+
+    #[test]
+    fn follow_camera_maps_player_to_ndc_center() {
+        let player = [1000.0, 20.0, -500.0];
+        let cam = SceneCamera::follow(player, 3000.0);
+        let vp = cam.view_proj();
+        // Applying view_proj to the player world position must land
+        // on the near-center of the clip volume — that's the whole
+        // point of "follow": target == player.
+        let col_major = |m: &[[f32; 4]; 4], r: usize| -> f32 {
+            m[0][r] * player[0] + m[1][r] * player[1] + m[2][r] * player[2] + m[3][r] * 1.0
+        };
+        let cx = col_major(&vp, 0);
+        let cy = col_major(&vp, 1);
+        let cw = col_major(&vp, 3);
+        assert!((cw - 1.0).abs() < 1e-4, "ortho w should be 1, got {cw}");
+        assert!(cx.abs() < 1e-3, "player should be at NDC x=0, got {cx}");
+        assert!(cy.abs() < 1e-3, "player should be at NDC y=0, got {cy}");
     }
 }
