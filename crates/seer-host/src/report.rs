@@ -394,6 +394,32 @@ pub fn render_html_report(
             h.heap_end_mb,
             fmt_delta_mb(h.d_heap_mb)
         );
+        // wasm size row — includes delta from the prior history entry
+        // if available. Zero (unknown) renders as em-dash. Reads at a
+        // glance whether this commit made the wasm heavier or lighter.
+        let wasm_row = if h.wasm_bytes == 0 {
+            String::new()
+        } else {
+            let mb = h.wasm_bytes as f64 / 1_048_576.0;
+            // Find prior non-zero entry.
+            let prior_wasm = history
+                .iter()
+                .rev()
+                .find(|p| p.wasm_bytes > 0 && p.when_unix < h.when_unix)
+                .map(|p| p.wasm_bytes);
+            let delta_html = match prior_wasm {
+                Some(p) if p != h.wasm_bytes => {
+                    let d = h.wasm_bytes as i64 - p as i64;
+                    let d_mb = d.abs() as f64 / 1_048_576.0;
+                    let sign = if d > 0 { "+" } else { "-" };
+                    let cls = if d > 0 { "up" } else { "down" };
+                    format!(r#"<span class="delta {cls}">({sign}{d_mb:.2} MB)</span>"#)
+                }
+                Some(_) => r#"<span class="delta">(flat)</span>"#.to_string(),
+                None => String::new(),
+            };
+            format!(r#"<div class="card-row">wasm: {mb:.2} MB {delta_html}</div>"#)
+        };
         let gpu_abs = format!(
             r#"gpu: {} · {:.2} MB <span class="delta">({} · {})</span>"#,
             h.gpu_live_end,
@@ -406,7 +432,7 @@ pub fn render_html_report(
             .map(|m| render_sparkline_svg(m))
             .unwrap_or_default();
         frame_gallery_html.push_str(&format!(
-            r#"<div class="commit-card{cls}"><a href="{report}"><img src="{frame}" alt="frame from {sha}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{{textContent:'no frame',className:'delta'}}));" /></a>{sparkline_svg}<div class="card-body"><div class="card-row header"><a class="sha" href="{report}">{sha}</a>{verdict_tag}</div><div class="card-row">{heap_abs}</div><div class="card-row">{gpu_abs}</div><div class="card-row footer">{ci_bit}{dur_bit}{leak_bit}</div></div></div>"#,
+            r#"<div class="commit-card{cls}"><a href="{report}"><img src="{frame}" alt="frame from {sha}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{{textContent:'no frame',className:'delta'}}));" /></a>{sparkline_svg}<div class="card-body"><div class="card-row header"><a class="sha" href="{report}">{sha}</a>{verdict_tag}</div><div class="card-row">{heap_abs}</div><div class="card-row">{gpu_abs}</div>{wasm_row}<div class="card-row footer">{ci_bit}{dur_bit}{leak_bit}</div></div></div>"#,
             report = h.report_url,
             frame = frame_url,
             sha = h.sha,

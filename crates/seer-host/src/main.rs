@@ -99,6 +99,11 @@ fn main() -> Result<()> {
 
     let mut summary = build_summary(&st, &sha, &short_sha, &ci_run_url);
     summary.duration_secs = host_start.elapsed().as_secs();
+    // Measure the wasm module's size at the same path the runtime
+    // loaded — captures whatever the workflow just built + uploaded.
+    summary.wasm_bytes = std::fs::metadata(&wasm_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
     let verdict = compute_verdict(&summary);
     summary.verdict_passed = verdict.passed;
     summary.verdict_violations = verdict.violations.clone();
