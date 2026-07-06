@@ -1,19 +1,23 @@
 import type { RunSummary, CommitReport, Metric } from './types'
 
-// Extract the full sha from a history entry. Old (pre-M1) entries
-// have a 7-char `sha` field but their per-sha S3 objects still live
-// at 40-char paths; the FULL sha is embedded in report_url. Post-M5
-// report_url shrinks to `/<sha>/` but the last path segment is still
-// the full sha. This helper is where that history is absorbed.
+// Extract the full sha from a history entry.
+//
+// Post-M1 entries store the full 40-char sha directly in `.sha` and
+// have report_url as `/?sha=<full>` (M6 deep-link into the viewer).
+// Pre-M1 entries have a 7-char `.sha` but embed the full sha in
+// their old `/perf/<full>/report.html` report_url. Both shapes are
+// handled here so a mixed history.json continues to render.
 export function shaFromEntry(entry: RunSummary): string {
+  // Trust .sha when it looks like a full sha — that's the direct,
+  // canonical answer for every commit landed after M1.
+  if (entry.sha.length >= 40) return entry.sha
+  // Legacy: dig the full sha out of the old per-commit report URL.
   let u = entry.report_url
   if (u.endsWith('/report.html')) u = u.slice(0, -'/report.html'.length)
   if (u.endsWith('/')) u = u.slice(0, -1)
   const parts = u.split('/').filter(p => p.length > 0)
   const last = parts[parts.length - 1] || ''
-  // If report_url didn't yield a sha (malformed or missing), fall
-  // back to the display .sha — degraded but not silently wrong.
-  return last || entry.sha
+  return last.length >= 40 ? last : entry.sha
 }
 
 async function loadJson<T>(url: string): Promise<T> {

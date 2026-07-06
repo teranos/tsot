@@ -125,46 +125,26 @@ jobs:
         working-directory: crates/seer-host
         run: cargo build --release
 
-      - name: Fetch prior history + metrics from S3
+      - name: Fetch prior history from S3
         if: vars.SEER_DISTRIBUTION_ID != ''
         continue-on-error: true
         run: |
-          mkdir -p out out/prior-metrics
-          # Public GETs against CloudFront — no auth needed.
+          mkdir -p out
+          # Public GET against CloudFront — no auth needed. seer-host
+          # reads this file, appends this run's summary, and writes
+          # out the updated history.json for upload back to S3.
           curl -sSf -o out/history-in.json https://seer.sbvh.nl/perf/history.json || echo '[]' > out/history-in.json
           echo "prior history entries: $(python3 -c 'import json,sys;print(len(json.load(open("out/history-in.json"))))' 2>/dev/null || echo 0)"
-          # Pull metrics.json for each prior sha so the report can
-          # render inline sparklines for every gallery card. Deriving
-          # each URL from the history entry's own report_url (which
-          # embeds the FULL sha the objects were uploaded under);
-          # saved locally keyed by SHORT sha (matches history.sha for
-          # the lookup on the report side).
-          python3 -c '
-          import json, sys
-          for e in json.load(open("out/history-in.json")):
-              short = e["sha"]
-              url = "https://seer.sbvh.nl" + e["report_url"].replace("/report.html", "/metrics.json")
-              print(f"{short}\t{url}")
-          ' | while IFS=$'\t' read -r short url; do
-            if curl -sSf -o "out/prior-metrics/${short}.json" "$url"; then
-              echo "fetched metrics for $short from $url"
-            else
-              echo "no metrics for $short (will render placeholder)"
-            fi
-          done
-          ls -la out/prior-metrics/ || true
 
       - name: Run seer-host on seer.wasm
         env:
           SEER_FRAMES: '180'
-          SEER_REPORT_PATH: out/report.html
           SEER_HISTORY_IN_PATH: out/history-in.json
           SEER_HISTORY_OUT_PATH: out/history.json
           SEER_SUMMARY_OUT_PATH: out/summary.json
           SEER_VERDICT_OUT_PATH: out/verdict.json
           SEER_METRICS_OUT_PATH: out/metrics.json
           SEER_COMMIT_REPORT_OUT_PATH: out/report.json
-          SEER_METRICS_DIR: out/prior-metrics
         run: |
           mkdir -p out
           [ -f out/history-in.json ] || echo '[]' > out/history-in.json
@@ -188,15 +168,14 @@ jobs:
           role-to-assume: arn:aws:iam::548351057127:role/seer-github-deploy
           aws-region: eu-central-1
 
-      - name: Upload perf report to S3
+      - name: Upload diagnostic artifacts to S3
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
         run: |
-          # Two locations: /perf/<sha>/ for permalinks, /perf/latest/
-          # for the always-current head.
+          # Two prefixes for every artifact — /perf/<sha>/ is the
+          # permalink, /perf/latest/ is the always-current head. The
+          # viewer at seer.sbvh.nl/ deep-links via ?sha=<hash> and
+          # loads these JSONs directly. No HTML pipeline any more.
           for prefix in "perf/${{ github.sha }}" "perf/latest"; do
-            aws s3 cp out/report.html "s3://seer-sbvh-static/$prefix/report.html" \
-              --cache-control "public, max-age=300" \
-              --content-type "text/html; charset=utf-8"
             aws s3 cp out/seer-host.log "s3://seer-sbvh-static/$prefix/seer-host.log" \
               --cache-control "public, max-age=300" \
               --content-type "text/plain; charset=utf-8"

@@ -111,20 +111,15 @@ pub fn env_i64(name: &str, default: i64) -> i64 {
         .unwrap_or(default)
 }
 
-/// Truncate a full 40-char SHA to the conventional 7-char display
-/// form. Safe against already-short input (returns as-is if shorter).
-pub fn short_sha(sha: &str) -> &str {
-    let end = sha.len().min(7);
-    &sha[..end]
-}
-
 /// Build the RunSummary from the host state at end of run.
 /// Verdict fields are left at their defaults; caller runs
 /// compute_verdict and patches them in.
 ///
 /// `sha` is the full 40-char sha and is what gets stored in the
-/// summary + used in URLs. Display code calls `short_sha(&summary.sha)`
-/// when it wants the 7-char form.
+/// summary + used in URLs. Display truncation (short sha for humans)
+/// lives entirely in the viewer's format.ts — no Rust-side short_sha
+/// helper any more, since the HTML pipeline (its only consumer) is
+/// gone.
 pub fn build_summary(st: &HostState, sha: &str, ci_run_url: &str) -> RunSummary {
     let leak_enabled = std::env::var("SEER_LEAK")
         .ok()
@@ -177,11 +172,37 @@ pub fn build_summary(st: &HostState, sha: &str, ci_run_url: &str) -> RunSummary 
         gpu_bytes_end_mb,
         d_gpu_bytes_mb: gpu_bytes_end_mb - gpu_bytes_start_mb,
         leak_enabled,
-        report_url: format!("/perf/{sha}/report.html"),
+        // Deep-link into the seer viewer. Pre-M6 this was
+        // /perf/{sha}/report.html — a per-commit static HTML file.
+        // That file no longer exists; the viewer at the root renders
+        // any sha via ?sha=<full>. Keeps the field's role (canonical
+        // URL for the reader to open this commit) meaningful.
+        report_url: format!("/?sha={sha}"),
         ci_run_url: ci_run_url.to_string(),
         verdict_passed: true,
         verdict_violations: Vec::new(),
         duration_secs: 0,
         wasm_bytes: 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_summary_preserves_full_sha() {
+        let st = HostState::new();
+        let full = "abcdef1234567890abcdef1234567890abcdef12";
+        let s = build_summary(&st, full, "");
+        assert_eq!(s.sha, full);
+    }
+
+    #[test]
+    fn report_url_is_viewer_deep_link_with_full_sha() {
+        let st = HostState::new();
+        let full = "abcdef1234567890abcdef1234567890abcdef12";
+        let s = build_summary(&st, full, "");
+        assert_eq!(s.report_url, "/?sha=abcdef1234567890abcdef1234567890abcdef12");
     }
 }
