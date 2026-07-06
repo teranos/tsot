@@ -15,6 +15,7 @@ pub mod build_info;
 pub mod campfire;
 pub mod error;
 pub mod health;
+pub mod net;
 pub mod obs;
 pub mod physics;
 pub mod room;
