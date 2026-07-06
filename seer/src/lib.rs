@@ -12,6 +12,7 @@
 // the next commit; wgpu wrapper the one after; game logic after that.
 
 pub mod build_info;
+pub mod campfire;
 pub mod error;
 pub mod health;
 pub mod obs;
@@ -245,17 +246,25 @@ fn report_player_pos(
 fn _run() {
     obs::emit("[seer.boot] entering run()");
     let mut app = App::new();
-    app.add_systems(Startup, (setup, trees::setup_trees.after(setup)))
-        .add_systems(
-            Update,
-            (
-                physics::advance_player,
-                physics::resolve_collisions.after(physics::advance_player),
-                room::world_bounds_clamp.after(physics::resolve_collisions),
-                tick.after(room::world_bounds_clamp),
-                report_player_pos.after(tick),
-            ),
-        );
+    app.add_systems(
+        Startup,
+        (
+            setup,
+            trees::setup_trees.after(setup),
+            campfire::setup_campfire.after(setup),
+        ),
+    )
+    .add_systems(
+        Update,
+        (
+            physics::advance_player,
+            physics::resolve_collisions.after(physics::advance_player),
+            room::world_bounds_clamp.after(physics::resolve_collisions),
+            campfire::flicker_fire.after(room::world_bounds_clamp),
+            tick.after(campfire::flicker_fire),
+            report_player_pos.after(tick),
+        ),
+    );
     let frames = frame_budget();
     obs::emit(&format!(
         "[seer.boot] Bevy App built, entering update loop for {frames} frames"
@@ -321,8 +330,14 @@ fn native_render_frame(
         bevy_ecs::prelude::With<physics::AabbCollider>,
         bevy_ecs::prelude::Without<physics::PlayerMarker>,
         bevy_ecs::prelude::Without<trees::TreeTrunk>,
+        bevy_ecs::prelude::Without<campfire::Campfire>,
     )>();
     let obstacles_vec: Vec<bevy_math::Vec3> = obs_q.iter(world).map(|p| p.0).collect();
+    let mut fire_q = world.query::<(&physics::Position, &campfire::Campfire)>();
+    let fires_vec: Vec<(bevy_math::Vec3, f32)> = fire_q
+        .iter(world)
+        .map(|(p, f)| (p.0, f.intensity))
+        .collect();
     let mut player_q = world
         .query_filtered::<&physics::Position, bevy_ecs::prelude::With<physics::PlayerMarker>>();
     let player_pos: bevy_math::Vec3 = player_q
@@ -357,6 +372,20 @@ fn native_render_frame(
             scale: [60.0, 80.0, 60.0],
         });
     }
+    // Campfires: warm orange cube whose color scales with the current
+    // flicker intensity. Wider than tall to read as a log pile rather
+    // than a totem. Since seer's shader has one directional light and
+    // no point-light channel, the fire doesn't illuminate its
+    // surroundings — it just self-emits by way of a brighter/dimmer
+    // color multiplier.
+    for (fire_pos, intensity) in &fires_vec {
+        let i = intensity.clamp(0.5, 1.5);
+        instances.push(render::SceneInstance {
+            pos: [fire_pos.x, 30.0, fire_pos.z],
+            color: [1.0 * i, 0.45 * i, 0.08 * i],
+            scale: [50.0, 60.0, 50.0],
+        });
+    }
     instances.push(render::SceneInstance {
         pos: [player_pos.x, 60.0, player_pos.z],
         color: [0.13, 0.83, 0.93],
@@ -366,9 +395,10 @@ fn native_render_frame(
     let camera = render::SceneCamera::default_for_floor(floor_half);
     render::render_scene(&dev, &queue, &camera, &instances, out_path)?;
     obs::emit(&format!(
-        "[gpu.native] scene rendered: {} trees + {} obstacles + player @ ({:.0},{:.0})",
+        "[gpu.native] scene rendered: {} trees + {} obstacles + {} campfires + player @ ({:.0},{:.0})",
         trees_vec.len(),
         obstacles_vec.len(),
+        fires_vec.len(),
         player_pos.x,
         player_pos.z,
     ));
