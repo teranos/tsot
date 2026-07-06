@@ -60,9 +60,7 @@ jobs:
           RUST_BACKTRACE: full
           SEER_FRAMES: '180'
           SEER_FRAME_PATH: out/frame.png
-          # Task 9 — 4-frame render at 25/50/75/100% of the tick loop.
-          # The viewer's FrameStrip fetches frame-0..3.png as evidence
-          # that the world actually evolved during the run.
+          # 4-frame render at 25/50/75/100% of the tick loop.
           SEER_MULTI_FRAME_DIR: out
         run: |
           mkdir -p out
@@ -79,10 +77,7 @@ jobs:
       - name: Upload rendered frames to S3
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
         run: |
-          # Single-frame (back-compat) + multi-frame (Task 9). Both
-          # exist after the run; the viewer picks up whichever it
-          # finds. --paths on invalidation lists them one at a time
-          # since the CLI doesn't accept globs on non-latest prefixes.
+          # frame.png + frame-{0..3}.png both may exist; upload each.
           if [ -f seer/out/frame.png ]; then
             for prefix in "perf/${{ github.sha }}" "perf/latest"; do
               aws s3 cp seer/out/frame.png "s3://seer-sbvh-static/$prefix/frame.png" \
@@ -113,11 +108,8 @@ jobs:
           retention-days: 30
 
   seer-p2p-test:
-    # Task 13 — proves seer-summary/v1 gossipsub topic + payload
-    # round-trip on native. Spawns publisher + subscriber swarms on
-    # loopback, asserts the subscriber sees the RunSummary the
-    # publisher sent. No relayer binary required — the two swarms
-    # mesh each other directly.
+    # Proves the seer-summary/v1 topic round-trips: publisher +
+    # subscriber swarms on loopback, no relayer.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -179,8 +171,6 @@ jobs:
           SEER_VERDICT_OUT_PATH: out/verdict.json
           SEER_METRICS_OUT_PATH: out/metrics.json
           SEER_COMMIT_REPORT_OUT_PATH: out/report.json
-          # Task 13 / column header — carry the head-commit subject
-          # into summary.json so the viewer column shows it inline.
           SEER_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           mkdir -p out

@@ -63,10 +63,8 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         },
     )?;
 
-    // Same host-ledger pattern, keyed by gpu id, partitioned by kind
-    // so seq spaces don't collide. `label_ptr`/`label_len` (added for
-    // Task 6) point into wasm memory at the resource name; decoded
-    // utf-8 lands in `GpuRecord.label`.
+    // `label_ptr`/`label_len` point into wasm memory at the resource
+    // name; decoded utf-8 lands in `GpuRecord.label`.
     linker.func_wrap(
         "env",
         "seer_record_gpu_event",
@@ -111,10 +109,8 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         },
     )?;
 
-    // Destroy counterpart (Task 7). No backtrace here — the destroy
-    // site is less interesting than the create site, and skipping
-    // WasmBacktrace keeps the boundary crossing cheap. Pairs with
-    // the earlier gpu_records entry to fill in destroyed_at_seq.
+    // No backtrace on destroy — the site is uninteresting and
+    // skipping WasmBacktrace keeps the boundary crossing cheap.
     linker.func_wrap(
         "env",
         "seer_record_gpu_destroyed",

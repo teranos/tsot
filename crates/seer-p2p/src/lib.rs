@@ -1,18 +1,7 @@
-// libp2p publish path for seer's RunSummary (Task 13). Extracted from
-// seer-host so the sibling `seer-p2p-test` integration crate can call
-// publish_summary directly against a loopback subscriber, in the same
-// shape rave-positions-test uses for rave-positions/v1.
-//
-// After seer-host finishes a diagnostic run, if SEER_P2P_BOOTSTRAP is
-// set, we dial the given multiaddress, subscribe to seer-summary/v1,
-// publish the summary as a signed gossipsub message, wait briefly for
-// propagation, then exit. Best-effort: any failure (no route,
-// timeout, gossipsub not meshed) is logged and swallowed by the
-// caller so the local diagnostic never blocks on the network.
-//
-// Reuses the existing `relaye.sbvh.nl` deployment — the relayer only
-// needs `seer-summary/v1` added to its RELAYE_TOPICS env for messages
-// on this topic to mesh (one line of deploy config).
+// libp2p publish path for a signed gossipsub payload on
+// seer-summary/v1. Callers hand in a Serialize + a bootstrap
+// multiaddr + a wall-clock deadline; on failure the error is
+// returned (never panics or blocks past the deadline).
 
 use anyhow::{Context, Result};
 use std::time::Duration;

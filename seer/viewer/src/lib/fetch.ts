@@ -1,17 +1,10 @@
 import type { RunSummary, CommitReport, Metric } from './types'
 
-// Extract the full sha from a history entry.
-//
-// Post-M1 entries store the full 40-char sha directly in `.sha` and
-// have report_url as `/?sha=<full>` (M6 deep-link into the viewer).
-// Pre-M1 entries have a 7-char `.sha` but embed the full sha in
-// their old `/perf/<full>/report.html` report_url. Both shapes are
-// handled here so a mixed history.json continues to render.
+// Extract the full sha. New entries carry it in `.sha`; older ones
+// have a 7-char display sha but embed the full one in report_url
+// (`/perf/<full>/report.html`).
 export function shaFromEntry(entry: RunSummary): string {
-  // Trust .sha when it looks like a full sha — that's the direct,
-  // canonical answer for every commit landed after M1.
   if (entry.sha.length >= 40) return entry.sha
-  // Legacy: dig the full sha out of the old per-commit report URL.
   let u = entry.report_url
   if (u.endsWith('/report.html')) u = u.slice(0, -'/report.html'.length)
   if (u.endsWith('/')) u = u.slice(0, -1)

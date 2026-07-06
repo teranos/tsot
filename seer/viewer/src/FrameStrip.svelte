@@ -1,13 +1,9 @@
 <script lang="ts">
   import { DATA_BASE } from './lib/fetch'
 
-  // Task 9 — multi-frame render + frame-diff. Fetches
-  // /perf/<sha>/frame-0..3.png for this commit (4 samples across
-  // the tick loop). Click a frame to select A; click a second to
-  // select B and switch to a canvas-based |A - B| pixel diff.
-  // Click the diff to cycle back to normal thumbs. Older commits
-  // that didn't run multi-frame in CI show only frame.png as a
-  // single thumbnail — the loader silently skips missing images.
+  // Fetches /perf/<sha>/frame-0..3.png (4 samples across the tick
+  // loop). Click a frame to select A; click a second for B and
+  // switch to a canvas-based |A - B| pixel diff.
 
   let { sha }: { sha: string } = $props()
 

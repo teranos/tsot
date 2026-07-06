@@ -3,7 +3,7 @@ name = "seer-obs"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "The seer observability bus. Extracted from seer/src/obs.rs so anything else that wants to publish/consume the same signal shape (peer-node observers, integration test binaries, future workspace crates) has a workspace crate to depend on instead of a re-implementation."
+description = "Instrumented global allocator + GPU resource inventory + wasm-side hotspot ring. Native + wasm32."
 
 [lib]
 crate-type = ["rlib"]

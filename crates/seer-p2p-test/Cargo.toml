@@ -3,7 +3,7 @@ name = "seer-p2p-test"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Integration test for seer-p2p — spawns publisher + subscriber swarms on loopback, asserts a RunSummary published on seer-summary/v1 lands on the subscriber. Native only; mirrors the rave-positions-test structure so any topic drift surfaces in CI."
+description = "Loopback round-trip test for the seer-summary/v1 gossipsub topic."
 
 [lib]
 path = "src/lib.rs"

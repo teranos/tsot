@@ -3,7 +3,7 @@ name = "seer-p2p"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "libp2p publish path for seer's RunSummary — extracted from seer-host so an integration test crate can call publish_summary directly against a loopback subscriber. Native only."
+description = "gossipsub publish to seer-summary/v1 via a bootstrap multiaddr. Native only."
 
 [lib]
 crate-type = ["rlib"]

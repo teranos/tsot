@@ -11,10 +11,8 @@
   const textures = $derived(entries.filter(([, r]) => r.kind === 2))
   const shaders = $derived(entries.filter(([, r]) => r.kind === 3))
 
-  // Aggregation by label — Task 6. Same label may be created many
-  // times (churned resources): the rollup lets the reader spot which
-  // label dominates the record count and byte total without scrolling
-  // the per-instance list. Grouping ignores kind; a label is a label.
+  // Rollup by label — same label created many times (churn) surfaces
+  // as one row instead of a scroll wall. Kind ignored.
   interface LabelRow {
     label: string
     count: number

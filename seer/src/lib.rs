@@ -271,12 +271,9 @@ fn _run() {
         "[seer.boot] Bevy App built, entering update loop for {frames} frames"
     ));
 
-    // Multi-frame render (Task 9). If SEER_MULTI_FRAME_DIR is set,
-    // snapshot the world at 25/50/75/100% of the tick loop; renders
-    // land as frame-0..3.png inside that dir. Otherwise fall back to
-    // single-frame SEER_FRAME_PATH behavior at 100%. Snapshots are
-    // cheap (position vectors), so we take them during the loop and
-    // render all at end when wgpu is set up.
+    // If SEER_MULTI_FRAME_DIR is set, snapshot the world at
+    // 25/50/75/100% of the tick loop; renders land as frame-0..3.png
+    // in that dir. Otherwise SEER_FRAME_PATH gets the last frame.
     #[cfg(not(target_arch = "wasm32"))]
     let multi_dir = std::env::var("SEER_MULTI_FRAME_DIR").ok();
     #[cfg(not(target_arch = "wasm32"))]

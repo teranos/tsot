@@ -119,15 +119,11 @@ pub fn env_i64(name: &str, default: i64) -> i64 {
         .unwrap_or(default)
 }
 
-/// Build the RunSummary from the host state at end of run.
-/// Verdict fields are left at their defaults; caller runs
-/// compute_verdict and patches them in.
+/// Build the RunSummary from host state. Verdict fields default;
+/// caller runs compute_verdict and patches them.
 ///
-/// `sha` is the full 40-char sha and is what gets stored in the
-/// summary + used in URLs. Display truncation (short sha for humans)
-/// lives entirely in the viewer's format.ts — no Rust-side short_sha
-/// helper any more, since the HTML pipeline (its only consumer) is
-/// gone.
+/// `sha` is the full 40-char sha, stored as-is; display truncation
+/// belongs to the viewer.
 pub fn build_summary(st: &HostState, sha: &str, ci_run_url: &str) -> RunSummary {
     let leak_enabled = std::env::var("SEER_LEAK")
         .ok()
@@ -180,11 +176,6 @@ pub fn build_summary(st: &HostState, sha: &str, ci_run_url: &str) -> RunSummary 
         gpu_bytes_end_mb,
         d_gpu_bytes_mb: gpu_bytes_end_mb - gpu_bytes_start_mb,
         leak_enabled,
-        // Deep-link into the seer viewer. Pre-M6 this was
-        // /perf/{sha}/report.html — a per-commit static HTML file.
-        // That file no longer exists; the viewer at the root renders
-        // any sha via ?sha=<full>. Keeps the field's role (canonical
-        // URL for the reader to open this commit) meaningful.
         report_url: format!("/?sha={sha}"),
         ci_run_url: ci_run_url.to_string(),
         verdict_passed: true,

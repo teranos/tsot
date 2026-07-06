@@ -1,17 +1,3 @@
-// Ported from rave/src/room.rs.
-//
-// What ports: the world's dimensions (FLOOR_HALF), the player's
-// canonical spawn point (SPAWN_POS), the pure touch-drag→plane
-// mapping (with its unit tests), and the XZ wall clamp logic that
-// keeps the player inside the world.
-//
-// What does NOT port (yet): keyboard/touch input reading (needs
-// bevy_input + bevy_input_capture — those pull dep trees seer
-// deliberately hasn't taken on), the third-person camera follow
-// (needs Camera3d), the floor + player mesh spawns (render).
-// Those land with Task 14 (player movement + camera) and Task 15
-// (lights + shading).
-
 use bevy_ecs::prelude::*;
 use bevy_math::{Vec2, Vec3};
 

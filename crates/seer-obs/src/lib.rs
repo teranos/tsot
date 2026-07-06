@@ -1,8 +1,4 @@
-// The observability bus. Founding module — extracted into a workspace
-// crate at Task 12 so downstream consumers (browser bootstrap, peer
-// observers, integration tests) share the exact same statics and
-// signal shape as the running wasm module, not a re-implementation
-// that drifts.
+// The observability bus.
 //
 // Two layers of coverage:
 //   1. Aggregate counters (bytes/peak/count). Cheap, always on, both
@@ -130,14 +126,7 @@ pub fn emit(line: &str) {
 unsafe extern "C" {
     fn seer_emit(ptr: *const u8, len: usize);
     fn seer_record_hotspot(seq: u32, size: u32, align: u32);
-    // Widened for Task 6: the label carries the resource name across
-    // the boundary. Previously the label lived wasm-side in
-    // GpuLiveResource and never crossed to the host; now the host's
-    // CommitReport gets it too so per-label aggregation is possible
-    // report-side.
     fn seer_record_gpu_event(id: u32, kind: u32, size: u32, label_ptr: *const u8, label_len: usize);
-    // Added for Task 7: destroy events cross the boundary too, so
-    // the host can compute per-resource lifetimes for the histogram.
     fn seer_record_gpu_destroyed(id: u32);
     fn seer_report_metric(frame: u32, heap_bytes: u32, gpu_live: u32, gpu_bytes: u32);
 }

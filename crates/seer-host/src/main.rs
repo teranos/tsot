@@ -1,13 +1,3 @@
-// Wasmtime host binary for the seer wasm module.
-//
-// Founding principle: every wasm→host boundary crossing is a Rust host
-// function you own. The four imports the wasm module expects are wired
-// in imports.rs; the state they mutate lives in state.rs; the
-// interpretation (summary + verdict) lives in summary.rs. main.rs just
-// runs the ceremony and writes machine-readable artifacts. The seer
-// viewer (seer/viewer/) renders those artifacts client-side; no
-// Rust-side HTML generation any more.
-
 mod imports;
 mod state;
 mod summary;
@@ -194,11 +184,8 @@ fn main() -> Result<()> {
         }
     }
 
-    // Task 13 — best-effort libp2p publish of the RunSummary onto the
-    // seer-summary/v1 gossipsub topic. Only fires when
-    // SEER_P2P_BOOTSTRAP is set (a multiaddr for relaye.sbvh.nl or a
-    // local dev relayer). Failure is logged and swallowed so a flaky
-    // network never blocks the diagnostic.
+    // Best-effort publish to seer-summary/v1. Failure is logged and
+    // swallowed; the diagnostic never blocks on the network.
     if let Ok(bootstrap) = std::env::var("SEER_P2P_BOOTSTRAP") {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
