@@ -79,7 +79,19 @@ async function preInitGpu(): Promise<{ status: number; device: unknown }> {
   }
 }
 
+async function loadBuildInfo() {
+  const el = document.getElementById('game-loading-build')
+  if (!el) return
+  try {
+    const r = await fetch('/build-info.json', { cache: 'no-cache' })
+    if (!r.ok) return
+    const info = await r.json() as { short: string; built_at: string }
+    el.textContent = `build: ${info.short} · ${info.built_at}`
+  } catch (_) {}
+}
+
 async function main() {
+  loadBuildInfo()
   const gpuPromise = preInitGpu()
   const wasmBytes = await streamWasmBytes('/game.wasm')
   const gpu = await gpuPromise

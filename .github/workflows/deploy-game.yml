@@ -70,6 +70,14 @@ jobs:
         working-directory: game/web
         run: bun run build.ts
 
+      - name: Generate build-info.json
+        run: |
+          SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          cat > game/web/dist/build-info.json <<EOF
+          {"short":"$SHORT","built_at":"${{ github.event.head_commit.timestamp }}"}
+          EOF
+          cat game/web/dist/build-info.json
+
       - name: Report bundle sizes
         run: |
           echo "== game web dist =="
@@ -99,6 +107,13 @@ jobs:
             --cache-control "no-store, no-cache, must-revalidate" \
             --content-type "text/html; charset=utf-8"
 
+      - name: Overwrite build-info.json with no-store cache
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        run: |
+          aws s3 cp game/web/dist/build-info.json "s3://${{ env.STATIC_BUCKET }}/build-info.json" \
+            --cache-control "no-store, no-cache, must-revalidate" \
+            --content-type "application/json"
+
       - name: Upload game.wasm
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
@@ -113,7 +128,7 @@ jobs:
         run: |
           INVALIDATION_ID=$(aws cloudfront create-invalidation \
             --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
-            --paths '/index.html' '/main.js' '/game.wasm' \
+            --paths '/index.html' '/main.js' '/game.wasm' '/build-info.json' \
             --query 'Invalidation.Id' \
             --output text)
           aws cloudfront wait invalidation-completed \
