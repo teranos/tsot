@@ -62,6 +62,12 @@ jobs:
         with:
           bun-version: '1.3.9'
 
+      - name: Boundary — ban wasm-bindgen family (cargo deny)
+        working-directory: game
+        run: |
+          cargo install --locked cargo-deny --version 0.16.4
+          cargo deny check bans
+
       - name: Build game.wasm
         working-directory: game
         env:
@@ -69,23 +75,31 @@ jobs:
           SEER_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
         run: cargo build --release --lib --target wasm32-unknown-unknown
 
-      - name: Check wasm imports against allow list
+      - name: Build seer-imports-check
+        working-directory: crates/seer-imports-check
+        run: cargo build --release
+
+      - name: Boundary — check game.wasm imports against allow list
         working-directory: crates/seer-imports-check
         run: |
-          cargo build --release
           ./target/release/seer-imports-check \
             ../../game/target/wasm32-unknown-unknown/release/game.wasm \
             ../../game/imports.allow
 
+      - name: Install viewer deps (bun)
+        working-directory: viewer
+        run: bun install --frozen-lockfile
+
       - name: Build viewer bundle
         working-directory: viewer
+        run: bun run build.ts
+
+      - name: Report bundle sizes
         run: |
-          bun install --frozen-lockfile
-          bun run build.ts
           echo "== viewer dist =="
-          ls -la dist/
+          ls -la viewer/dist/
           echo "== wasm size =="
-          wc -c ../game/target/wasm32-unknown-unknown/release/game.wasm
+          wc -c game/target/wasm32-unknown-unknown/release/game.wasm
 
       - name: Upload viewer dist artifact
         uses: actions/upload-artifact@v5
@@ -101,17 +115,18 @@ jobs:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Sync viewer to S3 root
+      - name: Sync viewer bundle to S3 root
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
-          # Root of the bucket = the viewer. --exclude "perf/*"
-          # keeps every commit's diagnostic artifacts untouched.
+          # --exclude "perf/*" keeps per-commit diagnostic artifacts untouched.
           aws s3 sync viewer/dist/ "s3://${{ env.STATIC_BUCKET }}/" \
             --delete \
             --exclude "perf/*" \
             --cache-control "public, max-age=300"
-          # index.html always fresh so the newest bundle loads on
-          # next tab reload.
+
+      - name: Overwrite index.html with no-store cache
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        run: |
           aws s3 cp viewer/dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
             --cache-control "no-store, no-cache, must-revalidate" \
             --content-type "text/html; charset=utf-8"
@@ -127,16 +142,10 @@ jobs:
             --cache-control "public, max-age=31536000, immutable" \
             --content-type "application/wasm"
 
-      - name: GC old game.wasm (keep newest 4)
+      - name: GC — compute keep set (newest 4 shas + this run)
+        id: gc_plan
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
-          # Read the current history.json, pick the 4 newest shas by
-          # when_unix, union with the sha we just uploaded (belt-and-
-          # -suspenders against races if seer.yml hasn't yet appended
-          # this run's entry). Then list every /perf/<sha>/game.wasm
-          # on S3 and delete anything whose sha isn't in the keep set.
-          # JSONs and frame.png are left alone — small, useful forever.
-          CURRENT="${{ github.sha }}"
           curl -sSf https://seer.sbvh.nl/perf/history.json -o history.json || echo '[]' > history.json
           KEEP=$(python3 -c "
           import json
@@ -144,43 +153,37 @@ jobs:
           h.sort(key=lambda e: e.get('when_unix', 0), reverse=True)
           shas = set()
           for entry in h[:4]:
-              # sha field is full 40-char on new entries, 7-char on
-              # older ones — either way, we also derive the full sha
-              # from report_url which embeds the S3 upload prefix.
+              # older history entries embed the full sha in report_url;
+              # newer entries carry it directly in .sha.
               url = entry.get('report_url', '')
               u = url.replace('/report.html', '').rstrip('/')
               parts = [p for p in u.split('/') if p]
               if parts:
                   shas.add(parts[-1])
               shas.add(entry.get('sha', ''))
-          shas.add('$CURRENT')
+          shas.add('${{ github.sha }}')
           shas.discard('')
           print(' '.join(shas))
           ")
           echo "keep shas: $KEEP"
-          # List every /perf/<sha>/game.wasm on S3. Anything with
-          # a sha not in KEEP gets deleted. Empty KEEP would delete
-          # everything — guard against that.
-          if [ -z "$KEEP" ]; then
-            echo "empty keep set — refusing to GC"
-            exit 0
-          fi
+          echo "keep=$KEEP" >> "$GITHUB_OUTPUT"
+
+      - name: GC — delete old game.wasm blobs
+        if: env.STATIC_DISTRIBUTION_ID != '' && steps.gc_plan.outputs.keep != ''
+        run: |
+          KEEP="${{ steps.gc_plan.outputs.keep }}"
           aws s3 ls "s3://${{ env.STATIC_BUCKET }}/perf/" --recursive \
             | awk '{print $4}' \
             | while read -r path; do
                 case "$path" in
-                  perf/*/game.wasm)
-                    sha=$(echo "$path" | cut -d/ -f2)
-                    case " $KEEP " in
-                      *" $sha "*)
-                        echo "keep $path"
-                        ;;
-                      *)
-                        echo "gc   $path"
-                        aws s3 rm "s3://${{ env.STATIC_BUCKET }}/$path"
-                        ;;
-                    esac
-                    ;;
+                  perf/*/game.wasm) : ;;
+                  *) continue ;;
+                esac
+                sha=$(echo "$path" | cut -d/ -f2)
+                case " $KEEP " in
+                  *" $sha "*) echo "keep $path" ;;
+                  *) echo "gc   $path"
+                     aws s3 rm "s3://${{ env.STATIC_BUCKET }}/$path" ;;
                 esac
               done
 
