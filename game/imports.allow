@@ -15,3 +15,6 @@ env.seer_record_hotspot
 env.seer_record_gpu_event
 env.seer_record_gpu_destroyed
 env.seer_report_metric
+
+env.game_gpu_init
+env.game_gpu_status

@@ -127,6 +127,19 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         },
     )?;
 
+    // WebGPU init under wasmtime — no browser, no GPU. init is a
+    // no-op; status pins to Unavailable so the wasm render path skips.
+    linker.func_wrap(
+        "env",
+        "game_gpu_init",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _power_pref: u32| -> Result<()> { Ok(()) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_status",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<u32> { Ok(2) },
+    )?;
+
     // Structured per-frame metric. Cheap: no backtrace capture, just
     // four numbers. Feeds the HTML time-series chart.
     linker.func_wrap(

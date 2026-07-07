@@ -40,3 +40,15 @@ variable "seer_bucket_name" {
   default     = "seer-sbvh-static"
 }
 
+variable "game_subdomain" {
+  description = "Subdomain serving the game (game/) wasm bundle through CloudFront."
+  type        = string
+  default     = "game"
+}
+
+variable "game_bucket_name" {
+  description = "S3 bucket name for game's dist/. Global namespace; pick something unique."
+  type        = string
+  default     = "game-sbvh-static"
+}
+

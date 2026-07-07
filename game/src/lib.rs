@@ -1,15 +1,9 @@
-// seer — cross-target entry point. Same `run()` on native and wasm.
-//
-// Global allocator is the instrumented one from `obs.rs` — every heap
-// allocation increments counters, and every allocation >= 64 KB captures
-// its call site into a bounded ring. This is architectural, not
-// opt-in: the moment the runtime touches this module, observability is
-// on.
-//
-// Commit #1 scope: no Bevy yet, no wgpu, no game logic. Prove the
-// architectural spine: two targets, one obs bus, one emit sink, one
-// host that observes the wasm boundary. Bevy plugs into this spine in
-// the next commit; wgpu wrapper the one after; game logic after that.
+// Game entry point. Same schedule on native and wasm; the module
+// exports init/frame/finalize as separate wasm functions so a browser
+// bootstrap can yield to the event loop between frames. `run()`
+// bundles them for the wasmtime/native paths.
+
+use std::cell::RefCell;
 
 pub mod build_info;
 pub mod campfire;
@@ -21,6 +15,8 @@ pub mod physics;
 pub mod room;
 pub mod trees;
 
+pub mod gpu_web;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gpu;
 
@@ -30,35 +26,32 @@ pub mod render;
 #[global_allocator]
 static ALLOC: obs::InstrumentedAlloc = obs::InstrumentedAlloc;
 
-// Wasm export. seer-host looks up `run` on the instance and calls it.
-// Plain no-mangle pub extern "C" — no wasm-bindgen glue, no thousand
-// imports. Every wasm→host crossing is deliberately named.
-#[cfg(target_arch = "wasm32")]
-#[unsafe(no_mangle)]
-pub extern "C" fn run() {
-    _run();
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn run() {
-    _run();
-}
-
-// Phase 2: real Bevy ECS. The frame loop is now a Bevy schedule, the
-// per-frame allocations are systems, retention lives in a Resource.
-// Same obs bus, same instrumented allocator — but now flowing through
-// bevy_ecs so we can watch what the ECS actually costs.
-//
-// Deliberately no bevy_time / bevy_log / bevy_render / bevy_winit yet.
-// Those all pull in platform integration that we want to see cost of
-// before adopting. Phase 3 wires wgpu; time/render/window come later.
-
 use bevy_app::{App, Startup, Update};
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::IntoScheduleConfigs;
 use bevy_math::Vec3;
 
 use physics::{AabbCollider, PlayerMarker, Position, Velocity};
+
+// Held across init/frame/finalize calls. Single-threaded: wasm32 has
+// no threads; native drives from main only.
+thread_local! {
+    static APP_STATE: RefCell<Option<App>> = const { RefCell::new(None) };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    static NATIVE_STATE: RefCell<Option<NativeRunState>> = const { RefCell::new(None) };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct NativeRunState {
+    budget: u32,
+    counter: u32,
+    checkpoints: Vec<u32>,
+    snapshots: Vec<SceneSnapshot>,
+    multi_dir: Option<String>,
+}
 
 #[derive(Resource, Default)]
 struct FrameCount(u32);
@@ -68,7 +61,6 @@ struct Retained(Vec<Vec<u8>>);
 
 #[derive(Resource, Default)]
 struct GpuHandles {
-    // Per-frame churn resources — recreated each frame, destroyed at end.
     cluster: Vec<u64>,
     uniform: Vec<u64>,
 }
@@ -77,8 +69,6 @@ const DEFAULT_FRAMES: u32 = 300;
 const REPORT_EVERY: u32 = 30;
 
 fn frame_budget() -> u32 {
-    // SEER_FRAMES env var lets CI keep the runtime bounded and the
-    // build log short. Local dev sticks with the default.
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::env::var("SEER_FRAMES")
@@ -107,24 +97,13 @@ fn setup(mut commands: Commands) {
         "[seer.setup] created shader id={sid} for demo — stays live forever"
     ));
 
-    // Demonstrate the sacred-error bus is live: emit one Info-severity
-    // record at startup so the report has evidence the drain path
-    // works even in the no-real-errors baseline case.
     error::emit_region(
         error::Severity::Info,
         "seer.setup",
         "seer booted",
-        format!(
-            "commit={} — sacred-error bus armed",
-            build_info::COMMIT
-        ),
+        format!("commit={} — sacred-error bus armed", build_info::COMMIT),
     );
 
-
-    // Ported from rave: spawn a player + 5 static obstacles that the
-    // resolve_collisions system iterates every frame. Real ECS query
-    // pattern with With<PlayerMarker> / Without<PlayerMarker> filters.
-    // Player spawns at rave's canonical SPAWN_POS.
     commands.spawn((
         PlayerMarker,
         Position(room::SPAWN_POS),
@@ -158,12 +137,9 @@ fn tick(
     count.0 += 1;
     let frame = count.0;
 
-    // Per-frame heap churn — dropped at end of system.
     let _cluster_cpu = vec![0u8; 200 * 1024];
     let _uniform_cpu = vec![0u8; 64 * 1024];
 
-    // Base workload: both cluster storage AND uniform buffer churn
-    // per frame. Destroy previous, create current. Steady state = flat.
     for id in gpu.cluster.drain(..) {
         obs::resource_destroyed(id);
     }
@@ -179,25 +155,6 @@ fn tick(
     gpu.cluster.push(cluster_id);
     gpu.uniform.push(uniform_id);
 
-    // ---- Leak-by-construction workload — commented out. ----
-    // Uncomment to reproduce the growing-memory chart the report
-    // showed at commit 400cc37. Retains CPU buffers on 5th/10th
-    // frames + a scene texture every 10. The exact rave-style
-    // signature; kept here as a controllable regression case.
-    //
-    // if frame.is_multiple_of(5) {
-    //     retained.0.push(vec![0u8; 512 * 1024]);
-    // }
-    // if frame.is_multiple_of(10) {
-    //     retained.0.push(vec![0u8; 1024 * 1024]);
-    //     let tid = obs::texture_created(1024 * 1024, 0x04 /* SAMPLED */, "scene.diffuse");
-    //     gpu.retained.push(tid);
-    // }
-
-    // Metric emission every frame — cheap host call (4 numbers), gives
-    // the HTML report a dense time series for the chart. Detailed
-    // text dumps stay at REPORT_EVERY intervals to keep the log
-    // readable.
     let heap = obs::ALLOC_BYTES.load(std::sync::atomic::Ordering::Relaxed) as u64;
     let (gpu_live, gpu_bytes) = obs::gpu_totals();
     obs::emit_metric(frame, heap, gpu_live, gpu_bytes);
@@ -212,10 +169,6 @@ fn tick(
         obs::dump_report();
         obs::dump_gpu_inventory();
 
-        // Drain sacred-errors captured this window. Axiom: never
-        // swallow. Info records use `[seer.note` (log-only); Warn /
-        // Error / Panic use `[seer.error` so the host bucks them into
-        // the report's Errors section. Same bus, different urgency.
         for e in error::drain() {
             let prefix = match e.severity {
                 error::Severity::Info => "[seer.note",
@@ -244,8 +197,57 @@ fn report_player_pos(
     }
 }
 
-fn _run() {
-    obs::emit("[seer.boot] entering run()");
+// --- Exported entry points ---
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn init() {
+    _init();
+}
+
+/// Advance one frame. Returns 0 to keep going, 1 when the run budget
+/// is reached (native only; wasm32 always returns 0).
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn frame() -> u32 {
+    _frame()
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn finalize() {
+    _finalize();
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn run() {
+    _init();
+    for _ in 0..DEFAULT_FRAMES {
+        _frame();
+    }
+    _finalize();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run() {
+    _init();
+    while _frame() == 0 {}
+    _finalize();
+}
+
+// --- Internal implementation ---
+
+fn _init() {
+    obs::emit("[seer.boot] entering init()");
+    #[cfg(target_arch = "wasm32")]
+    {
+        gpu_web::init(gpu_web::PowerPreference::Low);
+        obs::emit(&format!(
+            "[gpu_web] init kicked; status={:?}",
+            gpu_web::status()
+        ));
+    }
     let mut app = App::new();
     app.add_systems(
         Startup,
@@ -271,52 +273,88 @@ fn _run() {
     obs::emit(&format!(
         "[seer.boot] Bevy App built, entering update loop for {frames} frames"
     ));
-
-    // If SEER_MULTI_FRAME_DIR is set, snapshot the world at
-    // 25/50/75/100% of the tick loop; renders land as frame-0..3.png
-    // in that dir. Otherwise SEER_FRAME_PATH gets the last frame.
-    #[cfg(not(target_arch = "wasm32"))]
-    let multi_dir = std::env::var("SEER_MULTI_FRAME_DIR").ok();
-    #[cfg(not(target_arch = "wasm32"))]
-    let checkpoints: Vec<u32> = if multi_dir.is_some() {
-        vec![frames / 4, frames / 2, 3 * frames / 4, frames]
-    } else {
-        vec![frames]
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut snapshots: Vec<SceneSnapshot> = Vec::with_capacity(checkpoints.len());
-
-    #[cfg(not(target_arch = "wasm32"))]
-    for frame_idx in 1..=frames {
-        app.update();
-        if checkpoints.contains(&frame_idx) {
-            snapshots.push(snapshot_scene(&mut app));
-        }
-    }
-    #[cfg(target_arch = "wasm32")]
-    for _ in 0..frames {
-        app.update();
-    }
+    APP_STATE.with(|c| *c.borrow_mut() = Some(app));
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Some(dir) = multi_dir {
-            match render_snapshots(&snapshots, &dir) {
-                Ok(paths) => obs::emit(&format!(
-                    "[gpu.native] multi-frame render: {}",
-                    paths.join(", ")
-                )),
-                Err(e) => obs::emit(&format!("[gpu.native] multi-frame render failed: {e}")),
-            }
-        } else if let Ok(out_path) = std::env::var("SEER_FRAME_PATH")
-            && let Some(snap) = snapshots.last()
-        {
-            match render_single(snap, &out_path) {
-                Ok(_) => obs::emit(&format!("[gpu.native] rendered {out_path}")),
-                Err(e) => obs::emit(&format!("[gpu.native] render failed: {e}")),
+        let multi_dir = std::env::var("SEER_MULTI_FRAME_DIR").ok();
+        let checkpoints: Vec<u32> = if multi_dir.is_some() {
+            vec![frames / 4, frames / 2, 3 * frames / 4, frames]
+        } else {
+            vec![frames]
+        };
+        NATIVE_STATE.with(|c| {
+            *c.borrow_mut() = Some(NativeRunState {
+                budget: frames,
+                counter: 0,
+                checkpoints,
+                snapshots: Vec::new(),
+                multi_dir,
+            });
+        });
+    }
+}
+
+fn _frame() -> u32 {
+    APP_STATE.with(|c| {
+        if let Some(app) = c.borrow_mut().as_mut() {
+            app.update();
+        }
+    });
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (do_snapshot, done) = NATIVE_STATE.with(|c| {
+            let mut ns_opt = c.borrow_mut();
+            let ns = ns_opt.as_mut().expect("NATIVE_STATE not initialized");
+            ns.counter += 1;
+            let do_snapshot = ns.checkpoints.contains(&ns.counter);
+            let done = ns.counter >= ns.budget;
+            (do_snapshot, done)
+        });
+        if do_snapshot {
+            let snap = APP_STATE.with(|c| {
+                let mut a = c.borrow_mut();
+                let app = a.as_mut().expect("APP_STATE not initialized");
+                snapshot_scene(app)
+            });
+            NATIVE_STATE.with(|c| {
+                let mut ns_opt = c.borrow_mut();
+                let ns = ns_opt.as_mut().unwrap();
+                ns.snapshots.push(snap);
+            });
+        }
+        if done { 1 } else { 0 }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        0
+    }
+}
+
+fn _finalize() {
+    #[cfg(not(target_arch = "wasm32"))]
+    NATIVE_STATE.with(|c| {
+        let ns_opt = c.borrow();
+        if let Some(ns) = ns_opt.as_ref() {
+            if let Some(dir) = &ns.multi_dir {
+                match render_snapshots(&ns.snapshots, dir) {
+                    Ok(paths) => obs::emit(&format!(
+                        "[gpu.native] multi-frame render: {}",
+                        paths.join(", ")
+                    )),
+                    Err(e) => obs::emit(&format!("[gpu.native] multi-frame render failed: {e}")),
+                }
+            } else if let Ok(out_path) = std::env::var("SEER_FRAME_PATH")
+                && let Some(snap) = ns.snapshots.last()
+            {
+                match render_single(snap, &out_path) {
+                    Ok(_) => obs::emit(&format!("[gpu.native] rendered {out_path}")),
+                    Err(e) => obs::emit(&format!("[gpu.native] render failed: {e}")),
+                }
             }
         }
-    }
+    });
 
     obs::emit("[seer.done] final report:");
     obs::dump_report();
@@ -449,9 +487,6 @@ fn render_single(
     Ok(())
 }
 
-/// Multi-frame path — renders each snapshot as `<dir>/frame-N.png`
-/// with wgpu initialized once and reused across all N renders.
-/// Returns the list of paths written for the caller's log line.
 #[cfg(not(target_arch = "wasm32"))]
 fn render_snapshots(
     snapshots: &[SceneSnapshot],

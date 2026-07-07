@@ -46,6 +46,11 @@
         throw new Error(`${url} → HTTP ${res.status}`)
       }
       const bytes = await res.arrayBuffer()
+      // Encapsulated WebGPU init: the shim owns the async chain
+      // (navigator.gpu → requestAdapter → requestDevice). Wasm reads
+      // gpuStatus to observe progress. 0=pending, 1=ready, 2=unavailable.
+      let gpuStatus = 0
+      let gpuDevice: any = null
       const imports: WebAssembly.Imports = {
         env: {
           seer_emit: (ptr: number, len: number) => {
@@ -68,6 +73,30 @@
             // debugger can still pull them out.
             console.log(`[browser.metric] frame=${frame} heap=${heap} gpu_live=${live} gpu_bytes=${gpuBytes}`)
           },
+          game_gpu_init: (powerPref: number) => {
+            const nav = navigator as any
+            if (!nav.gpu) {
+              gpuStatus = 2
+              pushEmit('[browser.gpu_init] navigator.gpu missing — unavailable')
+              return
+            }
+            const powerPreference = powerPref === 1 ? 'high-performance' : 'low-power'
+            nav.gpu.requestAdapter({ powerPreference })
+              .then((adapter: any) => {
+                if (!adapter) throw new Error('no adapter')
+                return adapter.requestDevice()
+              })
+              .then((device: any) => {
+                gpuDevice = device
+                gpuStatus = 1
+                pushEmit('[browser.gpu_init] device ready')
+              })
+              .catch((e: any) => {
+                gpuStatus = 2
+                pushEmit(`[browser.gpu_init] failed: ${e?.message || e}`)
+              })
+          },
+          game_gpu_status: (): number => gpuStatus,
         },
       }
       const { instance } = await WebAssembly.instantiate(bytes, imports)
