@@ -105,6 +105,8 @@ async function main() {
   const bindGroups = new Map<number, GPUBindGroup>()
   const pipelineLayouts = new Map<number, GPUPipelineLayout>()
   const renderPipelines = new Map<number, GPURenderPipeline>()
+  type RenderTarget = { context: GPUCanvasContext, depthView: GPUTextureView }
+  const renderTargets = new Map<number, RenderTarget>()
   let nextHandle = 1
   const device = gpu.device as (GPUDevice | null)
 
@@ -231,6 +233,81 @@ async function main() {
         } catch (e) {
           console.error('[game.gpu_pipeline_layout_create]', e)
           return 0
+        }
+      },
+      game_gpu_render_target_configure: (canvasIdPtr: number, canvasIdLen: number, colorFormat: number, depthFormat: number): number => {
+        if (!device) return 0
+        const colorFmt = COLOR_FORMATS[colorFormat]
+        const depthFmt = DEPTH_FORMATS[depthFormat]
+        if (!colorFmt || !depthFmt) return 0
+        const canvasId = decodeString(canvasIdPtr, canvasIdLen)
+        const canvas: HTMLCanvasElement | null = canvasId.startsWith('#')
+          ? document.querySelector(canvasId)
+          : document.getElementById(canvasId) as HTMLCanvasElement | null
+        if (!canvas) return 0
+        const ctx = canvas.getContext('webgpu') as GPUCanvasContext | null
+        if (!ctx) return 0
+        try {
+          const dpr = window.devicePixelRatio || 1
+          canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr))
+          canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr))
+          ctx.configure({ device, format: colorFmt, alphaMode: 'opaque' })
+          const depthTex = device.createTexture({
+            label: 'game.depth',
+            size: [canvas.width, canvas.height, 1],
+            format: depthFmt,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT,
+          })
+          const depthView = depthTex.createView({ label: 'game.depth.view' })
+          const h = nextHandle++
+          renderTargets.set(h, { context: ctx, depthView })
+          return h
+        } catch (e) {
+          console.error('[game.gpu_render_target_configure]', e)
+          return 0
+        }
+      },
+      game_gpu_render_frame: (
+        targetH: number, pipelineH: number, bindGroupH: number,
+        vertexBufH: number, instanceBufH: number,
+        vertexCount: number, instanceCount: number,
+        clearR: number, clearG: number, clearB: number,
+      ): number => {
+        if (!device) return 1
+        const target = renderTargets.get(targetH)
+        const pipeline = renderPipelines.get(pipelineH)
+        const bindGroup = bindGroups.get(bindGroupH)
+        const vertexBuf = buffers.get(vertexBufH)
+        const instanceBuf = buffers.get(instanceBufH)
+        if (!target || !pipeline || !bindGroup || !vertexBuf || !instanceBuf) return 1
+        try {
+          const colorView = target.context.getCurrentTexture().createView({ label: 'game.frame.color' })
+          const encoder = device.createCommandEncoder({ label: 'game.frame.encoder' })
+          const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+              view: colorView,
+              clearValue: { r: clearR, g: clearG, b: clearB, a: 1.0 },
+              loadOp: 'clear',
+              storeOp: 'store',
+            }],
+            depthStencilAttachment: {
+              view: target.depthView,
+              depthClearValue: 1.0,
+              depthLoadOp: 'clear',
+              depthStoreOp: 'store',
+            },
+          })
+          pass.setPipeline(pipeline)
+          pass.setBindGroup(0, bindGroup)
+          pass.setVertexBuffer(0, vertexBuf)
+          pass.setVertexBuffer(1, instanceBuf)
+          pass.draw(vertexCount, instanceCount)
+          pass.end()
+          device.queue.submit([encoder.finish()])
+          return 0
+        } catch (e) {
+          console.error('[game.gpu_render_frame]', e)
+          return 1
         }
       },
       game_gpu_render_pipeline_create_cube: (

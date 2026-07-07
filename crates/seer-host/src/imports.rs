@@ -214,6 +214,32 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
          _label_len: i32|
          -> Result<u32> { Ok(0) },
     )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_target_configure",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _canvas_id_ptr: i32,
+         _canvas_id_len: i32,
+         _color_format: u32,
+         _depth_format: u32|
+         -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_frame",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _target: u32,
+         _pipeline: u32,
+         _bind_group: u32,
+         _vertex_buf: u32,
+         _instance_buf: u32,
+         _vertex_count: u32,
+         _instance_count: u32,
+         _clear_r: f32,
+         _clear_g: f32,
+         _clear_b: f32|
+         -> Result<u32> { Ok(1) },
+    )?;
 
     // Structured per-frame metric. Cheap: no backtrace capture, just
     // four numbers. Feeds the HTML time-series chart.

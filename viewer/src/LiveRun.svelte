@@ -200,6 +200,17 @@
               return 0
             }
           },
+          game_gpu_render_target_configure: (_canvasIdPtr: number, _canvasIdLen: number, _colorFormat: number, _depthFormat: number): number => {
+            // LiveRun is diagnostic replay — no canvas surface. Return
+            // 0 so the Rust demo skips the render_frame call cleanly.
+            return 0
+          },
+          game_gpu_render_frame: (
+            _targetH: number, _pipelineH: number, _bindGroupH: number,
+            _vertexBufH: number, _instanceBufH: number,
+            _vertexCount: number, _instanceCount: number,
+            _clearR: number, _clearG: number, _clearB: number,
+          ): number => 1,
           game_gpu_render_pipeline_create_cube: (
             pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
             colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

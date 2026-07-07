@@ -26,3 +26,5 @@ env.game_gpu_bind_group_layout_create_uniform
 env.game_gpu_bind_group_create
 env.game_gpu_pipeline_layout_create
 env.game_gpu_render_pipeline_create_cube
+env.game_gpu_render_target_configure
+env.game_gpu_render_frame

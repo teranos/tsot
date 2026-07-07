@@ -79,6 +79,20 @@ unsafe extern "C" {
         label_ptr: *const u8,
         label_len: u32,
     ) -> u32;
+    fn game_gpu_render_target_configure(
+        canvas_id_ptr: *const u8, canvas_id_len: u32,
+        color_format: u32, depth_format: u32,
+    ) -> u32;
+    fn game_gpu_render_frame(
+        target: u32,
+        pipeline: u32,
+        bind_group: u32,
+        vertex_buf: u32,
+        instance_buf: u32,
+        vertex_count: u32,
+        instance_count: u32,
+        clear_r: f32, clear_g: f32, clear_b: f32,
+    ) -> u32;
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -192,6 +206,55 @@ impl GamePipelineLayout {
         if h == 0 { None } else { Some(Self { handle: h }) }
     }
     pub fn handle(&self) -> u32 { self.handle }
+}
+
+/// Canvas-bound render target: WebGPU canvas context + depth texture,
+/// created once via configure. The JS shim owns getCurrentTexture()
+/// per frame; Rust just references it by handle.
+#[cfg(target_arch = "wasm32")]
+pub struct GameRenderTarget { handle: u32 }
+
+#[cfg(target_arch = "wasm32")]
+impl GameRenderTarget {
+    pub fn configure(canvas_id: &str, color_format: u32, depth_format: u32) -> Option<Self> {
+        let h = unsafe {
+            game_gpu_render_target_configure(
+                canvas_id.as_ptr(),
+                canvas_id.len() as u32,
+                color_format,
+                depth_format,
+            )
+        };
+        if h == 0 { None } else { Some(Self { handle: h }) }
+    }
+    pub fn handle(&self) -> u32 { self.handle }
+}
+
+/// Bundled encode/draw/submit — the JS shim owns the encoder + pass +
+/// submit dance internally. Returns 0 on success, non-zero on error.
+#[cfg(target_arch = "wasm32")]
+pub fn render_frame(
+    target: &GameRenderTarget,
+    pipeline: &GameRenderPipeline,
+    bind_group: &GameBindGroup,
+    vertex_buf: &GameBuffer,
+    instance_buf: &GameBuffer,
+    vertex_count: u32,
+    instance_count: u32,
+    clear_rgb: [f32; 3],
+) -> u32 {
+    unsafe {
+        game_gpu_render_frame(
+            target.handle,
+            pipeline.handle,
+            bind_group.handle,
+            vertex_buf.handle,
+            instance_buf.handle,
+            vertex_count,
+            instance_count,
+            clear_rgb[0], clear_rgb[1], clear_rgb[2],
+        )
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -289,7 +289,7 @@ fn _init() {
                 if let (Some(shader), Some(bg_layout)) = (shader, bg_layout) {
                     let bg = gpu_web::GameBindGroup::create(&bg_layout, &uniform_buf, "gpu_web.demo.bg");
                     let pl_layout = gpu_web::GamePipelineLayout::create(&bg_layout, "gpu_web.demo.pl");
-                    if let (Some(_bg), Some(pl_layout)) = (bg, pl_layout) {
+                    if let (Some(bg), Some(pl_layout)) = (bg, pl_layout) {
                         let pipeline = gpu_web::GameRenderPipeline::create_cube(
                             &pl_layout,
                             &shader,
@@ -303,6 +303,26 @@ fn _init() {
                             "[gpu_web] demo pipeline stack ok — pipeline={:?}",
                             pipeline.as_ref().map(|p| p.handle())
                         ));
+                        if let Some(pipeline) = pipeline {
+                            let target = gpu_web::GameRenderTarget::configure(
+                                "#game-canvas",
+                                gpu_web::color_format::BGRA8UNORM,
+                                gpu_web::depth_format::DEPTH32FLOAT,
+                            );
+                            if let Some(target) = target {
+                                let r = gpu_web::render_frame(
+                                    &target, &pipeline, &bg,
+                                    &vertex_buf, &vertex_buf,
+                                    36, 1,
+                                    [0.20, 0.05, 0.35],
+                                );
+                                obs::emit(&format!(
+                                    "[gpu_web] render_frame returned {r} (0=OK)"
+                                ));
+                            } else {
+                                obs::emit("[gpu_web] render_target configure returned null");
+                            }
+                        }
                     }
                 }
             } else {
