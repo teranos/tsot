@@ -96,11 +96,20 @@ async function main() {
   const wasmBytes = await streamWasmBytes('/game.wasm')
   const gpu = await gpuPromise
 
-  // Handle table for GPU resources — u32 handles from wasm map to real
-  // GPUBuffer objects. Explicit lifetime: create adds, destroy removes.
+  // Handle tables for GPU resources — u32 handles from wasm map to real
+  // GPU objects. Explicit lifetime for GPUBuffer (has .destroy());
+  // shader/layout/pipeline are refcounted by the browser.
   const buffers = new Map<number, GPUBuffer>()
+  const shaders = new Map<number, GPUShaderModule>()
+  const bindGroupLayouts = new Map<number, GPUBindGroupLayout>()
+  const bindGroups = new Map<number, GPUBindGroup>()
+  const pipelineLayouts = new Map<number, GPUPipelineLayout>()
+  const renderPipelines = new Map<number, GPURenderPipeline>()
   let nextHandle = 1
   const device = gpu.device as (GPUDevice | null)
+
+  const COLOR_FORMATS = ['rgba8unorm', 'bgra8unorm'] as const
+  const DEPTH_FORMATS = ['depth32float', 'depth24plus'] as const
 
   const imports: WebAssembly.Imports = {
     env: {
@@ -151,6 +160,121 @@ async function main() {
         if (!buf) return
         buf.destroy()
         buffers.delete(handle)
+      },
+      game_gpu_shader_module_create: (srcPtr: number, srcLen: number, labelPtr: number, labelLen: number): number => {
+        if (!device) return 0
+        try {
+          const code = decodeString(srcPtr, srcLen)
+          const label = decodeString(labelPtr, labelLen)
+          const mod = device.createShaderModule({ code, label })
+          const h = nextHandle++
+          shaders.set(h, mod)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_shader_module_create]', e)
+          return 0
+        }
+      },
+      game_gpu_bind_group_layout_create_uniform: (labelPtr: number, labelLen: number): number => {
+        if (!device) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const bgl = device.createBindGroupLayout({
+            label,
+            entries: [{
+              binding: 0,
+              visibility: GPUShaderStage.VERTEX,
+              buffer: { type: 'uniform' },
+            }],
+          })
+          const h = nextHandle++
+          bindGroupLayouts.set(h, bgl)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_bind_group_layout_create_uniform]', e)
+          return 0
+        }
+      },
+      game_gpu_bind_group_create: (layoutH: number, bufferH: number, labelPtr: number, labelLen: number): number => {
+        if (!device) return 0
+        const layout = bindGroupLayouts.get(layoutH)
+        const buffer = buffers.get(bufferH)
+        if (!layout || !buffer) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const bg = device.createBindGroup({
+            label,
+            layout,
+            entries: [{ binding: 0, resource: { buffer } }],
+          })
+          const h = nextHandle++
+          bindGroups.set(h, bg)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_bind_group_create]', e)
+          return 0
+        }
+      },
+      game_gpu_pipeline_layout_create: (bgLayoutH: number, labelPtr: number, labelLen: number): number => {
+        if (!device) return 0
+        const bgl = bindGroupLayouts.get(bgLayoutH)
+        if (!bgl) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const pl = device.createPipelineLayout({
+            label,
+            bindGroupLayouts: [bgl],
+          })
+          const h = nextHandle++
+          pipelineLayouts.set(h, pl)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_pipeline_layout_create]', e)
+          return 0
+        }
+      },
+      game_gpu_render_pipeline_create_cube: (
+        pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
+        colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,
+      ): number => {
+        if (!device) return 0
+        const pl = pipelineLayouts.get(pipelineLayoutH)
+        const shader = shaders.get(shaderH)
+        if (!pl || !shader) return 0
+        const colorFmt = COLOR_FORMATS[colorFormat]
+        const depthFmt = DEPTH_FORMATS[depthFormat]
+        if (!colorFmt || !depthFmt) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const pipeline = device.createRenderPipeline({
+            label,
+            layout: pl,
+            vertex: {
+              module: shader,
+              entryPoint: 'vs',
+              buffers: [
+                { arrayStride: vertexStride, stepMode: 'vertex', attributes: [
+                  { shaderLocation: 0, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 1, offset: 12, format: 'float32x3' },
+                ] },
+                { arrayStride: instanceStride, stepMode: 'instance', attributes: [
+                  { shaderLocation: 2, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 3, offset: 12, format: 'float32x3' },
+                  { shaderLocation: 4, offset: 24, format: 'float32x3' },
+                ] },
+              ],
+            },
+            primitive: { topology: 'triangle-list', frontFace: 'ccw', cullMode: 'back' },
+            depthStencil: { format: depthFmt, depthWriteEnabled: true, depthCompare: 'less' },
+            fragment: { module: shader, entryPoint: 'fs', targets: [{ format: colorFmt }] },
+          })
+          const h = nextHandle++
+          renderPipelines.set(h, pipeline)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_render_pipeline_create_cube]', e)
+          return 0
+        }
       },
     },
   }

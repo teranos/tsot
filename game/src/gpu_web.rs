@@ -44,6 +44,19 @@ pub mod usage {
     pub const QUERY_RESOLVE: u32 = 0x0200;
 }
 
+// Format discriminants — the JS shim's decoder tables map these to
+// WebGPU format strings. Keep the enum small; add values as game
+// needs new formats.
+pub mod color_format {
+    pub const RGBA8UNORM: u32 = 0;
+    pub const BGRA8UNORM: u32 = 1;
+}
+
+pub mod depth_format {
+    pub const DEPTH32FLOAT: u32 = 0;
+    pub const DEPTH24PLUS: u32 = 1;
+}
+
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
@@ -52,6 +65,20 @@ unsafe extern "C" {
     fn game_gpu_buffer_create(size: u32, usage: u32, label_ptr: *const u8, label_len: u32) -> u32;
     fn game_gpu_buffer_write(handle: u32, data_ptr: *const u8, data_len: u32);
     fn game_gpu_buffer_destroy(handle: u32);
+    fn game_gpu_shader_module_create(src_ptr: *const u8, src_len: u32, label_ptr: *const u8, label_len: u32) -> u32;
+    fn game_gpu_bind_group_layout_create_uniform(label_ptr: *const u8, label_len: u32) -> u32;
+    fn game_gpu_bind_group_create(layout: u32, buffer: u32, label_ptr: *const u8, label_len: u32) -> u32;
+    fn game_gpu_pipeline_layout_create(bg_layout: u32, label_ptr: *const u8, label_len: u32) -> u32;
+    fn game_gpu_render_pipeline_create_cube(
+        pipeline_layout: u32,
+        shader: u32,
+        vertex_stride: u32,
+        instance_stride: u32,
+        color_format: u32,
+        depth_format: u32,
+        label_ptr: *const u8,
+        label_len: u32,
+    ) -> u32;
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -95,6 +122,110 @@ impl Drop for GameBuffer {
     fn drop(&mut self) {
         unsafe { game_gpu_buffer_destroy(self.handle) }
     }
+}
+
+// Refcounted WebGPU objects (shader modules, layouts, bind groups,
+// pipelines) don't have explicit .destroy() — the browser refcounts
+// them via device. These wrappers hold a handle for greppability but
+// don't need Drop cleanup. If a leak surfaces on the JS handle map
+// later, add a generic `game_gpu_handle_release` import.
+
+#[cfg(target_arch = "wasm32")]
+pub struct GameShaderModule { handle: u32 }
+#[cfg(target_arch = "wasm32")]
+impl GameShaderModule {
+    pub fn create(source: &str, label: &str) -> Option<Self> {
+        let h = unsafe {
+            game_gpu_shader_module_create(
+                source.as_ptr(),
+                source.len() as u32,
+                label.as_ptr(),
+                label.len() as u32,
+            )
+        };
+        if h == 0 { None } else { Some(Self { handle: h }) }
+    }
+    pub fn handle(&self) -> u32 { self.handle }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub struct GameBindGroupLayout { handle: u32 }
+#[cfg(target_arch = "wasm32")]
+impl GameBindGroupLayout {
+    /// Specialized single-vertex-uniform layout — one uniform buffer at
+    /// binding 0, visibility=VERTEX. Matches render.rs's camera layout.
+    pub fn create_uniform(label: &str) -> Option<Self> {
+        let h = unsafe {
+            game_gpu_bind_group_layout_create_uniform(label.as_ptr(), label.len() as u32)
+        };
+        if h == 0 { None } else { Some(Self { handle: h }) }
+    }
+    pub fn handle(&self) -> u32 { self.handle }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub struct GameBindGroup { handle: u32 }
+#[cfg(target_arch = "wasm32")]
+impl GameBindGroup {
+    pub fn create(layout: &GameBindGroupLayout, buffer: &GameBuffer, label: &str) -> Option<Self> {
+        let h = unsafe {
+            game_gpu_bind_group_create(
+                layout.handle,
+                buffer.handle,
+                label.as_ptr(),
+                label.len() as u32,
+            )
+        };
+        if h == 0 { None } else { Some(Self { handle: h }) }
+    }
+    pub fn handle(&self) -> u32 { self.handle }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub struct GamePipelineLayout { handle: u32 }
+#[cfg(target_arch = "wasm32")]
+impl GamePipelineLayout {
+    pub fn create(bg_layout: &GameBindGroupLayout, label: &str) -> Option<Self> {
+        let h = unsafe {
+            game_gpu_pipeline_layout_create(bg_layout.handle, label.as_ptr(), label.len() as u32)
+        };
+        if h == 0 { None } else { Some(Self { handle: h }) }
+    }
+    pub fn handle(&self) -> u32 { self.handle }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub struct GameRenderPipeline { handle: u32 }
+#[cfg(target_arch = "wasm32")]
+impl GameRenderPipeline {
+    /// Specialized cube pipeline — matches render.rs's shape:
+    /// vertex buffer at slot 0 (pos+normal, both float32x3),
+    /// instance buffer at slot 1 (i_pos+i_color+i_scale, all float32x3).
+    /// Triangle-list, CCW, back-cull, depth-less-write.
+    pub fn create_cube(
+        pipeline_layout: &GamePipelineLayout,
+        shader: &GameShaderModule,
+        vertex_stride: u32,
+        instance_stride: u32,
+        color_format: u32,
+        depth_format: u32,
+        label: &str,
+    ) -> Option<Self> {
+        let h = unsafe {
+            game_gpu_render_pipeline_create_cube(
+                pipeline_layout.handle,
+                shader.handle,
+                vertex_stride,
+                instance_stride,
+                color_format,
+                depth_format,
+                label.as_ptr(),
+                label.len() as u32,
+            )
+        };
+        if h == 0 { None } else { Some(Self { handle: h }) }
+    }
+    pub fn handle(&self) -> u32 { self.handle }
 }
 
 #[cfg(test)]

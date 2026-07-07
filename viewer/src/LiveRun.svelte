@@ -52,7 +52,14 @@
       let gpuStatus = 0
       let gpuDevice: any = null
       const gpuBuffers = new Map<number, any>()
+      const gpuShaders = new Map<number, any>()
+      const gpuBindGroupLayouts = new Map<number, any>()
+      const gpuBindGroups = new Map<number, any>()
+      const gpuPipelineLayouts = new Map<number, any>()
+      const gpuRenderPipelines = new Map<number, any>()
       let nextGpuHandle = 1
+      const LIVE_COLOR_FORMATS = ['rgba8unorm', 'bgra8unorm'] as const
+      const LIVE_DEPTH_FORMATS = ['depth32float', 'depth24plus'] as const
       const imports: WebAssembly.Imports = {
         env: {
           seer_emit: (ptr: number, len: number) => {
@@ -126,6 +133,116 @@
             buf.destroy()
             gpuBuffers.delete(handle)
             pushEmit(`[browser.gpu_buffer_destroy] handle=${handle}`)
+          },
+          game_gpu_shader_module_create: (srcPtr: number, srcLen: number, labelPtr: number, labelLen: number): number => {
+            if (!gpuDevice) return 0
+            try {
+              const code = decodeString(srcPtr, srcLen)
+              const label = decodeString(labelPtr, labelLen)
+              const mod = gpuDevice.createShaderModule({ code, label })
+              const h = nextGpuHandle++
+              gpuShaders.set(h, mod)
+              pushEmit(`[browser.gpu_shader] handle=${h} label=${label} src_len=${srcLen}`)
+              return h
+            } catch (e: any) {
+              pushEmit(`[browser.gpu_shader] failed: ${e?.message || e}`)
+              return 0
+            }
+          },
+          game_gpu_bind_group_layout_create_uniform: (labelPtr: number, labelLen: number): number => {
+            if (!gpuDevice) return 0
+            try {
+              const label = decodeString(labelPtr, labelLen)
+              const bgl = gpuDevice.createBindGroupLayout({
+                label,
+                entries: [{ binding: 0, visibility: 1 /* GPUShaderStage.VERTEX */, buffer: { type: 'uniform' } }],
+              })
+              const h = nextGpuHandle++
+              gpuBindGroupLayouts.set(h, bgl)
+              return h
+            } catch (e: any) {
+              pushEmit(`[browser.gpu_bgl] failed: ${e?.message || e}`)
+              return 0
+            }
+          },
+          game_gpu_bind_group_create: (layoutH: number, bufferH: number, labelPtr: number, labelLen: number): number => {
+            if (!gpuDevice) return 0
+            const layout = gpuBindGroupLayouts.get(layoutH)
+            const buffer = gpuBuffers.get(bufferH)
+            if (!layout || !buffer) return 0
+            try {
+              const label = decodeString(labelPtr, labelLen)
+              const bg = gpuDevice.createBindGroup({
+                label,
+                layout,
+                entries: [{ binding: 0, resource: { buffer } }],
+              })
+              const h = nextGpuHandle++
+              gpuBindGroups.set(h, bg)
+              return h
+            } catch (e: any) {
+              pushEmit(`[browser.gpu_bg] failed: ${e?.message || e}`)
+              return 0
+            }
+          },
+          game_gpu_pipeline_layout_create: (bgLayoutH: number, labelPtr: number, labelLen: number): number => {
+            if (!gpuDevice) return 0
+            const bgl = gpuBindGroupLayouts.get(bgLayoutH)
+            if (!bgl) return 0
+            try {
+              const label = decodeString(labelPtr, labelLen)
+              const pl = gpuDevice.createPipelineLayout({ label, bindGroupLayouts: [bgl] })
+              const h = nextGpuHandle++
+              gpuPipelineLayouts.set(h, pl)
+              return h
+            } catch (e: any) {
+              pushEmit(`[browser.gpu_pl] failed: ${e?.message || e}`)
+              return 0
+            }
+          },
+          game_gpu_render_pipeline_create_cube: (
+            pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
+            colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,
+          ): number => {
+            if (!gpuDevice) return 0
+            const pl = gpuPipelineLayouts.get(pipelineLayoutH)
+            const shader = gpuShaders.get(shaderH)
+            if (!pl || !shader) return 0
+            const colorFmt = LIVE_COLOR_FORMATS[colorFormat]
+            const depthFmt = LIVE_DEPTH_FORMATS[depthFormat]
+            if (!colorFmt || !depthFmt) return 0
+            try {
+              const label = decodeString(labelPtr, labelLen)
+              const pipeline = gpuDevice.createRenderPipeline({
+                label,
+                layout: pl,
+                vertex: {
+                  module: shader,
+                  entryPoint: 'vs',
+                  buffers: [
+                    { arrayStride: vertexStride, stepMode: 'vertex', attributes: [
+                      { shaderLocation: 0, offset: 0, format: 'float32x3' },
+                      { shaderLocation: 1, offset: 12, format: 'float32x3' },
+                    ] },
+                    { arrayStride: instanceStride, stepMode: 'instance', attributes: [
+                      { shaderLocation: 2, offset: 0, format: 'float32x3' },
+                      { shaderLocation: 3, offset: 12, format: 'float32x3' },
+                      { shaderLocation: 4, offset: 24, format: 'float32x3' },
+                    ] },
+                  ],
+                },
+                primitive: { topology: 'triangle-list', frontFace: 'ccw', cullMode: 'back' },
+                depthStencil: { format: depthFmt, depthWriteEnabled: true, depthCompare: 'less' },
+                fragment: { module: shader, entryPoint: 'fs', targets: [{ format: colorFmt }] },
+              })
+              const h = nextGpuHandle++
+              gpuRenderPipelines.set(h, pipeline)
+              pushEmit(`[browser.gpu_pipeline] handle=${h} label=${label}`)
+              return h
+            } catch (e: any) {
+              pushEmit(`[browser.gpu_pipeline] failed: ${e?.message || e}`)
+              return 0
+            }
           },
         },
       }

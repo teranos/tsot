@@ -68,6 +68,25 @@ struct GpuHandles {
 const DEFAULT_FRAMES: u32 = 300;
 const REPORT_EVERY: u32 = 30;
 
+// Minimal WGSL for the checkpoint-3 demo — proves the pipeline stack
+// compiles end-to-end. Matches the cube pipeline's vertex layout.
+#[cfg(target_arch = "wasm32")]
+const DEMO_WGSL: &str = r#"
+struct Camera { view_proj: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> camera: Camera;
+@vertex
+fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
+      @location(2) i_pos: vec3<f32>, @location(3) i_color: vec3<f32>, @location(4) i_scale: vec3<f32>)
+      -> @builtin(position) vec4<f32> {
+  let world = pos * i_scale + i_pos;
+  return camera.view_proj * vec4<f32>(world, 1.0);
+}
+@fragment
+fn fs() -> @location(0) vec4<f32> {
+  return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+}
+"#;
+
 fn frame_budget() -> u32 {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -246,17 +265,46 @@ fn _init() {
         let status = gpu_web::status();
         obs::emit(&format!("[gpu_web] init kicked; status={status:?}"));
         if status == gpu_web::GpuStatus::Ready {
-            let buf = gpu_web::GameBuffer::create(
+            let vertex_buf = gpu_web::GameBuffer::create(
                 64,
                 gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
                 "gpu_web.demo.vertex",
             );
-            if let Some(buf) = buf {
-                buf.write(&[0u8; 64]);
+            let uniform_buf = gpu_web::GameBuffer::create(
+                64,
+                gpu_web::usage::UNIFORM | gpu_web::usage::COPY_DST,
+                "gpu_web.demo.camera",
+            );
+            if let (Some(vertex_buf), Some(uniform_buf)) = (vertex_buf, uniform_buf) {
+                vertex_buf.write(&[0u8; 64]);
+                uniform_buf.write(&[0u8; 64]);
                 obs::emit(&format!(
-                    "[gpu_web] demo buffer created + written handle={}",
-                    buf.handle()
+                    "[gpu_web] demo buffers ok — vertex={} uniform={}",
+                    vertex_buf.handle(),
+                    uniform_buf.handle()
                 ));
+
+                let shader = gpu_web::GameShaderModule::create(DEMO_WGSL, "gpu_web.demo.shader");
+                let bg_layout = gpu_web::GameBindGroupLayout::create_uniform("gpu_web.demo.bgl");
+                if let (Some(shader), Some(bg_layout)) = (shader, bg_layout) {
+                    let bg = gpu_web::GameBindGroup::create(&bg_layout, &uniform_buf, "gpu_web.demo.bg");
+                    let pl_layout = gpu_web::GamePipelineLayout::create(&bg_layout, "gpu_web.demo.pl");
+                    if let (Some(_bg), Some(pl_layout)) = (bg, pl_layout) {
+                        let pipeline = gpu_web::GameRenderPipeline::create_cube(
+                            &pl_layout,
+                            &shader,
+                            24, /* vertex stride: pos+normal, both float32x3 */
+                            36, /* instance stride: pos+color+scale, all float32x3 */
+                            gpu_web::color_format::BGRA8UNORM,
+                            gpu_web::depth_format::DEPTH32FLOAT,
+                            "gpu_web.demo.pipeline",
+                        );
+                        obs::emit(&format!(
+                            "[gpu_web] demo pipeline stack ok — pipeline={:?}",
+                            pipeline.as_ref().map(|p| p.handle())
+                        ));
+                    }
+                }
             } else {
                 obs::emit("[gpu_web] demo buffer create returned null");
             }

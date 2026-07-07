@@ -163,6 +163,57 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         "game_gpu_buffer_destroy",
         |_caller: Caller<'_, Arc<Mutex<HostState>>>, _handle: u32| -> Result<()> { Ok(()) },
     )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_shader_module_create",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _src_ptr: i32,
+         _src_len: i32,
+         _label_ptr: i32,
+         _label_len: i32|
+         -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_bind_group_layout_create_uniform",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _label_ptr: i32,
+         _label_len: i32|
+         -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_bind_group_create",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _layout: u32,
+         _buffer: u32,
+         _label_ptr: i32,
+         _label_len: i32|
+         -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_pipeline_layout_create",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _bg_layout: u32,
+         _label_ptr: i32,
+         _label_len: i32|
+         -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_pipeline_create_cube",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _pipeline_layout: u32,
+         _shader: u32,
+         _vertex_stride: u32,
+         _instance_stride: u32,
+         _color_format: u32,
+         _depth_format: u32,
+         _label_ptr: i32,
+         _label_len: i32|
+         -> Result<u32> { Ok(0) },
+    )?;
 
     // Structured per-frame metric. Cheap: no backtrace capture, just
     // four numbers. Feeds the HTML time-series chart.
