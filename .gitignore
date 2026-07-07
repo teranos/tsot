@@ -13,6 +13,9 @@ crates/*/target/
 # single source of truth for "things we never commit."
 ccg/dist/
 ccg/target/
+game/target/
+game/web/dist/
+viewer/dist/
 ccg/.em-cache/
 ccg/assets/src/elm-stuff/
 ccg/assets/elm-stuff/

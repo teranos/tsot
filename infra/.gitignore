@@ -7,4 +7,5 @@ terraform.tfstate.backup
 terraform.tfvars
 crash.log
 *.tfplan
+*.plan
 planfile
