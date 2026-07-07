@@ -66,30 +66,29 @@ pub struct SceneCamera {
 
 impl SceneCamera {
     pub fn default_for_floor(floor_half: f32) -> Self {
-        // 45° tilt from horizontal: eye Y offset == Z offset. Classic
-        // isometric-adjacent look — arctan(1) elevation.
+        // True isometric: equal offsets on all three axes → 45° yaw
+        // around Y + arctan(1/√2) ≈ 35° elevation. Cubes project as
+        // diamonds; world X and Z axes both draw at 45° to screen X.
+        let d = floor_half * 1.2;
         Self {
-            eye: [0.0, floor_half * 1.5, floor_half * 1.5],
+            eye: [d, d, d],
             target: [0.0, 0.0, 0.0],
             up: [0.0, 1.0, 0.0],
-            half_extent: floor_half * 1.1,
+            half_extent: floor_half * 1.4,
             near: 100.0,
-            far: floor_half * 5.0,
+            far: floor_half * 6.0,
         }
     }
 
     pub fn follow(player: [f32; 3], floor_half: f32) -> Self {
+        let d = floor_half * 1.2;
         Self {
-            eye: [
-                player[0],
-                player[1] + floor_half * 1.5,
-                player[2] + floor_half * 1.5,
-            ],
+            eye: [player[0] + d, player[1] + d, player[2] + d],
             target: player,
             up: [0.0, 1.0, 0.0],
-            half_extent: floor_half * 0.6,
+            half_extent: floor_half * 0.7,
             near: 100.0,
-            far: floor_half * 5.0,
+            far: floor_half * 6.0,
         }
     }
 
