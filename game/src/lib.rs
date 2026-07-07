@@ -9,6 +9,7 @@ pub mod build_info;
 pub mod campfire;
 pub mod error;
 pub mod health;
+pub mod identity;
 pub mod input;
 pub mod net;
 pub mod obs;
@@ -254,6 +255,12 @@ pub fn run() {
 
 fn _init() {
     obs::emit("[seer.boot] entering init()");
+    let id = identity::Identity::load_or_create();
+    obs::emit(&format!(
+        "[identity] {} ({})",
+        id.short(),
+        if id.is_new { "new" } else { "loaded" }
+    ));
     #[cfg(target_arch = "wasm32")]
     {
         gpu_web::init(gpu_web::PowerPreference::Low);

@@ -115,6 +115,54 @@ window.addEventListener('keyup', e => {
   if (b) { inputBits &= ~b; e.preventDefault() }
 })
 
+// IndexedDB identity storage. Rust owns the bytes; JS owns the store.
+// Pre-boot: try to load "self" so Rust's game_identity_load gets a
+// synchronous answer from the cached value. If Rust asks and there's
+// nothing, it generates via game_random_bytes and calls save.
+const IDENTITY_DB = 'game'
+const IDENTITY_STORE = 'identity'
+const IDENTITY_KEY = 'self'
+let identityBytes: Uint8Array | null = null
+
+function openIdentityDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDENTITY_DB, 1)
+    req.onupgradeneeded = () => {
+      const db = req.result
+      if (!db.objectStoreNames.contains(IDENTITY_STORE)) {
+        db.createObjectStore(IDENTITY_STORE)
+      }
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+}
+
+async function loadIdentityFromDb(): Promise<Uint8Array | null> {
+  const db = await openIdentityDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDENTITY_STORE, 'readonly')
+    const getReq = tx.objectStore(IDENTITY_STORE).get(IDENTITY_KEY)
+    getReq.onsuccess = () => {
+      const val = getReq.result
+      if (val instanceof Uint8Array) resolve(val)
+      else if (val instanceof ArrayBuffer) resolve(new Uint8Array(val))
+      else resolve(null)
+    }
+    getReq.onerror = () => reject(getReq.error)
+  })
+}
+
+async function saveIdentityToDb(bytes: Uint8Array): Promise<void> {
+  const db = await openIdentityDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDENTITY_STORE, 'readwrite')
+    const putReq = tx.objectStore(IDENTITY_STORE).put(bytes, IDENTITY_KEY)
+    putReq.onsuccess = () => resolve()
+    putReq.onerror = () => reject(putReq.error)
+  })
+}
+
 // Exclamation overlay — Rust computes clip-space coords above the NPC
 // each frame and passes them here; JS maps to canvas pixels and shows
 // a boxed "!" above that point. Repeated calls refresh the timeout so
@@ -139,8 +187,13 @@ function showBang(clipX: number, clipY: number) {
 async function main() {
   loadBuildInfo()
   const gpuPromise = preInitGpu()
+  const identityPromise = loadIdentityFromDb().catch(e => {
+    console.warn('[game] identity load failed:', e)
+    return null
+  })
   const wasmBytes = await streamWasmBytes('/game.wasm')
   const gpu = await gpuPromise
+  identityBytes = await identityPromise
 
   // Handle tables for GPU resources — u32 handles from wasm map to real
   // GPU objects. Explicit lifetime for GPUBuffer (has .destroy());
@@ -358,6 +411,23 @@ async function main() {
       },
       game_input_state: (): number => inputBits,
       game_show_exclamation: (clipX: number, clipY: number) => showBang(clipX, clipY),
+      game_identity_load: (outPtr: number): number => {
+        if (!memory || !identityBytes || identityBytes.length !== 32) return 0
+        new Uint8Array(memory.buffer, outPtr, 32).set(identityBytes)
+        return 32
+      },
+      game_identity_save: (bytesPtr: number, bytesLen: number) => {
+        if (!memory) return
+        const copy = new Uint8Array(bytesLen)
+        copy.set(new Uint8Array(memory.buffer, bytesPtr, bytesLen))
+        identityBytes = copy
+        saveIdentityToDb(copy).catch(e => console.warn('[game] identity save failed:', e))
+      },
+      game_random_bytes: (outPtr: number, outLen: number) => {
+        if (!memory) return
+        const view = new Uint8Array(memory.buffer, outPtr, outLen)
+        crypto.getRandomValues(view)
+      },
       game_gpu_render_pipeline_create_cube: (
         pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
         colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

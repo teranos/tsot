@@ -250,6 +250,34 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         "game_show_exclamation",
         |_caller: Caller<'_, Arc<Mutex<HostState>>>, _x: f32, _y: f32| -> Result<()> { Ok(()) },
     )?;
+    // Under wasmtime there's no IndexedDB, no user session, no
+    // browser crypto. Return "not found" from load so Rust generates
+    // an identity via random_bytes; that path stays deterministic
+    // because random_bytes here fills with zeros.
+    linker.func_wrap(
+        "env",
+        "game_identity_load",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _out_ptr: i32| -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_identity_save",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _bytes_ptr: i32, _bytes_len: i32|
+         -> Result<()> { Ok(()) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_random_bytes",
+        |mut caller: Caller<'_, Arc<Mutex<HostState>>>, out_ptr: i32, out_len: i32| -> Result<()> {
+            let memory = caller
+                .get_export("memory")
+                .and_then(|e| e.into_memory())
+                .ok_or_else(|| anyhow!("wasm module has no 'memory' export"))?;
+            let zeros = vec![0u8; out_len as usize];
+            memory.write(&mut caller, out_ptr as usize, &zeros)?;
+            Ok(())
+        },
+    )?;
 
     // Structured per-frame metric. Cheap: no backtrace capture, just
     // four numbers. Feeds the HTML time-series chart.

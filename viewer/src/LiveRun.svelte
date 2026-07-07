@@ -213,6 +213,9 @@
           ): number => 1,
           game_input_state: (): number => 0,
           game_show_exclamation: (_x: number, _y: number) => {},
+          game_identity_load: (_outPtr: number): number => 0,
+          game_identity_save: (_bytesPtr: number, _bytesLen: number) => {},
+          game_random_bytes: (_outPtr: number, _outLen: number) => {},
           game_gpu_render_pipeline_create_cube: (
             pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
             colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

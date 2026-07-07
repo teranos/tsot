@@ -30,3 +30,6 @@ env.game_gpu_render_target_configure
 env.game_gpu_render_frame
 env.game_input_state
 env.game_show_exclamation
+env.game_identity_load
+env.game_identity_save
+env.game_random_bytes
