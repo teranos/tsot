@@ -17,6 +17,7 @@ pub mod obs;
 pub mod physics;
 pub mod room;
 pub mod scene;
+pub mod trail;
 pub mod trees;
 pub mod ui;
 
@@ -279,6 +280,7 @@ fn _init() {
             trees::setup_trees.after(setup),
             campfire::setup_campfire.after(setup),
             map::setup_pins.after(setup),
+            trail::setup_trail.after(setup),
         ),
     );
     #[cfg(target_arch = "wasm32")]

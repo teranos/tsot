@@ -8,6 +8,7 @@ use bevy_math::Vec3;
 use crate::campfire;
 use crate::map::Pin;
 use crate::physics::{self, AabbCollider, NpcMarker, PlayerMarker, Position};
+use crate::trail::TrailMarker;
 use crate::room;
 use crate::trees;
 
@@ -189,6 +190,7 @@ pub struct SceneSnapshot {
     pub fires: Vec<(Vec3, f32)>,
     pub npcs: Vec<Vec3>,
     pub pins: Vec<Vec3>,
+    pub trails: Vec<Vec3>,
     pub player: Vec3,
 }
 
@@ -220,12 +222,15 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
     let npcs: Vec<Vec3> = npc_q.iter(world).map(|p| p.0).collect();
     let mut pin_q = world.query_filtered::<&Position, bevy_ecs::prelude::With<Pin>>();
     let pins: Vec<Vec3> = pin_q.iter(world).map(|p| p.0).collect();
+    let mut trail_q = world.query_filtered::<&Position, bevy_ecs::prelude::With<TrailMarker>>();
+    let trails: Vec<Vec3> = trail_q.iter(world).map(|p| p.0).collect();
     SceneSnapshot {
         trees,
         obstacles,
         fires,
         npcs,
         pins,
+        trails,
         player,
     }
 }
@@ -233,13 +238,23 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
 pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let floor_half = room::FLOOR_HALF;
     let mut instances: Vec<SceneInstance> = Vec::with_capacity(
-        1 + snap.trees.len() + snap.obstacles.len() + snap.fires.len() + 1,
+        1 + snap.trees.len() + snap.obstacles.len() + snap.fires.len() + snap.trails.len() + 1,
     );
     instances.push(SceneInstance {
         pos: [0.0, -50.0, 0.0],
         color: [0.09, 0.11, 0.15],
         scale: [floor_half * 2.0, 100.0, floor_half * 2.0],
     });
+    // Trail — a thin flat rectangle sitting just above the ground.
+    // Length is baked in via crate::trail::TRAIL_END_Z - TRAIL_START_Z.
+    let trail_length = crate::trail::TRAIL_END_Z - crate::trail::TRAIL_START_Z;
+    for t in &snap.trails {
+        instances.push(SceneInstance {
+            pos: [t.x, t.y, t.z],
+            color: [0.18, 0.15, 0.10],
+            scale: [crate::trail::TRAIL_WIDTH, 1.0, trail_length],
+        });
+    }
     for t in &snap.trees {
         instances.push(SceneInstance {
             pos: [t.x, 60.0, t.z],
