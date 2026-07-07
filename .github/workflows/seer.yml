@@ -215,12 +215,69 @@ jobs:
             --cache-control "public, max-age=60" \
             --content-type "application/json"
 
+      - name: Upload game.wasm to /perf/<sha>/
+        if: success() && vars.SEER_DISTRIBUTION_ID != ''
+        run: |
+          # Per-commit wasm for the viewer's LiveRun panel. Same binary
+          # seer-host just ran under wasmtime; LiveRun re-instantiates
+          # it in the browser with the same env.* imports. Was in
+          # seer-browser.yml — moved here so viewer changes don't
+          # trigger a game.wasm rebuild.
+          aws s3 cp \
+            game/target/wasm32-unknown-unknown/release/game.wasm \
+            "s3://seer-sbvh-static/perf/${{ github.sha }}/game.wasm" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "application/wasm"
+
+      - name: GC — compute keep set (newest 4 shas + this run)
+        id: gc_plan
+        if: success() && vars.SEER_DISTRIBUTION_ID != ''
+        run: |
+          curl -sSf https://seer.sbvh.nl/perf/history.json -o /tmp/history.json || echo '[]' > /tmp/history.json
+          KEEP=$(python3 -c "
+          import json
+          h = json.load(open('/tmp/history.json'))
+          h.sort(key=lambda e: e.get('when_unix', 0), reverse=True)
+          shas = set()
+          for entry in h[:4]:
+              url = entry.get('report_url', '')
+              u = url.replace('/report.html', '').rstrip('/')
+              parts = [p for p in u.split('/') if p]
+              if parts:
+                  shas.add(parts[-1])
+              shas.add(entry.get('sha', ''))
+          shas.add('${{ github.sha }}')
+          shas.discard('')
+          print(' '.join(shas))
+          ")
+          echo "keep shas: $KEEP"
+          echo "keep=$KEEP" >> "$GITHUB_OUTPUT"
+
+      - name: GC — delete old game.wasm blobs
+        if: success() && vars.SEER_DISTRIBUTION_ID != '' && steps.gc_plan.outputs.keep != ''
+        run: |
+          KEEP="${{ steps.gc_plan.outputs.keep }}"
+          aws s3 ls "s3://seer-sbvh-static/perf/" --recursive \
+            | awk '{print $4}' \
+            | while read -r path; do
+                case "$path" in
+                  perf/*/game.wasm) : ;;
+                  *) continue ;;
+                esac
+                sha=$(echo "$path" | cut -d/ -f2)
+                case " $KEEP " in
+                  *" $sha "*) echo "keep $path" ;;
+                  *) echo "gc   $path"
+                     aws s3 rm "s3://seer-sbvh-static/$path" ;;
+                esac
+              done
+
       - name: Invalidate CloudFront (diagnostic)
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.SEER_DISTRIBUTION_ID }}" \
-            --paths '/perf/latest/*' '/perf/history.json' \
+            --paths '/perf/latest/*' '/perf/history.json' "/perf/${{ github.sha }}/game.wasm" \
             --query 'Invalidation.Id' \
             --output text
 

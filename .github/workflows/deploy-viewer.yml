@@ -1,0 +1,103 @@
+name: deploy-viewer
+
+# seer.sbvh.nl viewer bundle. Split off from seer-browser.yml so
+# viewer-only changes don't trigger a game.wasm rebuild. Per-commit
+# game.wasm for LiveRun's diagnostic replay is uploaded by seer.yml.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'viewer/**'
+      - '.github/workflows/deploy-viewer.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-viewer
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: eu-central-1
+  STATIC_BUCKET: seer-sbvh-static
+  STATIC_DISTRIBUTION_ID: ${{ vars.SEER_DISTRIBUTION_ID }}
+  DEPLOY_ROLE_ARN: arn:aws:iam::548351057127:role/seer-github-deploy
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.9'
+
+      - name: Install viewer deps (bun)
+        working-directory: viewer
+        run: bun install --frozen-lockfile
+
+      - name: Build viewer bundle
+        working-directory: viewer
+        run: bun run build.ts
+
+      - name: Report bundle size
+        run: ls -la viewer/dist/
+
+      - name: Upload viewer dist artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: seer-viewer-${{ github.sha }}
+          path: viewer/dist/
+          retention-days: 30
+
+      - name: Assume deploy role
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync viewer bundle to S3 root
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        run: |
+          # --exclude "perf/*" keeps per-commit diagnostic artifacts untouched.
+          aws s3 sync viewer/dist/ "s3://${{ env.STATIC_BUCKET }}/" \
+            --delete \
+            --exclude "perf/*" \
+            --cache-control "public, max-age=300"
+
+      - name: Overwrite index.html with no-store cache
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        run: |
+          aws s3 cp viewer/dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
+            --cache-control "no-store, no-cache, must-revalidate" \
+            --content-type "text/html; charset=utf-8"
+
+      - name: Invalidate CloudFront
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        run: |
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
+            --paths '/index.html' '/main.js' '/tokens.css' '/font.css' \
+            --query 'Invalidation.Id' \
+            --output text)
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
+            --id "$INVALIDATION_ID"
+
+      - name: Summarize
+        run: |
+          {
+            echo "## deploy-viewer"
+            echo ""
+            if [ -n "${{ env.STATIC_DISTRIBUTION_ID }}" ]; then
+              echo "- Live at: https://seer.sbvh.nl/"
+            else
+              echo "- SEER_DISTRIBUTION_ID not set → skipped S3 deploy."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
