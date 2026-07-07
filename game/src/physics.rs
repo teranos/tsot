@@ -36,9 +36,37 @@ impl AabbCollider {
 #[derive(Component)]
 pub struct PlayerMarker;
 
+#[derive(Component)]
+pub struct NpcMarker;
+
 pub fn advance_player(mut q: Query<(&mut Position, &Velocity), With<PlayerMarker>>) {
     for (mut p, v) in q.iter_mut() {
         p.0 += v.0;
+    }
+}
+
+pub fn advance_npc(mut q: Query<(&mut Position, &Velocity), With<NpcMarker>>) {
+    for (mut p, v) in q.iter_mut() {
+        p.0 += v.0;
+    }
+}
+
+/// Distance at which player is considered bumping the NPC.
+/// (player radius) + (NPC visual half-width) ≈ 20 + 35.
+pub const BUMP_DISTANCE: f32 = 55.0;
+
+pub fn check_npc_bump(
+    player_q: Query<&Position, With<PlayerMarker>>,
+    npc_q: Query<&Position, With<NpcMarker>>,
+) {
+    let Some(player_pos) = player_q.iter().next() else {
+        return;
+    };
+    for npc_pos in npc_q.iter() {
+        if (player_pos.0 - npc_pos.0).length() < BUMP_DISTANCE {
+            crate::ui::show_exclamation();
+            return;
+        }
     }
 }
 
@@ -70,6 +98,53 @@ pub fn wander_input(
     let dir = Vec3::new(angle.cos(), 0.0, angle.sin());
     for mut v in q.iter_mut() {
         v.0 = dir * WANDER_SPEED;
+    }
+}
+
+/// Same wander pattern as the native player input, but for NPCs. Runs
+/// on both native and wasm so an NPC keeps circling in the browser
+/// while the player uses WASD.
+pub fn wander_npc(
+    mut q: Query<&mut Velocity, With<NpcMarker>>,
+    mut tick: Local<u32>,
+) {
+    *tick += 1;
+    let angle = (*tick as f32) * WANDER_TURN_RATE;
+    let dir = Vec3::new(angle.cos(), 0.0, angle.sin());
+    for mut v in q.iter_mut() {
+        v.0 = dir * WANDER_SPEED;
+    }
+}
+
+/// Player speed under keyboard input. Faster than the AI wander so
+/// crossing the room takes seconds, not tens of seconds.
+pub const KEYBOARD_SPEED: f32 = 18.0;
+
+/// WASD → velocity. W/S move along -Z/+Z (into/out of the screen with
+/// the follow camera); A/D move along -X/+X. Diagonals normalise so
+/// two-key combinations don't move faster than single-key.
+pub fn keyboard_input(mut q: Query<&mut Velocity, With<PlayerMarker>>) {
+    let s = crate::input::state();
+    let mut dir = Vec3::ZERO;
+    if s & crate::input::key::W != 0 {
+        dir.z -= 1.0;
+    }
+    if s & crate::input::key::S != 0 {
+        dir.z += 1.0;
+    }
+    if s & crate::input::key::A != 0 {
+        dir.x -= 1.0;
+    }
+    if s & crate::input::key::D != 0 {
+        dir.x += 1.0;
+    }
+    let vel = if dir.length_squared() > 0.0 {
+        dir.normalize() * KEYBOARD_SPEED
+    } else {
+        Vec3::ZERO
+    };
+    for mut v in q.iter_mut() {
+        v.0 = vel;
     }
 }
 

@@ -9,12 +9,14 @@ pub mod build_info;
 pub mod campfire;
 pub mod error;
 pub mod health;
+pub mod input;
 pub mod net;
 pub mod obs;
 pub mod physics;
 pub mod room;
 pub mod scene;
 pub mod trees;
+pub mod ui;
 
 pub mod gpu_web;
 
@@ -35,7 +37,7 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::IntoScheduleConfigs;
 use bevy_math::Vec3;
 
-use physics::{AabbCollider, PlayerMarker, Position, Velocity};
+use physics::{AabbCollider, NpcMarker, PlayerMarker, Position, Velocity};
 
 // Held across init/frame/finalize calls. Single-threaded: wasm32 has
 // no threads; native drives from main only.
@@ -113,6 +115,13 @@ fn setup(mut commands: Commands) {
         PlayerMarker,
         Position(room::SPAWN_POS),
         Velocity(Vec3::new(1.5, 0.0, 0.7)),
+    ));
+    // Circling NPC — same wander pattern as the deterministic native
+    // player input; bumping into it fires the exclamation overlay.
+    commands.spawn((
+        NpcMarker,
+        Position(Vec3::new(300.0, 0.0, 300.0)),
+        Velocity(Vec3::ZERO),
     ));
     for (i, offset) in [
         Vec3::new(80.0, 0.0, 0.0),
@@ -262,14 +271,21 @@ fn _init() {
             trees::setup_trees.after(setup),
             campfire::setup_campfire.after(setup),
         ),
-    )
-    .add_systems(
+    );
+    #[cfg(target_arch = "wasm32")]
+    let input_system = physics::keyboard_input;
+    #[cfg(not(target_arch = "wasm32"))]
+    let input_system = physics::wander_input;
+    app.add_systems(
         Update,
         (
-            physics::wander_input,
-            physics::advance_player.after(physics::wander_input),
+            input_system,
+            physics::wander_npc,
+            physics::advance_player.after(input_system),
+            physics::advance_npc.after(physics::wander_npc),
             physics::resolve_collisions.after(physics::advance_player),
             room::world_bounds_clamp.after(physics::resolve_collisions),
+            physics::check_npc_bump.after(physics::advance_npc),
             campfire::flicker_fire.after(room::world_bounds_clamp),
             tick.after(campfire::flicker_fire),
             report_player_pos.after(tick),

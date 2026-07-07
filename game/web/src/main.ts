@@ -90,6 +90,43 @@ async function loadBuildInfo() {
   } catch (_) {}
 }
 
+// WASD input state — a u32 bitmask (W=1, A=2, S=4, D=8) maintained
+// by window keydown/keyup listeners. Wasm polls via game_input_state.
+let inputBits = 0
+const KEY_W = 0x01
+const KEY_A = 0x02
+const KEY_S = 0x04
+const KEY_D = 0x08
+function keyBit(k: string): number {
+  switch (k.toLowerCase()) {
+    case 'w': return KEY_W
+    case 'a': return KEY_A
+    case 's': return KEY_S
+    case 'd': return KEY_D
+    default: return 0
+  }
+}
+window.addEventListener('keydown', e => {
+  const b = keyBit(e.key)
+  if (b) { inputBits |= b; e.preventDefault() }
+})
+window.addEventListener('keyup', e => {
+  const b = keyBit(e.key)
+  if (b) { inputBits &= ~b; e.preventDefault() }
+})
+
+// Exclamation overlay — Rust triggers it when the player bumps into
+// an NPC. Repeated calls refresh the timeout so it stays visible for
+// the duration of the overlap plus a short tail.
+const bangEl = document.getElementById('game-bang')
+let bangTimeout: ReturnType<typeof setTimeout> | null = null
+function showBang() {
+  if (!bangEl) return
+  bangEl.classList.add('shown')
+  if (bangTimeout) clearTimeout(bangTimeout)
+  bangTimeout = setTimeout(() => bangEl.classList.remove('shown'), 350)
+}
+
 async function main() {
   loadBuildInfo()
   const gpuPromise = preInitGpu()
@@ -310,6 +347,8 @@ async function main() {
           return 1
         }
       },
+      game_input_state: (): number => inputBits,
+      game_show_exclamation: () => showBang(),
       game_gpu_render_pipeline_create_cube: (
         pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
         colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

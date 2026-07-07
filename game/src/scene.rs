@@ -6,7 +6,7 @@ use bevy_app::App;
 use bevy_math::Vec3;
 
 use crate::campfire;
-use crate::physics::{self, AabbCollider, PlayerMarker, Position};
+use crate::physics::{self, AabbCollider, NpcMarker, PlayerMarker, Position};
 use crate::room;
 use crate::trees;
 
@@ -173,6 +173,7 @@ pub struct SceneSnapshot {
     pub trees: Vec<Vec3>,
     pub obstacles: Vec<Vec3>,
     pub fires: Vec<(Vec3, f32)>,
+    pub npcs: Vec<Vec3>,
     pub player: Vec3,
 }
 
@@ -200,10 +201,13 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         .next()
         .map(|p| p.0)
         .unwrap_or(Vec3::ZERO);
+    let mut npc_q = world.query_filtered::<&Position, bevy_ecs::prelude::With<NpcMarker>>();
+    let npcs: Vec<Vec3> = npc_q.iter(world).map(|p| p.0).collect();
     SceneSnapshot {
         trees,
         obstacles,
         fires,
+        npcs,
         player,
     }
 }
@@ -238,6 +242,13 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             pos: [fire_pos.x, 30.0, fire_pos.z],
             color: [1.0 * i, 0.45 * i, 0.08 * i],
             scale: [50.0, 60.0, 50.0],
+        });
+    }
+    for n in &snap.npcs {
+        instances.push(SceneInstance {
+            pos: [n.x, 60.0, n.z],
+            color: [0.95, 0.25, 0.20],
+            scale: [70.0, 140.0, 70.0],
         });
     }
     instances.push(SceneInstance {

@@ -28,3 +28,5 @@ env.game_gpu_pipeline_layout_create
 env.game_gpu_render_pipeline_create_cube
 env.game_gpu_render_target_configure
 env.game_gpu_render_frame
+env.game_input_state
+env.game_show_exclamation

@@ -43,3 +43,22 @@ html, body {
 #game-loading progress::-webkit-progress-value { background: #6f9; }
 #game-loading progress::-moz-progress-bar { background: #6f9; }
 body.loaded #game-loading { display: none; }
+#game-bang {
+  position: fixed;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.6);
+  font-size: 128px;
+  font-weight: 900;
+  color: #ffcc00;
+  opacity: 0;
+  transition: opacity 0.12s ease-out, transform 0.12s ease-out;
+  pointer-events: none;
+  z-index: 20;
+  text-shadow: 0 0 24px rgba(255, 200, 0, 0.6);
+  user-select: none;
+}
+#game-bang.shown {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}

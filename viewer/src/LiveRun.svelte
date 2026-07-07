@@ -211,6 +211,8 @@
             _vertexCount: number, _instanceCount: number,
             _clearR: number, _clearG: number, _clearB: number,
           ): number => 1,
+          game_input_state: (): number => 0,
+          game_show_exclamation: () => {},
           game_gpu_render_pipeline_create_cube: (
             pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
             colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

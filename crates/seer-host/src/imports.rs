@@ -240,6 +240,16 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
          _clear_b: f32|
          -> Result<u32> { Ok(1) },
     )?;
+    linker.func_wrap(
+        "env",
+        "game_input_state",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_show_exclamation",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<()> { Ok(()) },
+    )?;
 
     // Structured per-frame metric. Cheap: no backtrace capture, just
     // four numbers. Feeds the HTML time-series chart.
