@@ -1,9 +1,10 @@
-// game.sbvh.nl bootstrap. Fetches /game.wasm, wires the seven env.*
-// imports, drives requestAnimationFrame frame loop.
+// game.sbvh.nl bootstrap. Fetches /game.wasm with byte-progress
+// streaming, wires seven env.* imports, drives requestAnimationFrame.
+// Loading screen matches laye/bevy-starter.
 //
 // Encapsulated GPU init: JS runs navigator.gpu.requestAdapter →
-// requestDevice BEFORE wasm.init(). By the time wasm reads
-// game_gpu_status, it's Ready (or Unavailable) — never Pending.
+// requestDevice BEFORE wasm.init(). Wasm reads game_gpu_status —
+// Ready or Unavailable, never Pending.
 
 let memory: WebAssembly.Memory | null = null
 
@@ -11,6 +12,52 @@ function decodeString(ptr: number, len: number): string {
   if (!memory) return ''
   const bytes = new Uint8Array(memory.buffer, ptr, len)
   return new TextDecoder('utf-8').decode(bytes)
+}
+
+const loadingText = document.getElementById('game-loading-text')
+const loadingBar = document.querySelector('#game-loading progress') as HTMLProgressElement | null
+
+function fmtMB(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+function updateProgress(loaded: number, total: number) {
+  if (!loadingText || !loadingBar) return
+  if (total > 0) {
+    const pct = Math.floor((loaded / total) * 100)
+    loadingBar.value = loaded
+    loadingBar.max = total
+    loadingText.textContent = `loading game · ${pct}% · ${fmtMB(loaded)}/${fmtMB(total)}`
+  } else {
+    loadingText.textContent = `loading game · ${fmtMB(loaded)}`
+  }
+}
+
+async function streamWasmBytes(url: string): Promise<Uint8Array> {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`fetch ${url} → HTTP ${response.status}`)
+  const total = parseInt(response.headers.get('content-length') ?? '0', 10)
+  const body = response.body
+  if (!body) throw new Error(`fetch ${url} → response.body missing`)
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let loaded = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value) {
+      chunks.push(value)
+      loaded += value.length
+      updateProgress(loaded, total)
+    }
+  }
+  const bytes = new Uint8Array(loaded)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.length
+  }
+  return bytes
 }
 
 async function preInitGpu(): Promise<{ status: number; device: unknown }> {
@@ -33,14 +80,9 @@ async function preInitGpu(): Promise<{ status: number; device: unknown }> {
 }
 
 async function main() {
-  const [wasmRes, gpu] = await Promise.all([
-    fetch('/game.wasm'),
-    preInitGpu(),
-  ])
-  if (!wasmRes.ok) {
-    throw new Error(`game.wasm fetch → HTTP ${wasmRes.status}`)
-  }
-  const wasmBytes = await wasmRes.arrayBuffer()
+  const gpuPromise = preInitGpu()
+  const wasmBytes = await streamWasmBytes('/game.wasm')
+  const gpu = await gpuPromise
 
   const imports: WebAssembly.Imports = {
     env: {
@@ -79,6 +121,7 @@ async function main() {
   }
 
   init()
+  document.body.classList.add('loaded')
 
   const loop = () => {
     const done = frame()
@@ -90,6 +133,6 @@ async function main() {
 
 main().catch(e => {
   const msg = e instanceof Error ? e.message : String(e)
-  document.body.textContent = `[game] boot failed: ${msg}`
+  if (loadingText) loadingText.textContent = `boot failed: ${msg}`
   console.error('[game] boot failed:', e)
 })

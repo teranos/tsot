@@ -2,7 +2,7 @@
 // into dist/. No Svelte, no runtime deps — plain wasm+JS shim.
 
 import { join } from 'path'
-import { rm, mkdir } from 'fs/promises'
+import { rm, mkdir, copyFile } from 'fs/promises'
 
 const srcDir = join(import.meta.dir, 'src')
 const outDir = join(import.meta.dir, 'dist')
@@ -22,6 +22,8 @@ if (!result.success) {
   for (const msg of result.logs) console.error(msg)
   process.exit(1)
 }
+
+await copyFile(join(import.meta.dir, 'style.css'), join(outDir, 'style.css'))
 
 const html = await Bun.file(join(import.meta.dir, 'index.html')).text()
 await Bun.write(join(outDir, 'index.html'), html.replace('/src/main.ts', '/main.js'))
