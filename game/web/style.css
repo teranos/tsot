@@ -45,20 +45,26 @@ html, body {
 body.loaded #game-loading { display: none; }
 #game-bang {
   position: fixed;
-  top: 40%;
-  left: 50%;
-  transform: translate(-50%, -50%) scale(0.6);
-  font-size: 128px;
-  font-weight: 900;
-  color: #ffcc00;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -110%) scale(0.7);
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1;
+  color: #ffdd33;
+  background: rgba(20, 15, 5, 0.85);
+  border: 2px solid rgba(255, 200, 40, 0.9);
+  border-radius: 10px;
+  padding: 6px 16px;
   opacity: 0;
-  transition: opacity 0.12s ease-out, transform 0.12s ease-out;
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
   pointer-events: none;
   z-index: 20;
-  text-shadow: 0 0 24px rgba(255, 200, 0, 0.6);
+  text-shadow: 0 0 12px rgba(255, 210, 0, 0.5);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
   user-select: none;
 }
 #game-bang.shown {
   opacity: 1;
-  transform: translate(-50%, -50%) scale(1);
+  transform: translate(-50%, -110%) scale(1);
 }

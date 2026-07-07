@@ -248,7 +248,7 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
     linker.func_wrap(
         "env",
         "game_show_exclamation",
-        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<()> { Ok(()) },
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _x: f32, _y: f32| -> Result<()> { Ok(()) },
     )?;
 
     // Structured per-frame metric. Cheap: no backtrace capture, just

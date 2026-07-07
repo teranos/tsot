@@ -115,16 +115,25 @@ window.addEventListener('keyup', e => {
   if (b) { inputBits &= ~b; e.preventDefault() }
 })
 
-// Exclamation overlay — Rust triggers it when the player bumps into
-// an NPC. Repeated calls refresh the timeout so it stays visible for
-// the duration of the overlap plus a short tail.
+// Exclamation overlay — Rust computes clip-space coords above the NPC
+// each frame and passes them here; JS maps to canvas pixels and shows
+// a boxed "!" above that point. Repeated calls refresh the timeout so
+// it lingers for a short tail after the overlap ends.
 const bangEl = document.getElementById('game-bang')
 let bangTimeout: ReturnType<typeof setTimeout> | null = null
-function showBang() {
+function showBang(clipX: number, clipY: number) {
   if (!bangEl) return
+  const canvas = document.getElementById('game-canvas')
+  if (canvas) {
+    const rect = canvas.getBoundingClientRect()
+    const xPx = rect.left + (clipX + 1) * 0.5 * rect.width
+    const yPx = rect.top + (1 - clipY) * 0.5 * rect.height
+    bangEl.style.left = `${xPx}px`
+    bangEl.style.top = `${yPx}px`
+  }
   bangEl.classList.add('shown')
   if (bangTimeout) clearTimeout(bangTimeout)
-  bangTimeout = setTimeout(() => bangEl.classList.remove('shown'), 350)
+  bangTimeout = setTimeout(() => bangEl.classList.remove('shown'), 1200)
 }
 
 async function main() {
@@ -348,7 +357,7 @@ async function main() {
         }
       },
       game_input_state: (): number => inputBits,
-      game_show_exclamation: () => showBang(),
+      game_show_exclamation: (clipX: number, clipY: number) => showBang(clipX, clipY),
       game_gpu_render_pipeline_create_cube: (
         pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
         colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

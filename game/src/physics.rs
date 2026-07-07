@@ -64,7 +64,16 @@ pub fn check_npc_bump(
     };
     for npc_pos in npc_q.iter() {
         if (player_pos.0 - npc_pos.0).length() < BUMP_DISTANCE {
-            crate::ui::show_exclamation();
+            // Anchor the bang above the NPC cube — cube is 140 tall
+            // centred at Y=60, so top ≈ 130. Reconstruct the same
+            // follow camera render_web uses, project to clip space.
+            let bang_world = [npc_pos.0.x, 150.0, npc_pos.0.z];
+            let camera = crate::scene::SceneCamera::follow(
+                [player_pos.0.x, player_pos.0.y, player_pos.0.z],
+                crate::room::FLOOR_HALF,
+            );
+            let clip = camera.world_to_clip(bang_world);
+            crate::ui::show_exclamation(clip[0], clip[1]);
             return;
         }
     }

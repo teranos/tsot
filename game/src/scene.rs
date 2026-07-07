@@ -92,6 +92,20 @@ impl SceneCamera {
         }
     }
 
+    /// Project a world-space point to normalised clip coords in
+    /// [-1, 1] × [-1, 1]. JS scales these to canvas pixels.
+    pub fn world_to_clip(&self, world: [f32; 3]) -> [f32; 2] {
+        let vp = self.view_proj();
+        let cx = vp[0][0] * world[0] + vp[1][0] * world[1] + vp[2][0] * world[2] + vp[3][0];
+        let cy = vp[0][1] * world[0] + vp[1][1] * world[1] + vp[2][1] * world[2] + vp[3][1];
+        let cw = vp[0][3] * world[0] + vp[1][3] * world[1] + vp[2][3] * world[2] + vp[3][3];
+        if cw.abs() < 1e-6 {
+            [0.0, 0.0]
+        } else {
+            [cx / cw, cy / cw]
+        }
+    }
+
     /// view_proj packed row-major (column-major cols_array_2d).
     pub fn view_proj(&self) -> [[f32; 4]; 4] {
         let eye = Vec3::new(self.eye[0], self.eye[1], self.eye[2]);
