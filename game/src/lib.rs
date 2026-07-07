@@ -13,9 +13,13 @@ pub mod net;
 pub mod obs;
 pub mod physics;
 pub mod room;
+pub mod scene;
 pub mod trees;
 
 pub mod gpu_web;
+
+#[cfg(target_arch = "wasm32")]
+pub mod render_web;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gpu;
@@ -49,7 +53,7 @@ struct NativeRunState {
     budget: u32,
     counter: u32,
     checkpoints: Vec<u32>,
-    snapshots: Vec<SceneSnapshot>,
+    snapshots: Vec<scene::SceneSnapshot>,
     multi_dir: Option<String>,
 }
 
@@ -68,24 +72,6 @@ struct GpuHandles {
 const DEFAULT_FRAMES: u32 = 300;
 const REPORT_EVERY: u32 = 30;
 
-// Minimal WGSL for the checkpoint-3 demo — proves the pipeline stack
-// compiles end-to-end. Matches the cube pipeline's vertex layout.
-#[cfg(target_arch = "wasm32")]
-const DEMO_WGSL: &str = r#"
-struct Camera { view_proj: mat4x4<f32> };
-@group(0) @binding(0) var<uniform> camera: Camera;
-@vertex
-fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
-      @location(2) i_pos: vec3<f32>, @location(3) i_color: vec3<f32>, @location(4) i_scale: vec3<f32>)
-      -> @builtin(position) vec4<f32> {
-  let world = pos * i_scale + i_pos;
-  return camera.view_proj * vec4<f32>(world, 1.0);
-}
-@fragment
-fn fs() -> @location(0) vec4<f32> {
-  return vec4<f32>(1.0, 0.0, 0.0, 1.0);
-}
-"#;
 
 fn frame_budget() -> u32 {
     #[cfg(not(target_arch = "wasm32"))]
@@ -265,69 +251,7 @@ fn _init() {
         let status = gpu_web::status();
         obs::emit(&format!("[gpu_web] init kicked; status={status:?}"));
         if status == gpu_web::GpuStatus::Ready {
-            let vertex_buf = gpu_web::GameBuffer::create(
-                64,
-                gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
-                "gpu_web.demo.vertex",
-            );
-            let uniform_buf = gpu_web::GameBuffer::create(
-                64,
-                gpu_web::usage::UNIFORM | gpu_web::usage::COPY_DST,
-                "gpu_web.demo.camera",
-            );
-            if let (Some(vertex_buf), Some(uniform_buf)) = (vertex_buf, uniform_buf) {
-                vertex_buf.write(&[0u8; 64]);
-                uniform_buf.write(&[0u8; 64]);
-                obs::emit(&format!(
-                    "[gpu_web] demo buffers ok — vertex={} uniform={}",
-                    vertex_buf.handle(),
-                    uniform_buf.handle()
-                ));
-
-                let shader = gpu_web::GameShaderModule::create(DEMO_WGSL, "gpu_web.demo.shader");
-                let bg_layout = gpu_web::GameBindGroupLayout::create_uniform("gpu_web.demo.bgl");
-                if let (Some(shader), Some(bg_layout)) = (shader, bg_layout) {
-                    let bg = gpu_web::GameBindGroup::create(&bg_layout, &uniform_buf, "gpu_web.demo.bg");
-                    let pl_layout = gpu_web::GamePipelineLayout::create(&bg_layout, "gpu_web.demo.pl");
-                    if let (Some(bg), Some(pl_layout)) = (bg, pl_layout) {
-                        let pipeline = gpu_web::GameRenderPipeline::create_cube(
-                            &pl_layout,
-                            &shader,
-                            24, /* vertex stride: pos+normal, both float32x3 */
-                            36, /* instance stride: pos+color+scale, all float32x3 */
-                            gpu_web::color_format::BGRA8UNORM,
-                            gpu_web::depth_format::DEPTH32FLOAT,
-                            "gpu_web.demo.pipeline",
-                        );
-                        obs::emit(&format!(
-                            "[gpu_web] demo pipeline stack ok — pipeline={:?}",
-                            pipeline.as_ref().map(|p| p.handle())
-                        ));
-                        if let Some(pipeline) = pipeline {
-                            let target = gpu_web::GameRenderTarget::configure(
-                                "#game-canvas",
-                                gpu_web::color_format::BGRA8UNORM,
-                                gpu_web::depth_format::DEPTH32FLOAT,
-                            );
-                            if let Some(target) = target {
-                                let r = gpu_web::render_frame(
-                                    &target, &pipeline, &bg,
-                                    &vertex_buf, &vertex_buf,
-                                    36, 1,
-                                    [0.20, 0.05, 0.35],
-                                );
-                                obs::emit(&format!(
-                                    "[gpu_web] render_frame returned {r} (0=OK)"
-                                ));
-                            } else {
-                                obs::emit("[gpu_web] render_target configure returned null");
-                            }
-                        }
-                    }
-                }
-            } else {
-                obs::emit("[gpu_web] demo buffer create returned null");
-            }
+            render_web::init("#game-canvas");
         }
     }
     let mut app = App::new();
@@ -384,6 +308,13 @@ fn _frame() -> u32 {
         }
     });
 
+    #[cfg(target_arch = "wasm32")]
+    APP_STATE.with(|c| {
+        if let Some(app) = c.borrow_mut().as_mut() {
+            let _ = render_web::frame_from_app(app);
+        }
+    });
+
     #[cfg(not(target_arch = "wasm32"))]
     {
         let (do_snapshot, done) = NATIVE_STATE.with(|c| {
@@ -398,7 +329,7 @@ fn _frame() -> u32 {
             let snap = APP_STATE.with(|c| {
                 let mut a = c.borrow_mut();
                 let app = a.as_mut().expect("APP_STATE not initialized");
-                snapshot_scene(app)
+                scene::snapshot_scene(app)
             });
             NATIVE_STATE.with(|c| {
                 let mut ns_opt = c.borrow_mut();
@@ -444,88 +375,6 @@ fn _finalize() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-struct SceneSnapshot {
-    trees: Vec<bevy_math::Vec3>,
-    obstacles: Vec<bevy_math::Vec3>,
-    fires: Vec<(bevy_math::Vec3, f32)>,
-    player: bevy_math::Vec3,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn snapshot_scene(app: &mut App) -> SceneSnapshot {
-    let world = app.world_mut();
-    let mut tree_q =
-        world.query_filtered::<&physics::Position, bevy_ecs::prelude::With<trees::TreeTrunk>>();
-    let trees: Vec<bevy_math::Vec3> = tree_q.iter(world).map(|p| p.0).collect();
-    let mut obs_q = world.query_filtered::<&physics::Position, (
-        bevy_ecs::prelude::With<physics::AabbCollider>,
-        bevy_ecs::prelude::Without<physics::PlayerMarker>,
-        bevy_ecs::prelude::Without<trees::TreeTrunk>,
-        bevy_ecs::prelude::Without<campfire::Campfire>,
-    )>();
-    let obstacles: Vec<bevy_math::Vec3> = obs_q.iter(world).map(|p| p.0).collect();
-    let mut fire_q = world.query::<(&physics::Position, &campfire::Campfire)>();
-    let fires: Vec<(bevy_math::Vec3, f32)> = fire_q
-        .iter(world)
-        .map(|(p, f)| (p.0, f.intensity))
-        .collect();
-    let mut player_q = world
-        .query_filtered::<&physics::Position, bevy_ecs::prelude::With<physics::PlayerMarker>>();
-    let player = player_q
-        .iter(world)
-        .next()
-        .map(|p| p.0)
-        .unwrap_or(bevy_math::Vec3::ZERO);
-    SceneSnapshot {
-        trees,
-        obstacles,
-        fires,
-        player,
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<render::SceneInstance> {
-    let floor_half = room::FLOOR_HALF;
-    let mut instances: Vec<render::SceneInstance> = Vec::with_capacity(
-        1 + snap.trees.len() + snap.obstacles.len() + snap.fires.len() + 1,
-    );
-    instances.push(render::SceneInstance {
-        pos: [0.0, -50.0, 0.0],
-        color: [0.09, 0.11, 0.15],
-        scale: [floor_half * 2.0, 100.0, floor_half * 2.0],
-    });
-    for t in &snap.trees {
-        instances.push(render::SceneInstance {
-            pos: [t.x, 60.0, t.z],
-            color: [0.13, 0.77, 0.37],
-            scale: [40.0, 130.0, 40.0],
-        });
-    }
-    for o in &snap.obstacles {
-        instances.push(render::SceneInstance {
-            pos: [o.x, 40.0, o.z],
-            color: [0.92, 0.70, 0.03],
-            scale: [60.0, 80.0, 60.0],
-        });
-    }
-    for (fire_pos, intensity) in &snap.fires {
-        let i = intensity.clamp(0.5, 1.5);
-        instances.push(render::SceneInstance {
-            pos: [fire_pos.x, 30.0, fire_pos.z],
-            color: [1.0 * i, 0.45 * i, 0.08 * i],
-            scale: [50.0, 60.0, 50.0],
-        });
-    }
-    instances.push(render::SceneInstance {
-        pos: [snap.player.x, 60.0, snap.player.z],
-        color: [0.13, 0.83, 0.93],
-        scale: [70.0, 140.0, 70.0],
-    });
-    instances
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn init_wgpu() -> Result<(gpu::SeerDevice, wgpu::Queue), Box<dyn std::error::Error>> {
     obs::emit("[gpu.native] initializing wgpu");
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -556,12 +405,12 @@ fn init_wgpu() -> Result<(gpu::SeerDevice, wgpu::Queue), Box<dyn std::error::Err
 
 #[cfg(not(target_arch = "wasm32"))]
 fn render_single(
-    snap: &SceneSnapshot,
+    snap: &scene::SceneSnapshot,
     out_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (dev, queue) = init_wgpu()?;
-    let instances = snapshot_to_instances(snap);
-    let camera = render::SceneCamera::follow(
+    let instances = scene::snapshot_to_instances(snap);
+    let camera = scene::SceneCamera::follow(
         [snap.player.x, snap.player.y, snap.player.z],
         room::FLOOR_HALF,
     );
@@ -571,7 +420,7 @@ fn render_single(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn render_snapshots(
-    snapshots: &[SceneSnapshot],
+    snapshots: &[scene::SceneSnapshot],
     dir: &str,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(dir)?;
@@ -579,8 +428,8 @@ fn render_snapshots(
     let mut out_paths = Vec::with_capacity(snapshots.len());
     for (i, snap) in snapshots.iter().enumerate() {
         let out_path = format!("{dir}/frame-{i}.png");
-        let instances = snapshot_to_instances(snap);
-        let camera = render::SceneCamera::follow(
+        let instances = scene::snapshot_to_instances(snap);
+        let camera = scene::SceneCamera::follow(
             [snap.player.x, snap.player.y, snap.player.z],
             room::FLOOR_HALF,
         );
