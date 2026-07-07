@@ -51,6 +51,8 @@
       // gpuStatus to observe progress. 0=pending, 1=ready, 2=unavailable.
       let gpuStatus = 0
       let gpuDevice: any = null
+      const gpuBuffers = new Map<number, any>()
+      let nextGpuHandle = 1
       const imports: WebAssembly.Imports = {
         env: {
           seer_emit: (ptr: number, len: number) => {
@@ -97,6 +99,34 @@
               })
           },
           game_gpu_status: (): number => gpuStatus,
+          game_gpu_buffer_create: (size: number, usage: number, labelPtr: number, labelLen: number): number => {
+            if (!gpuDevice) return 0
+            try {
+              const label = decodeString(labelPtr, labelLen)
+              const buf = gpuDevice.createBuffer({ size, usage, label })
+              const h = nextGpuHandle++
+              gpuBuffers.set(h, buf)
+              pushEmit(`[browser.gpu_buffer_create] handle=${h} size=${size} usage=${usage.toString(16)} label=${label}`)
+              return h
+            } catch (e: any) {
+              pushEmit(`[browser.gpu_buffer_create] failed: ${e?.message || e}`)
+              return 0
+            }
+          },
+          game_gpu_buffer_write: (handle: number, dataPtr: number, dataLen: number) => {
+            if (!gpuDevice || !memory) return
+            const buf = gpuBuffers.get(handle)
+            if (!buf) return
+            const view = new Uint8Array(memory.buffer, dataPtr, dataLen)
+            gpuDevice.queue.writeBuffer(buf, 0, view)
+          },
+          game_gpu_buffer_destroy: (handle: number) => {
+            const buf = gpuBuffers.get(handle)
+            if (!buf) return
+            buf.destroy()
+            gpuBuffers.delete(handle)
+            pushEmit(`[browser.gpu_buffer_destroy] handle=${handle}`)
+          },
         },
       }
       const { instance } = await WebAssembly.instantiate(bytes, imports)

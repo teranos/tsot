@@ -96,6 +96,12 @@ async function main() {
   const wasmBytes = await streamWasmBytes('/game.wasm')
   const gpu = await gpuPromise
 
+  // Handle table for GPU resources — u32 handles from wasm map to real
+  // GPUBuffer objects. Explicit lifetime: create adds, destroy removes.
+  const buffers = new Map<number, GPUBuffer>()
+  let nextHandle = 1
+  const device = gpu.device as (GPUDevice | null)
+
   const imports: WebAssembly.Imports = {
     env: {
       seer_emit: (ptr: number, len: number) => {
@@ -120,6 +126,32 @@ async function main() {
         // JS pre-init already ran. Idempotent no-op.
       },
       game_gpu_status: (): number => gpu.status,
+      game_gpu_buffer_create: (size: number, usage: number, labelPtr: number, labelLen: number): number => {
+        if (!device) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const buf = device.createBuffer({ size, usage, label })
+          const h = nextHandle++
+          buffers.set(h, buf)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_buffer_create]', e)
+          return 0
+        }
+      },
+      game_gpu_buffer_write: (handle: number, dataPtr: number, dataLen: number) => {
+        if (!device || !memory) return
+        const buf = buffers.get(handle)
+        if (!buf) return
+        const view = new Uint8Array(memory.buffer, dataPtr, dataLen)
+        device.queue.writeBuffer(buf, 0, view)
+      },
+      game_gpu_buffer_destroy: (handle: number) => {
+        const buf = buffers.get(handle)
+        if (!buf) return
+        buf.destroy()
+        buffers.delete(handle)
+      },
     },
   }
 

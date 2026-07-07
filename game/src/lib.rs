@@ -243,10 +243,24 @@ fn _init() {
     #[cfg(target_arch = "wasm32")]
     {
         gpu_web::init(gpu_web::PowerPreference::Low);
-        obs::emit(&format!(
-            "[gpu_web] init kicked; status={:?}",
-            gpu_web::status()
-        ));
+        let status = gpu_web::status();
+        obs::emit(&format!("[gpu_web] init kicked; status={status:?}"));
+        if status == gpu_web::GpuStatus::Ready {
+            let buf = gpu_web::GameBuffer::create(
+                64,
+                gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+                "gpu_web.demo.vertex",
+            );
+            if let Some(buf) = buf {
+                buf.write(&[0u8; 64]);
+                obs::emit(&format!(
+                    "[gpu_web] demo buffer created + written handle={}",
+                    buf.handle()
+                ));
+            } else {
+                obs::emit("[gpu_web] demo buffer create returned null");
+            }
+        }
     }
     let mut app = App::new();
     app.add_systems(
