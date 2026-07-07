@@ -233,6 +233,7 @@ impl GameRenderTarget {
 /// Bundled encode/draw/submit — the JS shim owns the encoder + pass +
 /// submit dance internally. Returns 0 on success, non-zero on error.
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
 pub fn render_frame(
     target: &GameRenderTarget,
     pipeline: &GameRenderPipeline,

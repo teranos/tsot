@@ -66,8 +66,10 @@ pub struct SceneCamera {
 
 impl SceneCamera {
     pub fn default_for_floor(floor_half: f32) -> Self {
+        // 45° tilt from horizontal: eye Y offset == Z offset. Classic
+        // isometric-adjacent look — arctan(1) elevation.
         Self {
-            eye: [0.0, floor_half * 2.0, floor_half * 0.8],
+            eye: [0.0, floor_half * 1.5, floor_half * 1.5],
             target: [0.0, 0.0, 0.0],
             up: [0.0, 1.0, 0.0],
             half_extent: floor_half * 1.1,
@@ -80,8 +82,8 @@ impl SceneCamera {
         Self {
             eye: [
                 player[0],
-                player[1] + floor_half * 2.0,
-                player[2] + floor_half * 0.8,
+                player[1] + floor_half * 1.5,
+                player[2] + floor_half * 1.5,
             ],
             target: player,
             up: [0.0, 1.0, 0.0],
