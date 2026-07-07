@@ -11,6 +11,7 @@ pub mod error;
 pub mod health;
 pub mod identity;
 pub mod input;
+pub mod map;
 pub mod net;
 pub mod obs;
 pub mod physics;
@@ -277,6 +278,7 @@ fn _init() {
             setup,
             trees::setup_trees.after(setup),
             campfire::setup_campfire.after(setup),
+            map::setup_pins.after(setup),
         ),
     );
     #[cfg(target_arch = "wasm32")]

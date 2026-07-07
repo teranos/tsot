@@ -6,6 +6,7 @@ use bevy_app::App;
 use bevy_math::Vec3;
 
 use crate::campfire;
+use crate::map::Pin;
 use crate::physics::{self, AabbCollider, NpcMarker, PlayerMarker, Position};
 use crate::room;
 use crate::trees;
@@ -187,6 +188,7 @@ pub struct SceneSnapshot {
     pub obstacles: Vec<Vec3>,
     pub fires: Vec<(Vec3, f32)>,
     pub npcs: Vec<Vec3>,
+    pub pins: Vec<Vec3>,
     pub player: Vec3,
 }
 
@@ -216,11 +218,14 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         .unwrap_or(Vec3::ZERO);
     let mut npc_q = world.query_filtered::<&Position, bevy_ecs::prelude::With<NpcMarker>>();
     let npcs: Vec<Vec3> = npc_q.iter(world).map(|p| p.0).collect();
+    let mut pin_q = world.query_filtered::<&Position, bevy_ecs::prelude::With<Pin>>();
+    let pins: Vec<Vec3> = pin_q.iter(world).map(|p| p.0).collect();
     SceneSnapshot {
         trees,
         obstacles,
         fires,
         npcs,
+        pins,
         player,
     }
 }
@@ -262,6 +267,16 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             pos: [n.x, 60.0, n.z],
             color: [0.95, 0.25, 0.20],
             scale: [70.0, 140.0, 70.0],
+        });
+    }
+    // Named-zone markers — thin emissive-yellow rods so the layout
+    // reads at a glance. Rave's rod+sphere+label overlay lands when
+    // we grow text primitives in the shim.
+    for p in &snap.pins {
+        instances.push(SceneInstance {
+            pos: [p.x, 40.0, p.z],
+            color: [1.0, 0.9, 0.2],
+            scale: [20.0, 80.0, 20.0],
         });
     }
     instances.push(SceneInstance {
