@@ -24,11 +24,9 @@ bevy_app = "=0.19.0"
 bevy_ecs = "=0.19.0"
 bevy_math = "=0.19.0"
 serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.143"
 sacred-error = { path = "../crates/sacred-error" }
 seer-obs = { path = "../crates/seer-obs" }
-
-[dev-dependencies]
-serde_json = "=1.0.143"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.anyhow]
 version = "=1.0.100"

@@ -278,6 +278,37 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
             Ok(())
         },
     )?;
+    // No proxy in wasmtime. Pending is always 0, publish is a no-op,
+    // now_ms uses the host wall clock so RavePosition.at_ms stays
+    // realistic for downstream diagnostics.
+    linker.func_wrap(
+        "env",
+        "game_peers_pending",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_peers_recv",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _out_ptr: i32, _out_len: i32|
+         -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_self_publish",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _bytes_ptr: i32, _bytes_len: i32|
+         -> Result<()> { Ok(()) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_now_ms",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<f64> {
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as f64)
+                .unwrap_or(0.0);
+            Ok(ms)
+        },
+    )?;
 
     // Structured per-frame metric. Cheap: no backtrace capture, just
     // four numbers. Feeds the HTML time-series chart.

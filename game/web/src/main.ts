@@ -163,6 +163,49 @@ async function saveIdentityToDb(bytes: Uint8Array): Promise<void> {
   })
 }
 
+// Remote-players proxy — thin WebSocket bridge to relaye's R16 WS
+// gateway (see game/docs/relaye-game-gateway.md). Defaults to the
+// deployed endpoint so game.sbvh.nl works out of the box; override
+// with ?proxy=ws://... for local dev, or ?proxy=off to disable.
+// Incoming messages are one GamePosition JSON each; we frame them
+// length-prefixed (u32 LE + bytes) so Rust drains one buffer per
+// tick and slices with parse_frames.
+const DEFAULT_PROXY_WS = 'wss://relaye.sbvh.nl/ws/rave-positions/v1'
+const proxyParam = new URLSearchParams(location.search).get('proxy')
+const PROXY_WS_URL = proxyParam === 'off' ? '' : (proxyParam || DEFAULT_PROXY_WS)
+let proxyWs: WebSocket | null = null
+let proxyRxBuf: Uint8Array = new Uint8Array(0)
+
+function connectProxy() {
+  if (!PROXY_WS_URL) return
+  try {
+    proxyWs = new WebSocket(PROXY_WS_URL)
+    proxyWs.binaryType = 'arraybuffer'
+    proxyWs.onopen = () => console.log('[game.proxy] open', PROXY_WS_URL)
+    proxyWs.onclose = () => console.log('[game.proxy] close')
+    proxyWs.onerror = e => console.warn('[game.proxy] error', e)
+    proxyWs.onmessage = ev => {
+      let payload: Uint8Array
+      if (typeof ev.data === 'string') {
+        payload = new TextEncoder().encode(ev.data)
+      } else if (ev.data instanceof ArrayBuffer) {
+        payload = new Uint8Array(ev.data)
+      } else {
+        return
+      }
+      const len = payload.length
+      const merged = new Uint8Array(proxyRxBuf.length + 4 + len)
+      merged.set(proxyRxBuf)
+      new DataView(merged.buffer).setUint32(proxyRxBuf.length, len, true)
+      merged.set(payload, proxyRxBuf.length + 4)
+      proxyRxBuf = merged
+    }
+  } catch (e) {
+    console.warn('[game.proxy] connect failed:', e)
+  }
+}
+connectProxy()
+
 // Exclamation overlay — Rust computes clip-space coords above the NPC
 // each frame and passes them here; JS maps to canvas pixels and shows
 // a boxed "!" above that point. Repeated calls refresh the timeout so
@@ -428,6 +471,23 @@ async function main() {
         const view = new Uint8Array(memory.buffer, outPtr, outLen)
         crypto.getRandomValues(view)
       },
+      game_peers_pending: (): number => proxyRxBuf.length,
+      game_peers_recv: (outPtr: number, outLen: number): number => {
+        if (!memory) return 0
+        const n = Math.min(outLen, proxyRxBuf.length)
+        if (n === 0) return 0
+        new Uint8Array(memory.buffer, outPtr, n).set(proxyRxBuf.subarray(0, n))
+        proxyRxBuf = proxyRxBuf.subarray(n)
+        return n
+      },
+      game_self_publish: (bytesPtr: number, bytesLen: number) => {
+        if (!memory) return
+        if (!proxyWs || proxyWs.readyState !== WebSocket.OPEN) return
+        const copy = new Uint8Array(bytesLen)
+        copy.set(new Uint8Array(memory.buffer, bytesPtr, bytesLen))
+        try { proxyWs.send(copy) } catch (e) { console.warn('[game.publish]', e) }
+      },
+      game_now_ms: (): number => Date.now(),
       game_gpu_render_pipeline_create_cube: (
         pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
         colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

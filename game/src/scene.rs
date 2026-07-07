@@ -8,6 +8,7 @@ use bevy_math::Vec3;
 use crate::campfire;
 use crate::map::Pin;
 use crate::physics::{self, AabbCollider, NpcMarker, PlayerMarker, Position};
+use crate::remote_players::{RemotePlayers, color_for_peer};
 use crate::trail::TrailMarker;
 use crate::room;
 use crate::trees;
@@ -184,6 +185,11 @@ pub fn as_bytes<T: Copy>(slice: &[T]) -> &[u8] {
     }
 }
 
+pub struct RemotePeerDot {
+    pub pos: Vec3,
+    pub color: [f32; 3],
+}
+
 pub struct SceneSnapshot {
     pub trees: Vec<Vec3>,
     pub obstacles: Vec<Vec3>,
@@ -191,6 +197,7 @@ pub struct SceneSnapshot {
     pub npcs: Vec<Vec3>,
     pub pins: Vec<Vec3>,
     pub trails: Vec<Vec3>,
+    pub remote_peers: Vec<RemotePeerDot>,
     pub player: Vec3,
 }
 
@@ -224,6 +231,17 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
     let pins: Vec<Vec3> = pin_q.iter(world).map(|p| p.0).collect();
     let mut trail_q = world.query_filtered::<&Position, bevy_ecs::prelude::With<TrailMarker>>();
     let trails: Vec<Vec3> = trail_q.iter(world).map(|p| p.0).collect();
+    let remote_peers: Vec<RemotePeerDot> = world
+        .get_resource::<RemotePlayers>()
+        .map(|r| {
+            r.0.iter()
+                .map(|(peer, e)| RemotePeerDot {
+                    pos: e.pos,
+                    color: color_for_peer(peer),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     SceneSnapshot {
         trees,
         obstacles,
@@ -231,6 +249,7 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         npcs,
         pins,
         trails,
+        remote_peers,
         player,
     }
 }
@@ -275,6 +294,15 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             pos: [fire_pos.x, 30.0, fire_pos.z],
             color: [1.0 * i, 0.45 * i, 0.08 * i],
             scale: [50.0, 60.0, 50.0],
+        });
+    }
+    // Remote peers — per-peer colour so two players are visually
+    // distinct from each other and from NPCs.
+    for p in &snap.remote_peers {
+        instances.push(SceneInstance {
+            pos: [p.pos.x, 60.0, p.pos.z],
+            color: p.color,
+            scale: [70.0, 140.0, 70.0],
         });
     }
     for n in &snap.npcs {

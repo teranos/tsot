@@ -15,6 +15,7 @@ pub mod map;
 pub mod net;
 pub mod obs;
 pub mod physics;
+pub mod remote_players;
 pub mod room;
 pub mod scene;
 pub mod trail;
@@ -65,6 +66,9 @@ struct NativeRunState {
 #[derive(Resource, Default)]
 struct FrameCount(u32);
 
+#[derive(Resource, Default, Clone)]
+struct SelfPeer(String);
+
 #[derive(Resource, Default)]
 struct Retained(Vec<Vec<u8>>);
 
@@ -102,6 +106,7 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(FrameCount::default());
     commands.insert_resource(Retained::default());
     commands.insert_resource(GpuHandles::default());
+    commands.insert_resource(remote_players::RemotePlayers::default());
     let sid = obs::shader_created(4096, "seer.pbr");
     obs::emit(&format!(
         "[seer.setup] created shader id={sid} for demo — stays live forever"
@@ -199,6 +204,36 @@ fn tick(
     }
 }
 
+fn publish_self_position_system(
+    frame: Res<FrameCount>,
+    q: Query<&Position, With<PlayerMarker>>,
+    self_peer: Res<SelfPeer>,
+) {
+    // ~10Hz publish at 60Hz frame budget. Matches rave's 100ms cadence.
+    if !frame.0.is_multiple_of(6) {
+        return;
+    }
+    let Ok(p) = q.single() else {
+        return;
+    };
+    if let Err(e) =
+        remote_players::publish_position(&self_peer.0, p.0, remote_players::now_ms())
+    {
+        obs::emit(&format!("[remote_players.publish] error: {e:?}"));
+    }
+}
+
+fn drain_remote_positions_system(
+    mut remotes: ResMut<remote_players::RemotePlayers>,
+    self_peer: Res<SelfPeer>,
+) {
+    let now = remote_players::now_ms();
+    if let Err(e) = remote_players::pump_from_proxy(&mut remotes, now, &self_peer.0) {
+        obs::emit(&format!("[remote_players.pump] error: {e:?}"));
+    }
+    remote_players::evict_stale(&mut remotes, now);
+}
+
 fn report_player_pos(
     frame: Res<FrameCount>,
     q: Query<&Position, With<PlayerMarker>>,
@@ -273,6 +308,7 @@ fn _init() {
         }
     }
     let mut app = App::new();
+    app.insert_resource(SelfPeer(id.as_hex()));
     app.add_systems(
         Startup,
         (
@@ -299,6 +335,8 @@ fn _init() {
             physics::check_npc_bump.after(physics::advance_npc),
             campfire::flicker_fire.after(room::world_bounds_clamp),
             tick.after(campfire::flicker_fire),
+            drain_remote_positions_system.after(tick),
+            publish_self_position_system.after(physics::advance_player),
             report_player_pos.after(tick),
         ),
     );
