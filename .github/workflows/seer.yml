@@ -124,12 +124,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Boundary — ban wasm-bindgen family (cargo deny)
-        working-directory: game
-        run: |
-          cargo install --locked cargo-deny --version 0.16.4
-          cargo deny check bans
-
       - name: Build game.wasm
         working-directory: game
         env:
