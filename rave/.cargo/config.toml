@@ -1,5 +1,0 @@
-# getrandom 0.3 (transitive via libp2p on wasm32) needs this rustflag
-# to select its browser-API backend. Harmless when libp2p isn't in the
-# tree — the cfg flag goes unused.
-[target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

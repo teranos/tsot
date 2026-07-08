@@ -16,18 +16,6 @@ variable "root_domain" {
   default     = "sbvh.nl"
 }
 
-variable "rave_subdomain" {
-  description = "Subdomain serving the rave (Bevy + libp2p rave party) wasm bundle through CloudFront."
-  type        = string
-  default     = "rave"
-}
-
-variable "rave_bucket_name" {
-  description = "S3 bucket name for rave's dist/ contents. Global namespace; pick something unique."
-  type        = string
-  default     = "rave-sbvh-static"
-}
-
 variable "seer_subdomain" {
   description = "Subdomain serving seer's wasm bundle + per-commit perf reports through CloudFront."
   type        = string
