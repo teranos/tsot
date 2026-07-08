@@ -163,6 +163,117 @@ async function saveIdentityToDb(bytes: Uint8Array): Promise<void> {
   })
 }
 
+// Audio — non-spatial one-shot. `audioLoad` returns a handle
+// synchronously; the actual fetch + decode runs async off-thread.
+// Play before decode completes queues intent. Browsers require a user
+// gesture (WASD keydown here) before AudioContext can produce sound.
+type AudioSlot = {
+  buffer: AudioBuffer | null
+  source: AudioBufferSourceNode | null
+  pendingPlay: { volume: number, loop: boolean } | null
+  gain: GainNode | null
+}
+let audioCtx: AudioContext | null = null
+let audioUnlocked = false
+const audioSlots = new Map<number, AudioSlot>()
+let nextAudioHandle = 1
+
+function ensureAudioCtx(): AudioContext | null {
+  if (audioCtx) return audioCtx
+  try {
+    audioCtx = new AudioContext()
+  } catch (e) {
+    console.warn('[game.audio] AudioContext unavailable:', e)
+    return null
+  }
+  return audioCtx
+}
+
+function audioLoad(url: string): number {
+  const ctx = ensureAudioCtx()
+  if (!ctx) return 0
+  const h = nextAudioHandle++
+  const slot: AudioSlot = { buffer: null, source: null, pendingPlay: null, gain: null }
+  audioSlots.set(h, slot)
+  fetch(url)
+    .then(r => {
+      if (!r.ok) throw new Error(`fetch ${url}: ${r.status}`)
+      return r.arrayBuffer()
+    })
+    .then(bytes => ctx.decodeAudioData(bytes))
+    .then(buf => {
+      slot.buffer = buf
+      // If play was queued before decode finished, start it now.
+      if (slot.pendingPlay) {
+        const { volume, loop } = slot.pendingPlay
+        slot.pendingPlay = null
+        startAudioSlot(slot, volume, loop)
+      }
+    })
+    .catch(e => console.warn('[game.audio] load failed:', e))
+  return h
+}
+
+function startAudioSlot(slot: AudioSlot, volume: number, loop: boolean) {
+  const ctx = audioCtx
+  if (!ctx || !slot.buffer) return
+  const source = ctx.createBufferSource()
+  source.buffer = slot.buffer
+  source.loop = loop
+  const gain = ctx.createGain()
+  gain.gain.value = volume
+  source.connect(gain).connect(ctx.destination)
+  source.start(0)
+  slot.source = source
+  slot.gain = gain
+}
+
+function audioPlay(handle: number, volume: number, loop: boolean) {
+  const slot = audioSlots.get(handle)
+  if (!slot) return
+  // If context is still locked, buffer intent and wait for the unlock.
+  if (!audioUnlocked) {
+    slot.pendingPlay = { volume, loop }
+    return
+  }
+  if (!slot.buffer) {
+    slot.pendingPlay = { volume, loop }
+    return
+  }
+  startAudioSlot(slot, volume, loop)
+}
+
+function audioStop(handle: number) {
+  const slot = audioSlots.get(handle)
+  if (!slot) return
+  slot.pendingPlay = null
+  if (slot.source) {
+    try { slot.source.stop() } catch {}
+    slot.source = null
+  }
+  audioSlots.delete(handle)
+}
+
+// First user gesture unlocks the AudioContext and flushes any
+// queued play calls that were waiting on it.
+function unlockAudioOnGesture() {
+  if (audioUnlocked) return
+  const ctx = ensureAudioCtx()
+  if (!ctx) return
+  ctx.resume().then(() => {
+    audioUnlocked = true
+    for (const slot of audioSlots.values()) {
+      if (slot.pendingPlay && slot.buffer) {
+        const { volume, loop } = slot.pendingPlay
+        slot.pendingPlay = null
+        startAudioSlot(slot, volume, loop)
+      }
+    }
+  }).catch(e => console.warn('[game.audio] resume failed:', e))
+}
+window.addEventListener('keydown', unlockAudioOnGesture, { once: false })
+window.addEventListener('pointerdown', unlockAudioOnGesture, { once: false })
+
 // Remote-players proxy — thin WebSocket bridge to relaye's R16 WS
 // gateway (see game/docs/relaye-game-gateway.md). Defaults to the
 // deployed endpoint so game.sbvh.nl works out of the box; override
@@ -488,6 +599,20 @@ async function main() {
         try { proxyWs.send(copy) } catch (e) { console.warn('[game.publish]', e) }
       },
       game_now_ms: (): number => Date.now(),
+      // --- Audio ---
+      // Non-spatial: single looped track for now. JS owns AudioContext
+      // + AudioBufferSourceNode graph, Rust owns the handle lifetime.
+      // Browser blocks AudioContext.resume() until first user gesture,
+      // so we buffer "wanted to play" and start on the first WASD key.
+      game_audio_load: (pathPtr: number, pathLen: number): number => {
+        if (!memory) return 0
+        const path = decodeString(pathPtr, pathLen)
+        return audioLoad(path)
+      },
+      game_audio_play: (h: number, volX1000: number, loopFlag: number) => {
+        audioPlay(h, volX1000 / 1000, loopFlag !== 0)
+      },
+      game_audio_stop: (h: number) => audioStop(h),
       game_gpu_render_pipeline_create_cube: (
         pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
         colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

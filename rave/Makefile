@@ -8,7 +8,7 @@ BUILD_ENV := \
 	RAVE_BUILD_COMMIT="$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(shell [ -n "$$(git status --porcelain 2>/dev/null)" ] && echo -dirty)" \
 	RAVE_BUILD_TIME="$(shell date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-.PHONY: wasm wasm-webgpu wasm-webgl2 wasm-index wasm-audio clean
+.PHONY: wasm wasm-webgpu wasm-webgl2 wasm-index clean
 
 # `make wasm` builds both backend bundles + the single canonical
 # index.html that bootstraps whichever the client can run. All
@@ -17,20 +17,10 @@ BUILD_ENV := \
 # defines at compile time on `not(feature = "webgpu")` (bevy_render
 # pipeline_cache.rs:237), so the two backends have to be mutually
 # exclusive per build. Runtime pick lives in the bootstrap.
-wasm: wasm-webgpu wasm-webgl2 wasm-index wasm-audio
+wasm: wasm-webgpu wasm-webgl2 wasm-index
 	@echo ""
 	@echo "staged $(WASM_DIST)/"
 	@ls -la $(WASM_DIST)/
-
-wasm-audio:
-	@command -v python3 >/dev/null 2>&1 || { echo "error: python3 not on PATH."; exit 1; }
-	@command -v ffmpeg  >/dev/null 2>&1 || { echo "error: ffmpeg not on PATH."; exit 1; }
-	mkdir -p $(WASM_DIST)/assets/music
-	python3 tools/gen-rave-ogg.py /tmp/rave-source.wav
-	ffmpeg -y -loglevel error -i /tmp/rave-source.wav \
-		-af "aecho=0.8:0.9:40|100|200|400:0.5|0.3|0.15|0.08,aecho=0.7:0.4:600:0.35" \
-		-c:a libvorbis -q:a 4 $(WASM_DIST)/assets/music/rave.ogg
-	rm -f /tmp/rave-source.wav
 
 wasm-webgpu:
 	@command -v wasm-bindgen >/dev/null 2>&1 || { echo "error: wasm-bindgen not on PATH. Run via 'nix develop -c make wasm'."; exit 1; }

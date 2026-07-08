@@ -309,6 +309,25 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
             Ok(ms)
         },
     )?;
+    // No AudioContext under wasmtime — load returns 0 so the Rust
+    // GameAudioHandle stays inert, play/stop no-op.
+    linker.func_wrap(
+        "env",
+        "game_audio_load",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _path_ptr: i32, _path_len: i32|
+         -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_audio_play",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _h: u32, _vol: u32, _loop_flag: u32|
+         -> Result<()> { Ok(()) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_audio_stop",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _h: u32| -> Result<()> { Ok(()) },
+    )?;
 
     // Structured per-frame metric. Cheap: no backtrace capture, just
     // four numbers. Feeds the HTML time-series chart.

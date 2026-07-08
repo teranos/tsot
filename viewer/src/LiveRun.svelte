@@ -220,6 +220,9 @@
           game_peers_recv: (_outPtr: number, _outLen: number): number => 0,
           game_self_publish: (_bytesPtr: number, _bytesLen: number) => {},
           game_now_ms: (): number => Date.now(),
+          game_audio_load: (_pathPtr: number, _pathLen: number): number => 0,
+          game_audio_play: (_h: number, _vol: number, _loopFlag: number) => {},
+          game_audio_stop: (_h: number) => {},
           game_gpu_render_pipeline_create_cube: (
             pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
             colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

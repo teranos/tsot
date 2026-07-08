@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 
+pub mod audio;
 pub mod build_info;
 pub mod campfire;
 pub mod error;
@@ -68,6 +69,18 @@ struct FrameCount(u32);
 
 #[derive(Resource, Default, Clone)]
 struct SelfPeer(String);
+
+// Held so Drop → game_audio_stop fires on app teardown. Non-Send is
+// fine — App is single-threaded on wasm and native tests.
+#[allow(dead_code)]
+#[derive(Resource)]
+struct MusicHandle(audio::GameAudioHandle);
+
+fn setup_music(mut commands: Commands) {
+    let handle = audio::load_music();
+    audio::play(&handle, audio::DEFAULT_VOLUME, true);
+    commands.insert_resource(MusicHandle(handle));
+}
 
 #[derive(Resource, Default)]
 struct Retained(Vec<Vec<u8>>);
@@ -317,6 +330,7 @@ fn _init() {
             campfire::setup_campfire.after(setup),
             map::setup_pins.after(setup),
             trail::setup_trail.after(setup),
+            setup_music.after(setup),
         ),
     );
     #[cfg(target_arch = "wasm32")]

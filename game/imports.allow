@@ -38,3 +38,7 @@ env.game_peers_pending
 env.game_peers_recv
 env.game_self_publish
 env.game_now_ms
+
+env.game_audio_load
+env.game_audio_play
+env.game_audio_stop

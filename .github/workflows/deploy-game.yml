@@ -62,6 +62,13 @@ jobs:
             ../../game/target/wasm32-unknown-unknown/release/game.wasm \
             ../../game/imports.allow
 
+      - name: Install ffmpeg (for OGG encoding)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Generate music.ogg
+        working-directory: game
+        run: make music
+
       - name: Install game/web deps (bun)
         working-directory: game/web
         run: bun install --frozen-lockfile
