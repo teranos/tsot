@@ -349,6 +349,7 @@ fn _init() {
             room::world_bounds_clamp.after(physics::resolve_remote_player_collisions),
             physics::check_npc_bump.after(physics::advance_npc),
             campfire::flicker_fire.after(room::world_bounds_clamp),
+            campfire::campfire_crackle_system.after(campfire::flicker_fire),
             tick.after(campfire::flicker_fire),
             drain_remote_positions_system.after(tick),
             publish_self_position_system.after(physics::advance_player),

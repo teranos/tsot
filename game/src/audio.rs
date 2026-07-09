@@ -155,6 +155,61 @@ pub fn play_pock() {
     play_samples(&samples);
 }
 
+/// Firewood crackle — continuous soft hiss with occasional pop bursts.
+/// PRNG-driven so it doesn't repeat identically between bursts;
+/// `seed` advances per call. Returns mono f32 samples at SAMPLE_RATE.
+pub fn synthesize_crackle(dur_sec: f32, seed: u64) -> Vec<f32> {
+    let n = (dur_sec * SAMPLE_RATE as f32) as usize;
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(n);
+    let mut state = seed | 1;
+    let mut pop_env: f32 = 0.0;
+    let inv_u32 = 1.0 / u32::MAX as f32;
+    for _ in 0..n {
+        // xorshift64 — three samples per output frame (hiss, pop-trigger, pop-content)
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let r1 = (state as u32) as f32 * inv_u32 * 2.0 - 1.0;
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let r2 = (state as u32) as f32 * inv_u32;
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let r3 = (state as u32) as f32 * inv_u32 * 2.0 - 1.0;
+        // Soft continuous hiss
+        let hiss = r1 * 0.04;
+        // Random pop trigger — ~0.3% of samples per frame
+        if r2 > 0.997 {
+            pop_env = 0.5 + r3.abs() * 0.3;
+        }
+        let pop = r3 * pop_env;
+        pop_env *= 0.9992;
+        out.push((hiss + pop).clamp(-0.9, 0.9));
+    }
+    out
+}
+
+static CRACKLE_SEED: AtomicU64 = AtomicU64::new(0x9e3779b97f4a7c15);
+
+/// Play a firewood crackle burst at scaled volume. Advances the
+/// internal PRNG seed so successive calls produce distinct bursts.
+pub fn play_crackle(dur_sec: f32, volume: f32) {
+    if volume < 1e-3 {
+        return;
+    }
+    let seed = CRACKLE_SEED
+        .fetch_add(0x9E3779B97F4A7C15, Ordering::Relaxed)
+        .wrapping_add(1);
+    let samples = synthesize_crackle(dur_sec, seed);
+    let scaled: Vec<f32> = samples.iter().map(|s| s * volume).collect();
+    play_samples(&scaled);
+}
+
 pub struct GameAudioHandle(u32);
 
 impl GameAudioHandle {

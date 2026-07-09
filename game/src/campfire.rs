@@ -81,6 +81,47 @@ pub fn flicker_fire(mut fires: Query<&mut Campfire>, mut t: Local<f32>) {
     }
 }
 
+/// Radius at which the crackle fades to silence. Beyond this
+/// distance from the campfire, no sound is emitted at all.
+pub const CRACKLE_MAX_DIST: f32 = 500.0;
+/// Length of one crackle burst in seconds. Bursts overlap slightly
+/// (see CRACKLE_INTERVAL_TICKS) so the sound stays continuous while
+/// the player is in range.
+pub const CRACKLE_BURST_SEC: f32 = 0.25;
+/// Fire one crackle burst every N ticks. At 60fps → ~5 bursts/sec →
+/// each burst covering 0.25s means the audio is continuous with a
+/// small overlap.
+pub const CRACKLE_INTERVAL_TICKS: u32 = 12;
+
+/// Proximity-driven firewood crackle. Each tick, if the player is
+/// within CRACKLE_MAX_DIST of a campfire, fire a burst scaled by
+/// (1 - dist/max). Silent beyond max. Uses XZ-plane distance so
+/// vertical differences don't attenuate.
+pub fn campfire_crackle_system(
+    player_q: Query<&Position, With<crate::physics::PlayerMarker>>,
+    campfire_q: Query<&Position, With<Campfire>>,
+    mut tick: Local<u32>,
+) {
+    *tick = tick.wrapping_add(1);
+    if !(*tick).is_multiple_of(CRACKLE_INTERVAL_TICKS) {
+        return;
+    }
+    let Some(player_pos) = player_q.iter().next() else {
+        return;
+    };
+    for campfire_pos in campfire_q.iter() {
+        let dx = player_pos.0.x - campfire_pos.0.x;
+        let dz = player_pos.0.z - campfire_pos.0.z;
+        let dist_sq = dx * dx + dz * dz;
+        if dist_sq >= CRACKLE_MAX_DIST * CRACKLE_MAX_DIST {
+            continue;
+        }
+        let dist = dist_sq.sqrt();
+        let volume = 1.0 - dist / CRACKLE_MAX_DIST;
+        crate::audio::play_crackle(CRACKLE_BURST_SEC, volume);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
