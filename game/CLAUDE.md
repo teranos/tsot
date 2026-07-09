@@ -14,3 +14,5 @@ Enforced by `crates/seer-imports-check`.
 ## Browser render
 
 Rust owns the render pipeline.
+
+See [Architecture.md](./Architecture.md) for the artifact axioms.

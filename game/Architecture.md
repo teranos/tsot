@@ -1,0 +1,5 @@
+- game runs in both seer, WASI, WASM
+- libp2p doesnt need to do that per se, it doesnt need to be part of the same artifact
+- the nice pattern is to have as many wasm's as you need in the browser
+- everything is instrumentable outside of the browser
+- the direction where we dont need wasm-bindgen is nice

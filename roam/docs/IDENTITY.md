@@ -1,5 +1,7 @@
 # roam — Identity Menu
 
+Handoff to a laye session: identity work now lives in laye — audit unstruck items against `laye-me`, drop roam-code refs (`roam::identity::*`, `docs/CANONICAL.md`, milestone tags), keep the concepts (did:key, UCAN, ATProto binding, device pairing, sign+verify).
+
 Every item is consumed once. Strike through (`~~`) when eaten.
 Pick an appetizer; the appetizer informs what starter, main,
 cleanser, and dessert make sense after it. Items in the same row

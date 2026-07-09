@@ -1,5 +1,7 @@
 # roam — observability
 
+Handoff: seer + the env.* seam replace this doc's "narrate every internal decision" premise — Events/Health/Health-contract move to seer's docs, "errors are first-class" moves to game/CLAUDE.md as design axiom.
+
 Mirrors TSOT's principle: the system narrates every internal decision,
 errors are first-class, no hidden state behind devtools. The event log
 panel is the source of truth for "what just happened."

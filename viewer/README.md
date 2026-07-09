@@ -1,0 +1,2 @@
+- viewer being the name for seer frontend is confusing to me, it should be seer-view or seer-viewer
+- for the seer part I was looking into GlitchTip and Trivy
