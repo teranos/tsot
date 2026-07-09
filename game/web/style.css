@@ -90,6 +90,9 @@ body.loaded #game-loading { display: none; }
   cursor: pointer;
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
 }
 #mobile-dpad button:active { background: rgba(90, 90, 100, 0.85); }
 #mobile-dpad button[data-key="w"] { grid-column: 2; grid-row: 1; }
