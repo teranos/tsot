@@ -158,6 +158,44 @@ pub fn keyboard_input(mut q: Query<&mut Velocity, With<PlayerMarker>>) {
     }
 }
 
+/// Player half-width added to the remote peer's visual half-width
+/// (peer cubes are ~70 wide → half-width ≈ 35, same as NPC bump distance).
+pub const REMOTE_PEER_BLOCK_DIST: f32 = 55.0;
+
+/// Local player vs remote peers — sphere-sphere collision on the XZ plane
+/// (vertical differences don't block). Push local player out of overlap
+/// with any remote peer; cancel inbound velocity along the contact normal
+/// so movement stops instead of teleport-bouncing. Same shape as
+/// `resolve_collisions` but reads the RemotePlayers resource instead of
+/// an ECS obstacle query.
+pub fn resolve_remote_player_collisions(
+    mut player_q: Query<(&mut Position, &mut Velocity), With<PlayerMarker>>,
+    remotes: Res<crate::remote_players::RemotePlayers>,
+) {
+    let Some((mut p_pos, mut p_vel)) = player_q.iter_mut().next() else {
+        return;
+    };
+    let min_dist_sq = REMOTE_PEER_BLOCK_DIST * REMOTE_PEER_BLOCK_DIST;
+    for entry in remotes.0.values() {
+        let dx = p_pos.0.x - entry.pos.x;
+        let dz = p_pos.0.z - entry.pos.z;
+        let dist_sq = dx * dx + dz * dz;
+        if dist_sq < min_dist_sq && dist_sq > 1.0e-6 {
+            let dist = dist_sq.sqrt();
+            let nx = dx / dist;
+            let nz = dz / dist;
+            let overlap = REMOTE_PEER_BLOCK_DIST - dist;
+            p_pos.0.x += nx * overlap;
+            p_pos.0.z += nz * overlap;
+            let v_along = p_vel.0.x * nx + p_vel.0.z * nz;
+            if v_along < 0.0 {
+                p_vel.0.x -= nx * v_along;
+                p_vel.0.z -= nz * v_along;
+            }
+        }
+    }
+}
+
 pub fn resolve_collisions(
     mut player_q: Query<(&mut Position, &mut Velocity), With<PlayerMarker>>,
     obstacles: Query<(&Position, &AabbCollider), Without<PlayerMarker>>,

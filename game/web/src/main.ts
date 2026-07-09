@@ -115,6 +115,26 @@ window.addEventListener('keyup', e => {
   if (b) { inputBits &= ~b; e.preventDefault() }
 })
 
+// Mobile D-pad — visible only on touchscreens via CSS @media (pointer: coarse).
+// Touch (or mouse-down for testing on desktop) sets a WASD bit in the same
+// inputBits bitmask keyboard uses; release clears it. Same env.* poll from
+// game.wasm.
+const dpad = document.getElementById('mobile-dpad')
+if (dpad) {
+  for (const btn of Array.from(dpad.querySelectorAll<HTMLElement>('button[data-key]'))) {
+    const bit = keyBit(btn.getAttribute('data-key') || '')
+    if (!bit) continue
+    const on = (e: Event) => { e.preventDefault(); inputBits |= bit }
+    const off = (e: Event) => { e.preventDefault(); inputBits &= ~bit }
+    btn.addEventListener('touchstart', on, { passive: false })
+    btn.addEventListener('touchend', off, { passive: false })
+    btn.addEventListener('touchcancel', off, { passive: false })
+    btn.addEventListener('mousedown', on)
+    btn.addEventListener('mouseup', off)
+    btn.addEventListener('mouseleave', off)
+  }
+}
+
 // IndexedDB identity storage. Rust owns the bytes; JS owns the store.
 // Pre-boot: try to load "self" so Rust's game_identity_load gets a
 // synchronous answer from the cached value. If Rust asks and there's
