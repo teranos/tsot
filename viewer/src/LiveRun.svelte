@@ -224,6 +224,16 @@
           game_audio_play: (_h: number, _vol: number, _loopFlag: number) => {},
           game_audio_stop: (_h: number) => {},
           game_audio_play_samples: (_ptr: number, _count: number, _rate: number) => {},
+          game_touch_state: (_outPtr: number, _outMax: number): number => 0,
+          game_viewport_size: (_outPtr: number) => {},
+          game_gpu_render_pipeline_create_ui: (
+            _pipelineLayoutH: number, _shaderH: number, _instanceStride: number,
+            _colorFormat: number, _labelPtr: number, _labelLen: number,
+          ): number => 1,
+          game_gpu_render_ui_overlay: (
+            _targetH: number, _pipelineH: number, _bindGroupH: number,
+            _instanceBufH: number, _instanceCount: number,
+          ): number => 0,
           game_gpu_render_pipeline_create_cube: (
             pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
             colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

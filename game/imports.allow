@@ -28,6 +28,10 @@ env.game_gpu_pipeline_layout_create
 env.game_gpu_render_pipeline_create_cube
 env.game_gpu_render_target_configure
 env.game_gpu_render_frame
+env.game_gpu_render_pipeline_create_ui
+env.game_gpu_render_ui_overlay
+env.game_touch_state
+env.game_viewport_size
 env.game_input_state
 env.game_show_exclamation
 env.game_identity_load

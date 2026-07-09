@@ -334,6 +334,47 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         |_caller: Caller<'_, Arc<Mutex<HostState>>>, _ptr: u32, _count: u32, _rate: u32|
          -> Result<()> { Ok(()) },
     )?;
+    linker.func_wrap(
+        "env",
+        "game_touch_state",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _out_ptr: u32, _out_max: u32|
+         -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_viewport_size",
+        |mut caller: Caller<'_, Arc<Mutex<HostState>>>, out_ptr: u32| -> Result<()> {
+            // Write a plausible viewport for wasmtime host: 1920x1080.
+            let mem = caller.get_export("memory").and_then(|e| e.into_memory());
+            if let Some(mem) = mem {
+                let data = mem.data_mut(&mut caller);
+                let width: u32 = 1920;
+                let height: u32 = 1080;
+                let base = out_ptr as usize;
+                if base + 8 <= data.len() {
+                    data[base..base + 4].copy_from_slice(&width.to_le_bytes());
+                    data[base + 4..base + 8].copy_from_slice(&height.to_le_bytes());
+                }
+            }
+            Ok(())
+        },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_pipeline_create_ui",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _pl: u32, _shader: u32, _instance_stride: u32,
+         _color_format: u32, _label_ptr: u32, _label_len: u32|
+         -> Result<u32> { Ok(1) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_ui_overlay",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _target: u32, _pipeline: u32, _bind_group: u32,
+         _instance_buf: u32, _instance_count: u32|
+         -> Result<u32> { Ok(0) },
+    )?;
 
     // Structured per-frame metric. Cheap: no backtrace capture, just
     // four numbers. Feeds the HTML time-series chart.

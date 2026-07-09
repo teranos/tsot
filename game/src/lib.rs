@@ -8,6 +8,7 @@ use std::cell::RefCell;
 pub mod audio;
 pub mod build_info;
 pub mod campfire;
+pub mod dpad;
 pub mod error;
 pub mod health;
 pub mod identity;
@@ -328,6 +329,7 @@ fn _init() {
             setup,
             trees::setup_trees.after(setup),
             campfire::setup_campfire.after(setup),
+            dpad::setup_dpad.after(setup),
             map::setup_pins.after(setup),
             trail::setup_trail.after(setup),
             setup_music.after(setup),
@@ -350,6 +352,7 @@ fn _init() {
             physics::check_npc_bump.after(physics::advance_npc),
             campfire::flicker_fire.after(room::world_bounds_clamp),
             campfire::campfire_crackle_system.after(campfire::flicker_fire),
+            dpad::dpad_input_system.after(campfire::campfire_crackle_system),
             tick.after(campfire::flicker_fire),
             drain_remote_positions_system.after(tick),
             publish_self_position_system.after(physics::advance_player),

@@ -8,10 +8,12 @@
 
 use std::cell::RefCell;
 
+use crate::dpad;
 use crate::gpu_web;
 use crate::obs;
 use crate::scene::{
-    self, GpuVertex, SHADER_WGSL, SceneCamera, SceneInstance, as_bytes, cube_geometry,
+    self, GpuVertex, SHADER_WGSL, SceneCamera, SceneInstance, UI_SHADER_WGSL, as_bytes,
+    cube_geometry,
 };
 
 #[repr(C)]
@@ -29,6 +31,9 @@ struct RenderWebState {
     instance_buf: Option<gpu_web::GameBuffer>,
     instance_capacity: usize,
     vertex_count: u32,
+    // UI overlay — pipeline + persistent instance buffer for D-pad.
+    ui_pipeline: gpu_web::GameUiPipeline,
+    ui_instance_buf: gpu_web::GameBuffer,
 }
 
 thread_local! {
@@ -91,6 +96,36 @@ pub fn init(canvas_id: &str) -> bool {
         return false;
     };
 
+    // UI overlay: separate pipeline (no vertex buffer, no depth),
+    // draws screen-space quads on top of the world. Shares the
+    // camera bind group with the world pipeline for pipeline-layout
+    // reuse — the UI shader declares but doesn't use the uniform.
+    let ui_shader = gpu_web::GameShaderModule::create(UI_SHADER_WGSL, "render_web.ui.shader");
+    let Some(ui_shader) = ui_shader else {
+        obs::emit("[render_web] init: ui shader null");
+        return false;
+    };
+    let ui_pipeline = gpu_web::GameUiPipeline::create(
+        &pl_layout,
+        &ui_shader,
+        std::mem::size_of::<dpad::DpadInstance>() as u32,
+        gpu_web::color_format::BGRA8UNORM,
+        "render_web.ui.pipeline",
+    );
+    let Some(ui_pipeline) = ui_pipeline else {
+        obs::emit("[render_web] init: ui pipeline null");
+        return false;
+    };
+    let ui_instance_buf = gpu_web::GameBuffer::create(
+        (4 * std::mem::size_of::<dpad::DpadInstance>()) as u32,
+        gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+        "render_web.ui.instance",
+    );
+    let Some(ui_instance_buf) = ui_instance_buf else {
+        obs::emit("[render_web] init: ui instance buf null");
+        return false;
+    };
+
     STATE.with(|c| {
         *c.borrow_mut() = Some(RenderWebState {
             target,
@@ -101,6 +136,8 @@ pub fn init(canvas_id: &str) -> bool {
             instance_buf: None,
             instance_capacity: 0,
             vertex_count: vertices.len() as u32,
+            ui_pipeline,
+            ui_instance_buf,
         });
     });
     obs::emit(&format!(
@@ -152,8 +189,29 @@ pub fn frame(camera: &SceneCamera, instances: &[SceneInstance]) -> u32 {
     })
 }
 
+/// UI overlay pass — draws the D-pad on top of the world. Uploads
+/// the four button instances into the persistent UI instance
+/// buffer, then invokes the load-op render pass.
+pub fn frame_ui(instances: &[dpad::DpadInstance; 4]) -> u32 {
+    STATE.with(|c| {
+        let opt = c.borrow();
+        let Some(state) = opt.as_ref() else {
+            return 2;
+        };
+        state.ui_instance_buf.write(as_bytes(instances));
+        gpu_web::render_ui_overlay(
+            &state.target,
+            &state.ui_pipeline,
+            &state.bind_group,
+            &state.ui_instance_buf,
+            instances.len() as u32,
+        )
+    })
+}
+
 /// Called from lib.rs's _frame to compose the render step: query
-/// scene state from the App and hand it to `frame`.
+/// scene state from the App and hand it to `frame`, then overlay
+/// the D-pad.
 pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     let snap = scene::snapshot_scene(app);
     let instances = scene::snapshot_to_instances(&snap);
@@ -161,5 +219,10 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
         [snap.player.x, snap.player.y, snap.player.z],
         crate::room::FLOOR_HALF,
     );
-    frame(&camera, &instances)
+    let world_result = frame(&camera, &instances);
+    if world_result != 0 {
+        return world_result;
+    }
+    let dpad_instances = dpad::current_instances();
+    frame_ui(&dpad_instances)
 }

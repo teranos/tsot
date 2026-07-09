@@ -115,24 +115,60 @@ window.addEventListener('keyup', e => {
   if (b) { inputBits &= ~b; e.preventDefault() }
 })
 
-// Mobile D-pad — visible only on touchscreens via CSS @media (pointer: coarse).
-// Touch (or mouse-down for testing on desktop) sets a WASD bit in the same
-// inputBits bitmask keyboard uses; release clears it. Same env.* poll from
-// game.wasm.
-const dpad = document.getElementById('mobile-dpad')
-if (dpad) {
-  for (const btn of Array.from(dpad.querySelectorAll<HTMLElement>('button[data-key]'))) {
-    const bit = keyBit(btn.getAttribute('data-key') || '')
-    if (!bit) continue
-    const on = (e: Event) => { e.preventDefault(); inputBits |= bit }
-    const off = (e: Event) => { e.preventDefault(); inputBits &= ~bit }
-    btn.addEventListener('touchstart', on, { passive: false })
-    btn.addEventListener('touchend', off, { passive: false })
-    btn.addEventListener('touchcancel', off, { passive: false })
-    btn.addEventListener('mousedown', on)
-    btn.addEventListener('mouseup', off)
-    btn.addEventListener('mouseleave', off)
+// Raw touch positions in NDC (x: -1 left → +1 right, y: -1 bottom → +1 top
+// per WebGPU convention). Rust reads via game_touch_state, hit-tests
+// against Bevy-drawn D-pad rectangles. Mouse cursor while a button is
+// held counts as an extra touch so desktop testing works.
+type NdcTouch = { id: number, x: number, y: number }
+const activeTouches: NdcTouch[] = []
+let mouseTouch: { x: number, y: number } | null = null
+
+function clientToNdc(clientX: number, clientY: number, canvas: HTMLCanvasElement): { x: number, y: number } {
+  const rect = canvas.getBoundingClientRect()
+  const w = rect.width || 1
+  const h = rect.height || 1
+  return {
+    x: 2 * ((clientX - rect.left) / w) - 1,
+    y: 1 - 2 * ((clientY - rect.top) / h),
   }
+}
+
+const gameCanvas = document.getElementById('game-canvas') as HTMLCanvasElement | null
+if (gameCanvas) {
+  gameCanvas.addEventListener('touchstart', ev => {
+    ev.preventDefault()
+    for (const t of Array.from(ev.changedTouches)) {
+      const p = clientToNdc(t.clientX, t.clientY, gameCanvas)
+      activeTouches.push({ id: t.identifier, x: p.x, y: p.y })
+    }
+  }, { passive: false })
+  gameCanvas.addEventListener('touchmove', ev => {
+    ev.preventDefault()
+    for (const t of Array.from(ev.changedTouches)) {
+      const found = activeTouches.find(x => x.id === t.identifier)
+      if (found) {
+        const p = clientToNdc(t.clientX, t.clientY, gameCanvas)
+        found.x = p.x
+        found.y = p.y
+      }
+    }
+  }, { passive: false })
+  const dropTouch = (ev: TouchEvent) => {
+    for (const t of Array.from(ev.changedTouches)) {
+      const idx = activeTouches.findIndex(x => x.id === t.identifier)
+      if (idx >= 0) activeTouches.splice(idx, 1)
+    }
+  }
+  gameCanvas.addEventListener('touchend', ev => { ev.preventDefault(); dropTouch(ev) }, { passive: false })
+  gameCanvas.addEventListener('touchcancel', ev => { dropTouch(ev) })
+  gameCanvas.addEventListener('mousedown', ev => {
+    mouseTouch = clientToNdc(ev.clientX, ev.clientY, gameCanvas)
+  })
+  gameCanvas.addEventListener('mousemove', ev => {
+    if (mouseTouch) mouseTouch = clientToNdc(ev.clientX, ev.clientY, gameCanvas)
+  })
+  gameCanvas.addEventListener('mouseup', () => { mouseTouch = null })
+  gameCanvas.addEventListener('mouseleave', () => { mouseTouch = null })
 }
 
 // IndexedDB identity storage. Rust owns the bytes; JS owns the store.
@@ -584,6 +620,113 @@ async function main() {
         }
       },
       game_input_state: (): number => inputBits,
+      game_touch_state: (outPtr: number, outMax: number): number => {
+        if (!memory) return 0
+        const total = activeTouches.length + (mouseTouch ? 1 : 0)
+        const count = Math.min(total, outMax)
+        if (count === 0) return 0
+        const view = new DataView(memory.buffer, outPtr, count * 8)
+        let i = 0
+        for (const t of activeTouches) {
+          if (i >= count) break
+          view.setFloat32(i * 8, t.x, true)
+          view.setFloat32(i * 8 + 4, t.y, true)
+          i++
+        }
+        if (i < count && mouseTouch) {
+          view.setFloat32(i * 8, mouseTouch.x, true)
+          view.setFloat32(i * 8 + 4, mouseTouch.y, true)
+          i++
+        }
+        return i
+      },
+      game_viewport_size: (outPtr: number) => {
+        if (!memory || !gameCanvas) return
+        const rect = gameCanvas.getBoundingClientRect()
+        const view = new DataView(memory.buffer, outPtr, 8)
+        view.setUint32(0, Math.max(1, Math.floor(rect.width)), true)
+        view.setUint32(4, Math.max(1, Math.floor(rect.height)), true)
+      },
+      game_gpu_render_pipeline_create_ui: (
+        pipelineLayoutH: number, shaderH: number, instanceStride: number,
+        colorFormat: number, labelPtr: number, labelLen: number,
+      ): number => {
+        if (!device) return 0
+        const pl = pipelineLayouts.get(pipelineLayoutH)
+        const shader = shaders.get(shaderH)
+        if (!pl || !shader) return 0
+        const colorFmt = COLOR_FORMATS[colorFormat]
+        if (!colorFmt) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const pipeline = device.createRenderPipeline({
+            label,
+            layout: pl,
+            vertex: {
+              module: shader,
+              entryPoint: 'vs',
+              buffers: [
+                { arrayStride: instanceStride, stepMode: 'instance', attributes: [
+                  { shaderLocation: 0, offset: 0, format: 'float32x2' },
+                  { shaderLocation: 1, offset: 8, format: 'float32x2' },
+                  { shaderLocation: 2, offset: 16, format: 'float32x3' },
+                  { shaderLocation: 3, offset: 28, format: 'float32' },
+                ] },
+              ],
+            },
+            primitive: { topology: 'triangle-list' },
+            fragment: {
+              module: shader,
+              entryPoint: 'fs',
+              targets: [{
+                format: colorFmt,
+                blend: {
+                  color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                  alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                },
+              }],
+            },
+          })
+          const h = nextHandle++
+          renderPipelines.set(h, pipeline)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_render_pipeline_create_ui]', e)
+          return 0
+        }
+      },
+      game_gpu_render_ui_overlay: (
+        targetH: number, pipelineH: number, bindGroupH: number,
+        instanceBufH: number, instanceCount: number,
+      ): number => {
+        if (!device) return 1
+        const target = renderTargets.get(targetH)
+        const pipeline = renderPipelines.get(pipelineH)
+        const bindGroup = bindGroups.get(bindGroupH)
+        const instanceBuf = buffers.get(instanceBufH)
+        if (!target || !pipeline || !bindGroup || !instanceBuf) return 1
+        try {
+          const colorView = target.context.getCurrentTexture().createView({ label: 'game.ui.color' })
+          const encoder = device.createCommandEncoder({ label: 'game.ui.encoder' })
+          const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+              view: colorView,
+              loadOp: 'load',
+              storeOp: 'store',
+            }],
+          })
+          pass.setPipeline(pipeline)
+          pass.setBindGroup(0, bindGroup)
+          pass.setVertexBuffer(0, instanceBuf)
+          pass.draw(6, instanceCount)
+          pass.end()
+          device.queue.submit([encoder.finish()])
+          return 0
+        } catch (e) {
+          console.error('[game.gpu_render_ui_overlay]', e)
+          return 1
+        }
+      },
       game_show_exclamation: (clipX: number, clipY: number) => showBang(clipX, clipY),
       game_identity_load: (outPtr: number): number => {
         if (!memory || !identityBytes || identityBytes.length !== 32) return 0

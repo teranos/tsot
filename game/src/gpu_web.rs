@@ -93,6 +93,57 @@ unsafe extern "C" {
         instance_count: u32,
         clear_r: f32, clear_g: f32, clear_b: f32,
     ) -> u32;
+    fn game_gpu_render_pipeline_create_ui(
+        pipeline_layout: u32,
+        shader: u32,
+        instance_stride: u32,
+        color_format: u32,
+        label_ptr: *const u8,
+        label_len: u32,
+    ) -> u32;
+    fn game_gpu_render_ui_overlay(
+        target: u32,
+        pipeline: u32,
+        bind_group: u32,
+        instance_buf: u32,
+        instance_count: u32,
+    ) -> u32;
+    fn game_touch_state(out_ptr: *mut u8, out_max: u32) -> u32;
+    fn game_viewport_size(out_ptr: *mut u8);
+}
+
+/// Query the active touch positions from the JS side. Returns up to
+/// MAX entries; each pair is (x, y) in NDC (x: -1 left, +1 right;
+/// y: -1 bottom, +1 top per WebGPU convention). The list also
+/// includes the mouse cursor while a button is held so desktop
+/// testing works.
+#[cfg(target_arch = "wasm32")]
+pub fn touches() -> Vec<[f32; 2]> {
+    const MAX: usize = 8;
+    let mut buf: [f32; MAX * 2] = [0.0; MAX * 2];
+    let n = unsafe { game_touch_state(buf.as_mut_ptr() as *mut u8, MAX as u32) } as usize;
+    let n = n.min(MAX);
+    (0..n).map(|i| [buf[i * 2], buf[i * 2 + 1]]).collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn touches() -> Vec<[f32; 2]> {
+    Vec::new()
+}
+
+/// Viewport (client) pixel dimensions from the JS canvas. Used to
+/// derive the aspect ratio so UI quads render square regardless of
+/// portrait/landscape.
+#[cfg(target_arch = "wasm32")]
+pub fn viewport_size() -> (u32, u32) {
+    let mut out: [u32; 2] = [0; 2];
+    unsafe { game_viewport_size(out.as_mut_ptr() as *mut u8) };
+    (out[0], out[1])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn viewport_size() -> (u32, u32) {
+    (1920, 1080)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -254,6 +305,59 @@ pub fn render_frame(
             vertex_count,
             instance_count,
             clear_rgb[0], clear_rgb[1], clear_rgb[2],
+        )
+    }
+}
+
+/// UI-overlay pipeline: no vertex buffer (quad verts computed from
+/// @builtin(vertex_index)); one instance buffer holding UiInstance
+/// with per-quad NDC center, half-size, color, alpha. Uses the same
+/// bind group layout as the world pipeline for pipeline-layout reuse.
+#[cfg(target_arch = "wasm32")]
+pub struct GameUiPipeline { handle: u32 }
+
+#[cfg(target_arch = "wasm32")]
+impl GameUiPipeline {
+    pub fn create(
+        pipeline_layout: &GamePipelineLayout,
+        shader: &GameShaderModule,
+        instance_stride: u32,
+        color_format: u32,
+        label: &str,
+    ) -> Option<Self> {
+        let h = unsafe {
+            game_gpu_render_pipeline_create_ui(
+                pipeline_layout.handle,
+                shader.handle,
+                instance_stride,
+                color_format,
+                label.as_ptr(),
+                label.len() as u32,
+            )
+        };
+        if h == 0 { None } else { Some(Self { handle: h }) }
+    }
+    pub fn handle(&self) -> u32 { self.handle }
+}
+
+/// UI overlay render pass — LOAD the existing color attachment
+/// (world already drew into it), no depth attachment, draw N
+/// instanced quads via the UI pipeline. Returns 0 on success.
+#[cfg(target_arch = "wasm32")]
+pub fn render_ui_overlay(
+    target: &GameRenderTarget,
+    pipeline: &GameUiPipeline,
+    bind_group: &GameBindGroup,
+    instance_buf: &GameBuffer,
+    instance_count: u32,
+) -> u32 {
+    unsafe {
+        game_gpu_render_ui_overlay(
+            target.handle,
+            pipeline.handle,
+            bind_group.handle,
+            instance_buf.handle,
+            instance_count,
         )
     }
 }
