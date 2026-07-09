@@ -24,14 +24,93 @@ unsafe extern "C" {
     fn game_audio_load(path_ptr: *const u8, path_len: u32) -> u32;
     fn game_audio_play(handle: u32, volume_x1000: u32, loop_flag: u32);
     fn game_audio_stop(handle: u32);
-    fn game_play_thump();
-    fn game_play_bunk();
-    fn game_play_pock();
+    /// Play a PCM sample buffer through the browser's AudioContext.
+    /// JS wraps the samples in an AudioBuffer and starts a one-shot
+    /// BufferSourceNode. Samples must remain valid for the duration
+    /// of the extern call (JS copies before returning).
+    fn game_audio_play_samples(sample_ptr: *const f32, sample_count: u32, sample_rate: u32);
 }
 
-// Impact SFX — three synthesized one-shots the JS shim produces via
-// WebAudio oscillators. Debounced per-kind so sliding-along-a-wall
-// doesn't fire every frame.
+// Rust owns audio synthesis. JS is a dumb sink: it copies our PCM
+// samples into an AudioBuffer and plays. When music becomes
+// reactive/interactive (Python gen-rave-ogg.py replacement), the
+// same pipe carries continuous samples.
+pub const SAMPLE_RATE: u32 = 44100;
+
+#[derive(Clone, Copy)]
+pub enum WaveType {
+    Sine,
+    Square,
+    Triangle,
+}
+
+/// One-shot impact envelope: pitch-swept oscillator + exponential
+/// gain decay to near-silent. Returns mono f32 samples at
+/// SAMPLE_RATE. Same tonal recipe the JS oscillators used, now
+/// materialised sample-by-sample in Rust.
+pub fn synthesize_impact(
+    freq_start: f32,
+    freq_end: f32,
+    dur_sec: f32,
+    wave: WaveType,
+    gain_start: f32,
+) -> Vec<f32> {
+    let n = (dur_sec * SAMPLE_RATE as f32) as usize;
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(n);
+    let mut phase = 0.0_f32;
+    let freq_ratio = (freq_end / freq_start.max(1e-3)).max(1e-3);
+    let gain_end = 1e-4_f32;
+    let gain_ratio = (gain_end / gain_start.max(1e-4)).max(1e-6);
+    let inv_sr = 1.0 / SAMPLE_RATE as f32;
+    for i in 0..n {
+        let t = i as f32 / n as f32;
+        let freq = freq_start * freq_ratio.powf(t);
+        phase += freq * inv_sr;
+        if phase >= 1.0 {
+            phase -= phase.floor();
+        }
+        let sample = match wave {
+            WaveType::Sine => (phase * std::f32::consts::TAU).sin(),
+            WaveType::Square => {
+                if phase < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            WaveType::Triangle => {
+                if phase < 0.5 {
+                    4.0 * phase - 1.0
+                } else {
+                    3.0 - 4.0 * phase
+                }
+            }
+        };
+        let gain = gain_start * gain_ratio.powf(t);
+        out.push(sample * gain);
+    }
+    out
+}
+
+fn play_samples(samples: &[f32]) {
+    if samples.is_empty() {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        game_audio_play_samples(samples.as_ptr(), samples.len() as u32, SAMPLE_RATE);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = samples;
+    }
+}
+
+// Debounce per-kind — sliding along a wall or grinding into a peer
+// shouldn't fire every frame.
 use std::sync::atomic::{AtomicU64, Ordering};
 const IMPACT_DEBOUNCE_MS: u64 = 180;
 static LAST_THUMP_MS: AtomicU64 = AtomicU64::new(0);
@@ -54,8 +133,8 @@ pub fn play_thump() {
     if !debounced(&LAST_THUMP_MS) {
         return;
     }
-    #[cfg(target_arch = "wasm32")]
-    unsafe { game_play_thump() }
+    let samples = synthesize_impact(120.0, 45.0, 0.13, WaveType::Sine, 0.25);
+    play_samples(&samples);
 }
 
 /// Cliff-block impact — mid-frequency "bunk" (unused until cliffs land).
@@ -63,8 +142,8 @@ pub fn play_bunk() {
     if !debounced(&LAST_BUNK_MS) {
         return;
     }
-    #[cfg(target_arch = "wasm32")]
-    unsafe { game_play_bunk() }
+    let samples = synthesize_impact(220.0, 90.0, 0.09, WaveType::Triangle, 0.2);
+    play_samples(&samples);
 }
 
 /// Player-vs-player or player-vs-NPC — high, short "pock".
@@ -72,8 +151,8 @@ pub fn play_pock() {
     if !debounced(&LAST_POCK_MS) {
         return;
     }
-    #[cfg(target_arch = "wasm32")]
-    unsafe { game_play_pock() }
+    let samples = synthesize_impact(650.0, 260.0, 0.05, WaveType::Square, 0.15);
+    play_samples(&samples);
 }
 
 pub struct GameAudioHandle(u32);

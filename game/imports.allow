@@ -42,5 +42,4 @@ env.game_now_ms
 env.game_audio_load
 env.game_audio_play
 env.game_audio_stop
-env.game_play_thump
-env.game_play_pock
+env.game_audio_play_samples

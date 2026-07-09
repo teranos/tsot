@@ -330,18 +330,9 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
     )?;
     linker.func_wrap(
         "env",
-        "game_play_thump",
-        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<()> { Ok(()) },
-    )?;
-    linker.func_wrap(
-        "env",
-        "game_play_bunk",
-        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<()> { Ok(()) },
-    )?;
-    linker.func_wrap(
-        "env",
-        "game_play_pock",
-        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<()> { Ok(()) },
+        "game_audio_play_samples",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _ptr: u32, _count: u32, _rate: u32|
+         -> Result<()> { Ok(()) },
     )?;
 
     // Structured per-frame metric. Cheap: no backtrace capture, just
