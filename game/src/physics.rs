@@ -74,6 +74,7 @@ pub fn check_npc_bump(
             );
             let clip = camera.world_to_clip(bang_world);
             crate::ui::show_exclamation(clip[0], clip[1]);
+            crate::audio::play_pock();
             return;
         }
     }
@@ -192,6 +193,7 @@ pub fn resolve_remote_player_collisions(
                 p_vel.0.x -= nx * v_along;
                 p_vel.0.z -= nz * v_along;
             }
+            crate::audio::play_pock();
         }
     }
 }
@@ -224,6 +226,7 @@ pub fn resolve_collisions(
             if v_along < 0.0 {
                 p_vel.0 -= normal * v_along;
             }
+            crate::audio::play_thump();
         }
     }
 }

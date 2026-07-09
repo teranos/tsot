@@ -223,6 +223,9 @@
           game_audio_load: (_pathPtr: number, _pathLen: number): number => 0,
           game_audio_play: (_h: number, _vol: number, _loopFlag: number) => {},
           game_audio_stop: (_h: number) => {},
+          game_play_thump: () => {},
+          game_play_bunk: () => {},
+          game_play_pock: () => {},
           game_gpu_render_pipeline_create_cube: (
             pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
             colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,

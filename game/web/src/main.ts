@@ -263,6 +263,24 @@ function audioPlay(handle: number, volume: number, loop: boolean) {
   startAudioSlot(slot, volume, loop)
 }
 
+// Impact one-shot — pitch-swept oscillator with exponential gain decay.
+// Silent until AudioContext is unlocked (first user gesture).
+function playImpact(freqStart: number, freqEnd: number, dur: number, type: OscillatorType, gainStart: number) {
+  const ctx = ensureAudioCtx()
+  if (!ctx || !audioUnlocked) return
+  const t0 = ctx.currentTime
+  const osc = ctx.createOscillator()
+  const g = ctx.createGain()
+  osc.type = type
+  osc.frequency.setValueAtTime(freqStart, t0)
+  osc.frequency.exponentialRampToValueAtTime(Math.max(20, freqEnd), t0 + dur)
+  g.gain.setValueAtTime(gainStart, t0)
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur)
+  osc.connect(g).connect(ctx.destination)
+  osc.start()
+  osc.stop(t0 + dur)
+}
+
 function audioStop(handle: number) {
   const slot = audioSlots.get(handle)
   if (!slot) return
@@ -633,6 +651,11 @@ async function main() {
         audioPlay(h, volX1000 / 1000, loopFlag !== 0)
       },
       game_audio_stop: (h: number) => audioStop(h),
+      // Impact SFX — three synthesized one-shots. WebAudio oscillator +
+      // gain envelope, no assets. Debouncing is done Rust-side.
+      game_play_thump: () => playImpact(120, 45, 0.13, 'sine', 0.25),
+      game_play_bunk: () => playImpact(220, 90, 0.09, 'triangle', 0.2),
+      game_play_pock: () => playImpact(650, 260, 0.05, 'square', 0.15),
       game_gpu_render_pipeline_create_cube: (
         pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
         colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,
