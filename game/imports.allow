@@ -43,5 +43,4 @@ env.game_audio_load
 env.game_audio_play
 env.game_audio_stop
 env.game_play_thump
-env.game_play_bunk
 env.game_play_pock
