@@ -343,6 +343,60 @@ const PROXY_WS_URL = proxyParam === 'off' ? '' : (proxyParam || DEFAULT_PROXY_WS
 let proxyWs: WebSocket | null = null
 let proxyRxBuf: Uint8Array = new Uint8Array(0)
 
+// laye-p2p opt-in via `?p2p=laye`. index.html preloads the module
+// from laye.sbvh.nl into `window.__layeReadyPromise`. main() awaits
+// it, calls layeP2p.init(bootstrap), and stores the handle here.
+// The env.* handlers below check `layeP2p` first; if set, they
+// route through laye. If null (opt-out or failed init), they fall
+// back to the WebSocket path. Same wire — GamePosition JSON — and
+// laye's `recv_bytes` returns the same [u32 LE len][bytes]...
+// framing game.wasm's parse_frames already expects.
+const P2P_TOPIC = 'rave-positions/v1'
+const P2P_BOOTSTRAP = '/dns4/relaye.sbvh.nl/tcp/443/wss/p2p/12D3KooWC6UBnnmhhv3BAfYKyW1bFBD4GtC5waiEgQWJCb7Hbqaf'
+const useLaye = new URLSearchParams(location.search).get('p2p') === 'laye'
+type LayeP2p = {
+  init: (configJson: string) => Promise<void>
+  publish: (topic: string, bytes: Uint8Array) => void
+  pending_bytes: (topic: string) => number
+  recv_bytes: (topic: string) => Uint8Array
+  self_peer_id: () => string
+}
+let layeP2p: LayeP2p | null = null
+let layeRxBuf: Uint8Array = new Uint8Array(0)
+
+function drainLayeToBuf(): void {
+  if (!layeP2p) return
+  const pending = layeP2p.pending_bytes(P2P_TOPIC)
+  if (pending <= 0) return
+  const bytes = layeP2p.recv_bytes(P2P_TOPIC)
+  if (bytes.length === 0) return
+  const merged = new Uint8Array(layeRxBuf.length + bytes.length)
+  merged.set(layeRxBuf)
+  merged.set(bytes, layeRxBuf.length)
+  layeRxBuf = merged
+}
+
+async function initLayeIfEnabled(): Promise<void> {
+  if (!useLaye) return
+  const w = window as unknown as { __layeReadyPromise?: Promise<LayeP2p | null> }
+  const mod = await (w.__layeReadyPromise ?? Promise.resolve(null))
+  if (!mod) {
+    console.warn('[game] ?p2p=laye set but laye module unavailable — WebSocket fallback')
+    return
+  }
+  try {
+    await mod.init(JSON.stringify({
+      bootstrap_addrs: [P2P_BOOTSTRAP],
+      topics: [P2P_TOPIC],
+      identify_protocol: '/laye/1.0.0',
+    }))
+    layeP2p = mod
+    console.log('[game.laye] ready; self peer_id:', mod.self_peer_id())
+  } catch (e) {
+    console.error('[game.laye] init failed, WebSocket fallback:', e)
+  }
+}
+
 function connectProxy() {
   if (!PROXY_WS_URL) return
   try {
@@ -401,7 +455,9 @@ async function main() {
     console.warn('[game] identity load failed:', e)
     return null
   })
+  const layePromise = initLayeIfEnabled()
   const wasmBytes = await streamWasmBytes('/game.wasm')
+  await layePromise
   const gpu = await gpuPromise
   identityBytes = await identityPromise
 
@@ -745,9 +801,22 @@ async function main() {
         const view = new Uint8Array(memory.buffer, outPtr, outLen)
         crypto.getRandomValues(view)
       },
-      game_peers_pending: (): number => proxyRxBuf.length,
+      game_peers_pending: (): number => {
+        if (layeP2p) {
+          drainLayeToBuf()
+          return layeRxBuf.length
+        }
+        return proxyRxBuf.length
+      },
       game_peers_recv: (outPtr: number, outLen: number): number => {
         if (!memory) return 0
+        if (layeP2p) {
+          const n = Math.min(outLen, layeRxBuf.length)
+          if (n === 0) return 0
+          new Uint8Array(memory.buffer, outPtr, n).set(layeRxBuf.subarray(0, n))
+          layeRxBuf = layeRxBuf.subarray(n)
+          return n
+        }
         const n = Math.min(outLen, proxyRxBuf.length)
         if (n === 0) return 0
         new Uint8Array(memory.buffer, outPtr, n).set(proxyRxBuf.subarray(0, n))
@@ -756,9 +825,13 @@ async function main() {
       },
       game_self_publish: (bytesPtr: number, bytesLen: number) => {
         if (!memory) return
-        if (!proxyWs || proxyWs.readyState !== WebSocket.OPEN) return
         const copy = new Uint8Array(bytesLen)
         copy.set(new Uint8Array(memory.buffer, bytesPtr, bytesLen))
+        if (layeP2p) {
+          try { layeP2p.publish(P2P_TOPIC, copy) } catch (e) { console.warn('[game.laye.publish]', e) }
+          return
+        }
+        if (!proxyWs || proxyWs.readyState !== WebSocket.OPEN) return
         try { proxyWs.send(copy) } catch (e) { console.warn('[game.publish]', e) }
       },
       game_now_ms: (): number => Date.now(),

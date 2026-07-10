@@ -13,6 +13,29 @@
       <div id="game-loading-build" class="muted">build: unknown</div>
     </div>
     <div id="game-bang">!</div>
+    <script type="module">
+      // Preload laye-p2p from its CDN (laye.sbvh.nl serves it with
+      // CORS for game.sbvh.nl). If the import fails, the promise
+      // resolves to null and main.ts falls back to the WebSocket
+      // path. game.wasm's env.* signatures don't change; only which
+      // source fills the peer queue.
+      window.__layeReadyPromise = (async () => {
+        try {
+          const laye = await import('https://laye.sbvh.nl/laye_p2p.js');
+          await laye.default();
+          return {
+            init: laye.init,
+            publish: laye.publish,
+            pending_bytes: laye.pending_bytes,
+            recv_bytes: laye.recv_bytes,
+            self_peer_id: laye.self_peer_id,
+          };
+        } catch (e) {
+          console.warn('[game] laye-p2p load failed:', e);
+          return null;
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
