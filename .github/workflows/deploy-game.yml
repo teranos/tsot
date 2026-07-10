@@ -99,43 +99,92 @@ jobs:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Sync web bundle to S3 root
+      # Branch → S3 prefix routing. master lands at bucket root
+      # (game.sbvh.nl/); any other branch lands under
+      # game.sbvh.nl/<branch>/. Only branch deploys pass --delete so
+      # master syncs never touch the branch subdirs sitting next to
+      # them. Mirrors laye's deploy-bevy-starter pattern.
+      - name: Compute deploy target
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        id: target
+        run: |
+          REF="${{ github.ref_name }}"
+          if [ "$REF" = "master" ]; then
+            {
+              echo "prefix="
+              echo "delete_flag="
+              echo "invalidation_path=/*"
+              echo "url=https://game.sbvh.nl/"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "prefix=${REF}/"
+              echo "delete_flag=--delete"
+              echo "invalidation_path=/${REF}/*"
+              echo "url=https://game.sbvh.nl/${REF}/"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync web bundle to S3
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
-          aws s3 sync game/web/dist/ "s3://${{ env.STATIC_BUCKET }}/" \
-            --delete \
+          PREFIX="${{ steps.target.outputs.prefix }}"
+          DELETE="${{ steps.target.outputs.delete_flag }}"
+          aws s3 sync game/web/dist/ "s3://${{ env.STATIC_BUCKET }}/${PREFIX}" \
+            $DELETE \
             --exclude "game.wasm" \
+            --exclude "index.html" \
+            --exclude "build-info.json" \
             --cache-control "public, max-age=300"
 
       - name: Overwrite index.html with no-store cache
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
-          aws s3 cp game/web/dist/index.html "s3://${{ env.STATIC_BUCKET }}/index.html" \
+          PREFIX="${{ steps.target.outputs.prefix }}"
+          aws s3 cp game/web/dist/index.html "s3://${{ env.STATIC_BUCKET }}/${PREFIX}index.html" \
             --cache-control "no-store, no-cache, must-revalidate" \
             --content-type "text/html; charset=utf-8"
 
       - name: Overwrite build-info.json with no-store cache
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
-          aws s3 cp game/web/dist/build-info.json "s3://${{ env.STATIC_BUCKET }}/build-info.json" \
+          PREFIX="${{ steps.target.outputs.prefix }}"
+          aws s3 cp game/web/dist/build-info.json "s3://${{ env.STATIC_BUCKET }}/${PREFIX}build-info.json" \
             --cache-control "no-store, no-cache, must-revalidate" \
             --content-type "application/json"
 
       - name: Upload game.wasm
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
+          PREFIX="${{ steps.target.outputs.prefix }}"
           aws s3 cp \
             game/target/wasm32-unknown-unknown/release/game.wasm \
-            "s3://${{ env.STATIC_BUCKET }}/game.wasm" \
+            "s3://${{ env.STATIC_BUCKET }}/${PREFIX}game.wasm" \
             --cache-control "public, max-age=300" \
             --content-type "application/wasm"
+
+      # Regenerate the branch-index versions.json read by the in-game
+      # picker (press 9 to open). CommonPrefixes on a delimited
+      # list-objects returns every top-level "dir/" — strip the
+      # trailing slash. Master is not a prefix (it sits at the root),
+      # so the picker synthesises it on the client side.
+      - name: Regenerate versions.json
+        if: env.STATIC_DISTRIBUTION_ID != ''
+        run: |
+          aws s3api list-objects-v2 --bucket "${{ env.STATIC_BUCKET }}" \
+            --delimiter '/' \
+            --query 'CommonPrefixes[].Prefix' \
+            --output json | jq '(. // []) | map(rtrimstr("/"))' > versions.json
+          aws s3 cp versions.json "s3://${{ env.STATIC_BUCKET }}/versions.json" \
+            --cache-control "no-store, no-cache, must-revalidate" \
+            --content-type "application/json"
 
       - name: Invalidate CloudFront
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
           INVALIDATION_ID=$(aws cloudfront create-invalidation \
             --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
-            --paths '/index.html' '/main.js' '/game.wasm' '/build-info.json' \
+            --paths "${{ steps.target.outputs.invalidation_path }}" "/versions.json" \
             --query 'Invalidation.Id' \
             --output text)
           aws cloudfront wait invalidation-completed \
@@ -148,7 +197,7 @@ jobs:
             echo "## deploy-game"
             echo ""
             if [ -n "${{ env.STATIC_DISTRIBUTION_ID }}" ]; then
-              echo "- Live at: https://game.sbvh.nl/"
+              echo "- Live at: ${{ steps.target.outputs.url }}"
             else
               echo "- GAME_DISTRIBUTION_ID not set → skipped S3 deploy."
             fi

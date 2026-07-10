@@ -71,3 +71,44 @@ body.loaded #game-loading { display: none; }
 #game-canvas {
   touch-action: none;
 }
+#version-picker {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 200;
+  display: none;
+  background: rgba(15, 15, 20, 0.92);
+  color: #ddd;
+  padding: 14px 18px;
+  border-radius: 10px;
+  font: 13px ui-monospace, Menlo, monospace;
+  min-width: 220px;
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  user-select: none;
+}
+#version-picker.shown { display: block; }
+#version-picker-title {
+  font-size: 11px;
+  color: #888;
+  margin-bottom: 8px;
+  letter-spacing: 0.02em;
+}
+#version-picker-list a {
+  display: block;
+  padding: 6px 10px;
+  color: #ddd;
+  text-decoration: none;
+  border-radius: 5px;
+  border: 1px solid transparent;
+}
+#version-picker-list a:hover {
+  background: rgba(80, 80, 100, 0.35);
+  border-color: rgba(200, 200, 220, 0.2);
+}
+#version-picker-list a.current {
+  color: #6cf;
+  border-color: rgba(100, 200, 255, 0.35);
+}
