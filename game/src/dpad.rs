@@ -24,15 +24,17 @@ use std::cell::RefCell;
 
 use crate::input;
 
-/// Base half-size of a button in NDC-y. The x half-size is derived
-/// as (this / aspect) so buttons render square.
-const BASE_HALF_Y: f32 = 0.06;
-/// Distance from the D-pad centre to each button centre in NDC-y.
-const SPACING_Y: f32 = 0.15;
-/// Where the D-pad cross sits in NDC. Bottom-left corner of the
-/// viewport, offset in from the edges.
-const CENTER_X: f32 = -0.82;
-const CENTER_Y: f32 = -0.72;
+/// Button half-size in pixels — same in both axes so buttons render
+/// as squares regardless of viewport aspect. 60 px half → 120 px
+/// full, comfortably tap-sized on phones.
+const BUTTON_HALF_PX: f32 = 60.0;
+/// Distance from the D-pad centre to each button centre, in pixels.
+/// Bigger than BUTTON_HALF_PX so buttons don't overlap.
+const BUTTON_SPACING_PX: f32 = 100.0;
+/// Left-button LEFT edge inset from the viewport's left edge, pixels.
+const MARGIN_LEFT_PX: f32 = 24.0;
+/// Bottom-button BOTTOM edge inset from the viewport's bottom edge, pixels.
+const MARGIN_BOTTOM_PX: f32 = 24.0;
 
 /// One D-pad button as tracked between frames. bit is the
 /// input::key::* value it contributes to the touch bitmask when
@@ -85,36 +87,51 @@ pub fn setup_dpad(mut commands: Commands) {
     commands.insert_resource(Dpad::default());
 }
 
-/// Recompute button rectangles for a given viewport. Aspect-corrects
-/// so a button is a square in pixels rather than a square in NDC.
+/// Recompute button rectangles for a given viewport. Uses pixel-based
+/// sizing so buttons are always a fixed pixel size (square, tap-sized)
+/// and the leftmost/bottom-most button sit inside a safe margin from
+/// the viewport edge — no clipping on narrow portrait aspects.
 fn rebuild_layout(dpad: &mut Dpad, viewport: (u32, u32)) {
     let (w, h) = viewport;
-    let aspect = if h == 0 { 1.0 } else { (w as f32 / h as f32).max(0.5) };
-    let half_y = BASE_HALF_Y;
-    let half_x = BASE_HALF_Y / aspect;
-    let sp_y = SPACING_Y;
-    let sp_x = SPACING_Y / aspect;
+    if w == 0 || h == 0 {
+        return;
+    }
+    // NDC spans 2 units for each viewport dimension. To convert pixel
+    // distances into NDC units, divide by (dim/2).
+    let ndc_per_x_px = 2.0 / w as f32;
+    let ndc_per_y_px = 2.0 / h as f32;
+    let half_x = BUTTON_HALF_PX * ndc_per_x_px;
+    let half_y = BUTTON_HALF_PX * ndc_per_y_px;
+    let sp_x = BUTTON_SPACING_PX * ndc_per_x_px;
+    let sp_y = BUTTON_SPACING_PX * ndc_per_y_px;
+    let margin_left = MARGIN_LEFT_PX * ndc_per_x_px;
+    let margin_bottom = MARGIN_BOTTOM_PX * ndc_per_y_px;
+    // Anchor from bottom-left: left button's LEFT edge sits at
+    // -1 + margin_left; D-pad centre is one button-half + one spacing
+    // to the right of that. Same in y.
+    let center_x = -1.0 + margin_left + half_x + sp_x;
+    let center_y = -1.0 + margin_bottom + half_y + sp_y;
     // Order: W (up), A (left), S (down), D (right)
     dpad.buttons[0] = DpadButton {
-        center_ndc: [CENTER_X, CENTER_Y + sp_y],
+        center_ndc: [center_x, center_y + sp_y],
         half_size_ndc: [half_x, half_y],
         bit: input::key::W,
         pressed: false,
     };
     dpad.buttons[1] = DpadButton {
-        center_ndc: [CENTER_X - sp_x, CENTER_Y],
+        center_ndc: [center_x - sp_x, center_y],
         half_size_ndc: [half_x, half_y],
         bit: input::key::A,
         pressed: false,
     };
     dpad.buttons[2] = DpadButton {
-        center_ndc: [CENTER_X, CENTER_Y - sp_y],
+        center_ndc: [center_x, center_y - sp_y],
         half_size_ndc: [half_x, half_y],
         bit: input::key::S,
         pressed: false,
     };
     dpad.buttons[3] = DpadButton {
-        center_ndc: [CENTER_X + sp_x, CENTER_Y],
+        center_ndc: [center_x + sp_x, center_y],
         half_size_ndc: [half_x, half_y],
         bit: input::key::D,
         pressed: false,
@@ -184,7 +201,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layout_is_aspect_corrected() {
+    fn layout_is_pixel_sized() {
         let mut d = Dpad {
             last_viewport: (0, 0),
             buttons: [DpadButton {
@@ -195,11 +212,37 @@ mod tests {
             }; 4],
         };
         rebuild_layout(&mut d, (1920, 1080));
-        let landscape_half_x = d.buttons[0].half_size_ndc[0];
+        // 60 px half in a 1920-wide viewport → NDC 60 * 2 / 1920 = 0.0625.
+        assert!((d.buttons[0].half_size_ndc[0] - 0.0625).abs() < 1e-4);
         rebuild_layout(&mut d, (1080, 1920));
-        let portrait_half_x = d.buttons[0].half_size_ndc[0];
-        // Portrait has aspect < 1 → half_x = BASE_HALF_Y / aspect is
-        // larger than landscape.
-        assert!(portrait_half_x > landscape_half_x);
+        // Narrower viewport → larger x-half in NDC.
+        assert!(d.buttons[0].half_size_ndc[0] > 0.1);
+    }
+
+    #[test]
+    fn left_button_stays_on_screen_on_portrait() {
+        let mut d = Dpad {
+            last_viewport: (0, 0),
+            buttons: [DpadButton {
+                center_ndc: [0.0, 0.0],
+                half_size_ndc: [0.0, 0.0],
+                bit: 0,
+                pressed: false,
+            }; 4],
+        };
+        // iPhone-portrait-ish
+        rebuild_layout(&mut d, (390, 844));
+        let left_btn = &d.buttons[1]; // A
+        let left_edge = left_btn.center_ndc[0] - left_btn.half_size_ndc[0];
+        assert!(
+            left_edge > -1.0,
+            "left button left edge {left_edge} clips off-screen"
+        );
+        let bottom_btn = &d.buttons[2]; // S
+        let bottom_edge = bottom_btn.center_ndc[1] - bottom_btn.half_size_ndc[1];
+        assert!(
+            bottom_edge > -1.0,
+            "bottom button bottom edge {bottom_edge} clips off-screen"
+        );
     }
 }
