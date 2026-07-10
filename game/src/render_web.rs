@@ -117,7 +117,7 @@ pub fn init(canvas_id: &str) -> bool {
         return false;
     };
     let ui_instance_buf = gpu_web::GameBuffer::create(
-        (4 * std::mem::size_of::<dpad::DpadInstance>()) as u32,
+        (8 * std::mem::size_of::<dpad::DpadInstance>()) as u32,
         gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
         "render_web.ui.instance",
     );
@@ -190,9 +190,9 @@ pub fn frame(camera: &SceneCamera, instances: &[SceneInstance]) -> u32 {
 }
 
 /// UI overlay pass — draws the D-pad on top of the world. Uploads
-/// the four button instances into the persistent UI instance
+/// the eight button instances into the persistent UI instance
 /// buffer, then invokes the load-op render pass.
-pub fn frame_ui(instances: &[dpad::DpadInstance; 4]) -> u32 {
+pub fn frame_ui(instances: &[dpad::DpadInstance; 8]) -> u32 {
     STATE.with(|c| {
         let opt = c.borrow();
         let Some(state) = opt.as_ref() else {

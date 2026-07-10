@@ -83,10 +83,10 @@ pub fn flicker_fire(mut fires: Query<&mut Campfire>, mut t: Local<f32>) {
 
 /// Radius at which the crackle fades to silence. Beyond this
 /// distance from the campfire, no sound is emitted at all.
-pub const CRACKLE_MAX_DIST: f32 = 1500.0;
-/// Peak volume at contact (dist = 0). Below 1.0 so the crackle
-/// blends into the mix rather than dominating.
-pub const CRACKLE_MAX_VOLUME: f32 = 0.35;
+pub const CRACKLE_MAX_DIST: f32 = 3000.0;
+/// Peak volume at contact (dist = 0). Kept low so faint crackles
+/// at distance are audible without contact crackles becoming loud.
+pub const CRACKLE_MAX_VOLUME: f32 = 0.18;
 /// Length of one crackle burst in seconds. Bursts overlap slightly
 /// (see CRACKLE_INTERVAL_TICKS) so the sound stays continuous while
 /// the player is in range.

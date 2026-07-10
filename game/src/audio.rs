@@ -155,9 +155,10 @@ pub fn play_pock() {
     play_samples(&samples);
 }
 
-/// Firewood crackle — continuous soft hiss with occasional pop bursts.
-/// PRNG-driven so it doesn't repeat identically between bursts;
-/// `seed` advances per call. Returns mono f32 samples at SAMPLE_RATE.
+/// Firewood crackle — soft rolling texture with sparse, gentle pops.
+/// Both the hiss and the pop content are low-pass filtered so the
+/// texture reads as wood-and-embers rather than pink noise. PRNG-
+/// driven so bursts don't repeat identically.
 pub fn synthesize_crackle(dur_sec: f32, seed: u64) -> Vec<f32> {
     let n = (dur_sec * SAMPLE_RATE as f32) as usize;
     if n == 0 {
@@ -166,7 +167,12 @@ pub fn synthesize_crackle(dur_sec: f32, seed: u64) -> Vec<f32> {
     let mut out = Vec::with_capacity(n);
     let mut state = seed | 1;
     let mut pop_env: f32 = 0.0;
+    let mut pop_lpf: f32 = 0.0;
+    let mut hiss_lpf: f32 = 0.0;
     let inv_u32 = 1.0 / u32::MAX as f32;
+    // Low-pass alphas — small values → slower-moving output → mellow.
+    let hiss_alpha = 0.08_f32;
+    let pop_alpha = 0.10_f32;
     for _ in 0..n {
         // xorshift64 — three samples per output frame (hiss, pop-trigger, pop-content)
         state ^= state << 13;
@@ -181,15 +187,19 @@ pub fn synthesize_crackle(dur_sec: f32, seed: u64) -> Vec<f32> {
         state ^= state >> 7;
         state ^= state << 17;
         let r3 = (state as u32) as f32 * inv_u32 * 2.0 - 1.0;
-        // Soft continuous hiss
-        let hiss = r1 * 0.04;
-        // Random pop trigger — ~0.3% of samples per frame
-        if r2 > 0.997 {
-            pop_env = 0.5 + r3.abs() * 0.3;
+        // Filtered hiss — much softer than raw white noise
+        hiss_lpf = hiss_lpf * (1.0 - hiss_alpha) + r1 * hiss_alpha;
+        let hiss = hiss_lpf * 0.03;
+        // Rare pop trigger (~0.05% per frame) with a softer peak
+        if r2 > 0.9995 {
+            pop_env = 0.22 + r3.abs() * 0.13;
         }
-        let pop = r3 * pop_env;
-        pop_env *= 0.9992;
-        out.push((hiss + pop).clamp(-0.9, 0.9));
+        // Filtered pop content — smooths out the sharp white-noise edge
+        pop_lpf = pop_lpf * (1.0 - pop_alpha) + r3 * pop_alpha;
+        let pop = pop_lpf * pop_env;
+        // Slower envelope decay for gentler trailing tails
+        pop_env *= 0.9997;
+        out.push((hiss + pop).clamp(-0.6, 0.6));
     }
     out
 }

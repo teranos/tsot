@@ -25,16 +25,20 @@ use std::cell::RefCell;
 use crate::input;
 
 /// Button half-size in pixels — same in both axes so buttons render
-/// as squares regardless of viewport aspect. 60 px half → 120 px
-/// full, comfortably tap-sized on phones.
-const BUTTON_HALF_PX: f32 = 60.0;
-/// Distance from the D-pad centre to each button centre, in pixels.
-/// Bigger than BUTTON_HALF_PX so buttons don't overlap.
-const BUTTON_SPACING_PX: f32 = 100.0;
-/// Left-button LEFT edge inset from the viewport's left edge, pixels.
-const MARGIN_LEFT_PX: f32 = 24.0;
-/// Bottom-button BOTTOM edge inset from the viewport's bottom edge, pixels.
-const MARGIN_BOTTOM_PX: f32 = 24.0;
+/// as squares regardless of viewport aspect. 50 px half → 100 px
+/// full, tap-sized on phones and small enough that 3x3 fits in a
+/// reasonable corner footprint.
+const BUTTON_HALF_PX: f32 = 50.0;
+/// Distance from the D-pad centre to each orthogonal button centre,
+/// in pixels. Bigger than BUTTON_HALF_PX so buttons don't overlap.
+const BUTTON_SPACING_PX: f32 = 96.0;
+/// Corner button inset from the orthogonal spacing — the four
+/// diagonals sit at (±SPACING, ±SPACING) from the centre.
+const CORNER_SPACING_PX: f32 = 96.0;
+/// Left-edge inset from the viewport's left edge, pixels.
+const MARGIN_LEFT_PX: f32 = 20.0;
+/// Bottom-edge inset from the viewport's bottom edge, pixels.
+const MARGIN_BOTTOM_PX: f32 = 20.0;
 
 /// One D-pad button as tracked between frames. bit is the
 /// input::key::* value it contributes to the touch bitmask when
@@ -60,11 +64,14 @@ pub struct DpadInstance {
 }
 
 /// Bevy resource. `last_viewport` is what layout was built for —
-/// re-derived if the actual viewport size changes.
+/// re-derived if the actual viewport size changes. Eight buttons
+/// in a 3x3 grid (centre empty): four orthogonal (W/A/S/D) plus
+/// four diagonals (NW/NE/SW/SE) with OR'd input bits so a single
+/// touch produces the expected diagonal motion.
 #[derive(Resource)]
 pub struct Dpad {
     pub last_viewport: (u32, u32),
-    pub buttons: [DpadButton; 4],
+    pub buttons: [DpadButton; 8],
 }
 
 impl Default for Dpad {
@@ -76,7 +83,7 @@ impl Default for Dpad {
                 half_size_ndc: [0.0, 0.0],
                 bit: 0,
                 pressed: false,
-            }; 4],
+            }; 8],
         };
         rebuild_layout(&mut d, (1920, 1080));
         d
@@ -89,8 +96,9 @@ pub fn setup_dpad(mut commands: Commands) {
 
 /// Recompute button rectangles for a given viewport. Uses pixel-based
 /// sizing so buttons are always a fixed pixel size (square, tap-sized)
-/// and the leftmost/bottom-most button sit inside a safe margin from
-/// the viewport edge — no clipping on narrow portrait aspects.
+/// and the outermost buttons sit inside a safe margin from the
+/// viewport edge — no clipping on narrow portrait aspects. Eight
+/// buttons: N/S/E/W plus the four diagonals with OR'd bits.
 fn rebuild_layout(dpad: &mut Dpad, viewport: (u32, u32)) {
     let (w, h) = viewport;
     if w == 0 || h == 0 {
@@ -104,14 +112,21 @@ fn rebuild_layout(dpad: &mut Dpad, viewport: (u32, u32)) {
     let half_y = BUTTON_HALF_PX * ndc_per_y_px;
     let sp_x = BUTTON_SPACING_PX * ndc_per_x_px;
     let sp_y = BUTTON_SPACING_PX * ndc_per_y_px;
+    let corner_x = CORNER_SPACING_PX * ndc_per_x_px;
+    let corner_y = CORNER_SPACING_PX * ndc_per_y_px;
     let margin_left = MARGIN_LEFT_PX * ndc_per_x_px;
     let margin_bottom = MARGIN_BOTTOM_PX * ndc_per_y_px;
-    // Anchor from bottom-left: left button's LEFT edge sits at
-    // -1 + margin_left; D-pad centre is one button-half + one spacing
-    // to the right of that. Same in y.
-    let center_x = -1.0 + margin_left + half_x + sp_x;
-    let center_y = -1.0 + margin_bottom + half_y + sp_y;
-    // Order: W (up), A (left), S (down), D (right)
+    // Anchor so that the SW corner button's outer edge sits at the
+    // safe-margin inset. D-pad centre is corner_spacing + half in
+    // from that.
+    let center_x = -1.0 + margin_left + half_x + corner_x;
+    let center_y = -1.0 + margin_bottom + half_y + corner_y;
+    // Diagonal bit compositions
+    let nw = input::key::W | input::key::A;
+    let ne = input::key::W | input::key::D;
+    let sw = input::key::S | input::key::A;
+    let se = input::key::S | input::key::D;
+    // Layout order (arbitrary): N, E, S, W, NE, SE, SW, NW
     dpad.buttons[0] = DpadButton {
         center_ndc: [center_x, center_y + sp_y],
         half_size_ndc: [half_x, half_y],
@@ -119,9 +134,9 @@ fn rebuild_layout(dpad: &mut Dpad, viewport: (u32, u32)) {
         pressed: false,
     };
     dpad.buttons[1] = DpadButton {
-        center_ndc: [center_x - sp_x, center_y],
+        center_ndc: [center_x + sp_x, center_y],
         half_size_ndc: [half_x, half_y],
-        bit: input::key::A,
+        bit: input::key::D,
         pressed: false,
     };
     dpad.buttons[2] = DpadButton {
@@ -131,28 +146,52 @@ fn rebuild_layout(dpad: &mut Dpad, viewport: (u32, u32)) {
         pressed: false,
     };
     dpad.buttons[3] = DpadButton {
-        center_ndc: [center_x + sp_x, center_y],
+        center_ndc: [center_x - sp_x, center_y],
         half_size_ndc: [half_x, half_y],
-        bit: input::key::D,
+        bit: input::key::A,
+        pressed: false,
+    };
+    dpad.buttons[4] = DpadButton {
+        center_ndc: [center_x + corner_x, center_y + corner_y],
+        half_size_ndc: [half_x, half_y],
+        bit: ne,
+        pressed: false,
+    };
+    dpad.buttons[5] = DpadButton {
+        center_ndc: [center_x + corner_x, center_y - corner_y],
+        half_size_ndc: [half_x, half_y],
+        bit: se,
+        pressed: false,
+    };
+    dpad.buttons[6] = DpadButton {
+        center_ndc: [center_x - corner_x, center_y - corner_y],
+        half_size_ndc: [half_x, half_y],
+        bit: sw,
+        pressed: false,
+    };
+    dpad.buttons[7] = DpadButton {
+        center_ndc: [center_x - corner_x, center_y + corner_y],
+        half_size_ndc: [half_x, half_y],
+        bit: nw,
         pressed: false,
     };
     dpad.last_viewport = viewport;
 }
 
 thread_local! {
-    static DPAD_INSTANCES: RefCell<[DpadInstance; 4]> = const {
+    static DPAD_INSTANCES: RefCell<[DpadInstance; 8]> = const {
         RefCell::new([DpadInstance {
             center_ndc: [0.0, 0.0],
             half_size_ndc: [0.0, 0.0],
             color: [0.0, 0.0, 0.0],
             alpha: 0.0,
-        }; 4])
+        }; 8])
     };
 }
 
 /// Copy-out of the current D-pad instances, for render_web to
 /// upload each frame after the world pass.
-pub fn current_instances() -> [DpadInstance; 4] {
+pub fn current_instances() -> [DpadInstance; 8] {
     DPAD_INSTANCES.with(|c| *c.borrow())
 }
 
@@ -179,7 +218,7 @@ pub fn dpad_input_system(mut dpad: ResMut<Dpad>) {
         }
     }
     input::set_touch_bits(bits);
-    let mut instances = [DpadInstance::default(); 4];
+    let mut instances = [DpadInstance::default(); 8];
     for (i, btn) in dpad.buttons.iter().enumerate() {
         let (color, alpha) = if btn.pressed {
             ([0.55, 0.55, 0.6], 0.9)
@@ -200,49 +239,58 @@ pub fn dpad_input_system(mut dpad: ResMut<Dpad>) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn layout_is_pixel_sized() {
-        let mut d = Dpad {
+    fn blank_dpad() -> Dpad {
+        Dpad {
             last_viewport: (0, 0),
             buttons: [DpadButton {
                 center_ndc: [0.0, 0.0],
                 half_size_ndc: [0.0, 0.0],
                 bit: 0,
                 pressed: false,
-            }; 4],
-        };
-        rebuild_layout(&mut d, (1920, 1080));
-        // 60 px half in a 1920-wide viewport → NDC 60 * 2 / 1920 = 0.0625.
-        assert!((d.buttons[0].half_size_ndc[0] - 0.0625).abs() < 1e-4);
-        rebuild_layout(&mut d, (1080, 1920));
-        // Narrower viewport → larger x-half in NDC.
-        assert!(d.buttons[0].half_size_ndc[0] > 0.1);
+            }; 8],
+        }
     }
 
     #[test]
-    fn left_button_stays_on_screen_on_portrait() {
-        let mut d = Dpad {
-            last_viewport: (0, 0),
-            buttons: [DpadButton {
-                center_ndc: [0.0, 0.0],
-                half_size_ndc: [0.0, 0.0],
-                bit: 0,
-                pressed: false,
-            }; 4],
-        };
+    fn layout_is_pixel_sized() {
+        let mut d = blank_dpad();
+        rebuild_layout(&mut d, (1920, 1080));
+        // 50 px half in a 1920-wide viewport → NDC 50 * 2 / 1920 = 0.0521.
+        assert!((d.buttons[0].half_size_ndc[0] - 0.0520833).abs() < 1e-4);
+        rebuild_layout(&mut d, (1080, 1920));
+        // Narrower viewport → larger x-half in NDC.
+        assert!(d.buttons[0].half_size_ndc[0] > 0.09);
+    }
+
+    #[test]
+    fn all_buttons_stay_on_screen_on_portrait() {
+        let mut d = blank_dpad();
         // iPhone-portrait-ish
         rebuild_layout(&mut d, (390, 844));
-        let left_btn = &d.buttons[1]; // A
-        let left_edge = left_btn.center_ndc[0] - left_btn.half_size_ndc[0];
-        assert!(
-            left_edge > -1.0,
-            "left button left edge {left_edge} clips off-screen"
-        );
-        let bottom_btn = &d.buttons[2]; // S
-        let bottom_edge = bottom_btn.center_ndc[1] - bottom_btn.half_size_ndc[1];
-        assert!(
-            bottom_edge > -1.0,
-            "bottom button bottom edge {bottom_edge} clips off-screen"
-        );
+        for (i, btn) in d.buttons.iter().enumerate() {
+            let left = btn.center_ndc[0] - btn.half_size_ndc[0];
+            let bottom = btn.center_ndc[1] - btn.half_size_ndc[1];
+            assert!(left > -1.0, "button {i} left edge {left} off-screen");
+            assert!(
+                bottom > -1.0,
+                "button {i} bottom edge {bottom} off-screen"
+            );
+        }
+    }
+
+    #[test]
+    fn diagonals_or_two_bits() {
+        let d = blank_dpad();
+        let d = {
+            let mut d = d;
+            rebuild_layout(&mut d, (1920, 1080));
+            d
+        };
+        // Buttons 4-7 are diagonals — each carries two WASD bits.
+        for i in 4..8 {
+            let bits = d.buttons[i].bit;
+            let count = bits.count_ones();
+            assert_eq!(count, 2, "diagonal button {i} has bit={bits:04b}, expected 2 bits");
+        }
     }
 }
