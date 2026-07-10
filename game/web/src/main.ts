@@ -474,7 +474,10 @@ async function loadVersions() {
     list.textContent = ''
     appendVersionLink(list, '/', 'master', current === 'master')
     for (const v of versions) {
-      appendVersionLink(list, `/${v}/`, v, current === v)
+      // Point at /branch/index.html — CloudFront serves the root
+      // object automatically only for the true root; subdirectory
+      // implicit-index doesn't happen without a Function/Lambda@Edge.
+      appendVersionLink(list, `/${v}/index.html`, v, current === v)
     }
   } catch (e) {
     list.textContent = 'load failed: ' + e

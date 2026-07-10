@@ -166,15 +166,17 @@ jobs:
       # Regenerate the branch-index versions.json read by the in-game
       # picker (press 9 to open). CommonPrefixes on a delimited
       # list-objects returns every top-level "dir/" — strip the
-      # trailing slash. Master is not a prefix (it sits at the root),
-      # so the picker synthesises it on the client side.
+      # trailing slash and reject known non-branch prefixes so the
+      # picker only sees actual branch deploys. Master is not a
+      # prefix (it sits at the root), synthesised client-side.
       - name: Regenerate versions.json
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
           aws s3api list-objects-v2 --bucket "${{ env.STATIC_BUCKET }}" \
             --delimiter '/' \
             --query 'CommonPrefixes[].Prefix' \
-            --output json | jq '(. // []) | map(rtrimstr("/"))' > versions.json
+            --output json \
+            | jq '(. // []) | map(rtrimstr("/")) | map(select(. != "assets"))' > versions.json
           aws s3 cp versions.json "s3://${{ env.STATIC_BUCKET }}/versions.json" \
             --cache-control "no-store, no-cache, must-revalidate" \
             --content-type "application/json"
