@@ -79,10 +79,8 @@ jobs:
 
       # Fetch laye-p2p artifacts from laye.sbvh.nl and drop them
       # into the game dist so the browser loads them same-origin.
-      # wasm-bindgen's streaming instantiate + CORS interaction is
-      # flaky cross-origin; mirroring laye/bevy-starter's pattern —
       # laye_p2p.js + laye_p2p_bg.wasm served from the same host as
-      # index.html — is the reliable route.
+      # index.html is the only route — mirrors laye/bevy-starter.
       - name: Fetch laye-p2p artifacts
         working-directory: game/web/dist
         run: |
