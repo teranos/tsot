@@ -26,6 +26,8 @@ pub enum PropKind {
     Campfire,
     Chair,
     Table,
+    /// A wall segment one CDDA-tile wide. Used by the mapgen importer.
+    Wall,
 }
 
 /// Render/identity tag for a static structure prop (chair, table, and
@@ -91,6 +93,15 @@ pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3
                     StructureProp { kind: PropKind::Table },
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(64.0, 28.0, 64.0)),
+                ));
+            }
+            PropKind::Wall => {
+                // Solid, one CDDA-tile wide. Size matches scene.rs's
+                // Wall appearance (== CDDA_TILE world units).
+                commands.spawn((
+                    StructureProp { kind: PropKind::Wall },
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(80.0, 220.0, 80.0)),
                 ));
             }
         }

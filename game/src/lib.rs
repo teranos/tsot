@@ -9,6 +9,7 @@ pub mod audio;
 pub mod build_info;
 pub mod campfire;
 pub mod campsite;
+pub mod cdda;
 pub mod dpad;
 pub mod error;
 pub mod hash;
@@ -333,6 +334,7 @@ fn _init() {
             trees::setup_trees.after(setup),
             campfire::setup_campfire.after(setup),
             campsite::setup_campsites.after(setup),
+            cdda::setup_cdda_buildings.after(setup),
             dpad::setup_dpad.after(setup),
             map::setup_pins.after(setup),
             trail::setup_trail.after(setup),

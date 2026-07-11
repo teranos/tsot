@@ -315,6 +315,8 @@ fn prop_appearance(kind: PropKind) -> ([f32; 3], [f32; 3]) {
     match kind {
         PropKind::Chair => ([0.30, 0.20, 0.12], [28.0, 36.0, 28.0]),
         PropKind::Table => ([0.42, 0.28, 0.14], [64.0, 28.0, 64.0]),
+        // One CDDA tile wide; size matches the Wall collider in template.rs.
+        PropKind::Wall => ([0.48, 0.47, 0.50], [80.0, 220.0, 80.0]),
         PropKind::Campfire => ([1.0, 0.45, 0.08], [50.0, 60.0, 50.0]),
     }
 }
