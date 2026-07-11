@@ -15,6 +15,7 @@
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 
+use crate::hash::{jitter, wang_hash};
 use crate::obs;
 use crate::physics::{AabbCollider, Position};
 
@@ -70,22 +71,4 @@ pub fn setup_trees(mut commands: Commands) {
     obs::emit(&format!(
         "[seer.trees] spawned {trunks} trunks + {foliage} foliage entities (deterministic Wang-hash placement)"
     ));
-}
-
-fn wang_hash(ix: i32, iz: i32, salt: u32) -> u32 {
-    let mut h = (ix as u32)
-        .wrapping_mul(0x9E37_79B9)
-        .wrapping_add((iz as u32).wrapping_mul(0x85EB_CA77))
-        .wrapping_add(salt);
-    h ^= h >> 16;
-    h = h.wrapping_mul(0x7FEB_352D);
-    h ^= h >> 15;
-    h = h.wrapping_mul(0x846C_A68B);
-    h ^= h >> 16;
-    h
-}
-
-fn jitter(ix: i32, iz: i32, axis_salt: u32) -> f32 {
-    let h = wang_hash(ix, iz, axis_salt.wrapping_mul(0x1234_5678));
-    (h as f32 / u32::MAX as f32) * 2.0 - 1.0
 }

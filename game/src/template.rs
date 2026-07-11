@@ -24,6 +24,17 @@ use crate::physics::{AabbCollider, Position};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PropKind {
     Campfire,
+    Chair,
+    Table,
+}
+
+/// Render/identity tag for a static structure prop (chair, table, and
+/// CDDA furniture later). `scene.rs` maps the kind to a colour + size.
+/// The campfire is deliberately NOT a `StructureProp` — it renders
+/// through its own flickering path.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct StructureProp {
+    pub kind: PropKind,
 }
 
 /// One prop, positioned relative to the template's anchor.
@@ -69,6 +80,17 @@ pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3
                     AabbCollider {
                         half_extents: campfire::COLLIDER_HALF,
                     },
+                ));
+            }
+            PropKind::Chair => {
+                // Decor — no collider; you can step around a camp chair.
+                commands.spawn((StructureProp { kind: PropKind::Chair }, Position(pos)));
+            }
+            PropKind::Table => {
+                commands.spawn((
+                    StructureProp { kind: PropKind::Table },
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(64.0, 28.0, 64.0)),
                 ));
             }
         }

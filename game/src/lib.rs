@@ -8,8 +8,10 @@ use std::cell::RefCell;
 pub mod audio;
 pub mod build_info;
 pub mod campfire;
+pub mod campsite;
 pub mod dpad;
 pub mod error;
+pub mod hash;
 pub mod health;
 pub mod identity;
 pub mod input;
@@ -330,6 +332,7 @@ fn _init() {
             setup,
             trees::setup_trees.after(setup),
             campfire::setup_campfire.after(setup),
+            campsite::setup_campsites.after(setup),
             dpad::setup_dpad.after(setup),
             map::setup_pins.after(setup),
             trail::setup_trail.after(setup),

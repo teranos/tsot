@@ -11,6 +11,7 @@ use crate::physics::{self, AabbCollider, NpcMarker, PlayerMarker, Position};
 use crate::remote_players::{RemotePlayers, color_for_peer};
 use crate::trail::TrailMarker;
 use crate::room;
+use crate::template::{PropKind, StructureProp};
 use crate::trees;
 
 /// UI overlay shader — draws screen-space quads. Vertices computed
@@ -244,6 +245,7 @@ pub struct SceneSnapshot {
     pub pins: Vec<Vec3>,
     pub trails: Vec<Vec3>,
     pub remote_peers: Vec<RemotePeerDot>,
+    pub structures: Vec<(Vec3, PropKind)>,
     pub player: Vec3,
 }
 
@@ -257,6 +259,7 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         bevy_ecs::prelude::Without<PlayerMarker>,
         bevy_ecs::prelude::Without<trees::TreeTrunk>,
         bevy_ecs::prelude::Without<campfire::Campfire>,
+        bevy_ecs::prelude::Without<StructureProp>,
     )>();
     let obstacles: Vec<Vec3> = obs_q.iter(world).map(|p| p.0).collect();
     let mut fire_q = world.query::<(&Position, &campfire::Campfire)>();
@@ -288,6 +291,9 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
                 .collect()
         })
         .unwrap_or_default();
+    let mut struct_q = world.query::<(&Position, &StructureProp)>();
+    let structures: Vec<(Vec3, PropKind)> =
+        struct_q.iter(world).map(|(p, s)| (p.0, s.kind)).collect();
     SceneSnapshot {
         trees,
         obstacles,
@@ -296,7 +302,20 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         pins,
         trails,
         remote_peers,
+        structures,
         player,
+    }
+}
+
+/// Per-kind colour + cube size for static structure props. Chairs and
+/// tables read as distinct wooden furniture. The campfire never
+/// reaches here (it renders through its own flickering path); it has a
+/// fallback only so the match is total.
+fn prop_appearance(kind: PropKind) -> ([f32; 3], [f32; 3]) {
+    match kind {
+        PropKind::Chair => ([0.30, 0.20, 0.12], [28.0, 36.0, 28.0]),
+        PropKind::Table => ([0.42, 0.28, 0.14], [64.0, 28.0, 64.0]),
+        PropKind::Campfire => ([1.0, 0.45, 0.08], [50.0, 60.0, 50.0]),
     }
 }
 
@@ -366,6 +385,17 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             pos: [p.x, 40.0, p.z],
             color: [1.0, 0.9, 0.2],
             scale: [20.0, 80.0, 20.0],
+        });
+    }
+    // Structure props (camp chairs, tables — CDDA furniture later).
+    // Each kind carries its own colour + size; the base sits on the
+    // ground so the cube rises from y=0 (centre at half-height).
+    for (pos, kind) in &snap.structures {
+        let (color, scale) = prop_appearance(*kind);
+        instances.push(SceneInstance {
+            pos: [pos.x, scale[1] * 0.5, pos.z],
+            color,
+            scale,
         });
     }
     instances.push(SceneInstance {
