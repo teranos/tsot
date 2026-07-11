@@ -18,14 +18,14 @@
       <div id="version-picker-list">loading…</div>
     </div>
     <script type="module">
-      // Preload laye-p2p from its CDN (laye.sbvh.nl serves it with
-      // CORS for game.sbvh.nl). If the import fails, the promise
-      // resolves to null and main.ts falls back to the WebSocket
-      // path. game.wasm's env.* signatures don't change; only which
-      // source fills the peer queue.
+      // laye-p2p served same-origin from game.sbvh.nl (CI fetches
+      // it from laye.sbvh.nl into game's dist). This is the
+      // bevy-starter pattern — cross-origin wasm-bindgen streaming
+      // instantiate was flaky; same-origin is reliable and lets
+      // laye's DOM overlays (chat, error) actually render.
       window.__layeReadyPromise = (async () => {
         try {
-          const laye = await import('https://laye.sbvh.nl/laye_p2p.js');
+          const laye = await import('./laye_p2p.js');
           await laye.default();
           return {
             init: laye.init,

@@ -77,6 +77,19 @@ jobs:
         working-directory: game/web
         run: bun run build.ts
 
+      # Fetch laye-p2p artifacts from laye.sbvh.nl and drop them
+      # into the game dist so the browser loads them same-origin.
+      # wasm-bindgen's streaming instantiate + CORS interaction is
+      # flaky cross-origin; mirroring laye/bevy-starter's pattern —
+      # laye_p2p.js + laye_p2p_bg.wasm served from the same host as
+      # index.html — is the reliable route.
+      - name: Fetch laye-p2p artifacts
+        working-directory: game/web/dist
+        run: |
+          curl -fsSL -o laye_p2p.js https://laye.sbvh.nl/laye_p2p.js
+          curl -fsSL -o laye_p2p_bg.wasm https://laye.sbvh.nl/laye_p2p_bg.wasm
+          ls -la laye_p2p*
+
       - name: Generate build-info.json
         run: |
           SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
