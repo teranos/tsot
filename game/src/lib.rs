@@ -20,6 +20,7 @@ pub mod physics;
 pub mod remote_players;
 pub mod room;
 pub mod scene;
+pub mod template;
 pub mod trail;
 pub mod trees;
 pub mod ui;
