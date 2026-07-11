@@ -111,11 +111,24 @@ fn play_samples(samples: &[f32]) {
 
 // Debounce per-kind — sliding along a wall or grinding into a peer
 // shouldn't fire every frame.
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 const IMPACT_DEBOUNCE_MS: u64 = 180;
 static LAST_THUMP_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_BUNK_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_POCK_MS: AtomicU64 = AtomicU64::new(0);
+
+// Master mute — toggled by the Bevy-owned sound button
+// (see sound_button::sound_button_system). Every synthesis /
+// playback path checks this before touching the env.* boundary.
+static AUDIO_MUTED: AtomicBool = AtomicBool::new(false);
+
+pub fn is_muted() -> bool {
+    AUDIO_MUTED.load(Ordering::Relaxed)
+}
+
+pub fn set_muted(m: bool) {
+    AUDIO_MUTED.store(m, Ordering::Relaxed);
+}
 
 fn debounced(last: &AtomicU64) -> bool {
     let now = crate::remote_players::now_ms();
@@ -130,6 +143,9 @@ fn debounced(last: &AtomicU64) -> bool {
 
 /// Tree / obstacle impact — soft dull thud.
 pub fn play_thump() {
+    if is_muted() {
+        return;
+    }
     if !debounced(&LAST_THUMP_MS) {
         return;
     }
@@ -139,6 +155,9 @@ pub fn play_thump() {
 
 /// Cliff-block impact — mid-frequency "bunk" (unused until cliffs land).
 pub fn play_bunk() {
+    if is_muted() {
+        return;
+    }
     if !debounced(&LAST_BUNK_MS) {
         return;
     }
@@ -148,6 +167,9 @@ pub fn play_bunk() {
 
 /// Player-vs-player or player-vs-NPC — high, short "pock".
 pub fn play_pock() {
+    if is_muted() {
+        return;
+    }
     if !debounced(&LAST_POCK_MS) {
         return;
     }
@@ -209,6 +231,9 @@ static CRACKLE_SEED: AtomicU64 = AtomicU64::new(0x9e3779b97f4a7c15);
 /// Play a firewood crackle burst at scaled volume. Advances the
 /// internal PRNG seed so successive calls produce distinct bursts.
 pub fn play_crackle(dur_sec: f32, volume: f32) {
+    if is_muted() {
+        return;
+    }
     if volume < 1e-3 {
         return;
     }
@@ -257,6 +282,9 @@ pub fn load(url: &str) -> GameAudioHandle {
 
 pub fn play(handle: &GameAudioHandle, volume: f32, loop_flag: bool) {
     if handle.0 == 0 {
+        return;
+    }
+    if is_muted() {
         return;
     }
     let vol = (volume.clamp(0.0, 1.0) * 1000.0) as u32;

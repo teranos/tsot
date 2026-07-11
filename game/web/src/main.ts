@@ -330,30 +330,22 @@ function unlockAudioOnGesture() {
 window.addEventListener('keydown', unlockAudioOnGesture, { once: false })
 window.addEventListener('pointerdown', unlockAudioOnGesture, { once: false })
 
-// Remote-players proxy — thin WebSocket bridge to relaye's R16 WS
-// gateway (see game/docs/relaye-game-gateway.md). Defaults to the
-// deployed endpoint so game.sbvh.nl works out of the box; override
-// with ?proxy=ws://... for local dev, or ?proxy=off to disable.
-// Incoming messages are one GamePosition JSON each; we frame them
-// length-prefixed (u32 LE + bytes) so Rust drains one buffer per
-// tick and slices with parse_frames.
-const DEFAULT_PROXY_WS = 'wss://relaye.sbvh.nl/ws/rave-positions/v1'
-const proxyParam = new URLSearchParams(location.search).get('proxy')
-const PROXY_WS_URL = proxyParam === 'off' ? '' : (proxyParam || DEFAULT_PROXY_WS)
+// Remote-players fallback — WebSocket bridge to relaye's WS
+// gateway. Only used if laye-p2p fails to load or init.
+const PROXY_WS_URL = 'wss://relaye.sbvh.nl/ws/rave-positions/v1'
 let proxyWs: WebSocket | null = null
 let proxyRxBuf: Uint8Array = new Uint8Array(0)
 
-// laye-p2p opt-in via `?p2p=laye`. index.html preloads the module
-// from laye.sbvh.nl into `window.__layeReadyPromise`. main() awaits
-// it, calls layeP2p.init(bootstrap), and stores the handle here.
-// The env.* handlers below check `layeP2p` first; if set, they
-// route through laye. If null (opt-out or failed init), they fall
-// back to the WebSocket path. Same wire — GamePosition JSON — and
-// laye's `recv_bytes` returns the same [u32 LE len][bytes]...
-// framing game.wasm's parse_frames already expects.
+// laye-p2p is the transport. index.html preloads the module from
+// laye.sbvh.nl into window.__layeReadyPromise. main() awaits it and
+// calls layeP2p.init(bootstrap). The env.* handlers below check
+// layeP2p first; if null (module failed to load or init), they fall
+// back to the WebSocket path automatically. Same wire —
+// GamePosition JSON — and laye's recv_bytes returns the same
+// [u32 LE len][bytes]... framing game.wasm's parse_frames expects.
 const P2P_TOPIC = 'rave-positions/v1'
 const P2P_BOOTSTRAP = '/dns4/relaye.sbvh.nl/tcp/443/wss/p2p/12D3KooWC6UBnnmhhv3BAfYKyW1bFBD4GtC5waiEgQWJCb7Hbqaf'
-const useLaye = new URLSearchParams(location.search).get('p2p') === 'laye'
+const useLaye = true
 type LayeP2p = {
   init: (configJson: string) => Promise<void>
   publish: (topic: string, bytes: Uint8Array) => void
@@ -381,7 +373,7 @@ async function initLayeIfEnabled(): Promise<void> {
   const w = window as unknown as { __layeReadyPromise?: Promise<LayeP2p | null> }
   const mod = await (w.__layeReadyPromise ?? Promise.resolve(null))
   if (!mod) {
-    console.warn('[game] ?p2p=laye set but laye module unavailable — WebSocket fallback')
+    console.warn('[game.laye] module unavailable — WebSocket fallback')
     return
   }
   try {

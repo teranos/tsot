@@ -15,6 +15,7 @@ use crate::scene::{
     self, GpuVertex, SHADER_WGSL, SceneCamera, SceneInstance, UI_SHADER_WGSL, as_bytes,
     cube_geometry,
 };
+use crate::sound_button;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -117,7 +118,7 @@ pub fn init(canvas_id: &str) -> bool {
         return false;
     };
     let ui_instance_buf = gpu_web::GameBuffer::create(
-        (8 * std::mem::size_of::<dpad::DpadInstance>()) as u32,
+        (9 * std::mem::size_of::<dpad::DpadInstance>()) as u32,
         gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
         "render_web.ui.instance",
     );
@@ -189,10 +190,10 @@ pub fn frame(camera: &SceneCamera, instances: &[SceneInstance]) -> u32 {
     })
 }
 
-/// UI overlay pass — draws the D-pad on top of the world. Uploads
-/// the eight button instances into the persistent UI instance
-/// buffer, then invokes the load-op render pass.
-pub fn frame_ui(instances: &[dpad::DpadInstance; 8]) -> u32 {
+/// UI overlay pass — draws the D-pad + sound button on top of the
+/// world. Uploads nine UI instances (8 D-pad + 1 sound) into the
+/// persistent buffer, then invokes the load-op render pass.
+pub fn frame_ui(instances: &[dpad::DpadInstance; 9]) -> u32 {
     STATE.with(|c| {
         let opt = c.borrow();
         let Some(state) = opt.as_ref() else {
@@ -224,5 +225,9 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
         return world_result;
     }
     let dpad_instances = dpad::current_instances();
-    frame_ui(&dpad_instances)
+    let sound_instance = sound_button::current_instance();
+    let mut all: [dpad::DpadInstance; 9] = [Default::default(); 9];
+    all[..8].copy_from_slice(&dpad_instances);
+    all[8] = sound_instance;
+    frame_ui(&all)
 }

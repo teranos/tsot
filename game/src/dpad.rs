@@ -220,10 +220,13 @@ pub fn dpad_input_system(mut dpad: ResMut<Dpad>) {
     input::set_touch_bits(bits);
     let mut instances = [DpadInstance::default(); 8];
     for (i, btn) in dpad.buttons.iter().enumerate() {
+        // Bright colors so buttons stand out against the dark canvas.
+        // Pressed goes almost-white, resting is a mid-grey — both
+        // clearly readable on the (0.03,0.05,0.09) clear colour.
         let (color, alpha) = if btn.pressed {
-            ([0.55, 0.55, 0.6], 0.9)
+            ([0.95, 0.95, 1.0], 0.92)
         } else {
-            ([0.12, 0.12, 0.16], 0.7)
+            ([0.55, 0.58, 0.68], 0.75)
         };
         instances[i] = DpadInstance {
             center_ndc: btn.center_ndc,

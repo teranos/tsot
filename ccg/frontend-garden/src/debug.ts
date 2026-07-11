@@ -256,9 +256,6 @@ export function stopDebugOverlay(): void {
   }
 }
 
-// Auto-enable: opt out via `?nodebug` or localStorage.nodebug=1
-const optedOut =
-  location.search.includes('nodebug') || localStorage.getItem('nodebug') === '1';
-if (!optedOut) startDebugOverlay();
+startDebugOverlay();
 
 trace('boot', 'debug.ts loaded');

@@ -9,6 +9,7 @@ pub mod audio;
 pub mod build_info;
 pub mod campfire;
 pub mod dpad;
+pub mod sound_button;
 pub mod error;
 pub mod health;
 pub mod identity;
@@ -73,7 +74,6 @@ struct SelfPeer(String);
 
 // Held so Drop → game_audio_stop fires on app teardown. Non-Send is
 // fine — App is single-threaded on wasm and native tests.
-#[allow(dead_code)]
 #[derive(Resource)]
 struct MusicHandle(audio::GameAudioHandle);
 
@@ -81,6 +81,25 @@ fn setup_music(mut commands: Commands) {
     let handle = audio::load_music();
     audio::play(&handle, audio::DEFAULT_VOLUME, true);
     commands.insert_resource(MusicHandle(handle));
+}
+
+/// Stop or (re)start the music when the mute state changes so the
+/// running BufferSourceNode actually goes silent instead of just
+/// buffering into a nulled queue.
+fn music_gate_system(
+    music: Res<MusicHandle>,
+    mut last_muted: Local<bool>,
+) {
+    let now_muted = audio::is_muted();
+    if now_muted == *last_muted {
+        return;
+    }
+    if now_muted {
+        audio::stop(&music.0);
+    } else {
+        audio::play(&music.0, audio::DEFAULT_VOLUME, true);
+    }
+    *last_muted = now_muted;
 }
 
 #[derive(Resource, Default)]
@@ -330,6 +349,7 @@ fn _init() {
             trees::setup_trees.after(setup),
             campfire::setup_campfire.after(setup),
             dpad::setup_dpad.after(setup),
+            sound_button::setup_sound_button.after(setup),
             map::setup_pins.after(setup),
             trail::setup_trail.after(setup),
             setup_music.after(setup),
@@ -353,6 +373,8 @@ fn _init() {
             campfire::flicker_fire.after(room::world_bounds_clamp),
             campfire::campfire_crackle_system.after(campfire::flicker_fire),
             dpad::dpad_input_system.after(campfire::campfire_crackle_system),
+            sound_button::sound_button_system.after(dpad::dpad_input_system),
+            music_gate_system.after(sound_button::sound_button_system),
             tick.after(campfire::flicker_fire),
             drain_remote_positions_system.after(tick),
             publish_self_position_system.after(physics::advance_player),
