@@ -1,36 +1,32 @@
-// Ported from rave/src/trees.rs. Wang-hash-placed forest of TreeTrunk
-// + TreeFoliage entities across a 6000×6000 world floor, excluding a
-// central clearing + a south-going trail corridor.
+// Wang-hash-placed forest, ported from rave. The forest is a pure
+// function of a world-absolute cell grid — `tree_at_cell(ix, iz)` — so
+// it extends infinitely and is generated on demand per chunk (see
+// `chunk.rs`) rather than spawned all at once. No FLOOR_HALF, no
+// entity-per-tree-for-the-whole-world: the streamer holds only the
+// cells near the player.
 //
-// Adapted to seer's ECS: no Mesh3d / StandardMaterial (that pipeline
-// isn't in seer yet), no Bevy Transform (we use Position from the
-// physics port). The algorithm — Wang-hash gating + jitter + AABB
-// collider on trunks — is verbatim. The observation is: how many
-// entities get spawned, do they leak, how much heap does the ECS
-// storage grow after this system runs.
-//
-// Deterministic: same salt + same coordinates → same forest every
-// time. Verifying observability across commits requires this.
+// Deterministic: same salt + same cell → same tree everywhere, every
+// session, on every peer.
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 
 use crate::hash::{jitter, wang_hash};
-use crate::obs;
-use crate::physics::{AabbCollider, Position};
-use crate::room::FLOOR_HALF;
 
-// Ported constants — verbatim values from rave.
+/// Cell side in world units. Sparser than rave's 80 — the extra
+/// spacing suits the open world; drop toward 80 for a denser wood.
+pub const CELL: f32 = 120.0;
+
 const CLEARING_HALF: f32 = 500.0;
-// Sparsened from 80 when the world grew to FLOOR_HALF=8000, so the
-// forest covers the larger map without a ~10k-entity explosion — and
-// the extra spacing reads as more open. Drop back toward 80 for a
-// denser wood.
-const CELL: f32 = 120.0;
 const SPAWN_THRESHOLD: u32 = u32::MAX / 8;
 const CLEARING_EXCLUSION: f32 = CLEARING_HALF + 60.0;
 const TRAIL_CORRIDOR_HALF: f32 = 70.0;
 const TREE_DENSITY_SALT: u32 = 0xC0DE_F00D;
+
+/// Trunk render/collision height + foliage height, so the streamer and
+/// any caller agree on where the two entities sit.
+pub const TRUNK_Y: f32 = 30.0;
+pub const FOLIAGE_Y: f32 = 80.0;
 
 #[derive(Component)]
 pub struct TreeTrunk;
@@ -38,41 +34,43 @@ pub struct TreeTrunk;
 #[derive(Component)]
 pub struct TreeFoliage;
 
-pub fn setup_trees(mut commands: Commands) {
-    let cells_per_side = (FLOOR_HALF * 2.0 / CELL) as i32;
-    let origin = -FLOOR_HALF;
-    let mut trunks = 0u32;
-    let mut foliage = 0u32;
-
-    for ix in 0..cells_per_side {
-        for iz in 0..cells_per_side {
-            let cell_x = origin + ix as f32 * CELL + CELL / 2.0;
-            let cell_z = origin + iz as f32 * CELL + CELL / 2.0;
-            if cell_x.hypot(cell_z) < CLEARING_EXCLUSION {
-                continue;
-            }
-            if cell_z > CLEARING_HALF && cell_x.abs() < TRAIL_CORRIDOR_HALF {
-                continue;
-            }
-            if wang_hash(ix, iz, TREE_DENSITY_SALT) >= SPAWN_THRESHOLD {
-                continue;
-            }
-            let jitter_x = jitter(ix, iz, 1) * (CELL * 0.35);
-            let jitter_z = jitter(ix, iz, 2) * (CELL * 0.35);
-            let tx = cell_x + jitter_x;
-            let tz = cell_z + jitter_z;
-
-            commands.spawn((
-                TreeTrunk,
-                Position(Vec3::new(tx, 30.0, tz)),
-                AabbCollider::cuboid(Vec3::new(12.0, 60.0, 12.0)),
-            ));
-            commands.spawn((TreeFoliage, Position(Vec3::new(tx, 80.0, tz))));
-            trunks += 1;
-            foliage += 1;
-        }
+/// The tree at global cell `(ix, iz)`, if the hash + exclusions place
+/// one. World-absolute grid: cell centre is `(i + 0.5) * CELL`, valid
+/// for any (including negative) coordinate. Returns the ground-plane
+/// base position (y = 0); the streamer lifts trunk/foliage to their
+/// heights. Pure + deterministic.
+pub fn tree_at_cell(ix: i32, iz: i32) -> Option<Vec3> {
+    let cell_x = (ix as f32 + 0.5) * CELL;
+    let cell_z = (iz as f32 + 0.5) * CELL;
+    // Keep the central clearing (rave floor) free of trees.
+    if cell_x.hypot(cell_z) < CLEARING_EXCLUSION {
+        return None;
     }
-    obs::emit(&format!(
-        "[seer.trees] spawned {trunks} trunks + {foliage} foliage entities (deterministic Wang-hash placement)"
-    ));
+    // Keep the south-going trail corridor open.
+    if cell_z > CLEARING_HALF && cell_x.abs() < TRAIL_CORRIDOR_HALF {
+        return None;
+    }
+    // Density gate.
+    if wang_hash(ix, iz, TREE_DENSITY_SALT) >= SPAWN_THRESHOLD {
+        return None;
+    }
+    let jx = jitter(ix, iz, 1) * (CELL * 0.35);
+    let jz = jitter(ix, iz, 2) * (CELL * 0.35);
+    Some(Vec3::new(cell_x + jx, 0.0, cell_z + jz))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tree_at_cell_is_deterministic() {
+        assert_eq!(tree_at_cell(17, -23), tree_at_cell(17, -23));
+    }
+
+    #[test]
+    fn clearing_cell_is_empty() {
+        // Cell containing the origin — inside the clearing.
+        assert!(tree_at_cell(0, 0).is_none());
+    }
 }

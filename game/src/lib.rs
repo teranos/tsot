@@ -10,6 +10,7 @@ pub mod build_info;
 pub mod campfire;
 pub mod campsite;
 pub mod cdda;
+pub mod chunk;
 pub mod dpad;
 pub mod error;
 pub mod hash;
@@ -327,11 +328,11 @@ fn _init() {
     }
     let mut app = App::new();
     app.insert_resource(SelfPeer(id.as_hex()));
+    app.insert_resource(chunk::LoadedChunks::default());
     app.add_systems(
         Startup,
         (
             setup,
-            trees::setup_trees.after(setup),
             campfire::setup_campfire.after(setup),
             campsite::setup_campsites.after(setup),
             cdda::setup_cdda_buildings.after(setup),
@@ -356,6 +357,7 @@ fn _init() {
             physics::resolve_remote_player_collisions.after(physics::resolve_collisions),
             room::world_bounds_clamp.after(physics::resolve_remote_player_collisions),
             physics::check_npc_bump.after(physics::advance_npc),
+            chunk::stream_chunks.after(room::world_bounds_clamp),
             campfire::flicker_fire.after(room::world_bounds_clamp),
             campfire::campfire_crackle_system.after(campfire::flicker_fire),
             dpad::dpad_input_system.after(campfire::campfire_crackle_system),
