@@ -20,6 +20,7 @@ pub mod input;
 pub mod map;
 pub mod net;
 pub mod obs;
+pub mod palette;
 pub mod physics;
 pub mod remote_players;
 pub mod room;

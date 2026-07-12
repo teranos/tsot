@@ -332,6 +332,7 @@ fn prop_appearance(kind: PropKind) -> ([f32; 3], [f32; 3]) {
         // Flat roof slab, sits at ROOF_HEIGHT (elevation comes from the
         // prop's y position, not this box).
         PropKind::Roof => ([0.33, 0.30, 0.34], [80.0, 20.0, 80.0]),
+        PropKind::Furniture => ([0.34, 0.26, 0.20], [50.0, 70.0, 50.0]),
         PropKind::Campfire => ([1.0, 0.45, 0.08], [50.0, 60.0, 50.0]),
     }
 }

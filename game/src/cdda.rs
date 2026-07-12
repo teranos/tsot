@@ -36,6 +36,11 @@ pub const ROOF_HEIGHT: f32 = 220.0;
 
 /// The embedded garage mapgen (CC-BY-SA 3.0, CleverRaven / CDDA).
 const GARAGE_JSON: &str = include_str!("../assets/cdda/garage.json");
+/// The embedded house mapgen — palette-driven (CC-BY-SA 3.0, CDDA).
+const HOUSE_JSON: &str = include_str!("../assets/cdda/house01.json");
+/// A shed — CDDA has no standalone one, so this is an original inline
+/// mapgen in the same format (no palettes, no attribution needed).
+const SHED_JSON: &str = include_str!("../assets/buildings/shed.json");
 
 /// Buildings are rarer than campsites — roughly 1 chunk in 20.
 const BUILDING_CHUNK_CHANCE: u32 = u32::MAX / 20;
@@ -55,7 +60,6 @@ pub enum CddaError {
     Parse(String),
     NotFound(String),
     NoObject(String),
-    UnsupportedPalettes(String),
 }
 
 impl fmt::Display for CddaError {
@@ -64,10 +68,6 @@ impl fmt::Display for CddaError {
             CddaError::Parse(m) => write!(f, "CDDA mapgen parse error: {m}"),
             CddaError::NotFound(n) => write!(f, "CDDA mapgen '{n}' not found in file"),
             CddaError::NoObject(n) => write!(f, "CDDA mapgen '{n}' has no object"),
-            CddaError::UnsupportedPalettes(n) => write!(
-                f,
-                "CDDA mapgen '{n}' uses external palettes — not supported (inline only)"
-            ),
         }
     }
 }
@@ -111,25 +111,41 @@ fn first_id(v: &Value) -> Option<&str> {
     }
 }
 
-/// Map a cell's char to a prop, resolving furniture first (it sits on
-/// the floor) then terrain. Unmapped cells → None (skipped).
+/// Map a furniture id to a prop. Seats → Chair, work surfaces → Table,
+/// other solid furniture → a generic Furniture box; decorative bits
+/// (plants, lamps, mailboxes…) → None (skipped).
+fn furniture_prop(id: &str) -> Option<PropKind> {
+    let has = |needles: &[&str]| needles.iter().any(|n| id.contains(n));
+    if has(&["chair", "stool", "bench", "sofa", "armchair"]) {
+        return Some(PropKind::Chair);
+    }
+    if has(&["table", "counter", "desk", "workbench"]) {
+        return Some(PropKind::Table);
+    }
+    const SOLID: &[&str] = &[
+        "bed", "dresser", "fridge", "oven", "stove", "sink", "toilet", "bookcase", "wardrobe",
+        "cabinet", "locker", "rack", "shelf", "cupboard", "washer", "dryer", "dishwasher",
+        "bathtub", "shower", "chest", "safe", "fireplace", "furnace", "piano", "crate",
+        "entertainment", "displaycase", "glass_",
+    ];
+    if has(SOLID) {
+        return Some(PropKind::Furniture);
+    }
+    None
+}
+
+/// Map a cell's char to a prop via the resolved char→id maps, resolving
+/// furniture first (it sits on the floor) then terrain. Unmapped → None.
 fn cell_to_prop(
     ch: char,
-    terrain: &HashMap<String, Value>,
-    furniture: &HashMap<String, Value>,
+    terrain: &HashMap<char, String>,
+    furniture: &HashMap<char, String>,
 ) -> Option<PropKind> {
-    let key = ch.to_string();
-    if let Some(f) = furniture.get(&key).and_then(first_id) {
-        if f.contains("chair") {
-            return Some(PropKind::Chair);
-        }
-        if f.contains("counter") || f.contains("desk") || f.contains("table") {
-            return Some(PropKind::Table);
-        }
-        // Known furniture we don't model yet → skip; don't fall to terrain.
-        return None;
+    if let Some(f) = furniture.get(&ch) {
+        // Furniture char — its prop (or None); don't fall through to terrain.
+        return furniture_prop(f);
     }
-    if let Some(t) = terrain.get(&key).and_then(first_id) {
+    if let Some(t) = terrain.get(&ch) {
         if (t.contains("wall") || t.contains("fence")) && !t.contains("gate") {
             return Some(PropKind::Wall);
         }
@@ -155,8 +171,22 @@ pub fn mapgen_to_template(
         .object
         .as_ref()
         .ok_or_else(|| CddaError::NoObject(om_terrain.to_string()))?;
-    if !obj.palettes.is_empty() {
-        return Err(CddaError::UnsupportedPalettes(om_terrain.to_string()));
+    // Resolve referenced palettes into flat char→id maps, then overlay
+    // the inline terrain/furniture (inline overrides the palettes).
+    let (mut terrain, mut furniture) = if obj.palettes.is_empty() {
+        (HashMap::new(), HashMap::new())
+    } else {
+        crate::palette::resolve(&obj.palettes)
+    };
+    for (sym, val) in &obj.terrain {
+        if let (Some(ch), Some(id)) = (sym.chars().next(), first_id(val)) {
+            terrain.insert(ch, id.to_string());
+        }
+    }
+    for (sym, val) in &obj.furniture {
+        if let (Some(ch), Some(id)) = (sym.chars().next(), first_id(val)) {
+            furniture.insert(ch, id.to_string());
+        }
     }
 
     let height = obj.rows.len();
@@ -169,7 +199,7 @@ pub fn mapgen_to_template(
         .map(|row| {
             let mut cells: Vec<Option<PropKind>> = row
                 .chars()
-                .map(|ch| cell_to_prop(ch, &obj.terrain, &obj.furniture))
+                .map(|ch| cell_to_prop(ch, &terrain, &furniture))
                 .collect();
             cells.resize(width, None);
             cells
@@ -256,8 +286,25 @@ pub fn roof_to_props(
 /// The garage, imported from the embedded CDDA mapgen — ground floor
 /// (walls + furniture) plus its roof z-level capping the building.
 pub fn garage_template() -> Result<Template, CddaError> {
-    let mut t = mapgen_to_template(GARAGE_JSON, "s_garage_1", CDDA_TILE)?;
-    let roof = roof_to_props(GARAGE_JSON, "s_garage_roof_1", CDDA_TILE, ROOF_HEIGHT)?;
+    assemble_building(GARAGE_JSON, "s_garage_1", "s_garage_roof_1")
+}
+
+/// The house, imported from the embedded CDDA mapgen — its palettes
+/// (walls + the 68-symbol domestic furniture vocabulary) resolved via
+/// `palette::resolve`, capped with its roof.
+pub fn house_template() -> Result<Template, CddaError> {
+    assemble_building(HOUSE_JSON, "house_01", "house_01_roof")
+}
+
+/// A small shed (original inline mapgen, no palettes).
+pub fn shed_template() -> Result<Template, CddaError> {
+    assemble_building(SHED_JSON, "shed_1", "shed_roof")
+}
+
+/// Ground floor (walls + furniture, palettes resolved) + roof z-level.
+fn assemble_building(json: &str, ground_om: &str, roof_om: &str) -> Result<Template, CddaError> {
+    let mut t = mapgen_to_template(json, ground_om, CDDA_TILE)?;
+    let roof = roof_to_props(json, roof_om, CDDA_TILE, ROOF_HEIGHT)?;
     t.props.extend(roof);
     Ok(t)
 }
@@ -271,9 +318,15 @@ pub struct BuildingTemplates(pub Vec<Template>);
 /// obs bus (sacred); the building simply won't appear.
 pub fn load_building_templates() -> BuildingTemplates {
     let mut templates = Vec::new();
-    match garage_template() {
-        Ok(t) => templates.push(t),
-        Err(e) => obs::emit(&format!("[cdda] garage import failed: {e}")),
+    for (name, result) in [
+        ("garage", garage_template()),
+        ("house", house_template()),
+        ("shed", shed_template()),
+    ] {
+        match result {
+            Ok(t) => templates.push(t),
+            Err(e) => obs::emit(&format!("[cdda] {name} import failed: {e}")),
+        }
     }
     BuildingTemplates(templates)
 }
@@ -356,18 +409,20 @@ mod tests {
 
     #[test]
     fn cells_map_to_the_prop_vocabulary() {
-        let terrain: HashMap<String, Value> = [
-            ("w".to_string(), json!("t_wall_log")),
-            ("W".to_string(), json!("t_chainfence")),
-            ("^".to_string(), json!("t_chaingate_c")),
-            (".".to_string(), json!("t_thconc_floor")),
+        let s = |v: &str| v.to_string();
+        let terrain: HashMap<char, String> = [
+            ('w', s("t_wall_log")),
+            ('W', s("t_chainfence")),
+            ('^', s("t_chaingate_c")),
+            ('.', s("t_thconc_floor")),
         ]
         .into_iter()
         .collect();
-        let furniture: HashMap<String, Value> = [
-            ("h".to_string(), json!("f_chair")),
-            ("c".to_string(), json!("f_counter")),
-            ("t".to_string(), json!("f_toilet")),
+        let furniture: HashMap<char, String> = [
+            ('h', s("f_chair")),
+            ('c', s("f_counter")),
+            ('t', s("f_toilet")),
+            ('b', s("f_bed")),
         ]
         .into_iter()
         .collect();
@@ -377,7 +432,8 @@ mod tests {
         assert_eq!(cell_to_prop('^', &terrain, &furniture), None); // gate skipped
         assert_eq!(cell_to_prop('h', &terrain, &furniture), Some(PropKind::Chair));
         assert_eq!(cell_to_prop('c', &terrain, &furniture), Some(PropKind::Table));
-        assert_eq!(cell_to_prop('t', &terrain, &furniture), None); // toilet unmodelled
+        assert_eq!(cell_to_prop('b', &terrain, &furniture), Some(PropKind::Furniture)); // bed
+        assert_eq!(cell_to_prop('t', &terrain, &furniture), Some(PropKind::Furniture)); // toilet
         assert_eq!(cell_to_prop('.', &terrain, &furniture), None); // floor skipped
         assert_eq!(cell_to_prop(' ', &terrain, &furniture), None); // unknown
     }
@@ -417,9 +473,15 @@ mod tests {
     }
 
     #[test]
-    fn palette_using_entry_is_rejected() {
-        // s_garage (unlike s_garage_1) references parametrized_walls_palette.
-        let err = mapgen_to_template(GARAGE_JSON, "s_garage", CDDA_TILE).unwrap_err();
-        assert_eq!(err, CddaError::UnsupportedPalettes("s_garage".to_string()));
+    fn imports_palette_driven_house_with_walls_and_furniture() {
+        // house_01 is fully palette-driven — walls + the domestic
+        // furniture vocabulary come from resolving its 3 palettes.
+        let t = house_template().expect("house should import");
+        let n = |k: PropKind| t.props.iter().filter(|p| p.kind == k).count();
+        let walls = n(PropKind::Wall) + n(PropKind::WallNS) + n(PropKind::WallEW);
+        assert!(walls > 10, "expected a resolved wall outline, got {walls}");
+        let furniture = n(PropKind::Chair) + n(PropKind::Table) + n(PropKind::Furniture);
+        assert!(furniture > 3, "expected resolved furniture, got {furniture}");
+        assert!(n(PropKind::Roof) > 0, "expected a roof");
     }
 }

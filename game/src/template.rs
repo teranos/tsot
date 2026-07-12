@@ -34,6 +34,8 @@ pub enum PropKind {
     WallEW,
     /// Flat roof slab; elevation carried in the prop's y offset.
     Roof,
+    /// Generic solid furniture (bed, dresser, fridge, …) — a box.
+    Furniture,
 }
 
 /// Render/identity tag for a static structure prop (chair, table, and
@@ -130,6 +132,13 @@ pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3
             // Overhead — no collider; the player walks under it.
             PropKind::Roof => commands
                 .spawn((StructureProp { kind: PropKind::Roof }, Position(pos)))
+                .id(),
+            PropKind::Furniture => commands
+                .spawn((
+                    StructureProp { kind: PropKind::Furniture },
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(50.0, 70.0, 50.0)),
+                ))
                 .id(),
         };
         spawned.push(entity);
