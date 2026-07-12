@@ -1,12 +1,10 @@
-use bevy_ecs::prelude::*;
 use bevy_math::{Vec2, Vec3};
 
-use crate::physics::{PlayerMarker, Position, Velocity};
-
-/// World half-extent — half-size of the walkable XZ square at Y=0.
-/// 6 km × 6 km of forest floor. The clearing sits at the origin;
-/// the player spawns far enough away to be out of earshot until
-/// they walk in along the trail.
+/// Half-extent of the *content* region — the square around the origin
+/// where whole-world placers (campsites) still generate. No longer a
+/// wall: the floor and forest stream infinitely (see chunk.rs), so the
+/// player can walk past this into endless forest. Only bounds the
+/// not-yet-chunked content.
 pub const FLOOR_HALF: f32 = 8000.0;
 
 /// Where the player spawns — well south of the clearing. The trail
@@ -31,26 +29,6 @@ pub fn touch_drag_to_plane(dx: f32, dy: f32, deadzone: f32, radius: f32) -> Vec2
         return Vec2::ZERO;
     }
     (v / len) * (len / radius).min(1.0)
-}
-
-/// XZ wall clamp — keeps the player inside the world. Extracted from
-/// rave's `move_player` so the clamp logic runs even without the
-/// input systems that ported code depends on. Zeros the velocity
-/// component on the clamped axis so the player doesn't accumulate
-/// speed pushing into the wall.
-pub fn world_bounds_clamp(
-    mut players: Query<(&mut Position, &mut Velocity), With<PlayerMarker>>,
-) {
-    for (mut pos, mut vel) in &mut players {
-        if pos.0.x.abs() > FLOOR_HALF {
-            pos.0.x = pos.0.x.clamp(-FLOOR_HALF, FLOOR_HALF);
-            vel.0.x = 0.0;
-        }
-        if pos.0.z.abs() > FLOOR_HALF {
-            pos.0.z = pos.0.z.clamp(-FLOOR_HALF, FLOOR_HALF);
-            vel.0.z = 0.0;
-        }
-    }
 }
 
 #[cfg(test)]

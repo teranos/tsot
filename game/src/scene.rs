@@ -10,7 +10,6 @@ use crate::map::Pin;
 use crate::physics::{self, AabbCollider, NpcMarker, PlayerMarker, Position};
 use crate::remote_players::{RemotePlayers, color_for_peer};
 use crate::trail::TrailMarker;
-use crate::room;
 use crate::template::{PropKind, StructureProp};
 use crate::trees;
 
@@ -337,15 +336,21 @@ fn prop_appearance(kind: PropKind) -> ([f32; 3], [f32; 3]) {
     }
 }
 
+/// The floor is a single plane that follows the player — no world
+/// edge. Half-extent large enough to exceed the view and the streamed
+/// chunk region, so a uniform floor always fills the screen no matter
+/// how far you roam. (A flat, untextured plane sliding under you is
+/// invisible.)
+const FLOOR_FOLLOW_HALF: f32 = 6000.0;
+
 pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
-    let floor_half = room::FLOOR_HALF;
     let mut instances: Vec<SceneInstance> = Vec::with_capacity(
         1 + snap.trees.len() + snap.obstacles.len() + snap.fires.len() + snap.trails.len() + 1,
     );
     instances.push(SceneInstance {
-        pos: [0.0, -50.0, 0.0],
+        pos: [snap.player.x, -50.0, snap.player.z],
         color: [0.09, 0.11, 0.15],
-        scale: [floor_half * 2.0, 100.0, floor_half * 2.0],
+        scale: [FLOOR_FOLLOW_HALF * 2.0, 100.0, FLOOR_FOLLOW_HALF * 2.0],
     });
     // Trail — a thin flat rectangle sitting just above the ground.
     // Length is baked in via crate::trail::TRAIL_END_Z - TRAIL_START_Z.
@@ -429,6 +434,25 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floor_follows_the_player_so_there_is_no_world_edge() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![],
+            player: Vec3::new(123_456.0, 20.0, -98_765.0),
+        };
+        let instances = snapshot_to_instances(&snap);
+        // The floor is the first instance; it sits under the player.
+        assert_eq!(instances[0].pos[0], 123_456.0);
+        assert_eq!(instances[0].pos[2], -98_765.0);
+    }
 
     #[test]
     fn cube_geometry_is_36_verts_on_unit_bounds_with_unit_normals() {
