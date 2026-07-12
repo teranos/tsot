@@ -18,11 +18,15 @@ use bevy_math::Vec3;
 use crate::hash::{jitter, wang_hash};
 use crate::obs;
 use crate::physics::{AabbCollider, Position};
+use crate::room::FLOOR_HALF;
 
 // Ported constants — verbatim values from rave.
-const FLOOR_HALF: f32 = 3000.0;
 const CLEARING_HALF: f32 = 500.0;
-const CELL: f32 = 80.0;
+// Sparsened from 80 when the world grew to FLOOR_HALF=8000, so the
+// forest covers the larger map without a ~10k-entity explosion — and
+// the extra spacing reads as more open. Drop back toward 80 for a
+// denser wood.
+const CELL: f32 = 120.0;
 const SPAWN_THRESHOLD: u32 = u32::MAX / 8;
 const CLEARING_EXCLUSION: f32 = CLEARING_HALF + 60.0;
 const TRAIL_CORRIDOR_HALF: f32 = 70.0;

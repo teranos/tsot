@@ -114,6 +114,14 @@ pub struct SceneCamera {
     pub far: f32,
 }
 
+/// Follow-camera ortho half-extent, in world units — the visible
+/// radius around the player. Absolute (not floor-relative) so growing
+/// the world doesn't zoom the player's view back out. Smaller = more
+/// zoomed in; the world runs past the screen edge, which is what makes
+/// it read as open rather than as a board. (Future: minimap +
+/// discovery to navigate the part you can't see.)
+const FOLLOW_HALF_EXTENT: f32 = 1450.0;
+
 impl SceneCamera {
     pub fn default_for_floor(floor_half: f32) -> Self {
         // True isometric: equal offsets on all three axes → 45° yaw
@@ -136,7 +144,7 @@ impl SceneCamera {
             eye: [player[0] + d, player[1] + d, player[2] + d],
             target: player,
             up: [0.0, 1.0, 0.0],
-            half_extent: floor_half * 0.7,
+            half_extent: FOLLOW_HALF_EXTENT,
             near: 100.0,
             far: floor_half * 6.0,
         }
@@ -315,8 +323,16 @@ fn prop_appearance(kind: PropKind) -> ([f32; 3], [f32; 3]) {
     match kind {
         PropKind::Chair => ([0.30, 0.20, 0.12], [28.0, 36.0, 28.0]),
         PropKind::Table => ([0.42, 0.28, 0.14], [64.0, 28.0, 64.0]),
-        // One CDDA tile wide; size matches the Wall collider in template.rs.
+        // Walls are one CDDA tile long, thin across the run. NS runs
+        // along Z (thin in X); EW runs along X (thin in Z); the plain
+        // Wall (corner/junction) fills the tile. Sizes match the
+        // colliders in template.rs.
         PropKind::Wall => ([0.48, 0.47, 0.50], [80.0, 220.0, 80.0]),
+        PropKind::WallNS => ([0.48, 0.47, 0.50], [24.0, 220.0, 80.0]),
+        PropKind::WallEW => ([0.48, 0.47, 0.50], [80.0, 220.0, 24.0]),
+        // Flat roof slab, sits at ROOF_HEIGHT (elevation comes from the
+        // prop's y position, not this box).
+        PropKind::Roof => ([0.33, 0.30, 0.34], [80.0, 20.0, 80.0]),
         PropKind::Campfire => ([1.0, 0.45, 0.08], [50.0, 60.0, 50.0]),
     }
 }
@@ -394,8 +410,10 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     // ground so the cube rises from y=0 (centre at half-height).
     for (pos, kind) in &snap.structures {
         let (color, scale) = prop_appearance(*kind);
+        // Ground props anchor at y=0 → base on the floor; elevated props
+        // (the roof) carry their height in pos.y.
         instances.push(SceneInstance {
-            pos: [pos.x, scale[1] * 0.5, pos.z],
+            pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
             color,
             scale,
         });

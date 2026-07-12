@@ -12,10 +12,11 @@ use crate::room;
 use crate::template::{stamp_template, Prop, PropKind, Template};
 
 /// Coarse placement grid — much larger than the tree cell (80) so
-/// campsites are sparse and spread out.
-const CELL: f32 = 700.0;
-/// ~1-in-6 cells carries a campsite, before the exclusions below.
-const SPAWN_THRESHOLD: u32 = u32::MAX / 6;
+/// campsites are sparse and spread across the (now much larger) world.
+const CELL: f32 = 2000.0;
+/// ~1-in-24 gated cells carries a campsite, before the exclusions
+/// below — a handful across the whole map, not a camp in every glade.
+const SPAWN_THRESHOLD: u32 = u32::MAX / 24;
 /// Central clearing (the rave floor) half-extent — kept campsite-free.
 const CLEARING_HALF: f32 = 500.0;
 const CLEARING_EXCLUSION: f32 = CLEARING_HALF + 300.0;

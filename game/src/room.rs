@@ -7,7 +7,7 @@ use crate::physics::{PlayerMarker, Position, Velocity};
 /// 6 km × 6 km of forest floor. The clearing sits at the origin;
 /// the player spawns far enough away to be out of earshot until
 /// they walk in along the trail.
-pub const FLOOR_HALF: f32 = 3000.0;
+pub const FLOOR_HALF: f32 = 8000.0;
 
 /// Where the player spawns — well south of the clearing. The trail
 /// runs north from here to the clearing edge.

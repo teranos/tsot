@@ -26,8 +26,14 @@ pub enum PropKind {
     Campfire,
     Chair,
     Table,
-    /// A wall segment one CDDA-tile wide. Used by the mapgen importer.
+    /// Wall segment filling a whole CDDA tile — corner/junction/isolated.
     Wall,
+    /// Wall running N–S (along Z): long in Z, thin in X.
+    WallNS,
+    /// Wall running E–W (along X): long in X, thin in Z.
+    WallEW,
+    /// Flat roof slab; elevation carried in the prop's y offset.
+    Roof,
 }
 
 /// Render/identity tag for a static structure prop (chair, table, and
@@ -96,13 +102,31 @@ pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3
                 ));
             }
             PropKind::Wall => {
-                // Solid, one CDDA-tile wide. Size matches scene.rs's
-                // Wall appearance (== CDDA_TILE world units).
+                // Solid, one CDDA tile square. Sizes across all wall
+                // kinds match scene.rs's appearances.
                 commands.spawn((
                     StructureProp { kind: PropKind::Wall },
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(80.0, 220.0, 80.0)),
                 ));
+            }
+            PropKind::WallNS => {
+                commands.spawn((
+                    StructureProp { kind: PropKind::WallNS },
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(24.0, 220.0, 80.0)),
+                ));
+            }
+            PropKind::WallEW => {
+                commands.spawn((
+                    StructureProp { kind: PropKind::WallEW },
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(80.0, 220.0, 24.0)),
+                ));
+            }
+            PropKind::Roof => {
+                // Overhead — no collider; the player walks under it.
+                commands.spawn((StructureProp { kind: PropKind::Roof }, Position(pos)));
             }
         }
     }
