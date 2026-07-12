@@ -329,12 +329,12 @@ fn _init() {
     let mut app = App::new();
     app.insert_resource(SelfPeer(id.as_hex()));
     app.insert_resource(chunk::LoadedChunks::default());
+    app.insert_resource(cdda::load_building_templates());
     app.add_systems(
         Startup,
         (
             setup,
             campfire::setup_campfire.after(setup),
-            cdda::setup_cdda_buildings.after(setup),
             dpad::setup_dpad.after(setup),
             map::setup_pins.after(setup),
             trail::setup_trail.after(setup),

@@ -17,6 +17,7 @@ use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 
 use crate::campsite;
+use crate::cdda;
 use crate::physics::{AabbCollider, Position, PlayerMarker};
 use crate::template::stamp_template;
 use crate::trees::{self, TreeFoliage, TreeTrunk};
@@ -61,12 +62,23 @@ pub fn active_chunks(center: ChunkCoord, radius: i32) -> Vec<ChunkCoord> {
 /// Deterministic trees in a chunk — the ground-plane base positions of
 /// every tree whose cell this chunk owns. Pure.
 pub fn trees_in_chunk(c: ChunkCoord) -> Vec<Vec3> {
+    // A building (if any) fits within its own chunk, so only this
+    // chunk's building can shadow these cells — no neighbour query.
+    let building = cdda::building_anchor_in_chunk(c);
     let mut out = Vec::new();
     for lx in 0..CHUNK_CELLS {
         for lz in 0..CHUNK_CELLS {
             let ix = c.x * CHUNK_CELLS + lx;
             let iz = c.z * CHUNK_CELLS + lz;
             if let Some(base) = trees::tree_at_cell(ix, iz) {
+                // Don't grow trees through a building — clear its footprint.
+                if let Some(b) = building {
+                    if (base.x - b.x).abs() < cdda::BUILDING_FOOTPRINT_HALF
+                        && (base.z - b.z).abs() < cdda::BUILDING_FOOTPRINT_HALF
+                    {
+                        continue;
+                    }
+                }
                 out.push(base);
             }
         }
@@ -106,6 +118,7 @@ pub fn stream_chunks(
     mut commands: Commands,
     player_q: Query<&Position, With<PlayerMarker>>,
     mut loaded: ResMut<LoadedChunks>,
+    buildings: Res<cdda::BuildingTemplates>,
 ) {
     let Some(player) = player_q.iter().next() else {
         return;
@@ -143,6 +156,12 @@ pub fn stream_chunks(
                 &campsite::campsite_template(),
                 anchor,
             ));
+        }
+        if let Some(anchor) = cdda::building_anchor_in_chunk(c) {
+            if !buildings.0.is_empty() {
+                let idx = cdda::building_index(c, buildings.0.len());
+                entities.extend(stamp_template(&mut commands, &buildings.0[idx], anchor));
+            }
         }
         loaded.0.insert(c, entities);
     }
@@ -186,6 +205,27 @@ mod tests {
     }
 
     #[test]
+    fn trees_dont_grow_through_a_building() {
+        // Find a chunk that carries a building.
+        let mut found = None;
+        'search: for x in 0..80 {
+            for z in 0..80 {
+                let c = ChunkCoord { x, z };
+                if let Some(a) = cdda::building_anchor_in_chunk(c) {
+                    found = Some((c, a));
+                    break 'search;
+                }
+            }
+        }
+        let (c, anchor) = found.expect("a building chunk should exist");
+        for base in trees_in_chunk(c) {
+            let inside = (base.x - anchor.x).abs() < cdda::BUILDING_FOOTPRINT_HALF
+                && (base.z - anchor.z).abs() < cdda::BUILDING_FOOTPRINT_HALF;
+            assert!(!inside, "tree at {base:?} grows through building at {anchor:?}");
+        }
+    }
+
+    #[test]
     fn a_forest_chunk_carries_trees() {
         // A chunk well away from the clearing should hold some trees.
         assert!(!trees_in_chunk(ChunkCoord { x: 6, z: 6 }).is_empty());
@@ -197,6 +237,7 @@ mod tests {
 
         let mut world = World::new();
         world.insert_resource(LoadedChunks::default());
+        world.insert_resource(cdda::load_building_templates());
         let player = world
             .spawn((PlayerMarker, Position(Vec3::new(0.0, 20.0, 0.0))))
             .id();
