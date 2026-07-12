@@ -334,7 +334,6 @@ fn _init() {
         (
             setup,
             campfire::setup_campfire.after(setup),
-            campsite::setup_campsites.after(setup),
             cdda::setup_cdda_buildings.after(setup),
             dpad::setup_dpad.after(setup),
             map::setup_pins.after(setup),

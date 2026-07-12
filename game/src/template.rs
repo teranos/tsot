@@ -76,11 +76,15 @@ pub fn resolve_placements(template: &Template, anchor: Vec3) -> Vec<(Vec3, PropK
 /// bundle. The per-kind bundles mirror what each module spawned when
 /// it placed itself directly, so the render/collision contract is
 /// unchanged.
-pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3) {
+/// Returns the spawned entities, so a streaming caller can despawn a
+/// placed structure when its chunk unloads. Callers that place
+/// permanent structures can ignore the return.
+pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3) -> Vec<Entity> {
+    let mut spawned = Vec::new();
     for (pos, kind) in resolve_placements(template, anchor) {
-        match kind {
-            PropKind::Campfire => {
-                commands.spawn((
+        let entity = match kind {
+            PropKind::Campfire => commands
+                .spawn((
                     Campfire {
                         intensity: campfire::BASE_INTENSITY,
                     },
@@ -88,48 +92,49 @@ pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3
                     AabbCollider {
                         half_extents: campfire::COLLIDER_HALF,
                     },
-                ));
-            }
-            PropKind::Chair => {
-                // Decor — no collider; you can step around a camp chair.
-                commands.spawn((StructureProp { kind: PropKind::Chair }, Position(pos)));
-            }
-            PropKind::Table => {
-                commands.spawn((
+                ))
+                .id(),
+            // Decor — no collider; you can step around a camp chair.
+            PropKind::Chair => commands
+                .spawn((StructureProp { kind: PropKind::Chair }, Position(pos)))
+                .id(),
+            PropKind::Table => commands
+                .spawn((
                     StructureProp { kind: PropKind::Table },
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(64.0, 28.0, 64.0)),
-                ));
-            }
-            PropKind::Wall => {
-                // Solid, one CDDA tile square. Sizes across all wall
-                // kinds match scene.rs's appearances.
-                commands.spawn((
+                ))
+                .id(),
+            // Solid, one CDDA tile square. Wall sizes match scene.rs.
+            PropKind::Wall => commands
+                .spawn((
                     StructureProp { kind: PropKind::Wall },
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(80.0, 220.0, 80.0)),
-                ));
-            }
-            PropKind::WallNS => {
-                commands.spawn((
+                ))
+                .id(),
+            PropKind::WallNS => commands
+                .spawn((
                     StructureProp { kind: PropKind::WallNS },
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(24.0, 220.0, 80.0)),
-                ));
-            }
-            PropKind::WallEW => {
-                commands.spawn((
+                ))
+                .id(),
+            PropKind::WallEW => commands
+                .spawn((
                     StructureProp { kind: PropKind::WallEW },
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(80.0, 220.0, 24.0)),
-                ));
-            }
-            PropKind::Roof => {
-                // Overhead — no collider; the player walks under it.
-                commands.spawn((StructureProp { kind: PropKind::Roof }, Position(pos)));
-            }
-        }
+                ))
+                .id(),
+            // Overhead — no collider; the player walks under it.
+            PropKind::Roof => commands
+                .spawn((StructureProp { kind: PropKind::Roof }, Position(pos)))
+                .id(),
+        };
+        spawned.push(entity);
     }
+    spawned
 }
 
 #[cfg(test)]

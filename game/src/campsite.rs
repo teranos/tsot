@@ -1,35 +1,33 @@
 //! Hash-seeded procedural campsites — a fire ringed by camp chairs
-//! with a couple of tables, stamped at deterministic clearings across
-//! the world. Same world for every peer, no shared RNG: the anchors
-//! come from the shared `hash::wang_hash`, exactly like the forest, so
-//! two peers compute the identical set of campsites independently.
+//! with a couple of tables. Placed per chunk (like the forest), so
+//! they scatter endlessly across the streamed, boundless world rather
+//! than only within a central region. Same world for every peer: the
+//! placement is pure `hash::wang_hash` of the chunk coordinate, no RNG.
+//! The chunk streamer (`chunk::stream_chunks`) spawns a chunk's
+//! campsite when it loads and despawns it when it unloads.
 
-use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 
+use crate::chunk::{ChunkCoord, CHUNK_SIZE};
 use crate::hash::{jitter, wang_hash};
-use crate::room;
-use crate::template::{stamp_template, Prop, PropKind, Template};
+use crate::template::{Prop, PropKind, Template};
 
-/// Coarse placement grid — much larger than the tree cell (80) so
-/// campsites are sparse and spread across the (now much larger) world.
-const CELL: f32 = 2000.0;
-/// ~1-in-24 gated cells carries a campsite, before the exclusions
-/// below — a handful across the whole map, not a camp in every glade.
-const SPAWN_THRESHOLD: u32 = u32::MAX / 24;
+/// Roughly 1 chunk in 10 carries a campsite — sparse enough that you
+/// rarely see more than one at a time, common enough to stumble on.
+const CAMPSITE_CHUNK_CHANCE: u32 = u32::MAX / 10;
 /// Central clearing (the rave floor) half-extent — kept campsite-free.
 const CLEARING_HALF: f32 = 500.0;
 const CLEARING_EXCLUSION: f32 = CLEARING_HALF + 300.0;
 /// Keep campsites off the south-going trail so the walk-in stays open.
 const TRAIL_CORRIDOR_HALF: f32 = 220.0;
 /// Salt distinct from the forest's so campsites and trees don't
-/// correlate cell-for-cell.
+/// correlate chunk-for-chunk.
 const CAMPSITE_SALT: u32 = 0x0CA3_5175;
 
 /// The campsite layout: a fire at the centre, four camp chairs ringing
 /// it, two tables off to the side. Offsets are world units relative to
-/// the anchor. Swap this for a CDDA-imported layout later — the
-/// placement + stamp machinery doesn't change.
+/// the anchor. Swap for a CDDA-imported layout later — the placement +
+/// stamp machinery doesn't change.
 pub fn campsite_template() -> Template {
     const CHAIR_R: f32 = 90.0;
     let mut props = vec![Prop { offset: Vec3::ZERO, kind: PropKind::Campfire }];
@@ -41,45 +39,31 @@ pub fn campsite_template() -> Template {
     Template { props }
 }
 
-/// Deterministic campsite anchors. Pure — same result on every peer,
-/// every call, no RNG. A cell carries a campsite when its hash gates
-/// in and it clears the central clearing + the trail corridor.
-pub fn campsite_anchors() -> Vec<Vec3> {
-    let floor_half = room::FLOOR_HALF;
-    let cells_per_side = (floor_half * 2.0 / CELL) as i32;
-    let origin = -floor_half;
-    let mut anchors = Vec::new();
-    for ix in 0..cells_per_side {
-        for iz in 0..cells_per_side {
-            let cell_x = origin + ix as f32 * CELL + CELL / 2.0;
-            let cell_z = origin + iz as f32 * CELL + CELL / 2.0;
-            // Skip the central clearing.
-            if cell_x.hypot(cell_z) < CLEARING_EXCLUSION {
-                continue;
-            }
-            // Skip the south-going trail corridor.
-            if cell_z > CLEARING_HALF && cell_x.abs() < TRAIL_CORRIDOR_HALF {
-                continue;
-            }
-            // Hash gate — only some cells carry a campsite.
-            if wang_hash(ix, iz, CAMPSITE_SALT) >= SPAWN_THRESHOLD {
-                continue;
-            }
-            // Sub-cell jitter so campsites don't read as a grid.
-            let jx = jitter(ix, iz, 1) * (CELL * 0.3);
-            let jz = jitter(ix, iz, 2) * (CELL * 0.3);
-            anchors.push(Vec3::new(cell_x + jx, 0.0, cell_z + jz));
-        }
+/// The campsite anchor for a chunk, if the hash gates one in and it
+/// clears the central clearing + trail. Pure + deterministic — every
+/// peer generates the identical campsite for a chunk.
+pub fn campsite_in_chunk(c: ChunkCoord) -> Option<Vec3> {
+    // Only some chunks carry one.
+    if wang_hash(c.x, c.z, CAMPSITE_SALT) >= CAMPSITE_CHUNK_CHANCE {
+        return None;
     }
-    anchors
-}
-
-/// Startup system — stamp a campsite at every anchor.
-pub fn setup_campsites(mut commands: Commands) {
-    let template = campsite_template();
-    for anchor in campsite_anchors() {
-        stamp_template(&mut commands, &template, anchor);
+    // A jittered anchor inside the chunk (kept off the edges so its
+    // props don't spill into a neighbour).
+    let cx = (c.x as f32 + 0.5) * CHUNK_SIZE;
+    let cz = (c.z as f32 + 0.5) * CHUNK_SIZE;
+    let anchor = Vec3::new(
+        cx + jitter(c.x, c.z, 7) * (CHUNK_SIZE * 0.3),
+        0.0,
+        cz + jitter(c.x, c.z, 8) * (CHUNK_SIZE * 0.3),
+    );
+    // Keep clear of the central clearing + trail corridor.
+    if anchor.x.hypot(anchor.z) < CLEARING_EXCLUSION {
+        return None;
     }
+    if anchor.z > CLEARING_HALF && anchor.x.abs() < TRAIL_CORRIDOR_HALF {
+        return None;
+    }
+    Some(anchor)
 }
 
 #[cfg(test)]
@@ -87,20 +71,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn anchors_are_nonempty_and_deterministic() {
-        let a = campsite_anchors();
-        assert!(!a.is_empty(), "expected at least one campsite");
-        assert!(a.len() < 60, "campsite count unreasonable: {}", a.len());
-        assert_eq!(a, campsite_anchors(), "placement must be deterministic");
+    fn campsite_in_chunk_is_deterministic() {
+        let c = ChunkCoord { x: 4, z: -9 };
+        assert_eq!(campsite_in_chunk(c), campsite_in_chunk(c));
     }
 
     #[test]
-    fn anchors_avoid_the_central_clearing() {
-        for p in campsite_anchors() {
-            assert!(
-                p.x.hypot(p.z) >= CLEARING_HALF,
-                "campsite at {p:?} intrudes on the clearing",
-            );
+    fn campsites_are_sparse_but_present() {
+        let (mut count, mut total) = (0, 0);
+        for x in -20..20 {
+            for z in -20..20 {
+                total += 1;
+                if campsite_in_chunk(ChunkCoord { x, z }).is_some() {
+                    count += 1;
+                }
+            }
+        }
+        assert!(count > 0, "some chunks should carry a campsite");
+        assert!(count < total / 3, "campsites should be sparse: {count}/{total}");
+    }
+
+    #[test]
+    fn campsites_avoid_the_central_clearing() {
+        for x in -3..3 {
+            for z in -3..3 {
+                if let Some(a) = campsite_in_chunk(ChunkCoord { x, z }) {
+                    assert!(
+                        a.x.hypot(a.z) >= CLEARING_EXCLUSION,
+                        "campsite {a:?} intrudes on the clearing"
+                    );
+                }
+            }
         }
     }
 
@@ -111,7 +112,6 @@ mod tests {
         assert_eq!(count(PropKind::Campfire), 1);
         assert_eq!(count(PropKind::Chair), 4);
         assert_eq!(count(PropKind::Table), 2);
-        // The fire is the anchor — zero offset.
         let fire = t.props.iter().find(|p| p.kind == PropKind::Campfire).unwrap();
         assert_eq!(fire.offset, Vec3::ZERO);
     }

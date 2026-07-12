@@ -257,7 +257,9 @@ pub fn garage_template() -> Result<Template, CddaError> {
 /// just doesn't appear) rather than crashing.
 pub fn setup_cdda_buildings(mut commands: Commands) {
     match garage_template() {
-        Ok(t) => stamp_template(&mut commands, &t, GARAGE_ANCHOR),
+        Ok(t) => {
+            stamp_template(&mut commands, &t, GARAGE_ANCHOR);
+        }
         Err(e) => obs::emit(&format!("[cdda] garage import failed: {e}")),
     }
 }

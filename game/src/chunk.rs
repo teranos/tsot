@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 
+use crate::campsite;
 use crate::physics::{AabbCollider, Position, PlayerMarker};
+use crate::template::stamp_template;
 use crate::trees::{self, TreeFoliage, TreeTrunk};
 
 /// Cells per chunk side. A chunk is an integer block of forest cells,
@@ -134,6 +136,13 @@ pub fn stream_chunks(
         let mut entities = Vec::new();
         for base in trees_in_chunk(c) {
             entities.extend(spawn_tree(&mut commands, base));
+        }
+        if let Some(anchor) = campsite::campsite_in_chunk(c) {
+            entities.extend(stamp_template(
+                &mut commands,
+                &campsite::campsite_template(),
+                anchor,
+            ));
         }
         loaded.0.insert(c, entities);
     }
