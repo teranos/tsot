@@ -3,6 +3,83 @@
 Working notes for continuing this branch in a fresh session. Blunt on
 purpose: what's real, what's tested, what's never been looked at.
 
+## The honest part — what's wrong here (read this first)
+
+Written to be fixed, not to be excused. If you're improving this code,
+start here.
+
+- **The whole feature set was shipped without being seen.** Glass, HUD,
+  jukebox, volume slider, watermark — not one frame was ever rendered by
+  the agent that built them (no GPU in the sandbox). Unit tests check
+  instance-list separation and layout arithmetic; they prove nothing
+  about what appears. Commit messages say "verified" — they mean the
+  plumbing compiled, not that it looks right. Distrust every visual
+  claim in the log.
+
+- **The glass is incorrect, not just unverified.** It alpha-blends panes
+  with **depth-write off and no back-to-front sort**. That is
+  order-dependent compositing — a textbook transparency bug. Windows on
+  two walls will blend right or wrong depending on entity iteration
+  order. The user asked for "real glass"; this is "alpha blend without
+  sorting," which is a different, wrong thing. It was flagged in a review
+  and shipped anyway, as if flagging were fixing.
+
+- **Magic numbers with no basis.** `GLASS_ALPHA = 0.34`, glass tint
+  `[0.55,0.70,0.85]`, watermark alpha `0.30`, the wall-cutaway threshold,
+  the jukebox radius — all pulled from nowhere and never tuned against a
+  rendered frame.
+
+- **The watermark font is hand-guessed bitmaps.** The 3×5 glyphs for
+  `n`, `k`, `w`, and the hex letters are cramped guesses; nobody has seen
+  them at size. The test asserts "quads land in the top-right" — test
+  theater that can't catch an unreadable glyph.
+
+- **The native glass pass in `render.rs` has never executed.** It exists
+  for "parity" and could be broken with no signal. Parity theater.
+
+- **`?v=<commit>` cache-bust may do nothing.** If CloudFront drops the
+  query string from its cache key (a common default), it busts only the
+  browser, not the CDN — and I never checked the distribution config.
+  Shipped as "loop closed" on an unverified assumption.
+
+- **The JS build-match guard is probably redundant** (the watermark +
+  cache-bust already cover the common cases). It was added for
+  completeness and only questioned when the user did. Machinery that
+  hasn't earned its place.
+
+- **Known latent bugs left in on purpose, then written down instead of
+  fixed:** `build.rs` flattens to basename with no collision guard
+  (silent clobber); no `game/flake.lock` (unlocked inputs, unlike the
+  rest of the repo); `fetch-cdda.sh` verifies nothing it downloads;
+  stale `.cdda-src` is used silently when `CDDA_RELEASE` changes;
+  `Music` is `ResMut` in one system and `Option<ResMut>` in another
+  (one path panics if the resource is missing).
+
+- **The commit history is evidence of thrashing.** CDDA went
+  vendor → re-vendor → re-vendor → de-vendor → pin → lock across many
+  commits because the vendoring question was answered wrong twice before
+  it was answered right. The CC-BY-SA JSON blobs are now permanent in
+  history. A `git log -p` reader sees churn and licensed third-party
+  data. This wants a squash and probably a history scrub before a PR.
+
+- **Supply-chain hypocrisy.** Right after purging vendored third-party
+  data for provenance, `DeterminateSystems/nix-installer-action@main`
+  (a different vendor, unpinned floating ref) was wired into CI, and Nix
+  was installed in-container via a vendor `curl | sh`. Both caught only
+  because the user caught them.
+
+- **Process failures that produced the above:** claiming CI was
+  "suspicious / may be broken" without opening the Actions tab that was
+  available the whole time; offering the user false either/or choices to
+  dodge judgment calls I should have made; building the version readout
+  as a JS DOM badge at `bottom:6px` — wrong technology (JS, not the
+  game) *and* wrong place (behind the mobile toolbar) — after being told
+  plainly it belongs in the Rust render.
+
+The through-line: confident commit messages and green unit tests were
+allowed to stand in for looking at the running thing. Fix that habit
+first; it caused most of the rest.
+
 ## Branch
 
 `stamp-template`. All work below is on it and pushed to
