@@ -98,6 +98,79 @@ are the concrete things to improve — not vibes.
 - Don't hand the user implementation either/or questions; make the call
   and state it.
 
+## The interesting frontier — CDDA × the game
+
+The point of this branch, and the most interesting thing in it: **CDDA
+mapgen is authored, human, canonical 2D tile data; our world is a
+streaming, isometric, voxel, deterministic, per-peer-identical runtime.
+Cohering them is projecting one medium's canon into another's engine.**
+Right now that projection is shallow — symbol → `PropKind` → colored
+cube (`cdda::cell_to_prop`). The opportunities are all about deepening
+it. Ranked by how much world they unlock.
+
+1. **How much of the corpus can we swallow?** We resolve two buildings
+   (garage, house01) out of *hundreds* in `data/json/mapgen`, all in the
+   format `mapgen_to_template` already parses. Adding one is a line in
+   `cdda-files.txt`. So: what actually breaks at scale? Unknown symbols
+   silently drop to `None` in `cell_to_prop`; `place_nested`,
+   `place_vehicles`, `place_monsters`, nested mapgen, and multi-tile
+   overmap specials aren't handled at all. **First move: a coverage
+   report** — sweep the whole mapgen tree, count what fraction of
+   symbols and palette parameters we resolve vs silently drop. That map
+   *is* the roadmap, and it turns "add buildings" into a measured push
+   instead of a guess.
+
+2. **We render the floor plan; CDDA ships the meaning.** A `#` is a wall
+   to us; to CDDA it may be flammable, a container, a connection, a
+   door. The hand-placed purple jukebox is exactly a CDDA furniture
+   entry we could instead *read* from the corpus. Which CDDA flags map
+   to game behavior? `TRANSPARENT` already wants to feed the glass pass;
+   `CONTAINER`/`SEALED` want loot; doors want open/close. Cohering
+   semantics, not just geometry, is where buildings stop being scenery.
+
+3. **Palettes are already a procedural grammar — how far does it go?**
+   `palette.rs` rolls a per-building seed through CDDA's variant palettes
+   (abandoned / hoarder / survivor) to vary furniture density and wall
+   material. We deliberately *flattened* CDDA's authored weights to a
+   uniform pick (see the module doc) to get visible variety. That's a
+   design lever, not a bug — but it's worth asking whether the world's
+   generator should *be* CDDA's parameter/distribution system rather than
+   our per-chunk hash, and whether neighborhood/city coherence could come
+   from CDDA's overmap layer.
+
+4. **Determinism is the multiplier — and the thing that will break
+   first.** The world is a pure hash (`chunk.rs`); CDDA placement is
+   per-chunk hash + per-building seed, so two peers get the identical
+   world with no shared RNG. That means the *entire* CDDA corpus becomes
+   a shared deterministic universe for free. But resolution has to stay
+   bit-identical across platforms — we already moved to `BTreeMap` to
+   kill default-hasher entropy, and there's f32 in the tree-noise field.
+   **Worth doing before ingesting more: a golden-master test that pins
+   resolved building bytes per (building, seed)**, so a determinism
+   regression is caught the moment it appears rather than as a desync in
+   the field.
+
+5. **The z-axis is half-open.** We already pull the roof as separate
+   mapgen (`roof_om`) and cut it away when you're inside — that's the
+   first z-level UX. CDDA authors basements and upper floors as their own
+   mapgen. Full multi-floor buildings (walk upstairs, go down) is a
+   direct extension of the cut-away work, not a new system.
+
+6. **Settlement scale.** We drop single buildings independently by chunk
+   hash into endless forest. CDDA authors *towns* — roads, blocks,
+   connected specials. Cohering at the town level (a street that reads as
+   a street) is the tier above a lone house in the woods, and it's mostly
+   more authored data, not more code.
+
+7. **The monorepo seam.** Per the repo `CLAUDE.md`, roam v0.5 invokes the
+   ccg engine to resolve PvP encounters. CDDA mapgen carries monster
+   spawns. The open question: could a CDDA building's authored spawns
+   feed the encounter engine — CDDA content driving ccg fights — turning
+   the map corpus into an encounter source, not just architecture?
+
+The cheapest of these to start (a coverage report, #1) is also the one
+that makes every other one legible. Do it first.
+
 ## Branch
 
 `stamp-template`. All work below is on it and pushed to
