@@ -145,9 +145,12 @@ jobs:
       - name: Invalidate CloudFront
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
+          # The JS bundle is content-hashed (main-<hash>.js) and served
+          # from a fresh name each deploy, so it never needs invalidating
+          # — index.html (no-store) references the new name directly.
           INVALIDATION_ID=$(aws cloudfront create-invalidation \
             --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
-            --paths '/index.html' '/main.js' '/game.wasm' '/build-info.json' \
+            --paths '/index.html' '/game.wasm' '/build-info.json' \
             --query 'Invalidation.Id' \
             --output text)
           aws cloudfront wait invalidation-completed \
