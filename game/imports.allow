@@ -35,7 +35,6 @@ env.game_gpu_render_glass
 env.game_touch_state
 env.game_viewport_size
 env.game_input_state
-env.game_show_exclamation
 env.game_identity_load
 env.game_identity_save
 env.game_random_bytes

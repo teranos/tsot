@@ -126,6 +126,7 @@ const IMPACT_DEBOUNCE_MS: u64 = 180;
 static LAST_THUMP_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_BUNK_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_POCK_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_ALERT_MS: AtomicU64 = AtomicU64::new(0);
 
 fn debounced(last: &AtomicU64) -> bool {
     let now = crate::remote_players::now_ms();
@@ -162,6 +163,38 @@ pub fn play_pock() {
         return;
     }
     let samples = synthesize_impact(650.0, 260.0, 0.05, WaveType::Square, 0.15);
+    play_samples(&samples);
+}
+
+/// The MGS "!" alert cadence — four short square blips at ~1400 Hz.
+/// Iconic accompaniment to the "!" pop-over above the NPC.
+pub fn synthesize_alert() -> Vec<f32> {
+    const BLIP_HZ: f32 = 1400.0;
+    const BLIP_SEC: f32 = 0.045;
+    const GAP_SEC: f32 = 0.035;
+    const REPEATS: usize = 4;
+    let gap_len = (GAP_SEC * SAMPLE_RATE as f32) as usize;
+    let mut out = Vec::new();
+    for i in 0..REPEATS {
+        out.extend(synthesize_impact(BLIP_HZ, BLIP_HZ, BLIP_SEC, WaveType::Square, 0.2));
+        if i + 1 < REPEATS {
+            out.extend(std::iter::repeat(0.0).take(gap_len));
+        }
+    }
+    out
+}
+
+/// Play the "!" alert. Debounced by the alert's own duration so a
+/// lingering overlap doesn't retrigger the cadence mid-flight.
+const ALERT_DEBOUNCE_MS: u64 = 600;
+pub fn play_alert() {
+    let now = crate::remote_players::now_ms();
+    let prev = LAST_ALERT_MS.load(Ordering::Relaxed);
+    if now.saturating_sub(prev) < ALERT_DEBOUNCE_MS {
+        return;
+    }
+    LAST_ALERT_MS.store(now, Ordering::Relaxed);
+    let samples = synthesize_alert();
     play_samples(&samples);
 }
 

@@ -86,17 +86,6 @@ async function preInitGpu(): Promise<{ status: number; device: unknown }> {
   }
 }
 
-async function loadBuildInfo() {
-  const el = document.getElementById('game-loading-build')
-  if (!el) return
-  try {
-    const r = await fetch('/build-info.json', { cache: 'no-cache' })
-    if (!r.ok) return
-    const info = await r.json() as { short: string; built_at: string }
-    el.textContent = `build: ${info.short} · ${info.built_at}`
-  } catch (_) {}
-}
-
 // WASD input state — a u32 bitmask (W=1, A=2, S=4, D=8) maintained
 // by window keydown/keyup listeners. Wasm polls via game_input_state.
 let inputBits = 0
@@ -375,29 +364,7 @@ function connectProxy() {
 }
 connectProxy()
 
-// Exclamation overlay — Rust computes clip-space coords above the NPC
-// each frame and passes them here; JS maps to canvas pixels and shows
-// a boxed "!" above that point. Repeated calls refresh the timeout so
-// it lingers for a short tail after the overlap ends.
-const bangEl = document.getElementById('game-bang')
-let bangTimeout: ReturnType<typeof setTimeout> | null = null
-function showBang(clipX: number, clipY: number) {
-  if (!bangEl) return
-  const canvas = document.getElementById('game-canvas')
-  if (canvas) {
-    const rect = canvas.getBoundingClientRect()
-    const xPx = rect.left + (clipX + 1) * 0.5 * rect.width
-    const yPx = rect.top + (1 - clipY) * 0.5 * rect.height
-    bangEl.style.left = `${xPx}px`
-    bangEl.style.top = `${yPx}px`
-  }
-  bangEl.classList.add('shown')
-  if (bangTimeout) clearTimeout(bangTimeout)
-  bangTimeout = setTimeout(() => bangEl.classList.remove('shown'), 1200)
-}
-
 async function main() {
-  loadBuildInfo()
   const gpuPromise = preInitGpu()
   const identityPromise = loadIdentityFromDb().catch(e => {
     console.warn('[game] identity load failed:', e)
@@ -731,7 +698,6 @@ async function main() {
           return 1
         }
       },
-      game_show_exclamation: (clipX: number, clipY: number) => showBang(clipX, clipY),
       game_identity_load: (outPtr: number): number => {
         if (!memory || !identityBytes || identityBytes.length !== 32) return 0
         new Uint8Array(memory.buffer, outPtr, 32).set(identityBytes)

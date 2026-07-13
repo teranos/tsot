@@ -33,41 +33,10 @@ html, body {
   background: #222;
   border: none;
 }
-#game-loading-build {
-  margin-top: 6px;
-  color: #666;
-  font-size: 11px;
-}
-.muted { color: #888; }
 #game-loading progress::-webkit-progress-bar { background: #222; }
 #game-loading progress::-webkit-progress-value { background: #6f9; }
 #game-loading progress::-moz-progress-bar { background: #6f9; }
 body.loaded #game-loading { display: none; }
-#game-bang {
-  position: fixed;
-  left: 0;
-  top: 0;
-  transform: translate(-50%, -110%) scale(0.7);
-  font-size: 32px;
-  font-weight: 800;
-  line-height: 1;
-  color: #ffdd33;
-  background: rgba(20, 15, 5, 0.85);
-  border: 2px solid rgba(255, 200, 40, 0.9);
-  border-radius: 10px;
-  padding: 6px 16px;
-  opacity: 0;
-  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
-  pointer-events: none;
-  z-index: 20;
-  text-shadow: 0 0 12px rgba(255, 210, 0, 0.5);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
-  user-select: none;
-}
-#game-bang.shown {
-  opacity: 1;
-  transform: translate(-50%, -110%) scale(1);
-}
 #game-canvas {
   touch-action: none;
 }

@@ -6,6 +6,7 @@
 use std::cell::RefCell;
 
 pub mod audio;
+pub mod bang;
 pub mod build_info;
 pub mod campfire;
 pub mod campsite;
@@ -32,7 +33,6 @@ pub mod scene;
 pub mod template;
 pub mod trail;
 pub mod trees;
-pub mod ui;
 pub mod watermark;
 
 pub mod gpu_web;
@@ -398,6 +398,7 @@ fn _init() {
         Startup,
         (
             setup,
+            bang::setup_bang.after(setup),
             campfire::setup_campfire.after(setup),
             dpad::setup_dpad.after(setup),
             hud::setup_hud.after(setup),
@@ -421,6 +422,7 @@ fn _init() {
             physics::resolve_collisions.after(physics::advance_player),
             physics::resolve_remote_player_collisions.after(physics::resolve_collisions),
             physics::check_npc_bump.after(physics::advance_npc),
+            bang::age_and_publish.after(physics::check_npc_bump),
             chunk::stream_chunks.after(physics::resolve_remote_player_collisions),
             campfire::flicker_fire.after(physics::resolve_remote_player_collisions),
             campfire::campfire_crackle_system.after(campfire::flicker_fire),
