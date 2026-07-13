@@ -47,7 +47,11 @@ jobs:
       # CDDA map corpus is a pinned dependency, not vendored. Realise it
       # via the flake's hash-verified fetch and hand the store path to
       # build.rs through $CDDA_SRC.
-      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
       - name: Realise CDDA corpus (pinned, hash-verified)
         working-directory: game
         run: echo "CDDA_SRC=$(nix build .#cdda-src --no-link --print-out-paths)" >> "$GITHUB_ENV"

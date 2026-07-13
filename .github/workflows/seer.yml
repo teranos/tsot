@@ -36,7 +36,11 @@ jobs:
 
       # CDDA map corpus — pinned dependency, realised hash-verified via
       # the flake; $CDDA_SRC hands the store path to build.rs.
-      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
       - name: Realise CDDA corpus (pinned, hash-verified)
         working-directory: game
         run: echo "CDDA_SRC=$(nix build .#cdda-src --no-link --print-out-paths)" >> "$GITHUB_ENV"
@@ -131,7 +135,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
       - name: Realise CDDA corpus (pinned, hash-verified)
         working-directory: game
         run: echo "CDDA_SRC=$(nix build .#cdda-src --no-link --print-out-paths)" >> "$GITHUB_ENV"
