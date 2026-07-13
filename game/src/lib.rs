@@ -245,14 +245,32 @@ fn publish_self_position_system(
     }
 }
 
-fn persist_position_system(frame: Res<FrameCount>, q: Query<&Position, With<PlayerMarker>>) {
-    // Save the player position ~once a second so a reload resumes here.
-    if !frame.0.is_multiple_of(60) {
+fn persist_position_system(
+    frame: Res<FrameCount>,
+    player_q: Query<&Position, With<PlayerMarker>>,
+    structures: Query<(&Position, &template::StructureProp)>,
+    npcs: Query<&Position, With<NpcMarker>>,
+    mut was_safe_inside: Local<bool>,
+) {
+    if !frame.0.is_multiple_of(15) {
         return;
     }
-    if let Ok(p) = q.single() {
-        persist::save(p.0);
+    let Ok(player) = player_q.single() else {
+        return;
+    };
+    // "Inside" = a roof tile roughly overhead.
+    let inside = structures.iter().any(|(p, s)| {
+        s.kind == template::PropKind::Roof
+            && (p.0.x - player.0.x).abs() < 80.0
+            && (p.0.z - player.0.z).abs() < 80.0
+    });
+    let enemy_near = npcs.iter().any(|n| (n.0 - player.0).length() < 800.0);
+    let safe_inside = inside && !enemy_near;
+    // Checkpoint: save on entering a safe, enclosed area.
+    if safe_inside && !*was_safe_inside {
+        persist::save(player.0);
     }
+    *was_safe_inside = safe_inside;
 }
 
 fn drain_remote_positions_system(

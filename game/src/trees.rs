@@ -1,62 +1,92 @@
-// Wang-hash-placed forest, ported from rave. The forest is a pure
-// function of a world-absolute cell grid — `tree_at_cell(ix, iz)` — so
-// it extends infinitely and is generated on demand per chunk (see
-// `chunk.rs`) rather than spawned all at once. No FLOOR_HALF, no
-// entity-per-tree-for-the-whole-world: the streamer holds only the
-// cells near the player.
+// Wang-hash-placed forest, ported from rave and grown up. The forest
+// is a pure function of a world-absolute cell grid — `tree_at_cell` —
+// so it extends infinitely and streams per chunk (see `chunk.rs`).
 //
-// Deterministic: same salt + same cell → same tree everywhere, every
-// session, on every peer.
+// Density is non-uniform: a low-frequency value-noise field thins the
+// woods into clumps and clearings rather than an even scatter. Each
+// tree also gets a hash-varied height, and renders as a brown trunk
+// under a green canopy (see scene.rs).
+//
+// Deterministic: same salt + same cell → same tree everywhere.
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 
-use crate::hash::{jitter, wang_hash};
+use crate::hash::wang_hash;
 
-/// Cell side in world units. Sparser than rave's 80 — the extra
-/// spacing suits the open world; drop toward 80 for a denser wood.
+/// Cell side in world units.
 pub const CELL: f32 = 120.0;
 
 const CLEARING_HALF: f32 = 500.0;
-const SPAWN_THRESHOLD: u32 = u32::MAX / 8;
 const CLEARING_EXCLUSION: f32 = CLEARING_HALF + 60.0;
 const TRAIL_CORRIDOR_HALF: f32 = 70.0;
 const TREE_DENSITY_SALT: u32 = 0xC0DE_F00D;
+const TREE_HEIGHT_SALT: u32 = 0x7EE7_0009;
 
-/// Trunk render/collision height + foliage height, so the streamer and
-/// any caller agree on where the two entities sit.
-pub const TRUNK_Y: f32 = 30.0;
-pub const FOLIAGE_Y: f32 = 80.0;
+/// Peak local tree probability (in the densest patches). Averaged over
+/// the noise field the effective density is well under this, so the
+/// woods are sparser and clumpier than the old uniform 1-in-8.
+const DENSITY_PEAK: f32 = 0.20;
+/// Value-noise lattice spacing — the scale of forest patches/clearings.
+const NOISE_CELL: f32 = 1600.0;
 
+/// Trees span this height range (world units) — all far taller than the
+/// 220-tall buildings, but varied.
+const TREE_MIN_H: f32 = 320.0;
+const TREE_MAX_H: f32 = 760.0;
+
+/// A tree: its `height` drives the trunk + canopy render and collider.
 #[derive(Component)]
-pub struct TreeTrunk;
+pub struct TreeTrunk {
+    pub height: f32,
+}
 
-#[derive(Component)]
-pub struct TreeFoliage;
+fn hash01(ix: i32, iz: i32, salt: u32) -> f32 {
+    wang_hash(ix, iz, salt) as f32 / u32::MAX as f32
+}
 
-/// The tree at global cell `(ix, iz)`, if the hash + exclusions place
-/// one. World-absolute grid: cell centre is `(i + 0.5) * CELL`, valid
-/// for any (including negative) coordinate. Returns the ground-plane
-/// base position (y = 0); the streamer lifts trunk/foliage to their
-/// heights. Pure + deterministic.
-pub fn tree_at_cell(ix: i32, iz: i32) -> Option<Vec3> {
+/// Smooth value noise in [0,1] at world (x,z) — bilinear-interpolated
+/// hashed lattice with a smoothstep fade. Low frequency → big patches.
+fn density_noise(x: f32, z: f32) -> f32 {
+    let (gx, gz) = (x / NOISE_CELL, z / NOISE_CELL);
+    let (x0, z0) = (gx.floor(), gz.floor());
+    let (fx, fz) = (gx - x0, gz - z0);
+    let (ix0, iz0) = (x0 as i32, z0 as i32);
+    let salt = 0x0F0_5EED;
+    let a = hash01(ix0, iz0, salt);
+    let b = hash01(ix0 + 1, iz0, salt);
+    let c = hash01(ix0, iz0 + 1, salt);
+    let d = hash01(ix0 + 1, iz0 + 1, salt);
+    let sx = fx * fx * (3.0 - 2.0 * fx);
+    let sz = fz * fz * (3.0 - 2.0 * fz);
+    let ab = a + (b - a) * sx;
+    let cd = c + (d - c) * sx;
+    ab + (cd - ab) * sz
+}
+
+/// The tree at global cell `(ix, iz)`, if the noise-modulated hash +
+/// exclusions place one — with its position (y=0 base) and height.
+/// Pure + deterministic.
+pub fn tree_at_cell(ix: i32, iz: i32) -> Option<(Vec3, f32)> {
     let cell_x = (ix as f32 + 0.5) * CELL;
     let cell_z = (iz as f32 + 0.5) * CELL;
-    // Keep the central clearing (rave floor) free of trees.
     if cell_x.hypot(cell_z) < CLEARING_EXCLUSION {
         return None;
     }
-    // Keep the south-going trail corridor open.
     if cell_z > CLEARING_HALF && cell_x.abs() < TRAIL_CORRIDOR_HALF {
         return None;
     }
-    // Density gate.
-    if wang_hash(ix, iz, TREE_DENSITY_SALT) >= SPAWN_THRESHOLD {
+    // Clumpy density: local probability = peak × noise², so clearings
+    // (low noise) open right up.
+    let noise = density_noise(cell_x, cell_z);
+    let local = DENSITY_PEAK * noise * noise;
+    if hash01(ix, iz, TREE_DENSITY_SALT) >= local {
         return None;
     }
-    let jx = jitter(ix, iz, 1) * (CELL * 0.35);
-    let jz = jitter(ix, iz, 2) * (CELL * 0.35);
-    Some(Vec3::new(cell_x + jx, 0.0, cell_z + jz))
+    let jx = (hash01(ix, iz, 1) * 2.0 - 1.0) * (CELL * 0.35);
+    let jz = (hash01(ix, iz, 2) * 2.0 - 1.0) * (CELL * 0.35);
+    let height = TREE_MIN_H + hash01(ix, iz, TREE_HEIGHT_SALT) * (TREE_MAX_H - TREE_MIN_H);
+    Some((Vec3::new(cell_x + jx, 0.0, cell_z + jz), height))
 }
 
 #[cfg(test)]
@@ -70,7 +100,24 @@ mod tests {
 
     #[test]
     fn clearing_cell_is_empty() {
-        // Cell containing the origin — inside the clearing.
         assert!(tree_at_cell(0, 0).is_none());
+    }
+
+    #[test]
+    fn heights_vary_and_stay_taller_than_buildings() {
+        let mut heights = Vec::new();
+        for ix in -60..60 {
+            for iz in -60..60 {
+                if let Some((_, h)) = tree_at_cell(ix, iz) {
+                    assert!(h > 220.0, "tree {h} shorter than a building");
+                    heights.push(h);
+                }
+            }
+        }
+        assert!(!heights.is_empty());
+        let (min, max) = heights.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &h| {
+            (lo.min(h), hi.max(h))
+        });
+        assert!(max - min > 100.0, "expected varied heights, got {min}..{max}");
     }
 }

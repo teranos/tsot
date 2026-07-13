@@ -20,7 +20,7 @@ use crate::campsite;
 use crate::cdda;
 use crate::physics::{AabbCollider, Position, PlayerMarker};
 use crate::template::stamp_template;
-use crate::trees::{self, TreeFoliage, TreeTrunk};
+use crate::trees::{self, TreeTrunk};
 
 /// Cells per chunk side. A chunk is an integer block of forest cells,
 /// so cells never straddle a chunk boundary — each tree belongs to
@@ -61,7 +61,7 @@ pub fn active_chunks(center: ChunkCoord, radius: i32) -> Vec<ChunkCoord> {
 
 /// Deterministic trees in a chunk — the ground-plane base positions of
 /// every tree whose cell this chunk owns. Pure.
-pub fn trees_in_chunk(c: ChunkCoord) -> Vec<Vec3> {
+pub fn trees_in_chunk(c: ChunkCoord) -> Vec<(Vec3, f32)> {
     // A building (if any) fits within its own chunk, so only this
     // chunk's building can shadow these cells — no neighbour query.
     let building = cdda::building_anchor_in_chunk(c);
@@ -70,7 +70,7 @@ pub fn trees_in_chunk(c: ChunkCoord) -> Vec<Vec3> {
         for lz in 0..CHUNK_CELLS {
             let ix = c.x * CHUNK_CELLS + lx;
             let iz = c.z * CHUNK_CELLS + lz;
-            if let Some(base) = trees::tree_at_cell(ix, iz) {
+            if let Some((base, height)) = trees::tree_at_cell(ix, iz) {
                 // Don't grow trees through a building — clear its footprint.
                 if let Some(b) = building {
                     if (base.x - b.x).abs() < cdda::BUILDING_FOOTPRINT_HALF
@@ -79,7 +79,7 @@ pub fn trees_in_chunk(c: ChunkCoord) -> Vec<Vec3> {
                         continue;
                     }
                 }
-                out.push(base);
+                out.push((base, height));
             }
         }
     }
@@ -93,21 +93,14 @@ pub fn trees_in_chunk(c: ChunkCoord) -> Vec<Vec3> {
 pub struct LoadedChunks(pub BTreeMap<ChunkCoord, Vec<Entity>>);
 
 /// Spawn the trunk + foliage entities for one tree base position.
-fn spawn_tree(commands: &mut Commands, base: Vec3) -> [Entity; 2] {
-    let trunk = commands
+fn spawn_tree(commands: &mut Commands, base: Vec3, height: f32) -> Entity {
+    commands
         .spawn((
-            TreeTrunk,
-            Position(Vec3::new(base.x, trees::TRUNK_Y, base.z)),
-            AabbCollider::cuboid(Vec3::new(12.0, 60.0, 12.0)),
+            TreeTrunk { height },
+            Position(Vec3::new(base.x, 0.0, base.z)),
+            AabbCollider::cuboid(Vec3::new(24.0, 200.0, 24.0)),
         ))
-        .id();
-    let foliage = commands
-        .spawn((
-            TreeFoliage,
-            Position(Vec3::new(base.x, trees::FOLIAGE_Y, base.z)),
-        ))
-        .id();
-    [trunk, foliage]
+        .id()
 }
 
 /// Streaming system — keep exactly the chunks around the player loaded.
@@ -147,8 +140,8 @@ pub fn stream_chunks(
             continue;
         }
         let mut entities = Vec::new();
-        for base in trees_in_chunk(c) {
-            entities.extend(spawn_tree(&mut commands, base));
+        for (base, height) in trees_in_chunk(c) {
+            entities.push(spawn_tree(&mut commands, base, height));
         }
         if let Some(anchor) = campsite::campsite_in_chunk(c) {
             entities.extend(stamp_template(
@@ -220,7 +213,7 @@ mod tests {
             }
         }
         let (c, anchor) = found.expect("a building chunk should exist");
-        for base in trees_in_chunk(c) {
+        for (base, _) in trees_in_chunk(c) {
             let inside = (base.x - anchor.x).abs() < cdda::BUILDING_FOOTPRINT_HALF
                 && (base.z - anchor.z).abs() < cdda::BUILDING_FOOTPRINT_HALF;
             assert!(!inside, "tree at {base:?} grows through building at {anchor:?}");

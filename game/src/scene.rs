@@ -245,7 +245,7 @@ pub struct RemotePeerDot {
 }
 
 pub struct SceneSnapshot {
-    pub trees: Vec<Vec3>,
+    pub trees: Vec<(Vec3, f32)>,
     pub obstacles: Vec<Vec3>,
     pub fires: Vec<(Vec3, f32)>,
     pub npcs: Vec<Vec3>,
@@ -258,9 +258,8 @@ pub struct SceneSnapshot {
 
 pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
     let world = app.world_mut();
-    let mut tree_q =
-        world.query_filtered::<&Position, bevy_ecs::prelude::With<trees::TreeTrunk>>();
-    let trees: Vec<Vec3> = tree_q.iter(world).map(|p| p.0).collect();
+    let mut tree_q = world.query::<(&Position, &trees::TreeTrunk)>();
+    let trees: Vec<(Vec3, f32)> = tree_q.iter(world).map(|(p, t)| (p.0, t.height)).collect();
     let mut obs_q = world.query_filtered::<&Position, (
         bevy_ecs::prelude::With<AabbCollider>,
         bevy_ecs::prelude::Without<PlayerMarker>,
@@ -365,13 +364,20 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             scale: [crate::trail::TRAIL_WIDTH, 1.0, trail_length],
         });
     }
-    for t in &snap.trees {
-        // Much taller than buildings (walls are 220): trees tower over
-        // the settlements. Base on the ground (centre at height/2).
+    for (t, h) in &snap.trees {
+        // A brown trunk under a green canopy, sized by the tree's own
+        // height (varied, all taller than the 220 buildings).
+        let trunk_h = h * 0.40;
+        let canopy_h = h * 0.66;
         instances.push(SceneInstance {
-            pos: [t.x, 250.0, t.z],
+            pos: [t.x, trunk_h * 0.5, t.z],
+            color: [0.30, 0.20, 0.11],
+            scale: [h * 0.06, trunk_h, h * 0.06],
+        });
+        instances.push(SceneInstance {
+            pos: [t.x, trunk_h + canopy_h * 0.5 - h * 0.06, t.z],
             color: [0.13, 0.77, 0.37],
-            scale: [45.0, 500.0, 45.0],
+            scale: [h * 0.22, canopy_h, h * 0.22],
         });
     }
     for o in &snap.obstacles {
