@@ -33,6 +33,7 @@ pub mod template;
 pub mod trail;
 pub mod trees;
 pub mod ui;
+pub mod watermark;
 
 pub mod gpu_web;
 

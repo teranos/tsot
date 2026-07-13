@@ -307,8 +307,10 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     if glass_result != 0 {
         return glass_result;
     }
-    // D-pad first, HUD quads appended after.
+    // D-pad first, HUD quads, then the build watermark — all one UI
+    // pass. The watermark is the running binary drawing its own commit.
     let mut ui: Vec<dpad::DpadInstance> = dpad::current_instances().to_vec();
     ui.extend(hud::current_instances());
+    ui.extend(crate::watermark::watermark_quads(gpu_web::viewport_size()));
     frame_ui(&ui)
 }

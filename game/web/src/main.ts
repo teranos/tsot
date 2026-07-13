@@ -998,7 +998,6 @@ async function main() {
     return decodeString(ptrFn(), lenFn())
   }
   const runningCommit = readWasmStr('build_commit_ptr', 'build_commit_len')
-  const builtAt = readWasmStr('build_time_ptr', 'build_time_len')
   const shortSha = (s: string) => (s === 'unknown' ? s : s.slice(0, 7))
   if (
     EXPECTED_COMMIT !== 'unknown' &&
@@ -1016,20 +1015,11 @@ async function main() {
     throw new Error(`game.wasm missing init/frame — exports: ${Object.keys(instance.exports).join(', ')}`)
   }
 
+  // The visible commit is drawn IN the game, by Rust, via the UI
+  // overlay (see watermark.rs) — not a DOM badge. JS only guards the
+  // build match above; the render owns what you see.
   init()
   document.body.classList.add('loaded')
-
-  // Version badge — the running wasm's own commit (read + verified
-  // above), painted persistently so what's running is never in question.
-  try {
-    const badge = document.createElement('div')
-    badge.id = 'game-build-badge'
-    badge.textContent = `${shortSha(runningCommit)} · ${builtAt}`
-    badge.title = `running wasm ${runningCommit} (embedded) · built ${builtAt}`
-    document.body.appendChild(badge)
-  } catch (e) {
-    console.warn('[game] build badge failed:', e)
-  }
 
   const loop = () => {
     const done = frame()
