@@ -486,14 +486,17 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             scale: [20.0, 80.0, 20.0],
         });
     }
-    // Roof cut-away: when the player is under a roof (a roof tile is
-    // roughly overhead), hide the roof of the building they're in so
-    // the interior is visible. Distant roofs stay.
-    // "Inside" = a roof tile is roughly overhead.
+    // Roof cut-away: when the player is genuinely under a roof, hide
+    // that building's roof so the interior is visible. Distant roofs
+    // stay. "Inside" = the player is within a roof slab's footprint
+    // (half-width CDDA_TILE/2) — NOT merely near one. A looser, full-
+    // tile test made walls go see-through while you were still outside,
+    // just standing close to a wall.
+    let roof_half = crate::cdda::CDDA_TILE / 2.0;
     let under_roof = snap.structures.iter().any(|(p, k, _)| {
         *k == PropKind::Roof
-            && (p.x - snap.player.x).abs() < 80.0
-            && (p.z - snap.player.z).abs() < 80.0
+            && (p.x - snap.player.x).abs() <= roof_half
+            && (p.z - snap.player.z).abs() <= roof_half
     });
     // The isometric camera looks from +x,+z, so nearer props have a
     // larger x+z. When inside, hide this building's roof AND its
@@ -615,6 +618,13 @@ mod tests {
         let has_roof = |px: f32| snapshot_to_instances(&snap(px)).iter().any(|i| i.pos[1] > 100.0);
         assert!(!has_roof(0.0), "roof should be hidden when the player is under it");
         assert!(has_roof(5000.0), "roof should render when the player is far away");
+        // Just outside the slab's half-width (CDDA_TILE/2 = 40): the
+        // player is next to the wall but NOT under the roof, so the
+        // cut-away must NOT trigger — walls/roof stay solid.
+        assert!(
+            has_roof(60.0),
+            "standing close to a wall from outside must not make it see-through"
+        );
     }
 
     #[test]
