@@ -1,6 +1,7 @@
 node_modules/
 .DS_Store
 __pycache__/
+.claude/
 
 # Generic Rust target/ at the repo root + any nested in workspace-member
 # crates under crates/. Path deps like sacred-error generate their own
