@@ -87,6 +87,11 @@ jobs:
 
       - name: Build web bundle
         working-directory: game/web
+        env:
+          # Same commit the wasm build embeds, so the bundle bakes the
+          # matching value and the boot-time build-loop check passes on a
+          # coherent deploy (and fails loud on a skewed one).
+          SEER_BUILD_COMMIT: ${{ github.sha }}
         run: bun run build.ts
 
       - name: Generate build-info.json

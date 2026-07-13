@@ -18,12 +18,20 @@ await mkdir(outDir, { recursive: true })
 // boot dies with "import function ... must be callable". A hash in the
 // name makes the pairing atomic: a new bundle is a new URL, and the
 // fresh index.html can only ever reference the matching one.
+// The commit this bundle is built for — the SAME value the wasm build
+// embeds (SEER_BUILD_COMMIT). Baked in so main.ts can (a) fetch the
+// matching wasm and (b) refuse to run if the loaded wasm disagrees.
+// Defaults to 'unknown' with no CI env, exactly like build_info.rs, so
+// a local `cargo build` + `bun build` pair both say 'unknown' and match.
+const commit = process.env.SEER_BUILD_COMMIT || 'unknown'
+
 const result = await Bun.build({
   entrypoints: [join(srcDir, 'main.ts')],
   outdir: outDir,
   minify: false,
   sourcemap: 'inline',
   naming: '[name]-[hash].[ext]',
+  define: { __BUILD_COMMIT__: JSON.stringify(commit) },
 })
 
 if (!result.success) {
@@ -52,4 +60,4 @@ if (assetsExists) {
 const html = await Bun.file(join(import.meta.dir, 'index.html')).text()
 await Bun.write(join(outDir, 'index.html'), html.replace('/src/main.ts', `/${bundleName}`))
 
-console.log(`game web bundle built -> dist/ (${bundleName})`)
+console.log(`game web bundle built -> dist/ (${bundleName}, commit ${commit})`)

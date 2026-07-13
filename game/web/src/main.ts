@@ -8,6 +8,13 @@
 
 let memory: WebAssembly.Memory | null = null
 
+// Injected at bundle time by build.ts (Bun `define`): the commit this JS
+// is built for. Compared against the running wasm's own embedded commit
+// to close the build loop. 'unknown' with no CI env, matching
+// build_info.rs — so a local cargo+bun pair both say 'unknown' and match.
+declare const __BUILD_COMMIT__: string
+const EXPECTED_COMMIT = __BUILD_COMMIT__
+
 function decodeString(ptr: number, len: number): string {
   if (!memory) return ''
   const bytes = new Uint8Array(memory.buffer, ptr, len)
@@ -401,7 +408,9 @@ async function main() {
     console.warn('[game] identity load failed:', e)
     return null
   })
-  const wasmBytes = await streamWasmBytes('/game.wasm')
+  // Fetch the wasm for THIS build's commit, so a browser-cached
+  // /game.wasm from a prior deploy can't silently load against fresh JS.
+  const wasmBytes = await streamWasmBytes(`/game.wasm?v=${encodeURIComponent(EXPECTED_COMMIT)}`)
   const gpu = await gpuPromise
   identityBytes = await identityPromise
 
@@ -978,6 +987,29 @@ async function main() {
   const { instance } = await WebAssembly.instantiate(wasmBytes, imports)
   memory = instance.exports.memory as WebAssembly.Memory
 
+  // Loop closure: the running wasm reports its own embedded commit;
+  // refuse to boot if it isn't the build this JS was made for. A stale
+  // artifact — wasm or JS — surfaces here as a hard stop at the cursor,
+  // never a silent half-stale run that looks fine but isn't.
+  const readWasmStr = (ptrExport: string, lenExport: string): string => {
+    const ptrFn = instance.exports[ptrExport] as (() => number) | undefined
+    const lenFn = instance.exports[lenExport] as (() => number) | undefined
+    if (typeof ptrFn !== 'function' || typeof lenFn !== 'function') return 'unknown'
+    return decodeString(ptrFn(), lenFn())
+  }
+  const runningCommit = readWasmStr('build_commit_ptr', 'build_commit_len')
+  const builtAt = readWasmStr('build_time_ptr', 'build_time_len')
+  const shortSha = (s: string) => (s === 'unknown' ? s : s.slice(0, 7))
+  if (
+    EXPECTED_COMMIT !== 'unknown' &&
+    runningCommit !== 'unknown' &&
+    EXPECTED_COMMIT !== runningCommit
+  ) {
+    const msg = `build mismatch — page is ${shortSha(EXPECTED_COMMIT)} but wasm is ${shortSha(runningCommit)}; a stale artifact is being served`
+    if (loadingText) loadingText.textContent = `boot halted: ${msg}`
+    throw new Error(msg)
+  }
+
   const init = instance.exports.init as (() => void) | undefined
   const frame = instance.exports.frame as (() => number) | undefined
   if (typeof init !== 'function' || typeof frame !== 'function') {
@@ -987,22 +1019,13 @@ async function main() {
   init()
   document.body.classList.add('loaded')
 
-  // Version badge — sourced from the RUNNING wasm's own embedded
-  // build_info, not build-info.json. So there's never a question about
-  // what's actually running: the binary says so, on screen, always.
+  // Version badge — the running wasm's own commit (read + verified
+  // above), painted persistently so what's running is never in question.
   try {
-    const readWasmStr = (ptrExport: string, lenExport: string): string => {
-      const ptrFn = instance.exports[ptrExport] as (() => number) | undefined
-      const lenFn = instance.exports[lenExport] as (() => number) | undefined
-      if (typeof ptrFn !== 'function' || typeof lenFn !== 'function') return 'unknown'
-      return decodeString(ptrFn(), lenFn())
-    }
-    const commit = readWasmStr('build_commit_ptr', 'build_commit_len')
-    const builtAt = readWasmStr('build_time_ptr', 'build_time_len')
     const badge = document.createElement('div')
     badge.id = 'game-build-badge'
-    badge.textContent = `${commit} · ${builtAt}`
-    badge.title = 'running wasm build (embedded, not build-info.json)'
+    badge.textContent = `${shortSha(runningCommit)} · ${builtAt}`
+    badge.title = `running wasm ${runningCommit} (embedded) · built ${builtAt}`
     document.body.appendChild(badge)
   } catch (e) {
     console.warn('[game] build badge failed:', e)
