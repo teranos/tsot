@@ -987,6 +987,27 @@ async function main() {
   init()
   document.body.classList.add('loaded')
 
+  // Version badge — sourced from the RUNNING wasm's own embedded
+  // build_info, not build-info.json. So there's never a question about
+  // what's actually running: the binary says so, on screen, always.
+  try {
+    const readWasmStr = (ptrExport: string, lenExport: string): string => {
+      const ptrFn = instance.exports[ptrExport] as (() => number) | undefined
+      const lenFn = instance.exports[lenExport] as (() => number) | undefined
+      if (typeof ptrFn !== 'function' || typeof lenFn !== 'function') return 'unknown'
+      return decodeString(ptrFn(), lenFn())
+    }
+    const commit = readWasmStr('build_commit_ptr', 'build_commit_len')
+    const builtAt = readWasmStr('build_time_ptr', 'build_time_len')
+    const badge = document.createElement('div')
+    badge.id = 'game-build-badge'
+    badge.textContent = `${commit} · ${builtAt}`
+    badge.title = 'running wasm build (embedded, not build-info.json)'
+    document.body.appendChild(badge)
+  } catch (e) {
+    console.warn('[game] build badge failed:', e)
+  }
+
   const loop = () => {
     const done = frame()
     if (done !== 0) return

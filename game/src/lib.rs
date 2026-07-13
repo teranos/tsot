@@ -326,6 +326,33 @@ pub extern "C" fn finalize() {
     _finalize();
 }
 
+// The running binary reports its own identity. These expose the
+// compile-time build_info (SEER_BUILD_COMMIT / SEER_BUILD_TIME) so the
+// JS shim can paint a persistent on-screen badge sourced from THIS
+// wasm — not from build-info.json, which is a separate file that can
+// skew from the actual binary. "What version is running" then has one
+// unambiguous answer: what the wasm says about itself.
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn build_commit_ptr() -> *const u8 {
+    build_info::COMMIT.as_ptr()
+}
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn build_commit_len() -> u32 {
+    build_info::COMMIT.len() as u32
+}
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn build_time_ptr() -> *const u8 {
+    build_info::BUILT_AT.as_ptr()
+}
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn build_time_len() -> u32 {
+    build_info::BUILT_AT.len() as u32
+}
+
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn run() {
