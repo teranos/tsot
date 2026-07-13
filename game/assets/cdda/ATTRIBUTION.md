@@ -1,33 +1,30 @@
 # CDDA map data — attribution
 
-The files in this directory are taken verbatim from **Cataclysm: Dark
-Days Ahead**, by CleverRaven and contributors:
+The game's buildings are assembled from **Cataclysm: Dark Days Ahead**
+map data, by CleverRaven and contributors.
 
 - Source: https://github.com/CleverRaven/Cataclysm-DDA
 - License: **Creative Commons Attribution-ShareAlike 3.0 (CC-BY-SA 3.0)**
   — https://creativecommons.org/licenses/by-sa/3.0/
-- Pinned release: **`0.I`** (stable), tag `refs/tags/0.I`, commit
-  **`27939e29b8b4ddc081490d9f51de59a459c88df6`**. Every file below was
-  verified **byte-identical** to upstream at this release (2026-07-13).
-  We pin a frozen stable release, not a `master` commit, so the
-  vendored bytes track a versioned CDDA release. Reproduce any file:
-  `https://raw.githubusercontent.com/CleverRaven/Cataclysm-DDA/0.I/<upstream-path>`
+- Pinned release: the stable **letter** release named in
+  [`../../CDDA_RELEASE`](../../CDDA_RELEASE) (currently `0.I`).
 
-Files and their upstream paths:
+**Not vendored.** No CDDA JSON lives in this repository. The corpus is a
+build-time dependency, fetched from the pinned release and materialised
+into the build (`build.rs`) — never committed:
 
-- `garage.json` — `data/json/mapgen/garage.json`
-- `house01.json` — `data/json/mapgen/house/house01.json`
-- `palettes/house_general_palette.json` — `data/json/mapgen_palettes/house_general_palette.json`
-- `palettes/common_parameters.json` — `data/json/mapgen_palettes/common_parameters.json`
-- `palettes/roof_palette.json` — `data/json/mapgen_palettes/roof_palette.json`
-- `palettes/house_variant_palette.json` — `data/json/mapgen_palettes/house_variant_palette.json`
-- `palettes/house_survivor_palette.json` — `data/json/mapgen_palettes/house_survivor_palette.json`
-- `palettes/house_general_abandoned.json` — `data/json/mapgen_palettes/house_general_abandoned.json`
+- **Nix:** the `cataclysm-dda` fetch in `game/flake.nix` pins the
+  release by content hash (verified on every build; locked provenance).
+- **Bare cargo / CI:** `game/tools/fetch-cdda.sh` sparse-clones the same
+  release into `.cdda-src/` (gitignored).
 
-Any map layout derived from this data (buildings rendered in game) is a
-derivative work and remains under CC-BY-SA 3.0, with attribution to
-CleverRaven / the Cataclysm: Dark Days Ahead project.
+Which mapgen + palette files are pulled in is listed in `build.rs`
+(`CDDA_FILES`) — references into the pinned corpus, not copies. Adding a
+building adds a reference there; it never adds vendored bytes.
 
-The game's own code is not affected by this license; only the imported
-map layouts under this directory are. (The shed under
-`assets/buildings/` is an original layout, not CDDA content.)
+Any building rendered in game is a derivative of this data and remains
+under CC-BY-SA 3.0, attributed to CleverRaven / the Cataclysm: Dark Days
+Ahead project.
+
+(The shed under `assets/buildings/` is an original layout, ours, not
+CDDA content.)

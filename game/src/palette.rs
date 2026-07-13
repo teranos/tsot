@@ -10,7 +10,8 @@
 //! ignored in favour of a uniform spread — CDDA's weighting would make
 //! ~every house the "standard" variant, defeating the variety.
 //!
-//! Corpus is CC-BY-SA 3.0 CDDA content under assets/cdda/palettes/.
+//! Corpus is CC-BY-SA 3.0 CDDA content, fetched from a pinned release
+//! at build time (not vendored). See assets/cdda/ATTRIBUTION.md.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -19,13 +20,16 @@ use serde_json::Value;
 
 use crate::hash::wang_hash;
 
+// Palette corpus embedded from the build-time CDDA tree (build.rs
+// copies it out of the pinned release — never vendored in git).
+// CC-BY-SA 3.0, CleverRaven / CDDA; see assets/cdda/ATTRIBUTION.md.
 const FILES: &[&str] = &[
-    include_str!("../assets/cdda/palettes/house_general_palette.json"),
-    include_str!("../assets/cdda/palettes/common_parameters.json"),
-    include_str!("../assets/cdda/palettes/roof_palette.json"),
-    include_str!("../assets/cdda/palettes/house_variant_palette.json"),
-    include_str!("../assets/cdda/palettes/house_survivor_palette.json"),
-    include_str!("../assets/cdda/palettes/house_general_abandoned.json"),
+    include_str!(concat!(env!("OUT_DIR"), "/cdda/house_general_palette.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/cdda/common_parameters.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/cdda/roof_palette.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/cdda/house_variant_palette.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/cdda/house_survivor_palette.json")),
+    include_str!(concat!(env!("OUT_DIR"), "/cdda/house_general_abandoned.json")),
 ];
 
 struct Registry {

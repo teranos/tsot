@@ -34,12 +34,14 @@ pub const CDDA_TILE: f32 = 80.0;
 /// Roof elevation — matches the wall height so the slab caps the walls.
 pub const ROOF_HEIGHT: f32 = 220.0;
 
-/// The embedded garage mapgen (CC-BY-SA 3.0, CleverRaven / CDDA).
-const GARAGE_JSON: &str = include_str!("../assets/cdda/garage.json");
-/// The embedded house mapgen — palette-driven (CC-BY-SA 3.0, CDDA).
-const HOUSE_JSON: &str = include_str!("../assets/cdda/house01.json");
+// CDDA mapgen embedded from the build-time corpus (build.rs copies it
+// out of the release pinned in CDDA_RELEASE — never vendored in git).
+// CC-BY-SA 3.0, CleverRaven / CDDA; see assets/cdda/ATTRIBUTION.md.
+const GARAGE_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/garage.json"));
+/// The house mapgen — palette-driven (CC-BY-SA 3.0, CDDA).
+const HOUSE_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house01.json"));
 /// A shed — CDDA has no standalone one, so this is an original inline
-/// mapgen in the same format (no palettes, no attribution needed).
+/// mapgen in the same format (ours, so it stays vendored in-tree).
 const SHED_JSON: &str = include_str!("../assets/buildings/shed.json");
 
 /// Buildings are rarer than campsites — roughly 1 chunk in 20.

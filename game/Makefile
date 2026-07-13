@@ -1,4 +1,10 @@
-.PHONY: music web build clean
+.PHONY: music web build clean cdda
+
+# Fetch the CDDA map corpus (a pinned dependency, never vendored) into
+# .cdda-src/ so bare `cargo build`/`cargo test` can compile it in. Nix
+# users don't need this — the flake sets CDDA_SRC. Pinned to CDDA_RELEASE.
+cdda:
+	@./tools/fetch-cdda.sh
 
 # Generate the placeholder track and encode as OGG Vorbis. Output
 # lands in web/assets/ so build.ts picks it up when it copies assets/
