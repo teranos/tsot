@@ -178,7 +178,7 @@ pub fn synthesize_alert() -> Vec<f32> {
     for i in 0..REPEATS {
         out.extend(synthesize_impact(BLIP_HZ, BLIP_HZ, BLIP_SEC, WaveType::Square, 0.2));
         if i + 1 < REPEATS {
-            out.extend(std::iter::repeat(0.0).take(gap_len));
+            out.extend(std::iter::repeat_n(0.0, gap_len));
         }
     }
     out
