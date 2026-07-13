@@ -73,6 +73,37 @@ pub fn resolve_placements(template: &Template, anchor: Vec3) -> Vec<(Vec3, PropK
         .collect()
 }
 
+/// Rotate a template by `quarter_turns` × 90° in the XZ plane, so
+/// hash-placed buildings face different ways. Oriented walls swap
+/// NS↔EW on odd turns so a wall run stays thin across its length.
+pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
+    let q = quarter_turns % 4;
+    let props = t
+        .props
+        .iter()
+        .map(|p| {
+            let (x, z) = (p.offset.x, p.offset.z);
+            let (rx, rz) = match q {
+                1 => (-z, x),
+                2 => (-x, -z),
+                3 => (z, -x),
+                _ => (x, z),
+            };
+            let kind = if q % 2 == 1 {
+                match p.kind {
+                    PropKind::WallNS => PropKind::WallEW,
+                    PropKind::WallEW => PropKind::WallNS,
+                    k => k,
+                }
+            } else {
+                p.kind
+            };
+            Prop { offset: Vec3::new(rx, p.offset.y, rz), kind }
+        })
+        .collect();
+    Template { props }
+}
+
 /// Stamp every prop of `template` into the world at `anchor`. Thin ECS
 /// wrapper over `resolve_placements`; each `PropKind` spawns its
 /// bundle. The per-kind bundles mirror what each module spawned when
@@ -186,6 +217,21 @@ mod tests {
         let hits: Vec<Vec3> = q.iter(&world).map(|(p, _)| p.0).collect();
         assert_eq!(hits.len(), 1, "expected exactly one campfire entity");
         assert_eq!(hits[0], campfire::SPAWN_POS);
+    }
+
+    #[test]
+    fn rotate_turns_offsets_and_swaps_wall_orientation() {
+        let t = Template {
+            props: vec![Prop { offset: Vec3::new(10.0, 5.0, 0.0), kind: PropKind::WallNS }],
+        };
+        // 90°: (x,z)=(10,0) → (0,10); NS wall → EW; y unchanged.
+        let r1 = rotate_template(&t, 1);
+        assert_eq!(r1.props[0].offset, Vec3::new(0.0, 5.0, 10.0));
+        assert_eq!(r1.props[0].kind, PropKind::WallEW);
+        // Four quarter-turns is the identity.
+        let r4 = rotate_template(&t, 4);
+        assert_eq!(r4.props[0].offset, t.props[0].offset);
+        assert_eq!(r4.props[0].kind, t.props[0].kind);
     }
 
     #[test]

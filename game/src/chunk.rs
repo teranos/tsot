@@ -160,7 +160,9 @@ pub fn stream_chunks(
         if let Some(anchor) = cdda::building_anchor_in_chunk(c) {
             if !buildings.0.is_empty() {
                 let idx = cdda::building_index(c, buildings.0.len());
-                entities.extend(stamp_template(&mut commands, &buildings.0[idx], anchor));
+                let rotated =
+                    crate::template::rotate_template(&buildings.0[idx], cdda::building_rotation(c));
+                entities.extend(stamp_template(&mut commands, &rotated, anchor));
             }
         }
         loaded.0.insert(c, entities);

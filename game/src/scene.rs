@@ -411,13 +411,27 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             scale: [20.0, 80.0, 20.0],
         });
     }
-    // Structure props (camp chairs, tables — CDDA furniture later).
-    // Each kind carries its own colour + size; the base sits on the
-    // ground so the cube rises from y=0 (centre at half-height).
+    // Roof cut-away: when the player is under a roof (a roof tile is
+    // roughly overhead), hide the roof of the building they're in so
+    // the interior is visible. Distant roofs stay.
+    let under_roof = snap.structures.iter().any(|(p, k)| {
+        *k == PropKind::Roof
+            && (p.x - snap.player.x).abs() < 80.0
+            && (p.z - snap.player.z).abs() < 80.0
+    });
+
+    // Structure props (walls, furniture, roof). Each kind carries its
+    // own colour + size; ground props sit on the floor (base at y=0),
+    // elevated props (the roof) carry their height in pos.y.
     for (pos, kind) in &snap.structures {
+        if *kind == PropKind::Roof
+            && under_roof
+            && (pos.x - snap.player.x).abs() < 1100.0
+            && (pos.z - snap.player.z).abs() < 1100.0
+        {
+            continue; // you're inside — see-through roof
+        }
         let (color, scale) = prop_appearance(*kind);
-        // Ground props anchor at y=0 → base on the floor; elevated props
-        // (the roof) carry their height in pos.y.
         instances.push(SceneInstance {
             pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
             color,
@@ -453,6 +467,25 @@ mod tests {
         // The floor is the first instance; it sits under the player.
         assert_eq!(instances[0].pos[0], 123_456.0);
         assert_eq!(instances[0].pos[2], -98_765.0);
+    }
+
+    #[test]
+    fn roof_is_seethrough_when_the_player_is_under_it() {
+        let snap = |px: f32| SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![(Vec3::new(0.0, 220.0, 0.0), PropKind::Roof)],
+            player: Vec3::new(px, 20.0, 0.0),
+        };
+        // The roof is the only instance above y=100; check its presence.
+        let has_roof = |px: f32| snapshot_to_instances(&snap(px)).iter().any(|i| i.pos[1] > 100.0);
+        assert!(!has_roof(0.0), "roof should be hidden when the player is under it");
+        assert!(has_roof(5000.0), "roof should render when the player is far away");
     }
 
     #[test]

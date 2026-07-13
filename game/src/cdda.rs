@@ -46,6 +46,7 @@ const SHED_JSON: &str = include_str!("../assets/buildings/shed.json");
 const BUILDING_CHUNK_CHANCE: u32 = u32::MAX / 20;
 const BUILDING_SALT: u32 = 0xB1D6_5175;
 const BUILDING_PICK_SALT: u32 = 0xB1D6_9CE5;
+const BUILDING_ROT_SALT: u32 = 0xB1D6_2074;
 /// Square half-extent around a building kept clear of trees, so the
 /// forest doesn't grow through the walls — reads as a yard around it.
 pub const BUILDING_FOOTPRINT_HALF: f32 = 1050.0;
@@ -356,6 +357,12 @@ pub fn building_anchor_in_chunk(c: ChunkCoord) -> Option<Vec3> {
 /// pick, so the same chunk is the same building on every peer.
 pub fn building_index(c: ChunkCoord, num: usize) -> usize {
     (wang_hash(c.x, c.z, BUILDING_PICK_SALT) as usize) % num
+}
+
+/// Deterministic quarter-turn rotation (0..4) for a building-chunk, so
+/// two buildings of the same type face different ways.
+pub fn building_rotation(c: ChunkCoord) -> u8 {
+    (wang_hash(c.x, c.z, BUILDING_ROT_SALT) % 4) as u8
 }
 
 #[cfg(test)]
