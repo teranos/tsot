@@ -6,10 +6,12 @@ Days Ahead**, by CleverRaven and contributors:
 - Source: https://github.com/CleverRaven/Cataclysm-DDA
 - License: **Creative Commons Attribution-ShareAlike 3.0 (CC-BY-SA 3.0)**
   — https://creativecommons.org/licenses/by-sa/3.0/
-- Pinned commit: **`9177f364ba7bc413a56bd7f1b6b9915a92865f8a`**
-  (`master`). Every file below was verified **byte-identical** to
-  upstream at this commit (2026-07-13). Reproduce any file with:
-  `https://raw.githubusercontent.com/CleverRaven/Cataclysm-DDA/9177f364ba7bc413a56bd7f1b6b9915a92865f8a/<upstream-path>`
+- Pinned release: **`0.I`** (stable), tag `refs/tags/0.I`, commit
+  **`27939e29b8b4ddc081490d9f51de59a459c88df6`**. Every file below was
+  verified **byte-identical** to upstream at this release (2026-07-13).
+  We pin a frozen stable release, not a `master` commit, so the
+  vendored bytes track a versioned CDDA release. Reproduce any file:
+  `https://raw.githubusercontent.com/CleverRaven/Cataclysm-DDA/0.I/<upstream-path>`
 
 Files and their upstream paths:
 
