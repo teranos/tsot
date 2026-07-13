@@ -72,12 +72,11 @@ pub fn trees_in_chunk(c: ChunkCoord) -> Vec<(Vec3, f32)> {
             let iz = c.z * CHUNK_CELLS + lz;
             if let Some((base, height)) = trees::tree_at_cell(ix, iz) {
                 // Don't grow trees through a building — clear its footprint.
-                if let Some(b) = building {
-                    if (base.x - b.x).abs() < cdda::BUILDING_FOOTPRINT_HALF
-                        && (base.z - b.z).abs() < cdda::BUILDING_FOOTPRINT_HALF
-                    {
-                        continue;
-                    }
+                if let Some(b) = building
+                    && (base.x - b.x).abs() < cdda::BUILDING_FOOTPRINT_HALF
+                    && (base.z - b.z).abs() < cdda::BUILDING_FOOTPRINT_HALF
+                {
+                    continue;
                 }
                 out.push((base, height));
             }
@@ -150,13 +149,13 @@ pub fn stream_chunks(
                 anchor,
             ));
         }
-        if let Some(anchor) = cdda::building_anchor_in_chunk(c) {
-            if !buildings.0.is_empty() {
-                let idx = cdda::building_index(c, buildings.0.len());
-                let rotated =
-                    crate::template::rotate_template(&buildings.0[idx], cdda::building_rotation(c));
-                entities.extend(stamp_template(&mut commands, &rotated, anchor));
-            }
+        if let Some(anchor) = cdda::building_anchor_in_chunk(c)
+            && !buildings.0.is_empty()
+        {
+            let idx = cdda::building_index(c, buildings.0.len());
+            let rotated =
+                crate::template::rotate_template(&buildings.0[idx], cdda::building_rotation(c));
+            entities.extend(stamp_template(&mut commands, &rotated, anchor));
         }
         loaded.0.insert(c, entities);
     }

@@ -6,12 +6,12 @@
 //! campsite, a CDDA-imported building, and a player-placed structure
 //! all become `Template`s that feed the same `stamp_template`.
 //!
-//! `resolve_placements` is the deterministic, ECS-free core: template
-//! + anchor → world position + kind of every prop. Keeping it pure
-//! (like `room::touch_drag_to_plane`) means a placement is unit-
-//! testable, and — crucially for the P2P world — two peers stamping
-//! the same template at the same anchor resolve to the identical set
-//! of world positions with no shared RNG.
+//! `resolve_placements` is the deterministic, ECS-free core: given a
+//! template and an anchor it returns the world position + kind of every
+//! prop. Keeping it pure (like `room::touch_drag_to_plane`) means a
+//! placement is unit-testable, and — crucially for the P2P world — two
+//! peers stamping the same template at the same anchor resolve to the
+//! identical set of world positions with no shared RNG.
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;

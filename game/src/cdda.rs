@@ -228,7 +228,8 @@ pub fn mapgen_to_template(
     let width = obj.rows.iter().map(|r| r.chars().count()).max().unwrap_or(0);
 
     // Pass 1: base (kind, colour) per cell (walls are the plain Wall kind).
-    let grid: Vec<Vec<Option<(PropKind, Option<[f32; 3]>)>>> = obj
+    type Cell = Option<(PropKind, Option<[f32; 3]>)>;
+    let grid: Vec<Vec<Cell>> = obj
         .rows
         .iter()
         .map(|row| {
@@ -259,9 +260,9 @@ pub fn mapgen_to_template(
     let cx = width as f32 / 2.0;
     let cz = height as f32 / 2.0;
     let mut props = Vec::new();
-    for r in 0..height {
-        for c in 0..width {
-            let Some((base, color)) = grid[r][c] else { continue };
+    for (r, row) in grid.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            let Some((base, color)) = *cell else { continue };
             let kind = if base == PropKind::Wall || base == PropKind::Window {
                 let vertical = is_wall_like(r as isize - 1, c as isize)
                     || is_wall_like(r as isize + 1, c as isize);
@@ -574,10 +575,10 @@ mod tests {
         for seed in 0..HOUSE_VARIANTS {
             let t = assemble_building(HOUSE_JSON, "house_01", "house_01_roof", seed).unwrap();
             for p in &t.props {
-                if matches!(p.kind, PropKind::Wall | PropKind::WallNS | PropKind::WallEW) {
-                    if let Some(c) = p.color {
-                        colors.insert(format!("{c:?}"));
-                    }
+                if matches!(p.kind, PropKind::Wall | PropKind::WallNS | PropKind::WallEW)
+                    && let Some(c) = p.color
+                {
+                    colors.insert(format!("{c:?}"));
                 }
             }
         }
