@@ -241,52 +241,182 @@ pub fn mapgen_to_template(
             cells
         })
         .collect();
-    // A window continues a wall run, so it counts as wall-like both for
-    // orienting its neighbours and for orienting itself.
-    let is_wall_like = |r: isize, c: isize| -> bool {
+    // The wall LINE: cells whose char resolves to wall/fence/window/door
+    // /gate terrain — the connective tissue of a building's outline.
+    // Doors and gates don't emit a prop yet, but they still block flood-
+    // fill and count as run cells, so the wall line is unbroken across
+    // them and the interior stays interior.
+    let mut wall_line = vec![vec![false; width]; height];
+    for (r, row) in obj.rows.iter().enumerate() {
+        for (c, ch) in row.chars().enumerate() {
+            if c >= width {
+                break;
+            }
+            if let Some(t) = terrain.get(&ch)
+                && (t.contains("wall")
+                    || t.contains("fence")
+                    || t.contains("window")
+                    || t.contains("door")
+                    || t.contains("gate"))
+            {
+                wall_line[r][c] = true;
+            }
+        }
+    }
+    let is_solid = |r: i32, c: i32| -> bool {
         r >= 0
             && c >= 0
             && (r as usize) < height
             && (c as usize) < width
-            && matches!(
-                grid[r as usize][c as usize],
-                Some((PropKind::Wall, _)) | Some((PropKind::Window, _))
-            )
+            && wall_line[r as usize][c as usize]
     };
 
-    // Pass 2: emit props, orienting each wall by its neighbours so a run
-    // reads as a thin wall rather than a row of full-tile blocks.
-    // Grid is centred on the anchor: col → +x, row → +z.
+    // Flood-fill exterior — every non-solid cell reachable from the
+    // mapgen boundary. Cells not reached and not solid are "interior"
+    // (a floor of a fully enclosed room).
+    let mut exterior = vec![vec![false; width]; height];
+    let mut stack: Vec<(i32, i32)> = Vec::new();
+    for r in 0..height {
+        for c in 0..width {
+            let on_boundary =
+                r == 0 || c == 0 || r + 1 == height || c + 1 == width;
+            if on_boundary && !is_solid(r as i32, c as i32) {
+                stack.push((r as i32, c as i32));
+            }
+        }
+    }
+    while let Some((r, c)) = stack.pop() {
+        if r < 0 || c < 0 || (r as usize) >= height || (c as usize) >= width {
+            continue;
+        }
+        let (ru, cu) = (r as usize, c as usize);
+        if exterior[ru][cu] || is_solid(r, c) {
+            continue;
+        }
+        exterior[ru][cu] = true;
+        for (dr, dc) in [(-1i32, 0), (1, 0), (0, -1), (0, 1)] {
+            stack.push((r + dr, c + dc));
+        }
+    }
+    let is_interior = |r: i32, c: i32| -> bool {
+        if r < 0 || c < 0 || (r as usize) >= height || (c as usize) >= width {
+            return false;
+        }
+        !exterior[r as usize][c as usize] && !is_solid(r, c)
+    };
+
+    // Interior side of the horizontal run containing (r, c): walk the
+    // contiguous solid cells left and right, aggregate whether any of
+    // them has interior directly N or S. Ditto for vertical.
+    let horiz_run_interior = |r: i32, c: i32| -> (bool, bool) {
+        let (mut int_n, mut int_s) = (false, false);
+        let mut cc = c;
+        while is_solid(r, cc) {
+            if is_interior(r - 1, cc) { int_n = true; }
+            if is_interior(r + 1, cc) { int_s = true; }
+            cc -= 1;
+        }
+        let mut cc = c + 1;
+        while is_solid(r, cc) {
+            if is_interior(r - 1, cc) { int_n = true; }
+            if is_interior(r + 1, cc) { int_s = true; }
+            cc += 1;
+        }
+        (int_n, int_s)
+    };
+    let vert_run_interior = |r: i32, c: i32| -> (bool, bool) {
+        let (mut int_e, mut int_w) = (false, false);
+        let mut rr = r;
+        while is_solid(rr, c) {
+            if is_interior(rr, c + 1) { int_e = true; }
+            if is_interior(rr, c - 1) { int_w = true; }
+            rr -= 1;
+        }
+        let mut rr = r + 1;
+        while is_solid(rr, c) {
+            if is_interior(rr, c + 1) { int_e = true; }
+            if is_interior(rr, c - 1) { int_w = true; }
+            rr += 1;
+        }
+        (int_e, int_w)
+    };
+
+    let ew_kind = |base: PropKind| match base {
+        PropKind::Wall => PropKind::WallEW,
+        PropKind::Window => PropKind::WindowEW,
+        other => other,
+    };
+    let ns_kind = |base: PropKind| match base {
+        PropKind::Wall => PropKind::WallNS,
+        PropKind::Window => PropKind::WindowNS,
+        other => other,
+    };
+
+    // Pass 2: place each cell. Walls/windows follow the edge-placement
+    // rules; every other prop stays centred on its tile.
     let cx = width as f32 / 2.0;
     let cz = height as f32 / 2.0;
+    let half = tile_size / 2.0;
     let mut props = Vec::new();
-    for (r, row) in grid.iter().enumerate() {
-        for (c, cell) in row.iter().enumerate() {
+    for (r_idx, row_cells) in grid.iter().enumerate() {
+        for (c_idx, cell) in row_cells.iter().enumerate() {
             let Some((base, color)) = *cell else { continue };
-            let kind = if base == PropKind::Wall || base == PropKind::Window {
-                let vertical = is_wall_like(r as isize - 1, c as isize)
-                    || is_wall_like(r as isize + 1, c as isize);
-                let horizontal = is_wall_like(r as isize, c as isize - 1)
-                    || is_wall_like(r as isize, c as isize + 1);
-                // Orient walls and windows the same way: thin across the
-                // run's length, full-tile at corners/junctions.
-                match (base, vertical, horizontal) {
-                    (PropKind::Wall, true, false) => PropKind::WallNS,
-                    (PropKind::Wall, false, true) => PropKind::WallEW,
-                    (PropKind::Wall, _, _) => PropKind::Wall,
-                    (PropKind::Window, true, false) => PropKind::WindowNS,
-                    (PropKind::Window, false, true) => PropKind::WindowEW,
-                    (PropKind::Window, _, _) => PropKind::Window,
-                    _ => base,
-                }
-            } else {
-                base
+            let r = r_idx as i32;
+            let c = c_idx as i32;
+            let cx_world = (c_idx as f32 - cx) * tile_size;
+            let cz_world = (r_idx as f32 - cz) * tile_size;
+            let mut emit = |x: f32, z: f32, kind: PropKind| {
+                let offset = Vec3::new(x, 0.0, z);
+                props.push(match color {
+                    Some(col) => Prop::colored(offset, kind, col),
+                    None => Prop::at(offset, kind),
+                });
             };
-            let offset = Vec3::new((c as f32 - cx) * tile_size, 0.0, (r as f32 - cz) * tile_size);
-            props.push(match color {
-                Some(col) => Prop::colored(offset, kind, col),
-                None => Prop::at(offset, kind),
-            });
+
+            let is_wall_or_window = matches!(base, PropKind::Wall | PropKind::Window);
+            if !is_wall_or_window {
+                emit(cx_world, cz_world, base);
+                continue;
+            }
+
+            let horiz = is_solid(r, c - 1) || is_solid(r, c + 1);
+            let vert = is_solid(r - 1, c) || is_solid(r + 1, c);
+            if !horiz && !vert {
+                // Isolated pillar: full-tile at centre.
+                emit(cx_world, cz_world, base);
+                continue;
+            }
+
+            let (hn, hs) = if horiz { horiz_run_interior(r, c) } else { (false, false) };
+            let (ve, vw) = if vert { vert_run_interior(r, c) } else { (false, false) };
+            if !hn && !hs && !ve && !vw {
+                // Runs present but no interior anywhere in perp (e.g. a
+                // + cross-junction fully surrounded by walls). Fall back
+                // to a full-tile centred block.
+                emit(cx_world, cz_world, base);
+                continue;
+            }
+
+            if horiz && (hn || hs) {
+                // (true, true) divider → +z convention.
+                // (false, true) interior south → +z. (true, false) → -z.
+                let z_off = match (hn, hs) {
+                    (true, true) | (false, true) => half,
+                    (true, false) => -half,
+                    (false, false) => 0.0,
+                };
+                emit(cx_world, cz_world + z_off, ew_kind(base));
+            }
+            if vert && (ve || vw) {
+                // (true, true) divider → +x convention.
+                // (true, false) interior east → +x. (false, true) → -x.
+                let x_off = match (ve, vw) {
+                    (true, true) | (true, false) => half,
+                    (false, true) => -half,
+                    (false, false) => 0.0,
+                };
+                emit(cx_world + x_off, cz_world, ns_kind(base));
+            }
         }
     }
     Ok(Template { props })
@@ -599,6 +729,109 @@ mod tests {
         let furniture = n(PropKind::Chair) + n(PropKind::Table) + n(PropKind::Furniture);
         assert!(furniture > 3, "expected resolved furniture, got {furniture}");
         assert!(n(PropKind::Roof) > 0, "expected a roof");
+    }
+
+    // --- edge-placed walls: TDD for the new placement model ---
+    //
+    // The rules (from the user's drawings, images #16-#20):
+    //   - Perimeter walls sit on the interior-facing grid line, not centered.
+    //   - Corner cells emit TWO segments (an L on the interior-facing edges).
+    //   - Interior dividers (interior on both perp sides) emit ONE segment
+    //     shifted to the "positive" side (+z for horizontal, +x for vertical).
+    //   - Windows follow the same rules as the wall segment they replace.
+
+    fn synthetic_mapgen(rows: &[&str]) -> String {
+        let joined = rows
+            .iter()
+            .map(|r| format!("{r:?}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            r#"[{{"om_terrain":"tt","object":{{"rows":[{joined}],"terrain":{{"w":"t_wall",".":"t_floor",":":"t_window"}}}}}}]"#
+        )
+    }
+
+    #[test]
+    fn perimeter_wall_shifts_toward_interior() {
+        // 3×3 room: solid perimeter, one floor at (1, 1). The top-middle
+        // wall at (0, 1) has interior directly south — shift +tile/2 in z.
+        let json = synthetic_mapgen(&["www", "w.w", "www"]);
+        let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
+        // Cell (0, 1) centre: x = (1 - 1.5) * 80 = -40, z = (0 - 1.5) * 80 = -120.
+        // Shift +tile/2 (=40) in z toward interior south → z = -80.
+        let has_shifted = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallEW)
+                && (p.offset.x - (-40.0)).abs() < 1e-3
+                && (p.offset.z - (-80.0)).abs() < 1e-3
+        });
+        assert!(
+            has_shifted,
+            "top-middle wall should shift toward interior south; got: {:?}",
+            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn nw_corner_emits_two_segments_on_interior_edges() {
+        // NW corner of the same 3×3 room. Cell (0, 0) is a corner with
+        // interior at diagonal SE. Emits a horizontal segment on its
+        // south edge (z shift +40) and a vertical segment on its east
+        // edge (x shift +40), meeting at the SE inner corner.
+        let json = synthetic_mapgen(&["www", "w.w", "www"]);
+        let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
+        // Cell (0, 0) centre: x = -120, z = -120.
+        let has_horiz = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallEW)
+                && (p.offset.x - (-120.0)).abs() < 1e-3
+                && (p.offset.z - (-80.0)).abs() < 1e-3
+        });
+        let has_vert = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallNS)
+                && (p.offset.x - (-80.0)).abs() < 1e-3
+                && (p.offset.z - (-120.0)).abs() < 1e-3
+        });
+        assert!(has_horiz, "NW corner should emit a horizontal segment on its S edge");
+        assert!(has_vert, "NW corner should emit a vertical segment on its E edge");
+    }
+
+    #[test]
+    fn divider_between_two_rooms_shifts_positive() {
+        // 3×5 mapgen: two 1×1 rooms separated by a divider at (1, 2).
+        // The divider has interior E and W → 'always positive' convention
+        // shifts the vertical segment to +x by tile/2.
+        let json = synthetic_mapgen(&["wwwww", "w.w.w", "wwwww"]);
+        let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
+        // Cell (1, 2) centre: x = (2 - 2.5) * 80 = -40, z = (1 - 1.5) * 80 = -40.
+        // Shift +tile/2 (=40) in x → x = 0.
+        let has_divider = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallNS)
+                && (p.offset.x - 0.0).abs() < 1e-3
+                && (p.offset.z - (-40.0)).abs() < 1e-3
+        });
+        assert!(
+            has_divider,
+            "divider vertical segment should shift +tile/2 in x; got: {:?}",
+            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn windows_use_the_same_placement_rules_as_walls() {
+        // 3×3 with a window in the middle of the top wall run.
+        let json = synthetic_mapgen(&["w:w", "w.w", "www"]);
+        let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
+        // Cell (0, 1) is a Window inside a horizontal run; interior S.
+        // Shift +tile/2 in z (like WallEW would).
+        let has_window = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WindowEW)
+                && (p.offset.x - (-40.0)).abs() < 1e-3
+                && (p.offset.z - (-80.0)).abs() < 1e-3
+        });
+        assert!(
+            has_window,
+            "window should follow WallEW placement (shift +tile/2 in z); got: {:?}",
+            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
+        );
     }
 
     #[test]
