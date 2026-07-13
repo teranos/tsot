@@ -135,20 +135,41 @@ fn furniture_prop(id: &str) -> Option<PropKind> {
     None
 }
 
-/// Map a cell's char to a prop via the resolved char→id maps, resolving
-/// furniture first (it sits on the floor) then terrain. Unmapped → None.
+/// Wall/fence colour by material, so parametrized wall variation shows
+/// as differently-coloured houses (brick/wood/concrete/log/…).
+fn wall_color(id: &str) -> [f32; 3] {
+    if id.contains("brick") {
+        [0.55, 0.32, 0.27]
+    } else if id.contains("concrete") || id.contains("thconc") || id.contains("cinder") {
+        [0.56, 0.56, 0.60]
+    } else if id.contains("metal") || id.contains("chain") {
+        [0.46, 0.49, 0.53]
+    } else if id.contains("log") {
+        [0.40, 0.29, 0.17]
+    } else if id.contains("glass") {
+        [0.40, 0.55, 0.60]
+    } else if id.contains("wood") || id.contains("wall_w") || id.contains("fence") {
+        [0.52, 0.40, 0.25]
+    } else {
+        [0.48, 0.47, 0.50] // generic
+    }
+}
+
+/// Map a cell's char to (prop kind, optional colour) via the resolved
+/// char→id maps — furniture first (it sits on the floor), then terrain.
+/// Walls carry a material colour. Unmapped → None.
 fn cell_to_prop(
     ch: char,
     terrain: &HashMap<char, String>,
     furniture: &HashMap<char, String>,
-) -> Option<PropKind> {
+) -> Option<(PropKind, Option<[f32; 3]>)> {
     if let Some(f) = furniture.get(&ch) {
         // Furniture char — its prop (or None); don't fall through to terrain.
-        return furniture_prop(f);
+        return furniture_prop(f).map(|k| (k, None));
     }
     if let Some(t) = terrain.get(&ch) {
         if (t.contains("wall") || t.contains("fence")) && !t.contains("gate") {
-            return Some(PropKind::Wall);
+            return Some((PropKind::Wall, Some(wall_color(t))));
         }
     }
     None
@@ -194,12 +215,12 @@ pub fn mapgen_to_template(
     let height = obj.rows.len();
     let width = obj.rows.iter().map(|r| r.chars().count()).max().unwrap_or(0);
 
-    // Pass 1: base prop kind per cell (walls are the plain Wall kind).
-    let grid: Vec<Vec<Option<PropKind>>> = obj
+    // Pass 1: base (kind, colour) per cell (walls are the plain Wall kind).
+    let grid: Vec<Vec<Option<(PropKind, Option<[f32; 3]>)>>> = obj
         .rows
         .iter()
         .map(|row| {
-            let mut cells: Vec<Option<PropKind>> = row
+            let mut cells: Vec<_> = row
                 .chars()
                 .map(|ch| cell_to_prop(ch, &terrain, &furniture))
                 .collect();
@@ -212,7 +233,7 @@ pub fn mapgen_to_template(
             && c >= 0
             && (r as usize) < height
             && (c as usize) < width
-            && grid[r as usize][c as usize] == Some(PropKind::Wall)
+            && matches!(grid[r as usize][c as usize], Some((PropKind::Wall, _)))
     };
 
     // Pass 2: emit props, orienting each wall by its neighbours so a run
@@ -223,7 +244,7 @@ pub fn mapgen_to_template(
     let mut props = Vec::new();
     for r in 0..height {
         for c in 0..width {
-            let Some(base) = grid[r][c] else { continue };
+            let Some((base, color)) = grid[r][c] else { continue };
             let kind = if base == PropKind::Wall {
                 let vertical =
                     is_wall(r as isize - 1, c as isize) || is_wall(r as isize + 1, c as isize);
@@ -237,9 +258,11 @@ pub fn mapgen_to_template(
             } else {
                 base
             };
-            let x = (c as f32 - cx) * tile_size;
-            let z = (r as f32 - cz) * tile_size;
-            props.push(Prop { offset: Vec3::new(x, 0.0, z), kind });
+            let offset = Vec3::new((c as f32 - cx) * tile_size, 0.0, (r as f32 - cz) * tile_size);
+            props.push(match color {
+                Some(col) => Prop::colored(offset, kind, col),
+                None => Prop::at(offset, kind),
+            });
         }
     }
     Ok(Template { props })
@@ -275,10 +298,7 @@ pub fn roof_to_props(
             if ch != ' ' {
                 let x = (c as f32 - cx) * tile_size;
                 let z = (r as f32 - cz) * tile_size;
-                props.push(Prop {
-                    offset: Vec3::new(x, height_y, z),
-                    kind: PropKind::Roof,
-                });
+                props.push(Prop::at(Vec3::new(x, height_y, z), PropKind::Roof));
             }
         }
     }
@@ -448,15 +468,19 @@ mod tests {
         .into_iter()
         .collect();
 
-        assert_eq!(cell_to_prop('w', &terrain, &furniture), Some(PropKind::Wall));
-        assert_eq!(cell_to_prop('W', &terrain, &furniture), Some(PropKind::Wall));
-        assert_eq!(cell_to_prop('^', &terrain, &furniture), None); // gate skipped
-        assert_eq!(cell_to_prop('h', &terrain, &furniture), Some(PropKind::Chair));
-        assert_eq!(cell_to_prop('c', &terrain, &furniture), Some(PropKind::Table));
-        assert_eq!(cell_to_prop('b', &terrain, &furniture), Some(PropKind::Furniture)); // bed
-        assert_eq!(cell_to_prop('t', &terrain, &furniture), Some(PropKind::Furniture)); // toilet
-        assert_eq!(cell_to_prop('.', &terrain, &furniture), None); // floor skipped
-        assert_eq!(cell_to_prop(' ', &terrain, &furniture), None); // unknown
+        let kind = |ch: char| cell_to_prop(ch, &terrain, &furniture).map(|(k, _)| k);
+        assert_eq!(kind('w'), Some(PropKind::Wall));
+        assert_eq!(kind('W'), Some(PropKind::Wall));
+        assert_eq!(kind('^'), None); // gate skipped
+        assert_eq!(kind('h'), Some(PropKind::Chair));
+        assert_eq!(kind('c'), Some(PropKind::Table));
+        assert_eq!(kind('b'), Some(PropKind::Furniture)); // bed
+        assert_eq!(kind('t'), Some(PropKind::Furniture)); // toilet
+        assert_eq!(kind('.'), None); // floor skipped
+        assert_eq!(kind(' '), None); // unknown
+        // Walls carry a material colour, and materials differ.
+        assert!(cell_to_prop('w', &terrain, &furniture).unwrap().1.is_some());
+        assert_ne!(wall_color("t_brick_wall"), wall_color("t_wall_log"));
     }
 
     // --- assembly-level tests (RED against the stub) ---
@@ -510,6 +534,26 @@ mod tests {
             *counts.iter().max().unwrap(),
         );
         assert!(max > min, "expected some variant to be more furnished: {counts:?}");
+    }
+
+    #[test]
+    fn wall_colour_varies_across_house_seeds() {
+        use std::collections::HashSet;
+        let mut colors = HashSet::new();
+        for seed in 0..HOUSE_VARIANTS {
+            let t = assemble_building(HOUSE_JSON, "house_01", "house_01_roof", seed).unwrap();
+            for p in &t.props {
+                if matches!(p.kind, PropKind::Wall | PropKind::WallNS | PropKind::WallEW) {
+                    if let Some(c) = p.color {
+                        colors.insert(format!("{c:?}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            colors.len() > 1,
+            "expected walls of different materials/colours across seeds: {colors:?}"
+        );
     }
 
     #[test]

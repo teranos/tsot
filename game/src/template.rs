@@ -45,6 +45,8 @@ pub enum PropKind {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct StructureProp {
     pub kind: PropKind,
+    /// Colour override; `None` → the kind's default appearance.
+    pub color: Option<[f32; 3]>,
 }
 
 /// One prop, positioned relative to the template's anchor.
@@ -52,6 +54,19 @@ pub struct StructureProp {
 pub struct Prop {
     pub offset: Vec3,
     pub kind: PropKind,
+    /// Colour override; `None` → the kind's default appearance.
+    pub color: Option<[f32; 3]>,
+}
+
+impl Prop {
+    /// A prop with the default appearance for its kind.
+    pub fn at(offset: Vec3, kind: PropKind) -> Self {
+        Self { offset, kind, color: None }
+    }
+    /// A prop with an explicit colour (e.g. a wall tinted by material).
+    pub fn colored(offset: Vec3, kind: PropKind, color: [f32; 3]) -> Self {
+        Self { offset, kind, color: Some(color) }
+    }
 }
 
 /// A named group of props. The anchor is supplied at stamp time, so
@@ -98,7 +113,7 @@ pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
             } else {
                 p.kind
             };
-            Prop { offset: Vec3::new(rx, p.offset.y, rz), kind }
+            Prop { offset: Vec3::new(rx, p.offset.y, rz), kind, color: p.color }
         })
         .collect();
     Template { props }
@@ -114,8 +129,12 @@ pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
 /// permanent structures can ignore the return.
 pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3) -> Vec<Entity> {
     let mut spawned = Vec::new();
-    for (pos, kind) in resolve_placements(template, anchor) {
-        let entity = match kind {
+    for prop in &template.props {
+        let pos = anchor + prop.offset;
+        // StructureProp carrying this prop's colour override (walls
+        // tinted by material; None elsewhere → kind default).
+        let sp = |kind: PropKind| StructureProp { kind, color: prop.color };
+        let entity = match prop.kind {
             PropKind::Campfire => commands
                 .spawn((
                     Campfire {
@@ -128,12 +147,10 @@ pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3
                 ))
                 .id(),
             // Decor — no collider; you can step around a camp chair.
-            PropKind::Chair => commands
-                .spawn((StructureProp { kind: PropKind::Chair }, Position(pos)))
-                .id(),
+            PropKind::Chair => commands.spawn((sp(PropKind::Chair), Position(pos))).id(),
             PropKind::Table => commands
                 .spawn((
-                    StructureProp { kind: PropKind::Table },
+                    sp(PropKind::Table),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(64.0, 28.0, 64.0)),
                 ))
@@ -141,32 +158,30 @@ pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3
             // Solid, one CDDA tile square. Wall sizes match scene.rs.
             PropKind::Wall => commands
                 .spawn((
-                    StructureProp { kind: PropKind::Wall },
+                    sp(PropKind::Wall),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(80.0, 220.0, 80.0)),
                 ))
                 .id(),
             PropKind::WallNS => commands
                 .spawn((
-                    StructureProp { kind: PropKind::WallNS },
+                    sp(PropKind::WallNS),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(24.0, 220.0, 80.0)),
                 ))
                 .id(),
             PropKind::WallEW => commands
                 .spawn((
-                    StructureProp { kind: PropKind::WallEW },
+                    sp(PropKind::WallEW),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(80.0, 220.0, 24.0)),
                 ))
                 .id(),
             // Overhead — no collider; the player walks under it.
-            PropKind::Roof => commands
-                .spawn((StructureProp { kind: PropKind::Roof }, Position(pos)))
-                .id(),
+            PropKind::Roof => commands.spawn((sp(PropKind::Roof), Position(pos))).id(),
             PropKind::Furniture => commands
                 .spawn((
-                    StructureProp { kind: PropKind::Furniture },
+                    sp(PropKind::Furniture),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(50.0, 70.0, 50.0)),
                 ))
@@ -185,8 +200,8 @@ mod tests {
     fn resolve_translates_each_prop_by_the_anchor() {
         let t = Template {
             props: vec![
-                Prop { offset: Vec3::new(1.0, 2.0, 3.0), kind: PropKind::Campfire },
-                Prop { offset: Vec3::new(-5.0, 0.0, 10.0), kind: PropKind::Campfire },
+                Prop::at(Vec3::new(1.0, 2.0, 3.0), PropKind::Campfire),
+                Prop::at(Vec3::new(-5.0, 0.0, 10.0), PropKind::Campfire),
             ],
         };
         let anchor = Vec3::new(100.0, 0.0, -100.0);
@@ -222,7 +237,7 @@ mod tests {
     #[test]
     fn rotate_turns_offsets_and_swaps_wall_orientation() {
         let t = Template {
-            props: vec![Prop { offset: Vec3::new(10.0, 5.0, 0.0), kind: PropKind::WallNS }],
+            props: vec![Prop::at(Vec3::new(10.0, 5.0, 0.0), PropKind::WallNS)],
         };
         // 90°: (x,z)=(10,0) → (0,10); NS wall → EW; y unchanged.
         let r1 = rotate_template(&t, 1);
@@ -239,7 +254,7 @@ mod tests {
         // Same template + anchor → identical placements every call.
         // Guards the P2P invariant: no hidden RNG can creep in.
         let t = Template {
-            props: vec![Prop { offset: Vec3::new(7.0, 8.0, 9.0), kind: PropKind::Campfire }],
+            props: vec![Prop::at(Vec3::new(7.0, 8.0, 9.0), PropKind::Campfire)],
         };
         let a = resolve_placements(&t, Vec3::splat(3.0));
         let b = resolve_placements(&t, Vec3::splat(3.0));

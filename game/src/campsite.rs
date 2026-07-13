@@ -30,12 +30,12 @@ const CAMPSITE_SALT: u32 = 0x0CA3_5175;
 /// stamp machinery doesn't change.
 pub fn campsite_template() -> Template {
     const CHAIR_R: f32 = 90.0;
-    let mut props = vec![Prop { offset: Vec3::ZERO, kind: PropKind::Campfire }];
+    let mut props = vec![Prop::at(Vec3::ZERO, PropKind::Campfire)];
     for (dx, dz) in [(CHAIR_R, 0.0), (-CHAIR_R, 0.0), (0.0, CHAIR_R), (0.0, -CHAIR_R)] {
-        props.push(Prop { offset: Vec3::new(dx, 0.0, dz), kind: PropKind::Chair });
+        props.push(Prop::at(Vec3::new(dx, 0.0, dz), PropKind::Chair));
     }
-    props.push(Prop { offset: Vec3::new(160.0, 0.0, 70.0), kind: PropKind::Table });
-    props.push(Prop { offset: Vec3::new(-150.0, 0.0, -60.0), kind: PropKind::Table });
+    props.push(Prop::at(Vec3::new(160.0, 0.0, 70.0), PropKind::Table));
+    props.push(Prop::at(Vec3::new(-150.0, 0.0, -60.0), PropKind::Table));
     Template { props }
 }
 

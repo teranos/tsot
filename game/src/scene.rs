@@ -252,7 +252,7 @@ pub struct SceneSnapshot {
     pub pins: Vec<Vec3>,
     pub trails: Vec<Vec3>,
     pub remote_peers: Vec<RemotePeerDot>,
-    pub structures: Vec<(Vec3, PropKind)>,
+    pub structures: Vec<(Vec3, PropKind, Option<[f32; 3]>)>,
     pub player: Vec3,
 }
 
@@ -299,8 +299,10 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         })
         .unwrap_or_default();
     let mut struct_q = world.query::<(&Position, &StructureProp)>();
-    let structures: Vec<(Vec3, PropKind)> =
-        struct_q.iter(world).map(|(p, s)| (p.0, s.kind)).collect();
+    let structures: Vec<(Vec3, PropKind, Option<[f32; 3]>)> = struct_q
+        .iter(world)
+        .map(|(p, s)| (p.0, s.kind, s.color))
+        .collect();
     SceneSnapshot {
         trees,
         obstacles,
@@ -414,16 +416,17 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     // Roof cut-away: when the player is under a roof (a roof tile is
     // roughly overhead), hide the roof of the building they're in so
     // the interior is visible. Distant roofs stay.
-    let under_roof = snap.structures.iter().any(|(p, k)| {
+    let under_roof = snap.structures.iter().any(|(p, k, _)| {
         *k == PropKind::Roof
             && (p.x - snap.player.x).abs() < 80.0
             && (p.z - snap.player.z).abs() < 80.0
     });
 
-    // Structure props (walls, furniture, roof). Each kind carries its
-    // own colour + size; ground props sit on the floor (base at y=0),
+    // Structure props (walls, furniture, roof). Size comes from the
+    // kind; colour is the prop's own tint (walls by material) or the
+    // kind default. Ground props sit on the floor (base at y=0);
     // elevated props (the roof) carry their height in pos.y.
-    for (pos, kind) in &snap.structures {
+    for (pos, kind, tint) in &snap.structures {
         if *kind == PropKind::Roof
             && under_roof
             && (pos.x - snap.player.x).abs() < 1100.0
@@ -431,7 +434,8 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         {
             continue; // you're inside — see-through roof
         }
-        let (color, scale) = prop_appearance(*kind);
+        let (default_color, scale) = prop_appearance(*kind);
+        let color = tint.unwrap_or(default_color);
         instances.push(SceneInstance {
             pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
             color,
@@ -479,7 +483,7 @@ mod tests {
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
-            structures: vec![(Vec3::new(0.0, 220.0, 0.0), PropKind::Roof)],
+            structures: vec![(Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None)],
             player: Vec3::new(px, 20.0, 0.0),
         };
         // The roof is the only instance above y=100; check its presence.

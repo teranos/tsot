@@ -64,10 +64,7 @@ pub fn flicker_modulator(t: f32) -> f32 {
 /// `Template`s the same way; the campfire is simply the smallest one.
 pub fn campfire_template() -> Template {
     Template {
-        props: vec![Prop {
-            offset: Vec3::ZERO,
-            kind: PropKind::Campfire,
-        }],
+        props: vec![Prop::at(Vec3::ZERO, PropKind::Campfire)],
     }
 }
 
