@@ -338,20 +338,15 @@ window.addEventListener('keydown', unlockAudioOnGesture, { once: false })
 window.addEventListener('pointerdown', unlockAudioOnGesture, { once: false })
 
 // Remote-players proxy — thin WebSocket bridge to relaye's R16 WS
-// gateway (see game/docs/relaye-game-gateway.md). Defaults to the
-// deployed endpoint so game.sbvh.nl works out of the box; override
-// with ?proxy=ws://... for local dev, or ?proxy=off to disable.
-// Incoming messages are one GamePosition JSON each; we frame them
-// length-prefixed (u32 LE + bytes) so Rust drains one buffer per
-// tick and slices with parse_frames.
-const DEFAULT_PROXY_WS = 'wss://relaye.sbvh.nl/ws/rave-positions/v1'
-const proxyParam = new URLSearchParams(location.search).get('proxy')
-const PROXY_WS_URL = proxyParam === 'off' ? '' : (proxyParam || DEFAULT_PROXY_WS)
+// gateway (see game/docs/relaye-game-gateway.md). Incoming messages
+// are one GamePosition JSON each; we frame them length-prefixed
+// (u32 LE + bytes) so Rust drains one buffer per tick and slices
+// with parse_frames.
+const PROXY_WS_URL = 'wss://relaye.sbvh.nl/ws/rave-positions/v1'
 let proxyWs: WebSocket | null = null
 let proxyRxBuf: Uint8Array = new Uint8Array(0)
 
 function connectProxy() {
-  if (!PROXY_WS_URL) return
   try {
     proxyWs = new WebSocket(PROXY_WS_URL)
     proxyWs.binaryType = 'arraybuffer'
