@@ -135,6 +135,9 @@ fn furniture_prop(id: &str) -> Option<PropKind> {
     None
 }
 
+/// Glass windows — a light-blue thin panel sitting in the wall line.
+const WINDOW_COLOR: [f32; 3] = [0.50, 0.68, 0.82];
+
 /// Wall/fence colour by material, so parametrized wall variation shows
 /// as differently-coloured houses (brick/wood/concrete/log/…).
 fn wall_color(id: &str) -> [f32; 3] {
@@ -168,6 +171,11 @@ fn cell_to_prop(
         return furniture_prop(f).map(|k| (k, None));
     }
     if let Some(t) = terrain.get(&ch) {
+        // A window is a glass panel that sits in (and orients with) the
+        // wall run, so it reads as a window rather than a gap.
+        if t.contains("window") {
+            return Some((PropKind::Wall, Some(WINDOW_COLOR)));
+        }
         if (t.contains("wall") || t.contains("fence")) && !t.contains("gate") {
             return Some((PropKind::Wall, Some(wall_color(t))));
         }
@@ -481,6 +489,13 @@ mod tests {
         // Walls carry a material colour, and materials differ.
         assert!(cell_to_prop('w', &terrain, &furniture).unwrap().1.is_some());
         assert_ne!(wall_color("t_brick_wall"), wall_color("t_wall_log"));
+
+        // A window becomes a glass-tinted panel in the wall line.
+        let win: HashMap<char, String> = [(':', s("t_window"))].into_iter().collect();
+        assert_eq!(
+            cell_to_prop(':', &win, &HashMap::new()),
+            Some((PropKind::Wall, Some(WINDOW_COLOR)))
+        );
     }
 
     // --- assembly-level tests (RED against the stub) ---

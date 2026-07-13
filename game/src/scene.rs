@@ -416,23 +416,34 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     // Roof cut-away: when the player is under a roof (a roof tile is
     // roughly overhead), hide the roof of the building they're in so
     // the interior is visible. Distant roofs stay.
+    // "Inside" = a roof tile is roughly overhead.
     let under_roof = snap.structures.iter().any(|(p, k, _)| {
         *k == PropKind::Roof
             && (p.x - snap.player.x).abs() < 80.0
             && (p.z - snap.player.z).abs() < 80.0
     });
+    // The isometric camera looks from +x,+z, so nearer props have a
+    // larger x+z. When inside, hide this building's roof AND its
+    // camera-facing walls (in front of the player) so the interior
+    // shows; the far walls stay as a backdrop.
+    let player_depth = snap.player.x + snap.player.z;
 
     // Structure props (walls, furniture, roof). Size comes from the
     // kind; colour is the prop's own tint (walls by material) or the
     // kind default. Ground props sit on the floor (base at y=0);
     // elevated props (the roof) carry their height in pos.y.
     for (pos, kind, tint) in &snap.structures {
-        if *kind == PropKind::Roof
-            && under_roof
-            && (pos.x - snap.player.x).abs() < 1100.0
-            && (pos.z - snap.player.z).abs() < 1100.0
-        {
-            continue; // you're inside — see-through roof
+        let in_footprint =
+            (pos.x - snap.player.x).abs() < 1100.0 && (pos.z - snap.player.z).abs() < 1100.0;
+        if under_roof && in_footprint {
+            if *kind == PropKind::Roof {
+                continue; // see-through roof
+            }
+            let is_wall =
+                matches!(kind, PropKind::Wall | PropKind::WallNS | PropKind::WallEW);
+            if is_wall && (pos.x + pos.z) > player_depth + 40.0 {
+                continue; // see-through camera-facing wall
+            }
         }
         let (default_color, scale) = prop_appearance(*kind);
         let color = tint.unwrap_or(default_color);
@@ -490,6 +501,30 @@ mod tests {
         let has_roof = |px: f32| snapshot_to_instances(&snap(px)).iter().any(|i| i.pos[1] > 100.0);
         assert!(!has_roof(0.0), "roof should be hidden when the player is under it");
         assert!(has_roof(5000.0), "roof should render when the player is far away");
+    }
+
+    #[test]
+    fn near_walls_are_cut_away_when_inside() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![
+                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None), // overhead → inside
+                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None), // camera-facing (x+z>0)
+                (Vec3::new(-300.0, 0.0, -300.0), PropKind::Wall, None), // far side
+            ],
+            player: Vec3::ZERO,
+        };
+        let inst = snapshot_to_instances(&snap);
+        // Walls render around y=110; only the far wall should survive.
+        let walls: Vec<_> = inst.iter().filter(|i| (90.0..140.0).contains(&i.pos[1])).collect();
+        assert_eq!(walls.len(), 1, "only the far wall should remain when inside");
+        assert!(walls[0].pos[0] < 0.0, "the surviving wall is the far one");
     }
 
     #[test]
