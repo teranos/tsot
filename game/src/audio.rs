@@ -5,6 +5,12 @@
 //   game_audio_load(path_ptr, path_len) -> u32
 //   game_audio_play(handle, volume_x1000, loop_flag)
 //   game_audio_stop(handle)
+//   game_audio_set_volume(handle, volume_x1000)
+//
+// set_volume rides the per-slot GainNode the JS shim already keeps, so
+// a muted/quieter track is a live gain change — no stop + reload. This
+// is what lets the music toggle and the settings volume slider act on
+// the running track instantly.
 //
 // Async load — JS fetches + decodes off-thread. Play before decode
 // finishes is a silent no-op on the JS side. Browsers also require a
@@ -24,6 +30,10 @@ unsafe extern "C" {
     fn game_audio_load(path_ptr: *const u8, path_len: u32) -> u32;
     fn game_audio_play(handle: u32, volume_x1000: u32, loop_flag: u32);
     fn game_audio_stop(handle: u32);
+    /// Live-set the playing track's volume via its GainNode. No effect
+    /// if the handle never started (JS updates the pending-play volume
+    /// so the level is correct once it does start).
+    fn game_audio_set_volume(handle: u32, volume_x1000: u32);
     /// Play a PCM sample buffer through the browser's AudioContext.
     /// JS wraps the samples in an AudioBuffer and starts a one-shot
     /// BufferSourceNode. Samples must remain valid for the duration
@@ -226,6 +236,13 @@ impl GameAudioHandle {
     pub fn raw(&self) -> u32 {
         self.0
     }
+
+    /// Construct a handle from a raw id — test-only, so the music
+    /// state machine can be exercised without a live AudioContext.
+    #[cfg(test)]
+    pub fn from_raw_for_test(raw: u32) -> Self {
+        Self(raw)
+    }
 }
 
 impl Drop for GameAudioHandle {
@@ -275,5 +292,23 @@ pub fn stop(handle: &GameAudioHandle) {
     if handle.0 != 0 {
         #[cfg(target_arch = "wasm32")]
         unsafe { game_audio_stop(handle.0) }
+    }
+}
+
+/// Live-set the volume of a playing (or pending) track. Clamped to
+/// [0,1] then scaled ×1000 for the integer boundary. A no-op on the
+/// null handle (native / missing asset).
+pub fn set_volume(handle: &GameAudioHandle, volume: f32) {
+    if handle.0 == 0 {
+        return;
+    }
+    let vol = (volume.clamp(0.0, 1.0) * 1000.0) as u32;
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        game_audio_set_volume(handle.0, vol);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = vol;
     }
 }

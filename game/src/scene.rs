@@ -6,6 +6,7 @@ use bevy_app::App;
 use bevy_math::Vec3;
 
 use crate::campfire;
+use crate::jukebox::Jukebox;
 use crate::map::Pin;
 use crate::physics::{self, AabbCollider, NpcMarker, PlayerMarker, Position};
 use crate::remote_players::{RemotePlayers, color_for_peer};
@@ -56,6 +57,59 @@ fn vs(@builtin(vertex_index) vi: u32, inst: UiInstance) -> VOut {
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     return in.color;
+}
+"#;
+
+/// Glass pass shader — identical geometry to the world cube shader, but
+/// the fragment emits a low constant alpha so windows read as real
+/// see-through glass. Drawn after the opaque world with alpha blending,
+/// depth-tested against the world (so glass behind a wall is occluded)
+/// but not depth-writing (so overlapping panes blend). Same vertex +
+/// instance layout as SHADER_WGSL, so it reuses the cube geometry and
+/// SceneInstance buffer.
+pub const GLASS_SHADER_WGSL: &str = r#"
+struct Camera { view_proj: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> camera: Camera;
+
+struct VIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+};
+
+struct IIn {
+    @location(2) i_pos: vec3<f32>,
+    @location(3) i_color: vec3<f32>,
+    @location(4) i_scale: vec3<f32>,
+};
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) color: vec3<f32>,
+};
+
+@vertex
+fn vs(v: VIn, i: IIn) -> VOut {
+    let world = v.pos * i.i_scale + i.i_pos;
+    var o: VOut;
+    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    o.normal = normalize(v.normal);
+    o.color = i.i_color;
+    return o;
+}
+
+const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
+const AMBIENT: f32 = 0.25;
+const GLASS_ALPHA: f32 = 0.34;
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let l = normalize(LIGHT_DIR);
+    let ndotl = max(dot(normalize(in.normal), l), 0.0);
+    let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
+    // Pre-multiply by alpha? No — the pipeline uses straight-alpha
+    // blending (src-alpha, one-minus-src-alpha), so emit straight RGBA.
+    return vec4<f32>(in.color * k, GLASS_ALPHA);
 }
 "#;
 
@@ -253,6 +307,7 @@ pub struct SceneSnapshot {
     pub trails: Vec<Vec3>,
     pub remote_peers: Vec<RemotePeerDot>,
     pub structures: Vec<(Vec3, PropKind, Option<[f32; 3]>)>,
+    pub jukeboxes: Vec<Vec3>,
     pub player: Vec3,
 }
 
@@ -266,8 +321,11 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         bevy_ecs::prelude::Without<trees::TreeTrunk>,
         bevy_ecs::prelude::Without<campfire::Campfire>,
         bevy_ecs::prelude::Without<StructureProp>,
+        bevy_ecs::prelude::Without<Jukebox>,
     )>();
     let obstacles: Vec<Vec3> = obs_q.iter(world).map(|p| p.0).collect();
+    let mut juke_q = world.query_filtered::<&Position, bevy_ecs::prelude::With<Jukebox>>();
+    let jukeboxes: Vec<Vec3> = juke_q.iter(world).map(|p| p.0).collect();
     let mut fire_q = world.query::<(&Position, &campfire::Campfire)>();
     let fires: Vec<(Vec3, f32)> = fire_q
         .iter(world)
@@ -311,6 +369,7 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         trails,
         remote_peers,
         structures,
+        jukeboxes,
         player,
     }
 }
@@ -335,6 +394,12 @@ fn prop_appearance(kind: PropKind) -> ([f32; 3], [f32; 3]) {
         PropKind::Roof => ([0.33, 0.30, 0.34], [80.0, 20.0, 80.0]),
         PropKind::Furniture => ([0.34, 0.26, 0.20], [50.0, 70.0, 50.0]),
         PropKind::Campfire => ([1.0, 0.45, 0.08], [50.0, 60.0, 50.0]),
+        // Glass panes fill their tile like the wall they sit in; the
+        // translucency comes from the glass pass, not the colour. These
+        // are only reached through `snapshot_to_glass_instances`.
+        PropKind::Window => ([0.55, 0.70, 0.85], [80.0, 220.0, 80.0]),
+        PropKind::WindowNS => ([0.55, 0.70, 0.85], [24.0, 220.0, 80.0]),
+        PropKind::WindowEW => ([0.55, 0.70, 0.85], [80.0, 220.0, 24.0]),
     }
 }
 
@@ -441,6 +506,11 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     // kind default. Ground props sit on the floor (base at y=0);
     // elevated props (the roof) carry their height in pos.y.
     for (pos, kind, tint) in &snap.structures {
+        // Glass panes are drawn in the separate alpha-blended pass
+        // (see `snapshot_to_glass_instances`), never here.
+        if kind.is_window() {
+            continue;
+        }
         let in_footprint =
             (pos.x - snap.player.x).abs() < 1100.0 && (pos.z - snap.player.z).abs() < 1100.0;
         if under_roof && in_footprint {
@@ -461,12 +531,46 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             scale,
         });
     }
+    // Purple jukebox — a squat solid box you toggle the music at.
+    for j in &snap.jukeboxes {
+        instances.push(SceneInstance {
+            pos: [j.x, crate::jukebox::JUKEBOX_SIZE.y * 0.5, j.z],
+            color: crate::jukebox::JUKEBOX_COLOR,
+            scale: [
+                crate::jukebox::JUKEBOX_SIZE.x,
+                crate::jukebox::JUKEBOX_SIZE.y,
+                crate::jukebox::JUKEBOX_SIZE.z,
+            ],
+        });
+    }
     instances.push(SceneInstance {
         pos: [snap.player.x, 60.0, snap.player.z],
         color: [0.13, 0.83, 0.93],
         scale: [70.0, 140.0, 70.0],
     });
     instances
+}
+
+/// The translucent glass panes, as instances for the alpha-blended
+/// glass pass. Separate from `snapshot_to_instances` so the opaque
+/// world can draw + write depth first, then glass blends over it. Glass
+/// is see-through by construction, so — unlike opaque near walls — it's
+/// never cut away when the player is inside.
+pub fn snapshot_to_glass_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
+    let mut out = Vec::new();
+    for (pos, kind, tint) in &snap.structures {
+        if !kind.is_window() {
+            continue;
+        }
+        let (default_color, scale) = prop_appearance(*kind);
+        let color = tint.unwrap_or(default_color);
+        out.push(SceneInstance {
+            pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
+            color,
+            scale,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -484,6 +588,7 @@ mod tests {
             trails: vec![],
             remote_peers: vec![],
             structures: vec![],
+            jukeboxes: vec![],
             player: Vec3::new(123_456.0, 20.0, -98_765.0),
         };
         let instances = snapshot_to_instances(&snap);
@@ -503,6 +608,7 @@ mod tests {
             trails: vec![],
             remote_peers: vec![],
             structures: vec![(Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None)],
+            jukeboxes: vec![],
             player: Vec3::new(px, 20.0, 0.0),
         };
         // The roof is the only instance above y=100; check its presence.
@@ -526,6 +632,7 @@ mod tests {
                 (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None), // camera-facing (x+z>0)
                 (Vec3::new(-300.0, 0.0, -300.0), PropKind::Wall, None), // far side
             ],
+            jukeboxes: vec![],
             player: Vec3::ZERO,
         };
         let inst = snapshot_to_instances(&snap);
@@ -533,6 +640,62 @@ mod tests {
         let walls: Vec<_> = inst.iter().filter(|i| (90.0..140.0).contains(&i.pos[1])).collect();
         assert_eq!(walls.len(), 1, "only the far wall should remain when inside");
         assert!(walls[0].pos[0] < 0.0, "the surviving wall is the far one");
+    }
+
+    #[test]
+    fn windows_render_in_the_glass_pass_not_the_opaque_pass() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![
+                (Vec3::new(300.0, 0.0, 0.0), PropKind::WallNS, None),
+                (Vec3::new(300.0, 0.0, 80.0), PropKind::WindowNS, Some([0.5, 0.68, 0.82])),
+            ],
+            jukeboxes: vec![],
+            player: Vec3::ZERO,
+        };
+        let opaque = snapshot_to_instances(&snap);
+        let glass = snapshot_to_glass_instances(&snap);
+        // The glass pass carries exactly the one window pane.
+        assert_eq!(glass.len(), 1, "the window belongs to the glass pass");
+        assert_eq!(glass[0].color, [0.5, 0.68, 0.82], "keeps its glass tint");
+        // The opaque pass has the wall but not the window: no opaque
+        // instance sits at the window's position.
+        assert!(
+            !opaque.iter().any(|i| i.pos[0] == 300.0 && i.pos[2] == 80.0),
+            "the window must not be drawn opaque"
+        );
+        assert!(
+            opaque.iter().any(|i| i.pos[0] == 300.0 && i.pos[2] == 0.0),
+            "the wall still draws opaque"
+        );
+    }
+
+    #[test]
+    fn jukebox_renders_as_a_purple_box() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![],
+            jukeboxes: vec![Vec3::new(200.0, 0.0, 2400.0)],
+            player: Vec3::ZERO,
+        };
+        let inst = snapshot_to_instances(&snap);
+        assert!(
+            inst.iter()
+                .any(|i| i.color == crate::jukebox::JUKEBOX_COLOR && i.pos[0] == 200.0),
+            "the jukebox should render at its position in its purple colour"
+        );
     }
 
     #[test]

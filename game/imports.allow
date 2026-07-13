@@ -30,6 +30,8 @@ env.game_gpu_render_target_configure
 env.game_gpu_render_frame
 env.game_gpu_render_pipeline_create_ui
 env.game_gpu_render_ui_overlay
+env.game_gpu_render_pipeline_create_glass
+env.game_gpu_render_glass
 env.game_touch_state
 env.game_viewport_size
 env.game_input_state
@@ -49,3 +51,4 @@ env.game_audio_load
 env.game_audio_play
 env.game_audio_stop
 env.game_audio_play_samples
+env.game_audio_set_volume

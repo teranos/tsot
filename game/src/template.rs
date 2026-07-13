@@ -36,6 +36,21 @@ pub enum PropKind {
     Roof,
     /// Generic solid furniture (bed, dresser, fridge, …) — a box.
     Furniture,
+    /// Translucent glass window filling a tile (corner/junction/isolated).
+    /// Rendered in a separate alpha-blended pass, see-through from
+    /// outside; solid to walk into like the wall it sits in.
+    Window,
+    /// Glass window running N–S (along Z): long in Z, thin in X.
+    WindowNS,
+    /// Glass window running E–W (along X): long in X, thin in Z.
+    WindowEW,
+}
+
+impl PropKind {
+    /// Glass window variants — drawn translucent, in their own pass.
+    pub fn is_window(self) -> bool {
+        matches!(self, PropKind::Window | PropKind::WindowNS | PropKind::WindowEW)
+    }
 }
 
 /// Render/identity tag for a static structure prop (chair, table, and
@@ -108,6 +123,8 @@ pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
                 match p.kind {
                     PropKind::WallNS => PropKind::WallEW,
                     PropKind::WallEW => PropKind::WallNS,
+                    PropKind::WindowNS => PropKind::WindowEW,
+                    PropKind::WindowEW => PropKind::WindowNS,
                     k => k,
                 }
             } else {
@@ -184,6 +201,28 @@ pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3
                     sp(PropKind::Furniture),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(50.0, 70.0, 50.0)),
+                ))
+                .id(),
+            // Glass — solid to bump into, like the wall it sits in.
+            PropKind::Window => commands
+                .spawn((
+                    sp(PropKind::Window),
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(80.0, 220.0, 80.0)),
+                ))
+                .id(),
+            PropKind::WindowNS => commands
+                .spawn((
+                    sp(PropKind::WindowNS),
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(24.0, 220.0, 80.0)),
+                ))
+                .id(),
+            PropKind::WindowEW => commands
+                .spawn((
+                    sp(PropKind::WindowEW),
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(80.0, 220.0, 24.0)),
                 ))
                 .id(),
         };

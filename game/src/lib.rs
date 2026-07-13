@@ -15,9 +15,12 @@ pub mod dpad;
 pub mod error;
 pub mod hash;
 pub mod health;
+pub mod hud;
 pub mod identity;
 pub mod input;
+pub mod jukebox;
 pub mod map;
+pub mod music;
 pub mod net;
 pub mod obs;
 pub mod palette;
@@ -78,16 +81,18 @@ struct FrameCount(u32);
 #[derive(Resource, Default, Clone)]
 struct SelfPeer(String);
 
-// Held so Drop → game_audio_stop fires on app teardown. Non-Send is
-// fine — App is single-threaded on wasm and native tests.
-#[allow(dead_code)]
-#[derive(Resource)]
-struct MusicHandle(audio::GameAudioHandle);
-
+// The looped track starts playing at the default level. Its handle
+// lives in the `music::Music` resource, whose Drop → game_audio_stop
+// fires on app teardown. The HUD toggle, the jukebox, and the settings
+// slider all drive this one resource.
 fn setup_music(mut commands: Commands) {
     let handle = audio::load_music();
     audio::play(&handle, audio::DEFAULT_VOLUME, true);
-    commands.insert_resource(MusicHandle(handle));
+    commands.insert_resource(music::Music {
+        handle,
+        playing: true,
+        volume: audio::DEFAULT_VOLUME,
+    });
 }
 
 #[derive(Resource, Default)]
@@ -367,6 +372,8 @@ fn _init() {
             setup,
             campfire::setup_campfire.after(setup),
             dpad::setup_dpad.after(setup),
+            hud::setup_hud.after(setup),
+            jukebox::setup_jukebox.after(setup),
             map::setup_pins.after(setup),
             trail::setup_trail.after(setup),
             setup_music.after(setup),
@@ -390,6 +397,8 @@ fn _init() {
             campfire::flicker_fire.after(physics::resolve_remote_player_collisions),
             campfire::campfire_crackle_system.after(campfire::flicker_fire),
             dpad::dpad_input_system.after(campfire::campfire_crackle_system),
+            hud::hud_input_system.after(dpad::dpad_input_system),
+            jukebox::jukebox_proximity_system.after(physics::resolve_collisions),
             tick.after(campfire::flicker_fire),
             drain_remote_positions_system.after(tick),
             publish_self_position_system.after(physics::advance_player),
@@ -532,11 +541,12 @@ fn render_single(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (dev, queue) = init_wgpu()?;
     let instances = scene::snapshot_to_instances(snap);
+    let glass = scene::snapshot_to_glass_instances(snap);
     let camera = scene::SceneCamera::follow(
         [snap.player.x, snap.player.y, snap.player.z],
         room::FLOOR_HALF,
     );
-    render::render_scene(&dev, &queue, &camera, &instances, out_path)?;
+    render::render_scene(&dev, &queue, &camera, &instances, &glass, out_path)?;
     Ok(())
 }
 
@@ -551,11 +561,12 @@ fn render_snapshots(
     for (i, snap) in snapshots.iter().enumerate() {
         let out_path = format!("{dir}/frame-{i}.png");
         let instances = scene::snapshot_to_instances(snap);
+        let glass = scene::snapshot_to_glass_instances(snap);
         let camera = scene::SceneCamera::follow(
             [snap.player.x, snap.player.y, snap.player.z],
             room::FLOOR_HALF,
         );
-        render::render_scene(&dev, &queue, &camera, &instances, &out_path)?;
+        render::render_scene(&dev, &queue, &camera, &instances, &glass, &out_path)?;
         out_paths.push(out_path);
     }
     Ok(out_paths)

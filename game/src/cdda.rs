@@ -171,10 +171,12 @@ fn cell_to_prop(
         return furniture_prop(f).map(|k| (k, None));
     }
     if let Some(t) = terrain.get(&ch) {
-        // A window is a glass panel that sits in (and orients with) the
-        // wall run, so it reads as a window rather than a gap.
+        // A window is a translucent glass panel that sits in (and
+        // orients with) the wall run — see-through from outside, drawn
+        // in its own alpha pass. Kept as the base Window kind here;
+        // pass 2 orients it NS/EW to match its wall run.
         if t.contains("window") {
-            return Some((PropKind::Wall, Some(WINDOW_COLOR)));
+            return Some((PropKind::Window, Some(WINDOW_COLOR)));
         }
         if (t.contains("wall") || t.contains("fence")) && !t.contains("gate") {
             return Some((PropKind::Wall, Some(wall_color(t))));
@@ -236,12 +238,17 @@ pub fn mapgen_to_template(
             cells
         })
         .collect();
-    let is_wall = |r: isize, c: isize| -> bool {
+    // A window continues a wall run, so it counts as wall-like both for
+    // orienting its neighbours and for orienting itself.
+    let is_wall_like = |r: isize, c: isize| -> bool {
         r >= 0
             && c >= 0
             && (r as usize) < height
             && (c as usize) < width
-            && matches!(grid[r as usize][c as usize], Some((PropKind::Wall, _)))
+            && matches!(
+                grid[r as usize][c as usize],
+                Some((PropKind::Wall, _)) | Some((PropKind::Window, _))
+            )
     };
 
     // Pass 2: emit props, orienting each wall by its neighbours so a run
@@ -253,15 +260,21 @@ pub fn mapgen_to_template(
     for r in 0..height {
         for c in 0..width {
             let Some((base, color)) = grid[r][c] else { continue };
-            let kind = if base == PropKind::Wall {
-                let vertical =
-                    is_wall(r as isize - 1, c as isize) || is_wall(r as isize + 1, c as isize);
-                let horizontal =
-                    is_wall(r as isize, c as isize - 1) || is_wall(r as isize, c as isize + 1);
-                match (vertical, horizontal) {
-                    (true, false) => PropKind::WallNS,
-                    (false, true) => PropKind::WallEW,
-                    _ => PropKind::Wall, // corner, junction, or isolated
+            let kind = if base == PropKind::Wall || base == PropKind::Window {
+                let vertical = is_wall_like(r as isize - 1, c as isize)
+                    || is_wall_like(r as isize + 1, c as isize);
+                let horizontal = is_wall_like(r as isize, c as isize - 1)
+                    || is_wall_like(r as isize, c as isize + 1);
+                // Orient walls and windows the same way: thin across the
+                // run's length, full-tile at corners/junctions.
+                match (base, vertical, horizontal) {
+                    (PropKind::Wall, true, false) => PropKind::WallNS,
+                    (PropKind::Wall, false, true) => PropKind::WallEW,
+                    (PropKind::Wall, _, _) => PropKind::Wall,
+                    (PropKind::Window, true, false) => PropKind::WindowNS,
+                    (PropKind::Window, false, true) => PropKind::WindowEW,
+                    (PropKind::Window, _, _) => PropKind::Window,
+                    _ => base,
                 }
             } else {
                 base
@@ -490,11 +503,12 @@ mod tests {
         assert!(cell_to_prop('w', &terrain, &furniture).unwrap().1.is_some());
         assert_ne!(wall_color("t_brick_wall"), wall_color("t_wall_log"));
 
-        // A window becomes a glass-tinted panel in the wall line.
+        // A window becomes a translucent glass panel (its own kind),
+        // tinted, sitting in the wall line.
         let win: HashMap<char, String> = [(':', s("t_window"))].into_iter().collect();
         assert_eq!(
             cell_to_prop(':', &win, &HashMap::new()),
-            Some((PropKind::Wall, Some(WINDOW_COLOR)))
+            Some((PropKind::Window, Some(WINDOW_COLOR)))
         );
     }
 
@@ -582,5 +596,21 @@ mod tests {
         let furniture = n(PropKind::Chair) + n(PropKind::Table) + n(PropKind::Furniture);
         assert!(furniture > 3, "expected resolved furniture, got {furniture}");
         assert!(n(PropKind::Roof) > 0, "expected a roof");
+    }
+
+    #[test]
+    fn house_has_oriented_glass_windows() {
+        // The house palettes place windows in the exterior walls; they
+        // resolve to the translucent Window kind, oriented into thin
+        // runs like the walls they sit in.
+        let t = house_template().expect("house should import");
+        let windows = t.props.iter().filter(|p| p.kind.is_window()).count();
+        assert!(windows > 0, "expected glass windows in the house walls");
+        assert!(
+            t.props
+                .iter()
+                .any(|p| matches!(p.kind, PropKind::WindowNS | PropKind::WindowEW)),
+            "windows should orient thin along their wall run"
+        );
     }
 }
