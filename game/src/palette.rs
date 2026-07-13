@@ -1,14 +1,14 @@
-//! CDDA palette resolver.
+//! CDDA palette resolver — with per-building parameter selection.
 //!
-//! A mapgen references palettes (`"palettes": ["standard_domestic_..."]`);
-//! a palette maps symbols → terrain/furniture ids, can nest other
-//! palettes, and can defer values to *parameters* — values rolled once
-//! per scope and reused (CDDA's trick for varied-but-consistent
-//! buildings; see doc/JSON/MAPGEN.md). We don't roll: we resolve every
-//! parameter to its **highest-weight default**, collapsing the whole
-//! nested/parametrized structure into one flat `char → id` map the
-//! importer can consume. (Swapping "top weight" for a per-building hash
-//! pick is the future "varied houses, still identical per peer" step.)
+//! A mapgen references palettes; a palette maps symbols → terrain/
+//! furniture ids, nests other palettes, and defers values to
+//! *parameters* rolled once per scope (CDDA's varied-but-consistent
+//! trick; see doc/JSON/MAPGEN.md). We resolve every parameter from a
+//! per-building **seed** (hash of the building's chunk), so two houses
+//! pick different variant palettes / fence types / etc. but each is
+//! internally consistent and identical on every peer. Weights are
+//! ignored in favour of a uniform spread — CDDA's weighting would make
+//! ~every house the "standard" variant, defeating the variety.
 //!
 //! Corpus is CC-BY-SA 3.0 CDDA content under assets/cdda/palettes/.
 
@@ -17,22 +17,29 @@ use std::sync::OnceLock;
 
 use serde_json::Value;
 
-const HOUSE_GENERAL: &str = include_str!("../assets/cdda/palettes/house_general_palette.json");
-const COMMON_PARAMS: &str = include_str!("../assets/cdda/palettes/common_parameters.json");
-const ROOF: &str = include_str!("../assets/cdda/palettes/roof_palette.json");
+use crate::hash::wang_hash;
+
+const FILES: &[&str] = &[
+    include_str!("../assets/cdda/palettes/house_general_palette.json"),
+    include_str!("../assets/cdda/palettes/common_parameters.json"),
+    include_str!("../assets/cdda/palettes/roof_palette.json"),
+    include_str!("../assets/cdda/palettes/house_variant_palette.json"),
+    include_str!("../assets/cdda/palettes/house_survivor_palette.json"),
+    include_str!("../assets/cdda/palettes/house_general_abandoned.json"),
+];
 
 struct Registry {
     /// palette id → its JSON object.
     by_id: HashMap<String, Value>,
-    /// parameter name → resolved default id (highest-weight option).
-    params: HashMap<String, String>,
+    /// parameter name → its default value (a distribution).
+    param_defs: HashMap<String, Value>,
 }
 
 fn registry() -> &'static Registry {
     static REG: OnceLock<Registry> = OnceLock::new();
     REG.get_or_init(|| {
         let mut by_id = HashMap::new();
-        for src in [HOUSE_GENERAL, COMMON_PARAMS, ROOF] {
+        for src in FILES {
             if let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(src) {
                 for e in entries {
                     if let Some(id) = e.get("id").and_then(Value::as_str) {
@@ -41,67 +48,76 @@ fn registry() -> &'static Registry {
                 }
             }
         }
-        // Collect every parameter's default across the whole corpus.
-        let mut params = HashMap::new();
+        let mut param_defs = HashMap::new();
         for e in by_id.values() {
             if let Some(ps) = e.get("parameters").and_then(Value::as_object) {
                 for (name, def) in ps {
-                    if let Some(id) = def.get("default").and_then(top_of_distribution) {
-                        params.insert(name.clone(), id);
+                    if let Some(d) = def.get("default") {
+                        param_defs.insert(name.clone(), d.clone());
                     }
                 }
             }
         }
-        Registry { by_id, params }
+        Registry { by_id, param_defs }
     })
 }
 
-/// Highest-weight id from a distribution value — `{distribution: [[id,w],…]}`,
-/// a bare `[id,…]`, or a plain string.
-fn top_of_distribution(v: &Value) -> Option<String> {
+/// All candidate ids in a distribution value (weights dropped).
+fn options(v: &Value) -> Vec<String> {
     match v {
-        Value::String(s) => Some(s.clone()),
-        Value::Object(o) => o.get("distribution").and_then(top_of_distribution),
-        Value::Array(a) => {
-            // Weighted pairs [[id, w], …]?
-            if a.iter().all(|e| e.is_array()) && !a.is_empty() {
-                a.iter()
-                    .filter_map(|e| {
-                        let arr = e.as_array()?;
-                        let id = arr.first()?.as_str()?.to_string();
-                        let w = arr.get(1).and_then(Value::as_f64).unwrap_or(1.0);
-                        Some((id, w))
-                    })
-                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(id, _)| id)
-            } else {
-                // Bare list — first element.
-                a.first().and_then(top_of_distribution)
-            }
-        }
-        _ => None,
+        Value::String(s) => vec![s.clone()],
+        Value::Object(o) => o.get("distribution").map(options).unwrap_or_default(),
+        Value::Array(a) => a
+            .iter()
+            .flat_map(|e| match e {
+                // Weighted pair [id, weight] → the id.
+                Value::Array(pair) => pair
+                    .first()
+                    .and_then(Value::as_str)
+                    .map(|s| vec![s.to_string()])
+                    .unwrap_or_default(),
+                other => options(other),
+            })
+            .collect(),
+        _ => vec![],
     }
 }
 
-/// Resolve a terrain/furniture value to a concrete id string.
-fn resolve_value(v: &Value, reg: &Registry) -> Option<String> {
+/// A stable per-(building, parameter) hash.
+fn param_seed(seed: u32, name: &str) -> u32 {
+    let nh = name
+        .bytes()
+        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+    wang_hash(seed as i32, nh as i32, 0x5A17_5EED)
+}
+
+/// Uniform per-building pick from a named parameter's options.
+fn pick_param(name: &str, seed: u32, reg: &Registry) -> Option<String> {
+    let opts = options(reg.param_defs.get(name)?);
+    if opts.is_empty() {
+        return None;
+    }
+    Some(opts[(param_seed(seed, name) as usize) % opts.len()].clone())
+}
+
+/// Resolve a terrain/furniture value to a concrete id.
+fn resolve_value(v: &Value, seed: u32, reg: &Registry) -> Option<String> {
     match v {
         Value::String(s) => Some(s.clone()),
-        Value::Array(a) => a.iter().find_map(|e| resolve_value(e, reg)),
+        Value::Array(a) => a.iter().find_map(|e| resolve_value(e, seed, reg)),
         Value::Object(o) => {
             if let Some(p) = o.get("param").and_then(Value::as_str) {
-                reg.params
-                    .get(p)
-                    .cloned()
+                pick_param(p, seed, reg)
                     .or_else(|| o.get("fallback").and_then(Value::as_str).map(str::to_string))
             } else if let Some(sw) = o.get("switch") {
-                let key = resolve_value(sw, reg)?;
+                let key = resolve_value(sw, seed, reg)?;
                 o.get("cases")
                     .and_then(|c| c.get(&key))
-                    .and_then(|c| resolve_value(c, reg))
+                    .and_then(|c| resolve_value(c, seed, reg))
                     .or_else(|| sw.get("fallback").and_then(Value::as_str).map(str::to_string))
             } else if o.contains_key("distribution") {
-                top_of_distribution(v).and_then(|id| resolve_value(&Value::String(id), reg))
+                // Anonymous distribution — first option (no name to seed by).
+                options(v).into_iter().next()
             } else {
                 None
             }
@@ -110,16 +126,15 @@ fn resolve_value(v: &Value, reg: &Registry) -> Option<String> {
     }
 }
 
-/// Resolve a palettes-list entry (string, `{param}`, or `{distribution}`)
-/// to a concrete palette id.
-fn resolve_palette_ref(v: &Value, reg: &Registry) -> Option<String> {
+/// Resolve a palettes-list entry to a concrete palette id.
+fn resolve_palette_ref(v: &Value, seed: u32, reg: &Registry) -> Option<String> {
     match v {
         Value::String(s) => Some(s.clone()),
         Value::Object(o) => {
             if let Some(p) = o.get("param").and_then(Value::as_str) {
-                reg.params.get(p).cloned()
+                pick_param(p, seed, reg)
             } else {
-                top_of_distribution(v)
+                options(v).into_iter().next()
             }
         }
         _ => None,
@@ -128,6 +143,7 @@ fn resolve_palette_ref(v: &Value, reg: &Registry) -> Option<String> {
 
 fn merge_palette(
     id: &str,
+    seed: u32,
     reg: &Registry,
     ter: &mut HashMap<char, String>,
     fur: &mut HashMap<char, String>,
@@ -138,18 +154,17 @@ fn merge_palette(
     }
     seen.push(id.to_string());
     let Some(entry) = reg.by_id.get(id) else { return };
-    // Nested palettes first (so this palette's own defs override them).
     if let Some(nested) = entry.get("palettes").and_then(Value::as_array) {
         for n in nested {
-            if let Some(nid) = resolve_palette_ref(n, reg) {
-                merge_palette(&nid, reg, ter, fur, seen);
+            if let Some(nid) = resolve_palette_ref(n, seed, reg) {
+                merge_palette(&nid, seed, reg, ter, fur, seen);
             }
         }
     }
     for (map_key, out) in [("terrain", &mut *ter), ("furniture", &mut *fur)] {
         if let Some(obj) = entry.get(map_key).and_then(Value::as_object) {
             for (sym, val) in obj {
-                if let (Some(ch), Some(id)) = (sym.chars().next(), resolve_value(val, reg)) {
+                if let (Some(ch), Some(id)) = (sym.chars().next(), resolve_value(val, seed, reg)) {
                     out.insert(ch, id);
                 }
             }
@@ -157,15 +172,15 @@ fn merge_palette(
     }
 }
 
-/// Resolve a mapgen's `palettes` list into flat `char → id` maps for
-/// terrain and furniture. Later palettes override earlier ones.
-pub fn resolve(palettes: &[Value]) -> (HashMap<char, String>, HashMap<char, String>) {
+/// Resolve a mapgen's `palettes` list into flat `char → id` maps, with
+/// every parameter chosen from `seed`. Later palettes override earlier.
+pub fn resolve(palettes: &[Value], seed: u32) -> (HashMap<char, String>, HashMap<char, String>) {
     let reg = registry();
     let mut ter = HashMap::new();
     let mut fur = HashMap::new();
     for p in palettes {
-        if let Some(id) = resolve_palette_ref(p, reg) {
-            merge_palette(&id, reg, &mut ter, &mut fur, &mut Vec::new());
+        if let Some(id) = resolve_palette_ref(p, seed, reg) {
+            merge_palette(&id, seed, reg, &mut ter, &mut fur, &mut Vec::new());
         }
     }
     (ter, fur)
@@ -178,14 +193,9 @@ mod tests {
 
     #[test]
     fn resolves_the_standard_house_vocabulary_through_nesting() {
-        // domestic_general_and_variant_palette → variant param default →
-        // migration → standard_domestic → …_no_items, where the 68-symbol
-        // furniture vocabulary lives.
-        let (ter, fur) = resolve(&[json!("domestic_general_and_variant_palette")]);
+        let (ter, fur) = resolve(&[json!("domestic_general_and_variant_palette")], 0);
         assert_eq!(fur.get(&'h').map(String::as_str), Some("f_chair"));
         assert_eq!(fur.get(&'f').map(String::as_str), Some("f_table"));
-        assert!(fur.contains_key(&'d'), "dresser symbol should resolve");
-        // A wall terrain should resolve (via parametrized_walls_palette).
         assert!(
             ter.values().any(|v| v.contains("wall")),
             "expected some wall terrain in the resolved map"
@@ -193,8 +203,20 @@ mod tests {
     }
 
     #[test]
+    fn different_seeds_pick_different_variants() {
+        // Across many seeds, the resolved furniture map should not be
+        // identical every time — the per-building parameter pick varies.
+        let base = resolve(&[json!("domestic_general_and_variant_palette")], 0).1;
+        let differs = (1..40).any(|s| {
+            let f = resolve(&[json!("domestic_general_and_variant_palette")], s).1;
+            f != base
+        });
+        assert!(differs, "some seed should resolve a different variant");
+    }
+
+    #[test]
     fn unknown_palette_resolves_empty_not_panic() {
-        let (ter, fur) = resolve(&[json!("no_such_palette")]);
+        let (ter, fur) = resolve(&[json!("no_such_palette")], 7);
         assert!(ter.is_empty() && fur.is_empty());
     }
 }

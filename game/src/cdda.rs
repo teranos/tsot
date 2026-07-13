@@ -161,6 +161,7 @@ pub fn mapgen_to_template(
     json: &str,
     om_terrain: &str,
     tile_size: f32,
+    seed: u32,
 ) -> Result<Template, CddaError> {
     let entries: Vec<Entry> =
         serde_json::from_str(json).map_err(|e| CddaError::Parse(e.to_string()))?;
@@ -177,7 +178,7 @@ pub fn mapgen_to_template(
     let (mut terrain, mut furniture) = if obj.palettes.is_empty() {
         (HashMap::new(), HashMap::new())
     } else {
-        crate::palette::resolve(&obj.palettes)
+        crate::palette::resolve(&obj.palettes, seed)
     };
     for (sym, val) in &obj.terrain {
         if let (Some(ch), Some(id)) = (sym.chars().next(), first_id(val)) {
@@ -286,25 +287,34 @@ pub fn roof_to_props(
 
 /// The garage, imported from the embedded CDDA mapgen — ground floor
 /// (walls + furniture) plus its roof z-level capping the building.
+/// How many hash-varied house variants to pre-build. Each picks its
+/// own variant palette (standard / abandoned / hoarder / survivor) +
+/// fence/wall/lino, so building_index lands on visibly different houses.
+pub const HOUSE_VARIANTS: u32 = 6;
+
 pub fn garage_template() -> Result<Template, CddaError> {
-    assemble_building(GARAGE_JSON, "s_garage_1", "s_garage_roof_1")
+    assemble_building(GARAGE_JSON, "s_garage_1", "s_garage_roof_1", 0)
 }
 
-/// The house, imported from the embedded CDDA mapgen — its palettes
-/// (walls + the 68-symbol domestic furniture vocabulary) resolved via
-/// `palette::resolve`, capped with its roof.
+/// The house at the canonical seed 0 (used by tests). The world uses
+/// the seeded variants built in `load_building_templates`.
 pub fn house_template() -> Result<Template, CddaError> {
-    assemble_building(HOUSE_JSON, "house_01", "house_01_roof")
+    assemble_building(HOUSE_JSON, "house_01", "house_01_roof", 0)
 }
 
 /// A small shed (original inline mapgen, no palettes).
 pub fn shed_template() -> Result<Template, CddaError> {
-    assemble_building(SHED_JSON, "shed_1", "shed_roof")
+    assemble_building(SHED_JSON, "shed_1", "shed_roof", 0)
 }
 
-/// Ground floor (walls + furniture, palettes resolved) + roof z-level.
-fn assemble_building(json: &str, ground_om: &str, roof_om: &str) -> Result<Template, CddaError> {
-    let mut t = mapgen_to_template(json, ground_om, CDDA_TILE)?;
+/// Ground floor (walls + furniture, palettes resolved at `seed`) + roof.
+fn assemble_building(
+    json: &str,
+    ground_om: &str,
+    roof_om: &str,
+    seed: u32,
+) -> Result<Template, CddaError> {
+    let mut t = mapgen_to_template(json, ground_om, CDDA_TILE, seed)?;
     let roof = roof_to_props(json, roof_om, CDDA_TILE, ROOF_HEIGHT)?;
     t.props.extend(roof);
     Ok(t)
@@ -318,12 +328,16 @@ pub struct BuildingTemplates(pub Vec<Template>);
 /// Parse every building we ship, once. Import failures surface on the
 /// obs bus (sacred); the building simply won't appear.
 pub fn load_building_templates() -> BuildingTemplates {
+    let mut specs: Vec<(&str, Result<Template, CddaError>)> =
+        vec![("garage", garage_template()), ("shed", shed_template())];
+    for seed in 0..HOUSE_VARIANTS {
+        specs.push((
+            "house",
+            assemble_building(HOUSE_JSON, "house_01", "house_01_roof", seed),
+        ));
+    }
     let mut templates = Vec::new();
-    for (name, result) in [
-        ("garage", garage_template()),
-        ("house", house_template()),
-        ("shed", shed_template()),
-    ] {
+    for (name, result) in specs {
         match result {
             Ok(t) => templates.push(t),
             Err(e) => obs::emit(&format!("[cdda] {name} import failed: {e}")),
@@ -475,8 +489,27 @@ mod tests {
 
     #[test]
     fn unknown_om_terrain_is_a_surfaced_error() {
-        let err = mapgen_to_template(GARAGE_JSON, "s_no_such_building", CDDA_TILE).unwrap_err();
+        let err = mapgen_to_template(GARAGE_JSON, "s_no_such_building", CDDA_TILE, 0).unwrap_err();
         assert_eq!(err, CddaError::NotFound("s_no_such_building".to_string()));
+    }
+
+    #[test]
+    fn seeds_can_resolve_a_more_furnished_variant() {
+        // At least one seed picks a variant palette (the hoarder) that
+        // resolves visibly more furniture than the plainest one.
+        let count = |seed: u32| {
+            let t = assemble_building(HOUSE_JSON, "house_01", "house_01_roof", seed).unwrap();
+            t.props
+                .iter()
+                .filter(|p| p.kind == PropKind::Furniture)
+                .count()
+        };
+        let counts: Vec<usize> = (0..HOUSE_VARIANTS).map(count).collect();
+        let (min, max) = (
+            *counts.iter().min().unwrap(),
+            *counts.iter().max().unwrap(),
+        );
+        assert!(max > min, "expected some variant to be more furnished: {counts:?}");
     }
 
     #[test]
