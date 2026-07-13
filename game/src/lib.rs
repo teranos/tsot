@@ -82,17 +82,24 @@ struct FrameCount(u32);
 #[derive(Resource, Default, Clone)]
 struct SelfPeer(String);
 
-// The looped track starts playing at the default level. Its handle
-// lives in the `music::Music` resource, whose Drop → game_audio_stop
-// fires on app teardown. The HUD toggle, the jukebox, and the settings
-// slider all drive this one resource.
+// The looped track starts playing at the last session's mix (mute +
+// volume level, if any — else default). Its handle lives in the
+// `music::Music` resource, whose Drop → game_audio_stop fires on app
+// teardown. The HUD toggle, the jukebox, and the settings slider all
+// drive this one resource, and each change is persisted back so the
+// next boot resumes with the same mix.
 fn setup_music(mut commands: Commands) {
     let handle = audio::load_music();
-    audio::play(&handle, audio::DEFAULT_VOLUME, true);
+    let (playing, volume) =
+        persist::load_music().unwrap_or((true, audio::DEFAULT_VOLUME));
+    // Start silent when muted so the browser never audibly plays a
+    // frame at the wrong level before the mute state is applied.
+    let start_volume = if playing { volume } else { 0.0 };
+    audio::play(&handle, start_volume, true);
     commands.insert_resource(music::Music {
         handle,
-        playing: true,
-        volume: audio::DEFAULT_VOLUME,
+        playing,
+        volume,
     });
 }
 

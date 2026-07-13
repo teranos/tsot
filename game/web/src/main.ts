@@ -735,6 +735,26 @@ async function main() {
         const copy = new Uint8Array(memory.buffer, bytesPtr, bytesLen).slice()
         localStorage.setItem('game_position', btoa(String.fromCharCode(...copy)))
       },
+      // Music preference (playing flag + volume) — 5 bytes, same
+      // localStorage-through-Rust pattern as the position above.
+      game_music_state_load: (outPtr: number): number => {
+        if (!memory) return 0
+        const s = localStorage.getItem('game_music')
+        if (!s) return 0
+        try {
+          const arr = Uint8Array.from(atob(s), c => c.charCodeAt(0))
+          if (arr.length !== 5) return 0
+          new Uint8Array(memory.buffer, outPtr, 5).set(arr)
+          return 5
+        } catch {
+          return 0
+        }
+      },
+      game_music_state_save: (bytesPtr: number, bytesLen: number) => {
+        if (!memory) return
+        const copy = new Uint8Array(memory.buffer, bytesPtr, bytesLen).slice()
+        localStorage.setItem('game_music', btoa(String.fromCharCode(...copy)))
+      },
       game_peers_pending: (): number => proxyRxBuf.length,
       game_peers_recv: (outPtr: number, outLen: number): number => {
         if (!memory) return 0

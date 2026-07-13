@@ -34,18 +34,22 @@ impl Music {
         audio::set_volume(&self.handle, self.effective_volume());
     }
 
-    /// Flip mute on/off and apply immediately.
+    /// Flip mute on/off and apply immediately. Persists the new state
+    /// so the next boot starts with the same mix.
     pub fn toggle(&mut self) {
         self.playing = !self.playing;
         self.apply();
+        crate::persist::save_music(self.playing, self.volume);
     }
 
     /// Set the chosen level (clamped) and apply. Setting a non-zero
     /// level while muted leaves it muted — the slider changes what
     /// *un*muting will restore to, matching a real mixer channel.
+    /// Persists so the next boot starts with the same mix.
     pub fn set_volume(&mut self, v: f32) {
         self.volume = v.clamp(0.0, 1.0);
         self.apply();
+        crate::persist::save_music(self.playing, self.volume);
     }
 }
 
