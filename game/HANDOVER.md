@@ -3,82 +3,100 @@
 Working notes for continuing this branch in a fresh session. Blunt on
 purpose: what's real, what's tested, what's never been looked at.
 
-## The honest part — what's wrong here (read this first)
+## Known defects & risks (read this first)
 
-Written to be fixed, not to be excused. If you're improving this code,
-start here.
+Each has a location and a fix. Ranked by how likely it is to bite. These
+are the concrete things to improve — not vibes.
 
-- **The whole feature set was shipped without being seen.** Glass, HUD,
-  jukebox, volume slider, watermark — not one frame was ever rendered by
-  the agent that built them (no GPU in the sandbox). Unit tests check
-  instance-list separation and layout arithmetic; they prove nothing
-  about what appears. Commit messages say "verified" — they mean the
-  plumbing compiled, not that it looks right. Distrust every visual
-  claim in the log.
+1. **`build.rs` silently clobbers on basename collision.**
+   `game/build.rs` copies every `cdda-files.txt` path to
+   `OUT_DIR/cdda/<basename>` (the `basename(entry.path)` copy loop). The
+   8 current basenames are unique, so it works today. Add a file whose
+   basename collides (a second `roof.json`, another `house01.json`) and
+   the second copy overwrites the first — `include_str!` then embeds the
+   wrong bytes with no error. Fix: assert basenames are unique in
+   `build.rs`, or copy under the full relative path.
 
-- **The glass is incorrect, not just unverified.** It alpha-blends panes
-  with **depth-write off and no back-to-front sort**. That is
-  order-dependent compositing — a textbook transparency bug. Windows on
-  two walls will blend right or wrong depending on entity iteration
-  order. The user asked for "real glass"; this is "alpha blend without
-  sorting," which is a different, wrong thing. It was flagged in a review
-  and shipped anyway, as if flagging were fixing.
+2. **No `game/flake.lock`.** `game/flake.nix` has no committed lock; the
+   repo root and `roam/` both do. So `nix build .#cdda-src` resolves
+   nixpkgs/rust-overlay fresh every run — the corpus bytes stay
+   hash-pinned but the *builder toolchain* floats. Fix:
+   `cd game && nix flake lock` and commit it. (Not done here: the sandbox
+   blocks `api.github.com`, which flake input resolution needs; the git
+   mirror works but nixpkgs is too big to clone that way.)
 
-- **Magic numbers with no basis.** `GLASS_ALPHA = 0.34`, glass tint
-  `[0.55,0.70,0.85]`, watermark alpha `0.30`, the wall-cutaway threshold,
-  the jukebox radius — all pulled from nowhere and never tuned against a
-  rendered frame.
+3. **`Music` resource access is inconsistent.**
+   `hud::hud_input_system` takes `ResMut<Music>` (panics if the resource
+   is missing); `jukebox::jukebox_proximity_system` takes
+   `Option<ResMut<Music>>` (skips). `setup_music` always inserts it, so
+   it's fine now, but the two contracts diverge the moment ordering or a
+   feature flag changes. Pick one — likely `Option<ResMut>` everywhere.
 
-- **The watermark font is hand-guessed bitmaps.** The 3×5 glyphs for
-  `n`, `k`, `w`, and the hex letters are cramped guesses; nobody has seen
-  them at size. The test asserts "quads land in the top-right" — test
-  theater that can't catch an unreadable glyph.
+4. **`.cdda-src` staleness is invisible.** `build.rs` falls back to
+   `game/.cdda-src` when `$CDDA_SRC` is unset, but nothing ties that
+   cache to `CDDA_RELEASE`. Bump `CDDA_RELEASE`, forget to re-run
+   `make cdda`, and you compile the *previous* release silently. Fix:
+   record the fetched rev (e.g. `.cdda-src/.rev`) and make `build.rs`
+   fail if it doesn't equal `CDDA_RELEASE`.
 
-- **The native glass pass in `render.rs` has never executed.** It exists
-  for "parity" and could be broken with no signal. Parity theater.
+5. **`tools/fetch-cdda.sh` verifies nothing.** The nix path is
+   hash-pinned; the script path (used by `make cdda` and any non-nix
+   build) clones the `0.I` tag and compiles whatever it gets — a moved
+   tag or bad mirror goes undetected. Fix: after fetch, sha the files and
+   compare to a committed checksum, or drop the script path and require
+   nix.
 
-- **`?v=<commit>` cache-bust may do nothing.** If CloudFront drops the
-  query string from its cache key (a common default), it busts only the
-  browser, not the CDN — and I never checked the distribution config.
-  Shipped as "loop closed" on an unverified assumption.
+6. **`?v=<commit>` wasm cache-bust may not reach the CDN.** `main.ts`
+   fetches `/game.wasm?v=<commit>`. This reliably busts the *browser*
+   cache; whether it busts *CloudFront* depends on whether the query
+   string is in the distribution's cache key — unconfirmed. If it isn't,
+   the deploy's explicit `/game.wasm` invalidation is the real refresh
+   and the boot-time build-match guard is the backstop. Action: check the
+   distribution's cache-key config; don't rely on `?v=` blindly.
 
-- **The JS build-match guard is probably redundant** (the watermark +
-  cache-bust already cover the common cases). It was added for
-  completeness and only questioned when the user did. Machinery that
-  hasn't earned its place.
+7. **The JS build-match guard: decide, don't leave it ambiguous.**
+   `main.ts` reads the wasm's own commit (exports `build_commit_ptr/len`)
+   and halts if it differs from the commit baked into the bundle. With
+   the Rust watermark showing the real commit and the wasm cache-busted,
+   it's a narrow backstop. Keep it as a deliberate hard-stop, or delete
+   it — currently it's there by momentum.
 
-- **Known latent bugs left in on purpose, then written down instead of
-  fixed:** `build.rs` flattens to basename with no collision guard
-  (silent clobber); no `game/flake.lock` (unlocked inputs, unlike the
-  rest of the repo); `fetch-cdda.sh` verifies nothing it downloads;
-  stale `.cdda-src` is used silently when `CDDA_RELEASE` changes;
-  `Music` is `ResMut` in one system and `Option<ResMut>` in another
-  (one path panics if the resource is missing).
+8. **Watermark glyphs are unseen at size.** `watermark.rs::glyph()` has
+   hand-drawn 3×5 bitmaps for `0-9 a-f u n k o w`; `n/k/w` are cramped in
+   3 px. The sha renders (confirmed on device), but per-glyph legibility
+   isn't checked. If a character reads wrong, edit that one entry.
 
-- **The commit history is evidence of thrashing.** CDDA went
-  vendor → re-vendor → re-vendor → de-vendor → pin → lock across many
-  commits because the vendoring question was answered wrong twice before
-  it was answered right. The CC-BY-SA JSON blobs are now permanent in
-  history. A `git log -p` reader sees churn and licensed third-party
-  data. This wants a squash and probably a history scrub before a PR.
+## Not a defect — leave it alone
 
-- **Supply-chain hypocrisy.** Right after purging vendored third-party
-  data for provenance, `DeterminateSystems/nix-installer-action@main`
-  (a different vendor, unpinned floating ref) was wired into CI, and Nix
-  was installed in-container via a vendor `curl | sh`. Both caught only
-  because the user caught them.
+- **Glass looks correct — user-verified visually.** The glass pass draws
+  panes unsorted with depth-write off, which is *theoretically*
+  order-dependent. In practice it looks right and is not a problem. Only
+  if you ever see wrong blending where many panes overlap at once, add a
+  back-to-front sort in `scene::snapshot_to_glass_instances`. Do not
+  pre-emptively "fix" this.
 
-- **Process failures that produced the above:** claiming CI was
-  "suspicious / may be broken" without opening the Actions tab that was
-  available the whole time; offering the user false either/or choices to
-  dodge judgment calls I should have made; building the version readout
-  as a JS DOM badge at `bottom:6px` — wrong technology (JS, not the
-  game) *and* wrong place (behind the mobile toolbar) — after being told
-  plainly it belongs in the Rust render.
+## Also open (not code defects)
 
-The through-line: confident commit messages and green unit tests were
-allowed to stand in for looking at the running thing. Fix that habit
-first; it caused most of the rest.
+- No PR opened yet.
+- History is noisy (CDDA went vendor → de-vendor → pin across many
+  commits) and still contains the CC-BY-SA JSON blobs in old commits.
+  Squash / scrub before opening a PR.
+- Of the visual features, only **glass** has been confirmed on-device.
+  Music toggle, settings slider, jukebox toggle, and the wall cut-away
+  feel have not been driven end-to-end — verify them next.
+
+## How this went wrong (so it doesn't repeat)
+
+- Green unit tests and confident commit messages were treated as proof
+  the running thing works. They only prove it compiles. Drive the actual
+  flow before claiming behavior.
+- State was asserted without checking (said CI "may be broken" without
+  opening Actions). Verify first: `curl -s .../build-info.json` vs
+  `git rev-parse --short HEAD`, and read the Actions run.
+- Anything the user sees belongs in the Rust render, not a JS/DOM
+  overlay. The commit readout was built as a JS badge first — wrong.
+- Don't hand the user implementation either/or questions; make the call
+  and state it.
 
 ## Branch
 
@@ -168,41 +186,16 @@ Unit-tested and green: CDDA assembly + palette resolution, glass/opaque
 instance separation, jukebox proximity edge, HUD layout/slider math,
 music state machine, wall cut-away threshold, watermark font/layout.
 
-**Never rendered or looked at by the dev agent — no GPU in the sandbox:**
-- Glass windows actually appearing as glass in a building. UNCONFIRMED.
+Confirmed on-device by the user: **glass windows render fine.**
+
+**Not driven end-to-end by anyone yet:**
 - Music toggle / settings slider / jukebox toggle behaving on a device.
 - The watermark glyphs at real size (font is math-checked only).
-- The wall cut-away feel after tightening.
+- The wall cut-away feel after tightening the threshold.
 
-Everything visual has only ever been confirmed by the user's phone
-screenshots. Treat "tests pass" as necessary, not sufficient.
-
-## Open items (ranked)
-
-**Must-do (blocks a real review):**
-1. Get eyes on the actual pixels — glass first. Nothing visual is
-   verified by the agent.
-2. **Glass transparency is unsorted** — blended panes drawn in arbitrary
-   order with depth-write off → order-dependent compositing; windows on
-   two walls can blend wrong. Needs back-to-front sort (or per-pane
-   depth strategy). Real bug.
-3. **No `game/flake.lock`** while root + `roam/` commit one — unlocked
-   inputs. Commit a lock (`nix flake lock` in `game/`).
-4. **`build.rs` basename-collision guard** — it flattens manifest paths
-   to `OUT_DIR/cdda/<basename>` with no uniqueness check; a future
-   same-basename file silently clobbers.
-
-**Should-do:**
-- Decide the JS build-match guard's fate (keep as hard-stop backstop, or
-  remove now that the watermark + cache-bust cover it).
-- `tools/fetch-cdda.sh` trusts what it downloads (no checksum); the nix
-  path is hash-verified but the script path isn't.
-- Stale `.cdda-src` is used silently if `CDDA_RELEASE` changes without a
-  re-fetch — no staleness check.
-- History carries the old CC-BY-SA blobs (added pre-de-vendor) and is
-  noisy (vendor → re-vendor → de-vendor churn). Squash before a PR.
-
-**Not started:** no PR opened. Glass appearance in a house unconfirmed.
+The dev agent has no GPU, so it verified none of the visuals itself —
+they came from the user's screenshots. Treat "tests pass" as necessary,
+not sufficient.
 
 ## Environment gotchas
 
