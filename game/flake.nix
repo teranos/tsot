@@ -33,12 +33,20 @@
         # (trust-on-first-use); bumping the release = edit CDDA_RELEASE,
         # blank the hash, rebuild, commit the new hash — all reviewable.
         cddaRelease = pkgs.lib.removeSuffix "\n" (builtins.readFile ./CDDA_RELEASE);
+        # Exactly the files the game references — the same one manifest
+        # build.rs and tools/fetch-cdda.sh read. Non-cone sparse so it's
+        # file-level (~30 KB), not the whole 13 MB mapgen tree.
+        cddaFiles = pkgs.lib.filter (s: s != "" && !pkgs.lib.hasPrefix "#" s)
+          (pkgs.lib.splitString "\n" (builtins.readFile ./cdda-files.txt));
         cddaSrc = pkgs.fetchFromGitHub {
           owner = "CleverRaven";
           repo = "Cataclysm-DDA";
           rev = cddaRelease;
-          sparseCheckout = [ "data/json/mapgen" "data/json/mapgen_palettes" ];
-          hash = pkgs.lib.fakeHash;
+          sparseCheckout = cddaFiles;
+          nonConeMode = true;
+          # NAR hash of the sparse tree (the 8 files above) at rev 0.I.
+          # Verified against the bytes CDDA ships at that release.
+          hash = "sha256-VjEUCcVppprbzwAnF4/vkxto0geXr3LrbPCP26y9e3U=";
         };
       in {
         # The pinned corpus, exposed so CI / tooling can realise it

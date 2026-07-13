@@ -17,19 +17,11 @@
 
 use std::path::{Path, PathBuf};
 
-/// The CDDA corpus files the game references, by their path within the
-/// pinned CDDA source tree. Basenames are unique, so they flatten to
-/// `OUT_DIR/cdda/<basename>` without collision.
-const CDDA_FILES: &[&str] = &[
-    "data/json/mapgen/garage.json",
-    "data/json/mapgen/house/house01.json",
-    "data/json/mapgen_palettes/house_general_palette.json",
-    "data/json/mapgen_palettes/common_parameters.json",
-    "data/json/mapgen_palettes/roof_palette.json",
-    "data/json/mapgen_palettes/house_variant_palette.json",
-    "data/json/mapgen_palettes/house_survivor_palette.json",
-    "data/json/mapgen_palettes/house_general_abandoned.json",
-];
+/// The one manifest of CDDA corpus files the game references, by their
+/// path within the pinned source tree. Shared verbatim by the Nix
+/// `sparseCheckout` and `tools/fetch-cdda.sh`, so "which files" has a
+/// single source of truth. Adding a building = one line there.
+const MANIFEST: &str = "cdda-files.txt";
 
 /// Resolve the CDDA source-tree root: the Nix-pinned input if present,
 /// else the local `.cdda-src/` cache. Missing → a loud, actionable
@@ -58,11 +50,20 @@ fn cdda_src_root() -> PathBuf {
 
 fn main() {
     let root = cdda_src_root();
+    let manifest_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join(MANIFEST);
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", manifest_path.display()));
+    let files: Vec<&str> = manifest
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let dst_dir = out_dir.join("cdda");
     std::fs::create_dir_all(&dst_dir).unwrap();
 
-    for rel in CDDA_FILES {
+    for rel in &files {
         let src = root.join(rel);
         let name = Path::new(rel).file_name().unwrap();
         let dst = dst_dir.join(name);
@@ -80,6 +81,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", src.display());
     }
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed={MANIFEST}");
     println!("cargo:rerun-if-changed=CDDA_RELEASE");
     println!("cargo:rerun-if-env-changed=CDDA_SRC");
 }

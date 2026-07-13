@@ -34,10 +34,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers libvulkan1
 
-      # CDDA map corpus — pinned dependency, fetched not vendored.
-      - name: Fetch CDDA corpus
+      # CDDA map corpus — pinned dependency, realised hash-verified via
+      # the flake; $CDDA_SRC hands the store path to build.rs.
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Realise CDDA corpus (pinned, hash-verified)
         working-directory: game
-        run: ./tools/fetch-cdda.sh
+        run: echo "CDDA_SRC=$(nix build .#cdda-src --no-link --print-out-paths)" >> "$GITHUB_ENV"
 
       - name: Build game-native
         working-directory: game
@@ -129,9 +131,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Fetch CDDA corpus
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Realise CDDA corpus (pinned, hash-verified)
         working-directory: game
-        run: ./tools/fetch-cdda.sh
+        run: echo "CDDA_SRC=$(nix build .#cdda-src --no-link --print-out-paths)" >> "$GITHUB_ENV"
 
       - name: Build game.wasm
         working-directory: game

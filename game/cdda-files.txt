@@ -1,0 +1,8 @@
+data/json/mapgen/garage.json
+data/json/mapgen/house/house01.json
+data/json/mapgen_palettes/house_general_palette.json
+data/json/mapgen_palettes/common_parameters.json
+data/json/mapgen_palettes/roof_palette.json
+data/json/mapgen_palettes/house_variant_palette.json
+data/json/mapgen_palettes/house_survivor_palette.json
+data/json/mapgen_palettes/house_general_abandoned.json

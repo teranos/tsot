@@ -17,8 +17,14 @@ rel=$(tr -d ' \t\r\n' < "$here/CDDA_RELEASE")
 dst="$here/.cdda-src"
 repo="https://github.com/CleverRaven/Cataclysm-DDA.git"
 
-echo "[fetch-cdda] CDDA $rel -> .cdda-src (sparse: mapgen + mapgen_palettes)"
+# The exact files to materialise — one manifest, shared with build.rs
+# and game/flake.nix (no duplicated file list).
+files=$(grep -vE '^\s*(#|$)' "$here/cdda-files.txt")
+
+echo "[fetch-cdda] CDDA $rel -> .cdda-src (sparse: $(echo "$files" | wc -l | tr -d ' ') files)"
 rm -rf "$dst"
 git clone --depth 1 --filter=blob:none --sparse --branch "$rel" "$repo" "$dst" >/dev/null 2>&1
-git -C "$dst" sparse-checkout set data/json/mapgen data/json/mapgen_palettes >/dev/null 2>&1
+# Non-cone so we get exactly those files, not their whole directories.
+# shellcheck disable=SC2086
+git -C "$dst" sparse-checkout set --no-cone $files >/dev/null 2>&1
 echo "[fetch-cdda] pinned commit $(git -C "$dst" rev-parse HEAD)"
