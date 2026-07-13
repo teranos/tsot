@@ -21,6 +21,7 @@ pub mod map;
 pub mod net;
 pub mod obs;
 pub mod palette;
+pub mod persist;
 pub mod physics;
 pub mod remote_players;
 pub mod room;
@@ -141,7 +142,8 @@ fn setup(mut commands: Commands) {
 
     commands.spawn((
         PlayerMarker,
-        Position(room::SPAWN_POS),
+        // Resume where we left off if a position was saved.
+        Position(persist::load().unwrap_or(room::SPAWN_POS)),
         Velocity(Vec3::new(1.5, 0.0, 0.7)),
     ));
     // Circling NPC — same wander pattern as the deterministic native
@@ -240,6 +242,16 @@ fn publish_self_position_system(
         remote_players::publish_position(&self_peer.0, p.0, remote_players::now_ms())
     {
         obs::emit(&format!("[remote_players.publish] error: {e:?}"));
+    }
+}
+
+fn persist_position_system(frame: Res<FrameCount>, q: Query<&Position, With<PlayerMarker>>) {
+    // Save the player position ~once a second so a reload resumes here.
+    if !frame.0.is_multiple_of(60) {
+        return;
+    }
+    if let Ok(p) = q.single() {
+        persist::save(p.0);
     }
 }
 
@@ -363,6 +375,7 @@ fn _init() {
             tick.after(campfire::flicker_fire),
             drain_remote_positions_system.after(tick),
             publish_self_position_system.after(physics::advance_player),
+            persist_position_system.after(physics::advance_player),
             report_player_pos.after(tick),
         ),
     );

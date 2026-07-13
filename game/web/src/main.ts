@@ -745,6 +745,26 @@ async function main() {
         const view = new Uint8Array(memory.buffer, outPtr, outLen)
         crypto.getRandomValues(view)
       },
+      // Persistent player position (3 × f32 LE). localStorage: Rust owns
+      // the bytes, JS owns the store, same as identity.
+      game_position_load: (outPtr: number): number => {
+        if (!memory) return 0
+        const s = localStorage.getItem('game_position')
+        if (!s) return 0
+        try {
+          const arr = Uint8Array.from(atob(s), c => c.charCodeAt(0))
+          if (arr.length !== 12) return 0
+          new Uint8Array(memory.buffer, outPtr, 12).set(arr)
+          return 12
+        } catch {
+          return 0
+        }
+      },
+      game_position_save: (bytesPtr: number, bytesLen: number) => {
+        if (!memory) return
+        const copy = new Uint8Array(memory.buffer, bytesPtr, bytesLen).slice()
+        localStorage.setItem('game_position', btoa(String.fromCharCode(...copy)))
+      },
       game_peers_pending: (): number => proxyRxBuf.length,
       game_peers_recv: (outPtr: number, outLen: number): number => {
         if (!memory) return 0

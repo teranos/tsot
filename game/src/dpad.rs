@@ -116,10 +116,10 @@ fn rebuild_layout(dpad: &mut Dpad, viewport: (u32, u32)) {
     let corner_y = CORNER_SPACING_PX * ndc_per_y_px;
     let margin_left = MARGIN_LEFT_PX * ndc_per_x_px;
     let margin_bottom = MARGIN_BOTTOM_PX * ndc_per_y_px;
-    // Anchor so that the SW corner button's outer edge sits at the
-    // safe-margin inset. D-pad centre is corner_spacing + half in
-    // from that.
-    let center_x = -1.0 + margin_left + half_x + corner_x;
+    // Anchor in the bottom-RIGHT (right-handed): the SE corner button's
+    // outer edge sits at the safe-margin inset; the D-pad centre is
+    // corner_spacing + half in from that.
+    let center_x = 1.0 - margin_left - half_x - corner_x;
     let center_y = -1.0 + margin_bottom + half_y + corner_y;
     // Diagonal bit compositions
     let nw = input::key::W | input::key::A;

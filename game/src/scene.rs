@@ -366,10 +366,12 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         });
     }
     for t in &snap.trees {
+        // Much taller than buildings (walls are 220): trees tower over
+        // the settlements. Base on the ground (centre at height/2).
         instances.push(SceneInstance {
-            pos: [t.x, 60.0, t.z],
+            pos: [t.x, 250.0, t.z],
             color: [0.13, 0.77, 0.37],
-            scale: [40.0, 130.0, 40.0],
+            scale: [45.0, 500.0, 45.0],
         });
     }
     for o in &snap.obstacles {

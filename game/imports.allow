@@ -37,6 +37,8 @@ env.game_show_exclamation
 env.game_identity_load
 env.game_identity_save
 env.game_random_bytes
+env.game_position_load
+env.game_position_save
 
 env.game_peers_pending
 env.game_peers_recv
