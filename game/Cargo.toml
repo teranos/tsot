@@ -12,6 +12,10 @@ crate-type = ["cdylib", "rlib"]
 name = "game-native"
 path = "src/main.rs"
 
+[[bin]]
+name = "cdda-coverage"
+path = "src/bin/cdda_coverage.rs"
+
 [profile.release]
 opt-level = "s"
 lto = true
