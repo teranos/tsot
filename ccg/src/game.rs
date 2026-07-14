@@ -1,7 +1,7 @@
 //! Game-state module: data model, turn flow, zone movement, and card play.
 //!
 //! Submodules:
-//!   - `state`: types and basic accessors (PlayerId, Phase, Zone, CardInstance, GameState, ...).
+//!   - `state`: types and basic accessors (PlayerId, Phase, Zone, Sleeve, GameState, ...).
 //!   - `turn`: phase advancement, untap, draw, end-of-turn cleanup.
 //!   - `movement`: zone transitions.
 //!   - `play`: playing cards from hand, cost payment, attachment.
@@ -30,7 +30,7 @@ pub use journal::{Journal, JournalEntry};
 pub use movement::MoveError;
 pub use play::{ActivateChoices, ActivateError, PlayChoices, PlayError};
 pub use state::{
-    AttackDecl, CardInstance, CombatState, GameState, InstanceId, Modifier, Phase, PlayerId,
+    AttackDecl, Sleeve, CombatState, GameState, InstanceId, Modifier, Phase, PlayerId,
     PlayerState, PriorityError, PriorityState, StackItem, StatusEffect, Zone,
 };
 

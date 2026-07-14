@@ -56,7 +56,7 @@ pub type InstanceId = String;
 
 /// A specific copy of a card in the game.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CardInstance {
+pub struct Sleeve {
     pub instance_id: InstanceId,
     pub card: Card,
     pub owner: PlayerId,           // T.2 — immutable
@@ -88,7 +88,7 @@ pub struct CardInstance {
     pub status_effects: Vec<StatusEffect>,
 }
 
-impl CardInstance {
+impl Sleeve {
     /// Every card sharing this card's physical unit: strippable `attached`
     /// payments (Z.6) first, then fused `same_sleeve` cards (Z.7). Effect,
     /// static, and event sites act on the whole unit and MUST iterate this,
@@ -100,7 +100,7 @@ impl CardInstance {
     }
 }
 
-impl CardInstance {
+impl Sleeve {
     /// True if the card has the given (lowercase) keyword as one of its
     /// printed abilities, e.g. "flying", "haste", "vigilance", "defender", "unblockable".
     /// Also true if the card has a matching Modifier (Modifier::GainsFlying for "flying").
@@ -168,7 +168,7 @@ pub enum StatusEffect {
 }
 
 /// Per-player state. Zones reference instances by ID; the canonical
-/// CardInstance lives in GameState.card_pool.
+/// Sleeve lives in GameState.card_pool.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlayerState {
     pub board: Vec<InstanceId>,
@@ -259,7 +259,7 @@ pub struct CastPayments {
 pub struct GameState {
     pub a: PlayerState,
     pub b: PlayerState,
-    pub card_pool: BTreeMap<InstanceId, CardInstance>,
+    pub card_pool: BTreeMap<InstanceId, Sleeve>,
     pub active_player: PlayerId,
     pub turn: u32,
     pub phase: Phase,
@@ -1138,13 +1138,13 @@ impl GameState {
     fn init_player(
         pid: PlayerId,
         cards: Vec<Card>,
-        pool: &mut BTreeMap<InstanceId, CardInstance>,
+        pool: &mut BTreeMap<InstanceId, Sleeve>,
     ) -> PlayerState {
         let mut state = PlayerState::default();
         let mut ids: Vec<InstanceId> = Vec::with_capacity(cards.len());
         for (i, card) in cards.into_iter().enumerate() {
             let iid = format!("{:?}:{:04}:{}", pid, i, card.id);
-            let inst = CardInstance {
+            let inst = Sleeve {
                 instance_id: iid.clone(),
                 card,
                 owner: pid,
@@ -1260,7 +1260,7 @@ impl GameState {
     /// at this boundary.
     fn resolve_modifier_value(
         &self,
-        source: &CardInstance,
+        source: &Sleeve,
         mv: &crate::card::ModifierValue,
     ) -> f32 {
         match mv {
@@ -1715,9 +1715,9 @@ impl GameState {
         out
     }
 
-    /// Phase 2: full keyword check. Combines `CardInstance::has_keyword`
+    /// Phase 2: full keyword check. Combines `Sleeve::has_keyword`
     /// (printed + intrinsic modifiers) with `has_static_keyword` (on-board
-    /// static grants). Prefer this over the bare `CardInstance::has_keyword`
+    /// static grants). Prefer this over the bare `Sleeve::has_keyword`
     /// wherever a `GameState` is reachable.
     pub fn has_keyword(&self, iid: &InstanceId, keyword: &str) -> bool {
         if let Some(inst) = self.card_pool.get(iid) {

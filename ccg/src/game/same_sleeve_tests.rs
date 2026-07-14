@@ -3,7 +3,7 @@
 //! A same-sleeve card is fused inside its host's sleeve (RULES Z.7, C.4):
 //! it cannot be peeled off, targeted, or moved independently of the host,
 //! and it leaves play only when the host does. The engine models this as a
-//! separate `CardInstance.same_sleeve` child list, distinct from `attached`
+//! separate `Sleeve.same_sleeve` child list, distinct from `attached`
 //! (Z.6). That separation makes four rules fall out:
 //!   - P.8 cascade sweeps `attached` only → fused cards are never exiled.
 //!   - P.29 move-with-host: the sleeve is a child field on the host

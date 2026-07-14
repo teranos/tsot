@@ -248,7 +248,7 @@ pub struct Stats {
 
 /// Predicate side of a static ability: which cards on the BOARD receive
 /// the effect. Phase 1 is declarative — engine evaluates against the
-/// candidate's Card / CardInstance fields directly, no Lua call needed.
+/// candidate's Card / Sleeve fields directly, no Lua call needed.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct StaticAffects {
     /// Candidate must have at least one of these subtypes (case-insensitive
@@ -390,7 +390,7 @@ pub enum StaticEffect {
 }
 
 /// Phase 1.5 dynamic stat-modifier value. Resolved to an `i32` against the
-/// source CardInstance's current state every time `effective_stats` runs,
+/// source Sleeve's current state every time `effective_stats` runs,
 /// so the value automatically tracks attached-set changes.
 ///
 /// Lua parser accepts either a bare integer (`x = 2` → `Fixed(2)`) or a

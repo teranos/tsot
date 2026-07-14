@@ -2123,7 +2123,7 @@ mod tests {
         journal.rollback(&mut state);
 
         // Compare each top-level field; on a card_pool mismatch, walk
-        // per-instance and emit the first divergent CardInstance field.
+        // per-instance and emit the first divergent Sleeve field.
         assert_eq!(format!("{:?}", initial.active_player), format!("{:?}", state.active_player), "active_player not rolled back");
         assert_eq!(initial.turn, state.turn, "turn not rolled back");
         assert_eq!(format!("{:?}", initial.phase), format!("{:?}", state.phase), "phase not rolled back");
@@ -2135,7 +2135,7 @@ mod tests {
         assert_eq!(format!("{:?}", initial.a), format!("{:?}", state.a), "player A's zones not rolled back");
         assert_eq!(format!("{:?}", initial.b), format!("{:?}", state.b), "player B's zones not rolled back");
 
-        // card_pool: narrow to which CardInstance + which field.
+        // card_pool: narrow to which Sleeve + which field.
         for (iid, post_inst) in &state.card_pool {
             let init_inst = initial.card_pool.get(iid)
                 .unwrap_or_else(|| panic!("instance {iid} appeared post-rollback (not in initial pool)"));
