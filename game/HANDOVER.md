@@ -71,11 +71,13 @@ safe, so do them roughly in order.
 - [ ] **Drive the un-verified flows on device** (see Verification).
 - [ ] **Open a PR.** Squash the vendoring churn and scrub the CC-BY-SA
   JSON blobs from history first.
-- [ ] **Write the perf norm into `game/CLAUDE.md`.** It says the game is
-  "observed by seer" but never states the rule, so it got missed (see
-  lesson below). Add, plainly: *performance is only what seer's `[perf]`
-  measures; never infer it from counts (props/bytes/instances); a big
-  number is not a slow frame.*
+- [ ] **(Brandon, manual — not the agent) Write the perf norm into
+  `game/CLAUDE.md`.** It says the game is "observed by seer" but never
+  states the rule, so it got missed (see lesson below). The intent to
+  encode: *performance is only what seer's `[perf]` measures; never infer
+  it from counts (props/bytes/instances); a big number is not a slow
+  frame.* Likely a minor adjustment — the exact wording is yours; the
+  agent should not edit that file.
 - [ ] **Make the tour walk the last stretch** into a building so the
   load-spike number is a real single-boundary crossing, not the inflated
   bulk-load a teleport causes.
