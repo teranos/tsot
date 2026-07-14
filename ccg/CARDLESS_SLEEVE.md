@@ -19,8 +19,27 @@
   all-cardless coverage gate) and MILL exclusion (skip cardless, count real
   cards). Z.8f visibility also landed here. All changes are `is_cardless`-
   guarded no-ops for real (cardless-free) decks.
-- **Slice 8.** Deck-as-units, search-for-cardless, Window Cleaner.
-- **Spec.** Write Z.8 + S.4 amendment into RULES.md alongside behaviour.
+- **Spec — DONE.** Z.8 (a–f) + S.4 amendment written into RULES.md.
+- **Slice 8 — cardless sleeves become real & engine/AI-correct.**
+  - Creation primitive (build a cardless sleeve unit) + journaling.
+  - Deck-as-units: a deck can contain cardless-sleeve units (S.4);
+    GameState/deck construction handles them.
+  - AI-side wiring (deferred from slice 7): cardless in
+    `eligible_hand_payments` + affordability (`identity_matching_hand_count`,
+    `can_pay_instant_cost` mill branch) so picker and resolver agree.
+  - Acceptance: a hand-authored test deck with cardless sleeves runs a full
+    sim game; determinism + full-game rollback hold.
+- **Slice 9 — the cards + the end-to-end test deck.**
+  - `search library for cardless sleeves` primitive.
+  - Window Cleaner: ETB search+attach 2 cardless sleeves; on becoming
+    tapped, *may* move an attached cardless sleeve to GY and draw; no
+    inherent tap (needs an OnTapped trigger — verify/add).
+  - Supporting cards for the deck: clears (transparent) + an azure symbol.
+  - Acceptance (user's target): a test deck of Window Cleaners, clears, an
+    azure symbol, and cardless sleeves plays a full game — exercising Z.8b
+    free draw, cardless attach-fuel loop, and Z.8f visibility.
+- **Slice 10 (later) — Shatter Expectations.** Needs
+  counter-with-alternative-cost + composition-derived X + multi-zone exile.
 
 **Deferred to slice 8 (AI-side, safe until cardless sleeves exist in real
 decks):** add cardless sleeves to `eligible_hand_payments` + affordability
@@ -28,7 +47,10 @@ decks):** add cardless sleeves to `eligible_hand_payments` + affordability
 picker offers cardless bodies and never disagrees with the resolver. Not
 exercised today — nothing puts a cardless sleeve into an AI game yet.
 
-## Z.8 — CARDLESS SLEEVE (agreed spec, not yet in RULES.md)
+## Z.8 — CARDLESS SLEEVE (now canonical in RULES.md Z.8 + S.4)
+
+> The authoritative spec lives in RULES.md (Z.8a–f, S.4 amended). The
+> summary below is kept for planning context; RULES.md wins on any drift.
 
 A sleeve-unit containing no card. No color, no symbol, no printed rules;
 cannot be cast.
@@ -74,18 +96,11 @@ cannot be cast.
    `effective_top_of_deck_symbols` / any V.8 see-through path. Small; can
    ride alongside slice 6/8.
 
-## Card-text corrections
-
-- **Shatter Expectations** draft says "sleeveless" — replace with "cardless
-  sleeve" / "empty sleeve" when the card is written.
-
 ## REQUIRES USER INPUT (design)
 
 - **Terminology.** The only terms are **cardless sleeve** = **empty
-  sleeve** (synonyms). "sleeveless" is NOT a concept and must not appear —
-  everything is a sleeve, so a card with no sleeve is impossible; it was a
-  mistake in the Shatter Expectations draft. Still open: is "clear" =
-  transparent-frame (C.13/C.14)? (Very likely yes.)
+  sleeve** (synonyms). Still open: is "clear" = transparent-frame
+  (C.13/C.14)? (Very likely yes.)
 - **How cardless sleeves enter a deck** — decklist/genome representation,
   and legality: S.4 as 50 units, any cap on how many empties, minimum real
   cards.
@@ -131,8 +146,8 @@ cannot be cast.
   X from GY, X from BOARD, and X from DECK** (4X total). The controller
   **chooses** whether to pay or eat the counter (CONFIRMED: opponent's may).
 - Flavour: "he paid it!?"
-- Terminology: cardless sleeve = "empty sleeve"; the draft's "sleeveless"
-  is a MISTAKE — use cardless/empty. "clear" = transparent-frame (confirm).
+- Terminology: cardless sleeve = "empty sleeve". "clear" = transparent-frame
+  (confirm).
 - New engine needs (all deferred):
   - **Counter-with-alternative-cost** — a counter the *targeted* player may
     negate by paying, via an opponent-side prompt through the choice/oracle

@@ -18,7 +18,7 @@
 - **S.1** Each player starts the game with 5 cards in their HAND.
 - **S.2** Each player may send up to 2 cards from their HAND to the bottom of their DECK.
 - **S.3** A player who sends cards back draws an equal number of replacement cards.
-- **S.4** A standard deck contains 50 cards.
+- **S.4** A standard deck contains 50 sleeve-units. Most units are a sleeve holding one card; a unit may instead be a cardless sleeve (Z.8), which occupies a deck slot but is not a card.
 - **S.5** A card with the subtype `test` is not legal in standard tournament play and is excluded from standard decks.
 - **S.6** A standard deck contains at most 4 copies of any card (identified by `id`). Smaller pools may produce fewer copies; this is the upper bound, not a target.
 
@@ -53,6 +53,13 @@ The following zones are part of the game.
 - **Z.5** GRAVEYARD
 - **Z.6** ATTACHED — a card placed under another card.
 - **Z.7** SAME-SLEEVE — a card fused inside the host's sleeve.
+- **Z.8** CARDLESS SLEEVE — a sleeve-unit containing no card (an "empty sleeve"). The sleeve is the atomic unit in every zone; a card is optional content inside it (zero cards = cardless sleeve, one = an ordinary card, two or more = a same-sleeve fusion per Z.7). A cardless sleeve has no color, no symbol, no printed rules, and cannot be cast.
+  - **Z.8a** A cardless sleeve is untargetable — with no card inside it presents no front-visible face, and a target resolves to the front-visible card (C.4).
+  - **Z.8b** When drawing a card, a cardless sleeve on top of the DECK does not satisfy the draw: it is collected into HAND for free and the draw continues, cascading through consecutive cardless sleeves until a card-bearing unit is drawn.
+  - **Z.8c** A cardless sleeve counts as a generic payment body for HAND, GRAVEYARD, and (while attached) ATTACHED cost sources. It never counts for MILL, and never satisfies the color/symbol identity requirement of a cost (P.7a / P.12a) — it fills a slot, not an identity, and can never be the identity anchor.
+  - **Z.8d** A cardless sleeve may be attached (Z.6) to a card by an effect; while attached it may be spent to pay an ATTACHED-source cost.
+  - **Z.8e** A card cannot be moved into a cardless sleeve; it is a consumable blank.
+  - **Z.8f** A cardless sleeve is fully transparent for top-of-deck visibility (V.8): the see-through reveal looks past it to the card beneath.
 
 The STACK (R.8) is shared and global, not per-player, and therefore is not a Z-zone — it lives under R (Responses).
 
