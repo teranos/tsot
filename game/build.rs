@@ -15,6 +15,7 @@
 //! building means adding a line here — a *reference* into the pinned
 //! corpus, never a copied file.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// The one manifest of CDDA corpus files the game references, by their
@@ -62,6 +63,21 @@ fn main() {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let dst_dir = out_dir.join("cdda");
     std::fs::create_dir_all(&dst_dir).unwrap();
+
+    // Guard against silent clobber: two manifest entries with the same
+    // basename would overwrite each other under `OUT_DIR/cdda/<basename>`
+    // and `include_str!` would embed the wrong bytes with no error.
+    // Fail loudly here — the manifest is small, this scan is trivial.
+    let mut seen: HashMap<&str, &str> = HashMap::new();
+    for rel in &files {
+        let name = Path::new(rel).file_name().unwrap().to_str().unwrap();
+        if let Some(prev) = seen.insert(name, rel) {
+            panic!(
+                "cdda-files.txt has two entries whose basename collides on OUT_DIR/cdda/{name}: \
+                 {prev} and {rel} — rename one or copy under the full relative path"
+            );
+        }
+    }
 
     for rel in &files {
         let src = root.join(rel);
