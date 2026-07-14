@@ -92,9 +92,10 @@ cannot be cast.
    together).
 5. **Deckbuilding data format** — how a cardless sleeve is expressed in a
    decklist / EA genome so it can exist in real games (needed for slice 8).
-6. **Z.8f visibility** — treat `is_cardless()` as transparent in
-   `effective_top_of_deck_symbols` / any V.8 see-through path. Small; can
-   ride alongside slice 6/8.
+6. **Z.8e visibility — DONE (slice 7).** `effective_top_of_deck_symbols`
+   treats `is_cardless()` as transparent. Holds while every cardless sleeve
+   is clear; when opaque colored sleeves are modeled, gate this on the
+   sleeve's opacity (an opaque one blocks — Z.8e).
 
 ## REQUIRES USER INPUT (design)
 
