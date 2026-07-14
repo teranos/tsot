@@ -95,15 +95,31 @@ jobs:
             done
           done
 
+      - name: Upload native log to seer
+        # Publishes the game-native run's log — including its
+        # [perf.frame] lines — to the seer site so real live
+        # performance is visible on seer.sbvh.nl next to the wasm
+        # summary. Previously log lived only in CI upload-artifact,
+        # so the measurement Brandon cares about was invisible.
+        if: success() && vars.SEER_DISTRIBUTION_ID != ''
+        run: |
+          if [ ! -f game/out/game-native.log ]; then exit 0; fi
+          for prefix in "perf/${{ github.sha }}" "perf/latest"; do
+            aws s3 cp game/out/game-native.log \
+              "s3://seer-sbvh-static/$prefix/game-native.log" \
+              --cache-control "public, max-age=300" \
+              --content-type "text/plain; charset=utf-8"
+          done
+
       - name: Invalidate CloudFront (frames)
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.SEER_DISTRIBUTION_ID }}" \
-            --paths '/perf/latest/frame.png' '/perf/latest/frame-0.png' '/perf/latest/frame-1.png' '/perf/latest/frame-2.png' '/perf/latest/frame-3.png' \
+            --paths '/perf/latest/frame.png' '/perf/latest/frame-0.png' '/perf/latest/frame-1.png' '/perf/latest/frame-2.png' '/perf/latest/frame-3.png' '/perf/latest/game-native.log' \
             --query 'Invalidation.Id' --output text
 
-      - name: Upload native log
+      - name: Upload native log (CI artifact)
         if: always()
         uses: actions/upload-artifact@v5
         with:
