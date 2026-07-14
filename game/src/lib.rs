@@ -75,6 +75,108 @@ struct NativeRunState {
     checkpoints: Vec<u32>,
     snapshots: Vec<scene::SceneSnapshot>,
     multi_dir: Option<String>,
+    /// Wall-clock microseconds for each `app.update()` — the real
+    /// per-frame cost of the simulation. This is the measurement; prop
+    /// counts are not.
+    frame_us: Vec<u32>,
+    /// Tour stop labels, so frame timings can be attributed to what was
+    /// on screen (school / house / campsite / forest).
+    tour_labels: Vec<String>,
+}
+
+/// A deterministic tour of representative world content, so the seer run
+/// actually *encounters* buildings instead of wandering empty forest.
+/// The player teleports to each stop for a slice of the frame budget;
+/// the frame timings then cover real load, and the render checkpoints
+/// show a variety of stamps.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource, Default)]
+struct SeerTour {
+    stops: Vec<(String, Vec3)>,
+    budget: u32,
+}
+
+/// Native input: drive the player through the tour stops instead of
+/// wandering. Teleports (not walks) so each stop's region streams in
+/// promptly and the timing at that stop is steady-state + the load spike.
+#[cfg(not(target_arch = "wasm32"))]
+fn seer_tour_input(
+    frame: Res<FrameCount>,
+    tour: Res<SeerTour>,
+    mut q: Query<(&mut Position, &mut Velocity), With<PlayerMarker>>,
+) {
+    if tour.stops.is_empty() {
+        return;
+    }
+    let n = tour.stops.len();
+    let budget = tour.budget.max(1) as usize;
+    let idx = ((frame.0.saturating_sub(1)) as usize * n / budget).min(n - 1);
+    let target = tour.stops[idx].1;
+    for (mut p, mut v) in q.iter_mut() {
+        p.0 = target;
+        v.0 = Vec3::ZERO;
+    }
+}
+
+/// Scan chunks outward from the origin for the first matching one.
+#[cfg(not(target_arch = "wasm32"))]
+fn scan_chunk(pred: impl Fn(chunk::ChunkCoord) -> bool) -> Option<chunk::ChunkCoord> {
+    for radius in 1..400i32 {
+        for x in -radius..=radius {
+            for z in -radius..=radius {
+                if x.abs() != radius && z.abs() != radius {
+                    continue; // ring only
+                }
+                let c = chunk::ChunkCoord { x, z };
+                if pred(c) {
+                    return Some(c);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Build the tour: the nearest school, a house, a campsite, and a patch
+/// of deep forest — the variety of stamps the run should encounter.
+#[cfg(not(target_arch = "wasm32"))]
+fn seer_tour_from(bt: &cdda::BuildingTemplates) -> SeerTour {
+    let num = bt.templates.len().max(1);
+    // The school is the largest-footprint template.
+    let school_idx = bt
+        .half_extents
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let school = scan_chunk(|c| {
+        cdda::building_anchor_in_chunk(c).is_some() && cdda::building_index(c, num) == school_idx
+    })
+    .and_then(cdda::building_anchor_in_chunk);
+    let house = scan_chunk(|c| {
+        cdda::building_anchor_in_chunk(c).is_some() && cdda::building_index(c, num) != school_idx
+    })
+    .and_then(cdda::building_anchor_in_chunk);
+    let camp = scan_chunk(|c| campsite::campsite_in_chunk(c).is_some())
+        .and_then(campsite::campsite_in_chunk);
+    let forest = Vec3::new(7.5 * chunk::CHUNK_SIZE, 20.0, 7.5 * chunk::CHUNK_SIZE);
+
+    let mut stops = Vec::new();
+    if let Some(w) = school {
+        stops.push(("school".to_string(), w));
+    }
+    if let Some(w) = house {
+        stops.push(("house".to_string(), w));
+    }
+    if let Some(w) = camp {
+        stops.push(("campsite".to_string(), w));
+    }
+    stops.push(("forest".to_string(), forest));
+    for (label, w) in &stops {
+        obs::emit(&format!("[seer.tour] stop {label} at ({:.0}, {:.0})", w.x, w.z));
+    }
+    SeerTour { stops, budget: frame_budget() }
 }
 
 #[derive(Resource, Default)]
@@ -401,7 +503,10 @@ fn _init() {
     let mut app = App::new();
     app.insert_resource(SelfPeer(id.as_hex()));
     app.insert_resource(chunk::LoadedChunks::default());
-    app.insert_resource(cdda::load_building_templates());
+    let building_templates = cdda::load_building_templates();
+    #[cfg(not(target_arch = "wasm32"))]
+    let tour = seer_tour_from(&building_templates);
+    app.insert_resource(building_templates);
     app.add_systems(
         Startup,
         (
@@ -420,7 +525,7 @@ fn _init() {
     #[cfg(target_arch = "wasm32")]
     let input_system = physics::keyboard_input;
     #[cfg(not(target_arch = "wasm32"))]
-    let input_system = physics::wander_input;
+    let input_system = seer_tour_input;
     app.add_systems(
         Update,
         (
@@ -449,6 +554,10 @@ fn _init() {
     obs::emit(&format!(
         "[seer.boot] Bevy App built, entering update loop for {frames} frames"
     ));
+    #[cfg(not(target_arch = "wasm32"))]
+    let tour_labels: Vec<String> = tour.stops.iter().map(|(l, _)| l.clone()).collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    app.insert_resource(tour);
     APP_STATE.with(|c| *c.borrow_mut() = Some(app));
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -466,15 +575,26 @@ fn _init() {
                 checkpoints,
                 snapshots: Vec::new(),
                 multi_dir,
+                frame_us: Vec::new(),
+                tour_labels,
             });
         });
     }
 }
 
 fn _frame() -> u32 {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _t0 = std::time::Instant::now();
     APP_STATE.with(|c| {
         if let Some(app) = c.borrow_mut().as_mut() {
             app.update();
+        }
+    });
+    // The real measurement: wall-clock time for this frame's simulation.
+    #[cfg(not(target_arch = "wasm32"))]
+    NATIVE_STATE.with(|c| {
+        if let Some(ns) = c.borrow_mut().as_mut() {
+            ns.frame_us.push(_t0.elapsed().as_micros() as u32);
         }
     });
 
@@ -520,6 +640,38 @@ fn _finalize() {
     NATIVE_STATE.with(|c| {
         let ns_opt = c.borrow();
         if let Some(ns) = ns_opt.as_ref() {
+            // The perf report: real per-frame simulation time, overall +
+            // attributed to what the player was standing in. THIS is the
+            // measurement — not counts.
+            if !ns.frame_us.is_empty() {
+                let us = &ns.frame_us;
+                let mut sorted = us.clone();
+                sorted.sort_unstable();
+                let n = sorted.len();
+                let avg = us.iter().map(|&x| x as u64).sum::<u64>() / n as u64;
+                let pct = |q: f64| sorted[(((n as f64) * q) as usize).min(n - 1)];
+                obs::emit(&format!(
+                    "[perf] app.update() over {n} frames: avg={avg}us p50={}us p95={}us max={}us",
+                    pct(0.5),
+                    pct(0.95),
+                    sorted[n - 1],
+                ));
+                let stops = ns.tour_labels.len().max(1);
+                for (i, label) in ns.tour_labels.iter().enumerate() {
+                    let lo = i * n / stops;
+                    let hi = ((i + 1) * n / stops).min(n);
+                    if lo >= hi {
+                        continue;
+                    }
+                    let slice = &us[lo..hi];
+                    let savg = slice.iter().map(|&x| x as u64).sum::<u64>() / slice.len() as u64;
+                    let smax = *slice.iter().max().unwrap();
+                    obs::emit(&format!(
+                        "[perf] stop={label}: avg={savg}us max={smax}us over {} frames",
+                        slice.len()
+                    ));
+                }
+            }
             if let Some(dir) = &ns.multi_dir {
                 match render_snapshots(&ns.snapshots, dir) {
                     Ok(paths) => obs::emit(&format!(
