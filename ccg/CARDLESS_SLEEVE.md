@@ -17,15 +17,21 @@
   added for the anchor+cardless-body HAND case and MILL exclusion. All
   changes `is_cardless`-guarded → no-ops for cardless-free decks.
 - **Spec — DONE.** Z.8 + S.4 in RULES.md.
-- **Slice 8 — cardless sleeves become real & engine/AI-correct.**
-  - Creation primitive (build a cardless sleeve unit) + journaling.
-  - Deck-as-units: a deck can contain cardless-sleeve units (S.4).
-  - AI-side wiring (deferred from slice 7): cardless in
-    `eligible_hand_payments` + affordability (`identity_matching_hand_count`,
-    `can_pay_instant_cost` mill branch) so picker and resolver agree. Not
-    exercised today — nothing puts a cardless sleeve into an AI game yet.
-  - Acceptance: a hand-authored test deck with cardless sleeves runs a full
-    sim game; determinism + full-game rollback hold.
+- **Slice 8 — cardless sleeves become real & engine/AI-correct.** Medium
+  (≈ slice 7). Three subunits, each green on its own:
+  - **8.1 Representation + serialization (S–M).** A primitive to place
+    cardless-sleeve units in a deck (decks are `Vec<Card>`, so a helper, not
+    a `GameState::new` rewrite). Replay/Save serialize deck as card-ids —
+    add a cardless sentinel + rebuild handling so cardless units round-trip.
+    Round-trip test.
+  - **8.2 AI affordability + eligibility (M, delicate).** `eligible_hand_
+    payments` offers cardless bodies; `can_pay_instant_cost` /
+    `identity_matching_hand_count` model "1 real anchor + cardless bodies"
+    and count real cards for mill. Picker and resolver must agree — the
+    bug-prone area. Unit tests per cost source.
+  - **8.3 End-to-end acceptance (S–M).** A hand-authored test deck with
+    cardless sleeves plays a full sim game; determinism + full-game rollback
+    hold. Fix whatever integration surfaces.
 - **Slice 9 — the cards + the end-to-end test deck.**
   - `search library for cardless sleeves` primitive.
   - Window Cleaner (see backlog). OnTapped trigger — verify/add.
