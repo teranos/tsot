@@ -2,126 +2,65 @@
 
 > The sleeve is the atomic unit in every zone; a card is optional content
 > inside it. 0 cards = cardless sleeve (Z.8), 1 = a normal card, 2+ = a
-> same-sleeve fusion (Z.7). This unifies C.16, V.7b, and Z.7 under one
-> ontology.
+> same-sleeve fusion (Z.7). Rules are canonical in RULES.md (Z.8, S.4);
+> this doc is the roadmap, not the spec.
 
 ## Status
 
 - **Slice 4 — DONE.** `CardInstance → Sleeve` rename.
-- **Slice 5 — DONE (approved).** `Sleeve.content: Option<Card>` + `card()`
-  blank-fallback accessor + `card_mut()` + `is_cardless()`. Emptiness is
-  representable; nothing creates a cardless sleeve yet. 492 lib + all
-  integration green.
+- **Slice 5 — DONE.** `Sleeve.content: Option<Card>` + `card()` blank-
+  fallback accessor + `card_mut()` + `is_cardless()`. Emptiness is
+  representable; nothing creates a cardless sleeve yet.
 - **Slice 6 — DONE.** Z.8b free draw (`draw_one` primitive).
-- **Slice 7 — DONE.** Z.8c cost payment. Attach / wildcard-hand / can't-anchor
-  were already free (blank card = empty identity); code added for the
-  anchor+cardless-body HAND case (exempt cardless from per-card P.7a + an
-  all-cardless coverage gate) and MILL exclusion (skip cardless, count real
-  cards). Z.8f visibility also landed here. All changes are `is_cardless`-
-  guarded no-ops for real (cardless-free) decks.
-- **Spec — DONE.** Z.8 (a–f) + S.4 amendment written into RULES.md.
+- **Slice 7 — DONE.** Z.8c cost payment + Z.8e visibility. Attach / wildcard-
+  hand / can't-anchor were already free (blank card = empty identity); code
+  added for the anchor+cardless-body HAND case and MILL exclusion. All
+  changes `is_cardless`-guarded → no-ops for cardless-free decks.
+- **Spec — DONE.** Z.8 + S.4 in RULES.md.
 - **Slice 8 — cardless sleeves become real & engine/AI-correct.**
   - Creation primitive (build a cardless sleeve unit) + journaling.
-  - Deck-as-units: a deck can contain cardless-sleeve units (S.4);
-    GameState/deck construction handles them.
+  - Deck-as-units: a deck can contain cardless-sleeve units (S.4).
   - AI-side wiring (deferred from slice 7): cardless in
     `eligible_hand_payments` + affordability (`identity_matching_hand_count`,
-    `can_pay_instant_cost` mill branch) so picker and resolver agree.
+    `can_pay_instant_cost` mill branch) so picker and resolver agree. Not
+    exercised today — nothing puts a cardless sleeve into an AI game yet.
   - Acceptance: a hand-authored test deck with cardless sleeves runs a full
     sim game; determinism + full-game rollback hold.
 - **Slice 9 — the cards + the end-to-end test deck.**
   - `search library for cardless sleeves` primitive.
-  - Window Cleaner: ETB search+attach 2 cardless sleeves; on becoming
-    tapped, *may* move an attached cardless sleeve to GY and draw; no
-    inherent tap (needs an OnTapped trigger — verify/add).
-  - Supporting cards for the deck: clears (transparent) + an azure symbol.
-  - Acceptance (user's target): a test deck of Window Cleaners, clears, an
-    azure symbol, and cardless sleeves plays a full game — exercising Z.8b
-    free draw, cardless attach-fuel loop, and Z.8f visibility.
-- **Slice 10 (later) — Shatter Expectations.** Needs
+  - Window Cleaner (see backlog). OnTapped trigger — verify/add.
+  - Supporting cards: clears (transparent) + an azure symbol.
+  - Acceptance (user's target): a deck of Window Cleaners, clears, an azure
+    symbol, and cardless sleeves plays a full game.
+- **Slice 10 (later) — Shatter Expectations** (see backlog). Needs
   counter-with-alternative-cost + composition-derived X + multi-zone exile.
 
-**Deferred to slice 8 (AI-side, safe until cardless sleeves exist in real
-decks):** add cardless sleeves to `eligible_hand_payments` + affordability
-(`identity_matching_hand_count`, `can_pay_instant_cost` mill branch) so the
-picker offers cardless bodies and never disagrees with the resolver. Not
-exercised today — nothing puts a cardless sleeve into an AI game yet.
+## Watch-outs
 
-## Z.8 — CARDLESS SLEEVE (now canonical in RULES.md Z.8 + S.4)
+- **`card_mut()` invariant.** Panics on a cardless sleeve by design (no card
+  to mutate). Once cardless sleeves exist, confirm no write path reaches one.
+- **Visibility opacity.** `effective_top_of_deck_symbols` treats every
+  cardless sleeve as transparent — correct while all are clear; gate on
+  sleeve opacity once opaque colored sleeves are modeled (an opaque one
+  blocks, Z.8e).
 
-> The authoritative spec lives in RULES.md (Z.8a–f, S.4 amended). The
-> summary below is kept for planning context; RULES.md wins on any drift.
+## Open questions (user input)
 
-A sleeve-unit containing no card. No color, no symbol, no printed rules;
-cannot be cast.
-- **Z.8a** Untargetable — no card inside → no front-visible face → nothing
-  can target it (C.4).
-- **Z.8b** Draw — a cardless sleeve on top of DECK does not satisfy "draw a
-  card": it is collected into HAND for free and the draw continues,
-  cascading through consecutive cardless sleeves until one card-bearing
-  unit is drawn.
-- **Z.8c** Cost payment — counts as a generic body for HAND, GRAVEYARD, and
-  (while attached) ATTACHED cost sources. Never counts for MILL. Never
-  satisfies the color/symbol identity requirement of any cost (P.7a) — it
-  fills a slot, not an identity.
-- **Z.8d** Attachment — may be attached (Z.6) to a card by an effect
-  (Window Cleaner); while attached it can be spent to pay an ATTACHED cost.
-- **Z.8e** Not fillable (current) — a card cannot be moved into a cardless
-  sleeve; consumable blank. *[Deferred: the "worn" concept, own branch.]*
-- **Z.8f** Fully transparent for visibility — for top-of-deck visibility
-  (V.8), a cardless sleeve counts as fully transparent: the see-through
-  reveal walk looks past it to the card beneath (there is no card inside to
-  hide anything). Engine: `effective_top_of_deck_symbols` (and any V.8
-  visibility path) must treat `is_cardless()` as transparent.
-- **S.4 amended** — "a deck contains 50 cards" → **50 sleeve-units** (a
-  cardless sleeve is a legal unit; empties occupy a unit).
+- Is "clear" = transparent-frame (C.13/C.14)? (Very likely yes.)
+- **Deckbuilding format** — how a cardless sleeve is expressed in a decklist
+  / EA genome; slice-8 uses a hand-authored fixture, EA-genome TBD.
+- **C.14 for cardless sleeves** — a cardless sleeve is frameless; can it
+  attach to any host, or only transparent ones?
+- **EA valuation** — should the EA draft cardless sleeves? (Affects genome.)
 
-## MUST-DO (engineering, inside this branch)
+## Deferred
 
-1. **Cardless-sleeve creation primitive + journaling.** Nothing builds one
-   yet. Gate for slice 6. Every new mutation (create, draw-skip collect,
-   exile-to-pay) must journal, per the rollback invariant.
-2. **`card_mut()` invariant audit.** `card_mut()` panics on a cardless
-   sleeve by design (no card to mutate). Once cardless sleeves exist,
-   confirm no write path can reach one.
-3. **Sim/AI awareness.** Cardless sleeves will sit in decks and hands.
-   Not-castable is already handled (blank kind = Unspecified, AI filters
-   it). Still needed: the free-draw during AI games, and treating a
-   cardless sleeve as valid payment fuel in cost selection.
-4. **RULES.md Z.8 + S.4** written alongside the behaviour (rules+code move
-   together).
-5. **Deckbuilding data format** — how a cardless sleeve is expressed in a
-   decklist / EA genome so it can exist in real games (needed for slice 8).
-6. **Z.8e visibility — DONE (slice 7).** `effective_top_of_deck_symbols`
-   treats `is_cardless()` as transparent. Holds while every cardless sleeve
-   is clear; when opaque colored sleeves are modeled, gate this on the
-   sleeve's opacity (an opaque one blocks — Z.8e).
-
-## REQUIRES USER INPUT (design)
-
-- **Terminology.** The only terms are **cardless sleeve** = **empty
-  sleeve** (synonyms). Still open: is "clear" = transparent-frame
-  (C.13/C.14)? (Very likely yes.)
-- **How cardless sleeves enter a deck** — decklist/genome representation,
-  and legality: S.4 as 50 units, any cap on how many empties, minimum real
-  cards.
-- **C.14 for cardless sleeves.** A cardless sleeve is frameless (no card =
-  no frame). Can it attach to any host, or only transparent hosts? Window
-  Cleaner has transparent slots and attaches cardless sleeves — is there a
-  required transparent-compat relationship?
-- **AI/EA valuation** — should the EA be allowed to draft cardless sleeves?
-  (Affects genome format and fitness.)
-
-## DEFERRABLE
-
-- **Elm UI** — out of scope for this branch (rendering cardless sleeves,
-  the free-draw animation, attach visuals). TODO noted in ELM_PLAN.md.
-- **"Worn" + fillable sleeves (Z.8e)** — own branch (putting cards in/out
-  of sleeves).
-- **Window Cleaner on-tap trigger** — needs an OnTapped event (verify it
-  exists). Slice 8 or later.
-- **Shatter Expectations** — capstone card; needs the counter-unless-pay
-  mechanic (below). After the core cardless slices.
+- **Elm UI** — out of scope this branch (rendering, free-draw animation,
+  attach visuals). TODO in ELM_PLAN.md.
+- **Worn + fillable sleeves** — own branch (putting cards in/out of sleeves).
+- **Opaque / colored sleeves** — the sleeve-color/opacity model (colored
+  transparent + opaque colored-back sleeves that carry color and can satisfy
+  color costs). Beyond cardless; touches Z.8e visibility.
 - **Enforcing S.4 legality** — only if/when a deck-legality check exists.
 
 ## Card backlog
@@ -131,32 +70,20 @@ cannot be cast.
 - ETB: search library for 2 cardless sleeves, attach them to this card.
   Window Cleaner only ever gives **transparent** (clear) cardless sleeves.
 - On becoming tapped: *may* move an attached cardless sleeve to GY and draw
-  a card. **No inherent tap ability** — relies on being tapped for an
-  attack or by another effect.
+  a card. **No inherent tap ability** — tapped by an attack or another effect.
 - Loop: the 2 attached cardless sleeves are attach-cost fuel for the next
   Window Cleaner.
-- New engine needs: OnTapped trigger (verify), search-for-cardless.
 
 ### Shatter Expectations (instant, colourless)
 - Entire top and bottom rows: transparent slots.
 - Cost: **X graveyard** — you exile cards to pay.
-- **X is derived from the payment composition (CONFIRMED):**
-  `X = (#clear + #cardless/empty sleeves exiled) − (#non-clear-non-cardless
-  cards exiled)`. Each clear or empty sleeve adds 1; each ordinary card
-  subtracts 1 (`f`). Pure clear/empty payment maximises X.
+- **X is derived from the payment composition:** `X = (#clear + #cardless
+  sleeves exiled) − (#non-clear-non-cardless cards exiled)`. Each clear or
+  empty adds 1; each ordinary card subtracts 1. Pure clear/empty maximises X.
 - Effect: **Counter target spell, unless its controller exiles X from HAND,
   X from GY, X from BOARD, and X from DECK** (4X total). The controller
-  **chooses** whether to pay or eat the counter (CONFIRMED: opponent's may).
+  **chooses** whether to pay.
 - Flavour: "he paid it!?"
-- Terminology: cardless sleeve = "empty sleeve". "clear" = transparent-frame
-  (confirm).
-- New engine needs (all deferred):
-  - **Counter-with-alternative-cost** — a counter the *targeted* player may
-    negate by paying, via an opponent-side prompt through the choice/oracle
-    system. Today `game.counter` is unconditional.
-  - **Composition-derived X** — X computed from the clear/cardless vs
-    ordinary split of the exiled payment.
-  - **Multi-zone exile** (X from each of hand/gy/board/deck).
-- Open edge: what if X ≤ 0 (payment net-negative, or all ordinary cards)?
-  Does X floor at 0 (counter free to ignore / does nothing), and is such a
-  payment even legal?
+- New engine needs: counter-with-alternative-cost (opponent-side may-pay
+  prompt); composition-derived X; multi-zone exile.
+- Open edge: X ≤ 0 (all-ordinary or net-negative payment) — floor at 0? legal?
