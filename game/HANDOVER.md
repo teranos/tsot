@@ -76,7 +76,25 @@ safe, so do them roughly in order.
 - [x] **Unify `Music` resource access.** Both `hud` and `jukebox` now
   take `Option<ResMut<Music>>` (and `Option<ResMut<SfxMix>>` for the
   sliders), so setup-order changes never explode the frame.
+- [ ] **Implement `place_nested`.** The coverage report's measured #1
+  blocker — **654 hits**, more than any other unhandled feature
+  (place_loot 418, place_monster 372, place_monsters 331, place_vehicles
+  305). It's the biggest lever on the 4498 "empty" resolves, and it lets
+  the hand-authored `shed.json` be **deleted** (CDDA's sheds are nested
+  pieces, not standalone). Start in `cdda/placement`.
+- [ ] **Publish the native `[perf]` frame-time to the seer site.** THE
+  measurement Brandon cares about ("1 measurement: real live
+  performance") is produced by the `game-native` run but only uploaded as
+  a CI *artifact* (`seer.yml` `upload-artifact`), never to
+  `seer.sbvh.nl/perf/…` — so it's measured and invisible on the site.
+  Upload `game-native.log` (or a parsed `perf.json`) to `/perf/<sha>/` +
+  `/perf/latest/` beside the frame PNGs, and surface it in the viewer.
 - [ ] **Drive the un-verified flows on device** (see Verification).
+  Includes **confirm the purple jukebox actually renders** — Brandon
+  reported on 07-13 he "never found the purple jukebox you said you would
+  create"; the code exists (`src/jukebox.rs`, `scene.rs`) but on-device
+  presence is unconfirmed. Plus music/SFX persist across reload, both
+  sliders, ESC/gear close, ghost+cut-away between two adjacent buildings.
 - [ ] **Open a PR.** Squash the vendoring churn and scrub the CC-BY-SA
   JSON blobs from history first.
 - [ ] **(Brandon, manual — not the agent) Write the perf norm into
@@ -91,8 +109,12 @@ safe, so do them roughly in order.
   walks in at `KEYBOARD_SPEED`, so chunks stream in one boundary at a
   time. Not yet verified against the seer perf history — need a run to
   confirm the load spike moved to a real per-boundary number.
-- [ ] **Get frame time from the real browser** (rAF delta → seer). Native
-  sim time is only half; the device's live frame time is the truth.
+- [x] **Get frame time from the real browser** (rAF delta → seer). Landed
+  in `d191031`: rAF-to-rAF delta captured every tick, p50/… emitted
+  through seer. Not yet confirmed showing up in the seer perf history on
+  device — needs a real browser run against the viewer to verify the
+  number lands, and pairs with "publish the native `[perf]`" above so both
+  the CI-native and on-device browser numbers are visible.
 
 ### Lesson — the perf failure mode (don't repeat it)
 
