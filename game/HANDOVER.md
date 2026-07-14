@@ -5,8 +5,17 @@ so re-verify live-vs-HEAD and re-read the checklist before trusting it.
 
 Branch: **`stamp-template`**, pushed to `origin`. Live at game.sbvh.nl
 (check `curl -s https://game.sbvh.nl/build-info.json` vs
-`git rev-parse --short HEAD` — they should match; the in-game watermark
-top-right is the ground truth). Snapshot taken at tip `1ce8439`.
+`git rev-parse --short HEAD`; the in-game watermark top-right is the
+ground truth). Snapshot at tip **`38b0ef5`**.
+
+> **⚠ Deploy status — verify first.** The deploy + seer were **broken
+> from `dc2e978` onward** (a flake hash bug, see the lesson below), so as
+> of this snapshot **live was stuck at `190d684`** — the school,
+> multi-tile streaming, and all the seer work had NOT deployed. `38b0ef5`
+> fixes the root cause but could not be `nix build`-verified in the
+> sandbox. **First action for anyone continuing: confirm CI is green and
+> `build-info.json` advances past `190d684`.** If live still lags HEAD,
+> the deploy is still failing — start there.
 
 ## North star — where this is going
 
@@ -28,6 +37,11 @@ is either sharpening that projection or the hygiene that lets it scale.
 Ranked. The corpus is the point; the first four are what make growing it
 safe, so do them roughly in order.
 
+- [ ] **Confirm the deploy recovered (do this first).** After `38b0ef5`,
+  check `curl -s https://game.sbvh.nl/build-info.json` advances past
+  `190d684`, and that the latest `deploy-game` and `seer` runs are green.
+  If not, `nix build .#cdda-src` is still the suspect — the computed
+  hash `sha256-DXXf…` was not `nix build`-verified in the sandbox.
 - [ ] **Coverage report over the full 0.I mapgen tree.** The first real
   corpus move and the one that makes the rest legible. For every
   `om_terrain` building, dry-run it through the resolver
@@ -57,8 +71,10 @@ safe, so do them roughly in order.
   one silently. Write the fetched rev to `.cdda-src/.rev`; fail if ≠
   `CDDA_RELEASE`.
 - [ ] **`tools/fetch-cdda.sh` integrity.** The nix path is hash-pinned;
-  the script path compiles whatever the `0.I` tag returns, unverified.
-  Checksum after fetch, or drop the script path and require nix.
+  the script path (used for bare-cargo/CI) fetches the same subtrees but
+  verifies nothing — this is exactly what hid the flake-hash break
+  locally (see lesson). Checksum after fetch, or drop the script path and
+  require nix.
 - [ ] **Decide the JS build-match guard.** `main.ts` halts if the wasm's
   commit ≠ the bundle's. With the watermark + `?v=` cache-bust it's a
   narrow backstop. Keep it as a deliberate hard-stop or delete it — and
@@ -97,6 +113,22 @@ only real cost is a one-frame load hitch. seer is the *only* way we
 actually know. Rule going forward: no perf claim without a seer `[perf]`
 line — and if seer can't measure it yet, the task is to extend seer, not
 to guess.
+
+### Lesson — the deploy went stale under a green local build
+
+For 9 commits the deploy + seer were **broken and I didn't know**, because
+after asserting "live == HEAD" early on I stopped checking it and kept
+piling commits on. Root cause: the flake sparse-fetched *exactly*
+`cdda-files.txt`, so the content hash was a function of the file list;
+adding a building changed the hash, `nix build .#cdda-src` failed, and
+that's the first step of both deploy-game and seer. Local `cargo` builds
+stayed green because they use the `.cdda-src` fetch path, which **doesn't
+verify the hash** — so nothing surfaced the break here. Two rules from
+this: (1) after any deploy-affecting push, **verify `build-info.json` ==
+HEAD** — a green local build is not a green deploy; (2) a build path that
+skips the integrity check the real path enforces will hide exactly this
+class of break. Fixed at `38b0ef5` by decoupling the fetch (fixed
+subtrees) from the manifest, so the hash no longer moves on corpus edits.
 
 ## The big questions (the frontier)
 
@@ -163,8 +195,17 @@ Each is a want above, framed as the open question, with where to start.
 - **Version:** the in-Rust watermark (top-right) is the *sole* version
   indicator; the loading-screen build badge and `build-info.json` fetch
   are gone. `ui.rs` deleted; `?proxy=` escape hatch removed.
-- **Boundary:** 44 hand-wired `env.*` imports. **Tests:** 88 lib green,
+- **Boundary:** 44 hand-wired `env.*` imports. **Tests:** 98 lib green,
   clippy silent.
+- **seer:** runs on every push to any branch + nightly (paths gate
+  removed). Its native run now **measures real per-frame time** and
+  **tours the world** (teleports through a school, house, campsite,
+  forest) so it encounters variety instead of empty forest.
+- **CDDA fetch is decoupled from the manifest** (`38b0ef5`): the flake +
+  `fetch-cdda.sh` fetch the fixed `mapgen` + `mapgen_palettes` subtrees,
+  `build.rs` picks which files to embed from `cdda-files.txt`. The
+  flake hash only moves on a `CDDA_RELEASE` bump — adding a building
+  never touches it.
 - **Corpus:** **7** CDDA buildings — garage, houses 01–04 (each ×6
   palette variants), the daycare, and the **school** (the first
   multi-tile building: a 3×3 / 72×72 grid) + our shed = 28 templates.
@@ -174,11 +215,11 @@ Each is a want above, framed as the open question, with where to start.
   resolve** (`palette.rs` registers `type: palette` objects declared in
   a building's own mapgen, e.g. the school's `school_palette`).
 - Adding a palette-compatible house is one line in `cdda-files.txt` +
-  one in `HOUSE_LAYOUTS`; a one-off adds a `*_template()` + a `specs`
-  line (`cdda/building.rs`). The coupling (manifest ↔ Rust registry) is
-  still real — the `build.rs`-codegen fix in checklist territory would
-  collapse it, and the systematic sweep (checklist #1) is the way past
-  hand-picked buildings.
+  one in `HOUSE_LAYOUTS` (no flake edit, no hash re-pin — the fetch is
+  decoupled); a one-off adds a `*_template()` + a `specs` line
+  (`cdda/building.rs`). The remaining coupling (manifest ↔ Rust registry)
+  is a `build.rs`-codegen fix away, and the systematic sweep (checklist
+  #1) is the way past hand-picked buildings.
 - **Perf (measured, not guessed):** seer's native run now times every
   `app.update()` and reports it (overall + per tour-stop). First numbers
   (200 frames, native, no GPU): steady-state **p50 = 316µs**; standing in
@@ -203,7 +244,7 @@ present first (below) or the build fails loudly.
     -Z build-std=std,panic_abort
   ```
   CI builds `--release` with `SEER_BUILD_COMMIT` / `SEER_BUILD_TIME` set.
-- **native + tests:** `cd game && cargo +nightly test` (88 lib + a few
+- **native + tests:** `cd game && cargo +nightly test` (98 lib + a few
   integration).
 - **web bundle:** `cd game/web && bun run build.ts` → `dist/`
   (`main-<hash>.js`, content-hashed; index.html rewritten to it).
@@ -215,14 +256,16 @@ present first (below) or the build fails loudly.
 The build needs CDDA mapgen/palette files. They are **not in git**.
 
 - **Nix:** `cd game && nix build .#cdda-src` → set `CDDA_SRC` to the
-  result. Pinned by content hash in `game/flake.nix` to release `0.I`.
+  result. Pins the `mapgen` + `mapgen_palettes` subtrees at `0.I` by
+  content hash in `game/flake.nix` (fixed set — not `cdda-files.txt`).
 - **Bare cargo / local:** `cd game && make cdda` (runs
-  `tools/fetch-cdda.sh`, sparse-clones `0.I` into gitignored
-  `.cdda-src/`). `build.rs` falls back to `.cdda-src` when `$CDDA_SRC` is
-  unset.
-- Which files: `game/cdda-files.txt` — the single manifest read by
-  `build.rs`, the flake, and the fetch script. **Add a building = one
-  line there.** Release string: `game/CDDA_RELEASE` (`0.I`). Attribution:
+  `tools/fetch-cdda.sh`, sparse-clones the same subtrees at `0.I` into
+  gitignored `.cdda-src/`). `build.rs` falls back to `.cdda-src` when
+  `$CDDA_SRC` is unset.
+- Which files to embed: `game/cdda-files.txt` — read by `build.rs` (the
+  fetch grabs whole subtrees; this manifest only selects what's compiled
+  in). **Add a building = one line here** (+ the registry), no flake
+  touch. Release string: `game/CDDA_RELEASE` (`0.I`). Attribution:
   `game/assets/cdda/ATTRIBUTION.md` (CC-BY-SA 3.0).
 
 ## Version / "what's running" (read before touching)
