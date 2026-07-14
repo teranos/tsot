@@ -95,20 +95,24 @@ cannot be cast.
 
 ### Shatter Expectations (instant, colourless)
 - Entire top and bottom rows: transparent slots.
-- Cost: **X graveyard**, where X = the number of **sleeveless and clear**
-  cards exiled to pay for it. *(Open: confirm X is defined by the count of
-  cardless + transparent cards exiled.)*
-- Effect: **Counter target spell, unless its controller exiles X from their
-  HAND, X from GY, X from BOARD, and X from DECK.** (Opponent may pay 4X to
-  save the spell.)
+- Cost: **X graveyard** — you exile cards to pay.
+- **X is derived from the payment composition (CONFIRMED):**
+  `X = (#clear + #cardless/empty sleeves exiled) − (#non-clear-non-cardless
+  cards exiled)`. Each clear or empty sleeve adds 1; each ordinary card
+  subtracts 1 (`f`). Pure clear/empty payment maximises X.
+- Effect: **Counter target spell, unless its controller exiles X from HAND,
+  X from GY, X from BOARD, and X from DECK** (4X total). The controller
+  **chooses** whether to pay or eat the counter (CONFIRMED: opponent's may).
 - Flavour: "he paid it!?"
+- Terminology: cardless sleeve = "sleeveless" = "empty sleeve"; "clear" =
+  transparent-frame (assumed; confirm).
 - New engine needs (all deferred):
-  - **Counter-with-alternative-cost** — a counter the *targeted* player can
-    negate by paying. Today `game.counter` is unconditional; this needs an
-    opponent-side may-cost prompt through the choice/oracle system.
-  - **Variable X paid by exiling cardless + clear** — X = payment count.
-  - **Multi-zone exile** (X from each of hand/gy/board/deck) as a payment
-    shape.
-- Open questions: exact X definition; is the escape cost a "may" the
-  opponent chooses at counter-resolution; do cardless/clear give a discount
-  or just define X.
+  - **Counter-with-alternative-cost** — a counter the *targeted* player may
+    negate by paying, via an opponent-side prompt through the choice/oracle
+    system. Today `game.counter` is unconditional.
+  - **Composition-derived X** — X computed from the clear/cardless vs
+    ordinary split of the exiled payment.
+  - **Multi-zone exile** (X from each of hand/gy/board/deck).
+- Open edge: what if X ≤ 0 (payment net-negative, or all ordinary cards)?
+  Does X floor at 0 (counter free to ignore / does nothing), and is such a
+  payment even legal?
