@@ -73,7 +73,7 @@ fn save_load_round_trip_preserves_lua_handler_calls() {
     let atk = state.a.hand[0].clone();
     {
         let inst = state.card_pool.get_mut(&atk).unwrap();
-        inst.card = bee.clone();
+        inst.content = Some(bee.clone());
     }
     state.a.hand.remove(0);
     state.a.board.push(atk.clone());
@@ -86,7 +86,7 @@ fn save_load_round_trip_preserves_lua_handler_calls() {
     // After rebind, the bee's handlers should be present.
     let bee_inst = resumed.card_pool.get(&atk).unwrap();
     assert!(
-        !bee_inst.card.handlers.is_empty(),
+        !bee_inst.card().handlers.is_empty(),
         "handlers should be rebound after restore"
     );
 

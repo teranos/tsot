@@ -81,7 +81,7 @@ pub(crate) fn deck_of(n: usize, prefix: &str) -> Vec<Card> {
 }
 
 pub(crate) fn set_cost(state: &mut GameState, iid: &InstanceId, cost: Vec<CostComponent>) {
-    state.card_pool.get_mut(iid).unwrap().card.cost = cost;
+    state.card_pool.get_mut(iid).unwrap().card_mut().cost = cost;
 }
 
 /// Mutate a card's identity (colors + symbols) in-place. Used by
@@ -108,13 +108,13 @@ pub(crate) fn set_identity(
             real_colors.push(c.to_string());
         }
     }
-    entry.card.colors = real_colors;
-    entry.card.frame = if is_transparent {
+    entry.card_mut().colors = real_colors;
+    entry.card_mut().frame = if is_transparent {
         Some("transparent".to_string())
     } else {
         None
     };
-    entry.card.symbols = if symbol.is_empty() {
+    entry.card_mut().symbols = if symbol.is_empty() {
         Vec::new()
     } else {
         vec![symbol.to_string()]

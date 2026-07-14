@@ -271,7 +271,7 @@ impl GameState {
                 .card_pool
                 .get(attacker)
                 .map(|i| {
-                    i.card
+                    i.card()
                         .subtypes
                         .iter()
                         .map(|s| s.to_ascii_lowercase())
@@ -279,7 +279,7 @@ impl GameState {
                 })
                 .unwrap_or_default();
             blocker_inst
-                .card
+                .card()
                 .can_block_subtypes
                 .iter()
                 .any(|s| attacker_subs.iter().any(|a| a == s))
@@ -299,12 +299,12 @@ impl GameState {
         // `cannot_block_subtypes` intersects with attacker's subtypes.
         // Rats vs cats: rat's `cannot_block_subtypes = ["cat"]` blocks
         // (sic) the block. Case-insensitive.
-        let blocker_cant: &[String] = &blocker_inst.card.cannot_block_subtypes;
+        let blocker_cant: &[String] = &blocker_inst.card().cannot_block_subtypes;
         if !blocker_cant.is_empty() {
             let attacker_subs: Vec<String> = self
                 .card_pool
                 .get(attacker)
-                .map(|i| i.card.subtypes.iter().map(|s| s.to_ascii_lowercase()).collect())
+                .map(|i| i.card().subtypes.iter().map(|s| s.to_ascii_lowercase()).collect())
                 .unwrap_or_default();
             if blocker_cant
                 .iter()

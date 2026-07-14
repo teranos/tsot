@@ -121,20 +121,20 @@ pub fn card_view(state: &GameState, iid: &InstanceId) -> CardView {
     match inst {
         Some(inst) => {
             let (power, toughness) = state.effective_stats(iid);
-            let printed = format_cost(&inst.card.cost);
-            let effective = format_effective_cost(state, iid, &inst.card.cost);
+            let printed = format_cost(&inst.card().cost);
+            let effective = format_effective_cost(state, iid, &inst.card().cost);
             CardView {
                 iid: iid.clone(),
-                id: inst.card.id.clone(),
-                name: inst.card.name.clone(),
-                kind: format!("{:?}", inst.card.kind),
-                colors: inst.card.colors.clone(),
-                symbols: inst.card.symbols.clone(),
-                subtypes: inst.card.subtypes.clone(),
+                id: inst.card().id.clone(),
+                name: inst.card().name.clone(),
+                kind: format!("{:?}", inst.card().kind),
+                colors: inst.card().colors.clone(),
+                symbols: inst.card().symbols.clone(),
+                subtypes: inst.card().subtypes.clone(),
                 cost: printed,
                 effective_cost: effective,
-                abilities: inst.card.abilities.clone(),
-                flavor: inst.card.flavor.clone(),
+                abilities: inst.card().abilities.clone(),
+                flavor: inst.card().flavor.clone(),
                 tapped: inst.tapped,
                 summoning_sick: inst.summoning_sick,
                 damage: inst.damage,

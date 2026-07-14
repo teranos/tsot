@@ -1089,7 +1089,7 @@
             .card_pool
             .get_mut(&board_iid)
             .unwrap()
-            .card
+            .card_mut()
             .activated
             .push(ActivatedAbility {
                 cost_tap: false,

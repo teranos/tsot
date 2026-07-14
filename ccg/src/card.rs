@@ -76,8 +76,12 @@ impl CardRegistry {
 // doesn't branch on color — it's identity/flavor data passed through to
 // handlers via `game.card(iid).colors`.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CardType {
+    /// Also the kind of the blank card backing a cardless sleeve (Z.8):
+    /// no identity, and uncastable (cast routing only accepts the
+    /// concrete castable kinds).
+    #[default]
     Unspecified,
     Creature,
     /// Non-permanent card that resolves to GRAVEYARD. The timing class
@@ -555,7 +559,7 @@ impl EventName {
     ];
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Card {
     pub id: String,
     pub name: String,

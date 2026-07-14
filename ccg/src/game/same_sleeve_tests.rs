@@ -170,7 +170,7 @@ fn apoptosis_is_fused_so_a_strip_over_attached_never_takes_itself() {
     let host = s.a.hand[0].clone();
     let payment = s.a.hand[1].clone();
     let apop = s.a.hand[2].clone();
-    s.card_pool.get_mut(&apop).unwrap().card = apoptosis;
+    s.card_pool.get_mut(&apop).unwrap().content = Some(apoptosis);
     let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
     let _ = s.remove_from_zone(&payment, PlayerId::A, Zone::Hand);
     s.add_attached(&host, &payment);

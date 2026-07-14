@@ -80,7 +80,7 @@ impl StepEngine {
                     self.state
                         .card_pool
                         .get(iid)
-                        .map(|i| i.card.name.clone())
+                        .map(|i| i.card().name.clone())
                         .unwrap_or_else(|| iid.to_string())
                 })
                 .collect();
@@ -106,7 +106,7 @@ impl StepEngine {
                         .state
                         .card_pool
                         .get(atk)
-                        .map(|i| i.card.name.clone())
+                        .map(|i| i.card().name.clone())
                         .unwrap_or_else(|| atk.clone());
                     self.emit_human_refusal(
                         active,
@@ -200,13 +200,13 @@ impl StepEngine {
                         .state
                         .card_pool
                         .get(blk)
-                        .map(|i| i.card.name.clone())
+                        .map(|i| i.card().name.clone())
                         .unwrap_or_else(|| blk.to_string());
                     let an = self
                         .state
                         .card_pool
                         .get(atk)
-                        .map(|i| i.card.name.clone())
+                        .map(|i| i.card().name.clone())
                         .unwrap_or_else(|| atk.to_string());
                     format!("{} → {}", bn, an)
                 })
@@ -230,13 +230,13 @@ impl StepEngine {
                     .state
                     .card_pool
                     .get(blk)
-                    .map(|i| i.card.name.clone())
+                    .map(|i| i.card().name.clone())
                     .unwrap_or_else(|| blk.clone());
                 let atk_name = self
                     .state
                     .card_pool
                     .get(atk)
-                    .map(|i| i.card.name.clone())
+                    .map(|i| i.card().name.clone())
                     .unwrap_or_else(|| atk.clone());
                 self.emit_human_refusal(
                     defender,

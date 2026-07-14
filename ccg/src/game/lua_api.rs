@@ -254,7 +254,7 @@ pub(crate) fn do_smart_discard(s: &mut GameState, pid: PlayerId, n: usize) {
         // Per-card-id telemetry: bump a prefixed action_counts key. This
         // piggybacks on the existing journaled bump_action plumbing so a
         // preview-and-rollback correctly undoes the count too.
-        let card_id = s.card_pool.get(&iid).map(|c| c.card.id.clone());
+        let card_id = s.card_pool.get(&iid).map(|c| c.card().id.clone());
         let _ = s.move_card(&iid, pid, Zone::Hand, Zone::Graveyard);
         s.bump_action("discard", pid);
         if let Some(cid) = card_id {
@@ -280,7 +280,7 @@ fn discard_score(state: &GameState, iid: &InstanceId) -> i32 {
     let mut s = 0i32;
     let (x, y) = state.effective_stats(iid);
     s -= (x + y).round() as i32;
-    let h = &c.card.handlers;
+    let h = &c.card().handlers;
     if h.contains_key(&crate::card::EventName::OnPlay) {
         s -= 10;
     }
@@ -441,7 +441,7 @@ fn do_move_to(
         let is_creature = s
             .card_pool
             .get(iid)
-            .map(|inst| inst.card.kind == CardType::Creature)
+            .map(|inst| inst.card().kind == CardType::Creature)
             .unwrap_or(false);
         if is_creature {
             s.set_summoning_sick(&iid_owned, true);
@@ -1233,12 +1233,12 @@ macro_rules! build_game_table {
                         return Ok(None);
                     };
                     let t = lua.create_table()?;
-                    t.set("id", inst.card.id.clone())?;
+                    t.set("id", inst.card().id.clone())?;
                     t.set("instance_id", iid.clone())?;
-                    t.set("type", card_type_str(&inst.card))?;
+                    t.set("type", card_type_str(&inst.card()))?;
                     t.set(
                         "subtypes",
-                        lua.create_sequence_from(inst.card.subtypes.clone())?,
+                        lua.create_sequence_from(inst.card().subtypes.clone())?,
                     )?;
                     t.set(
                         "colors",
@@ -1246,7 +1246,7 @@ macro_rules! build_game_table {
                     )?;
                     t.set(
                         "symbols",
-                        lua.create_sequence_from(inst.card.symbols.clone())?,
+                        lua.create_sequence_from(inst.card().symbols.clone())?,
                     )?;
                     t.set(
                         "face",
@@ -1423,11 +1423,11 @@ pub(crate) fn fire_self_only(
     let Some(inst) = state.card_pool.get(source) else {
         return Ok(());
     };
-    let Some(handler) = inst.card.handlers.get(&event).cloned() else {
+    let Some(handler) = inst.card().handlers.get(&event).cloned() else {
         return Ok(());
     };
     let owner = inst.owner;
-    let card_id = inst.card.id.clone();
+    let card_id = inst.card().id.clone();
 
     // O9: bracket the Lua scope with `Instant::now()` so the Handler
     // event records the handler's wall-clock cost. Cheap no-op when
@@ -1504,7 +1504,7 @@ pub(crate) fn fire_activated(
         return Ok(());
     };
     let owner = inst.owner;
-    let card_id = inst.card.id.clone();
+    let card_id = inst.card().id.clone();
 
     let state_cell = RefCell::new(&mut *state);
     let oracle_cell = RefCell::new(&mut *oracle);
@@ -1587,11 +1587,11 @@ pub(crate) fn fire_with_partner(
     let Some(inst) = state.card_pool.get(source) else {
         return Ok(());
     };
-    let Some(handler) = inst.card.handlers.get(&event).cloned() else {
+    let Some(handler) = inst.card().handlers.get(&event).cloned() else {
         return Ok(());
     };
     let owner = inst.owner;
-    let card_id = inst.card.id.clone();
+    let card_id = inst.card().id.clone();
 
     let trace_active = crate::trace::is_enabled();
     let t0 = trace_active.then(std::time::Instant::now);
@@ -1660,7 +1660,7 @@ mod suppress_tests {
             .card_pool
             .get_mut(iid)
             .unwrap()
-            .card
+            .card_mut()
             .handlers
             .insert(EventName::OnDie, handler);
     }
@@ -1691,7 +1691,7 @@ mod suppress_tests {
             .card_pool
             .get_mut(iid)
             .unwrap()
-            .card
+            .card_mut()
             .activated
             .push(ActivatedAbility {
                 cost_tap: true,
@@ -1712,7 +1712,7 @@ mod suppress_tests {
         let mutation = s.a.hand[0].clone();
         let host = s.a.hand[1].clone();
         install_noop_activation(&lua, &mut s, &host);
-        s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(make_suppressor_static());
+        s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(make_suppressor_static());
         s.a.hand.retain(|i| i != &mutation && i != &host);
         s.a.board.push(host.clone());
 
@@ -1744,8 +1744,8 @@ mod suppress_tests {
             .into_iter()
             .find(|c| c.id == "cryogenic-chamber")
             .unwrap();
-        s.card_pool.get_mut(&chamber_iid).unwrap().card = chamber_card;
-        s.card_pool.get_mut(&victim_iid).unwrap().card.kind = CardType::Creature;
+        s.card_pool.get_mut(&chamber_iid).unwrap().content = Some(chamber_card);
+        s.card_pool.get_mut(&victim_iid).unwrap().card_mut().kind = CardType::Creature;
         s.a.hand.retain(|i| i != &chamber_iid);
         s.b.hand.retain(|i| i != &victim_iid);
         s.a.board.push(chamber_iid.clone());
@@ -1785,11 +1785,11 @@ mod suppress_tests {
             .into_iter()
             .find(|c| c.id == "cryogenic-chamber")
             .unwrap();
-        s.card_pool.get_mut(&chamber_iid).unwrap().card = chamber_card;
+        s.card_pool.get_mut(&chamber_iid).unwrap().content = Some(chamber_card);
         // Mark the two non-chamber cards as creatures so they're
         // eligible targets.
-        s.card_pool.get_mut(&victim_iid).unwrap().card.kind = CardType::Creature;
-        s.card_pool.get_mut(&distractor_iid).unwrap().card.kind = CardType::Creature;
+        s.card_pool.get_mut(&victim_iid).unwrap().card_mut().kind = CardType::Creature;
+        s.card_pool.get_mut(&distractor_iid).unwrap().card_mut().kind = CardType::Creature;
         // Put chamber + creatures on board.
         s.a.hand.retain(|i| i != &chamber_iid && i != &distractor_iid);
         s.b.hand.retain(|i| i != &victim_iid);
@@ -1822,7 +1822,7 @@ mod suppress_tests {
         let mutation = s.a.hand[0].clone();
         let host = s.a.hand[1].clone();
         install_draw_handler(&lua, &mut s, &host);
-        s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(make_suppressor_static());
+        s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(make_suppressor_static());
         s.a.hand.retain(|i| i != &mutation && i != &host);
         s.a.board.push(host.clone());
 
@@ -1922,7 +1922,7 @@ mod lua_yield_pending_tests {
             .card_pool
             .get_mut(iid)
             .unwrap()
-            .card
+            .card_mut()
             .handlers
             .insert(EventName::OnDie, handler);
     }
@@ -2007,7 +2007,7 @@ mod lua_yield_pending_tests {
             .card_pool
             .get_mut(&host)
             .unwrap()
-            .card
+            .card_mut()
             .handlers
             .insert(EventName::OnDie, handler);
 
@@ -2212,7 +2212,7 @@ mod mlua_chain_walker_tests {
             .card_pool
             .get_mut(&host_iid)
             .unwrap()
-            .card
+            .card_mut()
             .handlers
             .insert(EventName::OnDie, handler);
 

@@ -36,14 +36,14 @@ pub fn enumerate_playable_in_hand(
             let Some(inst) = state.card_pool.get(*iid) else {
                 return false;
             };
-            let is_creature = inst.card.kind == CardType::Creature;
+            let is_creature = inst.card().kind == CardType::Creature;
             match kind_filter {
                 PickKindFilter::Any => {}
                 PickKindFilter::CreatureOnly if !is_creature => return false,
                 PickKindFilter::NonCreatureOnly if is_creature => return false,
                 _ => {}
             }
-            match inst.card.kind {
+            match inst.card().kind {
                 CardType::Creature => {
                     // Always affordability-gate creatures now that the
                     // `rig_creature_free_haste` shortcut is gone — plain
@@ -107,7 +107,7 @@ pub fn dedup_candidates_by_card_id(
         let id = state
             .card_pool
             .get(&iid)
-            .map(|i| i.card.id.clone())
+            .map(|i| i.card().id.clone())
             .unwrap_or_default();
         if seen.insert(id) {
             out.push(iid);
@@ -180,7 +180,7 @@ pub fn play_priority_score(state: &GameState, iid: &InstanceId) -> i32 {
         return 0;
     };
     let mut s = 0i32;
-    if let Some(def) = &inst.card.static_def {
+    if let Some(def) = &inst.card().static_def {
         let mut has_cost = false;
         let mut has_stat_or_keyword = false;
         let mut has_restrict = false;
@@ -219,7 +219,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     // RULES P.32: refuse if the card declares a target category and no
     // legal target exists. Mirrors the engine's cast-time gate so the
     // picker doesn't burn rolls on cards play_card will refuse.
-    if let Some(target) = inst.card.target {
+    if let Some(target) = inst.card().target {
         if !state.is_target_legal(target) {
             return false;
         }
@@ -230,8 +230,8 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     // immediately rejects with SymbolUniquenessViolated. Without
     // this, UCT rollouts spin on duplicate-Symbol picks and the
     // failure sink fills with per-rollout backtrace dumps.
-    if matches!(inst.card.kind, CardType::Symbol) {
-        let cast_id = inst.card.id.clone();
+    if matches!(inst.card().kind, CardType::Symbol) {
+        let cast_id = inst.card().id.clone();
         let already_in_play = state
             .a
             .board
@@ -241,7 +241,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
                 state
                     .card_pool
                     .get(bid)
-                    .map(|i| i.card.id == cast_id)
+                    .map(|i| i.card().id == cast_id)
                     .unwrap_or(false)
             });
         if already_in_play {
@@ -252,7 +252,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     // mirrors the play_card gate (game/play.rs sets
     // SymbolCastCapReached) so duplicate-cast attempts in the same
     // turn don't churn the rollout.
-    if matches!(inst.card.kind, CardType::Symbol) {
+    if matches!(inst.card().kind, CardType::Symbol) {
         let idx = match player {
             PlayerId::A => 0,
             PlayerId::B => 1,
@@ -272,7 +272,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     // affordability, treat is_x as needing 1 of the resource minimum:
     // the cast is "useful" iff at least X=1 is payable. X=0 makes the
     // cast a no-op, so we don't bother accepting cards we'd cast for X=0.
-    for c in &inst.card.cost {
+    for c in &inst.card().cost {
         let amount = if c.is_x {
             1
         } else {
@@ -327,7 +327,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
         let is_crystal = state
             .card_pool
             .get(&sub_iid)
-            .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+            .map(|i| i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
             .unwrap_or(false);
         if hand_need > 0 || gy_need > 0 {
             if is_crystal {
@@ -365,13 +365,13 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     // discards are NOT.
     let cast_ident = state.card_identity(iid);
     // C.14: transparent cards can't pay for BOARD-placed casts.
-    let cast_is_board_placed = inst.card.kind.is_board_placed();
+    let cast_is_board_placed = inst.card().kind.is_board_placed();
     let is_transparent = |h: &InstanceId| -> bool {
         state
             .card_pool
             .get(h)
             .map(|i| {
-                i.card
+                i.card()
                     .colors
                     .iter()
                     .any(|c| c.eq_ignore_ascii_case("transparent"))
@@ -401,7 +401,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             state
                 .card_pool
                 .get(*gid)
-                .map(|i| i.card.gy_hand_substitute)
+                .map(|i| i.card().gy_hand_substitute)
                 .unwrap_or(false)
         })
         .count();
@@ -425,7 +425,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     if hand_need > 0 && !cast_ident.is_empty() && hand_have_identity == 0 {
         // Would the GY anchor save us via P.12b?
         let cast_colors_lc: std::collections::BTreeSet<String> = inst
-            .card
+            .card()
             .colors
             .iter()
             .map(|c| c.to_ascii_lowercase())
@@ -437,7 +437,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
                     .card_pool
                     .get(gid)
                     .map(|i| {
-                        i.card
+                        i.card()
                             .colors
                             .iter()
                             .any(|c| cast_colors_lc.contains(&c.to_ascii_lowercase()))
@@ -467,7 +467,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
                 state
                     .card_pool
                     .get(iid)
-                    .map(|i| i.card.kind == *k)
+                    .map(|i| i.card().kind == *k)
                     .unwrap_or(false)
             } else {
                 true
@@ -495,7 +495,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     // NoGraveyardPaymentForColor → response-window spin.
     if gy_need > 0 {
         let cast_colors: std::collections::BTreeSet<String> = inst
-            .card
+            .card()
             .colors
             .iter()
             .map(|c| c.to_ascii_lowercase())
@@ -506,7 +506,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
                     .card_pool
                     .get(gid)
                     .map(|i| {
-                        i.card
+                        i.card()
                             .colors
                             .iter()
                             .any(|c| cast_colors.contains(&c.to_ascii_lowercase()))
@@ -535,7 +535,7 @@ pub fn attached_keep_value(state: &GameState, attached_iid: &InstanceId) -> i32 
     };
     let mut score: i32 = 0;
     // (1) Spending a mutation loses its P.28 effect on the host.
-    if inst.card.kind == CardType::Mutation || inst.card.static_def.is_some() {
+    if inst.card().kind == CardType::Mutation || inst.card().static_def.is_some() {
         score += 20;
     }
     // (2) Host crystal tap-substitution (P.24b): an attached card is
@@ -545,13 +545,13 @@ pub fn attached_keep_value(state: &GameState, attached_iid: &InstanceId) -> i32 
     // sharing each of its colors.
     if let Some(host) = state.host_of(attached_iid).and_then(|h| state.card_pool.get(&h)) {
         let is_crystal = host
-            .card
+            .card()
             .subtypes
             .iter()
             .any(|s| s.eq_ignore_ascii_case("crystal"));
         if is_crystal {
             let my_colors: std::collections::BTreeSet<String> = inst
-                .card
+                .card()
                 .colors
                 .iter()
                 .map(|c| c.to_ascii_lowercase())
@@ -563,7 +563,7 @@ pub fn attached_keep_value(state: &GameState, attached_iid: &InstanceId) -> i32 
                     .filter(|x| *x != attached_iid)
                     .filter_map(|x| state.card_pool.get(x))
                     .filter(|i| {
-                        i.card
+                        i.card()
                             .colors
                             .iter()
                             .any(|c| c.eq_ignore_ascii_case(color))
@@ -577,7 +577,7 @@ pub fn attached_keep_value(state: &GameState, attached_iid: &InstanceId) -> i32 
         // (3) Static-granted activated ability via A.10. Spending the
         // source card strips the granted ability from the host.
         if inst
-            .card
+            .card()
             .static_def
             .as_ref()
             .is_some_and(|d| {
@@ -604,7 +604,7 @@ pub fn sacrifice_keep_value(state: &GameState, iid: &InstanceId) -> i32 {
         return 0;
     };
     let (x, y) = state.effective_stats(iid);
-    let cost_weight: i32 = inst.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    let cost_weight: i32 = inst.card().cost.iter().map(|c| c.amount.max(0)).sum();
     let attached_count = inst.attached.len() as i32;
     (x + y).round() as i32 + cost_weight * 2 + attached_count * 2
 }
@@ -772,7 +772,7 @@ pub fn eligible_attackers(state: &GameState, player: PlayerId) -> Vec<InstanceId
             };
             // RULES B.1: only creatures attack. Artifacts /
             // environments / mutations don't.
-            if inst.card.kind != CardType::Creature {
+            if inst.card().kind != CardType::Creature {
                 return false;
             }
             if inst.tapped {
@@ -1023,7 +1023,7 @@ mod tests {
     ) -> InstanceId {
         let iid = state.player(side).hand[0].clone();
         let inst = state.card_pool.get_mut(&iid).unwrap();
-        inst.card = card_creature(id, x, y);
+        inst.content = Some(card_creature(id, x, y));
         inst.summoning_sick = false;
         state.player_mut(side).hand.retain(|x| x != &iid);
         state.player_mut(side).board.push(iid.clone());
@@ -1035,7 +1035,7 @@ mod tests {
             .card_pool
             .get_mut(iid)
             .unwrap()
-            .card
+            .card_mut()
             .abilities
             .push(ability.to_string());
     }
@@ -1058,8 +1058,8 @@ mod tests {
         let symbol = s.player(PlayerId::A).hand[1].clone();
         {
             let c = s.card_pool.get_mut(&cast).unwrap();
-            c.card.colors = vec!["red".to_string()];
-            c.card.cost = vec![CostComponent {
+            c.card_mut().colors = vec!["red".to_string()];
+            c.card_mut().cost = vec![CostComponent {
                 amount: 1,
                 source: CostSource::Hand,
                 is_x: false,
@@ -1068,10 +1068,10 @@ mod tests {
         }
         {
             let sym = s.card_pool.get_mut(&symbol).unwrap();
-            sym.card.kind = CardType::Symbol;
+            sym.card_mut().kind = CardType::Symbol;
             // Deliberately a different color from the cast — P.24e has
             // no color requirement.
-            sym.card.colors = vec!["green".to_string()];
+            sym.card_mut().colors = vec!["green".to_string()];
         }
         s.player_mut(PlayerId::A).hand.retain(|x| x != &symbol);
         s.player_mut(PlayerId::A).board.push(symbol.clone());
@@ -1097,8 +1097,8 @@ mod tests {
         let gy_seed = s.player(PlayerId::A).hand[2].clone();
         {
             let c = s.card_pool.get_mut(&cast).unwrap();
-            c.card.colors = vec!["red".to_string()];
-            c.card.cost = vec![CostComponent {
+            c.card_mut().colors = vec!["red".to_string()];
+            c.card_mut().cost = vec![CostComponent {
                 amount: 1,
                 source: CostSource::Graveyard,
                 is_x: false,
@@ -1107,13 +1107,13 @@ mod tests {
         }
         {
             let sym = s.card_pool.get_mut(&symbol).unwrap();
-            sym.card.kind = CardType::Symbol;
-            sym.card.colors = vec!["red".to_string()];
+            sym.card_mut().kind = CardType::Symbol;
+            sym.card_mut().colors = vec!["red".to_string()];
         }
         {
             // Blue GY seed — does NOT anchor a red cast. Without
             // Symbol-tap coverage the gy_anchor gate refuses.
-            s.card_pool.get_mut(&gy_seed).unwrap().card.colors = vec!["blue".to_string()];
+            s.card_pool.get_mut(&gy_seed).unwrap().card_mut().colors = vec!["blue".to_string()];
         }
         s.player_mut(PlayerId::A).hand.retain(|x| x != &symbol);
         s.player_mut(PlayerId::A).board.push(symbol.clone());
@@ -1146,9 +1146,9 @@ mod tests {
         {
             // 2-hand blue spell, mirroring surge.
             let c = s.card_pool.get_mut(&cast).unwrap();
-            c.card.colors = vec!["blue".to_string()];
-            c.card.kind = CardType::Spell;
-            c.card.cost = vec![CostComponent {
+            c.card_mut().colors = vec!["blue".to_string()];
+            c.card_mut().kind = CardType::Spell;
+            c.card_mut().cost = vec![CostComponent {
                 amount: 2,
                 source: CostSource::Hand,
                 is_x: false,
@@ -1157,8 +1157,8 @@ mod tests {
         }
         // Other hand cards: red + green — neither shares blue's
         // identity, so eligible_hand_payments returns empty.
-        s.card_pool.get_mut(&off_color_a).unwrap().card.colors = vec!["red".to_string()];
-        s.card_pool.get_mut(&off_color_b).unwrap().card.colors = vec!["green".to_string()];
+        s.card_pool.get_mut(&off_color_a).unwrap().card_mut().colors = vec!["red".to_string()];
+        s.card_pool.get_mut(&off_color_b).unwrap().card_mut().colors = vec!["green".to_string()];
         // No jewel / symbol on board, no clear-* substitutes in gy.
         assert!(
             !can_pay_instant_cost(&s, PlayerId::A, &cast),
@@ -1189,23 +1189,23 @@ mod tests {
         {
             // 2-hand blue spell.
             let c = s.card_pool.get_mut(&cast).unwrap();
-            c.card.colors = vec!["blue".to_string()];
-            c.card.kind = CardType::Spell;
-            c.card.cost = vec![CostComponent {
+            c.card_mut().colors = vec!["blue".to_string()];
+            c.card_mut().kind = CardType::Spell;
+            c.card_mut().cost = vec![CostComponent {
                 amount: 2,
                 source: CostSource::Hand,
                 is_x: false,
                 kind: None,
             }];
         }
-        s.card_pool.get_mut(&off_color_a).unwrap().card.colors = vec!["red".to_string()];
-        s.card_pool.get_mut(&off_color_b).unwrap().card.colors = vec!["green".to_string()];
+        s.card_pool.get_mut(&off_color_a).unwrap().card_mut().colors = vec!["red".to_string()];
+        s.card_pool.get_mut(&off_color_b).unwrap().card_mut().colors = vec!["green".to_string()];
         // Static that reduces Spell hand cost by 1. Mirrors modern-
         // lcd-clock's shape but targets Spell kind instead of Creature.
         {
             let r = s.card_pool.get_mut(&reducer).unwrap();
-            r.card.kind = CardType::Artifact;
-            r.card.static_def = Some(StaticDef {
+            r.card_mut().kind = CardType::Artifact;
+            r.card_mut().static_def = Some(StaticDef {
                 affects: StaticAffects {
                     kind: Some(CardType::Spell),
                     ..Default::default()
@@ -1245,8 +1245,8 @@ mod tests {
         let jewel = s.player(PlayerId::A).hand[1].clone();
         {
             let c = s.card_pool.get_mut(&cast).unwrap();
-            c.card.colors = vec!["red".to_string()];
-            c.card.cost = vec![CostComponent {
+            c.card_mut().colors = vec!["red".to_string()];
+            c.card_mut().cost = vec![CostComponent {
                 amount: 2,
                 source: CostSource::Hand,
                 is_x: false,
@@ -1255,9 +1255,9 @@ mod tests {
         }
         {
             let j = s.card_pool.get_mut(&jewel).unwrap();
-            j.card.kind = CardType::Artifact;
-            j.card.colors = vec!["red".to_string()];
-            j.card.subtypes = vec!["jewel".to_string()];
+            j.card_mut().kind = CardType::Artifact;
+            j.card_mut().colors = vec!["red".to_string()];
+            j.card_mut().subtypes = vec!["jewel".to_string()];
         }
         // Move the jewel to A's board, untapped.
         s.player_mut(PlayerId::A).hand.retain(|x| x != &jewel);
@@ -1283,8 +1283,8 @@ mod tests {
         let gy_seed = s.player(PlayerId::A).hand[2].clone();
         {
             let c = s.card_pool.get_mut(&cast).unwrap();
-            c.card.colors = vec!["red".to_string()];
-            c.card.cost = vec![
+            c.card_mut().colors = vec!["red".to_string()];
+            c.card_mut().cost = vec![
                 CostComponent {
                     amount: 1,
                     source: CostSource::Hand,
@@ -1301,13 +1301,13 @@ mod tests {
         }
         {
             let j = s.card_pool.get_mut(&jewel).unwrap();
-            j.card.kind = CardType::Artifact;
-            j.card.colors = vec!["red".to_string()];
-            j.card.subtypes = vec!["jewel".to_string()];
+            j.card_mut().kind = CardType::Artifact;
+            j.card_mut().colors = vec!["red".to_string()];
+            j.card_mut().subtypes = vec!["jewel".to_string()];
         }
         {
             let g = s.card_pool.get_mut(&gy_seed).unwrap();
-            g.card.colors = vec!["red".to_string()];
+            g.card_mut().colors = vec!["red".to_string()];
         }
         s.player_mut(PlayerId::A).hand.retain(|x| x != &jewel);
         s.player_mut(PlayerId::A).board.push(jewel.clone());
@@ -1331,8 +1331,8 @@ mod tests {
         let iid = s.player(PlayerId::A).hand[0].clone();
         {
             let inst = s.card_pool.get_mut(&iid).unwrap();
-            inst.card.kind = CardType::Symbol;
-            inst.card.cost = vec![];
+            inst.card_mut().kind = CardType::Symbol;
+            inst.card_mut().cost = vec![];
         }
         let offered = enumerate_playable_in_hand(&s, PlayerId::A, PickKindFilter::Any);
         assert!(

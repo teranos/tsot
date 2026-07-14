@@ -23,14 +23,14 @@ pub fn rebind_handlers(state: &mut GameState, registry: &CardRegistry) -> Result
         let template = registry
             .cards()
             .iter()
-            .find(|c| c.id == inst.card.id)
+            .find(|c| c.id == inst.card().id)
             .ok_or_else(|| {
                 format!(
                     "rebind_handlers: card id {:?} (on instance {iid}) not in registry",
-                    inst.card.id
+                    inst.card().id
                 )
             })?;
-        inst.card.handlers = template.handlers.clone();
+        inst.card_mut().handlers = template.handlers.clone();
     }
     Ok(())
 }

@@ -11,7 +11,7 @@ fn add_ability(s: &mut GameState, iid: &InstanceId, ability: &str) {
     s.card_pool
         .get_mut(iid)
         .unwrap()
-        .card
+        .card_mut()
         .abilities
         .push(ability.to_string());
 }
@@ -210,8 +210,8 @@ fn flying_attacker_can_be_blocked_by_subtype_override() {
     put_on_board(&mut s, PlayerId::B, &cat);
     add_ability(&mut s, &bird, "haste");
     add_ability(&mut s, &bird, "flying");
-    s.card_pool.get_mut(&bird).unwrap().card.subtypes = vec!["bird".to_string()];
-    s.card_pool.get_mut(&cat).unwrap().card.can_block_subtypes = vec!["bird".to_string()];
+    s.card_pool.get_mut(&bird).unwrap().card_mut().subtypes = vec!["bird".to_string()];
+    s.card_pool.get_mut(&cat).unwrap().card_mut().can_block_subtypes = vec!["bird".to_string()];
     enter_combat(&mut s);
     s.declare_attacker(&bird, None).unwrap();
     s.confirm_attacks().unwrap();
@@ -260,8 +260,8 @@ fn blocker_with_cannot_block_subtype_is_rejected() {
     put_on_board(&mut s, PlayerId::A, &cat);
     put_on_board(&mut s, PlayerId::B, &rat);
     add_ability(&mut s, &cat, "haste");
-    s.card_pool.get_mut(&cat).unwrap().card.subtypes = vec!["cat".to_string()];
-    s.card_pool.get_mut(&rat).unwrap().card.cannot_block_subtypes = vec!["cat".to_string()];
+    s.card_pool.get_mut(&cat).unwrap().card_mut().subtypes = vec!["cat".to_string()];
+    s.card_pool.get_mut(&rat).unwrap().card_mut().cannot_block_subtypes = vec!["cat".to_string()];
     enter_combat(&mut s);
     s.declare_attacker(&cat, None).unwrap();
     s.confirm_attacks().unwrap();
@@ -279,7 +279,7 @@ fn blocker_without_cannot_block_subtype_can_still_block() {
     put_on_board(&mut s, PlayerId::A, &cat);
     put_on_board(&mut s, PlayerId::B, &dog);
     add_ability(&mut s, &cat, "haste");
-    s.card_pool.get_mut(&cat).unwrap().card.subtypes = vec!["cat".to_string()];
+    s.card_pool.get_mut(&cat).unwrap().card_mut().subtypes = vec!["cat".to_string()];
     // dog has no cannot_block_subtypes restriction — should block fine.
     enter_combat(&mut s);
     s.declare_attacker(&cat, None).unwrap();
@@ -335,8 +335,8 @@ fn battle_captain_untaps_other_attackers_on_attack() {
     let other_iid = s.a.hand[1].clone();
     {
         let inst = s.card_pool.get_mut(&cap_iid).unwrap();
-        inst.card.handlers = captain.handlers.clone();
-        inst.card.id = captain.id.clone();
+        inst.card_mut().handlers = captain.handlers.clone();
+        inst.card_mut().id = captain.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &cap_iid);
     put_on_board(&mut s, PlayerId::A, &other_iid);
@@ -385,9 +385,9 @@ fn game_card_exposes_id_type_subtypes_stats_tapped() {
     let atk = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = probe.handlers.clone();
-        inst.card.id = probe.id.clone();
-        inst.card.subtypes = vec!["human".to_string()];
+        inst.card_mut().handlers = probe.handlers.clone();
+        inst.card_mut().id = probe.id.clone();
+        inst.card_mut().subtypes = vec!["human".to_string()];
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     add_ability(&mut s, &atk, "haste");
@@ -428,8 +428,8 @@ fn mortal_bee_attack_exiles_opponent_deck_and_self_taxes() {
     let atk = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = bee.handlers.clone();
-        inst.card.id = bee.id.clone();
+        inst.card_mut().handlers = bee.handlers.clone();
+        inst.card_mut().id = bee.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     add_ability(&mut s, &atk, "haste");
@@ -482,8 +482,8 @@ fn game_discard_moves_n_from_hand_to_graveyard() {
     let atk = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = probe.handlers.clone();
-        inst.card.id = probe.id.clone();
+        inst.card_mut().handlers = probe.handlers.clone();
+        inst.card_mut().id = probe.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     add_ability(&mut s, &atk, "haste");
@@ -528,8 +528,8 @@ fn smart_discard_prefers_vanilla_over_pitch_payoff_jewel() {
     let jewel = s.a.hand[1].clone();
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = probe.handlers.clone();
-        inst.card.id = probe.id.clone();
+        inst.card_mut().handlers = probe.handlers.clone();
+        inst.card_mut().id = probe.id.clone();
     }
     // Give the jewel an OnAttachedAsCost handler so discard_score sees it.
     // Reuse the probe's on_attack Function (mlua::Function is a Lua reference,
@@ -543,7 +543,7 @@ fn smart_discard_prefers_vanilla_over_pitch_payoff_jewel() {
     s.card_pool
         .get_mut(&jewel)
         .unwrap()
-        .card
+        .card_mut()
         .handlers
         .insert(crate::card::EventName::OnAttachedAsCost, probe_handler);
     put_on_board(&mut s, PlayerId::A, &atk);
@@ -587,8 +587,8 @@ fn game_print_handler_call_does_not_error() {
     let atk = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = probe.handlers.clone();
-        inst.card.id = probe.id.clone();
+        inst.card_mut().handlers = probe.handlers.clone();
+        inst.card_mut().id = probe.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     add_ability(&mut s, &atk, "haste");
@@ -631,8 +631,8 @@ fn handler_mutations_round_trip_through_journal() {
     let atk = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = probe.handlers.clone();
-        inst.card.id = probe.id.clone();
+        inst.card_mut().handlers = probe.handlers.clone();
+        inst.card_mut().id = probe.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     add_ability(&mut s, &atk, "haste");
@@ -694,8 +694,8 @@ fn on_attack_handler_fires_when_attacker_declared() {
     let atk = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = fixture.handlers.clone();
-        inst.card.id = fixture.id.clone();
+        inst.card_mut().handlers = fixture.handlers.clone();
+        inst.card_mut().id = fixture.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     add_ability(&mut s, &atk, "haste");
@@ -741,8 +741,8 @@ fn on_block_handler_fires_when_blocker_declared() {
     // Handler goes on the BLOCKER, not the attacker.
     {
         let inst = s.card_pool.get_mut(&blk).unwrap();
-        inst.card.handlers = fixture.handlers.clone();
-        inst.card.id = fixture.id.clone();
+        inst.card_mut().handlers = fixture.handlers.clone();
+        inst.card_mut().id = fixture.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     put_on_board(&mut s, PlayerId::B, &blk);
@@ -784,8 +784,8 @@ fn midnight_raven_attack_moves_top_of_deck_to_bottom() {
     let atk = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = raven.handlers.clone();
-        inst.card.id = raven.id.clone();
+        inst.card_mut().handlers = raven.handlers.clone();
+        inst.card_mut().id = raven.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     add_ability(&mut s, &atk, "haste");
@@ -822,8 +822,8 @@ fn thorn_beetle_on_block_damages_attacker() {
     let blk = s.b.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&blk).unwrap();
-        inst.card.handlers = beetle.handlers.clone();
-        inst.card.id = beetle.id.clone();
+        inst.card_mut().handlers = beetle.handlers.clone();
+        inst.card_mut().id = beetle.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     put_on_board(&mut s, PlayerId::B, &blk);
@@ -875,8 +875,8 @@ fn on_blocked_by_handler_fires_when_block_declared() {
     // Swap the attacker's card data for the fixture (keep stats so combat math works).
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = fixture.handlers.clone();
-        inst.card.id = fixture.id.clone();
+        inst.card_mut().handlers = fixture.handlers.clone();
+        inst.card_mut().id = fixture.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     put_on_board(&mut s, PlayerId::B, &blk);
@@ -916,8 +916,8 @@ fn tantrum_imp_handler_damages_blocker_and_mills_defender() {
     // keep the 1/1 stats so combat math stays predictable.
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = tantrum.handlers.clone();
-        inst.card.id = tantrum.id.clone();
+        inst.card_mut().handlers = tantrum.handlers.clone();
+        inst.card_mut().id = tantrum.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     put_on_board(&mut s, PlayerId::B, &blk);
@@ -960,8 +960,8 @@ fn squirrel_overrun_handler_draws_a_card_when_blocked() {
     let blk = s.b.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card.handlers = squirrel.handlers.clone();
-        inst.card.id = squirrel.id.clone();
+        inst.card_mut().handlers = squirrel.handlers.clone();
+        inst.card_mut().id = squirrel.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &atk);
     put_on_board(&mut s, PlayerId::B, &blk);
@@ -1003,8 +1003,8 @@ fn trustworthy_lender_on_die_returns_attached_to_hand() {
     // Swap lender's card data in (keep stats so 1/1 vs 1/1 is mutual kill).
     {
         let inst = s.card_pool.get_mut(&lender_iid).unwrap();
-        inst.card.handlers = lender.handlers.clone();
-        inst.card.id = lender.id.clone();
+        inst.card_mut().handlers = lender.handlers.clone();
+        inst.card_mut().id = lender.id.clone();
     }
 
     put_on_board(&mut s, PlayerId::A, &lender_iid);
@@ -1092,7 +1092,7 @@ fn declare_attacker_returns_choice_pending_when_on_attack_yields() {
     s.card_pool
         .get_mut(&atk)
         .unwrap()
-        .card
+        .card_mut()
         .handlers
         .insert(EventName::OnAttack, handler);
 
@@ -1150,8 +1150,8 @@ fn on_attack_handler_fires_on_attached_cards() {
     // is missing and the mutation's handler never runs.
     {
         let inst = s.card_pool.get_mut(&mutation).unwrap();
-        inst.card.handlers = fixture.handlers.clone();
-        inst.card.id = fixture.id.clone();
+        inst.card_mut().handlers = fixture.handlers.clone();
+        inst.card_mut().id = fixture.id.clone();
     }
     put_on_board(&mut s, PlayerId::A, &host);
     s.add_attached(&host, &mutation);

@@ -54,11 +54,21 @@ pub enum Zone {
 
 pub type InstanceId = String;
 
-/// A specific copy of a card in the game.
+/// A sleeve — the atomic unit in every zone. It holds optional card
+/// content: `Some(card)` for an ordinary card, `None` for a cardless
+/// sleeve (Z.8). Read the content through `card()` (blank-card fallback)
+/// so the ~everywhere `sleeve.card().<field>` access stays ergonomic;
+/// check emptiness with `is_cardless()`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Sleeve {
     pub instance_id: InstanceId,
-    pub card: Card,
+    /// The card inside the sleeve, or `None` for a cardless sleeve (Z.8).
+    /// Prefer the `card()` / `card_mut()` accessors over touching this
+    /// directly. `alias = "card"` keeps pre-sleeve-model save files (which
+    /// serialized this as a non-optional `card` object) loadable — the old
+    /// object deserializes into `Some(card)`.
+    #[serde(default, alias = "card")]
+    pub content: Option<Card>,
     pub owner: PlayerId,           // T.2 — immutable
     pub controller: PlayerId,      // T.1 — defaults to owner; effects may change it
     pub tapped: bool,              // B.4
@@ -88,7 +98,42 @@ pub struct Sleeve {
     pub status_effects: Vec<StatusEffect>,
 }
 
+thread_local! {
+    /// Per-thread blank card backing cardless sleeves (Z.8): no id, no
+    /// colors, no symbols, `CardType::Unspecified` (uncastable). `Card` is
+    /// `!Sync` — its `handlers` hold `!Send` mlua `Function`s — so a shared
+    /// `static` is impossible; a leaked per-thread instance yields the
+    /// `&'static Card` that `card()` hands back. One tiny leak per thread.
+    static BLANK_CARD: &'static Card = Box::leak(Box::new(Card::default()));
+}
+
 impl Sleeve {
+    /// The card inside this sleeve, or the blank card if it is a cardless
+    /// sleeve (Z.8). Use this for reads; the blank has no colors, no
+    /// symbols, and `Unspecified` kind, so identity-based logic treats a
+    /// cardless sleeve as an inert body automatically.
+    pub fn card(&self) -> &Card {
+        match &self.content {
+            Some(c) => c,
+            None => BLANK_CARD.with(|b| *b),
+        }
+    }
+
+    /// Mutable access to the contained card. Panics via `expect` only if
+    /// called on a cardless sleeve — writing a card field on an empty
+    /// sleeve is an invariant violation (there is no card to mutate), so
+    /// it must surface rather than silently fill the sleeve.
+    pub fn card_mut(&mut self) -> &mut Card {
+        self.content
+            .as_mut()
+            .expect("card_mut() on a cardless sleeve — no card content to mutate")
+    }
+
+    /// Z.8: true iff this sleeve has no card inside.
+    pub fn is_cardless(&self) -> bool {
+        self.content.is_none()
+    }
+
     /// Every card sharing this card's physical unit: strippable `attached`
     /// payments (Z.6) first, then fused `same_sleeve` cards (Z.7). Effect,
     /// static, and event sites act on the whole unit and MUST iterate this,
@@ -105,7 +150,7 @@ impl Sleeve {
     /// printed abilities, e.g. "flying", "haste", "vigilance", "defender", "unblockable".
     /// Also true if the card has a matching Modifier (Modifier::GainsFlying for "flying").
     pub fn has_keyword(&self, keyword: &str) -> bool {
-        let printed = self.card.abilities.iter().any(|a| {
+        let printed = self.card().abilities.iter().any(|a| {
             let normalized = a.trim().trim_end_matches('.').to_lowercase();
             normalized == keyword
         });
@@ -732,16 +777,16 @@ impl GameState {
                 let Some(inst) = self.card_pool.get(*iid) else {
                     return false;
                 };
-                if inst.card.kind != crate::card::CardType::Spell {
+                if inst.card().kind != crate::card::CardType::Spell {
                     return false;
                 }
-                if inst.card.timing != Some(crate::card::Timing::Instant) {
+                if inst.card().timing != Some(crate::card::Timing::Instant) {
                     return false;
                 }
                 let mut hand_need: usize = 0;
                 let mut mill_need: usize = 0;
                 let mut gy_need: usize = 0;
-                for c in &inst.card.cost {
+                for c in &inst.card().cost {
                     if c.is_x {
                         return false;
                     }
@@ -763,7 +808,7 @@ impl GameState {
                 // → priority window spin.
                 if gy_need > 0 {
                     let cast_colors: std::collections::BTreeSet<String> = inst
-                        .card
+                        .card()
                         .colors
                         .iter()
                         .map(|c| c.to_ascii_lowercase())
@@ -773,7 +818,7 @@ impl GameState {
                             self.card_pool
                                 .get(gid)
                                 .map(|i| {
-                                    i.card
+                                    i.card()
                                         .colors
                                         .iter()
                                         .any(|c| cast_colors.contains(&c.to_ascii_lowercase()))
@@ -790,7 +835,7 @@ impl GameState {
                 // (target = "chain") is a candidate when the chain is empty;
                 // play_card refuses with CastValidateFailed and the
                 // priority window can't advance.
-                if let Some(target) = inst.card.target {
+                if let Some(target) = inst.card().target {
                     if !self.is_target_legal(target) {
                         return false;
                     }
@@ -1146,7 +1191,7 @@ impl GameState {
             let iid = format!("{:?}:{:04}:{}", pid, i, card.id);
             let inst = Sleeve {
                 instance_id: iid.clone(),
-                card,
+                content: Some(card),
                 owner: pid,
                 controller: pid,
                 tapped: false,
@@ -1205,7 +1250,7 @@ impl GameState {
         let Some(inst) = self.card_pool.get(iid) else {
             return (0.0, 0.0);
         };
-        let (mut x, mut y) = inst.card.stats.map(|s| (s.x, s.y)).unwrap_or((0.0, 0.0));
+        let (mut x, mut y) = inst.card().stats.map(|s| (s.x, s.y)).unwrap_or((0.0, 0.0));
         for m in &inst.modifiers {
             match m {
                 Modifier::StatBoost { x: dx, y: dy } => {
@@ -1275,7 +1320,7 @@ impl GameState {
                         self.card_pool
                             .get(*aid)
                             .map(|c| {
-                                c.card
+                                c.card()
                                     .colors
                                     .iter()
                                     .any(|col| col.eq_ignore_ascii_case(&needle))
@@ -1290,7 +1335,7 @@ impl GameState {
                 .filter(|aid| {
                     self.card_pool
                         .get(*aid)
-                        .map(|c| c.card.kind == *kind)
+                        .map(|c| c.card().kind == *kind)
                         .unwrap_or(false)
                 })
                 .count() as f32,
@@ -1310,7 +1355,7 @@ impl GameState {
                     .filter(|iid| {
                         self.card_pool
                             .get(*iid)
-                            .map(|i| i.card.face.iter().any(|f| f.to_ascii_lowercase() == needle))
+                            .map(|i| i.card().face.iter().any(|f| f.to_ascii_lowercase() == needle))
                             .unwrap_or(false)
                     })
                     .count() as f32
@@ -1335,11 +1380,11 @@ impl GameState {
                 let mut seen: Vec<crate::card::CardType> = Vec::new();
                 for iid in self.a.board.iter().chain(self.b.board.iter()) {
                     if let Some(inst) = self.card_pool.get(iid) {
-                        if inst.card.kind == crate::card::CardType::Unspecified {
+                        if inst.card().kind == crate::card::CardType::Unspecified {
                             continue;
                         }
-                        if !seen.contains(&inst.card.kind) {
-                            seen.push(inst.card.kind);
+                        if !seen.contains(&inst.card().kind) {
+                            seen.push(inst.card().kind);
                         }
                     }
                 }
@@ -1374,7 +1419,7 @@ impl GameState {
         target_iid: &InstanceId,
     ) -> Option<&crate::card::StaticDef> {
         let source = self.card_pool.get(source_iid)?;
-        let def = source.card.static_def.as_ref()?;
+        let def = source.card().static_def.as_ref()?;
         let target = self.card_pool.get(target_iid)?;
 
         // Phase 2 condition gate: short-circuit before any affects logic.
@@ -1416,7 +1461,7 @@ impl GameState {
         }
         if !affects.subtypes.is_empty() {
             let target_subs: Vec<String> = target
-                .card
+                .card()
                 .subtypes
                 .iter()
                 .map(|s| s.to_ascii_lowercase())
@@ -1427,7 +1472,7 @@ impl GameState {
         }
         if !affects.colors.is_empty() {
             let target_colors: Vec<String> = target
-                .card
+                .card()
                 .colors
                 .iter()
                 .map(|c| c.to_ascii_lowercase())
@@ -1437,7 +1482,7 @@ impl GameState {
             }
         }
         if let Some(k) = affects.kind {
-            if target.card.kind != k {
+            if target.card().kind != k {
                 return None;
             }
         }
@@ -1476,7 +1521,7 @@ impl GameState {
                     .graveyard
                     .iter()
                     .filter_map(|iid| self.card_pool.get(iid))
-                    .filter(|inst| inst.card.kind != crate::card::CardType::Creature)
+                    .filter(|inst| inst.card().kind != crate::card::CardType::Creature)
                     .count();
                 non_creatures >= *min
             }
@@ -1490,7 +1535,7 @@ impl GameState {
                 };
                 for att_iid in &source.attached {
                     if let Some(att) = self.card_pool.get(att_iid) {
-                        for sym in &att.card.symbols {
+                        for sym in &att.card().symbols {
                             if top_symbols.iter().any(|t| t == sym) {
                                 return true;
                             }
@@ -1510,9 +1555,9 @@ impl GameState {
     pub fn effective_top_of_deck_symbols(&self, player: PlayerId) -> Vec<String> {
         for iid in &self.player(player).deck {
             if let Some(inst) = self.card_pool.get(iid) {
-                let is_transparent = inst.card.frame.as_deref() == Some("transparent");
+                let is_transparent = inst.card().frame.as_deref() == Some("transparent");
                 if !is_transparent {
-                    return inst.card.symbols.clone();
+                    return inst.card().symbols.clone();
                 }
             }
         }
@@ -1549,7 +1594,7 @@ impl GameState {
             .filter(move |iid| {
                 self.card_pool
                     .get(*iid)
-                    .map(|i| i.card.static_def.is_some())
+                    .map(|i| i.card().static_def.is_some())
                     .unwrap_or(false)
             })
             // Subtractive: if this iid's own abilities are suppressed
@@ -1591,7 +1636,7 @@ impl GameState {
     pub fn is_transparent(&self, iid: &InstanceId) -> bool {
         self.card_pool
             .get(iid)
-            .map(|i| i.card.frame.as_deref() == Some("transparent"))
+            .map(|i| i.card().frame.as_deref() == Some("transparent"))
             .unwrap_or(false)
     }
 
@@ -1608,7 +1653,7 @@ impl GameState {
             let Some(attached) = self.card_pool.get(attached_iid) else {
                 continue;
             };
-            let Some(def) = attached.card.static_def.as_ref() else {
+            let Some(def) = attached.card().static_def.as_ref() else {
                 continue;
             };
             if !def
@@ -1637,7 +1682,7 @@ impl GameState {
             let Some(attached) = self.card_pool.get(attached_iid) else {
                 continue;
             };
-            let Some(def) = attached.card.static_def.as_ref() else {
+            let Some(def) = attached.card().static_def.as_ref() else {
                 continue;
             };
             if !def
@@ -1662,7 +1707,7 @@ impl GameState {
         }
         let mut out: Vec<String> = Vec::new();
         if let Some(inst) = self.card_pool.get(iid) {
-            for c in &inst.card.colors {
+            for c in &inst.card().colors {
                 let lc = c.to_ascii_lowercase();
                 if !out.iter().any(|x| x == &lc) {
                     out.push(lc);
@@ -1693,7 +1738,7 @@ impl GameState {
     pub fn effective_face(&self, iid: &InstanceId) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         if let Some(inst) = self.card_pool.get(iid) {
-            for f in &inst.card.face {
+            for f in &inst.card().face {
                 let lc = f.to_ascii_lowercase();
                 if !out.iter().any(|x| x == &lc) {
                     out.push(lc);
@@ -1761,7 +1806,7 @@ impl GameState {
         let printed = self
             .card_pool
             .get(iid)
-            .map(|i| i.card.activated.len())
+            .map(|i| i.card().activated.len())
             .unwrap_or(0);
         let granted = self
             .static_source_iids()
@@ -1784,9 +1829,9 @@ impl GameState {
     /// `static_source_iids()` order. Returns `None` past the total.
     pub fn activation_at(&self, iid: &InstanceId, idx: usize) -> Option<&crate::card::ActivatedAbility> {
         let inst = self.card_pool.get(iid)?;
-        let printed_count = inst.card.activated.len();
+        let printed_count = inst.card().activated.len();
         if idx < printed_count {
-            return inst.card.activated.get(idx);
+            return inst.card().activated.get(idx);
         }
         let mut remaining = idx - printed_count;
         for src in self.static_source_iids() {
@@ -1852,7 +1897,7 @@ impl GameState {
         ];
         for source in sources {
             let printed: i32 = inst
-                .card
+                .card()
                 .cost
                 .iter()
                 .filter(|c| c.source == source)

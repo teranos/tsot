@@ -564,7 +564,7 @@ mod tests {
         s.card_pool
             .get_mut(&iid)
             .unwrap()
-            .card
+            .card_mut()
             .handlers
             .insert(EventName::OnTurnBegin, handler);
 

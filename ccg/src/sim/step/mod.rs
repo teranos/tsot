@@ -603,7 +603,7 @@ impl StepEngine {
                 let hand_ids = |iids: &[crate::game::InstanceId]| -> Vec<String> {
                     iids.iter()
                         .filter_map(|i| {
-                            self.state.card_pool.get(i).map(|c| c.card.id.clone())
+                            self.state.card_pool.get(i).map(|c| c.card().id.clone())
                         })
                         .collect()
                 };

@@ -142,14 +142,14 @@ pub(crate) fn build_pattern_b_choices(
     let kind = state
         .card_pool
         .get(picked)
-        .map(|c| c.card.kind)
+        .map(|c| c.card().kind)
         .unwrap_or(CardType::Unspecified);
     let picked_is_creature = matches!(kind, CardType::Creature);
     let mut choices = PlayChoices::default();
     let cost = state
         .card_pool
         .get(picked)
-        .map(|c| c.card.cost.clone())
+        .map(|c| c.card().cost.clone())
         .unwrap_or_default();
     let has_is_x = cost.iter().any(|c| c.is_x);
 
@@ -165,7 +165,7 @@ pub(crate) fn build_pattern_b_choices(
                 state
                     .card_pool
                     .get(*iid)
-                    .map(|i| i.card.kind == CardType::Creature)
+                    .map(|i| i.card().kind == CardType::Creature)
                     .unwrap_or(false)
             })
             .count();
@@ -177,7 +177,7 @@ pub(crate) fn build_pattern_b_choices(
                 state
                     .card_pool
                     .get(*gid)
-                    .map(|i| i.card.gy_hand_substitute)
+                    .map(|i| i.card().gy_hand_substitute)
                     .unwrap_or(false)
             })
             .count();
@@ -200,7 +200,7 @@ pub(crate) fn build_pattern_b_choices(
             let is_crystal = state
                 .card_pool
                 .get(&sub_iid)
-                .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                .map(|i| i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
                 .unwrap_or(false);
             if is_crystal { 1 } else { 2 }
         } else if state.find_symbol_tap_candidate(active).is_some() {
@@ -231,7 +231,7 @@ pub(crate) fn build_pattern_b_choices(
             .card_pool
             .get(picked)
             .map(|i| {
-                i.card
+                i.card()
                     .colors
                     .iter()
                     .map(|c| c.to_ascii_lowercase())
@@ -245,7 +245,7 @@ pub(crate) fn build_pattern_b_choices(
                     .card_pool
                     .get(gid)
                     .map(|i| {
-                        i.card
+                        i.card()
                             .colors
                             .iter()
                             .any(|c| cast_colors_lc.contains(&c.to_ascii_lowercase()))
@@ -325,7 +325,7 @@ pub(crate) fn build_pattern_b_choices(
                     .card_pool
                     .get(&sub_iid)
                     .map(|i| {
-                        i.card
+                        i.card()
                             .subtypes
                             .iter()
                             .any(|s| s.eq_ignore_ascii_case("crystal"))
@@ -432,7 +432,7 @@ pub(crate) fn build_pattern_b_choices(
                 let is_crystal = state
                     .card_pool
                     .get(&sub)
-                    .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                    .map(|i| i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
                     .unwrap_or(false);
                 choices.jewel_tap = Some(sub);
                 if is_crystal {
@@ -501,7 +501,7 @@ pub(crate) fn build_pattern_b_choices(
                 let is_crystal = state
                     .card_pool
                     .get(&sub)
-                    .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                    .map(|i| i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
                     .unwrap_or(false);
                 choices.jewel_tap = Some(sub);
                 if is_crystal {
@@ -580,7 +580,7 @@ pub(crate) fn build_pattern_b_choices(
                 let is_crystal = state
                     .card_pool
                     .get(&sub)
-                    .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                    .map(|i| i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
                     .unwrap_or(false);
                 choices.jewel_tap = Some(sub);
                 if is_crystal {
@@ -679,7 +679,7 @@ pub(crate) fn build_pattern_b_choices(
                         state
                             .card_pool
                             .get(*iid)
-                            .map(|i| i.card.kind == k)
+                            .map(|i| i.card().kind == k)
                             .unwrap_or(false)
                     } else {
                         true
@@ -1067,7 +1067,7 @@ pub fn run_game_continue(
             // spent deciding, not what the engine spent validating.
             let pick_card_id = pick
                 .as_ref()
-                .and_then(|iid| state.card_pool.get(iid).map(|c| c.card.id.clone()))
+                .and_then(|iid| state.card_pool.get(iid).map(|c| c.card().id.clone()))
                 .unwrap_or_else(|| "pass".to_string());
             pick_timing.record(PickTimingEntry {
                 turn,
@@ -1092,13 +1092,13 @@ pub fn run_game_continue(
             let picked_is_creature = state
                 .card_pool
                 .get(&picked)
-                .map(|c| c.card.kind == CardType::Creature)
+                .map(|c| c.card().kind == CardType::Creature)
                 .unwrap_or(false);
             {
                 let kind = state
                     .card_pool
                     .get(&picked)
-                    .map(|c| c.card.kind)
+                    .map(|c| c.card().kind)
                     .unwrap_or(CardType::Unspecified);
                 // Build PlayChoices via the shared choice-builder (same
                 // function MCTS rollouts use). Sacrifice-stats bumping
@@ -1132,7 +1132,7 @@ pub fn run_game_continue(
                 };
                 // Update sacrifice telemetry from the picked ids.
                 for sac_iid in &choices.sacrifice_ids {
-                    if let Some(card_id) = state.card_pool.get(sac_iid).map(|c| c.card.id.clone()) {
+                    if let Some(card_id) = state.card_pool.get(sac_iid).map(|c| c.card().id.clone()) {
                         *stats.card_sacrificed_count.entry(card_id).or_insert(0) += 1;
                     }
                 }
@@ -1154,7 +1154,7 @@ pub fn run_game_continue(
                     let card_id = state
                         .card_pool
                         .get(&picked)
-                        .map(|c| c.card.id.clone())
+                        .map(|c| c.card().id.clone())
                         .unwrap_or_else(|| format!("?{picked}"));
                     eprintln!(
                         "\x1b[38;5;{}m[SLOW CAST] turn={} active={:?} card={} elapsed={:.2?} result={:?}\x1b[0m",
@@ -1175,7 +1175,7 @@ pub fn run_game_continue(
                     }
                     bump_played(&mut stats, active);
                     if let Some(card_id) =
-                        state.card_pool.get(&picked).map(|c| c.card.id.clone())
+                        state.card_pool.get(&picked).map(|c| c.card().id.clone())
                     {
                         match active {
                             PlayerId::A => {
@@ -1207,7 +1207,7 @@ pub fn run_game_continue(
                             .card_play_turn_events
                             .push((card_id, turn_now, active));
                     }
-                    let timing = state.card_pool.get(&picked).and_then(|c| c.card.timing);
+                    let timing = state.card_pool.get(&picked).and_then(|c| c.card().timing);
                     let label = match kind {
                         CardType::Spell => match timing {
                             Some(crate::Timing::Instant) => format!("instant {}", short(&picked)),
@@ -1239,7 +1239,7 @@ pub fn run_game_continue(
                         let card_id = state
                             .card_pool
                             .get(&picked)
-                            .map(|c| c.card.id.clone())
+                            .map(|c| c.card().id.clone())
                             .unwrap_or_else(|| picked.clone());
                         let active_is_human = matches!(ais[active.index()], super::AiKind::Human(_));
                         crate::sim::instrument::tee_log(log, format!(
@@ -1250,7 +1250,7 @@ pub fn run_game_continue(
                         let card_id = state
                             .card_pool
                             .get(&picked)
-                            .map(|c| c.card.id.clone())
+                            .map(|c| c.card().id.clone())
                             .unwrap_or_else(|| picked.clone());
                         crate::sim::instrument::tee_log(log, format!(
                             "turn {turn} ({active:?}): {card_id} rolled back (would have lost the game)"
@@ -1439,7 +1439,7 @@ pub fn run_game_continue(
                         let picked_is_creature = state
                             .card_pool
                             .get(&picked)
-                            .map(|c| c.card.kind == CardType::Creature)
+                            .map(|c| c.card().kind == CardType::Creature)
                             .unwrap_or(false);
                         let build_result = build_pattern_b_choices(
                             state, active, &picked, &mut oracle,
@@ -1462,7 +1462,7 @@ pub fn run_game_continue(
                             let card_id = state
                                 .card_pool
                                 .get(&picked)
-                                .map(|c| c.card.id.clone())
+                                .map(|c| c.card().id.clone())
                                 .unwrap_or_else(|| picked.clone());
                             crate::sim::instrument::tee_log(log, format!(
                                 "turn {turn} ({active:?}): main2 play_card({card_id}) failed: {err:?}"
@@ -1547,7 +1547,7 @@ pub(crate) fn enumerate_human_activations(
         let card_name = state
             .card_pool
             .get(iid)
-            .map(|i| i.card.name.clone())
+            .map(|i| i.card().name.clone())
             .unwrap_or_else(|| iid.clone());
         for idx in 0..n {
             if !state.can_activate(iid, idx) {
@@ -1598,7 +1598,7 @@ pub(crate) fn run_activation_pass(
     let ids: Vec<InstanceId> = state.player(player).board.clone();
     for iid in &ids {
         let is_creature = match state.card_pool.get(iid) {
-            Some(inst) => inst.card.kind == CardType::Creature,
+            Some(inst) => inst.card().kind == CardType::Creature,
             None => continue,
         };
         // RULES A.5+: total activations = printed (`card.activated`)
@@ -1680,14 +1680,14 @@ fn report_game_timeout(
     let _ = crate::game::bump_timeout_and_maybe_halt(site);
     let ids = |iids: &[InstanceId]| -> Vec<String> {
         iids.iter()
-            .filter_map(|i| state.card_pool.get(i).map(|c| c.card.id.clone()))
+            .filter_map(|i| state.card_pool.get(i).map(|c| c.card().id.clone()))
             .collect()
     };
     let card_id_of = |iid: &InstanceId| -> String {
         state
             .card_pool
             .get(iid)
-            .map(|c| c.card.id.clone())
+            .map(|c| c.card().id.clone())
             .unwrap_or_else(|| format!("?{iid}"))
     };
     // Per-game color prefix/suffix so every dump line wears the
@@ -1722,7 +1722,7 @@ fn report_game_timeout(
             if host.attached.is_empty() {
                 continue;
             }
-            let host_id = host.card.id.clone();
+            let host_id = host.card().id.clone();
             let att: Vec<String> = host.attached.iter().map(card_id_of).collect();
             eprintln!("{c}  {label} attached: {host_id} <- {att:?}{z}");
         }
@@ -1914,8 +1914,8 @@ mod tests {
         let cast = s.player(active).hand[0].clone();
         {
             let inst = s.card_pool.get_mut(&cast).unwrap();
-            inst.card.colors = vec!["green".to_string()];
-            inst.card.cost = vec![CostComponent {
+            inst.card_mut().colors = vec!["green".to_string()];
+            inst.card_mut().cost = vec![CostComponent {
                 amount: 0,
                 source: CostSource::Hand,
                 is_x: true,
@@ -1927,8 +1927,8 @@ mod tests {
         let symbol = s.player(active).hand[1].clone();
         {
             let inst = s.card_pool.get_mut(&symbol).unwrap();
-            inst.card.kind = CardType::Symbol;
-            inst.card.colors = vec!["blue".to_string()];
+            inst.card_mut().kind = CardType::Symbol;
+            inst.card_mut().colors = vec!["blue".to_string()];
         }
         s.player_mut(active).hand.retain(|x| x != &symbol);
         s.player_mut(active).board.push(symbol.clone());
@@ -2003,9 +2003,9 @@ mod tests {
         let cast = s.player(active).hand[0].clone();
         {
             let inst = s.card_pool.get_mut(&cast).unwrap();
-            inst.card.kind = CardType::Spell;
-            inst.card.colors = vec!["red".to_string()];
-            inst.card.cost = vec![
+            inst.card_mut().kind = CardType::Spell;
+            inst.card_mut().colors = vec!["red".to_string()];
+            inst.card_mut().cost = vec![
                 CostComponent {
                     amount: 0,
                     source: CostSource::Hand,
@@ -2028,19 +2028,19 @@ mod tests {
         // Red jewel on A's board → substitution_coverage = 2.
         {
             let j = s.card_pool.get_mut(&jewel).unwrap();
-            j.card.kind = CardType::Artifact;
-            j.card.subtypes = vec!["jewel".to_string()];
-            j.card.colors = vec!["red".to_string()];
+            j.card_mut().kind = CardType::Artifact;
+            j.card_mut().subtypes = vec!["jewel".to_string()];
+            j.card_mut().colors = vec!["red".to_string()];
         }
         s.player_mut(active).hand.retain(|x| x != &jewel);
         s.player_mut(active).board.push(jewel.clone());
         s.card_pool.get_mut(&jewel).unwrap().tapped = false;
         // Identity-matching hand cards so the picker doesn't refuse at
         // the hand-identity gate (we're testing the X-cap, not identity).
-        s.card_pool.get_mut(&red_hand_a).unwrap().card.colors = vec!["red".to_string()];
-        s.card_pool.get_mut(&red_hand_b).unwrap().card.colors = vec!["red".to_string()];
+        s.card_pool.get_mut(&red_hand_a).unwrap().card_mut().colors = vec!["red".to_string()];
+        s.card_pool.get_mut(&red_hand_b).unwrap().card_mut().colors = vec!["red".to_string()];
         // Seed graveyard with a non-red card (no anchor possible).
-        s.card_pool.get_mut(&gy_seed_a).unwrap().card.colors = vec!["blue".to_string()];
+        s.card_pool.get_mut(&gy_seed_a).unwrap().card_mut().colors = vec!["blue".to_string()];
         s.player_mut(active).hand.retain(|x| x != &gy_seed_a);
         s.player_mut(active).graveyard.push(gy_seed_a);
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xC0DE);
