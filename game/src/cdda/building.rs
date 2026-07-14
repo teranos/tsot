@@ -19,14 +19,32 @@ const HOUSE01_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house01.
 const HOUSE02_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house02.json"));
 const HOUSE03_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house03.json"));
 const HOUSE04_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house04.json"));
-/// The daycare — a single-tile civic building (the closest thing to a
-/// school we can ingest; real schools are multi-tile specials). Its
-/// walls + windows are defined inline in the mapgen, so it needs no
-/// palette beyond the roof palette we already fetch.
+/// The daycare — a single-tile civic building. Its walls + windows are
+/// defined inline in the mapgen, so it needs no palette beyond the roof
+/// palette we already fetch.
 const DAYCARE_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/daycare.json"));
+/// The school — a 3×3 *multi-tile* building (72×72), driven by
+/// `school_palette` which it declares inline (registered by the palette
+/// resolver). Streams via the grid-sliced per-chunk path in `chunk.rs`.
+const SCHOOL_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/school_1.json"));
 /// A shed — CDDA has no standalone one, so this is an original inline
 /// mapgen in the same format (ours, so it stays vendored in-tree).
 const SHED_JSON: &str = include_str!("../../assets/buildings/shed.json");
+
+/// Every shipped mapgen JSON. Exposed so the palette resolver can
+/// register palettes a building declares *inline* in its own file —
+/// CDDA registers all `type: palette` objects globally, wherever
+/// they're declared (e.g. the school's `school_palette`).
+pub(crate) const SHIPPED_MAPGEN: &[&str] = &[
+    GARAGE_JSON,
+    HOUSE01_JSON,
+    HOUSE02_JSON,
+    HOUSE03_JSON,
+    HOUSE04_JSON,
+    DAYCARE_JSON,
+    SCHOOL_JSON,
+    SHED_JSON,
+];
 
 /// The palette-driven house layouts the world ships: `(json, ground om,
 /// roof om)`. Each is built into `HOUSE_VARIANTS` seeded variants at
@@ -65,6 +83,14 @@ pub fn shed_template() -> Result<Template, CddaError> {
 /// (its only palette is cosmetic carpets).
 pub fn daycare_template() -> Result<Template, CddaError> {
     assemble_building(DAYCARE_JSON, "s_daycare", "s_daycare_roof", 0)
+}
+
+/// The school — its 3×3 ground floor (`school_1_*`) capped by the roof
+/// z-level (`school_4_*`). The upper floors (`school_2_*`/`school_3_*`)
+/// are z-levels we don't place yet. One big 72×72 grid → a template that
+/// spans several chunks, streamed per-chunk (see `chunk.rs`).
+pub fn school_template() -> Result<Template, CddaError> {
+    assemble_building(SCHOOL_JSON, "school_1_1", "school_4_5", 0)
 }
 
 /// Ground floor (walls + furniture, palettes resolved at `seed`) + roof.
@@ -116,6 +142,7 @@ pub fn load_building_templates() -> BuildingTemplates {
         ("garage".to_string(), garage_template()),
         ("shed".to_string(), shed_template()),
         ("daycare".to_string(), daycare_template()),
+        ("school".to_string(), school_template()),
     ];
     // Every house layout × every palette seed — so the streamer lands on
     // different floor plans AND different material/furniture variants.
@@ -248,6 +275,26 @@ mod tests {
                 "{ground}: expected glass windows"
             );
         }
+    }
+
+    #[test]
+    fn school_is_a_multi_tile_enclosed_roofed_building() {
+        // The multi-tile payoff: a 72×72 school resolves (via its inline
+        // school_palette) into a big enclosed, roofed building whose
+        // footprint spans well beyond a single 24-tile om.
+        let t = school_template().expect("school should import");
+        let n = |k: PropKind| t.props.iter().filter(|p| p.kind == k).count();
+        let walls = n(PropKind::Wall) + n(PropKind::WallNS) + n(PropKind::WallEW);
+        assert!(walls > 30, "school: expected a large wall outline, got {walls}");
+        assert!(n(PropKind::Roof) > 100, "school: expected a big roof, got {}", n(PropKind::Roof));
+        let half = t
+            .props
+            .iter()
+            .fold(0.0_f32, |m, p| m.max(p.offset.x.abs()).max(p.offset.z.abs()));
+        assert!(
+            half > crate::cdda::CDDA_TILE * 18.0,
+            "school should span multiple om tiles, half-extent={half}"
+        );
     }
 
     #[test]

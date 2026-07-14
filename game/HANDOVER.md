@@ -139,16 +139,25 @@ Each is a want above, framed as the open question, with where to start.
   are gone. `ui.rs` deleted; `?proxy=` escape hatch removed.
 - **Boundary:** 44 hand-wired `env.*` imports. **Tests:** 88 lib green,
   clippy silent.
-- **Corpus:** **6** CDDA buildings — garage, houses 01–04 (each ×6
-  palette variants), and the daycare (a single-tile civic building) +
-  our shed = 27 templates the streamer picks from. A palette-compatible
-  house is one line in `cdda-files.txt` + one in `HOUSE_LAYOUTS`; a
-  one-off like the daycare adds a `*_template()` + a `specs` line
-  (`cdda/building.rs`). Real schools/malls are **multi-tile specials**
-  we can't ingest yet — the assembler does single 24×24 tiles. The
-  systematic sweep (checklist #1) is the way past hand-picked buildings;
-  the coupling (manifest ↔ Rust registry) is real and worth the
-  build.rs-codegen fix noted there.
+- **Corpus:** **7** CDDA buildings — garage, houses 01–04 (each ×6
+  palette variants), the daycare, and the **school** (the first
+  multi-tile building: a 3×3 / 72×72 grid) + our shed = 28 templates.
+- **Multi-tile buildings work** (`chunk.rs`): a building's props are
+  distributed to the chunks that contain them, so it streams per-chunk
+  and never despawns from under you (CDDA-style). **Inline palettes
+  resolve** (`palette.rs` registers `type: palette` objects declared in
+  a building's own mapgen, e.g. the school's `school_palette`).
+- Adding a palette-compatible house is one line in `cdda-files.txt` +
+  one in `HOUSE_LAYOUTS`; a one-off adds a `*_template()` + a `specs`
+  line (`cdda/building.rs`). The coupling (manifest ↔ Rust registry) is
+  still real — the `build.rs`-codegen fix in checklist territory would
+  collapse it, and the systematic sweep (checklist #1) is the way past
+  hand-picked buildings.
+- **Perf watch:** the school is ~4–5k props (a 72×72 roof is thousands
+  of slabs). Instanced draw handles the cubes, but that's thousands of
+  ECS entities + a heavy rotate/stamp on load per school. Fine for a
+  few; revisit if many big buildings stream at once (e.g. merge a solid
+  roof into fewer slabs).
 
 ## Build / run
 

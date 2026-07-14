@@ -43,10 +43,26 @@ fn registry() -> &'static Registry {
     static REG: OnceLock<Registry> = OnceLock::new();
     REG.get_or_init(|| {
         let mut by_id = HashMap::new();
+        // Dedicated palette files: every id'd entry is a palette.
         for src in FILES {
             if let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(src) {
                 for e in entries {
                     if let Some(id) = e.get("id").and_then(Value::as_str) {
+                        by_id.insert(id.to_string(), e);
+                    }
+                }
+            }
+        }
+        // Palettes declared *inline* inside a building's own mapgen file
+        // (e.g. the school's `school_palette`). CDDA registers every
+        // `type: palette` object globally regardless of which file it's
+        // in; mirror that so those buildings resolve.
+        for src in crate::cdda::building::SHIPPED_MAPGEN {
+            if let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(src) {
+                for e in entries {
+                    if e.get("type").and_then(Value::as_str) == Some("palette")
+                        && let Some(id) = e.get("id").and_then(Value::as_str)
+                    {
                         by_id.insert(id.to_string(), e);
                     }
                 }

@@ -4,6 +4,7 @@ data/json/mapgen/house/house02.json
 data/json/mapgen/house/house03.json
 data/json/mapgen/house/house04.json
 data/json/mapgen/daycare.json
+data/json/mapgen/school_1.json
 data/json/mapgen_palettes/house_general_palette.json
 data/json/mapgen_palettes/common_parameters.json
 data/json/mapgen_palettes/roof_palette.json
