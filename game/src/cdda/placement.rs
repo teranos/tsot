@@ -228,10 +228,19 @@ pub fn mapgen_to_template(
     };
 
     // Pass 2: place each cell. Walls/windows follow the edge-placement
-    // rules; every other prop stays centred on its tile.
+    // rules; every other prop stays centred on its tile. Wall geometry
+    // sits ENTIRELY within its own wall cell (space-maximising for the
+    // adjacent floor cell) — the wall's inner face is exactly on the
+    // grid boundary; the wall extends `WALL_HALF_THICKNESS` back into
+    // the wall cell, never into the room.
     let cx = width as f32 / 2.0;
     let cz = height as f32 / 2.0;
     let half = tile_size / 2.0;
+    // Half of a wall's thin-axis extent (WallEW/WallNS are 24 wide in
+    // prop_appearance → 12 half). Kept local since prop_appearance
+    // lives in scene.rs; if the wall thickness ever changes there,
+    // update this too.
+    const WALL_HALF_THICKNESS: f32 = 12.0;
     let mut props = Vec::new();
     for (r_idx, row_cells) in grid.iter().enumerate() {
         for (c_idx, cell) in row_cells.iter().enumerate() {
@@ -282,23 +291,36 @@ pub fn mapgen_to_template(
 
             // T-junction skip: at a cell where BOTH runs are active, a
             // one-sided end of a DIVIDER run would poke a wall pillar
-            // into (or past) the perpendicular perimeter wall. Skip that
-            // side's emission — the perimeter takes care of the visual
-            // meeting point, and the next cell in the divider run picks
-            // up the wall geometry. Doesn't fire at true corners (where
-            // the run is single-side interior, not divider) or at
-            // divider ends that aren't at a perpendicular perimeter.
+            // into the perpendicular perimeter wall. Skip that side's
+            // emission — the perimeter and next cell in the divider run
+            // form the T cleanly.
+            //
+            // Corner skip: at a cell where BOTH runs are one-sided AND
+            // each run has a single-side interior (i.e. two adjacent
+            // wall neighbours + interior at the diagonal), the cell is
+            // an outer corner. Neither wall component should extend
+            // past the corner point — the adjacent cells' walls meet
+            // there to form the L. So skip BOTH emissions here.
             let horiz_one_sided = is_solid(r, c - 1) != is_solid(r, c + 1);
             let vert_one_sided = is_solid(r - 1, c) != is_solid(r + 1, c);
-            let skip_horiz = horiz && hn && hs && horiz_one_sided && vert;
-            let skip_vert = vert && ve && vw && vert_one_sided && horiz;
+            let is_corner = horiz_one_sided
+                && vert_one_sided
+                && (hn || hs)
+                && (ve || vw)
+                && !(hn && hs)
+                && !(ve && vw);
+            let skip_horiz = is_corner || (horiz && hn && hs && horiz_one_sided && vert);
+            let skip_vert = is_corner || (vert && ve && vw && vert_one_sided && horiz);
 
             if horiz && (hn || hs) && !skip_horiz {
                 // (true, true) divider → +z convention.
                 // (false, true) interior south → +z. (true, false) → -z.
+                // Wall lives entirely inside its own wall cell — inner
+                // face on the grid line, back edge WALL_HALF_THICKNESS
+                // into the cell. Neither face crosses into the floor.
                 let z_off = match (hn, hs) {
-                    (true, true) | (false, true) => half,
-                    (true, false) => -half,
+                    (true, true) | (false, true) => half - WALL_HALF_THICKNESS,
+                    (true, false) => -half + WALL_HALF_THICKNESS,
                     (false, false) => 0.0,
                 };
                 emit(cx_world, cz_world + z_off, ew_kind(base));
@@ -306,9 +328,10 @@ pub fn mapgen_to_template(
             if vert && (ve || vw) && !skip_vert {
                 // (true, true) divider → +x convention.
                 // (true, false) interior east → +x. (false, true) → -x.
+                // Same space-maximising shift — wall entirely in cell.
                 let x_off = match (ve, vw) {
-                    (true, true) | (true, false) => half,
-                    (false, true) => -half,
+                    (true, true) | (true, false) => half - WALL_HALF_THICKNESS,
+                    (false, true) => -half + WALL_HALF_THICKNESS,
                     (false, false) => 0.0,
                 };
                 emit(cx_world + x_off, cz_world, ns_kind(base));
@@ -371,57 +394,76 @@ mod tests {
     }
 
     #[test]
-    fn perimeter_wall_shifts_toward_interior() {
+    fn perimeter_wall_sits_entirely_inside_its_wall_cell() {
         // 3×3 room: solid perimeter, one floor at (1, 1). The top-middle
-        // wall at (0, 1) has interior directly south — shift +tile/2 in z.
+        // wall at (0, 1) has interior south. Space-maximising: wall
+        // geometry lives entirely in the wall cell, inner face on the
+        // grid boundary → centre at row_south − WALL_HALF_THICKNESS.
         let json = synthetic_mapgen(&["www", "w.w", "www"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
-        // Cell (0, 1) centre: x = (1 - 1.5) * 80 = -40, z = (0 - 1.5) * 80 = -120.
-        // Shift +tile/2 (=40) in z toward interior south → z = -80.
+        // Cell (0, 1) centre: x = (1 − 1.5) × 80 = −40, z = (0 − 1.5) × 80 = −120.
+        // South edge of the cell: z = −80. Shift back by 12 → z = −92.
         let has_shifted = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallEW)
                 && (p.offset.x - (-40.0)).abs() < 1e-3
-                && (p.offset.z - (-80.0)).abs() < 1e-3
+                && (p.offset.z - (-92.0)).abs() < 1e-3
         });
         assert!(
             has_shifted,
-            "top-middle wall should shift toward interior south; got: {:?}",
+            "top-middle wall should sit entirely in its wall cell (z = row_south − 12); got: {:?}",
             t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn nw_corner_emits_two_segments_on_interior_edges() {
+    fn corner_cell_emits_no_wall_segments() {
+        // The old L-emit-both at corners produced an X-cross in iso view
+        // (walls extended past the corner point in all 4 directions).
+        // Now the corner cell emits NOTHING; the two adjacent cells'
+        // walls meet at the corner point and form the L.
         let json = synthetic_mapgen(&["www", "w.w", "www"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
-        let has_horiz = t.props.iter().any(|p| {
-            matches!(p.kind, PropKind::WallEW)
+        // Cell (0, 0) centre: x = −120, z = −120. Nothing should sit at
+        // its area — no WallEW anywhere around row 0 col 0, no WallNS
+        // around col 0 row 0.
+        for p in &t.props {
+            if matches!(p.kind, PropKind::WallEW)
                 && (p.offset.x - (-120.0)).abs() < 1e-3
-                && (p.offset.z - (-80.0)).abs() < 1e-3
-        });
-        let has_vert = t.props.iter().any(|p| {
-            matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-80.0)).abs() < 1e-3
+            {
+                panic!("NW corner cell should not emit a WallEW: {:?}", p);
+            }
+            if matches!(p.kind, PropKind::WallNS)
                 && (p.offset.z - (-120.0)).abs() < 1e-3
-        });
-        assert!(has_horiz, "NW corner should emit a horizontal segment on its S edge");
-        assert!(has_vert, "NW corner should emit a vertical segment on its E edge");
+            {
+                panic!("NW corner cell should not emit a WallNS: {:?}", p);
+            }
+        }
+        // But the four perimeter middles do emit — one per side.
+        let count = t
+            .props
+            .iter()
+            .filter(|p| matches!(p.kind, PropKind::WallEW | PropKind::WallNS))
+            .count();
+        assert_eq!(count, 4, "expected 4 perimeter walls (one per side), got {count}");
     }
 
     #[test]
     fn divider_between_two_rooms_shifts_positive() {
         // 3×5 mapgen: two 1×1 rooms separated by a divider at (1, 2).
+        // "Always positive" divider: wall inside its cell, inner face on
+        // the +x boundary → centre at east_edge − WALL_HALF_THICKNESS.
         let json = synthetic_mapgen(&["wwwww", "w.w.w", "wwwww"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
-        // Cell (1, 2) centre: x = (2 - 2.5) * 80 = -40, z = (1 - 1.5) * 80 = -40.
+        // Cell (1, 2) centre: x = (2 − 2.5) × 80 = −40, z = (1 − 1.5) × 80 = −40.
+        // East edge: x = 0. Shift back by 12 → x = −12.
         let has_divider = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - 0.0).abs() < 1e-3
+                && (p.offset.x - (-12.0)).abs() < 1e-3
                 && (p.offset.z - (-40.0)).abs() < 1e-3
         });
         assert!(
             has_divider,
-            "divider vertical segment should shift +tile/2 in x; got: {:?}",
+            "divider vertical segment should live inside its wall cell (x = east_edge − 12); got: {:?}",
             t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
         );
     }
@@ -433,11 +475,11 @@ mod tests {
         let has_window = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WindowEW)
                 && (p.offset.x - (-40.0)).abs() < 1e-3
-                && (p.offset.z - (-80.0)).abs() < 1e-3
+                && (p.offset.z - (-92.0)).abs() < 1e-3
         });
         assert!(
             has_window,
-            "window should follow WallEW placement (shift +tile/2 in z); got: {:?}",
+            "window should follow WallEW placement (inside wall cell, inner face on grid line); got: {:?}",
             t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
         );
     }
@@ -447,16 +489,15 @@ mod tests {
         // 4×5: two 1×1 rooms separated by a divider at col 2. Perimeter
         // walls all around. The T-junction cells (0, 2) and (3, 2) are
         // where the divider meets the top and bottom perimeter — the
-        // vertical divider should NOT emit at those cells (the perimeter
-        // wall + the next cell's vertical form the T cleanly).
+        // vertical divider should NOT emit at those cells.
         let json = synthetic_mapgen(&["wwwww", "w.w.w", "w.w.w", "wwwww"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
         // For 4×5 with tile=80: cx=2.5, cz=2.0.
-        // Cell (0, 2) centre: x=-40, z=-160. Vert emission would sit at
-        // (col+40, row_center) = (0, -160). Assert none there.
+        // Cell (0, 2) centre: x=−40, z=−160. Vert emission (post space-
+        // max shift) would sit at x = 0 − 12 = −12, z = −160. None.
         let has_top_protrusion = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallNS)
-                && p.offset.x.abs() < 1e-3
+                && (p.offset.x - (-12.0)).abs() < 1e-3
                 && (p.offset.z - (-160.0)).abs() < 1e-3
         });
         assert!(
@@ -464,40 +505,25 @@ mod tests {
             "top T-junction should not emit a vertical divider at (0, 2); got: {:?}",
             t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
         );
-        // Same for the bottom T-junction (row 3).
+        // Same for the bottom T-junction (row 3, z = 80).
         let has_bottom_protrusion = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallNS)
-                && p.offset.x.abs() < 1e-3
+                && (p.offset.x - (-12.0)).abs() < 1e-3
                 && (p.offset.z - 80.0).abs() < 1e-3
         });
         assert!(!has_bottom_protrusion, "bottom T-junction should not emit vertical");
         // But the divider IS emitted at the middle cells (1, 2) and (2, 2).
         let mid_1 = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallNS)
-                && p.offset.x.abs() < 1e-3
+                && (p.offset.x - (-12.0)).abs() < 1e-3
                 && (p.offset.z - (-80.0)).abs() < 1e-3
         });
         let mid_2 = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallNS)
-                && p.offset.x.abs() < 1e-3
+                && (p.offset.x - (-12.0)).abs() < 1e-3
                 && p.offset.z.abs() < 1e-3
         });
         assert!(mid_1 && mid_2, "the divider still emits at rows 1 and 2");
-    }
-
-    #[test]
-    fn nw_corner_still_emits_two_segments() {
-        // Guard rail: the T-junction skip must NOT affect true corners
-        // (where the perp side is exterior, not interior). Same 3×3 room
-        // as the perimeter/corner tests.
-        let json = synthetic_mapgen(&["www", "w.w", "www"]);
-        let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
-        let has_vert = t.props.iter().any(|p| {
-            matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-80.0)).abs() < 1e-3
-                && (p.offset.z - (-120.0)).abs() < 1e-3
-        });
-        assert!(has_vert, "NW corner vertical must still emit");
     }
 
     #[test]

@@ -185,34 +185,34 @@ mod tests {
         // — 4 one-offs (garage, shed, daycare, school) then 4 house
         // layouts × 6 palette seeds = 28 templates.
         const EXPECTED: &[u64] = &[
-            0x652ADF5E32A07226, // garage
-            0x419E33708645F1AF, // shed
-            0x14CFA38AB862A3EE, // daycare
-            0xB4571DED1918F0BC, // school
-            0xEC7086C3F0935EF1, // house_01 seed 0
-            0x2165D17D30C75AEB, // house_01 seed 1
-            0x01D3C6850C5C8FCF, // house_01 seed 2
-            0x2165D17D30C75AEB, // house_01 seed 3
-            0xEC53D3118F8A3ECF, // house_01 seed 4
-            0xAC4AC13DA8229A83, // house_01 seed 5
-            0xFEE8C61AFED233F1, // house_02 seed 0
-            0xA51C55D373C2C6AB, // house_02 seed 1
-            0x7A69DC8F07176B5E, // house_02 seed 2
-            0x76B375DF85E00023, // house_02 seed 3
-            0x3C2B8BC7756C515D, // house_02 seed 4
-            0x0342A7D3B10F687D, // house_02 seed 5
-            0x2E64489A9DF121D1, // house_03 seed 0
-            0x902093CF1DD6461F, // house_03 seed 1
-            0xAC6884759567FB5D, // house_03 seed 2
-            0x902093CF1DD6461F, // house_03 seed 3
-            0xD1FB4F673DA07157, // house_03 seed 4
-            0xA4E5778814C29A49, // house_03 seed 5
-            0x08E6908FB97E8367, // house_04 seed 0
-            0xD6E7787ABFDFFC3C, // house_04 seed 1
-            0xFE454C60602726E2, // house_04 seed 2
-            0xD6E7787ABFDFFC3C, // house_04 seed 3
-            0xFF4558B5AB8CC224, // house_04 seed 4
-            0xB6DB46313168AB76, // house_04 seed 5
+            0xB84F97743A8A6D00, // garage
+            0x6AC0D34AA85B4827, // shed
+            0x725F7482D072E2F0, // daycare
+            0x15F966A8691475BF, // school
+            0x41CC62D5A16D698D, // house_01 seed 0
+            0x719685D6400B7D47, // house_01 seed 1
+            0x2227BE6134DEB4D7, // house_01 seed 2
+            0x719685D6400B7D47, // house_01 seed 3
+            0x8B0F90E993B324DB, // house_01 seed 4
+            0xCBD298AFF65F326F, // house_01 seed 5
+            0x534CDA273342CA22, // house_02 seed 0
+            0x8F8CFF1B45407F68, // house_02 seed 1
+            0xD94C1747ACDBDD8D, // house_02 seed 2
+            0x2E6F2F6DCEB18EE4, // house_02 seed 3
+            0xD54E5578751820CD, // house_02 seed 4
+            0xD2EE431E0CCF8CF1, // house_02 seed 5
+            0x7C036E90E5159CEA, // house_03 seed 0
+            0x31FFBF37D123D7B0, // house_03 seed 1
+            0x108ACEF8748CF12E, // house_03 seed 2
+            0x31FFBF37D123D7B0, // house_03 seed 3
+            0x7FEAA65E6CE6B9FC, // house_03 seed 4
+            0x6B97CF8F6C65C08E, // house_03 seed 5
+            0x87308BCF54C0C31F, // house_04 seed 0
+            0x62C0AAC84A2D7BF0, // house_04 seed 1
+            0xED8A849C92393512, // house_04 seed 2
+            0x62C0AAC84A2D7BF0, // house_04 seed 3
+            0xE06A2D2B0C7AEA94, // house_04 seed 4
+            0x8D87FD212FE5B8BE, // house_04 seed 5
         ];
         if actual != EXPECTED {
             let dump: Vec<String> =
