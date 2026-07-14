@@ -74,8 +74,30 @@ pub struct CardInstance {
     #[serde(default)]
     pub attacked_this_turn: bool,
     pub attached: Vec<InstanceId>, // Z.6
+    /// Z.7 SAME-SLEEVE: cards fused inside this card's sleeve (mutations
+    /// per P.26). Distinct from `attached`: fused cards are NOT strippable,
+    /// do NOT contribute to attached-count (C.16), and are exempt from
+    /// P.8's cascade (P.29). Because they are a child field on the host
+    /// instance, they ride the host's zone moves structurally — P.29's
+    /// "move with host, everywhere" needs no follow-logic. Their statics
+    /// and handlers still apply to the host, so every effect/static/event
+    /// site consults `children()` (attached ∪ same_sleeve), not `attached`.
+    #[serde(default)]
+    pub same_sleeve: Vec<InstanceId>,
     pub modifiers: Vec<Modifier>,  // C.12 continuous effects
     pub status_effects: Vec<StatusEffect>,
+}
+
+impl CardInstance {
+    /// Every card sharing this card's physical unit: strippable `attached`
+    /// payments (Z.6) first, then fused `same_sleeve` cards (Z.7). Effect,
+    /// static, and event sites act on the whole unit and MUST iterate this,
+    /// so a fused mutation's statics/handlers still reach the host. Counting
+    /// (`AttachedCount`, C.16) and the P.8 cascade deliberately use
+    /// `attached` alone — a fused card is not attached.
+    pub fn children(&self) -> impl Iterator<Item = &InstanceId> {
+        self.attached.iter().chain(self.same_sleeve.iter())
+    }
 }
 
 impl CardInstance {
@@ -1030,6 +1052,43 @@ impl GameState {
         true
     }
 
+    /// Z.7: fuse `sleeved` into `host`'s sleeve, journaling the addition.
+    /// Counterpart of `add_attached` for same-sleeve cards (mutations per
+    /// P.26). The fused card is not strippable and rides the host's zone
+    /// moves structurally (P.29).
+    pub fn add_same_sleeve(&mut self, host: &InstanceId, sleeved: &InstanceId) {
+        let Some(inst) = self.card_pool.get_mut(host) else {
+            return;
+        };
+        inst.same_sleeve.push(sleeved.clone());
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::AddSameSleeve {
+                host: host.clone(),
+                sleeved: sleeved.clone(),
+            });
+        }
+    }
+
+    /// Z.7: remove `sleeved` from `host`'s sleeve, journaling the removal at
+    /// its position. Returns true if it was actually fused to host.
+    pub fn remove_same_sleeve(&mut self, host: &InstanceId, sleeved: &InstanceId) -> bool {
+        let Some(inst) = self.card_pool.get_mut(host) else {
+            return false;
+        };
+        let Some(pos) = inst.same_sleeve.iter().position(|x| x == sleeved) else {
+            return false;
+        };
+        inst.same_sleeve.remove(pos);
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::RemoveSameSleeve {
+                host: host.clone(),
+                sleeved: sleeved.clone(),
+                at_pos: pos,
+            });
+        }
+        true
+    }
+
     /// Engine helper: credit a `game.*` action invocation to the affected player.
     pub fn bump_action(&mut self, action: &str, who: PlayerId) {
         let entry = self
@@ -1092,6 +1151,7 @@ impl GameState {
                 summoning_sick: false,
                 attacked_this_turn: false,
                 attached: Vec::new(),
+                same_sleeve: Vec::new(),
                 modifiers: Vec::new(),
                 status_effects: Vec::new(),
             };
@@ -1324,13 +1384,15 @@ impl GameState {
         if affects.exclude_self && source_iid == target_iid {
             return None;
         }
-        // Scope check. AttachedHost requires that the source is in the
-        // target's `attached` list (i.e., target IS the host of source).
-        // SourceOnly requires target == source (the static targets itself).
+        // Scope check. AttachedHost requires that the source is a child of
+        // the target (i.e., target IS the host of source) — via either the
+        // `attached` list (Z.6) or the `same_sleeve` list (Z.7, mutations
+        // per P.28). SourceOnly requires target == source (the static
+        // targets itself).
         match affects.scope {
             crate::card::StaticScope::Board => {}
             crate::card::StaticScope::AttachedHost => {
-                if !target.attached.iter().any(|x| x == source_iid) {
+                if !target.children().any(|x| x == source_iid) {
                     return None;
                 }
             }
@@ -1472,11 +1534,13 @@ impl GameState {
             .chain(self.b.board.iter())
             .flat_map(move |board_iid| {
                 let host = self.card_pool.get(board_iid);
-                let attached = host
-                    .map(|h| h.attached.iter())
+                // Z.7: fused same-sleeve sources (mutations) participate in
+                // static evaluation just like attached sources — union both.
+                let children = host
+                    .map(|h| h.children())
                     .into_iter()
                     .flatten();
-                std::iter::once(board_iid).chain(attached)
+                std::iter::once(board_iid).chain(children)
             })
             .filter(move |iid| {
                 self.card_pool
@@ -1536,7 +1600,7 @@ impl GameState {
         let Some(target) = self.card_pool.get(target_iid) else {
             return false;
         };
-        for attached_iid in &target.attached {
+        for attached_iid in target.children() {
             let Some(attached) = self.card_pool.get(attached_iid) else {
                 continue;
             };
@@ -1565,7 +1629,7 @@ impl GameState {
         let Some(target) = self.card_pool.get(target_iid) else {
             return false;
         };
-        for attached_iid in &target.attached {
+        for attached_iid in target.children() {
             let Some(attached) = self.card_pool.get(attached_iid) else {
                 continue;
             };

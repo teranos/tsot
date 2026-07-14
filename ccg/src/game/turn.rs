@@ -124,10 +124,12 @@ impl GameState {
             if let Some(c) = ctx {
                 let board: Vec<InstanceId> = self.player(self.active_player).board.clone();
                 for iid in &board {
+                    // Z.7: fused same-sleeve mutations get their phase-entry
+                    // handlers (on_upkeep / on_untap_step) fired too.
                     let attached: Vec<InstanceId> = self
                         .card_pool
                         .get(iid)
-                        .map(|i| i.attached.clone())
+                        .map(|i| i.children().cloned().collect())
                         .unwrap_or_default();
                     lua_api::fire_self_only(
                         c.lua,

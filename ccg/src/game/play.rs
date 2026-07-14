@@ -1295,7 +1295,11 @@ impl GameState {
                 .mutation_target
                 .as_ref()
                 .expect("validated by play_card");
-            self.add_attached(target, instance);
+            // P.26 / Z.7: a mutation fuses into the host's sleeve, it does
+            // not attach as a strippable object. It therefore rides the
+            // host's zone moves (P.29), is exempt from the P.8 cascade, and
+            // does not count toward attached-count (C.16).
+            self.add_same_sleeve(target, instance);
             self.set_face_down(instance, true);
         } else if is_board_placed {
             self.add_to_zone(instance, player, Zone::Board);

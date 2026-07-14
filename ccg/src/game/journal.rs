@@ -105,6 +105,18 @@ pub enum JournalEntry {
         host: InstanceId,
         attached: InstanceId,
     },
+    /// Z.7: fused a card into a host's `same_sleeve` list. Inverse: pop last.
+    AddSameSleeve {
+        host: InstanceId,
+        sleeved: InstanceId,
+    },
+    /// Z.7: removed a fused card from a host's `same_sleeve` list.
+    /// Inverse: re-insert at `at_pos`.
+    RemoveSameSleeve {
+        host: InstanceId,
+        sleeved: InstanceId,
+        at_pos: usize,
+    },
     RemoveFromZone {
         iid: InstanceId,
         owner: PlayerId,
@@ -352,6 +364,26 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
                 }
             }
         }
+        JournalEntry::AddSameSleeve { host, sleeved } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                if let Some(last) = inst.same_sleeve.last() {
+                    debug_assert_eq!(
+                        *last, sleeved,
+                        "add-same-sleeve inverse: iid mismatch at tail"
+                    );
+                    inst.same_sleeve.pop();
+                }
+            }
+        }
+        JournalEntry::RemoveSameSleeve {
+            host,
+            sleeved,
+            at_pos,
+        } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                inst.same_sleeve.insert(at_pos, sleeved);
+            }
+        }
         JournalEntry::RemoveFromZone {
             iid,
             owner,
@@ -490,6 +522,20 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::AddAttached { host, attached } => {
             if let Some(inst) = state.card_pool.get_mut(&host) {
                 inst.attached.push(attached);
+            }
+        }
+        JournalEntry::AddSameSleeve { host, sleeved } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                inst.same_sleeve.push(sleeved);
+            }
+        }
+        JournalEntry::RemoveSameSleeve {
+            host,
+            sleeved: _,
+            at_pos,
+        } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                inst.same_sleeve.remove(at_pos);
             }
         }
         JournalEntry::RemoveFromZone {

@@ -178,10 +178,13 @@ impl GameState {
         // expect to receive `self = the mutation` when the host attacks.
         // Snapshot attached before firing so a handler that detaches /
         // moves doesn't desync the iteration.
+        // Z.7: fused same-sleeve mutations (klotho / TNF / VEGF) declare
+        // OnAttack and receive `self = the mutation`, so iterate the whole
+        // unit (attached ∪ same_sleeve), not just attached.
         let attached: Vec<InstanceId> = self
             .card_pool
             .get(attacker)
-            .map(|i| i.attached.clone())
+            .map(|i| i.children().cloned().collect())
             .unwrap_or_default();
         if let Some(c) = ctx.as_deref_mut() {
             lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker)
@@ -465,10 +468,12 @@ impl GameState {
         for attacker in &damaged_attackers {
             // Snapshot the attached list before firing so handlers that
             // mutate state (detach, move) don't desync the iteration.
+            // Z.7: same-sleeve mutations declaring OnDealtDamageToPlayer
+            // (cinder-wurm et al.) fire too — iterate the whole unit.
             let attached: Vec<InstanceId> = self
                 .card_pool
                 .get(attacker)
-                .map(|i| i.attached.clone())
+                .map(|i| i.children().cloned().collect())
                 .unwrap_or_default();
             if let Some(c) = ctx.as_deref_mut() {
                 lua_api::fire_self_only(
