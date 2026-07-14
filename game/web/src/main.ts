@@ -372,9 +372,16 @@ async function main() {
     console.warn('[game] identity load failed:', e)
     return null
   })
-  // Fetch the wasm for THIS build's commit, so a browser-cached
-  // /game.wasm from a prior deploy can't silently load against fresh JS.
-  const wasmBytes = await streamWasmBytes(`/game.wasm?v=${encodeURIComponent(EXPECTED_COMMIT)}`)
+  // No URL parameters — banned repo-wide. The CDN's cache policy
+  // (Managed-CachingOptimized) strips them anyway, so `?v=<commit>`
+  // only ever busted the browser cache. The two mechanisms that
+  // actually keep this loop closed:
+  //   1. Deploy invalidates `/game.wasm` at CloudFront, so the CDN
+  //      serves the new bytes once the invalidation completes.
+  //   2. The boot-time build-match guard below reads the wasm's own
+  //      commit and halts if it disagrees with the bundle's, catching
+  //      any window where a browser still has the previous wasm cached.
+  const wasmBytes = await streamWasmBytes('/game.wasm')
   const gpu = await gpuPromise
   identityBytes = await identityPromise
 
