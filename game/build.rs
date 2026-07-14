@@ -46,6 +46,23 @@ fn cdda_src_root() -> PathBuf {
          or run `make cdda` / `tools/fetch-cdda.sh` to populate {}",
         local.display()
     );
+    // Staleness guard: fetch-cdda.sh stamps .rev with CDDA_RELEASE; if
+    // someone bumps CDDA_RELEASE without re-fetching, we'd silently
+    // compile the old corpus. Fail loudly with the fix in the message.
+    // (Nix-provided CDDA_SRC skips this — it's already hash-pinned.)
+    let release = std::fs::read_to_string(manifest.join("CDDA_RELEASE"))
+        .expect("reading CDDA_RELEASE")
+        .trim()
+        .to_string();
+    let rev_path = local.join(".rev");
+    let rev = std::fs::read_to_string(&rev_path)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    assert!(
+        rev == release,
+        ".cdda-src is stale: CDDA_RELEASE is {release:?} but .cdda-src/.rev is {rev:?}. \
+         Run `make cdda` to refresh."
+    );
     local
 }
 

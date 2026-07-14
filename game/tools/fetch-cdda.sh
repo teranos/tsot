@@ -30,4 +30,8 @@ rm -rf "$dst"
 git clone --depth 1 --filter=blob:none --sparse --branch "$rel" "$repo" "$dst" >/dev/null 2>&1
 git -C "$dst" sparse-checkout set --no-cone \
     'data/json/mapgen' 'data/json/mapgen_palettes' >/dev/null 2>&1
+# Stamp the release so build.rs can detect a stale .cdda-src (bumping
+# CDDA_RELEASE without a re-fetch would otherwise compile the old corpus
+# silently).
+printf '%s\n' "$rel" > "$dst/.rev"
 echo "[fetch-cdda] pinned commit $(git -C "$dst" rev-parse HEAD)"
