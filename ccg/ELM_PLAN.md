@@ -228,3 +228,14 @@ the failure surfaced N indirections later as a useless TypeError at a
 downstream consumer in `play.html`. Stages 8 (fault surface) and 9
 (collapse bridge) address the structural problem; stage 10 is the
 deckbuilder retry on the simpler surface.
+
+## TODO — cardless-sleeve UI (deferred, tracked in CARDLESS_SLEEVE.md)
+
+The sleeve-as-atom / cardless-sleeve work (branch
+`claude/ccg-discussion-qhi0rq`) is engine-only for now; the Elm UI is
+out of scope on that branch. When it lands, the UI must render a cardless
+sleeve (an empty sleeve unit — no card, no identity), the Z.8b free-draw
+(collect empties off the deck top without spending the draw), and attach
+visuals (Window Cleaner's attached cardless sleeves). Card model in
+Card.elm will need an optional-content shape mirroring `Sleeve.content:
+Option<Card>`.
