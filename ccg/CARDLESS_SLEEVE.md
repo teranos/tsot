@@ -37,9 +37,13 @@
     matches the resolver, so it never loops, it just misses some castable
     plays. Wiring that needs anchor-first hand selection; revisit if a card
     makes it matter.
-  - **8.3 End-to-end acceptance (S–M).** A hand-authored test deck with
-    cardless sleeves plays a full sim game; determinism + full-game rollback
-    hold. Fix whatever integration surfaces.
+  - **8.3 End-to-end acceptance — DONE.** `sim/run.rs` tests build a deck
+    from `DeckUnit`s with cardless sleeves and run a full Heuristic-vs-
+    Heuristic game: it completes with a winner, the Z.8b free draw pulls a
+    cardless sleeve off the deck, the full-game replay journal rolls back to
+    the exact initial state (cardless sleeves included), and two identical
+    runs are byte-identical (determinism). No integration fixes were needed —
+    the whole 4→8 arc holds in a real game.
 - **Slice 9 — the cards + the end-to-end test deck.**
   - `search library for cardless sleeves` primitive.
   - Window Cleaner (see backlog). OnTapped trigger — verify/add.

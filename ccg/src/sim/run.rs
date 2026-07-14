@@ -2202,4 +2202,129 @@ mod tests {
             "journals diverged across identical runs"
         );
     }
+
+    /// Slice 8.3 acceptance: a deck built from `DeckUnit`s including cardless
+    /// sleeves (S.4) plays a full AI game — exercising the Z.8b free draw —
+    /// and the full-game replay journal rolls back to the exact initial
+    /// state (cardless sleeves included).
+    #[test]
+    fn full_game_with_cardless_sleeves_runs_and_rolls_back() {
+        use crate::game::DeckUnit;
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| {
+                matches!(c.kind, crate::card::CardType::Creature)
+                    && c.handlers.is_empty()
+                    && c.cost.len() == 1
+                    && !c.cost[0].is_x
+            })
+            .expect("a vanilla creature should exist in cards/")
+            .clone();
+        let make_units = || -> Vec<DeckUnit> {
+            (0..50)
+                .map(|i| {
+                    if i >= 5 && i % 6 == 5 {
+                        DeckUnit::Cardless
+                    } else {
+                        DeckUnit::Card(template.clone())
+                    }
+                })
+                .collect()
+        };
+
+        let mut state = GameState::from_units(make_units(), make_units());
+        let initial_cardless =
+            state.card_pool.values().filter(|s| s.is_cardless()).count();
+        assert!(initial_cardless > 0, "test deck must contain cardless sleeves");
+
+        let initial = state.clone();
+        state.replay_journal = Some(crate::game::Journal::new());
+        let mut rng = StdRng::seed_from_u64(0x5133_1E55);
+        let mut log: Vec<String> = Vec::new();
+        let ais = [super::super::AiKind::Heuristic, super::super::AiKind::Heuristic];
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
+
+        assert!(state.winner.is_some(), "game should have a winner");
+        assert!(stats.turns > 0);
+        // Z.8b actually fired: at least one cardless sleeve was drawn out of
+        // a deck (collected into a hand / moved on) during the game.
+        let cardless_off_deck = state
+            .card_pool
+            .iter()
+            .filter(|(iid, s)| {
+                s.is_cardless()
+                    && !state.a.deck.contains(*iid)
+                    && !state.b.deck.contains(*iid)
+            })
+            .count();
+        assert!(
+            cardless_off_deck > 0,
+            "the free draw should have pulled a cardless sleeve off a deck"
+        );
+
+        let journal = state.replay_journal.take().expect("replay_journal open");
+        assert!(!journal.is_empty(), "a full game produces journal entries");
+        journal.rollback(&mut state);
+
+        assert_eq!(
+            format!("{:?}", initial.a),
+            format!("{:?}", state.a),
+            "A zones not rolled back"
+        );
+        assert_eq!(
+            format!("{:?}", initial.b),
+            format!("{:?}", state.b),
+            "B zones not rolled back"
+        );
+        assert_eq!(
+            format!("{:?}", initial.card_pool),
+            format!("{:?}", state.card_pool),
+            "card_pool (incl. cardless sleeves) not rolled back"
+        );
+        assert_eq!(
+            state.card_pool.values().filter(|s| s.is_cardless()).count(),
+            initial_cardless,
+            "all cardless sleeves restored by rollback"
+        );
+    }
+
+    #[test]
+    fn full_game_with_cardless_sleeves_is_deterministic() {
+        use crate::game::DeckUnit;
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| matches!(c.kind, crate::card::CardType::Creature))
+            .unwrap()
+            .clone();
+        let make_units = || -> Vec<DeckUnit> {
+            (0..50)
+                .map(|i| {
+                    if i >= 5 && i % 6 == 5 {
+                        DeckUnit::Cardless
+                    } else {
+                        DeckUnit::Card(template.clone())
+                    }
+                })
+                .collect()
+        };
+
+        let s1 = GameState::from_units(make_units(), make_units());
+        let s2 = GameState::from_units(make_units(), make_units());
+        let mut rng1 = StdRng::seed_from_u64(0xC0FFEE);
+        let mut rng2 = StdRng::seed_from_u64(0xC0FFEE);
+        let mut log1: Vec<String> = Vec::new();
+        let mut log2: Vec<String> = Vec::new();
+        let (stats1, j1) = run_game(s1, &mut rng1, &mut log1, &registry);
+        let (stats2, j2) = run_game(s2, &mut rng2, &mut log2, &registry);
+
+        assert_eq!(log1, log2, "logs diverged with cardless sleeves present");
+        assert_eq!(format!("{stats1:?}"), format!("{stats2:?}"));
+        assert_eq!(format!("{j1:?}"), format!("{j2:?}"), "journals diverged");
+    }
 }
