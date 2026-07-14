@@ -1129,7 +1129,39 @@ async function main() {
   init()
   document.body.classList.add('loaded')
 
+  // Real per-frame wall time on the actual device. rAF-to-rAF delta is
+  // what the player perceives, unlike the native sim frame time seer
+  // already reports. Every ~1s (60 frames) we emit a p50/p95/p99 line
+  // to the console with the [game.perf.frame] tag so a future browser-
+  // telemetry collector can scrape a real device number, not just the
+  // native tour's timings. Counts are not performance; this IS.
+  const PERF_WINDOW_FRAMES = 60
+  const PERF_KEEP_MAX = 300
+  let perfDeltas: number[] = []
+  let perfLastTs = 0
+  let perfFramesSinceLog = 0
   const loop = () => {
+    const now = performance.now()
+    if (perfLastTs > 0) {
+      perfDeltas.push(now - perfLastTs)
+      perfFramesSinceLog++
+      if (perfFramesSinceLog >= PERF_WINDOW_FRAMES) {
+        const sorted = [...perfDeltas].sort((a, b) => a - b)
+        const pick = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))]
+        const p50 = pick(0.5)
+        const p95 = pick(0.95)
+        const p99 = pick(0.99)
+        console.log(
+          `[game.perf.frame] n=${sorted.length} p50=${p50.toFixed(2)}ms p95=${p95.toFixed(2)}ms p99=${p99.toFixed(2)}ms`
+        )
+        // Keep a rolling tail so the next window has recent context.
+        if (perfDeltas.length > PERF_KEEP_MAX) {
+          perfDeltas = perfDeltas.slice(-PERF_KEEP_MAX)
+        }
+        perfFramesSinceLog = 0
+      }
+    }
+    perfLastTs = now
     const done = frame()
     if (done !== 0) return
     requestAnimationFrame(loop)
