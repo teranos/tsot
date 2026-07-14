@@ -25,11 +25,18 @@
     `CARDLESS_SLEEVE_ID` sentinel so cardless deck units round-trip. Tests in
     `tests/cardless_sleeve.rs` (from_units placement, save/load, replay
     rebuild).
-  - **8.2 AI affordability + eligibility (M, delicate).** `eligible_hand_
-    payments` offers cardless bodies; `can_pay_instant_cost` /
-    `identity_matching_hand_count` model "1 real anchor + cardless bodies"
-    and count real cards for mill. Picker and resolver must agree — the
-    bug-prone area. Unit tests per cost source.
+  - **8.2 AI affordability — DONE (picker/resolver agree; no loops).**
+    Auditing the model showed only MILL could disagree: the resolver counts
+    card-bearing sleeves (slice 7) but `can_pay_instant_cost` counted total
+    deck → fixed to count `!is_cardless` cards. The rest already agree:
+    wildcard-hand and attach include cardless in `eligible_hand_payments` /
+    `attached_have`; GY is guarded by the P.12a anchor check. Tests in
+    `game/cardless_sleeve_tests.rs` per cost source. **Deferred optimization
+    (not a loop):** the AI does not yet exploit cardless as bodies for an
+    *identity* HAND cost — it stays conservative (no anchor → refuse), which
+    matches the resolver, so it never loops, it just misses some castable
+    plays. Wiring that needs anchor-first hand selection; revisit if a card
+    makes it matter.
   - **8.3 End-to-end acceptance (S–M).** A hand-authored test deck with
     cardless sleeves plays a full sim game; determinism + full-game rollback
     hold. Fix whatever integration surfaces.

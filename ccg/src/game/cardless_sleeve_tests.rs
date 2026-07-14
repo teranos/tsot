@@ -201,3 +201,67 @@ fn z8c_cardless_sleeve_is_not_millable() {
     assert!(res.is_ok(), "{res:?}");
     assert!(s.a.graveyard.contains(&real), "a card-bearing sleeve was milled, not a cardless one");
 }
+
+// ---- 8.2: AI affordability agrees with the resolver on cardless ----
+
+#[test]
+fn z8_can_pay_mill_counts_real_cards_not_cardless() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    set_cost(&mut s, &cast, vec![cost(CostSource::Mill, 1)]);
+    let a_card = s.card_pool.get(&cast).unwrap().card().clone();
+
+    // Whole deck cardless → 0 millable cards → mill:1 unaffordable.
+    let deck: Vec<InstanceId> = s.a.deck.clone();
+    for iid in &deck {
+        make_cardless(&mut s, iid);
+    }
+    assert!(
+        !crate::sim::ai::can_pay_instant_cost(&s, PlayerId::A, &cast),
+        "mill:1 unaffordable when the deck is all cardless"
+    );
+
+    // Restore one real card on top → 1 millable → affordable.
+    s.card_pool.get_mut(&deck[0]).unwrap().content = Some(a_card);
+    assert!(
+        crate::sim::ai::can_pay_instant_cost(&s, PlayerId::A, &cast),
+        "mill:1 affordable once one real card is millable"
+    );
+}
+
+#[test]
+fn z8_can_pay_wildcard_hand_cost_with_a_cardless_body() {
+    // Colorless (wildcard) cast: a cardless sleeve in hand pays the slot.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    let others: Vec<InstanceId> = s.a.hand.iter().filter(|h| **h != cast).cloned().collect();
+    for iid in &others {
+        make_cardless(&mut s, iid);
+    }
+    set_cost(&mut s, &cast, vec![hand_cost(1)]);
+
+    assert!(
+        crate::sim::ai::can_pay_instant_cost(&s, PlayerId::A, &cast),
+        "wildcard hand:1 affordable via a cardless body"
+    );
+}
+
+#[test]
+fn z8_can_pay_identity_hand_needs_a_real_anchor_not_just_cardless() {
+    // Identity cast with only cardless in hand: no real anchor, so the AI
+    // stays conservative and does NOT offer it — matching the resolver's
+    // all-cardless rejection, so no pick/resolve loop.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    s.card_pool.get_mut(&cast).unwrap().card_mut().colors = vec!["green".to_string()];
+    let others: Vec<InstanceId> = s.a.hand.iter().filter(|h| **h != cast).cloned().collect();
+    for iid in &others {
+        make_cardless(&mut s, iid);
+    }
+    set_cost(&mut s, &cast, vec![hand_cost(1)]);
+
+    assert!(
+        !crate::sim::ai::can_pay_instant_cost(&s, PlayerId::A, &cast),
+        "identity hand:1 not affordable with only cardless (no anchor)"
+    );
+}

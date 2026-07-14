@@ -518,8 +518,13 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             }
         }
     }
+    // Z.8c: cardless sleeves are never milled, so mill affordability counts
+    // card-bearing sleeves only — mirrors the resolver's real-card count in
+    // game/play.rs, or the picker offers a mill cast the resolver then
+    // rejects with InsufficientDeckForMill.
+    let millable_deck = p.deck.iter().filter(|iid| !state.is_cardless(iid)).count();
     hand_have >= hand_need
-        && p.deck.len() >= mill_need
+        && millable_deck >= mill_need
         && p.graveyard.len() >= gy_need
         && attached_have >= attached_need
         && sac_ok
