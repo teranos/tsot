@@ -33,25 +33,24 @@
         # (trust-on-first-use); bumping the release = edit CDDA_RELEASE,
         # blank the hash, rebuild, commit the new hash — all reviewable.
         cddaRelease = pkgs.lib.removeSuffix "\n" (builtins.readFile ./CDDA_RELEASE);
-        # Exactly the files the game references — the same one manifest
-        # build.rs and tools/fetch-cdda.sh read. Non-cone sparse so it's
-        # file-level (~30 KB), not the whole 13 MB mapgen tree.
-        cddaFiles = pkgs.lib.filter (s: s != "" && !pkgs.lib.hasPrefix "#" s)
-          (pkgs.lib.splitString "\n" (builtins.readFile ./cdda-files.txt));
+        # Fetch the whole mapgen + palette SUBTREES — NOT the exact files
+        # in cdda-files.txt. This decouples the fetch from the manifest:
+        # adding a building is one line in cdda-files.txt and does NOT
+        # change what's fetched, so this hash only ever changes on a
+        # CDDA_RELEASE bump — never on a corpus edit. (An earlier version
+        # sparse-fetched exactly cdda-files.txt, which coupled the hash to
+        # the file list and silently broke deploy + seer whenever a
+        # building was added.) build.rs picks the exact files to embed.
+        # Keep these patterns identical to tools/fetch-cdda.sh.
         cddaSrc = pkgs.fetchFromGitHub {
           owner = "CleverRaven";
           repo = "Cataclysm-DDA";
           rev = cddaRelease;
-          sparseCheckout = cddaFiles;
+          sparseCheckout = [ "data/json/mapgen" "data/json/mapgen_palettes" ];
           nonConeMode = true;
-          # NAR hash of the sparse tree (the files in cdda-files.txt) at
-          # rev 0.I, verified against the bytes CDDA ships at that
-          # release. IMPORTANT: this hash tracks cdda-files.txt — adding
-          # or removing a file changes the sparse set and this MUST be
-          # recomputed, or `nix build .#cdda-src` fails and the deploy +
-          # seer break. (Recompute: reproduce the listed files at 0.I,
-          # `nix hash path --type sha256 --sri <dir>`.)
-          hash = "sha256-kmTjhbwAiPaEbNdRG40Pgw67pbXczCFnWam7hve2Yl8=";
+          # NAR hash of those two subtrees at CDDA_RELEASE. Stable across
+          # corpus edits; recompute only when CDDA_RELEASE changes.
+          hash = "sha256-DXXfU9uFwW1BrWkvfardBC3KAIM2rOj7T4QgKGRFBv8=";
         };
       in {
         # The pinned corpus, exposed so CI / tooling can realise it
