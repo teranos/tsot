@@ -1555,7 +1555,10 @@ impl GameState {
     pub fn effective_top_of_deck_symbols(&self, player: PlayerId) -> Vec<String> {
         for iid in &self.player(player).deck {
             if let Some(inst) = self.card_pool.get(iid) {
-                let is_transparent = inst.card().frame.as_deref() == Some("transparent");
+                // Z.8f: a cardless sleeve is fully transparent for
+                // top-of-deck visibility — see past it to the card beneath.
+                let is_transparent =
+                    inst.is_cardless() || inst.card().frame.as_deref() == Some("transparent");
                 if !is_transparent {
                     return inst.card().symbols.clone();
                 }
@@ -1637,6 +1640,16 @@ impl GameState {
         self.card_pool
             .get(iid)
             .map(|i| i.card().frame.as_deref() == Some("transparent"))
+            .unwrap_or(false)
+    }
+
+    /// Z.8: true iff `iid` is a cardless sleeve (no card content). Used by
+    /// cost-payment sites — a cardless sleeve is a generic payment body
+    /// that never satisfies a color/symbol identity requirement (Z.8c).
+    pub fn is_cardless(&self, iid: &InstanceId) -> bool {
+        self.card_pool
+            .get(iid)
+            .map(|i| i.is_cardless())
             .unwrap_or(false)
     }
 

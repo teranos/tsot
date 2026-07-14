@@ -573,6 +573,19 @@ impl GameState {
             }
         }
 
+        // Z.8c: cardless sleeves are HAND-cost bodies with no identity. If
+        // the cast has identity, no GY color anchor was supplied, and EVERY
+        // HAND payment is a cardless body, none anchors identity — reject
+        // (parallel to the substitute gate above; a real matching card must
+        // anchor, cardless bodies fill the rest).
+        if !gy_supplies_color_anchor
+            && !choices.hand_payment_ids.is_empty()
+            && choices.hand_payment_ids.iter().all(|h| self.is_cardless(h))
+            && !self.card_identity(instance).is_empty()
+        {
+            return Err(PlayError::NoHandPaymentForIdentity);
+        }
+
         let mut seen: BTreeSet<&InstanceId> = BTreeSet::new();
         for hid in &choices.hand_payment_ids {
             if !seen.insert(hid) {
@@ -599,8 +612,11 @@ impl GameState {
             // P.12b: when a color-matching GRAVEYARD pitch was supplied
             // for the same cast, P.7a is suspended — the anchor pitch
             // supplies the thematic alignment for the whole bundle.
+            // Z.8c: a cardless sleeve is a generic body — exempt from the
+            // per-card P.7a match. An all-cardless payment can't anchor
+            // identity and is caught by the coverage gate above.
             let cast_ident = self.card_identity(instance);
-            if !cast_ident.is_empty() && !gy_supplies_color_anchor {
+            if !cast_ident.is_empty() && !gy_supplies_color_anchor && !self.is_cardless(hid) {
                 let pay_ident = self.card_identity(hid);
                 if cast_ident.is_disjoint(&pay_ident) {
                     return Err(PlayError::HandPaymentIdentityMismatch(hid.clone()));
@@ -620,7 +636,14 @@ impl GameState {
             }
         }
 
-        let deck_have = self.player(player).deck.len();
+        // Z.8c: only card-bearing sleeves can be milled, so affordability
+        // counts real cards, not cardless sleeves that would be skimmed.
+        let deck_have = self
+            .player(player)
+            .deck
+            .iter()
+            .filter(|iid| !self.is_cardless(iid))
+            .count();
         if deck_have < mill_needed {
             return Err(PlayError::InsufficientDeckForMill {
                 needed: mill_needed,
@@ -782,14 +805,17 @@ impl GameState {
             sacrifice: choices.sacrifice_ids.clone(),
         };
 
-        // MILL cost: top N of DECK → GRAVEYARD (P.11).
-        for _ in 0..mill_needed {
+        // MILL cost: top N CARD-bearing sleeves → GRAVEYARD (P.11). Z.8c: a
+        // cardless sleeve never counts for mill — it is skimmed to GY along
+        // the way without consuming a mill slot (parallel to the Z.8b draw
+        // skip).
+        let mut milled = 0;
+        while milled < mill_needed {
             let Some(top) = self.player(player).deck.first().cloned() else {
                 break;
             };
-            payments_snapshot.mill.push(top.clone());
-            // Sacred-error sweep: was `let _ = self.move_card(...)`.
-            // The `top` came from `deck.first()` two lines up so
+            let is_cardless = self.is_cardless(&top);
+            // Sacred-error sweep: `top` came from `deck.first()` so
             // NotInZone shouldn't be possible — but if it ever happens,
             // it's state corruption that previously hid silently.
             let _ = self.move_card_or_emit(
@@ -799,6 +825,10 @@ impl GameState {
                 Zone::Graveyard,
                 "play-mill-cost",
             );
+            if !is_cardless {
+                payments_snapshot.mill.push(top.clone());
+                milled += 1;
+            }
         }
 
         // GRAVEYARD cost (P.12): if the caller supplied explicit

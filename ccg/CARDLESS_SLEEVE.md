@@ -12,10 +12,21 @@
   blank-fallback accessor + `card_mut()` + `is_cardless()`. Emptiness is
   representable; nothing creates a cardless sleeve yet. 492 lib + all
   integration green.
-- **Slice 6 — APPROVED, next.** Z.8b free draw.
-- **Slice 7 — APPROVED.** Z.8c cost payment.
+- **Slice 6 — DONE.** Z.8b free draw (`draw_one` primitive).
+- **Slice 7 — DONE.** Z.8c cost payment. Attach / wildcard-hand / can't-anchor
+  were already free (blank card = empty identity); code added for the
+  anchor+cardless-body HAND case (exempt cardless from per-card P.7a + an
+  all-cardless coverage gate) and MILL exclusion (skip cardless, count real
+  cards). Z.8f visibility also landed here. All changes are `is_cardless`-
+  guarded no-ops for real (cardless-free) decks.
 - **Slice 8.** Deck-as-units, search-for-cardless, Window Cleaner.
 - **Spec.** Write Z.8 + S.4 amendment into RULES.md alongside behaviour.
+
+**Deferred to slice 8 (AI-side, safe until cardless sleeves exist in real
+decks):** add cardless sleeves to `eligible_hand_payments` + affordability
+(`identity_matching_hand_count`, `can_pay_instant_cost` mill branch) so the
+picker offers cardless bodies and never disagrees with the resolver. Not
+exercised today — nothing puts a cardless sleeve into an AI game yet.
 
 ## Z.8 — CARDLESS SLEEVE (agreed spec, not yet in RULES.md)
 
