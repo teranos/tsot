@@ -5,13 +5,14 @@ name: seer
 # under wasmtime, recording every boundary crossing. Both upload
 # stdout as artifacts.
 
+# seer runs regardless — every push to any branch, plus nightly even
+# when nothing is pushed. No paths gate: perf is measured continuously,
+# not only when game/ changes, so a regression anywhere is caught.
 on:
   push:
     branches: ['**']
-    paths:
-      - 'game/**'
-      - 'crates/seer-host/**'
-      - '.github/workflows/seer.yml'
+  schedule:
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 permissions:
