@@ -1125,17 +1125,44 @@ impl GameState {
     /// Counterpart of `add_attached` for same-sleeve cards (mutations per
     /// P.26). The fused card is not strippable and rides the host's zone
     /// moves structurally (P.29).
-    pub fn add_same_sleeve(&mut self, host: &InstanceId, sleeved: &InstanceId) {
-        let Some(inst) = self.card_pool.get_mut(host) else {
-            return;
+    /// Z.7: fuse `sleeved` into `host`'s sleeve, journaling the addition.
+    /// Returns whether it was added. This is the single enforcement point
+    /// for the sleeve cap — a sleeve holds at most 4 cards (a host plus 3
+    /// same-sleeve cards) — so no route (mutation cast, redirect, a future
+    /// "worn" mechanic) can over-fill a sleeve. A refused add emits a sacred
+    /// error and does nothing. Callers that can refuse earlier (mutation
+    /// casts check `SleeveFull` before payment) still should; this backstops
+    /// them.
+    pub fn add_same_sleeve(&mut self, host: &InstanceId, sleeved: &InstanceId) -> bool {
+        const MAX_SAME_SLEEVE: usize = 3;
+        let Some(inst) = self.card_pool.get(host) else {
+            return false;
         };
-        inst.same_sleeve.push(sleeved.clone());
+        if inst.same_sleeve.len() >= MAX_SAME_SLEEVE {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "engine",
+                "sleeve full",
+                format!(
+                    "Z.7: sleeve of {host} already holds {} same-sleeve cards; \
+                     refusing to fuse {sleeved} (a sleeve holds at most 4 cards)",
+                    inst.same_sleeve.len()
+                ),
+            );
+            return false;
+        }
+        self.card_pool
+            .get_mut(host)
+            .expect("host present — checked above")
+            .same_sleeve
+            .push(sleeved.clone());
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::AddSameSleeve {
                 host: host.clone(),
                 sleeved: sleeved.clone(),
             });
         }
+        true
     }
 
     /// Z.7: remove `sleeved` from `host`'s sleeve, journaling the removal at

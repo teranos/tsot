@@ -276,3 +276,29 @@ fn z7_sleeve_holds_at_most_four_cards_host_plus_three_mutations() {
     );
     assert!(matches!(res, Err(PlayError::SleeveFull(_))), "4th mutation refused: {res:?}");
 }
+
+#[test]
+fn z7_add_same_sleeve_enforces_the_cap_at_the_deep_door() {
+    // The cap is enforced in add_same_sleeve itself, not only on the cast
+    // path — so any future fuser (redirect, "worn") is covered.
+    crate::error::reset();
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let host = s.a.hand[0].clone();
+    let cards: Vec<InstanceId> = (1..=4).map(|i| s.a.hand[i].clone()).collect();
+
+    for c in &cards[..3] {
+        assert!(s.add_same_sleeve(&host, c), "first 3 same-sleeve cards fuse");
+    }
+    assert_eq!(s.card_pool.get(&host).unwrap().same_sleeve.len(), 3);
+
+    assert!(
+        !s.add_same_sleeve(&host, &cards[3]),
+        "the 4th is refused at the deep door"
+    );
+    assert_eq!(
+        s.card_pool.get(&host).unwrap().same_sleeve.len(),
+        3,
+        "the refused card was not added"
+    );
+    assert!(!crate::error::drain().is_empty(), "a sacred error surfaced the refusal");
+}
