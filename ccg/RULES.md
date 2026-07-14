@@ -53,13 +53,13 @@ The following zones are part of the game.
 - **Z.5** GRAVEYARD
 - **Z.6** ATTACHED — a card placed under another card.
 - **Z.7** SAME-SLEEVE — a card fused inside the host's sleeve.
-- **Z.8** CARDLESS SLEEVE — a sleeve-unit containing no card (an "empty sleeve"). The sleeve is the atomic unit in every zone; a card is optional content inside it (zero cards = cardless sleeve, one = an ordinary card, two or more = a same-sleeve fusion per Z.7). A cardless sleeve has no color, no symbol, no printed rules, and cannot be cast.
-  - **Z.8a** A cardless sleeve is untargetable — with no card inside it presents no front-visible face, and a target resolves to the front-visible card (C.4).
-  - **Z.8b** When drawing a card, a cardless sleeve on top of the DECK does not satisfy the draw: it is collected into HAND for free and the draw continues, cascading through consecutive cardless sleeves until a card-bearing unit is drawn.
-  - **Z.8c** A cardless sleeve counts as a generic payment body for HAND, GRAVEYARD, and (while attached) ATTACHED cost sources. It never counts for MILL, and never satisfies the color/symbol identity requirement of a cost (P.7a / P.12a) — it fills a slot, not an identity, and can never be the identity anchor.
-  - **Z.8d** A cardless sleeve may be attached (Z.6) to a card by an effect; while attached it may be spent to pay an ATTACHED-source cost.
-  - **Z.8e** A card cannot be moved into a cardless sleeve; it is a consumable blank.
-  - **Z.8f** A cardless sleeve is fully transparent for top-of-deck visibility (V.8): the see-through reveal looks past it to the card beneath.
+- **Z.8** CARDLESS SLEEVE — a sleeve with no card in it (an "empty sleeve"). The sleeve is the unit that occupies a zone; the card inside is optional. None makes it cardless; one is an ordinary card; two or more is a same-sleeve fusion (Z.7). A cardless sleeve has no color, no symbol, and cannot be cast.
+  - **Z.8a** It cannot be targeted. There is no card inside to be its front face, and a target resolves to the front face (C.4).
+  - **Z.8b** It does not count as a card drawn. On top of the DECK it is taken into HAND for free and the draw carries on. Several empties in a row are all taken, and one card is still drawn.
+  - **Z.8c** It pays as a plain body. It can fill a HAND, GRAVEYARD, or ATTACHED cost slot, but never a MILL slot. It never covers the color or symbol part of a cost (P.7a / P.12a) — identity must still come from a real card.
+  - **Z.8d** It can be attached to a card by an effect. While attached, it can pay an ATTACHED cost.
+  - **Z.8e** Nothing can be moved into a cardless sleeve. It stays empty.
+  - **Z.8f** It is see-through. On top of the DECK it counts as transparent, so visibility reads the card beneath it (V.8).
 
 The STACK (R.8) is shared and global, not per-player, and therefore is not a Z-zone — it lives under R (Responses).
 
