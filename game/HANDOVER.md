@@ -71,6 +71,30 @@ safe, so do them roughly in order.
 - [ ] **Drive the un-verified flows on device** (see Verification).
 - [ ] **Open a PR.** Squash the vendoring churn and scrub the CC-BY-SA
   JSON blobs from history first.
+- [ ] **Write the perf norm into `game/CLAUDE.md`.** It says the game is
+  "observed by seer" but never states the rule, so it got missed (see
+  lesson below). Add, plainly: *performance is only what seer's `[perf]`
+  measures; never infer it from counts (props/bytes/instances); a big
+  number is not a slow frame.*
+- [ ] **Make the tour walk the last stretch** into a building so the
+  load-spike number is a real single-boundary crossing, not the inflated
+  bulk-load a teleport causes.
+- [ ] **Get frame time from the real browser** (rAF delta → seer). Native
+  sim time is only half; the device's live frame time is the truth.
+
+### Lesson — the perf failure mode (don't repeat it)
+
+A calibrated measurement tool (seer) already existed and I wasn't
+operating from it — `game/CLAUDE.md` literally says "Observed by seer"
+and I still reached for inference. The failure mode: I counted things
+(props, bytes, instances), saw a big number, and called it "heavy" /
+"perf concern" — dressed as an "honest flag." **Counts are not
+performance.** The measured reality was the opposite: standing in the
+"3,755-prop" school costs ~0.4ms/frame (steady state), negligible; the
+only real cost is a one-frame load hitch. seer is the *only* way we
+actually know. Rule going forward: no perf claim without a seer `[perf]`
+line — and if seer can't measure it yet, the task is to extend seer, not
+to guess.
 
 ## The big questions (the frontier)
 
