@@ -37,53 +37,45 @@ is either sharpening that projection or the hygiene that lets it scale.
 Ranked. The corpus is the point; the first four are what make growing it
 safe, so do them roughly in order.
 
-- [ ] **Confirm the deploy recovered (do this first).** After `38b0ef5`,
-  check `curl -s https://game.sbvh.nl/build-info.json` advances past
-  `190d684`, and that the latest `deploy-game` and `seer` runs are green.
-  If not, `nix build .#cdda-src` is still the suspect — the computed
-  hash `sha256-DXXf…` was not `nix build`-verified in the sandbox.
-- [ ] **Coverage report over the full 0.I mapgen tree.** The first real
-  corpus move and the one that makes the rest legible. For every
-  `om_terrain` building, dry-run it through the resolver
-  (`cdda::placement` / `cdda::cells::cell_to_prop`) and tally which
-  symbols + palette parameters resolve vs silently drop to `None`. Flag
-  `place_nested` / `place_vehicles` / `place_monsters` / multi-tile
-  specials (all currently unhandled). Output: a ranked "cheapest
-  buildings to add" list. Turns "add buildings" into a measured push.
-- [ ] **`build.rs` basename-collision guard.** It copies each
-  `cdda-files.txt` entry to `OUT_DIR/cdda/<basename>` with no uniqueness
-  check; two same-basename files silently clobber and `include_str!`
-  embeds the wrong bytes. Assert uniqueness (or copy under the full
-  relative path) *before* the corpus grows and trips it.
-- [ ] **Determinism golden-master.** Pin resolved building bytes per
-  `(building, seed)` in a test. Placement is deterministic and tested,
-  but resolved *output* isn't byte-pinned — and the projection just got
-  branchier (flood-fill, edge shifts). This catches cross-peer drift
-  before it ships as a desync. Prereq for more buildings AND P2P.
-- [ ] **Commit `game/flake.lock`.** Root and `roam/` commit one; game
-  doesn't, so `nix build .#cdda-src` floats nixpkgs/rust-overlay each
-  run (corpus bytes stay hash-pinned; the *toolchain* doesn't).
-  `cd game && nix flake lock` — needs real github access (the sandbox
-  blocks `api.github.com` for flake inputs).
-- [ ] **`.cdda-src` staleness guard.** `build.rs` uses the gitignored
-  `.cdda-src` when `$CDDA_SRC` is unset, but nothing ties it to
-  `CDDA_RELEASE`. Bump the release, forget `make cdda`, compile the old
-  one silently. Write the fetched rev to `.cdda-src/.rev`; fail if ≠
-  `CDDA_RELEASE`.
-- [ ] **`tools/fetch-cdda.sh` integrity.** The nix path is hash-pinned;
-  the script path (used for bare-cargo/CI) fetches the same subtrees but
-  verifies nothing — this is exactly what hid the flake-hash break
-  locally (see lesson). Checksum after fetch, or drop the script path and
-  require nix.
-- [ ] **Decide the JS build-match guard.** `main.ts` halts if the wasm's
-  commit ≠ the bundle's. With the watermark + `?v=` cache-bust it's a
-  narrow backstop. Keep it as a deliberate hard-stop or delete it — and
-  confirm CloudFront's cache-key includes the query string, else `?v=`
-  busts only the browser (the deploy invalidation is the real CDN
-  refresh).
-- [ ] **Unify `Music` resource access.** `hud` takes `ResMut<Music>`
-  (panics if absent); `jukebox` takes `Option<ResMut<Music>>` (skips).
-  Pick one — `Option<ResMut>` everywhere.
+- [x] **Confirm the deploy recovered (do this first).** Verified: live
+  reached HEAD (`9ef9b53`) before the recent batch; `nix build
+  .#cdda-src` builds cleanly locally; every push since has been green in
+  both `deploy-game` and `seer`.
+- [x] **Coverage report over the full 0.I mapgen tree.** Landed as
+  `game/src/bin/cdda_coverage.rs`. First pass on 0.I: 845 mapgen files,
+  6284 distinct om_terrains → **1675 resolved** (330K props total), 4498
+  empty (mostly roof-only entries + palette gaps), 111 skipped, **0
+  importer failures**. Top unhandled features by hit count:
+  `place_nested` (654), `place_loot` (418), `place_monster` (372),
+  `place_monsters` (331), `place_vehicles` (305). Empties are the next
+  real lever — either the mapgen is roof-only (fine) or the palette
+  chars aren't yet mapped to any prop.
+- [x] **`build.rs` basename-collision guard.** Asserts basename
+  uniqueness before copying; fails loudly with both offenders in the
+  message. Tests pass; not yet stress-tested with an actual same-name
+  collision in the manifest.
+- [x] **Determinism golden-master.** `Template::stable_digest` is an
+  FNV-1a of an explicit per-prop byte serialisation (f32 LE offsets,
+  pinned u8 tag per `PropKind`, colour tag + straight bytes). Test pins
+  the 28 shipped-template digests locally; **not yet cross-platform
+  verified** — the hash is designed to be platform-stable, but a Linux
+  CI run against these pins is the real proof.
+- [x] **Commit `game/flake.lock`.** Committed via `nix flake lock`;
+  nightly rust, rust-src, wasm target now pin.
+- [x] **`.cdda-src` staleness guard.** `fetch-cdda.sh` stamps
+  `.cdda-src/.rev` with `CDDA_RELEASE`; `build.rs` fails if it drifts.
+  Nix path is hash-pinned already, skips this check.
+- [x] **`tools/fetch-cdda.sh` integrity.** Pinned expected commit in
+  `game/CDDA_COMMIT`; script fails if the fetched HEAD doesn't match.
+- [x] **Decide the JS build-match guard.** Decision: **KEEP**.
+  CloudFront's Managed-CachingOptimized has `QueryStringBehavior:"none"`
+  (verified on distribution `E398MD1MAZIFP7`), so `?v=` only ever busted
+  the browser cache. Deploy invalidation refreshes the CDN; boot-time
+  build-match guard covers the browser cache slip. Removed the
+  redundant `?v=` query string (URL params banned repo-wide).
+- [x] **Unify `Music` resource access.** Both `hud` and `jukebox` now
+  take `Option<ResMut<Music>>` (and `Option<ResMut<SfxMix>>` for the
+  sliders), so setup-order changes never explode the frame.
 - [ ] **Drive the un-verified flows on device** (see Verification).
 - [ ] **Open a PR.** Squash the vendoring churn and scrub the CC-BY-SA
   JSON blobs from history first.
@@ -94,9 +86,11 @@ safe, so do them roughly in order.
   it from counts (props/bytes/instances); a big number is not a slow
   frame.* Likely a minor adjustment — the exact wording is yours; the
   agent should not edit that file.
-- [ ] **Make the tour walk the last stretch** into a building so the
-  load-spike number is a real single-boundary crossing, not the inflated
-  bulk-load a teleport causes.
+- [x] **Make the tour walk the last stretch** into a building. On each
+  new stop, the player teleports 800 units north of the target then
+  walks in at `KEYBOARD_SPEED`, so chunks stream in one boundary at a
+  time. Not yet verified against the seer perf history — need a run to
+  confirm the load spike moved to a real per-boundary number.
 - [ ] **Get frame time from the real browser** (rAF delta → seer). Native
   sim time is only half; the device's live frame time is the truth.
 
