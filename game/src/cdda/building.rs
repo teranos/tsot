@@ -18,6 +18,12 @@ const GARAGE_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/garage.js
 const HOUSE01_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house01.json"));
 const HOUSE02_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house02.json"));
 const HOUSE03_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house03.json"));
+const HOUSE04_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house04.json"));
+/// The daycare — a single-tile civic building (the closest thing to a
+/// school we can ingest; real schools are multi-tile specials). Its
+/// walls + windows are defined inline in the mapgen, so it needs no
+/// palette beyond the roof palette we already fetch.
+const DAYCARE_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/daycare.json"));
 /// A shed — CDDA has no standalone one, so this is an original inline
 /// mapgen in the same format (ours, so it stays vendored in-tree).
 const SHED_JSON: &str = include_str!("../../assets/buildings/shed.json");
@@ -30,6 +36,7 @@ const HOUSE_LAYOUTS: &[(&str, &str, &str)] = &[
     (HOUSE01_JSON, "house_01", "house_01_roof"),
     (HOUSE02_JSON, "house_02", "house_02_roof"),
     (HOUSE03_JSON, "house_03", "house_03_roof"),
+    (HOUSE04_JSON, "house_04", "house_04_roof"),
 ];
 
 /// How many hash-varied house variants to pre-build. Each picks its
@@ -52,6 +59,12 @@ pub fn house_template() -> Result<Template, CddaError> {
 /// A small shed (original inline mapgen, no palettes).
 pub fn shed_template() -> Result<Template, CddaError> {
     assemble_building(SHED_JSON, "shed_1", "shed_roof", 0)
+}
+
+/// The daycare — inline walls/windows, one flat roof; no seeded variants
+/// (its only palette is cosmetic carpets).
+pub fn daycare_template() -> Result<Template, CddaError> {
+    assemble_building(DAYCARE_JSON, "s_daycare", "s_daycare_roof", 0)
 }
 
 /// Ground floor (walls + furniture, palettes resolved at `seed`) + roof.
@@ -78,6 +91,7 @@ pub fn load_building_templates() -> BuildingTemplates {
     let mut specs: Vec<(String, Result<Template, CddaError>)> = vec![
         ("garage".to_string(), garage_template()),
         ("shed".to_string(), shed_template()),
+        ("daycare".to_string(), daycare_template()),
     ];
     // Every house layout × every palette seed — so the streamer lands on
     // different floor plans AND different material/furniture variants.
@@ -208,6 +222,22 @@ mod tests {
                 "{ground}: expected glass windows"
             );
         }
+    }
+
+    #[test]
+    fn daycare_imports_with_walls_roof_and_windows() {
+        // Single-tile civic building; inline walls/windows, so it must
+        // resolve to an enclosed, roofed, windowed building from the
+        // roof palette alone (its carpet palette isn't fetched).
+        let t = daycare_template().expect("daycare should import");
+        let n = |k: PropKind| t.props.iter().filter(|p| p.kind == k).count();
+        let walls = n(PropKind::Wall) + n(PropKind::WallNS) + n(PropKind::WallEW);
+        assert!(walls > 10, "daycare: expected a wall outline, got {walls}");
+        assert!(n(PropKind::Roof) > 0, "daycare: expected a roof");
+        assert!(
+            t.props.iter().any(|p| p.kind.is_window()),
+            "daycare: expected glass windows"
+        );
     }
 
     #[test]

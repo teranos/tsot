@@ -139,12 +139,16 @@ Each is a want above, framed as the open question, with where to start.
   are gone. `ui.rs` deleted; `?proxy=` escape hatch removed.
 - **Boundary:** 44 hand-wired `env.*` imports. **Tests:** 88 lib green,
   clippy silent.
-- **Corpus:** **4** CDDA buildings — garage + houses 01/02/03 (each ×6
-  palette variants) + our shed = 20 templates the streamer picks from.
-  Adding a palette-compatible house is now one line in `cdda-files.txt`
-  + one in `HOUSE_LAYOUTS` (`cdda/building.rs`). The systematic sweep
-  (checklist #1 coverage report) is still the way to go past
-  hand-picked, palette-compatible houses into the rest of the corpus.
+- **Corpus:** **6** CDDA buildings — garage, houses 01–04 (each ×6
+  palette variants), and the daycare (a single-tile civic building) +
+  our shed = 27 templates the streamer picks from. A palette-compatible
+  house is one line in `cdda-files.txt` + one in `HOUSE_LAYOUTS`; a
+  one-off like the daycare adds a `*_template()` + a `specs` line
+  (`cdda/building.rs`). Real schools/malls are **multi-tile specials**
+  we can't ingest yet — the assembler does single 24×24 tiles. The
+  systematic sweep (checklist #1) is the way past hand-picked buildings;
+  the coupling (manifest ↔ Rust registry) is real and worth the
+  build.rs-codegen fix noted there.
 
 ## Build / run
 
