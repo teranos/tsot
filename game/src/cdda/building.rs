@@ -170,6 +170,61 @@ mod tests {
     use super::*;
     use crate::template::PropKind;
 
+    /// Golden-master: every seeded building resolves to the same bytes
+    /// on every peer. If this test fires, either the placement pipeline
+    /// changed (edge shifts, palette resolver, flood-fill…) or the
+    /// PropKind tags moved — read the reported mismatch and confirm the
+    /// change was intentional before updating the pinned digest.
+    /// See `template::Template::stable_digest`.
+    #[test]
+    fn every_shipped_building_digests_stably() {
+        let t = load_building_templates();
+        let actual: Vec<u64> =
+            t.templates.iter().map(|t| t.stable_digest()).collect();
+        // Pinned via the first canonical run of `load_building_templates`
+        // — 4 one-offs (garage, shed, daycare, school) then 4 house
+        // layouts × 6 palette seeds = 28 templates.
+        const EXPECTED: &[u64] = &[
+            0x652ADF5E32A07226, // garage
+            0x419E33708645F1AF, // shed
+            0x14CFA38AB862A3EE, // daycare
+            0xB4571DED1918F0BC, // school
+            0xEC7086C3F0935EF1, // house_01 seed 0
+            0x2165D17D30C75AEB, // house_01 seed 1
+            0x01D3C6850C5C8FCF, // house_01 seed 2
+            0x2165D17D30C75AEB, // house_01 seed 3
+            0xEC53D3118F8A3ECF, // house_01 seed 4
+            0xAC4AC13DA8229A83, // house_01 seed 5
+            0xFEE8C61AFED233F1, // house_02 seed 0
+            0xA51C55D373C2C6AB, // house_02 seed 1
+            0x7A69DC8F07176B5E, // house_02 seed 2
+            0x76B375DF85E00023, // house_02 seed 3
+            0x3C2B8BC7756C515D, // house_02 seed 4
+            0x0342A7D3B10F687D, // house_02 seed 5
+            0x2E64489A9DF121D1, // house_03 seed 0
+            0x902093CF1DD6461F, // house_03 seed 1
+            0xAC6884759567FB5D, // house_03 seed 2
+            0x902093CF1DD6461F, // house_03 seed 3
+            0xD1FB4F673DA07157, // house_03 seed 4
+            0xA4E5778814C29A49, // house_03 seed 5
+            0x08E6908FB97E8367, // house_04 seed 0
+            0xD6E7787ABFDFFC3C, // house_04 seed 1
+            0xFE454C60602726E2, // house_04 seed 2
+            0xD6E7787ABFDFFC3C, // house_04 seed 3
+            0xFF4558B5AB8CC224, // house_04 seed 4
+            0xB6DB46313168AB76, // house_04 seed 5
+        ];
+        if actual != EXPECTED {
+            let dump: Vec<String> =
+                actual.iter().map(|d| format!("0x{d:016X}")).collect();
+            panic!(
+                "building digests drifted from the golden master. \
+                 Confirm the change is intended, then update EXPECTED to:\n[\n  {},\n]",
+                dump.join(",\n  ")
+            );
+        }
+    }
+
     #[test]
     fn building_templates_load_the_garage() {
         let t = load_building_templates();

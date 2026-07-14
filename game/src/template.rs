@@ -93,6 +93,62 @@ pub struct Template {
     pub props: Vec<Prop>,
 }
 
+impl Template {
+    /// Cross-platform, cross-compile stable digest of the resolved
+    /// template. FNV-1a over an explicit byte serialization — floats as
+    /// `to_le_bytes`, the prop kind as a fixed u8 tag (not the enum's
+    /// automatic discriminant), colour as tag + straight bytes. Used by
+    /// the golden-master test to catch determinism drift: two peers
+    /// resolving the same building must produce identical props, and any
+    /// refactor that shifts even one byte should trip the test.
+    pub fn stable_digest(&self) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        let mut mix = |b: u8| {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        };
+        let mix_bytes = |bytes: &[u8], mix: &mut dyn FnMut(u8)| {
+            for &b in bytes {
+                mix(b);
+            }
+        };
+        for p in &self.props {
+            mix_bytes(&p.offset.x.to_le_bytes(), &mut mix);
+            mix_bytes(&p.offset.y.to_le_bytes(), &mut mix);
+            mix_bytes(&p.offset.z.to_le_bytes(), &mut mix);
+            mix(prop_kind_tag(p.kind));
+            match p.color {
+                None => mix(0),
+                Some(c) => {
+                    mix(1);
+                    mix_bytes(&c[0].to_le_bytes(), &mut mix);
+                    mix_bytes(&c[1].to_le_bytes(), &mut mix);
+                    mix_bytes(&c[2].to_le_bytes(), &mut mix);
+                }
+            }
+        }
+        h
+    }
+}
+
+/// Fixed u8 tag per `PropKind` — pinned here so a refactor that
+/// reorders the enum doesn't silently change every golden digest.
+fn prop_kind_tag(k: PropKind) -> u8 {
+    match k {
+        PropKind::Campfire => 0,
+        PropKind::Chair => 1,
+        PropKind::Table => 2,
+        PropKind::Wall => 3,
+        PropKind::WallNS => 4,
+        PropKind::WallEW => 5,
+        PropKind::Roof => 6,
+        PropKind::Furniture => 7,
+        PropKind::Window => 8,
+        PropKind::WindowNS => 9,
+        PropKind::WindowEW => 10,
+    }
+}
+
 /// Pure placement resolution: `template` + `anchor` → the world
 /// position and kind of every prop. No ECS, no side effects, no RNG.
 pub fn resolve_placements(template: &Template, anchor: Vec3) -> Vec<(Vec3, PropKind)> {
