@@ -59,26 +59,67 @@ pub fn active_chunks(center: ChunkCoord, radius: i32) -> Vec<ChunkCoord> {
     out
 }
 
+/// A yard cleared of trees just beyond a building's own footprint.
+const TREE_YARD_MARGIN: f32 = 90.0;
+
+/// How many chunks a building's props can reach from its anchor chunk.
+/// A prop at `half` from the anchor (which sits at a chunk centre) lands
+/// at most `(half + CHUNK_SIZE/2)/CHUNK_SIZE` chunks away, rounded up.
+/// Single-tile buildings give 1; a multi-tile school reaches further.
+pub fn building_reach(buildings: &cdda::BuildingTemplates) -> i32 {
+    let max_half = buildings.half_extents.iter().copied().fold(0.0_f32, f32::max);
+    ((max_half + CHUNK_SIZE * 0.5) / CHUNK_SIZE).ceil() as i32
+}
+
+/// Every building whose footprint can reach chunk `c`: anchors within
+/// `reach` chunks that carry a building, with the deterministic template
+/// index + rotation. Pure — every peer computes the same set, so a
+/// multi-tile building assembles identically no matter which chunk you
+/// approach it from.
+pub fn buildings_reaching(
+    c: ChunkCoord,
+    buildings: &cdda::BuildingTemplates,
+    reach: i32,
+) -> Vec<(Vec3, usize, u8)> {
+    let mut out = Vec::new();
+    if buildings.is_empty() {
+        return out;
+    }
+    for dx in -reach..=reach {
+        for dz in -reach..=reach {
+            let a = ChunkCoord { x: c.x + dx, z: c.z + dz };
+            if let Some(anchor) = cdda::building_anchor_in_chunk(a) {
+                let idx = cdda::building_index(a, buildings.len());
+                out.push((anchor, idx, cdda::building_rotation(a)));
+            }
+        }
+    }
+    out
+}
+
 /// Deterministic trees in a chunk — the ground-plane base positions of
-/// every tree whose cell this chunk owns. Pure.
-pub fn trees_in_chunk(c: ChunkCoord) -> Vec<(Vec3, f32)> {
-    // A building (if any) fits within its own chunk, so only this
-    // chunk's building can shadow these cells — no neighbour query.
-    let building = cdda::building_anchor_in_chunk(c);
+/// every tree whose cell this chunk owns, minus any that would grow
+/// through a nearby building's footprint (a multi-tile building's yard
+/// reaches into neighbouring chunks, so we clear against every building
+/// that reaches this one, sized to its own footprint). Pure.
+pub fn trees_in_chunk(c: ChunkCoord, buildings: &cdda::BuildingTemplates) -> Vec<(Vec3, f32)> {
+    let reach = building_reach(buildings);
+    let yards: Vec<(Vec3, f32)> = buildings_reaching(c, buildings, reach)
+        .into_iter()
+        .map(|(anchor, idx, _rot)| (anchor, buildings.half_extents[idx] + TREE_YARD_MARGIN))
+        .collect();
     let mut out = Vec::new();
     for lx in 0..CHUNK_CELLS {
         for lz in 0..CHUNK_CELLS {
             let ix = c.x * CHUNK_CELLS + lx;
             let iz = c.z * CHUNK_CELLS + lz;
             if let Some((base, height)) = trees::tree_at_cell(ix, iz) {
-                // Don't grow trees through a building — clear its footprint.
-                if let Some(b) = building
-                    && (base.x - b.x).abs() < cdda::BUILDING_FOOTPRINT_HALF
-                    && (base.z - b.z).abs() < cdda::BUILDING_FOOTPRINT_HALF
-                {
-                    continue;
+                let in_a_yard = yards.iter().any(|(a, half)| {
+                    (base.x - a.x).abs() < *half && (base.z - a.z).abs() < *half
+                });
+                if !in_a_yard {
+                    out.push((base, height));
                 }
-                out.push((base, height));
             }
         }
     }
@@ -139,7 +180,7 @@ pub fn stream_chunks(
             continue;
         }
         let mut entities = Vec::new();
-        for (base, height) in trees_in_chunk(c) {
+        for (base, height) in trees_in_chunk(c, &buildings) {
             entities.push(spawn_tree(&mut commands, base, height));
         }
         if let Some(anchor) = campsite::campsite_in_chunk(c) {
@@ -149,13 +190,32 @@ pub fn stream_chunks(
                 anchor,
             ));
         }
-        if let Some(anchor) = cdda::building_anchor_in_chunk(c)
-            && !buildings.0.is_empty()
-        {
-            let idx = cdda::building_index(c, buildings.0.len());
-            let rotated =
-                crate::template::rotate_template(&buildings.0[idx], cdda::building_rotation(c));
-            entities.extend(stamp_template(&mut commands, &rotated, anchor));
+        // Buildings: stamp the props of every building reaching this chunk
+        // that land INSIDE it. A single-tile building stamps entirely into
+        // its own chunk; a multi-tile one has each chunk stamp its own
+        // slice, so it loads/unloads per-chunk and never despawns from
+        // under the player (mirrors CDDA generating one om tile at a time).
+        let reach = building_reach(&buildings);
+        let (cx0, cz0) = (c.x as f32 * CHUNK_SIZE, c.z as f32 * CHUNK_SIZE);
+        for (anchor, idx, rot) in buildings_reaching(c, &buildings, reach) {
+            // Cheap AABB reject: skip buildings whose footprint can't
+            // overlap this chunk (so a single-tile building only ever
+            // rotates + stamps for its own chunk).
+            let half = buildings.half_extents[idx];
+            if anchor.x + half < cx0
+                || anchor.x - half > cx0 + CHUNK_SIZE
+                || anchor.z + half < cz0
+                || anchor.z - half > cz0 + CHUNK_SIZE
+            {
+                continue;
+            }
+            let rotated = crate::template::rotate_template(&buildings.templates[idx], rot);
+            entities.extend(crate::template::stamp_template_where(
+                &mut commands,
+                &rotated,
+                anchor,
+                |w| world_to_chunk(w) == c,
+            ));
         }
         loaded.0.insert(c, entities);
     }
@@ -183,23 +243,30 @@ mod tests {
         assert!(!a.contains(&ChunkCoord { x: 7, z: -2 }));
     }
 
+    fn no_buildings() -> cdda::BuildingTemplates {
+        cdda::BuildingTemplates::default()
+    }
+
     #[test]
     fn trees_in_chunk_are_deterministic() {
         let c = ChunkCoord { x: 3, z: 4 };
-        assert_eq!(trees_in_chunk(c), trees_in_chunk(c));
+        let b = no_buildings();
+        assert_eq!(trees_in_chunk(c, &b), trees_in_chunk(c, &b));
     }
 
     #[test]
     fn adjacent_chunks_do_not_share_trees() {
-        let a = trees_in_chunk(ChunkCoord { x: 3, z: 4 });
-        let b = trees_in_chunk(ChunkCoord { x: 4, z: 4 });
+        let b = no_buildings();
+        let a = trees_in_chunk(ChunkCoord { x: 3, z: 4 }, &b);
+        let bb = trees_in_chunk(ChunkCoord { x: 4, z: 4 }, &b);
         for pa in &a {
-            assert!(!b.iter().any(|pb| pb == pa), "a tree is in two chunks");
+            assert!(!bb.iter().any(|pb| pb == pa), "a tree is in two chunks");
         }
     }
 
     #[test]
     fn trees_dont_grow_through_a_building() {
+        let buildings = cdda::load_building_templates();
         // Find a chunk that carries a building.
         let mut found = None;
         'search: for x in 0..80 {
@@ -212,9 +279,10 @@ mod tests {
             }
         }
         let (c, anchor) = found.expect("a building chunk should exist");
-        for (base, _) in trees_in_chunk(c) {
-            let inside = (base.x - anchor.x).abs() < cdda::BUILDING_FOOTPRINT_HALF
-                && (base.z - anchor.z).abs() < cdda::BUILDING_FOOTPRINT_HALF;
+        let idx = cdda::building_index(c, buildings.len());
+        let half = buildings.half_extents[idx];
+        for (base, _) in trees_in_chunk(c, &buildings) {
+            let inside = (base.x - anchor.x).abs() < half && (base.z - anchor.z).abs() < half;
             assert!(!inside, "tree at {base:?} grows through building at {anchor:?}");
         }
     }
@@ -222,7 +290,83 @@ mod tests {
     #[test]
     fn a_forest_chunk_carries_trees() {
         // A chunk well away from the clearing should hold some trees.
-        assert!(!trees_in_chunk(ChunkCoord { x: 6, z: 6 }).is_empty());
+        assert!(!trees_in_chunk(ChunkCoord { x: 6, z: 6 }, &no_buildings()).is_empty());
+    }
+
+    #[test]
+    fn a_building_wider_than_a_chunk_spans_and_reaches_multiple_chunks() {
+        use crate::template::{Prop, PropKind, Template};
+        // A wall line ~3 chunks wide.
+        let span = (CHUNK_SIZE * 1.2) as i32;
+        let props: Vec<Prop> = (-span..=span)
+            .step_by(80)
+            .map(|x| Prop::at(Vec3::new(x as f32, 0.0, 0.0), PropKind::Wall))
+            .collect();
+        let big = Template { props };
+        let half = big.props.iter().fold(0.0_f32, |m, p| m.max(p.offset.x.abs()));
+        let bt = cdda::BuildingTemplates { templates: vec![big.clone()], half_extents: vec![half] };
+        // Reach must extend past a single chunk.
+        assert!(building_reach(&bt) >= 1, "reach should cover a multi-chunk building");
+        // Anchored at a chunk centre, its props land in more than one chunk.
+        let anchor = Vec3::new(0.5 * CHUNK_SIZE, 0.0, 0.5 * CHUNK_SIZE);
+        let chunks: std::collections::BTreeSet<_> =
+            big.props.iter().map(|p| world_to_chunk(anchor + p.offset)).collect();
+        assert!(chunks.len() > 1, "a building wider than a chunk must span chunks: {}", chunks.len());
+    }
+
+    #[test]
+    fn multi_tile_building_survives_when_its_anchor_chunk_unloads() {
+        use bevy_ecs::system::RunSystemOnce;
+        use crate::template::{Prop, PropKind, StructureProp, Template};
+        // A wall line ~1.5 chunks wide in +/- x — bigger than one chunk.
+        let span = (CHUNK_SIZE * 1.5) as i32;
+        let props: Vec<Prop> = (-span..=span)
+            .step_by(80)
+            .map(|x| Prop::at(Vec3::new(x as f32, 0.0, 0.0), PropKind::Wall))
+            .collect();
+        let bt = cdda::BuildingTemplates {
+            templates: vec![Template { props }],
+            half_extents: vec![span as f32],
+        };
+        // Anchor it at a real (deterministic) building chunk.
+        let mut bc = None;
+        'outer: for x in 0..200 {
+            for z in 0..200 {
+                let c = ChunkCoord { x, z };
+                if cdda::building_anchor_in_chunk(c).is_some() {
+                    bc = Some(c);
+                    break 'outer;
+                }
+            }
+        }
+        let bc = bc.expect("a building chunk exists");
+        let anchor = cdda::building_anchor_in_chunk(bc).unwrap();
+
+        let mut world = World::new();
+        world.insert_resource(LoadedChunks::default());
+        world.insert_resource(bt);
+        let player = world.spawn((PlayerMarker, Position(anchor))).id();
+        let count_walls = |w: &mut World| {
+            let mut q = w.query::<&StructureProp>();
+            q.iter(w).count()
+        };
+
+        world.run_system_once(stream_chunks).unwrap();
+        assert!(count_walls(&mut world) > 0, "building should stream in near the anchor");
+
+        // Walk to the building's far wing: the anchor chunk drops out of
+        // range, but the wing chunk (now loaded) owns its slice — so the
+        // building is still there rather than despawning from under you.
+        world.get_mut::<Position>(player).unwrap().0 = anchor + Vec3::new(span as f32, 0.0, 0.0);
+        world.run_system_once(stream_chunks).unwrap();
+        assert!(
+            !world.resource::<LoadedChunks>().0.contains_key(&bc),
+            "the anchor chunk should have unloaded"
+        );
+        assert!(
+            count_walls(&mut world) > 0,
+            "the building slice at the wing survives the anchor chunk unloading"
+        );
     }
 
     #[test]

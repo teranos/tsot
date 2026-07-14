@@ -145,9 +145,27 @@ pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
 /// placed structure when its chunk unloads. Callers that place
 /// permanent structures can ignore the return.
 pub fn stamp_template(commands: &mut Commands, template: &Template, anchor: Vec3) -> Vec<Entity> {
+    stamp_template_where(commands, template, anchor, |_| true)
+}
+
+/// Like `stamp_template`, but only spawns props whose *world* position
+/// (`anchor + offset`) satisfies `keep`. This is what lets a multi-tile
+/// building be distributed across the chunks it spans: each chunk stamps
+/// only the props that land inside it, so the building loads/unloads
+/// per-chunk (mirroring how CDDA generates one overmap tile at a time)
+/// instead of despawning wholesale when a single anchor chunk unloads.
+pub fn stamp_template_where(
+    commands: &mut Commands,
+    template: &Template,
+    anchor: Vec3,
+    keep: impl Fn(Vec3) -> bool,
+) -> Vec<Entity> {
     let mut spawned = Vec::new();
     for prop in &template.props {
         let pos = anchor + prop.offset;
+        if !keep(pos) {
+            continue;
+        }
         // StructureProp carrying this prop's colour override (walls
         // tinted by material; None elsewhere → kind default).
         let sp = |kind: PropKind| StructureProp { kind, color: prop.color };

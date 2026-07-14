@@ -83,7 +83,31 @@ pub fn assemble_building(
 /// Parsed building templates, cached once at startup so the chunk
 /// streamer stamps from memory instead of re-parsing JSON per chunk.
 #[derive(Resource, Default)]
-pub struct BuildingTemplates(pub Vec<Template>);
+pub struct BuildingTemplates {
+    pub templates: Vec<Template>,
+    /// Per-template footprint half-extent — the largest `|offset.x|` or
+    /// `|offset.z|` over its props, i.e. how far the building reaches
+    /// from its anchor. Rotation only swaps the axes, so this max is
+    /// rotation-safe. Streaming uses it to distribute a building's props
+    /// across the chunks they land in (multi-tile support).
+    pub half_extents: Vec<f32>,
+}
+
+impl BuildingTemplates {
+    pub fn is_empty(&self) -> bool {
+        self.templates.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.templates.len()
+    }
+}
+
+/// The footprint half-extent of one template (max `|x|`/`|z|` offset).
+fn footprint_half(t: &Template) -> f32 {
+    t.props
+        .iter()
+        .fold(0.0_f32, |m, p| m.max(p.offset.x.abs()).max(p.offset.z.abs()))
+}
 
 /// Parse every building we ship, once. Import failures surface on the
 /// obs bus (sacred); the building simply won't appear.
@@ -110,7 +134,8 @@ pub fn load_building_templates() -> BuildingTemplates {
             Err(e) => obs::emit(&format!("[cdda] {name} import failed: {e}")),
         }
     }
-    BuildingTemplates(templates)
+    let half_extents = templates.iter().map(footprint_half).collect();
+    BuildingTemplates { templates, half_extents }
 }
 
 #[cfg(test)]
@@ -121,8 +146,9 @@ mod tests {
     #[test]
     fn building_templates_load_the_garage() {
         let t = load_building_templates();
-        assert!(!t.0.is_empty(), "garage should parse");
-        assert!(t.0[0].props.len() > 50, "garage should be many props");
+        assert!(!t.is_empty(), "garage should parse");
+        assert!(t.templates[0].props.len() > 50, "garage should be many props");
+        assert_eq!(t.templates.len(), t.half_extents.len(), "extents track templates");
     }
 
     #[test]
