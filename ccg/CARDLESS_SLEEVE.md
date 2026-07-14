@@ -35,6 +35,11 @@ cannot be cast.
   (Window Cleaner); while attached it can be spent to pay an ATTACHED cost.
 - **Z.8e** Not fillable (current) — a card cannot be moved into a cardless
   sleeve; consumable blank. *[Deferred: the "worn" concept, own branch.]*
+- **Z.8f** Fully transparent for visibility — for top-of-deck visibility
+  (V.8), a cardless sleeve counts as fully transparent: the see-through
+  reveal walk looks past it to the card beneath (there is no card inside to
+  hide anything). Engine: `effective_top_of_deck_symbols` (and any V.8
+  visibility path) must treat `is_cardless()` as transparent.
 - **S.4 amended** — "a deck contains 50 cards" → **50 sleeve-units** (a
   cardless sleeve is a legal unit; empties occupy a unit).
 
@@ -54,11 +59,22 @@ cannot be cast.
    together).
 5. **Deckbuilding data format** — how a cardless sleeve is expressed in a
    decklist / EA genome so it can exist in real games (needed for slice 8).
+6. **Z.8f visibility** — treat `is_cardless()` as transparent in
+   `effective_top_of_deck_symbols` / any V.8 see-through path. Small; can
+   ride alongside slice 6/8.
+
+## Card-text corrections
+
+- **Shatter Expectations** draft says "sleeveless" — replace with "cardless
+  sleeve" / "empty sleeve" when the card is written.
 
 ## REQUIRES USER INPUT (design)
 
-- **Terminology.** "sleeveless" = **cardless sleeve** — CONFIRMED. Still
-  open: is "clear" = transparent-frame (C.13/C.14)? (Very likely yes.)
+- **Terminology.** The only terms are **cardless sleeve** = **empty
+  sleeve** (synonyms). "sleeveless" is NOT a concept and must not appear —
+  everything is a sleeve, so a card with no sleeve is impossible; it was a
+  mistake in the Shatter Expectations draft. Still open: is "clear" =
+  transparent-frame (C.13/C.14)? (Very likely yes.)
 - **How cardless sleeves enter a deck** — decklist/genome representation,
   and legality: S.4 as 50 units, any cap on how many empties, minimum real
   cards.
@@ -104,8 +120,8 @@ cannot be cast.
   X from GY, X from BOARD, and X from DECK** (4X total). The controller
   **chooses** whether to pay or eat the counter (CONFIRMED: opponent's may).
 - Flavour: "he paid it!?"
-- Terminology: cardless sleeve = "sleeveless" = "empty sleeve"; "clear" =
-  transparent-frame (assumed; confirm).
+- Terminology: cardless sleeve = "empty sleeve"; the draft's "sleeveless"
+  is a MISTAKE — use cardless/empty. "clear" = transparent-frame (confirm).
 - New engine needs (all deferred):
   - **Counter-with-alternative-cost** — a counter the *targeted* player may
     negate by paying, via an opponent-side prompt through the choice/oracle
