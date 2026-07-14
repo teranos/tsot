@@ -280,7 +280,20 @@ pub fn mapgen_to_template(
                 continue;
             }
 
-            if horiz && (hn || hs) {
+            // T-junction skip: at a cell where BOTH runs are active, a
+            // one-sided end of a DIVIDER run would poke a wall pillar
+            // into (or past) the perpendicular perimeter wall. Skip that
+            // side's emission — the perimeter takes care of the visual
+            // meeting point, and the next cell in the divider run picks
+            // up the wall geometry. Doesn't fire at true corners (where
+            // the run is single-side interior, not divider) or at
+            // divider ends that aren't at a perpendicular perimeter.
+            let horiz_one_sided = is_solid(r, c - 1) != is_solid(r, c + 1);
+            let vert_one_sided = is_solid(r - 1, c) != is_solid(r + 1, c);
+            let skip_horiz = horiz && hn && hs && horiz_one_sided && vert;
+            let skip_vert = vert && ve && vw && vert_one_sided && horiz;
+
+            if horiz && (hn || hs) && !skip_horiz {
                 // (true, true) divider → +z convention.
                 // (false, true) interior south → +z. (true, false) → -z.
                 let z_off = match (hn, hs) {
@@ -290,7 +303,7 @@ pub fn mapgen_to_template(
                 };
                 emit(cx_world, cz_world + z_off, ew_kind(base));
             }
-            if vert && (ve || vw) {
+            if vert && (ve || vw) && !skip_vert {
                 // (true, true) divider → +x convention.
                 // (true, false) interior east → +x. (false, true) → -x.
                 let x_off = match (ve, vw) {
@@ -427,6 +440,64 @@ mod tests {
             "window should follow WallEW placement (shift +tile/2 in z); got: {:?}",
             t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn t_junction_divider_doesnt_protrude_into_the_perimeter_cell() {
+        // 4×5: two 1×1 rooms separated by a divider at col 2. Perimeter
+        // walls all around. The T-junction cells (0, 2) and (3, 2) are
+        // where the divider meets the top and bottom perimeter — the
+        // vertical divider should NOT emit at those cells (the perimeter
+        // wall + the next cell's vertical form the T cleanly).
+        let json = synthetic_mapgen(&["wwwww", "w.w.w", "w.w.w", "wwwww"]);
+        let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
+        // For 4×5 with tile=80: cx=2.5, cz=2.0.
+        // Cell (0, 2) centre: x=-40, z=-160. Vert emission would sit at
+        // (col+40, row_center) = (0, -160). Assert none there.
+        let has_top_protrusion = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallNS)
+                && p.offset.x.abs() < 1e-3
+                && (p.offset.z - (-160.0)).abs() < 1e-3
+        });
+        assert!(
+            !has_top_protrusion,
+            "top T-junction should not emit a vertical divider at (0, 2); got: {:?}",
+            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
+        );
+        // Same for the bottom T-junction (row 3).
+        let has_bottom_protrusion = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallNS)
+                && p.offset.x.abs() < 1e-3
+                && (p.offset.z - 80.0).abs() < 1e-3
+        });
+        assert!(!has_bottom_protrusion, "bottom T-junction should not emit vertical");
+        // But the divider IS emitted at the middle cells (1, 2) and (2, 2).
+        let mid_1 = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallNS)
+                && p.offset.x.abs() < 1e-3
+                && (p.offset.z - (-80.0)).abs() < 1e-3
+        });
+        let mid_2 = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallNS)
+                && p.offset.x.abs() < 1e-3
+                && p.offset.z.abs() < 1e-3
+        });
+        assert!(mid_1 && mid_2, "the divider still emits at rows 1 and 2");
+    }
+
+    #[test]
+    fn nw_corner_still_emits_two_segments() {
+        // Guard rail: the T-junction skip must NOT affect true corners
+        // (where the perp side is exterior, not interior). Same 3×3 room
+        // as the perimeter/corner tests.
+        let json = synthetic_mapgen(&["www", "w.w", "www"]);
+        let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
+        let has_vert = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallNS)
+                && (p.offset.x - (-80.0)).abs() < 1e-3
+                && (p.offset.z - (-120.0)).abs() < 1e-3
+        });
+        assert!(has_vert, "NW corner vertical must still emit");
     }
 
     #[test]
