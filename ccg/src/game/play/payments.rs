@@ -216,6 +216,14 @@ impl GameState {
                 !self.has_restriction(t, crate::card::Restriction::CannotBeAttachedTo)
             })
             .filter(|t| !cast_transparent || self.is_transparent(t))
+            // Z.7: skip a full sleeve (host + 3 same-sleeve cards); a 4th
+            // mutation is refused, so the picker must not offer it.
+            .filter(|t| {
+                self.card_pool
+                    .get(*t)
+                    .map(|i| i.same_sleeve.len() < 3)
+                    .unwrap_or(false)
+            })
             .cloned()
             .collect()
     }

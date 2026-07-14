@@ -706,6 +706,17 @@ impl GameState {
             if self.is_transparent(instance) && !self.is_transparent(target) {
                 return Err(PlayError::MutationTargetInvalid(target.clone()));
             }
+            // Z.7: a sleeve holds at most 4 cards — the host plus up to 3
+            // same-sleeve mutations. Refuse a mutation that would be the 4th
+            // fused card.
+            let fused = self
+                .card_pool
+                .get(target)
+                .map(|i| i.same_sleeve.len())
+                .unwrap_or(0);
+            if fused >= 3 {
+                return Err(PlayError::SleeveFull(target.clone()));
+            }
         }
 
         // P.16: SACRIFICE cost validation. Each chosen sacrifice ID must be

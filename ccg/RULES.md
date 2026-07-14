@@ -52,7 +52,7 @@ The following zones are part of the game.
 - **Z.4** EXILE
 - **Z.5** GRAVEYARD
 - **Z.6** ATTACHED — a card placed under another card.
-- **Z.7** SAME-SLEEVE — a card fused inside the host's sleeve.
+- **Z.7** SAME-SLEEVE — a card fused inside the host's sleeve. A sleeve holds at most 4 cards: a host and up to 3 same-sleeve cards.
 - **Z.8** CARDLESS SLEEVE — a sleeve with no card in it (an "empty sleeve"). It has no symbol and cannot be cast.
   - **Z.8a** It cannot be targeted.
   - **Z.8b** It is not a card. On top of the DECK it is taken into HAND for free and the draw continues to the next unit.

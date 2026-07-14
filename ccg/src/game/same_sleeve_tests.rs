@@ -224,3 +224,55 @@ fn nested_sleeve_rides_host_and_resolves_hosts() {
         assert!(!zone.contains(&outer) && !zone.contains(&inner), "nested cards not loose");
     }
 }
+
+#[test]
+fn z7_sleeve_holds_at_most_four_cards_host_plus_three_mutations() {
+    use crate::card::CardType;
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let host = s.a.hand[0].clone();
+    let f1 = s.a.hand[1].clone();
+    let f2 = s.a.hand[2].clone();
+    let third = s.a.hand[3].clone();
+    let fourth = s.a.hand[4].clone();
+
+    s.card_pool.get_mut(&host).unwrap().card_mut().kind = CardType::Creature;
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+    // Two mutations already fused (host + 2 = 3 cards).
+    for m in [&f1, &f2] {
+        let _ = s.remove_from_zone(m, PlayerId::A, Zone::Hand);
+        s.add_same_sleeve(&host, m);
+    }
+
+    // The 3rd mutation (host + 3 = 4 cards, the max) is allowed.
+    {
+        let inst = s.card_pool.get_mut(&third).unwrap();
+        inst.card_mut().kind = CardType::Mutation;
+        inst.card_mut().cost = vec![];
+    }
+    let res = s.play_card(
+        PlayerId::A,
+        &third,
+        PlayChoices { mutation_target: Some(host.clone()), ..PlayChoices::default() },
+        None,
+    );
+    assert!(!matches!(res, Err(PlayError::SleeveFull(_))), "3rd mutation allowed: {res:?}");
+    assert_eq!(
+        s.card_pool.get(&host).unwrap().same_sleeve.len(),
+        3,
+        "host now carries 3 same-sleeve mutations"
+    );
+
+    // A 4th mutation onto the now-full sleeve is refused (Z.7).
+    {
+        let inst = s.card_pool.get_mut(&fourth).unwrap();
+        inst.card_mut().kind = CardType::Mutation;
+        inst.card_mut().cost = vec![];
+    }
+    let res = s.play_card(
+        PlayerId::A,
+        &fourth,
+        PlayChoices { mutation_target: Some(host.clone()), ..PlayChoices::default() },
+        None,
+    );
+    assert!(matches!(res, Err(PlayError::SleeveFull(_))), "4th mutation refused: {res:?}");
+}
