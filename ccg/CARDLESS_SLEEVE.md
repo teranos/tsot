@@ -128,6 +128,7 @@ cannot be cast.
 ### Window Cleaner (human, cyan)
 - Transparent slots T, TR, RU, RC, C. Cost `2 attach`. 2/3 reach.
 - ETB: search library for 2 cardless sleeves, attach them to this card.
+  Window Cleaner only ever gives **transparent** (clear) cardless sleeves.
 - On becoming tapped: *may* move an attached cardless sleeve to GY and draw
   a card. **No inherent tap ability** — relies on being tapped for an
   attack or by another effect.

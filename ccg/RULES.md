@@ -53,10 +53,10 @@ The following zones are part of the game.
 - **Z.5** GRAVEYARD
 - **Z.6** ATTACHED — a card placed under another card.
 - **Z.7** SAME-SLEEVE — a card fused inside the host's sleeve.
-- **Z.8** CARDLESS SLEEVE — a sleeve with no card in it (an "empty sleeve"). It has no color, no symbol, and cannot be cast.
+- **Z.8** CARDLESS SLEEVE — a sleeve with no card in it (an "empty sleeve"). It has no symbol and cannot be cast.
   - **Z.8a** It cannot be targeted.
   - **Z.8b** It is not a card. On top of the DECK it is taken into HAND for free and the draw continues to the next unit.
-  - **Z.8c** It pays as a plain body for HAND, GRAVEYARD, and ATTACHED costs — never MILL, and never the color or symbol part of a cost (P.7a / P.12a).
+  - **Z.8c** It pays as a plain body for HAND, GRAVEYARD, and ATTACHED costs — never MILL, and never the symbol part of a cost (P.7a / P.12a).
   - **Z.8d** An effect can attach it to a card; while attached it can pay an ATTACHED cost.
   - **Z.8e** On top of the DECK it counts as fully transparent (V.8).
 
