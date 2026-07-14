@@ -37,5 +37,6 @@ pub use choice::{
     RandomOracle, RecordingOracle, ScriptedAnswer, ScriptedOracle,
 };
 pub use game::{
-    Sleeve, GameState, Modifier, MoveError, Phase, PlayerId, PlayerState, StatusEffect, Zone,
+    DeckUnit, Sleeve, GameState, Modifier, MoveError, Phase, PlayerId, PlayerState, StatusEffect,
+    Zone,
 };

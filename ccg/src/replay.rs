@@ -12,14 +12,24 @@
 //! live `CardRegistry` via `rebind_handlers` after deserialization.
 
 use crate::card::CardRegistry;
-use crate::game::{GameState, Journal};
+use crate::game::{DeckUnit, GameState, Journal};
 use serde::{Deserialize, Serialize};
+
+/// Reserved deck-id sentinel marking a cardless sleeve (Z.8) in a
+/// `ReplayFile`'s `deck_*_card_ids`. Not a real card id, so it round-trips
+/// without colliding with any card in the registry.
+pub const CARDLESS_SLEEVE_ID: &str = "__cardless__";
 
 /// Walk a deserialized `GameState`'s `card_pool` and re-attach Lua handlers
 /// by looking up each card's id in the live `CardRegistry`. Required after
 /// loading from JSON: serialized cards have empty handler maps.
 pub fn rebind_handlers(state: &mut GameState, registry: &CardRegistry) -> Result<(), String> {
     for (iid, inst) in &mut state.card_pool {
+        // Z.8: a cardless sleeve has no card to rebind (its blank card has
+        // id "", which is not in the registry).
+        if inst.is_cardless() {
+            continue;
+        }
         let template = registry
             .cards()
             .iter()
@@ -59,23 +69,29 @@ impl ReplayFile {
     /// `GameState::new` was called) — call `journal.replay_forward(&mut state)`
     /// to advance to the final state.
     pub fn rebuild_initial_state(&self, registry: &CardRegistry) -> Result<GameState, String> {
-        let deck_a = self.lookup_cards(&self.deck_a_card_ids, registry)?;
-        let deck_b = self.lookup_cards(&self.deck_b_card_ids, registry)?;
-        Ok(GameState::new(deck_a, deck_b))
+        let deck_a = self.lookup_units(&self.deck_a_card_ids, registry)?;
+        let deck_b = self.lookup_units(&self.deck_b_card_ids, registry)?;
+        Ok(GameState::from_units(deck_a, deck_b))
     }
 
-    fn lookup_cards(
+    /// Map deck ids to `DeckUnit`s: the cardless sentinel becomes a cardless
+    /// sleeve (Z.8), every other id is looked up as a card.
+    fn lookup_units(
         &self,
         ids: &[String],
         registry: &CardRegistry,
-    ) -> Result<Vec<crate::card::Card>, String> {
+    ) -> Result<Vec<DeckUnit>, String> {
         ids.iter()
             .map(|id| {
+                if id == CARDLESS_SLEEVE_ID {
+                    return Ok(DeckUnit::Cardless);
+                }
                 registry
                     .cards()
                     .iter()
                     .find(|c| c.id == *id)
                     .cloned()
+                    .map(DeckUnit::Card)
                     .ok_or_else(|| format!("ReplayFile: card id not in registry: {id}"))
             })
             .collect()

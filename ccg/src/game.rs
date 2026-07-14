@@ -33,7 +33,7 @@ pub use journal::{Journal, JournalEntry};
 pub use movement::MoveError;
 pub use play::{ActivateChoices, ActivateError, PlayChoices, PlayError};
 pub use state::{
-    AttackDecl, Sleeve, CombatState, GameState, InstanceId, Modifier, Phase, PlayerId,
+    AttackDecl, DeckUnit, Sleeve, CombatState, GameState, InstanceId, Modifier, Phase, PlayerId,
     PlayerState, PriorityError, PriorityState, StackItem, StatusEffect, Zone,
 };
 

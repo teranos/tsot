@@ -19,11 +19,12 @@
 - **Spec — DONE.** Z.8 + S.4 in RULES.md.
 - **Slice 8 — cardless sleeves become real & engine/AI-correct.** Medium
   (≈ slice 7). Three subunits, each green on its own:
-  - **8.1 Representation + serialization (S–M).** A primitive to place
-    cardless-sleeve units in a deck (decks are `Vec<Card>`, so a helper, not
-    a `GameState::new` rewrite). Replay/Save serialize deck as card-ids —
-    add a cardless sentinel + rebuild handling so cardless units round-trip.
-    Round-trip test.
+  - **8.1 Representation + serialization — DONE.** `DeckUnit {Card, Cardless}`
+    + `GameState::from_units`; `new(Vec<Card>)` unchanged (wraps as Card
+    units). `rebind_handlers` skips cardless; `ReplayFile` uses the
+    `CARDLESS_SLEEVE_ID` sentinel so cardless deck units round-trip. Tests in
+    `tests/cardless_sleeve.rs` (from_units placement, save/load, replay
+    rebuild).
   - **8.2 AI affordability + eligibility (M, delicate).** `eligible_hand_
     payments` offers cardless bodies; `can_pay_instant_cost` /
     `identity_matching_hand_count` model "1 real anchor + cardless bodies"

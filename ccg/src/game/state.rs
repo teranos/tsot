@@ -54,6 +54,17 @@ pub enum Zone {
 
 pub type InstanceId = String;
 
+/// A deck-building unit: a sleeve holding a card, or a cardless sleeve
+/// (Z.8). `GameState::from_units` builds a game from these so a deck can
+/// contain empty sleeves alongside ordinary cards (S.4).
+// `Card` is a large struct; the codebase passes it by value everywhere
+// (e.g. `Vec<Card>`), so this transient builder enum does the same.
+#[allow(clippy::large_enum_variant)]
+pub enum DeckUnit {
+    Card(Card),
+    Cardless,
+}
+
 /// A sleeve — the atomic unit in every zone. It holds optional card
 /// content: `Some(card)` for an ordinary card, `None` for a cardless
 /// sleeve (Z.8). Read the content through `card()` (blank-card fallback)
@@ -386,6 +397,15 @@ impl GameState {
     /// Cards passed in are dealt in order: first 5 become HAND, rest become DECK.
     /// Real games will shuffle the deck before this call; this function does not.
     pub fn new(deck_a: Vec<Card>, deck_b: Vec<Card>) -> Self {
+        Self::from_units(
+            deck_a.into_iter().map(DeckUnit::Card).collect(),
+            deck_b.into_iter().map(DeckUnit::Card).collect(),
+        )
+    }
+
+    /// Like `new`, but each deck is a list of `DeckUnit`s so a deck can hold
+    /// cardless sleeves (Z.8 / S.4) alongside ordinary cards.
+    pub fn from_units(deck_a: Vec<DeckUnit>, deck_b: Vec<DeckUnit>) -> Self {
         let mut card_pool = BTreeMap::new();
         let a = Self::init_player(PlayerId::A, deck_a, &mut card_pool);
         let b = Self::init_player(PlayerId::B, deck_b, &mut card_pool);
@@ -1182,16 +1202,19 @@ impl GameState {
 
     fn init_player(
         pid: PlayerId,
-        cards: Vec<Card>,
+        units: Vec<DeckUnit>,
         pool: &mut BTreeMap<InstanceId, Sleeve>,
     ) -> PlayerState {
         let mut state = PlayerState::default();
-        let mut ids: Vec<InstanceId> = Vec::with_capacity(cards.len());
-        for (i, card) in cards.into_iter().enumerate() {
-            let iid = format!("{:?}:{:04}:{}", pid, i, card.id);
+        let mut ids: Vec<InstanceId> = Vec::with_capacity(units.len());
+        for (i, unit) in units.into_iter().enumerate() {
+            let (iid, content) = match unit {
+                DeckUnit::Card(card) => (format!("{:?}:{:04}:{}", pid, i, card.id), Some(card)),
+                DeckUnit::Cardless => (format!("{:?}:{:04}:cardless", pid, i), None),
+            };
             let inst = Sleeve {
                 instance_id: iid.clone(),
-                content: Some(card),
+                content,
                 owner: pid,
                 controller: pid,
                 tapped: false,
