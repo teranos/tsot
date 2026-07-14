@@ -59,6 +59,7 @@ The following zones are part of the game.
   - **Z.8c** It pays as a plain body for HAND, GRAVEYARD, and ATTACHED costs — never MILL, and never the symbol part of a cost (P.7a / P.12a).
   - **Z.8d** An effect can attach it to a card; while attached it can pay an ATTACHED cost.
   - **Z.8e** On top of the DECK a clear one counts as fully transparent (V.8); an opaque one does not.
+  - **Z.8f** In HAND it does not count toward the maximum hand size (U.10).
 
 The STACK (R.8) is shared and global, not per-player, and therefore is not a Z-zone — it lives under R (Responses).
 

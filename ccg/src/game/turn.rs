@@ -244,13 +244,27 @@ impl GameState {
     fn do_end_step(&mut self) {
         const MAX_HAND: usize = 6;
         let pid = self.active_player;
-        let hand_len = self.player(pid).hand.len();
-        if hand_len <= MAX_HAND {
+        // Z.8f: cardless sleeves in HAND don't count toward the max hand
+        // size, and aren't discarded to satisfy it — only card-bearing
+        // sleeves do.
+        let real_in_hand = self
+            .player(pid)
+            .hand
+            .iter()
+            .filter(|iid| !self.is_cardless(iid))
+            .count();
+        if real_in_hand <= MAX_HAND {
             return;
         }
-        let to_discard = hand_len - MAX_HAND;
+        let to_discard = real_in_hand - MAX_HAND;
         for _ in 0..to_discard {
-            let Some(front) = self.player(pid).hand.first().cloned() else {
+            let Some(front) = self
+                .player(pid)
+                .hand
+                .iter()
+                .find(|iid| !self.is_cardless(iid))
+                .cloned()
+            else {
                 break;
             };
             // Sacred-error sweep: end-step discard hand-front → graveyard.
@@ -330,6 +344,59 @@ mod tests {
         assert_eq!(s.a.hand.len(), hand_before + 1);
         assert_eq!(s.a.deck.len(), deck_before - 1);
         assert_eq!(s.a.hand.last(), Some(&top));
+    }
+
+    #[test]
+    fn end_step_ignores_cardless_sleeves_for_max_hand_size() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        // A starts with 5 real cards; build hand to 8 real + 2 cardless.
+        for _ in 0..3 {
+            let top = s.a.deck[0].clone();
+            s.move_card(&top, PlayerId::A, Zone::Deck, Zone::Hand).unwrap();
+        }
+        for _ in 0..2 {
+            let top = s.a.deck[0].clone();
+            s.move_card(&top, PlayerId::A, Zone::Deck, Zone::Hand).unwrap();
+            s.card_pool.get_mut(&top).unwrap().content = None;
+        }
+        assert_eq!(s.a.hand.len(), 10);
+        assert_eq!(s.a.hand.iter().filter(|i| !s.is_cardless(i)).count(), 8);
+
+        s.do_end_step();
+
+        // Discarded down to 6 card-bearing sleeves; the 2 cardless stay.
+        assert_eq!(
+            s.a.hand.iter().filter(|i| !s.is_cardless(i)).count(),
+            6,
+            "discards down to 6 card-bearing sleeves"
+        );
+        assert_eq!(
+            s.a.hand.iter().filter(|i| s.is_cardless(i)).count(),
+            2,
+            "cardless sleeves are not discarded"
+        );
+    }
+
+    #[test]
+    fn end_step_no_discard_when_only_cardless_push_over_the_cap() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        // 6 real (5 dealt + 1 drawn) + 3 cardless = 9 sleeves, 6 real.
+        let top = s.a.deck[0].clone();
+        s.move_card(&top, PlayerId::A, Zone::Deck, Zone::Hand).unwrap();
+        for _ in 0..3 {
+            let t = s.a.deck[0].clone();
+            s.move_card(&t, PlayerId::A, Zone::Deck, Zone::Hand).unwrap();
+            s.card_pool.get_mut(&t).unwrap().content = None;
+        }
+        let hand_before = s.a.hand.clone();
+
+        s.do_end_step();
+
+        // 6 real <= 6 → no discard, even though 9 sleeves exceed the cap.
+        assert_eq!(
+            s.a.hand, hand_before,
+            "no discard when only cardless sleeves push over the cap"
+        );
     }
 
     #[test]
