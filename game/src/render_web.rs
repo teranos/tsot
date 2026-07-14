@@ -13,8 +13,8 @@ use crate::gpu_web;
 use crate::hud;
 use crate::obs;
 use crate::scene::{
-    self, GLASS_SHADER_WGSL, GpuVertex, SHADER_WGSL, SceneCamera, SceneInstance, UI_SHADER_WGSL,
-    as_bytes, cube_geometry,
+    self, GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, GpuVertex, SHADER_WGSL, SceneCamera, SceneInstance,
+    UI_SHADER_WGSL, as_bytes, cube_geometry,
 };
 
 #[repr(C)]
@@ -37,6 +37,11 @@ struct RenderWebState {
     glass_pipeline: gpu_web::GameRenderPipeline,
     glass_instance_buf: Option<gpu_web::GameBuffer>,
     glass_instance_capacity: usize,
+    // Ghost pass — cut-away walls + roof at low alpha, drawn after
+    // glass so the outline sits on top.
+    ghost_pipeline: gpu_web::GameRenderPipeline,
+    ghost_instance_buf: Option<gpu_web::GameBuffer>,
+    ghost_instance_capacity: usize,
     // UI overlay — pipeline + growable instance buffer for D-pad + HUD.
     ui_pipeline: gpu_web::GameUiPipeline,
     ui_instance_buf: Option<gpu_web::GameBuffer>,
@@ -144,6 +149,26 @@ pub fn init(canvas_id: &str) -> bool {
         obs::emit("[render_web] init: glass pipeline null");
         return false;
     };
+    // Ghost pipeline: shares the pipeline layout + world's vertex layout,
+    // its own shader emits a low constant alpha for cut-away outlines.
+    let ghost_shader = gpu_web::GameShaderModule::create(GHOST_SHADER_WGSL, "render_web.ghost.shader");
+    let Some(ghost_shader) = ghost_shader else {
+        obs::emit("[render_web] init: ghost shader null");
+        return false;
+    };
+    let ghost_pipeline = gpu_web::GameRenderPipeline::create_ghost(
+        &pl_layout,
+        &ghost_shader,
+        std::mem::size_of::<GpuVertex>() as u32,
+        std::mem::size_of::<SceneInstance>() as u32,
+        gpu_web::color_format::BGRA8UNORM,
+        gpu_web::depth_format::DEPTH32FLOAT,
+        "render_web.ghost.pipeline",
+    );
+    let Some(ghost_pipeline) = ghost_pipeline else {
+        obs::emit("[render_web] init: ghost pipeline null");
+        return false;
+    };
 
     STATE.with(|c| {
         *c.borrow_mut() = Some(RenderWebState {
@@ -158,6 +183,9 @@ pub fn init(canvas_id: &str) -> bool {
             glass_pipeline,
             glass_instance_buf: None,
             glass_instance_capacity: 0,
+            ghost_pipeline,
+            ghost_instance_buf: None,
+            ghost_instance_capacity: 0,
             ui_pipeline,
             ui_instance_buf: None,
             ui_instance_capacity: 0,
@@ -252,6 +280,45 @@ pub fn frame_glass(instances: &[SceneInstance]) -> u32 {
     })
 }
 
+/// Ghost pass — cut-away walls + roof at low alpha, drawn after the
+/// glass pass so the outline sits on top. Grows its own instance
+/// buffer as the ghost set changes with the player's inside/outside
+/// state. A no-op success when there are no ghosts.
+pub fn frame_ghost(instances: &[SceneInstance]) -> u32 {
+    if instances.is_empty() {
+        return 0;
+    }
+    STATE.with(|c| {
+        let mut opt = c.borrow_mut();
+        let Some(state) = opt.as_mut() else {
+            return 2;
+        };
+        if state.ghost_instance_buf.is_none() || instances.len() > state.ghost_instance_capacity {
+            let new_cap = instances.len().max(16);
+            let new_size = (new_cap * std::mem::size_of::<SceneInstance>()) as u32;
+            state.ghost_instance_buf = gpu_web::GameBuffer::create(
+                new_size,
+                gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+                "render_web.ghost.instance",
+            );
+            state.ghost_instance_capacity = new_cap;
+        }
+        let Some(ghost_buf) = state.ghost_instance_buf.as_ref() else {
+            return 3;
+        };
+        ghost_buf.write(as_bytes(instances));
+        gpu_web::render_ghost(
+            &state.target,
+            &state.ghost_pipeline,
+            &state.bind_group,
+            &state.vertex_buf,
+            ghost_buf,
+            state.vertex_count,
+            instances.len() as u32,
+        )
+    })
+}
+
 /// UI overlay pass — draws the D-pad + HUD quads on top of everything.
 /// Grows the UI instance buffer as the quad count changes (the HUD's
 /// settings panel adds quads when open), then runs the load-op pass.
@@ -289,12 +356,13 @@ pub fn frame_ui(instances: &[dpad::DpadInstance]) -> u32 {
 }
 
 /// Called from lib.rs's _frame to compose the render step: opaque world
-/// first, then the translucent glass panes, then the D-pad + HUD
-/// overlay.
+/// first, then translucent glass panes, then the ghost pass (cut-away
+/// walls + roof at low alpha), then the D-pad + HUD overlay.
 pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     let snap = scene::snapshot_scene(app);
     let instances = scene::snapshot_to_instances(&snap);
     let glass = scene::snapshot_to_glass_instances(&snap);
+    let ghost = scene::snapshot_to_ghost_instances(&snap);
     let camera = SceneCamera::follow(
         [snap.player.x, snap.player.y, snap.player.z],
         crate::room::FLOOR_HALF,
@@ -306,6 +374,10 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     let glass_result = frame_glass(&glass);
     if glass_result != 0 {
         return glass_result;
+    }
+    let ghost_result = frame_ghost(&ghost);
+    if ghost_result != 0 {
+        return ghost_result;
     }
     // D-pad, HUD quads, build watermark, NPC-bump "!" — all one UI
     // pass. The watermark is the running binary drawing its own commit.

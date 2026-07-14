@@ -941,6 +941,105 @@ async function main() {
           return 0
         }
       },
+      // Ghost pipeline — same shape as glass (alpha-blended, depth-test
+      // on, depth-write off) but drawn LAST so the cut-away outline sits
+      // on top of both opaque and glass. Distinct pipeline so its blend
+      // and future tuning evolve without touching glass.
+      game_gpu_render_pipeline_create_ghost: (
+        pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
+        colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,
+      ): number => {
+        if (!device) return 0
+        const pl = pipelineLayouts.get(pipelineLayoutH)
+        const shader = shaders.get(shaderH)
+        if (!pl || !shader) return 0
+        const colorFmt = COLOR_FORMATS[colorFormat]
+        const depthFmt = DEPTH_FORMATS[depthFormat]
+        if (!colorFmt || !depthFmt) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const pipeline = device.createRenderPipeline({
+            label,
+            layout: pl,
+            vertex: {
+              module: shader,
+              entryPoint: 'vs',
+              buffers: [
+                { arrayStride: vertexStride, stepMode: 'vertex', attributes: [
+                  { shaderLocation: 0, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 1, offset: 12, format: 'float32x3' },
+                ] },
+                { arrayStride: instanceStride, stepMode: 'instance', attributes: [
+                  { shaderLocation: 2, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 3, offset: 12, format: 'float32x3' },
+                  { shaderLocation: 4, offset: 24, format: 'float32x3' },
+                ] },
+              ],
+            },
+            primitive: { topology: 'triangle-list', frontFace: 'ccw', cullMode: 'back' },
+            depthStencil: { format: depthFmt, depthWriteEnabled: false, depthCompare: 'less' },
+            fragment: {
+              module: shader,
+              entryPoint: 'fs',
+              targets: [{
+                format: colorFmt,
+                blend: {
+                  color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                  alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                },
+              }],
+            },
+          })
+          const h = nextHandle++
+          renderPipelines.set(h, pipeline)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_render_pipeline_create_ghost]', e)
+          return 0
+        }
+      },
+      // Ghost pass — LOAD the world's colour + depth, blend the outlines
+      // of cut-away walls/roof on top.
+      game_gpu_render_ghost: (
+        targetH: number, pipelineH: number, bindGroupH: number,
+        vertexBufH: number, instanceBufH: number,
+        vertexCount: number, instanceCount: number,
+      ): number => {
+        if (!device) return 1
+        const target = renderTargets.get(targetH)
+        const pipeline = renderPipelines.get(pipelineH)
+        const bindGroup = bindGroups.get(bindGroupH)
+        const vertexBuf = buffers.get(vertexBufH)
+        const instanceBuf = buffers.get(instanceBufH)
+        if (!target || !pipeline || !bindGroup || !vertexBuf || !instanceBuf) return 1
+        try {
+          const colorView = target.context.getCurrentTexture().createView({ label: 'game.ghost.color' })
+          const encoder = device.createCommandEncoder({ label: 'game.ghost.encoder' })
+          const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+              view: colorView,
+              loadOp: 'load',
+              storeOp: 'store',
+            }],
+            depthStencilAttachment: {
+              view: target.depthView,
+              depthLoadOp: 'load',
+              depthStoreOp: 'store',
+            },
+          })
+          pass.setPipeline(pipeline)
+          pass.setBindGroup(0, bindGroup)
+          pass.setVertexBuffer(0, vertexBuf)
+          pass.setVertexBuffer(1, instanceBuf)
+          pass.draw(vertexCount, instanceCount)
+          pass.end()
+          device.queue.submit([encoder.finish()])
+          return 0
+        } catch (e) {
+          console.error('[game.gpu_render_ghost]', e)
+          return 1
+        }
+      },
       // Glass pass — LOAD the world's colour + depth (opaque already
       // drew + wrote depth), blend the panes, keep depth read-only.
       game_gpu_render_glass: (

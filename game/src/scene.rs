@@ -60,6 +60,57 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Ghost pass shader — cut-away walls + roof render here at low alpha
+/// instead of vanishing, so the player still sees the outline of the
+/// building they're inside. Same vertex + instance layout as the world
+/// cube shader; distinct pipeline from glass so its alpha (and future
+/// per-instance tuning) evolves separately.
+pub const GHOST_SHADER_WGSL: &str = r#"
+struct Camera { view_proj: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> camera: Camera;
+
+struct VIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+};
+
+struct IIn {
+    @location(2) i_pos: vec3<f32>,
+    @location(3) i_color: vec3<f32>,
+    @location(4) i_scale: vec3<f32>,
+};
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) color: vec3<f32>,
+};
+
+@vertex
+fn vs(v: VIn, i: IIn) -> VOut {
+    let world = v.pos * i.i_scale + i.i_pos;
+    var o: VOut;
+    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    o.normal = normalize(v.normal);
+    o.color = i.i_color;
+    return o;
+}
+
+const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
+const AMBIENT: f32 = 0.25;
+/// Deliberately faint — the ghost is a hint of the wall's outline,
+/// not a wall you look through.
+const GHOST_ALPHA: f32 = 0.15;
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let l = normalize(LIGHT_DIR);
+    let ndotl = max(dot(normalize(in.normal), l), 0.0);
+    let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
+    return vec4<f32>(in.color * k, GHOST_ALPHA);
+}
+"#;
+
 /// Glass pass shader — identical geometry to the world cube shader, but
 /// the fragment emits a low constant alpha so windows read as real
 /// see-through glass. Drawn after the opaque world with alpha blending,
@@ -554,6 +605,52 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     instances
 }
 
+/// Every wall/roof cut away by `snapshot_to_instances` — surfaced here
+/// as low-alpha ghost instances so the player still sees an outline of
+/// the building they're inside, rather than the geometry silently
+/// disappearing. Same eligibility test as the cut-away in
+/// `snapshot_to_instances`, inverted: this returns exactly what the
+/// opaque pass skips (never the other way around, so no double-draw).
+pub fn snapshot_to_ghost_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
+    let roof_half = crate::cdda::CDDA_TILE / 2.0;
+    let under_roof = snap.structures.iter().any(|(p, k, _)| {
+        *k == PropKind::Roof
+            && (p.x - snap.player.x).abs() <= roof_half
+            && (p.z - snap.player.z).abs() <= roof_half
+    });
+    if !under_roof {
+        return Vec::new();
+    }
+    let player_depth = snap.player.x + snap.player.z;
+    let mut out = Vec::new();
+    for (pos, kind, tint) in &snap.structures {
+        if kind.is_window() {
+            continue;
+        }
+        let in_footprint =
+            (pos.x - snap.player.x).abs() < 1100.0 && (pos.z - snap.player.z).abs() < 1100.0;
+        if !in_footprint {
+            continue;
+        }
+        let is_ghost = *kind == PropKind::Roof
+            || (matches!(
+                kind,
+                PropKind::Wall | PropKind::WallNS | PropKind::WallEW
+            ) && (pos.x + pos.z) > player_depth + 40.0);
+        if !is_ghost {
+            continue;
+        }
+        let (default_color, scale) = prop_appearance(*kind);
+        let color = tint.unwrap_or(default_color);
+        out.push(SceneInstance {
+            pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
+            color,
+            scale,
+        });
+    }
+    out
+}
+
 /// The translucent glass panes, as instances for the alpha-blended
 /// glass pass. Separate from `snapshot_to_instances` so the opaque
 /// world can draw + write depth first, then glass blends over it. Glass
@@ -650,6 +747,60 @@ mod tests {
         let walls: Vec<_> = inst.iter().filter(|i| (90.0..140.0).contains(&i.pos[1])).collect();
         assert_eq!(walls.len(), 1, "only the far wall should remain when inside");
         assert!(walls[0].pos[0] < 0.0, "the surviving wall is the far one");
+    }
+
+    #[test]
+    fn cut_away_wall_and_roof_surface_as_ghost_instances() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![
+                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None), // overhead → inside
+                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None), // camera-facing (x+z>0)
+                (Vec3::new(-300.0, 0.0, -300.0), PropKind::Wall, None), // far side (still opaque)
+            ],
+            jukeboxes: vec![],
+            player: Vec3::ZERO,
+        };
+        let opaque = snapshot_to_instances(&snap);
+        let ghost = snapshot_to_ghost_instances(&snap);
+        // The opaque pass keeps the far wall only.
+        let opaque_walls: Vec<_> = opaque.iter().filter(|i| (90.0..140.0).contains(&i.pos[1])).collect();
+        assert_eq!(opaque_walls.len(), 1);
+        assert!(opaque_walls[0].pos[0] < 0.0);
+        // Ghost carries what the opaque pass dropped: the camera-facing
+        // wall + the roof — never the far wall (still opaque).
+        assert_eq!(ghost.len(), 2, "expected roof + camera-facing wall as ghosts");
+        assert!(ghost.iter().any(|i| i.pos[1] > 200.0), "ghost includes the roof");
+        assert!(
+            ghost.iter().any(|i| i.pos[0] > 0.0 && (90.0..140.0).contains(&i.pos[1])),
+            "ghost includes the camera-facing wall"
+        );
+    }
+
+    #[test]
+    fn ghost_is_empty_when_not_under_roof() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![
+                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None),
+                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None),
+            ],
+            jukeboxes: vec![],
+            player: Vec3::new(5000.0, 0.0, 5000.0), // far from any roof
+        };
+        assert!(snapshot_to_ghost_instances(&snap).is_empty());
     }
 
     #[test]
