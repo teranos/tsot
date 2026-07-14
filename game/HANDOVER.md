@@ -139,8 +139,12 @@ Each is a want above, framed as the open question, with where to start.
   are gone. `ui.rs` deleted; `?proxy=` escape hatch removed.
 - **Boundary:** 44 hand-wired `env.*` imports. **Tests:** 88 lib green,
   clippy silent.
-- **Corpus:** still only **2** CDDA buildings (garage, house01) + our
-  shed. The machinery is ready; the world isn't full yet. ← the gap.
+- **Corpus:** **4** CDDA buildings — garage + houses 01/02/03 (each ×6
+  palette variants) + our shed = 20 templates the streamer picks from.
+  Adding a palette-compatible house is now one line in `cdda-files.txt`
+  + one in `HOUSE_LAYOUTS` (`cdda/building.rs`). The systematic sweep
+  (checklist #1 coverage report) is still the way to go past
+  hand-picked, palette-compatible houses into the rest of the corpus.
 
 ## Build / run
 

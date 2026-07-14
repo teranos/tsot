@@ -12,11 +12,25 @@ use super::placement::{CDDA_TILE, CddaError, ROOF_HEIGHT, mapgen_to_template, ro
 // out of the release pinned in CDDA_RELEASE — never vendored in git).
 // CC-BY-SA 3.0, CleverRaven / CDDA; see assets/cdda/ATTRIBUTION.md.
 const GARAGE_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/garage.json"));
-/// The house mapgen — palette-driven (CC-BY-SA 3.0, CDDA).
-const HOUSE_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house01.json"));
+/// The house mapgens — palette-driven (CC-BY-SA 3.0, CDDA). All three
+/// reference the same palette set, so they resolve from the palettes we
+/// already fetch; each is a distinct authored floor plan.
+const HOUSE01_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house01.json"));
+const HOUSE02_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house02.json"));
+const HOUSE03_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/house03.json"));
 /// A shed — CDDA has no standalone one, so this is an original inline
 /// mapgen in the same format (ours, so it stays vendored in-tree).
 const SHED_JSON: &str = include_str!("../../assets/buildings/shed.json");
+
+/// The palette-driven house layouts the world ships: `(json, ground om,
+/// roof om)`. Each is built into `HOUSE_VARIANTS` seeded variants at
+/// load. Adding another CDDA house = one line here + one in
+/// `cdda-files.txt`.
+const HOUSE_LAYOUTS: &[(&str, &str, &str)] = &[
+    (HOUSE01_JSON, "house_01", "house_01_roof"),
+    (HOUSE02_JSON, "house_02", "house_02_roof"),
+    (HOUSE03_JSON, "house_03", "house_03_roof"),
+];
 
 /// How many hash-varied house variants to pre-build. Each picks its
 /// own variant palette (standard / abandoned / hoarder / survivor) +
@@ -29,10 +43,10 @@ pub fn garage_template() -> Result<Template, CddaError> {
     assemble_building(GARAGE_JSON, "s_garage_1", "s_garage_roof_1", 0)
 }
 
-/// The house at the canonical seed 0 (used by tests). The world uses
-/// the seeded variants built in `load_building_templates`.
+/// house_01 at the canonical seed 0 (used by tests). The world uses the
+/// seeded variants of every layout, built in `load_building_templates`.
 pub fn house_template() -> Result<Template, CddaError> {
-    assemble_building(HOUSE_JSON, "house_01", "house_01_roof", 0)
+    assemble_building(HOUSE01_JSON, "house_01", "house_01_roof", 0)
 }
 
 /// A small shed (original inline mapgen, no palettes).
@@ -61,13 +75,19 @@ pub struct BuildingTemplates(pub Vec<Template>);
 /// Parse every building we ship, once. Import failures surface on the
 /// obs bus (sacred); the building simply won't appear.
 pub fn load_building_templates() -> BuildingTemplates {
-    let mut specs: Vec<(&str, Result<Template, CddaError>)> =
-        vec![("garage", garage_template()), ("shed", shed_template())];
-    for seed in 0..HOUSE_VARIANTS {
-        specs.push((
-            "house",
-            assemble_building(HOUSE_JSON, "house_01", "house_01_roof", seed),
-        ));
+    let mut specs: Vec<(String, Result<Template, CddaError>)> = vec![
+        ("garage".to_string(), garage_template()),
+        ("shed".to_string(), shed_template()),
+    ];
+    // Every house layout × every palette seed — so the streamer lands on
+    // different floor plans AND different material/furniture variants.
+    for (json, ground, roof) in HOUSE_LAYOUTS {
+        for seed in 0..HOUSE_VARIANTS {
+            specs.push((
+                format!("{ground}#{seed}"),
+                assemble_building(json, ground, roof, seed),
+            ));
+        }
     }
     let mut templates = Vec::new();
     for (name, result) in specs {
@@ -122,7 +142,7 @@ mod tests {
         // At least one seed picks a variant palette (the hoarder) that
         // resolves visibly more furniture than the plainest one.
         let count = |seed: u32| {
-            let t = assemble_building(HOUSE_JSON, "house_01", "house_01_roof", seed).unwrap();
+            let t = assemble_building(HOUSE01_JSON, "house_01", "house_01_roof", seed).unwrap();
             t.props
                 .iter()
                 .filter(|p| p.kind == PropKind::Furniture)
@@ -141,7 +161,7 @@ mod tests {
         use std::collections::HashSet;
         let mut colors = HashSet::new();
         for seed in 0..HOUSE_VARIANTS {
-            let t = assemble_building(HOUSE_JSON, "house_01", "house_01_roof", seed).unwrap();
+            let t = assemble_building(HOUSE01_JSON, "house_01", "house_01_roof", seed).unwrap();
             for p in &t.props {
                 if matches!(p.kind, PropKind::Wall | PropKind::WallNS | PropKind::WallEW)
                     && let Some(c) = p.color
@@ -167,6 +187,27 @@ mod tests {
         let furniture = n(PropKind::Chair) + n(PropKind::Table) + n(PropKind::Furniture);
         assert!(furniture > 3, "expected resolved furniture, got {furniture}");
         assert!(n(PropKind::Roof) > 0, "expected a roof");
+    }
+
+    #[test]
+    fn every_house_layout_imports_with_walls_roof_and_windows() {
+        // The safety net for adding CDDA houses: each shipped layout must
+        // resolve to an enclosed, roofed, windowed building. A layout
+        // that references a palette we don't fetch, or leans on
+        // unhandled mapgen, fails here instead of silently spawning a
+        // ruin in the world.
+        for (json, ground, roof) in HOUSE_LAYOUTS {
+            let t = assemble_building(json, ground, roof, 0)
+                .unwrap_or_else(|e| panic!("{ground} should import: {e}"));
+            let n = |k: PropKind| t.props.iter().filter(|p| p.kind == k).count();
+            let walls = n(PropKind::Wall) + n(PropKind::WallNS) + n(PropKind::WallEW);
+            assert!(walls > 10, "{ground}: expected a wall outline, got {walls}");
+            assert!(n(PropKind::Roof) > 0, "{ground}: expected a roof");
+            assert!(
+                t.props.iter().any(|p| p.kind.is_window()),
+                "{ground}: expected glass windows"
+            );
+        }
     }
 
     #[test]
