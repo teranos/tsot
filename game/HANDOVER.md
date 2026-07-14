@@ -1,318 +1,261 @@
 # game — handover
 
-Working notes for continuing this branch in a fresh session. Blunt on
-purpose: what's real, what's tested, what's never been looked at.
+Working notes for continuing this branch. Blunt on purpose. A snapshot,
+so re-verify live-vs-HEAD and re-read the checklist before trusting it.
 
-## Known defects & risks (read this first)
+Branch: **`stamp-template`**, pushed to `origin`. Live at game.sbvh.nl
+(check `curl -s https://game.sbvh.nl/build-info.json` vs
+`git rev-parse --short HEAD` — they should match; the in-game watermark
+top-right is the ground truth). Snapshot taken at tip `1ce8439`.
 
-Each has a location and a fix. Ranked by how likely it is to bite. These
-are the concrete things to improve — not vibes.
+## North star — where this is going
 
-1. **`build.rs` silently clobbers on basename collision.**
-   `game/build.rs` copies every `cdda-files.txt` path to
-   `OUT_DIR/cdda/<basename>` (the `basename(entry.path)` copy loop). The
-   8 current basenames are unique, so it works today. Add a file whose
-   basename collides (a second `roof.json`, another `house01.json`) and
-   the second copy overwrites the first — `include_str!` then embeds the
-   wrong bytes with no error. Fix: assert basenames are unique in
-   `build.rs`, or copy under the full relative path.
+A world where CDDA's authored places are actually *there*: many
+buildings, that **enclose** you, that you go **inside and upstairs and
+down**, that carry **function not just shape**, arranged into **towns**,
+**deterministic and identical for every peer**, with the map able to
+**spawn the fights**. Everything the player sees is drawn by the Rust
+engine; the running binary always tells the truth about itself.
 
-2. **No `game/flake.lock`.** `game/flake.nix` has no committed lock; the
-   repo root and `roam/` both do. So `nix build .#cdda-src` resolves
-   nixpkgs/rust-overlay fresh every run — the corpus bytes stay
-   hash-pinned but the *builder toolchain* floats. Fix:
-   `cd game && nix flake lock` and commit it. (Not done here: the sandbox
-   blocks `api.github.com`, which flake input resolution needs; the git
-   mirror works but nixpkgs is too big to clone that way.)
+The most interesting thing on this branch is the seam that serves that:
+**CDDA mapgen is authored, human, canonical 2D tile data; our world is a
+streaming, isometric, voxel, deterministic runtime. Cohering them is
+projecting one medium's canon into another's engine.** Everything below
+is either sharpening that projection or the hygiene that lets it scale.
 
-3. **`Music` resource access is inconsistent.**
-   `hud::hud_input_system` takes `ResMut<Music>` (panics if the resource
-   is missing); `jukebox::jukebox_proximity_system` takes
-   `Option<ResMut<Music>>` (skips). `setup_music` always inserts it, so
-   it's fine now, but the two contracts diverge the moment ordering or a
-   feature flag changes. Pick one — likely `Option<ResMut>` everywhere.
+## Do next — checklist
 
-4. **`.cdda-src` staleness is invisible.** `build.rs` falls back to
-   `game/.cdda-src` when `$CDDA_SRC` is unset, but nothing ties that
-   cache to `CDDA_RELEASE`. Bump `CDDA_RELEASE`, forget to re-run
-   `make cdda`, and you compile the *previous* release silently. Fix:
-   record the fetched rev (e.g. `.cdda-src/.rev`) and make `build.rs`
-   fail if it doesn't equal `CDDA_RELEASE`.
+Ranked. The corpus is the point; the first four are what make growing it
+safe, so do them roughly in order.
 
-5. **`tools/fetch-cdda.sh` verifies nothing.** The nix path is
-   hash-pinned; the script path (used by `make cdda` and any non-nix
-   build) clones the `0.I` tag and compiles whatever it gets — a moved
-   tag or bad mirror goes undetected. Fix: after fetch, sha the files and
-   compare to a committed checksum, or drop the script path and require
-   nix.
+- [ ] **Coverage report over the full 0.I mapgen tree.** The first real
+  corpus move and the one that makes the rest legible. For every
+  `om_terrain` building, dry-run it through the resolver
+  (`cdda::placement` / `cdda::cells::cell_to_prop`) and tally which
+  symbols + palette parameters resolve vs silently drop to `None`. Flag
+  `place_nested` / `place_vehicles` / `place_monsters` / multi-tile
+  specials (all currently unhandled). Output: a ranked "cheapest
+  buildings to add" list. Turns "add buildings" into a measured push.
+- [ ] **`build.rs` basename-collision guard.** It copies each
+  `cdda-files.txt` entry to `OUT_DIR/cdda/<basename>` with no uniqueness
+  check; two same-basename files silently clobber and `include_str!`
+  embeds the wrong bytes. Assert uniqueness (or copy under the full
+  relative path) *before* the corpus grows and trips it.
+- [ ] **Determinism golden-master.** Pin resolved building bytes per
+  `(building, seed)` in a test. Placement is deterministic and tested,
+  but resolved *output* isn't byte-pinned — and the projection just got
+  branchier (flood-fill, edge shifts). This catches cross-peer drift
+  before it ships as a desync. Prereq for more buildings AND P2P.
+- [ ] **Commit `game/flake.lock`.** Root and `roam/` commit one; game
+  doesn't, so `nix build .#cdda-src` floats nixpkgs/rust-overlay each
+  run (corpus bytes stay hash-pinned; the *toolchain* doesn't).
+  `cd game && nix flake lock` — needs real github access (the sandbox
+  blocks `api.github.com` for flake inputs).
+- [ ] **`.cdda-src` staleness guard.** `build.rs` uses the gitignored
+  `.cdda-src` when `$CDDA_SRC` is unset, but nothing ties it to
+  `CDDA_RELEASE`. Bump the release, forget `make cdda`, compile the old
+  one silently. Write the fetched rev to `.cdda-src/.rev`; fail if ≠
+  `CDDA_RELEASE`.
+- [ ] **`tools/fetch-cdda.sh` integrity.** The nix path is hash-pinned;
+  the script path compiles whatever the `0.I` tag returns, unverified.
+  Checksum after fetch, or drop the script path and require nix.
+- [ ] **Decide the JS build-match guard.** `main.ts` halts if the wasm's
+  commit ≠ the bundle's. With the watermark + `?v=` cache-bust it's a
+  narrow backstop. Keep it as a deliberate hard-stop or delete it — and
+  confirm CloudFront's cache-key includes the query string, else `?v=`
+  busts only the browser (the deploy invalidation is the real CDN
+  refresh).
+- [ ] **Unify `Music` resource access.** `hud` takes `ResMut<Music>`
+  (panics if absent); `jukebox` takes `Option<ResMut<Music>>` (skips).
+  Pick one — `Option<ResMut>` everywhere.
+- [ ] **Drive the un-verified flows on device** (see Verification).
+- [ ] **Open a PR.** Squash the vendoring churn and scrub the CC-BY-SA
+  JSON blobs from history first.
 
-6. **`?v=<commit>` wasm cache-bust may not reach the CDN.** `main.ts`
-   fetches `/game.wasm?v=<commit>`. This reliably busts the *browser*
-   cache; whether it busts *CloudFront* depends on whether the query
-   string is in the distribution's cache key — unconfirmed. If it isn't,
-   the deploy's explicit `/game.wasm` invalidation is the real refresh
-   and the boot-time build-match guard is the backstop. Action: check the
-   distribution's cache-key config; don't rely on `?v=` blindly.
+## The big questions (the frontier)
 
-7. **The JS build-match guard: decide, don't leave it ambiguous.**
-   `main.ts` reads the wasm's own commit (exports `build_commit_ptr/len`)
-   and halts if it differs from the commit baked into the bundle. With
-   the Rust watermark showing the real commit and the wasm cache-busted,
-   it's a narrow backstop. Keep it as a deliberate hard-stop, or delete
-   it — currently it's there by momentum.
+Each is a want above, framed as the open question, with where to start.
 
-8. **Watermark glyphs are unseen at size.** `watermark.rs::glyph()` has
-   hand-drawn 3×5 bitmaps for `0-9 a-f u n k o w`; `n/k/w` are cramped in
-   3 px. The sha renders (confirmed on device), but per-glyph legibility
-   isn't checked. If a character reads wrong, edit that one entry.
+1. **How much of the corpus can the world actually hold, and what's the
+   honest ceiling?** The coverage report answers half; the other half is
+   which unhandled features (`place_nested`, vehicles, monsters,
+   multi-tile overmap specials) you must implement to break past a lone
+   building. (Our own `shed.json` exists only because CDDA has no
+   standalone shed — its sheds are `place_nested` pieces. When nested
+   mapgen lands, the shed can go.)
+2. **When does a building stop being scenery?** Which CDDA flags become
+   behavior — `TRANSPARENT`→glass, doors open/close, `CONTAINER`/`SEALED`
+   →loot? The hand-placed purple jukebox is exactly a CDDA furniture
+   entry we could be *reading* instead of authoring. Cohering meaning,
+   not just geometry.
+3. **Should the generator *be* CDDA's grammar?** `palette.rs` already
+   rolls a per-building seed through CDDA's variant palettes (we
+   flattened its weights for visible variety). How far up — block, town —
+   does the authored parameter/distribution + overmap layer reach as the
+   world generator, vs our per-chunk hash?
+4. **Can you go down and up?** Roof cut-away + the ghost pass is the
+   first z-level UX. CDDA ships basements and upper floors as their own
+   mapgen. What's descend/ascend in an iso voxel world?
+5. **Do lone buildings become towns?** CDDA authors roads, blocks,
+   connected specials. Is settlement coherence mostly more authored data
+   through the same pipeline, or new placement logic?
+6. **Does the map feed combat?** roam v0.5 invokes the ccg engine for PvP
+   (repo `CLAUDE.md`); CDDA mapgen carries monster spawns. Could a
+   building's authored spawns become encounters resolved by ccg — the map
+   as an encounter source, not just architecture?
 
 ## Not a defect — leave it alone
 
-- **Glass looks correct — user-verified visually.** The glass pass draws
-  panes unsorted with depth-write off, which is *theoretically*
-  order-dependent. In practice it looks right and is not a problem. Only
-  if you ever see wrong blending where many panes overlap at once, add a
-  back-to-front sort in `scene::snapshot_to_glass_instances`. Do not
-  pre-emptively "fix" this.
+- **Glass looks correct — user-verified on device.** The glass pass draws
+  panes unsorted with depth-write off (theoretically order-dependent). In
+  practice it's fine. Only if you ever see wrong blending where many
+  panes overlap, add a back-to-front sort in
+  `scene::snapshot_to_glass_instances`. Do not pre-emptively "fix" it.
 
-## Also open (not code defects)
+## State now (post-pull)
 
-- No PR opened yet.
-- History is noisy (CDDA went vendor → de-vendor → pin across many
-  commits) and still contains the CC-BY-SA JSON blobs in old commits.
-  Squash / scrub before opening a PR.
-- Of the visual features, only **glass** has been confirmed on-device.
-  Music toggle, settings slider, jukebox toggle, and the wall cut-away
-  feel have not been driven end-to-end — verify them next.
-
-## How this went wrong (so it doesn't repeat)
-
-- Green unit tests and confident commit messages were treated as proof
-  the running thing works. They only prove it compiles. Drive the actual
-  flow before claiming behavior.
-- State was asserted without checking (said CI "may be broken" without
-  opening Actions). Verify first: `curl -s .../build-info.json` vs
-  `git rev-parse --short HEAD`, and read the Actions run.
-- Anything the user sees belongs in the Rust render, not a JS/DOM
-  overlay. The commit readout was built as a JS badge first — wrong.
-- Don't hand the user implementation either/or questions; make the call
-  and state it.
-
-## The interesting frontier — CDDA × the game
-
-The point of this branch, and the most interesting thing in it: **CDDA
-mapgen is authored, human, canonical 2D tile data; our world is a
-streaming, isometric, voxel, deterministic, per-peer-identical runtime.
-Cohering them is projecting one medium's canon into another's engine.**
-Right now that projection is shallow — symbol → `PropKind` → colored
-cube (`cdda::cell_to_prop`). The opportunities are all about deepening
-it. Ranked by how much world they unlock.
-
-1. **How much of the corpus can we swallow?** We resolve two buildings
-   (garage, house01) out of *hundreds* in `data/json/mapgen`, all in the
-   format `mapgen_to_template` already parses. Adding one is a line in
-   `cdda-files.txt`. So: what actually breaks at scale? Unknown symbols
-   silently drop to `None` in `cell_to_prop`; `place_nested`,
-   `place_vehicles`, `place_monsters`, nested mapgen, and multi-tile
-   overmap specials aren't handled at all. **First move: a coverage
-   report** — sweep the whole mapgen tree, count what fraction of
-   symbols and palette parameters we resolve vs silently drop. That map
-   *is* the roadmap, and it turns "add buildings" into a measured push
-   instead of a guess.
-
-2. **We render the floor plan; CDDA ships the meaning.** A `#` is a wall
-   to us; to CDDA it may be flammable, a container, a connection, a
-   door. The hand-placed purple jukebox is exactly a CDDA furniture
-   entry we could instead *read* from the corpus. Which CDDA flags map
-   to game behavior? `TRANSPARENT` already wants to feed the glass pass;
-   `CONTAINER`/`SEALED` want loot; doors want open/close. Cohering
-   semantics, not just geometry, is where buildings stop being scenery.
-
-3. **Palettes are already a procedural grammar — how far does it go?**
-   `palette.rs` rolls a per-building seed through CDDA's variant palettes
-   (abandoned / hoarder / survivor) to vary furniture density and wall
-   material. We deliberately *flattened* CDDA's authored weights to a
-   uniform pick (see the module doc) to get visible variety. That's a
-   design lever, not a bug — but it's worth asking whether the world's
-   generator should *be* CDDA's parameter/distribution system rather than
-   our per-chunk hash, and whether neighborhood/city coherence could come
-   from CDDA's overmap layer.
-
-4. **Determinism is the multiplier — and the thing that will break
-   first.** The world is a pure hash (`chunk.rs`); CDDA placement is
-   per-chunk hash + per-building seed, so two peers get the identical
-   world with no shared RNG. That means the *entire* CDDA corpus becomes
-   a shared deterministic universe for free. But resolution has to stay
-   bit-identical across platforms — we already moved to `BTreeMap` to
-   kill default-hasher entropy, and there's f32 in the tree-noise field.
-   **Worth doing before ingesting more: a golden-master test that pins
-   resolved building bytes per (building, seed)**, so a determinism
-   regression is caught the moment it appears rather than as a desync in
-   the field.
-
-5. **The z-axis is half-open.** We already pull the roof as separate
-   mapgen (`roof_om`) and cut it away when you're inside — that's the
-   first z-level UX. CDDA authors basements and upper floors as their own
-   mapgen. Full multi-floor buildings (walk upstairs, go down) is a
-   direct extension of the cut-away work, not a new system.
-
-6. **Settlement scale.** We drop single buildings independently by chunk
-   hash into endless forest. CDDA authors *towns* — roads, blocks,
-   connected specials. Cohering at the town level (a street that reads as
-   a street) is the tier above a lone house in the woods, and it's mostly
-   more authored data, not more code.
-
-7. **The monorepo seam.** Per the repo `CLAUDE.md`, roam v0.5 invokes the
-   ccg engine to resolve PvP encounters. CDDA mapgen carries monster
-   spawns. The open question: could a CDDA building's authored spawns
-   feed the encounter engine — CDDA content driving ccg fights — turning
-   the map corpus into an encounter source, not just architecture?
-
-The cheapest of these to start (a coverage report, #1) is also the one
-that makes every other one legible. Do it first.
-
-## Branch
-
-`stamp-template`. All work below is on it and pushed to
-`origin/stamp-template`. Latest deployed commit is live at
-game.sbvh.nl (check: `curl -s https://game.sbvh.nl/build-info.json`
-vs `git rev-parse --short HEAD`).
-
-## What landed this stretch
-
-- **Glass windows** — real alpha-blended transparency. Windows resolve
-  to `PropKind::Window*` and render in a dedicated blended pass
-  (depth-tested, depth-write off) *between* the opaque world and the UI.
-  New hand-wired imports `game_gpu_render_pipeline_create_glass` +
-  `game_gpu_render_glass`. Mirrored in native `render.rs`.
-- **HUD** — left music toggle, settings gear, settings panel with a
-  live volume slider, all drawn through the UI-overlay quad pipeline.
-- **Purple jukebox** — in-world prop near spawn; walking into its radius
-  toggles the music (edge-triggered).
-- **Music** — one `music::Music` resource; volume/mute applied live via
-  the new `game_audio_set_volume` import (GainNode, no stop/reload).
-- **CDDA as a pinned dependency** — no third-party JSON in git anymore
-  (see below).
-- **Build-loop closure** — content-hashed JS bundle, cache-busted wasm
-  fetch, boot-time build-match guard, and an **in-game commit
-  watermark drawn in Rust** (`watermark.rs`), top-right.
+- **Render passes (wasm):** opaque → **glass** (translucent windows) →
+  **ghost** (cut-away walls/roof at alpha 0.15, so you see the outline of
+  what you're inside instead of it vanishing) → **UI**. Ghost is the
+  exact inverse filter of the opaque cut-away — emits only what opaque
+  drops, no double-draw (`scene::snapshot_to_ghost_instances`).
+- **CDDA → geometry:** module is now a directory
+  `cdda/{parse,cells,placement,building,chunks}`. Walls are **edge-placed**
+  — flood-fill from the mapgen boundary marks exterior, walls sit on the
+  interior-facing grid line, corners emit L-segments to the inner corner,
+  room dividers shift +z/+x ("always positive"), doors/gates block the
+  flood so interiors don't leak. T-junction pillar protrusion fixed.
+  Cut-away is anchored to the **overhead roof cell** (radius 800) so a
+  neighbouring building stays solid.
+- **HUD (all Rust UI quads):** music toggle (bottom-left), settings gear
+  (top-left, tap to open/close), settings panel with **music + SFX**
+  sliders; ESC also closes (desktop only — touch closes via the gear).
+  The "!" bump indicator is now `bang.rs` quads (not DOM); NPC bumps play
+  an MGS-style four-blip alert.
+- **Persistence:** player position, music mix (mute + volume), SFX level
+  — all localStorage via hand-wired env imports.
+- **Version:** the in-Rust watermark (top-right) is the *sole* version
+  indicator; the loading-screen build badge and `build-info.json` fetch
+  are gone. `ui.rs` deleted; `?proxy=` escape hatch removed.
+- **Boundary:** 44 hand-wired `env.*` imports. **Tests:** 88 lib green,
+  clippy silent.
+- **Corpus:** still only **2** CDDA buildings (garage, house01) + our
+  shed. The machinery is ready; the world isn't full yet. ← the gap.
 
 ## Build / run
 
-Nightly toolchain required (edition 2024, `-Z build-std`).
+Nightly toolchain (edition 2024, `-Z build-std`). CDDA corpus must be
+present first (below) or the build fails loudly.
 
-- **wasm (local debug), the way used here:**
+- **wasm (local debug):**
   ```
   cd game
   RUSTFLAGS='--cfg getrandom_backend="wasm_js"' \
     cargo +nightly build --target wasm32-unknown-unknown --lib \
     -Z build-std=std,panic_abort
   ```
-  CI builds `--release` (see `.github/workflows/deploy-game.yml`) with
-  `SEER_BUILD_COMMIT` / `SEER_BUILD_TIME` env set.
-- **native + tests:** `cd game && cargo +nightly test` (76 lib + a few
-  integration; 78 with the new watermark tests).
+  CI builds `--release` with `SEER_BUILD_COMMIT` / `SEER_BUILD_TIME` set.
+- **native + tests:** `cd game && cargo +nightly test` (88 lib + a few
+  integration).
 - **web bundle:** `cd game/web && bun run build.ts` → `dist/`
-  (`main-<hash>.js`, hashed; index.html rewritten to it).
-- **imports boundary:** build `crates/seer-imports-check`, run it against
-  the wasm vs `game/imports.allow` (currently 39 imports).
+  (`main-<hash>.js`, content-hashed; index.html rewritten to it).
+- **imports boundary:** build `crates/seer-imports-check`, run against the
+  wasm vs `game/imports.allow` (44 imports).
 
 ### CDDA corpus (a dependency, never vendored)
 
-The build needs the CDDA mapgen/palette files. They are **not in git**.
+The build needs CDDA mapgen/palette files. They are **not in git**.
 
-- **Nix (CI + hermetic):** `cd game && nix build .#cdda-src` → set
-  `CDDA_SRC` to the result; `build.rs` reads it. Pinned by content hash
-  in `game/flake.nix` to the `0.I` stable release.
+- **Nix:** `cd game && nix build .#cdda-src` → set `CDDA_SRC` to the
+  result. Pinned by content hash in `game/flake.nix` to release `0.I`.
 - **Bare cargo / local:** `cd game && make cdda` (runs
-  `tools/fetch-cdda.sh`, sparse-clones the pinned release into
-  gitignored `.cdda-src/`). `build.rs` falls back to `.cdda-src` when
-  `CDDA_SRC` is unset; missing corpus fails the build loudly.
-- Which files: `game/cdda-files.txt` (the single manifest, read by
-  `build.rs`, the flake, and the fetch script). Add a building = one
-  line there. Pinned release string: `game/CDDA_RELEASE` (`0.I`).
-- Attribution: `game/assets/cdda/ATTRIBUTION.md` (CC-BY-SA 3.0).
+  `tools/fetch-cdda.sh`, sparse-clones `0.I` into gitignored
+  `.cdda-src/`). `build.rs` falls back to `.cdda-src` when `$CDDA_SRC` is
+  unset.
+- Which files: `game/cdda-files.txt` — the single manifest read by
+  `build.rs`, the flake, and the fetch script. **Add a building = one
+  line there.** Release string: `game/CDDA_RELEASE` (`0.I`). Attribution:
+  `game/assets/cdda/ATTRIBUTION.md` (CC-BY-SA 3.0).
 
-## Version / "what's running" model (read this before touching it)
+## Version / "what's running" (read before touching)
 
-The whole point: the running binary proves its own identity; no file can
-lie about it.
+The running binary proves its own identity; no file can lie about it.
 
-- `build_info::COMMIT` / `BUILT_AT` are compiled into the wasm from
+- `build_info::COMMIT` / `BUILT_AT` compiled into the wasm from
   `SEER_BUILD_COMMIT` / `SEER_BUILD_TIME`.
-- **Watermark** (`src/watermark.rs`) — Rust reads `build_info::COMMIT`
-  and draws the short sha as UI-overlay quads, top-right, every frame.
-  This is THE version indicator. Not `build-info.json` (a separate file
-  that skewed during the cache incident), not the loading bar.
-- **Content-hashed bundle** (`web/build.ts`) — `main-<hash>.js` behind a
-  `no-store` index.html; a browser can't serve a stale bundle against a
-  new wasm.
-- **Cache-busted wasm** — `main.ts` fetches `/game.wasm?v=<commit>`.
-- **Build-match guard** — `main.ts` reads the wasm's own commit (exports
-  `build_commit_ptr/len`) and refuses to boot if it differs from the
-  commit baked into the bundle. NOTE: possibly redundant now given the
-  watermark + cache-bust; a decision is pending (see open items).
+- **Watermark** (`src/watermark.rs`) draws the short sha as UI quads,
+  top-right, every frame — THE indicator. Not `build-info.json`.
+- **Content-hashed bundle** behind `no-store` index.html; **`?v=`
+  cache-busted wasm fetch**; **boot-time build-match guard** in `main.ts`
+  (see checklist — decide its fate).
 
 ## Verification status — BLUNT
 
-Unit-tested and green: CDDA assembly + palette resolution, glass/opaque
-instance separation, jukebox proximity edge, HUD layout/slider math,
-music state machine, wall cut-away threshold, watermark font/layout.
+Unit-tested green: CDDA assembly/palette resolution, edge placement +
+T-junction, glass/ghost split, cut-away scoping (adjacent building stays
+solid), jukebox edge, HUD/slider math, music+sfx state, persistence
+round-trips, watermark layout.
 
-Confirmed on-device by the user: **glass windows render fine.**
+Confirmed on device by the user: **glass**. The **cut-away, ghost, and
+edge-wall** work was visually driven (the artifacts fixed — X-cross
+pillars, see-through-from-outside — are only findable by looking), so
+it's had eyes on it, but not a systematic pass.
 
-**Not driven end-to-end by anyone yet:**
-- Music toggle / settings slider / jukebox toggle behaving on a device.
-- The watermark glyphs at real size (font is math-checked only).
-- The wall cut-away feel after tightening the threshold.
-
-The dev agent has no GPU, so it verified none of the visuals itself —
-they came from the user's screenshots. Treat "tests pass" as necessary,
-not sufficient.
+**Not driven end-to-end by anyone:** music toggle + mix-persist across a
+reload, both sliders on device, jukebox toggle, ESC/gear close,
+watermark glyph legibility at size, ghost + cut-away standing between two
+adjacent buildings. The dev agent has no GPU — it verifies no visuals
+itself. "Tests pass" is necessary, not sufficient.
 
 ## Environment gotchas
 
-- **No GPU** in the dev sandbox — native wgpu render and any visual
-  check fail here (`No suitable graphics adapter`). Only the user's
-  device confirms visuals.
-- **`api.github.com` is blocked** by the sandbox proxy, so `nix` flake
-  *input* resolution (nixpkgs/flake-utils via `github:`) fails here —
-  but the proxy's **git mirror works**, so `builtins.fetchGit` and plain
-  `git clone` of github repos succeed. This is why the CDDA hash was
-  verified via `builtins.fetchGit` + `nix hash path`, not a full
-  `nix build`.
+- **No GPU** in the dev sandbox — native wgpu render and any visual check
+  fail (`No suitable graphics adapter`). Only the user's device confirms
+  visuals.
+- **`api.github.com` is blocked** by the proxy, so `nix` flake *input*
+  resolution via `github:` fails — but the proxy's **git mirror works**
+  (`builtins.fetchGit`, plain `git clone` succeed). That's why the CDDA
+  hash was verified via `builtins.fetchGit` + `nix hash path`, not a full
+  `nix build`, and why `flake.lock` couldn't be generated here.
 - **`imports.allow` is enforced** — every wasm↔JS crossing is a
   hand-wired `env.*` import; adding one means editing `imports.allow` +
   `main.ts` + the Rust extern, and CI diffs it.
-- **Strict TDD**, **errors are sacred** (surface at the cursor, never
-  swallow), **Rust owns the render** — see `game/CLAUDE.md` and repo
-  `CLAUDE.md`.
+- **Strict TDD**, **errors are sacred**, **Rust owns the render/UI** —
+  see `game/CLAUDE.md` and repo `CLAUDE.md`.
 
-## User's mental model (operate by this)
+## Operating principles (the user's model — operate by this)
 
 - The running binary is the only source of truth — not metadata files,
   not commit history, not claims.
-- Features live in the game, in the Rust. Not JS/DOM overlays.
-- The loop must close itself: no ambiguity about what's running, and
-  never blame the user's cache/refresh.
-- Verify before asserting — about everything.
+- Everything the player sees lives in the game, in Rust. Not JS/DOM.
+- The loop closes itself: no ambiguity about what's running, and never
+  blame the user's cache/refresh.
+- **Verify before asserting — about everything** (e.g. `curl` the live
+  build + read the Actions run before claiming CI state).
 - Don't vendor other people's code; pin it.
 - Quality, fully, now — no deferring, no false either/or questions, no
-  fake caveats.
+  fake caveats. Drive the actual flow before claiming behavior.
 
 ## Key files
 
-- `src/watermark.rs` — in-game commit watermark (UI quads).
-- `src/build_info.rs` — COMMIT / BUILT_AT.
-- `src/scene.rs` — `GLASS_SHADER_WGSL`, glass/opaque split
-  (`snapshot_to_glass_instances`), roof/near-wall cut-away.
-- `src/render_web.rs` — world → glass → UI passes (wasm).
-- `src/render.rs` — native mirror incl. glass pass.
-- `src/gpu_web.rs` — glass pipeline/draw imports + wrappers.
-- `src/hud.rs`, `src/music.rs`, `src/jukebox.rs` — HUD/music/jukebox.
-- `web/build.ts`, `web/src/main.ts` — bundle hashing, wasm fetch,
+- `src/cdda/` — `parse` (JSON walkers), `cells` (char→PropKind +
+  wall-line predicate), `placement` (edge-placed walls/windows, roof,
+  flood-fill interior), `building` (assembly + registry), `chunks` (world
+  placement, index, rotation). `mod.rs` re-exports.
+- `src/scene.rs` — `GLASS_SHADER_WGSL`, `GHOST_SHADER_WGSL`, the
+  opaque/glass/ghost split + cut-away anchoring.
+- `src/render_web.rs` — opaque → glass → ghost → UI passes (wasm).
+- `src/render.rs` — native mirror (glass; no ghost — CI PNGs don't need
+  it).
+- `src/gpu_web.rs` — glass + ghost pipeline/draw imports + wrappers.
+- `src/hud.rs`, `src/music.rs`, `src/sfx.rs`, `src/jukebox.rs`,
+  `src/bang.rs` — HUD, audio mixes, jukebox, the "!" alert.
+- `src/watermark.rs` — in-game commit watermark. `src/build_info.rs` —
+  COMMIT / BUILT_AT.
+- `src/persist.rs` — position + music + sfx localStorage round trips.
+- `web/build.ts`, `web/src/main.ts` — bundle hashing, `?v=` wasm fetch,
   build-match guard.
 - `flake.nix`, `CDDA_RELEASE`, `cdda-files.txt`, `build.rs`,
-  `tools/fetch-cdda.sh` — CDDA dependency.
+  `tools/fetch-cdda.sh` — the CDDA dependency.
 - `imports.allow` — the wasm↔JS boundary.
 - `.github/workflows/deploy-game.yml`, `seer.yml` — CI/deploy.
