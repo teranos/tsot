@@ -538,17 +538,24 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         });
     }
     // Roof cut-away: when the player is genuinely under a roof, hide
-    // that building's roof so the interior is visible. Distant roofs
-    // stay. "Inside" = the player is within a roof slab's footprint
-    // (half-width CDDA_TILE/2) — NOT merely near one. A looser, full-
-    // tile test made walls go see-through while you were still outside,
-    // just standing close to a wall.
+    // that building's roof so the interior is visible. "Inside" = the
+    // player is within a roof slab's footprint (half-width CDDA_TILE/2).
+    // The cut-away is anchored to the FOUND overhead roof cell, not the
+    // player, so a neighbouring building's roof/walls stay solid even
+    // when they'd be within the player's own cut radius.
     let roof_half = crate::cdda::CDDA_TILE / 2.0;
-    let under_roof = snap.structures.iter().any(|(p, k, _)| {
+    let overhead = snap.structures.iter().find(|(p, k, _)| {
         *k == PropKind::Roof
             && (p.x - snap.player.x).abs() <= roof_half
             && (p.z - snap.player.z).abs() <= roof_half
     });
+    let under_roof = overhead.is_some();
+    // Tight enough that a neighbouring building's walls stay solid
+    // (buildings sit ≥ 1 chunk apart, so anything past 800 is a
+    // different structure), loose enough to reach a big CDDA house's
+    // far perimeter from the overhead cell.
+    let cutaway_radius = 800.0_f32;
+    let overhead_pos = overhead.map(|(p, _, _)| *p).unwrap_or(snap.player);
     // The isometric camera looks from +x,+z, so nearer props have a
     // larger x+z. When inside, hide this building's roof AND its
     // camera-facing walls (in front of the player) so the interior
@@ -565,8 +572,8 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         if kind.is_window() {
             continue;
         }
-        let in_footprint =
-            (pos.x - snap.player.x).abs() < 1100.0 && (pos.z - snap.player.z).abs() < 1100.0;
+        let in_footprint = (pos.x - overhead_pos.x).abs() < cutaway_radius
+            && (pos.z - overhead_pos.z).abs() < cutaway_radius;
         if under_roof && in_footprint {
             if *kind == PropKind::Roof {
                 continue; // see-through roof
@@ -613,22 +620,24 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
 /// opaque pass skips (never the other way around, so no double-draw).
 pub fn snapshot_to_ghost_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let roof_half = crate::cdda::CDDA_TILE / 2.0;
-    let under_roof = snap.structures.iter().any(|(p, k, _)| {
+    let overhead = snap.structures.iter().find(|(p, k, _)| {
         *k == PropKind::Roof
             && (p.x - snap.player.x).abs() <= roof_half
             && (p.z - snap.player.z).abs() <= roof_half
     });
-    if !under_roof {
+    let Some(overhead) = overhead else {
         return Vec::new();
-    }
+    };
+    let overhead_pos = overhead.0;
+    let cutaway_radius = 800.0_f32;
     let player_depth = snap.player.x + snap.player.z;
     let mut out = Vec::new();
     for (pos, kind, tint) in &snap.structures {
         if kind.is_window() {
             continue;
         }
-        let in_footprint =
-            (pos.x - snap.player.x).abs() < 1100.0 && (pos.z - snap.player.z).abs() < 1100.0;
+        let in_footprint = (pos.x - overhead_pos.x).abs() < cutaway_radius
+            && (pos.z - overhead_pos.z).abs() < cutaway_radius;
         if !in_footprint {
             continue;
         }
@@ -721,6 +730,46 @@ mod tests {
         assert!(
             has_roof(60.0),
             "standing close to a wall from outside must not make it see-through"
+        );
+    }
+
+    fn structure_at(x: f32, y: f32, z: f32, kind: PropKind) -> (Vec3, PropKind, Option<[f32; 3]>) {
+        (Vec3::new(x, y, z), kind, None)
+    }
+
+    #[test]
+    fn cut_away_stays_within_the_building_you_are_actually_under() {
+        // Player is inside building A (roof at origin). Building B sits
+        // ~900 units east — well within the old 1100 blast radius but a
+        // separate building (its own roof). B's camera-facing wall must
+        // stay solid.
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![
+                // Building A: roof over the player.
+                structure_at(0.0, 220.0, 0.0, PropKind::Roof),
+                // Building B: its own roof 900 units east, plus a
+                // camera-facing wall next to that roof.
+                structure_at(900.0, 220.0, 900.0, PropKind::Roof),
+                structure_at(900.0, 0.0, 900.0, PropKind::Wall),
+            ],
+            jukeboxes: vec![],
+            player: Vec3::ZERO,
+        };
+        let opaque = snapshot_to_instances(&snap);
+        let has_neighbor_wall = opaque.iter().any(|i| {
+            i.pos[0] > 800.0 && (90.0..140.0).contains(&i.pos[1])
+        });
+        assert!(
+            has_neighbor_wall,
+            "neighbouring building's wall got cut — cut-away leaked past the current building's footprint: {:?}",
+            opaque.iter().map(|i| (i.pos, i.scale)).collect::<Vec<_>>()
         );
     }
 
