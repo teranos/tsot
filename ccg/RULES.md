@@ -53,13 +53,13 @@ The following zones are part of the game.
 - **Z.5** GRAVEYARD
 - **Z.6** ATTACHED — a card placed under another card.
 - **Z.7** SAME-SLEEVE — a card fused inside the host's sleeve.
-- **Z.8** CARDLESS SLEEVE — a sleeve with no card in it (an "empty sleeve"). The sleeve is the unit that occupies a zone; the card inside is optional. None makes it cardless; one is an ordinary card; two or more is a same-sleeve fusion (Z.7). A cardless sleeve has no color, no symbol, and cannot be cast.
-  - **Z.8a** It cannot be targeted. There is no card inside to be its front face, and a target resolves to the front face (C.4).
-  - **Z.8b** It does not count as a card drawn. On top of the DECK it is taken into HAND for free and the draw carries on. Several empties in a row are all taken, and one card is still drawn.
-  - **Z.8c** It pays as a plain body. It can fill a HAND, GRAVEYARD, or ATTACHED cost slot, but never a MILL slot. It never covers the color or symbol part of a cost (P.7a / P.12a) — identity must still come from a real card.
-  - **Z.8d** It can be attached to a card by an effect. While attached, it can pay an ATTACHED cost.
-  - **Z.8e** Nothing can be moved into a cardless sleeve. It stays empty.
-  - **Z.8f** It is see-through. On top of the DECK it counts as transparent, so visibility reads the card beneath it (V.8).
+- **Z.8** CARDLESS SLEEVE — a sleeve with no card in it (an "empty sleeve"). It has no color, no symbol, and cannot be cast.
+  - **Z.8a** It cannot be targeted.
+  - **Z.8b** It is not a card. On top of the DECK it is taken into HAND for free and the draw continues to the next unit.
+  - **Z.8c** It pays as a plain body for HAND, GRAVEYARD, and ATTACHED costs — never MILL, and never the color or symbol part of a cost (P.7a / P.12a).
+  - **Z.8d** An effect can attach it to a card; while attached it can pay an ATTACHED cost.
+  - **Z.8e** Nothing can be put into it.
+  - **Z.8f** On top of the DECK it counts as fully transparent (V.8).
 
 The STACK (R.8) is shared and global, not per-player, and therefore is not a Z-zone — it lives under R (Responses).
 
