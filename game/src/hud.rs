@@ -202,12 +202,17 @@ pub fn current_instances() -> Vec<DpadInstance> {
 }
 
 /// Poll touches + keys, drive the toggles + sliders, publish the
-/// render quads.
+/// render quads. Both `Music` and `SfxMix` are `Option<ResMut>` so
+/// this system runs regardless of setup ordering — matching the
+/// jukebox's pattern; the HANDOVER flagged the inconsistency.
 pub fn hud_input_system(
     mut hud: ResMut<Hud>,
-    mut music: ResMut<Music>,
-    mut sfx: ResMut<SfxMix>,
+    music: Option<ResMut<Music>>,
+    sfx: Option<ResMut<SfxMix>>,
 ) {
+    let (Some(mut music), Some(mut sfx)) = (music, sfx) else {
+        return;
+    };
     let viewport = crate::gpu_web::viewport_size();
     let layout = compute_layout(viewport, hud.panel_open);
     let touches = crate::gpu_web::touches();
