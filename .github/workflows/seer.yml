@@ -191,10 +191,21 @@ jobs:
         run: |
           mkdir -p out
           [ -f out/history-in.json ] || echo '[]' > out/history-in.json
+          # `| tee` returns tee's exit status (0), so a seer-host crash —
+          # e.g. `unknown import: env::…` when a boundary crossing wasn't
+          # mirrored into the host — used to leave this step green while
+          # seer measured NOTHING and the stale S3 data rotted silently.
+          # Errors are sacred: preserve seer-host's own exit code and turn
+          # the job red so the failure lands in front of us.
           ./crates/seer-host/target/release/seer-host \
             game/target/wasm32-unknown-unknown/release/game.wasm \
             2>&1 | tee out/seer-host.log
+          status=${PIPESTATUS[0]}
           ls -la out/
+          if [ "$status" -ne 0 ]; then
+            echo "::error::seer-host exited $status — game.wasm failed to run under wasmtime; seer measured nothing this run"
+            exit "$status"
+          fi
 
       - name: Upload host log
         if: always()
