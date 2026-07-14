@@ -24,6 +24,9 @@ mod trace_tests;
 #[cfg(test)]
 mod same_sleeve_tests;
 
+#[cfg(test)]
+mod cardless_sleeve_tests;
+
 pub use combat::{CombatError, CombatOutcome};
 pub use context::EventContext;
 pub use journal::{Journal, JournalEntry};

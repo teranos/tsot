@@ -57,9 +57,8 @@ cannot be cast.
 
 ## REQUIRES USER INPUT (design)
 
-- **Terminology.** Is "sleeveless" (from Shatter Expectations) the same as
-  "cardless"? Is "clear" = transparent-frame (C.13/C.14)? Confirm so the
-  card text maps to engine concepts.
+- **Terminology.** "sleeveless" = **cardless sleeve** — CONFIRMED. Still
+  open: is "clear" = transparent-frame (C.13/C.14)? (Very likely yes.)
 - **How cardless sleeves enter a deck** — decklist/genome representation,
   and legality: S.4 as 50 units, any cap on how many empties, minimum real
   cards.

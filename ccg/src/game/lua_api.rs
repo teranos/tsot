@@ -183,7 +183,10 @@ fn do_mill(s: &mut GameState, pid_str: &str, n: i32, dest_str: &str) -> Result<(
 fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     let pid = parse_pid(pid_str)?;
     for _ in 0..n.max(0) {
-        if s.player(pid).deck.is_empty() {
+        // Z.8b: draw_one collects any cardless sleeves on top for free and
+        // draws the first card-bearing sleeve. false = the deck emptied
+        // before a card was drawn → L.1 handler-draw deckout.
+        if !s.draw_one(pid) {
             // L.1: effect-draw on an empty deck → drawing player loses.
             // Counted separately from "voluntary suicide" plays caught by
             // preview-rollback (those increment `preview_skip_suicide`).
@@ -194,10 +197,6 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
             s.set_winner(Some(pid.opponent()), "deckout_handler_draw");
             break;
         }
-        let Some(top) = s.player(pid).deck.first().cloned() else {
-            break;
-        };
-        let _ = s.move_card(&top, pid, Zone::Deck, Zone::Hand);
         s.bump_action("draw", pid);
     }
     Ok(())

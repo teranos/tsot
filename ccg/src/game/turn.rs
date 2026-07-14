@@ -208,19 +208,35 @@ impl GameState {
     /// L.1: if the DECK is empty, the active player loses immediately.
     fn do_draw_step(&mut self) {
         let pid = self.active_player;
-        if self.player(pid).deck.is_empty() {
+        if !self.draw_one(pid) {
             self.set_winner(Some(pid.opponent()), "deckout_draw");
-            return;
         }
-        let top = self.player(pid).deck[0].clone();
-        // Sacred-error sweep: draw step deck-top → hand.
-        let _ = self.move_card_or_emit(
-            &top,
-            pid,
-            Zone::Deck,
-            Zone::Hand,
-            "turn-draw-step",
-        );
+    }
+
+    /// Z.8b: draw one CARD. A cardless sleeve (Z.8) on top of the deck does
+    /// not satisfy the draw — it is collected into HAND for free and the
+    /// draw continues, cascading through consecutive empties, until the
+    /// first card-bearing sleeve is drawn into HAND. Returns `true` if a
+    /// card was drawn, `false` if the deck emptied first (the caller
+    /// resolves the deckout per L.1). All moves go through the journaled
+    /// `move_card_or_emit`, so this rolls back cleanly.
+    pub(crate) fn draw_one(&mut self, pid: super::state::PlayerId) -> bool {
+        loop {
+            let Some(top) = self.player(pid).deck.first().cloned() else {
+                return false; // deck empty — no card drawn
+            };
+            let cardless = self
+                .card_pool
+                .get(&top)
+                .map(|s| s.is_cardless())
+                .unwrap_or(false);
+            // Sacred-error sweep: deck-top → hand.
+            let _ = self.move_card_or_emit(&top, pid, Zone::Deck, Zone::Hand, "draw-z8b");
+            if !cardless {
+                return true; // drew a card-bearing sleeve
+            }
+            // Cardless sleeve collected for free; keep drawing.
+        }
     }
 
     /// U.10: at End phase, the active player discards down to a HAND size of 6.
