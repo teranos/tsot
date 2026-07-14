@@ -672,6 +672,15 @@ pub struct Card {
     /// `x_value = Some(0)` with `PlayError::XBelowMinimum`.
     #[serde(default)]
     pub allow_x_zero: bool,
+    /// RULES Z.7 (SAME-SLEEVE): this card fuses inside its host's sleeve
+    /// rather than sitting alongside it as a separate attached object.
+    /// A fused card cannot be peeled off, targeted, or moved independently
+    /// of the host, and it leaves play only when the host does — in
+    /// particular it is NOT swept to EXILE by P.8's attached-cascade
+    /// (P.29). Set by mutation cards (`same_sleeve = true` in Lua);
+    /// default false for ordinary attached payments.
+    #[serde(default)]
+    pub same_sleeve: bool,
     /// Activated abilities the controller may fire on their initiative.
     /// Resolves immediately (no stack, no response window per the design
     /// decision recorded in RULES A.5). Each entry has a cost, a text

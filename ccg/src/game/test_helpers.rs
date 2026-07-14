@@ -31,6 +31,7 @@ pub(crate) fn card_with_stats(id: &str, x: f32, y: f32) -> Card {
         target: None,
         gy_hand_substitute: false,
         allow_x_zero: false,
+        same_sleeve: false,
         is_variant: false,
         variant_of: None,
     }
@@ -67,6 +68,7 @@ pub(crate) fn card_no_stats(id: &str, kind: CardType) -> Card {
         target: None,
         gy_hand_substitute: false,
         allow_x_zero: false,
+        same_sleeve: false,
         is_variant: false,
         variant_of: None,
     }

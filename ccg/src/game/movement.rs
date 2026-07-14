@@ -136,6 +136,18 @@ impl GameState {
             .map(|i| i.attached.clone())
             .unwrap_or_default();
         for aid in &attached_snapshot {
+            // RULES Z.7 / P.29: a same-sleeve card is fused to the host,
+            // not merely attached. It is exempt from the P.8 cascade — it
+            // leaves play only with the host, so it stays fused here and
+            // travels with the host's own zone move.
+            let fused = self
+                .card_pool
+                .get(aid)
+                .map(|i| i.card.same_sleeve)
+                .unwrap_or(false);
+            if fused {
+                continue;
+            }
             self.remove_attached(host, aid);
             self.set_face_down(aid, false);
             let owner = self
