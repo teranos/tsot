@@ -42,6 +42,8 @@ env.game_position_load
 env.game_position_save
 env.game_music_state_load
 env.game_music_state_save
+env.game_sfx_state_load
+env.game_sfx_state_save
 
 env.game_peers_pending
 env.game_peers_recv

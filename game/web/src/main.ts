@@ -93,12 +93,14 @@ const KEY_W = 0x01
 const KEY_A = 0x02
 const KEY_S = 0x04
 const KEY_D = 0x08
+const KEY_ESC = 0x10
 function keyBit(k: string): number {
   switch (k.toLowerCase()) {
     case 'w': return KEY_W
     case 'a': return KEY_A
     case 's': return KEY_S
     case 'd': return KEY_D
+    case 'escape': return KEY_ESC
     default: return 0
   }
 }
@@ -754,6 +756,25 @@ async function main() {
         if (!memory) return
         const copy = new Uint8Array(memory.buffer, bytesPtr, bytesLen).slice()
         localStorage.setItem('game_music', btoa(String.fromCharCode(...copy)))
+      },
+      // SFX preference (volume, 4 bytes = f32 LE) — parallels music.
+      game_sfx_state_load: (outPtr: number): number => {
+        if (!memory) return 0
+        const s = localStorage.getItem('game_sfx')
+        if (!s) return 0
+        try {
+          const arr = Uint8Array.from(atob(s), c => c.charCodeAt(0))
+          if (arr.length !== 4) return 0
+          new Uint8Array(memory.buffer, outPtr, 4).set(arr)
+          return 4
+        } catch {
+          return 0
+        }
+      },
+      game_sfx_state_save: (bytesPtr: number, bytesLen: number) => {
+        if (!memory) return
+        const copy = new Uint8Array(memory.buffer, bytesPtr, bytesLen).slice()
+        localStorage.setItem('game_sfx', btoa(String.fromCharCode(...copy)))
       },
       game_peers_pending: (): number => proxyRxBuf.length,
       game_peers_recv: (outPtr: number, outLen: number): number => {

@@ -19,6 +19,7 @@ use std::cell::RefCell;
 
 use crate::dpad::DpadInstance;
 use crate::music::Music;
+use crate::sfx::SfxMix;
 
 /// Square button half-size in pixels — same in both axes so it renders
 /// square regardless of aspect. Tap-sized.
@@ -42,18 +43,21 @@ impl Rect {
 }
 
 /// Resolved on-screen geometry for one frame: the two corner buttons
-/// plus, when open, the settings panel and its slider track.
+/// plus, when open, the settings panel and its two slider tracks
+/// (music on top, SFX below).
 pub struct HudLayout {
     pub music: Rect,
     pub gear: Rect,
     pub panel_open: bool,
     pub panel: Rect,
-    pub slider: Rect,
+    pub music_slider: Rect,
+    pub sfx_slider: Rect,
 }
 
 /// Compute the HUD geometry for a viewport. Buttons are pixel-sized and
 /// pinned to corners with a safe margin (mirrors the D-pad); the panel
-/// is a centred dialog sized in NDC fractions.
+/// is a centred dialog sized in NDC fractions with two sliders stacked
+/// (music on top, SFX below).
 pub fn compute_layout(viewport: (u32, u32), panel_open: bool) -> HudLayout {
     let (w, h) = viewport;
     let (w, h) = (w.max(1) as f32, h.max(1) as f32);
@@ -75,10 +79,11 @@ pub fn compute_layout(viewport: (u32, u32), panel_open: bool) -> HudLayout {
         hx: half_x,
         hy: half_y,
     };
-    // Centred modal. Slider track sits inside it, a bit below centre.
+    // Centred modal — two slider tracks vertically stacked.
     let panel = Rect { cx: 0.0, cy: 0.0, hx: 0.42, hy: 0.30 };
-    let slider = Rect { cx: 0.0, cy: -0.06, hx: 0.32, hy: 0.028 };
-    HudLayout { music, gear, panel_open, panel, slider }
+    let music_slider = Rect { cx: 0.0, cy: 0.08, hx: 0.32, hy: 0.028 };
+    let sfx_slider = Rect { cx: 0.0, cy: -0.10, hx: 0.32, hy: 0.028 };
+    HudLayout { music, gear, panel_open, panel, music_slider, sfx_slider }
 }
 
 /// Map a touch x-coordinate to a volume in [0,1] across the slider
@@ -88,24 +93,66 @@ pub fn volume_from_x(slider: &Rect, x: f32) -> f32 {
     ((x - left) / (2.0 * slider.hx)).clamp(0.0, 1.0)
 }
 
-/// HUD state carried between frames: whether the panel is open, and the
-/// previous-frame coverage of each tap button for rising-edge taps.
+/// HUD state carried between frames: whether the panel is open, the
+/// previous-frame coverage of each tap button for rising-edge taps,
+/// and the previous ESC-key state so tapping ESC once closes the
+/// settings panel.
 #[derive(Resource, Default)]
 pub struct Hud {
     pub panel_open: bool,
     pub prev_music: bool,
     pub prev_gear: bool,
+    pub prev_esc: bool,
 }
 
 pub fn setup_hud(mut commands: Commands) {
     commands.insert_resource(Hud::default());
 }
 
-/// Build the overlay quads for the current layout + music state. When
+/// Purple fill on the music track — same tint as the music toggle so
+/// the eye reads them as one channel.
+const MUSIC_FILL: [f32; 3] = [0.45, 0.35, 0.75];
+/// Teal fill on the SFX track — distinct from the music purple.
+const SFX_FILL: [f32; 3] = [0.30, 0.65, 0.55];
+
+fn push_slider(
+    out: &mut Vec<DpadInstance>,
+    slider: &Rect,
+    level: f32,
+    fill_color: [f32; 3],
+) {
+    // Track.
+    out.push(DpadInstance {
+        center_ndc: [slider.cx, slider.cy],
+        half_size_ndc: [slider.hx, slider.hy],
+        color: [0.20, 0.20, 0.26],
+        alpha: 1.0,
+    });
+    // Filled portion, left edge → knob, showing the current level.
+    let left = slider.cx - slider.hx;
+    let knob_x = left + level * 2.0 * slider.hx;
+    let fill_hx = ((knob_x - left) * 0.5).max(0.0);
+    out.push(DpadInstance {
+        center_ndc: [left + fill_hx, slider.cy],
+        half_size_ndc: [fill_hx, slider.hy],
+        color: fill_color,
+        alpha: 1.0,
+    });
+    // Knob — square-ish grip, slightly taller than the track.
+    let knob_hx = slider.hy;
+    out.push(DpadInstance {
+        center_ndc: [knob_x, slider.cy],
+        half_size_ndc: [knob_hx, slider.hy * 1.8],
+        color: [0.88, 0.88, 0.94],
+        alpha: 1.0,
+    });
+}
+
+/// Build the overlay quads for the current layout + audio state. When
 /// the panel is closed that's just the two corner buttons; open, it's
-/// the backdrop, the slider track, its filled portion, and the knob.
-pub fn build_quads(layout: &HudLayout, music: &Music) -> Vec<DpadInstance> {
-    let mut out = Vec::with_capacity(6);
+/// the backdrop plus a music slider (purple) and an SFX slider (teal).
+pub fn build_quads(layout: &HudLayout, music: &Music, sfx: &SfxMix) -> Vec<DpadInstance> {
+    let mut out = Vec::with_capacity(10);
     // Music toggle — purple when playing, dim when muted.
     let (mc, ma) = if music.playing {
         ([0.55, 0.35, 0.85], 0.9)
@@ -138,31 +185,8 @@ pub fn build_quads(layout: &HudLayout, music: &Music) -> Vec<DpadInstance> {
             color: [0.06, 0.06, 0.10],
             alpha: 0.92,
         });
-        // Slider track.
-        out.push(DpadInstance {
-            center_ndc: [layout.slider.cx, layout.slider.cy],
-            half_size_ndc: [layout.slider.hx, layout.slider.hy],
-            color: [0.20, 0.20, 0.26],
-            alpha: 1.0,
-        });
-        // Filled portion, left edge → knob, showing the current level.
-        let left = layout.slider.cx - layout.slider.hx;
-        let knob_x = left + music.volume * 2.0 * layout.slider.hx;
-        let fill_hx = ((knob_x - left) * 0.5).max(0.0);
-        out.push(DpadInstance {
-            center_ndc: [left + fill_hx, layout.slider.cy],
-            half_size_ndc: [fill_hx, layout.slider.hy],
-            color: [0.45, 0.35, 0.75],
-            alpha: 1.0,
-        });
-        // Knob.
-        let knob_hx = layout.slider.hy; // square-ish grip
-        out.push(DpadInstance {
-            center_ndc: [knob_x, layout.slider.cy],
-            half_size_ndc: [knob_hx, layout.slider.hy * 1.8],
-            color: [0.88, 0.88, 0.94],
-            alpha: 1.0,
-        });
+        push_slider(&mut out, &layout.music_slider, music.volume, MUSIC_FILL);
+        push_slider(&mut out, &layout.sfx_slider, sfx.volume, SFX_FILL);
     }
     out
 }
@@ -177,8 +201,13 @@ pub fn current_instances() -> Vec<DpadInstance> {
     HUD_INSTANCES.with(|c| c.borrow().clone())
 }
 
-/// Poll touches, drive the toggles + slider, publish the render quads.
-pub fn hud_input_system(mut hud: ResMut<Hud>, mut music: ResMut<Music>) {
+/// Poll touches + keys, drive the toggles + sliders, publish the
+/// render quads.
+pub fn hud_input_system(
+    mut hud: ResMut<Hud>,
+    mut music: ResMut<Music>,
+    mut sfx: ResMut<SfxMix>,
+) {
     let viewport = crate::gpu_web::viewport_size();
     let layout = compute_layout(viewport, hud.panel_open);
     let touches = crate::gpu_web::touches();
@@ -195,18 +224,30 @@ pub fn hud_input_system(mut hud: ResMut<Hud>, mut music: ResMut<Music>) {
     hud.prev_music = music_cov;
     hud.prev_gear = gear_cov;
 
-    // Continuous slider drag while the panel is open.
+    // ESC (rising edge) closes the settings panel. Reads the keyboard
+    // bit exposed by the input shim; the touch path can't send ESC, so
+    // this is desktop-only for now.
+    let esc = (crate::input::state() & crate::input::key::ESC) != 0;
+    if esc && !hud.prev_esc && hud.panel_open {
+        hud.panel_open = false;
+    }
+    hud.prev_esc = esc;
+
+    // Continuous slider drag while the panel is open — one channel
+    // per slider so a thumb on one doesn't drag the other.
     if hud.panel_open {
         for &p in &touches {
-            if layout.slider.contains(p) {
-                music.set_volume(volume_from_x(&layout.slider, p[0]));
+            if layout.music_slider.contains(p) {
+                music.set_volume(volume_from_x(&layout.music_slider, p[0]));
+            } else if layout.sfx_slider.contains(p) {
+                sfx.set_volume(volume_from_x(&layout.sfx_slider, p[0]));
             }
         }
     }
 
     // Render quads reflect the (possibly just-toggled) panel state.
     let render_layout = compute_layout(viewport, hud.panel_open);
-    let quads = build_quads(&render_layout, &music);
+    let quads = build_quads(&render_layout, &music, &sfx);
     HUD_INSTANCES.with(|c| *c.borrow_mut() = quads);
 }
 
@@ -223,6 +264,10 @@ mod tests {
         }
     }
 
+    fn sfx(volume: f32) -> SfxMix {
+        SfxMix { volume }
+    }
+
     #[test]
     fn corner_buttons_stay_on_screen_on_portrait() {
         let l = compute_layout((390, 844), false);
@@ -237,29 +282,48 @@ mod tests {
     }
 
     #[test]
-    fn slider_x_maps_across_the_track() {
+    fn sliders_map_x_across_their_own_tracks() {
         let l = compute_layout((1920, 1080), true);
-        let s = l.slider;
-        assert!((volume_from_x(&s, s.cx - s.hx) - 0.0).abs() < 1e-6, "left = 0");
-        assert!((volume_from_x(&s, s.cx + s.hx) - 1.0).abs() < 1e-6, "right = 1");
-        assert!((volume_from_x(&s, s.cx) - 0.5).abs() < 1e-6, "centre = 0.5");
-        // Past the ends clamps.
-        assert_eq!(volume_from_x(&s, -2.0), 0.0);
-        assert_eq!(volume_from_x(&s, 2.0), 1.0);
+        for s in [l.music_slider, l.sfx_slider] {
+            assert!((volume_from_x(&s, s.cx - s.hx) - 0.0).abs() < 1e-6, "left = 0");
+            assert!((volume_from_x(&s, s.cx + s.hx) - 1.0).abs() < 1e-6, "right = 1");
+            assert!((volume_from_x(&s, s.cx) - 0.5).abs() < 1e-6, "centre = 0.5");
+            assert_eq!(volume_from_x(&s, -2.0), 0.0);
+            assert_eq!(volume_from_x(&s, 2.0), 1.0);
+        }
+        // Sliders don't overlap — music is above SFX.
+        assert!(l.music_slider.cy > l.sfx_slider.cy);
+        let music_bot = l.music_slider.cy - l.music_slider.hy;
+        let sfx_top = l.sfx_slider.cy + l.sfx_slider.hy;
+        assert!(
+            music_bot > sfx_top,
+            "music slider bottom {music_bot} must sit above SFX slider top {sfx_top}"
+        );
     }
 
     #[test]
-    fn panel_adds_quads_only_when_open() {
-        let closed = build_quads(&compute_layout((1920, 1080), false), &music(true, 0.5));
-        let open = build_quads(&compute_layout((1920, 1080), true), &music(true, 0.5));
+    fn panel_adds_two_sliders_when_open() {
+        let closed =
+            build_quads(&compute_layout((1920, 1080), false), &music(true, 0.5), &sfx(0.5));
+        let open =
+            build_quads(&compute_layout((1920, 1080), true), &music(true, 0.5), &sfx(0.5));
         assert_eq!(closed.len(), 2, "just the two corner buttons when closed");
-        assert!(open.len() > closed.len(), "the panel adds slider quads");
+        // Panel-open adds: backdrop + 3 quads per slider × 2 sliders = 7 extras.
+        assert_eq!(open.len(), closed.len() + 7);
     }
 
     #[test]
     fn muted_music_button_reads_dim() {
-        let on = build_quads(&compute_layout((1920, 1080), false), &music(true, 0.5));
-        let off = build_quads(&compute_layout((1920, 1080), false), &music(false, 0.5));
+        let on = build_quads(
+            &compute_layout((1920, 1080), false),
+            &music(true, 0.5),
+            &sfx(0.5),
+        );
+        let off = build_quads(
+            &compute_layout((1920, 1080), false),
+            &music(false, 0.5),
+            &sfx(0.5),
+        );
         // The first quad is the music button; muted alpha is lower.
         assert!(off[0].alpha < on[0].alpha);
     }

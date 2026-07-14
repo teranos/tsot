@@ -30,6 +30,7 @@ pub mod physics;
 pub mod remote_players;
 pub mod room;
 pub mod scene;
+pub mod sfx;
 pub mod template;
 pub mod trail;
 pub mod trees;
@@ -411,6 +412,7 @@ fn _init() {
             hud::setup_hud.after(setup),
             jukebox::setup_jukebox.after(setup),
             map::setup_pins.after(setup),
+            sfx::setup_sfx.after(setup),
             trail::setup_trail.after(setup),
             setup_music.after(setup),
         ),

@@ -119,6 +119,41 @@ fn play_samples(samples: &[f32]) {
     }
 }
 
+// One global SFX gain — a u32 storing volume × 1000. Every play_*
+// scales its samples by this before handing them to JS. Kept in a
+// static atomic so the free-function play paths (physics, campfire)
+// can read it without threading a Bevy resource through every call.
+// Default 1000 (=1.0) so the SFX slider starts at "full" and the
+// existing per-sound gains stay unchanged until the user turns it down.
+static SFX_VOLUME_X1000: AtomicU64 = AtomicU64::new(1000);
+
+pub fn set_sfx_volume(v: f32) {
+    let clamped = v.clamp(0.0, 1.0);
+    SFX_VOLUME_X1000.store((clamped * 1000.0) as u64, Ordering::Relaxed);
+}
+
+pub fn sfx_volume() -> f32 {
+    SFX_VOLUME_X1000.load(Ordering::Relaxed) as f32 / 1000.0
+}
+
+/// Multiply a sample slice by the current SFX gain before playing. A
+/// gain of 1.0 skips the copy for the hot path.
+fn play_samples_scaled(samples: &[f32]) {
+    let gain = sfx_volume();
+    if samples.is_empty() {
+        return;
+    }
+    if (gain - 1.0).abs() < 1e-3 {
+        play_samples(samples);
+        return;
+    }
+    if gain < 1e-3 {
+        return;
+    }
+    let scaled: Vec<f32> = samples.iter().map(|s| s * gain).collect();
+    play_samples(&scaled);
+}
+
 // Debounce per-kind — sliding along a wall or grinding into a peer
 // shouldn't fire every frame.
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -145,7 +180,7 @@ pub fn play_thump() {
         return;
     }
     let samples = synthesize_impact(120.0, 45.0, 0.13, WaveType::Sine, 0.25);
-    play_samples(&samples);
+    play_samples_scaled(&samples);
 }
 
 /// Cliff-block impact — mid-frequency "bunk" (unused until cliffs land).
@@ -154,7 +189,7 @@ pub fn play_bunk() {
         return;
     }
     let samples = synthesize_impact(220.0, 90.0, 0.09, WaveType::Triangle, 0.2);
-    play_samples(&samples);
+    play_samples_scaled(&samples);
 }
 
 /// Player-vs-player or player-vs-NPC — high, short "pock".
@@ -163,7 +198,7 @@ pub fn play_pock() {
         return;
     }
     let samples = synthesize_impact(650.0, 260.0, 0.05, WaveType::Square, 0.15);
-    play_samples(&samples);
+    play_samples_scaled(&samples);
 }
 
 /// The MGS "!" alert cadence — four short square blips at ~1400 Hz.
@@ -195,7 +230,7 @@ pub fn play_alert() {
     }
     LAST_ALERT_MS.store(now, Ordering::Relaxed);
     let samples = synthesize_alert();
-    play_samples(&samples);
+    play_samples_scaled(&samples);
 }
 
 /// Firewood crackle — soft rolling texture with sparse, gentle pops.
@@ -260,7 +295,7 @@ pub fn play_crackle(dur_sec: f32, volume: f32) {
         .wrapping_add(1);
     let samples = synthesize_crackle(dur_sec, seed);
     let scaled: Vec<f32> = samples.iter().map(|s| s * volume).collect();
-    play_samples(&scaled);
+    play_samples_scaled(&scaled);
 }
 
 pub struct GameAudioHandle(u32);

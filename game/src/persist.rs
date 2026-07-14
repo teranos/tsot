@@ -13,12 +13,16 @@ unsafe extern "C" {
     fn game_position_save(bytes_ptr: *const u8, bytes_len: u32);
     fn game_music_state_load(out_ptr: *mut u8) -> u32;
     fn game_music_state_save(bytes_ptr: *const u8, bytes_len: u32);
+    fn game_sfx_state_load(out_ptr: *mut u8) -> u32;
+    fn game_sfx_state_save(bytes_ptr: *const u8, bytes_len: u32);
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
 const POS_LEN: usize = 12;
 #[cfg(any(target_arch = "wasm32", test))]
 const MUSIC_LEN: usize = 5;
+#[cfg(target_arch = "wasm32")]
+const SFX_LEN: usize = 4;
 
 #[cfg(any(target_arch = "wasm32", test))]
 fn encode(p: Vec3) -> [u8; POS_LEN] {
@@ -96,6 +100,29 @@ pub fn save_music(playing: bool, volume: f32) {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_music(_playing: bool, _volume: f32) {}
 
+/// The stored SFX level. None → first visit / native.
+#[cfg(target_arch = "wasm32")]
+pub fn load_sfx() -> Option<f32> {
+    let mut buf = [0u8; SFX_LEN];
+    let n = unsafe { game_sfx_state_load(buf.as_mut_ptr()) };
+    (n as usize == SFX_LEN).then(|| f32::from_le_bytes(buf))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_sfx() -> Option<f32> {
+    None
+}
+
+/// Persist the SFX level — called from `SfxMix::set_volume`.
+#[cfg(target_arch = "wasm32")]
+pub fn save_sfx(volume: f32) {
+    let b = volume.to_le_bytes();
+    unsafe { game_sfx_state_save(b.as_ptr(), SFX_LEN as u32) };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_sfx(_volume: f32) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +138,11 @@ mod tests {
         assert_eq!(decode_music(&encode_music(true, 0.42)), (true, 0.42));
         assert_eq!(decode_music(&encode_music(false, 0.0)), (false, 0.0));
         assert_eq!(decode_music(&encode_music(false, 1.0)), (false, 1.0));
+    }
+
+    #[test]
+    fn sfx_level_round_trips_through_bytes() {
+        let v = 0.42_f32;
+        assert_eq!(f32::from_le_bytes(v.to_le_bytes()), v);
     }
 }
