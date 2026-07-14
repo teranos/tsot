@@ -44,9 +44,14 @@
           rev = cddaRelease;
           sparseCheckout = cddaFiles;
           nonConeMode = true;
-          # NAR hash of the sparse tree (the 8 files above) at rev 0.I.
-          # Verified against the bytes CDDA ships at that release.
-          hash = "sha256-VjEUCcVppprbzwAnF4/vkxto0geXr3LrbPCP26y9e3U=";
+          # NAR hash of the sparse tree (the files in cdda-files.txt) at
+          # rev 0.I, verified against the bytes CDDA ships at that
+          # release. IMPORTANT: this hash tracks cdda-files.txt — adding
+          # or removing a file changes the sparse set and this MUST be
+          # recomputed, or `nix build .#cdda-src` fails and the deploy +
+          # seer break. (Recompute: reproduce the listed files at 0.I,
+          # `nix hash path --type sha256 --sri <dir>`.)
+          hash = "sha256-kmTjhbwAiPaEbNdRG40Pgw67pbXczCFnWam7hve2Yl8=";
         };
       in {
         # The pinned corpus, exposed so CI / tooling can realise it
