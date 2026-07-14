@@ -6,16 +6,16 @@ so re-verify live-vs-HEAD and re-read the checklist before trusting it.
 Branch: **`stamp-template`**, pushed to `origin`. Live at game.sbvh.nl
 (check `curl -s https://game.sbvh.nl/build-info.json` vs
 `git rev-parse --short HEAD`; the in-game watermark top-right is the
-ground truth). Snapshot at tip **`38b0ef5`**.
+ground truth). Snapshot at tip **`3b25e8f`**.
 
-> **⚠ Deploy status — verify first.** The deploy + seer were **broken
-> from `dc2e978` onward** (a flake hash bug, see the lesson below), so as
-> of this snapshot **live was stuck at `190d684`** — the school,
-> multi-tile streaming, and all the seer work had NOT deployed. `38b0ef5`
-> fixes the root cause but could not be `nix build`-verified in the
-> sandbox. **First action for anyone continuing: confirm CI is green and
-> `build-info.json` advances past `190d684`.** If live still lags HEAD,
-> the deploy is still failing — start there.
+> **Deploy + seer status (verified at this snapshot).** The flake-hash
+> break is fixed (decoupled fetch, `38b0ef5`) and the **deploy recovered**
+> — live reached HEAD again at `94c8696`. **seer** was separately *green
+> but dark*: it ran on every push yet measured **nothing** for this whole
+> branch (see the lesson below). Fixed and **verified live at `3b25e8f`**:
+> `seer.sbvh.nl/perf/history.json` now carries `3b25e8f` (frames=300,
+> verdict PASS), per-sha permalinks resolve. Still re-verify live-vs-HEAD
+> before trusting any of this — a snapshot goes stale fast.
 
 ## North star — where this is going
 
@@ -130,6 +130,43 @@ skips the integrity check the real path enforces will hide exactly this
 class of break. Fixed at `38b0ef5` by decoupling the fetch (fixed
 subtrees) from the manifest, so the hash no longer moves on corpus edits.
 
+### Lesson — seer was green but dark (measured nothing for the whole branch)
+
+seer looked alive — it ran on every push, the jobs were green, `frame.png`
+and a `seer-host.log` kept uploading — but it was measuring **nothing**.
+The live `perf/latest/seer-host.log` said it plainly:
+
+```
+[host] instantiating
+Error: unknown import: `env::game_gpu_render_glass` has not been defined
+```
+
+Every boundary crossing this branch added — glass/ghost pipeline+render,
+position/music/sfx persistence, audio volume: **11 in total** — went into
+`imports.allow` and the game's externs but was **never mirrored into
+seer-host's linker**. wasmtime rejects the module at instantiation on the
+first missing import, so seer-host ran zero frames and wrote no
+summary/metrics/history JSON. That's why `history.json` froze at Jul 10
+while the branch kept moving. Two compounding causes:
+
+1. **A swallowed error.** The run step piped seer-host through `| tee`, so
+   the pipe returned tee's exit 0 and a hard crash left the job **green**.
+   Errors are sacred — a buried one rots for days. Fixed: the step now
+   preserves seer-host's exit code (`PIPESTATUS`) + emits `::error::`, so a
+   host crash turns the job **red**.
+2. **No conformance check.** `seer-imports-check` proves game.wasm's
+   imports ⊆ `imports.allow`, but nothing proved seer-host's linker ⊇
+   `imports.allow`. Added that test
+   (`linker_satisfies_every_allowed_import`). The two now compose: game's
+   imports ⊆ allow ⊆ host → instantiation can never again fail on a missing
+   import, and it's caught by `cargo test` at the source, not as stale S3
+   data days later.
+
+Rule from this: **a green pipeline is not a live measurement — read the
+artifact it produced.** `history.json` had the wrong newest sha and
+`seer-host.log` was 189 bytes; both were visible from a plain `curl`. The
+job colour said nothing. Fixed + verified live at `3b25e8f`.
+
 ## The big questions (the frontier)
 
 Each is a want above, framed as the open question, with where to start.
@@ -200,7 +237,12 @@ Each is a want above, framed as the open question, with where to start.
 - **seer:** runs on every push to any branch + nightly (paths gate
   removed). Its native run now **measures real per-frame time** and
   **tours the world** (teleports through a school, house, campsite,
-  forest) so it encounters variety instead of empty forest.
+  forest) so it encounters variety instead of empty forest. **seer-host's
+  linker now covers all `imports.allow` crossings** (was missing 11 — glass/
+  ghost/persist/audio — so game.wasm failed to instantiate; see lesson),
+  guarded by `linker_satisfies_every_allowed_import`, and a host crash now
+  turns the job red instead of hiding behind `tee`. Verified live: the wasm
+  run is publishing per-sha summary/metrics/history again.
 - **CDDA fetch is decoupled from the manifest** (`38b0ef5`): the flake +
   `fetch-cdda.sh` fetch the fixed `mapgen` + `mapgen_palettes` subtrees,
   `build.rs` picks which files to embed from `cdda-files.txt`. The
