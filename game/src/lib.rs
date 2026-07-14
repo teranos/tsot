@@ -96,9 +96,19 @@ struct SeerTour {
     budget: u32,
 }
 
-/// Native input: drive the player through the tour stops instead of
-/// wandering. Teleports (not walks) so each stop's region streams in
-/// promptly and the timing at that stop is steady-state + the load spike.
+/// How far outside each tour stop the player teleports before walking
+/// the last stretch in — one CDDA overmap-tile's worth, so the approach
+/// crosses one or two chunk boundaries at a time (the real per-boundary
+/// load spike), not the inflated bulk-load a teleport straight to the
+/// target would produce.
+#[cfg(not(target_arch = "wasm32"))]
+const TOUR_APPROACH_DISTANCE: f32 = 800.0;
+
+/// Native input: drive the player through the tour stops. On the first
+/// frame of each new stop, teleport to `target − TOUR_APPROACH_DISTANCE`
+/// in +z (north of the stop), then walk toward the target every frame
+/// after — so each stop's chunks stream in the way they would for a
+/// player physically walking up, not all at once.
 #[cfg(not(target_arch = "wasm32"))]
 fn seer_tour_input(
     frame: Res<FrameCount>,
@@ -111,10 +121,29 @@ fn seer_tour_input(
     let n = tour.stops.len();
     let budget = tour.budget.max(1) as usize;
     let idx = ((frame.0.saturating_sub(1)) as usize * n / budget).min(n - 1);
+    let prev_idx = if frame.0 >= 2 {
+        Some(((frame.0 - 2) as usize * n / budget).min(n - 1))
+    } else {
+        None
+    };
     let target = tour.stops[idx].1;
+    let approach = target + Vec3::new(0.0, 0.0, -TOUR_APPROACH_DISTANCE);
+    let entering_new_stop = prev_idx != Some(idx);
     for (mut p, mut v) in q.iter_mut() {
-        p.0 = target;
-        v.0 = Vec3::ZERO;
+        if entering_new_stop {
+            p.0 = approach;
+        }
+        let toward = target - p.0;
+        let dist_sq = toward.length_squared();
+        if dist_sq > (physics::KEYBOARD_SPEED * physics::KEYBOARD_SPEED) {
+            let dir = toward.normalize();
+            v.0 = dir * physics::KEYBOARD_SPEED;
+        } else {
+            // Within one step of the target — snap and stop, so the
+            // remaining budget at this stop is measured at rest.
+            p.0 = target;
+            v.0 = Vec3::ZERO;
+        }
     }
 }
 
