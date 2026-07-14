@@ -153,11 +153,16 @@ Each is a want above, framed as the open question, with where to start.
   still real — the `build.rs`-codegen fix in checklist territory would
   collapse it, and the systematic sweep (checklist #1) is the way past
   hand-picked buildings.
-- **Perf watch:** the school is ~4–5k props (a 72×72 roof is thousands
-  of slabs). Instanced draw handles the cubes, but that's thousands of
-  ECS entities + a heavy rotate/stamp on load per school. Fine for a
-  few; revisit if many big buildings stream at once (e.g. merge a solid
-  roof into fewer slabs).
+- **Perf (measured, not guessed):** seer's native run now times every
+  `app.update()` and reports it (overall + per tour-stop). First numbers
+  (200 frames, native, no GPU): steady-state **p50 = 316µs**; standing in
+  the school ≈ **0.4ms/frame** — sub-millisecond, negligible. The *only*
+  real cost is the region **load frame** (school max **19.5ms**), a
+  one-frame hitch when a big building streams in. So "big building =
+  heavy" is false for steady-state; the load spike is the only thing
+  worth looking at, and even that is inflated here because the tour
+  *teleports* (bulk-loads a region) rather than walking one boundary at a
+  time. Do not claim perf without a seer `[perf]` line.
 
 ## Build / run
 
