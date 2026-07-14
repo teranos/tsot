@@ -130,3 +130,97 @@ fn same_sleeve_add_round_trips_through_journal() {
     let after = format!("{:?}", s.card_pool.get(&host).unwrap().same_sleeve);
     assert_eq!(before, after, "AddSameSleeve rolled back to empty sleeve");
 }
+
+#[test]
+fn host_of_finds_a_same_sleeve_host() {
+    // A fused mutation HAS a host. `host_of` must find it, or every
+    // mutation handler that calls `game.host_of(self)` — MYC, TNF,
+    // DNA-DIRECTED-DNA-POLYMERASE — silently no-ops once the mutation
+    // lives in `same_sleeve` instead of `attached`.
+    let (s, host, payment, sleeved) = host_with_payment_and_sleeve();
+    assert_eq!(
+        s.host_of(&payment),
+        Some(host.clone()),
+        "attached payment's host is found (Z.6)"
+    );
+    assert_eq!(
+        s.host_of(&sleeved),
+        Some(host.clone()),
+        "Z.7: a fused same-sleeve card's host must be found too"
+    );
+}
+
+#[test]
+fn apoptosis_is_fused_so_a_strip_over_attached_never_takes_itself() {
+    // Loop-closer for the original bug: APOPTOSIS strips "one of this
+    // creature's attached cards" per turn. Because APOPTOSIS is fused
+    // (same_sleeve), it is not in the host's `attached` list, so a strip
+    // that reads `attached` (per the card's wording) can never take
+    // itself — the self-strip / early-sacrifice bug is structurally dead.
+    let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let apoptosis = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "APOPTOSIS")
+        .expect("APOPTOSIS in corpus")
+        .clone();
+    assert!(apoptosis.same_sleeve, "APOPTOSIS declares same_sleeve");
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let host = s.a.hand[0].clone();
+    let payment = s.a.hand[1].clone();
+    let apop = s.a.hand[2].clone();
+    s.card_pool.get_mut(&apop).unwrap().card = apoptosis;
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+    let _ = s.remove_from_zone(&payment, PlayerId::A, Zone::Hand);
+    s.add_attached(&host, &payment);
+    let _ = s.remove_from_zone(&apop, PlayerId::A, Zone::Hand);
+    s.add_same_sleeve(&host, &apop);
+
+    // Simulate the strip the ability performs: detach one of the host's
+    // ATTACHED cards and move it to the graveyard.
+    let strippable: Vec<InstanceId> = s.card_pool.get(&host).unwrap().attached.clone();
+    assert_eq!(strippable, vec![payment.clone()], "APOPTOSIS itself is not strippable");
+    s.remove_attached(&host, &strippable[0]);
+    s.add_to_zone(&strippable[0], PlayerId::A, Zone::Graveyard);
+
+    // APOPTOSIS is untouched and still fused; the host has no attached
+    // cards left (the ability's sacrifice condition), which is correct —
+    // it did not consume itself to get there.
+    assert!(
+        s.card_pool.get(&host).unwrap().same_sleeve.contains(&apop),
+        "APOPTOSIS stays fused after the strip"
+    );
+    assert!(
+        s.card_pool.get(&host).unwrap().attached.is_empty(),
+        "host is bare of attached cards — reached without self-stripping"
+    );
+}
+
+#[test]
+fn nested_sleeve_rides_host_and_resolves_hosts() {
+    // A fused card can itself carry a fused child (a sleeve inside a
+    // sleeve). Because each list is a field on its parent instance, the
+    // whole tree rides the top host's zone move structurally.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let host = s.a.hand[0].clone();
+    let outer = s.a.hand[1].clone(); // fused to host
+    let inner = s.a.hand[2].clone(); // fused to `outer`
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+    let _ = s.remove_from_zone(&outer, PlayerId::A, Zone::Hand);
+    s.add_same_sleeve(&host, &outer);
+    let _ = s.remove_from_zone(&inner, PlayerId::A, Zone::Hand);
+    s.add_same_sleeve(&outer, &inner);
+
+    assert_eq!(s.host_of(&outer), Some(host.clone()), "outer's host is the creature");
+    assert_eq!(s.host_of(&inner), Some(outer.clone()), "inner's host is the outer sleeve card");
+
+    // Top host dies → move to graveyard. The whole nested unit rides along.
+    let _ = s.move_card(&host, PlayerId::A, Zone::Board, Zone::Graveyard);
+    assert!(s.a.graveyard.contains(&host));
+    assert_eq!(s.host_of(&outer), Some(host.clone()), "nested tree intact after move");
+    assert_eq!(s.host_of(&inner), Some(outer.clone()), "inner still fused to outer");
+    for zone in [&s.a.board, &s.a.exile, &s.a.hand, &s.a.deck] {
+        assert!(!zone.contains(&outer) && !zone.contains(&inner), "nested cards not loose");
+    }
+}

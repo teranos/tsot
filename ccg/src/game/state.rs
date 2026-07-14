@@ -941,11 +941,15 @@ impl GameState {
         }
     }
 
-    /// Find the host iid that has `attached` in its attached vec.
-    /// Returns None if `attached` isn't attached to anything in the pool.
-    pub fn host_of(&self, attached: &InstanceId) -> Option<InstanceId> {
+    /// Find the host iid that carries `child` — as a Z.6 attached card OR a
+    /// Z.7 same-sleeve card. Returns None if `child` isn't a child of
+    /// anything in the pool. A fused mutation HAS a host, so this must
+    /// consult `children()`: every mutation handler that calls
+    /// `game.host_of(self)` (MYC, TNF, DNA-DIRECTED-DNA-POLYMERASE) relies
+    /// on it resolving once the mutation lives in `same_sleeve`.
+    pub fn host_of(&self, child: &InstanceId) -> Option<InstanceId> {
         for (host_iid, host) in &self.card_pool {
-            if host.attached.iter().any(|x| x == attached) {
+            if host.children().any(|x| x == child) {
                 return Some(host_iid.clone());
             }
         }

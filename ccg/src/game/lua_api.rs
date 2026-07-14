@@ -99,8 +99,11 @@ fn find_zone_of(s: &GameState, owner: PlayerId, iid: &str) -> Option<Zone> {
 /// Search all card_pool instances for an `attached` containing `iid`.
 /// Returns the host's iid if found.
 fn find_host_of_attached(s: &GameState, iid: &str) -> Option<InstanceId> {
+    // Z.7: a fused same-sleeve card has a host too — consult `children()`
+    // (attached ∪ same_sleeve), or mutation handlers calling
+    // `game.host_of(self)` no-op once the mutation is sleeved.
     for (host_iid, host) in &s.card_pool {
-        if host.attached.iter().any(|x| x == iid) {
+        if host.children().any(|x| x == iid) {
             return Some(host_iid.clone());
         }
     }
