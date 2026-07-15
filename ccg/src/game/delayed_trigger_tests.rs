@@ -110,3 +110,36 @@ fn delayed_trigger_does_not_fire_on_the_opponents_turn() {
     assert_eq!(fired, 0, "A's trigger did not fire on B's turn");
     assert_eq!(s.delayed_triggers.len(), 1, "the trigger stays queued for A's turn");
 }
+
+#[test]
+fn premonition_draws_two_at_your_next_turn_from_the_graveyard() {
+    // The shipped card that uses the registry: cast Premonition (it
+    // resolves to the graveyard now), and the draw fires at the start of
+    // your next turn — from the graveyard, where no on_turn_begin could
+    // reach it.
+    let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let card = registry.cards().iter().find(|c| c.id == "premonition").unwrap().clone();
+
+    let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+    // Put Premonition in A's graveyard (as if it just resolved) and fire
+    // its on_play to schedule the delayed draw.
+    let prem = s.a.hand[0].clone();
+    s.card_pool.get_mut(&prem).unwrap().content = Some(card);
+    let _ = s.move_card(&prem, PlayerId::A, Zone::Hand, Zone::Graveyard);
+
+    let mut oracle = ScriptedOracle::new(vec![]);
+    fire_self_only(registry.lua(), &mut s, &mut oracle, EventName::OnPlay, &prem)
+        .expect("on_play answers locally");
+    assert_eq!(s.delayed_triggers.len(), 1, "Premonition scheduled its draw");
+
+    let deck_before = s.a.deck.len();
+
+    // Advance from B's End into A's next turn begin — the draw fires.
+    s.active_player = PlayerId::B;
+    s.phase = crate::game::Phase::End;
+    s.next_phase(Some(&mut EventContext::new(registry.lua(), &mut oracle)))
+        .expect("phase advance");
+
+    assert_eq!(s.a.deck.len(), deck_before - 2, "Premonition drew two at A's next turn");
+    assert!(s.delayed_triggers.is_empty(), "the one-shot draw is spent");
+}
