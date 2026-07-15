@@ -525,6 +525,13 @@ pub enum EventName {
     /// by the time the broadcast fires). Used by Avatar of Greed and
     /// any other "whenever a creature dies, ..." trigger.
     OnCreatureDies,
+    /// Fires on a creature the moment it becomes tapped by attacking
+    /// (declare_attacker). Handler receives `self` = the tapped creature.
+    /// Window Cleaner's "whenever this becomes tapped" trigger. Note: only
+    /// the attack tap fires this today — an external tap via `game.set_tapped`
+    /// happens inside a Lua borrow, so firing there needs a deferred-event
+    /// queue (tracked with the delayed-trigger registry).
+    OnTapped,
 }
 
 impl EventName {
@@ -541,11 +548,12 @@ impl EventName {
             EventName::OnDealtDamageToPlayer => "on_dealt_damage_to_player",
             EventName::OnTurnBegin => "on_turn_begin",
             EventName::OnCreatureDies => "on_creature_dies",
+            EventName::OnTapped => "on_tapped",
         }
     }
 
     /// All known event names, for loader iteration.
-    pub const ALL: [EventName; 10] = [
+    pub const ALL: [EventName; 11] = [
         EventName::OnEnterBoard,
         EventName::OnDie,
         EventName::OnAttack,
@@ -556,6 +564,7 @@ impl EventName {
         EventName::OnDealtDamageToPlayer,
         EventName::OnTurnBegin,
         EventName::OnCreatureDies,
+        EventName::OnTapped,
     ];
 }
 

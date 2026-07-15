@@ -1176,3 +1176,40 @@ fn on_attack_handler_fires_on_attached_cards() {
         "attached card's on_attack handler must fire when host attacks"
     );
 }
+
+#[test]
+fn on_tapped_fires_when_a_creature_attacks() {
+    // Window Cleaner's trigger: a creature with no inherent tap fires
+    // on_tapped the moment it taps by attacking.
+    let registry = registry_with_fixture(
+        "tap_probe",
+        r#"return {
+            id = "tap-probe",
+            on_tapped = function(game, self)
+                _G.on_tapped_fired = (_G.on_tapped_fired or 0) + 1
+                _G.on_tapped_who = self.instance_id
+            end,
+        }"#,
+    );
+    let probe = registry.cards().iter().find(|c| c.id == "tap-probe").unwrap().clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let atk = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&atk).unwrap();
+        inst.card_mut().handlers = probe.handlers.clone();
+        inst.card_mut().id = probe.id.clone();
+    }
+    put_on_board(&mut s, PlayerId::A, &atk);
+    add_ability(&mut s, &atk, "haste");
+    enter_combat(&mut s);
+
+    s.declare_attacker(&atk, Some(&mut crate::game::EventContext::lua_only(registry.lua())))
+        .unwrap();
+
+    let globals = registry.lua().globals();
+    let fired: i32 = globals.get("on_tapped_fired").unwrap_or(0);
+    let who: String = globals.get("on_tapped_who").unwrap_or_default();
+    assert_eq!(fired, 1, "on_tapped fired once when the creature attacked");
+    assert_eq!(who, atk, "on_tapped fired on the tapped attacker");
+}

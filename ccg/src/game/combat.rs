@@ -189,6 +189,13 @@ impl GameState {
         if let Some(c) = ctx.as_deref_mut() {
             lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker)
                 .map_err(CombatError::ChoicePending)?;
+            // OnTapped: attacking just tapped the attacker (unless vigilant).
+            // Window Cleaner's "whenever this becomes tapped" trigger. Only
+            // the attack tap fires OnTapped today (see EventName::OnTapped).
+            if !vigilant {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnTapped, attacker)
+                    .map_err(CombatError::ChoicePending)?;
+            }
         }
         for aid in &attached {
             if let Some(c) = ctx.as_deref_mut() {
