@@ -472,6 +472,11 @@ pub fn pick_play_uct(
         // rollout actually takes. Rollout internals stay suspended.
         let iter_t0 = crate::trace::is_enabled().then(std::time::Instant::now);
 
+        // JOURNALING CONTRACT audit (feature journal-audit): fingerprint
+        // before, compare after the rollback below — each UCT iteration
+        // self-verifies that its rollback fully round-trips.
+        #[cfg(feature = "journal-audit")]
+        let audit_pre = state.audit_fingerprint();
         // Open a per-iteration journal so the simulation's mutations
         // can be rolled back at the end.
         let outer_replay = state.replay_journal.take();
@@ -560,6 +565,12 @@ pub fn pick_play_uct(
         let journal = state.replay_journal.take().unwrap_or_default();
         journal.rollback(state);
         state.replay_journal = outer_replay;
+        #[cfg(feature = "journal-audit")]
+        assert_eq!(
+            audit_pre,
+            state.audit_fingerprint(),
+            "JOURNALING CONTRACT: UCT iteration did not round-trip — a mutation escaped the journal",
+        );
     }
 
     // Pick the most-visited root child (UCT-robust choice).

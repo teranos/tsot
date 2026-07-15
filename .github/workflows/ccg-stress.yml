@@ -44,3 +44,13 @@ jobs:
         env:
           TSOT_STRESS_GAMES: ${{ github.event.inputs.games || '3000' }}
         run: cargo test --release --lib stress_soak -- --ignored --nocapture
+
+      # JOURNALING CONTRACT enforcement (too costly for PR CI, weekly is
+      # its home): every MCTS/UCT rollout in the suite fingerprints the
+      # whole state before its journal rollback and asserts it round-trips
+      # after. Catches any field mutated without being journaled — the
+      # delayed-trigger class of bug — regardless of what a test remembers
+      # to compare.
+      - name: Journaling-contract audit (rollout round-trip)
+        working-directory: ccg
+        run: cargo test --features journal-audit

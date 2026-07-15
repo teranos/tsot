@@ -29,6 +29,14 @@ path = "src/main.rs"
 name = "tsot_wasm"
 path = "src/bin/tsot_wasm.rs"
 
+[features]
+# Runtime enforcement of the GameState JOURNALING CONTRACT: every
+# MCTS/UCT rollout self-verifies that its journal rollback restored the
+# ENTIRE state (minus the deliberately-swapped replay_journal). Off by
+# default — it fingerprints the whole state per rollout, so it's for the
+# weekly soak (`cargo test --features journal-audit`), not PR CI.
+journal-audit = []
+
 [dependencies]
 clap = { version = "=4.5.20", features = ["derive"] }
 include_dir = "=0.7.4"

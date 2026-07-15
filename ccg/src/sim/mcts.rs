@@ -268,6 +268,12 @@ fn simulate_rollout(
     cfg: &MctsConfig,
 ) -> bool {
     let lua = registry.lua();
+    // JOURNALING CONTRACT audit (feature journal-audit): fingerprint the
+    // whole state now, compare after every rollback+restore below. The
+    // review's delayed-trigger bug was exactly a rollout that didn't
+    // round-trip.
+    #[cfg(feature = "journal-audit")]
+    let audit_pre = state.audit_fingerprint();
     // Save the caller's replay_journal aside (typical case: outer
     // game's whole-run capture). We install a fresh journal for the
     // rollout; mutations land in it; we roll it back at the end and
@@ -292,6 +298,12 @@ fn simulate_rollout(
             let rollout_journal = state.replay_journal.take().unwrap_or_default();
             rollout_journal.rollback(state);
             state.replay_journal = outer_replay;
+            #[cfg(feature = "journal-audit")]
+            assert_eq!(
+                audit_pre,
+                state.audit_fingerprint(),
+                "JOURNALING CONTRACT: MCTS rollout did not round-trip on early-out",
+            );
             return false;
         }
         BuildChoiceResult::Pending(p) => {
@@ -313,6 +325,12 @@ fn simulate_rollout(
             let rollout_journal = state.replay_journal.take().unwrap_or_default();
             rollout_journal.rollback(state);
             state.replay_journal = outer_replay;
+            #[cfg(feature = "journal-audit")]
+            assert_eq!(
+                audit_pre,
+                state.audit_fingerprint(),
+                "JOURNALING CONTRACT: MCTS rollout did not round-trip on early-out",
+            );
             return false;
         }
     };
@@ -367,6 +385,12 @@ fn simulate_rollout(
     let rollout_journal = state.replay_journal.take().unwrap_or_default();
     rollout_journal.rollback(state);
     state.replay_journal = outer_replay;
+    #[cfg(feature = "journal-audit")]
+    assert_eq!(
+        audit_pre,
+        state.audit_fingerprint(),
+        "JOURNALING CONTRACT: MCTS rollout did not round-trip — a mutation escaped the journal",
+    );
 
     won
 }

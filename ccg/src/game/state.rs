@@ -350,8 +350,9 @@ pub struct DelayedTrigger {
 ///
 /// The invariant is enforced, not merely documented: the full-game
 /// rollback tests compare the ENTIRE state (not a hand-picked subset of
-/// fields), and the rollout paths self-verify the round-trip under
-/// `debug_assertions`. A non-journaled mutation fails those.
+/// fields), and — under the `journal-audit` feature run weekly in
+/// `ccg-stress` — every MCTS/UCT rollout self-verifies its round-trip.
+/// A non-journaled mutation fails those.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GameState {
     pub a: PlayerState,
@@ -758,6 +759,21 @@ impl GameState {
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetPendingMainPhaseReturns { was, now });
         }
+    }
+
+    /// JOURNALING-CONTRACT audit hook (feature `journal-audit`). A
+    /// whole-state fingerprint EXCLUDING `replay_journal` — which the
+    /// rollout envelope deliberately takes out and restores, so it isn't
+    /// part of the "does the rollback round-trip?" question. Formats
+    /// rather than clones (the outer journal can be huge). Compared
+    /// before vs. after a rollout's rollback; a mismatch means a mutation
+    /// escaped the journal.
+    #[cfg(feature = "journal-audit")]
+    pub fn audit_fingerprint(&mut self) -> String {
+        let saved = self.replay_journal.take();
+        let f = format!("{self:?}");
+        self.replay_journal = saved;
+        f
     }
 
     /// Journaled replace of the extra-turn queue.
