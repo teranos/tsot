@@ -1,7 +1,5 @@
 //! The NPC-bump "!" overlay — Rust owns the render, drawn as UI quads
 //! through the same overlay pipeline as the D-pad + HUD + watermark.
-//! Replaces the earlier `#game-bang` DOM element (violated "Bevy owns
-//! UI").
 //!
 //! On a bump, `trigger` stashes the NDC position under the "!". Each
 //! frame, `age_and_publish` ages the state; when it ages past
@@ -13,12 +11,12 @@ use std::cell::RefCell;
 
 use crate::dpad::DpadInstance;
 
-/// ~60 frames/s × 1.2s tail, matching the JS DOM version's lifetime.
+/// ~60 frames/s × 1.2s tail.
 const BANG_TICKS: u32 = 72;
 /// One glyph pixel in CSS px. Bigger than the watermark (3px) so the
 /// "!" reads above the NPC's head, not as a signature.
 const PIXEL_PX: f32 = 6.0;
-/// Warm yellow — the same feel as the old DOM box, without the box.
+/// Warm yellow.
 const COLOR: [f32; 3] = [0.98, 0.83, 0.13];
 
 /// 3x5 pixel font for "!" — a vertical stroke, gap, dot.

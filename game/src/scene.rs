@@ -740,9 +740,8 @@ mod tests {
     #[test]
     fn cut_away_stays_within_the_building_you_are_actually_under() {
         // Player is inside building A (roof at origin). Building B sits
-        // ~900 units east — well within the old 1100 blast radius but a
-        // separate building (its own roof). B's camera-facing wall must
-        // stay solid.
+        // ~900 units east but is a separate building (its own roof).
+        // B's camera-facing wall must stay solid.
         let snap = SceneSnapshot {
             trees: vec![],
             obstacles: vec![],

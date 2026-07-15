@@ -25,7 +25,7 @@ const TREE_HEIGHT_SALT: u32 = 0x7EE7_0009;
 
 /// Peak local tree probability (in the densest patches). Averaged over
 /// the noise field the effective density is well under this, so the
-/// woods are sparser and clumpier than the old uniform 1-in-8.
+/// woods read as clumpy patches with clearings.
 const DENSITY_PEAK: f32 = 0.20;
 /// Value-noise lattice spacing — the scale of forest patches/clearings.
 const NOISE_CELL: f32 = 1600.0;

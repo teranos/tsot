@@ -1,4 +1,4 @@
-//! CDDA mapgen coverage report — HANDOVER checklist #2.
+//! CDDA mapgen coverage report.
 //!
 //! Walks the pinned CDDA mapgen tree (`$CDDA_SRC` or `.cdda-src`), pulls
 //! every `om_terrain` name it finds, tries to resolve each through

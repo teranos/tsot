@@ -203,8 +203,7 @@ pub fn current_instances() -> Vec<DpadInstance> {
 
 /// Poll touches + keys, drive the toggles + sliders, publish the
 /// render quads. Both `Music` and `SfxMix` are `Option<ResMut>` so
-/// this system runs regardless of setup ordering — matching the
-/// jukebox's pattern; the HANDOVER flagged the inconsistency.
+/// this system runs regardless of setup ordering.
 pub fn hud_input_system(
     mut hud: ResMut<Hud>,
     music: Option<ResMut<Music>>,

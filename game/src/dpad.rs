@@ -1,5 +1,4 @@
-// Bevy-owned mobile D-pad. Replaces the earlier HTML/CSS overlay
-// that violated the "Rust owns render" axiom from game/CLAUDE.md.
+// Bevy-owned mobile D-pad.
 //
 // Data flow:
 //   1. dpad_input_system polls the current viewport size from
