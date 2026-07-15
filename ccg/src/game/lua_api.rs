@@ -1084,6 +1084,20 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.is_clear(iid) → bool. True if the sleeve holds a
+        // transparent-frame ("clear") card (C.13). Distinct from a
+        // cardless sleeve, which has no frame at all. Shatter
+        // Expectations counts clears and cardless sleeves together when
+        // deriving X from its exile composition.
+        let cell_icl = &$cell;
+        game.set(
+            "is_clear",
+            $scope.create_function_mut(move |_, iid: String| -> Result<bool> {
+                let s = cell_icl.borrow();
+                Ok(s.is_transparent(&iid))
+            })?,
+        )?;
+
         // game.attach_from_deck(host, player, n) — take top n cards of
         // `player`'s DECK and attach each to `host` face-down (P.17).
         // Respects C.14 — a transparent card is skipped if `host`

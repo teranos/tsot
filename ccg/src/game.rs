@@ -33,6 +33,9 @@ mod window_cleaner_tests;
 #[cfg(test)]
 mod angry_glassblower_tests;
 
+#[cfg(test)]
+mod shatter_tests;
+
 pub use combat::{CombatError, CombatOutcome};
 pub use context::EventContext;
 pub use journal::{Journal, JournalEntry};

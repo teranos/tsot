@@ -66,8 +66,16 @@
     a winner with rollback + determinism holding. Tests in `sim/run.rs`
     (`full_game_on_a_window_cleaner_deck_runs_and_rolls_back` +
     `..._is_deterministic`). Slice 9 complete.
-- **Slice 10 (later) — Shatter Expectations** (see backlog). Needs
-  counter-with-alternative-cost + composition-derived X + multi-zone exile.
+- **Slice 10 — DONE. Shatter Expectations** (`cards/shatter-expectations.lua`).
+  Colourless instant, top+bottom rows transparent (holes). All three novel
+  pieces resolved in `on_play`: composition-derived X (caster exiles chosen
+  GY cards; clears + cardless add 1, ordinaries subtract 1), an opponent-side
+  may-pay via `game.confirm_for`, and multi-zone exile (X from HAND/GY/BOARD/
+  DECK). Non-positive X whiffs (ransom trivially met → spell resolves). Added
+  `game.is_clear(iid)` Lua binding. The may-pay turned out to be synchronous
+  via `confirm_for` — the slice-11 queue de-risked it but wasn't required.
+  Tests in `game/shatter_tests.rs` (opponent pays, opponent declines →
+  counter, X≤0 whiff).
 
 ## Watch-outs
 
@@ -153,7 +161,7 @@
 - Tests in `game/angry_glassblower_tests.rs` (attach-from-hand, no-sleeve
   no-op, exile-empty cantrip, exile-real no-cantrip).
 
-### Shatter Expectations (instant, colourless)
+### Shatter Expectations (instant, colourless) — DONE (slice 10)
 - Entire top and bottom rows: transparent slots.
 - Cost: **X graveyard** — you exile cards to pay.
 - **X is derived from the payment composition:** `X = (#clear + #cardless
