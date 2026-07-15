@@ -451,7 +451,26 @@ fn prop_appearance(kind: PropKind) -> ([f32; 3], [f32; 3]) {
         PropKind::Window => ([0.55, 0.70, 0.85], [80.0, 220.0, 80.0]),
         PropKind::WindowNS => ([0.55, 0.70, 0.85], [24.0, 220.0, 80.0]),
         PropKind::WindowEW => ([0.55, 0.70, 0.85], [80.0, 220.0, 24.0]),
+        // Fence — bottom rail (single instance from prop_appearance).
+        // The top rail is added by the structure loop as a second
+        // instance, so the fence reads as two stacked thin bars with a
+        // see-through gap between them (real-fence silhouette).
+        PropKind::Fence => (FENCE_COLOR, [8.0, 6.0, 8.0]),
+        PropKind::FenceNS => (FENCE_COLOR, [8.0, 6.0, 80.0]),
+        PropKind::FenceEW => (FENCE_COLOR, [80.0, 6.0, 8.0]),
     }
+}
+
+/// Weathered wood — same value across all three fence kinds so a fence
+/// run reads as one continuous piece.
+const FENCE_COLOR: [f32; 3] = [0.42, 0.32, 0.20];
+/// Bottom rail sits low, top rail near the top of the 60-tall collider.
+/// The gap between them (~35 units) is the see-through part.
+const FENCE_BOTTOM_Y: f32 = 12.0;
+const FENCE_TOP_Y: f32 = 48.0;
+
+fn is_fence(k: PropKind) -> bool {
+    matches!(k, PropKind::Fence | PropKind::FenceNS | PropKind::FenceEW)
 }
 
 /// The floor is a single plane that follows the player — no world
@@ -470,6 +489,31 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         color: [0.09, 0.11, 0.15],
         scale: [FLOOR_FOLLOW_HALF * 2.0, 100.0, FLOOR_FOLLOW_HALF * 2.0],
     });
+    // Dev grid: one CDDA tile = 80 world units. Faint lines on the floor
+    // so wall placement can be eyeballed against the cell boundaries
+    // without knowing which building spawned. Bounded around the player,
+    // snapped to the grid so lines stay stationary as the player moves.
+    const GRID_HALF: f32 = 2000.0;
+    const GRID_STEP: f32 = 80.0;
+    const GRID_COLOR: [f32; 3] = [0.14, 0.16, 0.20];
+    const GRID_THICK: f32 = 2.0;
+    let px_snap = (snap.player.x / GRID_STEP).round() * GRID_STEP;
+    let pz_snap = (snap.player.z / GRID_STEP).round() * GRID_STEP;
+    let n = (GRID_HALF / GRID_STEP) as i32;
+    for i in -n..=n {
+        let x = px_snap + (i as f32) * GRID_STEP;
+        instances.push(SceneInstance {
+            pos: [x, 0.1, pz_snap],
+            color: GRID_COLOR,
+            scale: [GRID_THICK, 1.0, GRID_HALF * 2.0],
+        });
+        let z = pz_snap + (i as f32) * GRID_STEP;
+        instances.push(SceneInstance {
+            pos: [px_snap, 0.1, z],
+            color: GRID_COLOR,
+            scale: [GRID_HALF * 2.0, 1.0, GRID_THICK],
+        });
+    }
     // Trail — a thin flat rectangle sitting just above the ground.
     // Length is baked in via crate::trail::TRAIL_END_Z - TRAIL_START_Z.
     let trail_length = crate::trail::TRAIL_END_Z - crate::trail::TRAIL_START_Z;
@@ -586,6 +630,38 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         }
         let (default_color, scale) = prop_appearance(*kind);
         let color = tint.unwrap_or(default_color);
+        if is_fence(*kind) {
+            // Bottom + top rail, gap between. Two thin bars per fence cell.
+            instances.push(SceneInstance {
+                pos: [pos.x, FENCE_BOTTOM_Y, pos.z],
+                color,
+                scale,
+            });
+            instances.push(SceneInstance {
+                pos: [pos.x, FENCE_TOP_Y, pos.z],
+                color,
+                scale,
+            });
+            // Vertical post at each end of the cell along the fence's
+            // axis, so the run reads as posts + rails, not floating bars.
+            let post_scale = [8.0, 60.0, 8.0];
+            let (dx, dz) = match *kind {
+                PropKind::FenceEW => (40.0, 0.0),
+                PropKind::FenceNS => (0.0, 40.0),
+                _ => (0.0, 0.0),
+            };
+            instances.push(SceneInstance {
+                pos: [pos.x - dx, post_scale[1] * 0.5, pos.z - dz],
+                color,
+                scale: post_scale,
+            });
+            instances.push(SceneInstance {
+                pos: [pos.x + dx, post_scale[1] * 0.5, pos.z + dz],
+                color,
+                scale: post_scale,
+            });
+            continue;
+        }
         instances.push(SceneInstance {
             pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
             color,

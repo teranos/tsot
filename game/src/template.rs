@@ -44,6 +44,16 @@ pub enum PropKind {
     WindowNS,
     /// Glass window running E–W (along X): long in X, thin in Z.
     WindowEW,
+    /// Fence — a short, see-through barrier. Blocks movement (a real
+    /// fence you'd have to go around), but does NOT seal a building's
+    /// interior for flood-fill: an area enclosed by fences stays
+    /// exterior (a yard, not a room). Rendered as two stacked rails
+    /// so the gap between is visible.
+    Fence,
+    /// Fence running N–S (along Z).
+    FenceNS,
+    /// Fence running E–W (along X).
+    FenceEW,
 }
 
 impl PropKind {
@@ -146,6 +156,9 @@ fn prop_kind_tag(k: PropKind) -> u8 {
         PropKind::Window => 8,
         PropKind::WindowNS => 9,
         PropKind::WindowEW => 10,
+        PropKind::Fence => 11,
+        PropKind::FenceNS => 12,
+        PropKind::FenceEW => 13,
     }
 }
 
@@ -181,6 +194,8 @@ pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
                     PropKind::WallEW => PropKind::WallNS,
                     PropKind::WindowNS => PropKind::WindowEW,
                     PropKind::WindowEW => PropKind::WindowNS,
+                    PropKind::FenceNS => PropKind::FenceEW,
+                    PropKind::FenceEW => PropKind::FenceNS,
                     k => k,
                 }
             } else {
@@ -297,6 +312,30 @@ pub fn stamp_template_where(
                     sp(PropKind::WindowEW),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(80.0, 220.0, 24.0)),
+                ))
+                .id(),
+            // Fence — short (60 tall) barrier, blocks movement. Collider
+            // spans the whole cell along its axis so the fence line is
+            // unbroken even with the see-through visual.
+            PropKind::Fence => commands
+                .spawn((
+                    sp(PropKind::Fence),
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(80.0, 60.0, 80.0)),
+                ))
+                .id(),
+            PropKind::FenceNS => commands
+                .spawn((
+                    sp(PropKind::FenceNS),
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(8.0, 60.0, 80.0)),
+                ))
+                .id(),
+            PropKind::FenceEW => commands
+                .spawn((
+                    sp(PropKind::FenceEW),
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(80.0, 60.0, 8.0)),
                 ))
                 .id(),
         };

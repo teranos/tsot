@@ -9,8 +9,8 @@ use crate::template::PropKind;
 /// Glass windows — a light-blue thin panel sitting in the wall line.
 pub(crate) const WINDOW_COLOR: [f32; 3] = [0.50, 0.68, 0.82];
 
-/// Wall/fence colour by material, so parametrized wall variation shows
-/// as differently-coloured houses (brick/wood/concrete/log/…).
+/// Wall colour by material, so parametrized wall variation shows as
+/// differently-coloured houses (brick/wood/concrete/log/…).
 pub(crate) fn wall_color(id: &str) -> [f32; 3] {
     if id.contains("brick") {
         [0.55, 0.32, 0.27]
@@ -22,10 +22,22 @@ pub(crate) fn wall_color(id: &str) -> [f32; 3] {
         [0.40, 0.29, 0.17]
     } else if id.contains("glass") {
         [0.40, 0.55, 0.60]
-    } else if id.contains("wood") || id.contains("wall_w") || id.contains("fence") {
+    } else if id.contains("wood") || id.contains("wall_w") {
         [0.52, 0.40, 0.25]
     } else {
         [0.48, 0.47, 0.50] // generic
+    }
+}
+
+/// Fence colour by material — chain-link reads grey/metal, wooden and
+/// picket fences read warm brown. The default is a weathered wood.
+pub(crate) fn fence_color(id: &str) -> [f32; 3] {
+    if id.contains("chain") || id.contains("metal") {
+        [0.46, 0.49, 0.53]
+    } else if id.contains("picket") || id.contains("wood") {
+        [0.52, 0.40, 0.25]
+    } else {
+        [0.42, 0.32, 0.20]
     }
 }
 
@@ -43,7 +55,14 @@ pub(crate) fn cell_to_prop(
         if t.contains("window") {
             return Some((PropKind::Window, Some(WINDOW_COLOR)));
         }
-        if (t.contains("wall") || t.contains("fence")) && !t.contains("gate") {
+        // Fence before wall: a fence's terrain id can technically match
+        // "wall" substrings in some corpora, but a fence is a
+        // yard-bounding barrier — short, see-through, doesn't seal a
+        // room. Kept as the base Fence kind; pass 2 orients it NS/EW.
+        if t.contains("fence") && !t.contains("gate") {
+            return Some((PropKind::Fence, Some(fence_color(t))));
+        }
+        if t.contains("wall") && !t.contains("gate") {
             return Some((PropKind::Wall, Some(wall_color(t))));
         }
     }
@@ -54,15 +73,16 @@ pub(crate) fn cell_to_prop(
 /// connective tissue that seals a building's interior? Walls, windows,
 /// doors, gates all qualify (doors + gates don't render as a prop yet,
 /// but they still complete the wall line for flood-fill).
+///
+/// Fences are DELIBERATELY excluded: they bound a yard, not a room. A
+/// fenced-in area must stay exterior for flood-fill, or the building
+/// walls facing that yard get misclassified as room-to-room dividers.
 pub(crate) fn is_wall_line_char(ch: char, terrain: &HashMap<char, String>) -> bool {
     let Some(t) = terrain.get(&ch) else {
         return false;
     };
-    t.contains("wall")
-        || t.contains("fence")
-        || t.contains("window")
-        || t.contains("door")
-        || t.contains("gate")
+    (t.contains("wall") || t.contains("window") || t.contains("door") || t.contains("gate"))
+        && !t.contains("fence")
 }
 
 #[cfg(test)]
@@ -83,7 +103,7 @@ mod tests {
 
         let kind = |ch: char| cell_to_prop(ch, &terrain).map(|(k, _)| k);
         assert_eq!(kind('w'), Some(PropKind::Wall));
-        assert_eq!(kind('W'), Some(PropKind::Wall));
+        assert_eq!(kind('W'), Some(PropKind::Fence));
         assert_eq!(kind('^'), None); // gate skipped
         assert_eq!(kind('.'), None); // floor skipped
         assert_eq!(kind(' '), None); // unknown

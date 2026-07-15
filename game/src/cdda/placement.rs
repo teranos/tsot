@@ -257,6 +257,29 @@ pub fn mapgen_to_template(
                 });
             };
 
+            // Fence: emit one centred prop per cell, oriented by whether
+            // its neighbours (horizontal vs vertical) are also fences.
+            // Fences don't participate in the wall edge-placement rules
+            // — they're a yard boundary, not a room seal (excluded from
+            // is_wall_line_char so flood-fill passes through).
+            if matches!(base, PropKind::Fence) {
+                let is_fence_at = |rr: i32, cc: i32| -> bool {
+                    if rr < 0 || cc < 0 || (rr as usize) >= height || (cc as usize) >= width {
+                        return false;
+                    }
+                    matches!(grid[rr as usize][cc as usize], Some((PropKind::Fence, _)))
+                };
+                let horiz = is_fence_at(r, c - 1) || is_fence_at(r, c + 1);
+                let vert = is_fence_at(r - 1, c) || is_fence_at(r + 1, c);
+                let kind = match (horiz, vert) {
+                    (true, false) => PropKind::FenceEW,
+                    (false, true) => PropKind::FenceNS,
+                    _ => PropKind::Fence, // isolated post or 4-way junction
+                };
+                emit(cx_world, cz_world, kind);
+                continue;
+            }
+
             let is_wall_or_window = matches!(base, PropKind::Wall | PropKind::Window);
             if !is_wall_or_window {
                 emit(cx_world, cz_world, base);
@@ -335,6 +358,19 @@ pub fn mapgen_to_template(
                 emit_e = emit_e || e_open;
             }
 
+            // Divider takes precedence per axis: a single centred wall
+            // serves both rooms, so the perimeter/diagonal emissions on
+            // the same axis (which would give N-outer + S-outer + centre
+            // = three parallel walls) must be suppressed.
+            if divider_ew {
+                emit_n = false;
+                emit_s = false;
+            }
+            if divider_ns {
+                emit_e = false;
+                emit_w = false;
+            }
+
             // If per-cell decided no horizontal wall but this cell IS
             // part of a horizontal run, align to the run's outer edge
             // (any cell in the run with a direct exterior on N or S).
@@ -342,12 +378,12 @@ pub fn mapgen_to_template(
             // neighbours are all wall_line so the per-cell rule finds
             // no orientation, but the RUN through them has a clear
             // edge from other cells.
-            if !emit_n && !emit_s && (is_solid(r, c - 1) || is_solid(r, c + 1)) {
+            if !emit_n && !emit_s && !divider_ew && (is_solid(r, c - 1) || is_solid(r, c + 1)) {
                 let (run_n, run_s) = horiz_run_side(r, c);
                 emit_n = run_n;
                 emit_s = run_s;
             }
-            if !emit_e && !emit_w && (is_solid(r - 1, c) || is_solid(r + 1, c)) {
+            if !emit_e && !emit_w && !divider_ns && (is_solid(r - 1, c) || is_solid(r + 1, c)) {
                 let (run_e, run_w) = vert_run_side(r, c);
                 emit_e = run_e;
                 emit_w = run_w;
@@ -553,6 +589,130 @@ mod tests {
     }
 
     #[test]
+    fn fence_ring_leaves_the_enclosed_area_as_exterior() {
+        // A fenced yard is bounded by fence chars but the interior
+        // stays EXTERIOR — flood-fill must pass through fence cells,
+        // otherwise the building walls facing the yard would be
+        // detected as room-to-room dividers (the yard bug).
+        // 5×5 mapgen with a fence ring around a single floor cell.
+        // Fence chars use `f`; wall_line excludes fence, so the floor
+        // at (2, 2) is reachable from the mapgen boundary.
+        let json = r#"[{
+            "om_terrain": "tt",
+            "object": {
+                "rows": ["fffff", "f...f", "f...f", "f...f", "fffff"],
+                "terrain": {"f": "t_fence_barbed", ".": "t_floor"}
+            }
+        }]"#;
+        let t = mapgen_to_template(json, "tt", CDDA_TILE, 0).unwrap();
+        // 16 fence-perimeter cells (5+5+3+3 = 16) emit fence props.
+        let fence_props = t.props.iter().filter(|p| {
+            matches!(
+                p.kind,
+                PropKind::Fence | PropKind::FenceEW | PropKind::FenceNS
+            )
+        }).count();
+        assert_eq!(fence_props, 16, "one fence prop per perimeter cell; got {fence_props}");
+        // No wall props anywhere — this mapgen has no walls, only fence.
+        // If flood-fill had failed to reach the interior, the fence
+        // cells would have been treated as wall_line and interior
+        // classification would have produced spurious wall geometry.
+        let wall_props = t
+            .props
+            .iter()
+            .filter(|p| matches!(p.kind, PropKind::Wall | PropKind::WallEW | PropKind::WallNS))
+            .count();
+        assert_eq!(wall_props, 0, "no walls should be emitted from a fence-only ring");
+    }
+
+    #[test]
+    fn building_wall_adjacent_to_fenced_yard_emits_as_perimeter() {
+        // Building (a single wall cell) sits inside a fenced yard.
+        // Because fences don't block flood-fill, the yard stays
+        // exterior — so the wall cell has exterior on all 4 sides and
+        // emits outer perimeter walls, NOT centred dividers.
+        // 5×5 mapgen with wall at (2, 2). Cx=Cz=2.5 → cell centre at
+        // (−40, −40). Outer edges at cell centre ± (40−12) = ±28
+        // relative to the centre → absolute (−68/−12) on each axis.
+        let json = r#"[{
+            "om_terrain": "tt",
+            "object": {
+                "rows": ["fffff", "f...f", "f.w.f", "f...f", "fffff"],
+                "terrain": {"f": "t_fence_barbed", "w": "t_wall_log", ".": "t_floor"}
+            }
+        }]"#;
+        let t = mapgen_to_template(json, "tt", CDDA_TILE, 0).unwrap();
+        // No centred wall at the cell centre (that would be the divider
+        // signature — proves yard was misclassified as interior).
+        let has_centred = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallEW | PropKind::WallNS)
+                && (p.offset.x - (-40.0)).abs() < 1e-3
+                && (p.offset.z - (-40.0)).abs() < 1e-3
+        });
+        assert!(
+            !has_centred,
+            "yard-facing wall should NOT be a centred divider; got: {:?}",
+            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
+        );
+        // Four outer-edge walls: N at (−40, −68), S at (−40, −12),
+        // E at (−12, −40), W at (−68, −40).
+        let expected = [(-40.0, -68.0), (-40.0, -12.0), (-12.0, -40.0), (-68.0, -40.0)];
+        for (ex, ez) in expected {
+            let found = t.props.iter().any(|p| {
+                matches!(p.kind, PropKind::WallEW | PropKind::WallNS)
+                    && (p.offset.x - ex).abs() < 1e-3
+                    && (p.offset.z - ez).abs() < 1e-3
+            });
+            assert!(
+                found,
+                "missing perimeter wall at ({ex}, {ez}); got: {:?}",
+                t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn a_cell_never_emits_more_than_one_wall_per_axis() {
+        // Regression: divider + diagonal + perimeter rules were all
+        // additive on the same axis, so a divider cell whose diagonals
+        // were also interior emitted N-outer + S-outer + centred = three
+        // parallel WallEW segments in the same 80-unit cell (visible
+        // in-game as tripled walls / windows). Cross-shaped divider
+        // pattern reproduces it: a wall cell with rooms N, S, E, W and
+        // interior on every diagonal.
+        let json = synthetic_mapgen(&[
+            "wwwww",
+            "w...w",
+            "w.w.w",
+            "w...w",
+            "wwwww",
+        ]);
+        let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
+        use std::collections::HashMap;
+        let mut per_cell_ew: HashMap<(i32, i32), usize> = HashMap::new();
+        let mut per_cell_ns: HashMap<(i32, i32), usize> = HashMap::new();
+        for p in &t.props {
+            let cx = (p.offset.x / CDDA_TILE).round() as i32;
+            let cz = (p.offset.z / CDDA_TILE).round() as i32;
+            match p.kind {
+                PropKind::WallEW | PropKind::WindowEW => {
+                    *per_cell_ew.entry((cx, cz)).or_default() += 1;
+                }
+                PropKind::WallNS | PropKind::WindowNS => {
+                    *per_cell_ns.entry((cx, cz)).or_default() += 1;
+                }
+                _ => {}
+            }
+        }
+        for (cell, n) in &per_cell_ew {
+            assert!(*n <= 1, "cell {cell:?}: {n} WallEW emissions on same axis");
+        }
+        for (cell, n) in &per_cell_ns {
+            assert!(*n <= 1, "cell {cell:?}: {n} WallNS emissions on same axis");
+        }
+    }
+
+    #[test]
     fn t_junction_divider_doesnt_protrude_into_the_perimeter_cell() {
         // 4×5: two 1×1 rooms separated by a divider at col 2. Perimeter
         // walls all around. The T-junction cells (0, 2) and (3, 2) are
@@ -561,11 +721,13 @@ mod tests {
         let json = synthetic_mapgen(&["wwwww", "w.w.w", "w.w.w", "wwwww"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
         // For 4×5 with tile=80: cx=2.5, cz=2.0.
-        // Cell (0, 2) centre: x=−40, z=−160. Vert emission (post space-
-        // max shift) would sit at x = 0 − 12 = −12, z = −160. None.
+        // Divider cells (1, 2) and (2, 2) have room E + room W → centred
+        // WallNS at cell centre x=−40, at their z. T-junction cells
+        // (0, 2) and (3, 2) are perimeter (N-facing / S-facing exterior)
+        // and must NOT emit a vertical divider.
         let has_top_protrusion = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-12.0)).abs() < 1e-3
+                && (p.offset.x - (-40.0)).abs() < 1e-3
                 && (p.offset.z - (-160.0)).abs() < 1e-3
         });
         assert!(
@@ -573,22 +735,21 @@ mod tests {
             "top T-junction should not emit a vertical divider at (0, 2); got: {:?}",
             t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
         );
-        // Same for the bottom T-junction (row 3, z = 80).
         let has_bottom_protrusion = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-12.0)).abs() < 1e-3
+                && (p.offset.x - (-40.0)).abs() < 1e-3
                 && (p.offset.z - 80.0).abs() < 1e-3
         });
         assert!(!has_bottom_protrusion, "bottom T-junction should not emit vertical");
-        // But the divider IS emitted at the middle cells (1, 2) and (2, 2).
+        // Divider present at the two middle cells, single centred wall each.
         let mid_1 = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-12.0)).abs() < 1e-3
+                && (p.offset.x - (-40.0)).abs() < 1e-3
                 && (p.offset.z - (-80.0)).abs() < 1e-3
         });
         let mid_2 = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-12.0)).abs() < 1e-3
+                && (p.offset.x - (-40.0)).abs() < 1e-3
                 && p.offset.z.abs() < 1e-3
         });
         assert!(mid_1 && mid_2, "the divider still emits at rows 1 and 2");
