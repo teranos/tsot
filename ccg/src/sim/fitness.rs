@@ -20,10 +20,10 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use crate::card::{Card, CardRegistry};
-use crate::game::{GameState, PlayerId};
+use crate::game::{DeckUnit, GameState, PlayerId};
 
 use super::deck_token::{DeckToken, Side};
-use super::genome::{to_deck, GenomeError};
+use super::genome::{shuffle_units, to_units, GenomeError};
 use super::run::run_game_with_ai;
 use super::AiKind;
 use super::variants::{build_random_deck, mandatory_for_variant, variant_pool, VARIANTS};
@@ -103,7 +103,10 @@ pub fn fitness_breakdown(
     base_seed: u64,
     ai: &AiKind,
 ) -> Result<FitnessBreakdown, GenomeError> {
-    let deck_g = to_deck(registry.as_ref(), genome)?;
+    // Build as sleeve-units so a genome carrying the cardless sentinel
+    // materializes real empty sleeves. Opponent decks are ordinary cards,
+    // wrapped as `DeckUnit::Card` per game below.
+    let deck_g = to_units(registry.as_ref(), genome)?;
     // Discard any failure-sink entries that pre-date this evaluation —
     // they belong to whatever the worker thread ran before us. Drain
     // BEFORE the empty-gauntlet early-return so the cleanup happens
@@ -141,12 +144,13 @@ pub fn fitness_breakdown(
             // whole gauntlet is replayable from the outer seed.
             // genome as side A
             let mut deck_g_a = deck_g.clone();
-            let mut deck_opp_a = opp.clone();
+            let mut deck_opp_a: Vec<DeckUnit> =
+                opp.iter().cloned().map(DeckUnit::Card).collect();
             let mut shuf_rng_a = StdRng::seed_from_u64(rng.gen());
             let mut shuf_rng_b = StdRng::seed_from_u64(rng.gen());
-            crate::sim::genome::shuffle_deck(&mut deck_g_a, &mut shuf_rng_a);
-            crate::sim::genome::shuffle_deck(&mut deck_opp_a, &mut shuf_rng_b);
-            let state = GameState::new(deck_g_a, deck_opp_a);
+            shuffle_units(&mut deck_g_a, &mut shuf_rng_a);
+            shuffle_units(&mut deck_opp_a, &mut shuf_rng_b);
+            let state = GameState::from_units(deck_g_a, deck_opp_a);
             // One seed drives the game AND identifies it in the timeout
             // dump — bind it once so the two can never disagree.
             let game_seed = rng.gen();
@@ -162,13 +166,14 @@ pub fn fitness_breakdown(
             }
             opp_games += 1;
             // genome as side B
-            let mut deck_opp_b = opp.clone();
+            let mut deck_opp_b: Vec<DeckUnit> =
+                opp.iter().cloned().map(DeckUnit::Card).collect();
             let mut deck_g_b = deck_g.clone();
             let mut shuf_rng_a = StdRng::seed_from_u64(rng.gen());
             let mut shuf_rng_b = StdRng::seed_from_u64(rng.gen());
-            crate::sim::genome::shuffle_deck(&mut deck_opp_b, &mut shuf_rng_a);
-            crate::sim::genome::shuffle_deck(&mut deck_g_b, &mut shuf_rng_b);
-            let state = GameState::new(deck_opp_b, deck_g_b);
+            shuffle_units(&mut deck_opp_b, &mut shuf_rng_a);
+            shuffle_units(&mut deck_g_b, &mut shuf_rng_b);
+            let state = GameState::from_units(deck_opp_b, deck_g_b);
             let game_seed = rng.gen();
             let mut game_rng = StdRng::seed_from_u64(game_seed);
             let mut log = Vec::new();

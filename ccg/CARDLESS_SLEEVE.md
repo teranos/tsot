@@ -127,8 +127,15 @@
   carries 3 empty sleeves + 2 Angry Glassblowers (swapped for 5 clears).
   The blue starter still ships without empties — add the sentinel to
   `STARTER_DECK_IDS` if wanted.
-- **EA drafts cardless sleeves?** — currently NO (the EA pool is
-  `Vec<Card>`; genome/deckbuilder never emit cardless). Open design call.
+- **EA drafts cardless sleeves — DONE.** The cardless sentinel is now a
+  first-class draftable gene: `random_genome` can draft it, `mutate` can
+  introduce/remove it, and `repair` treats it as a valid capped id (no
+  longer strips it). Fitness builds each genome via `to_units` →
+  `from_units`, so a drafted sentinel materializes a real empty sleeve.
+  A sentinel-free genome evaluates byte-identically to the old
+  `to_deck`/`new` path (same shuffle rng), and run-to-run determinism
+  holds throughout — but the draft/mutate ops now include the sentinel,
+  so evolved genomes for a given seed differ from before.
 
 ## Known issues
 

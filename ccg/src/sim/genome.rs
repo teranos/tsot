@@ -122,6 +122,11 @@ pub fn random_genome(
     for c in pool {
         *remaining.entry(c.id.clone()).or_insert(0) += cap;
     }
+    // Cardless sleeves are a draftable gene too — a decklist may carry
+    // empty sleeves (Z.8 / S.4), so the EA can evolve them in like any
+    // other id (capped the same). `to_units` turns the sentinel into a
+    // real cardless sleeve at build time.
+    remaining.insert(crate::replay::CARDLESS_SLEEVE_ID.to_string(), cap);
     let pool_unique = remaining.len();
     if pool_unique * (cap as usize) < len {
         return Err(GenomeError::PoolTooSmall {
@@ -166,6 +171,28 @@ mod tests {
         for card in &deck {
             assert_eq!(card.id, first_id);
         }
+    }
+
+    #[test]
+    fn random_genome_can_draft_cardless_sleeves() {
+        use crate::game::DeckUnit;
+        use crate::replay::CARDLESS_SLEEVE_ID;
+
+        // A one-card pool plus the always-draftable cardless sentinel:
+        // capacity is 5 (card) + 5 (sentinel) = 10, exactly the genome
+        // length, so the genome MUST spend all 5 cardless slots.
+        let registry = load_registry();
+        let one = vec![registry.cards()[0].clone()];
+        let mut rng = StdRng::seed_from_u64(1);
+        let genome = random_genome(&one, 10, 5, &mut rng).unwrap();
+
+        let sentinels = genome.iter().filter(|id| id.as_str() == CARDLESS_SLEEVE_ID).count();
+        assert!(sentinels > 0, "the EA can draft cardless sleeves into a genome");
+
+        // to_units turns each sentinel into a real cardless sleeve.
+        let units = to_units(&registry, &genome).unwrap();
+        let empties = units.iter().filter(|u| matches!(u, DeckUnit::Cardless)).count();
+        assert_eq!(empties, sentinels, "each drafted sentinel becomes a cardless sleeve");
     }
 
     #[test]
@@ -345,9 +372,11 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0xEA);
         let g = random_genome(&p, 50, 3, &mut rng).unwrap();
         for id in &g {
+            // The cardless sentinel is a valid draftable gene alongside
+            // every pool card id.
             assert!(
-                pool_ids.contains(id.as_str()),
-                "id {id} not in pool"
+                pool_ids.contains(id.as_str()) || id.as_str() == crate::replay::CARDLESS_SLEEVE_ID,
+                "id {id} is neither a pool id nor the cardless sentinel"
             );
         }
     }
@@ -364,7 +393,8 @@ mod tests {
 
     #[test]
     fn random_genome_rejects_pool_too_small() {
-        // Single-card pool, cap 3, asking for 50 → cannot satisfy.
+        // Single-card pool + the cardless sentinel = 2 unique, cap 3 →
+        // 6 capacity, still can't fill 50.
         let p = vec![pool()[0].clone()];
         let mut rng = StdRng::seed_from_u64(0xEA);
         let err = random_genome(&p, 50, 3, &mut rng).unwrap_err();
@@ -376,7 +406,7 @@ mod tests {
             } => {
                 assert_eq!(len, 50);
                 assert_eq!(cap, 3);
-                assert_eq!(pool_unique, 1);
+                assert_eq!(pool_unique, 2, "pool card + cardless sentinel");
             }
             other => panic!("expected PoolTooSmall, got {other:?}"),
         }
