@@ -367,12 +367,28 @@ fn do_add_modifier(
 }
 
 fn do_set_tapped(s: &mut GameState, iid: &str, tapped: bool) -> Result<()> {
-    let owner = s.card_pool.get(iid).map(|i| i.owner);
-    if owner.is_some() {
-        s.set_tapped(&iid.to_string(), tapped);
-    }
-    if let Some(o) = owner {
-        s.bump_action(if tapped { "tap" } else { "untap" }, o);
+    let Some(owner) = s.card_pool.get(iid).map(|i| i.owner) else {
+        return Ok(());
+    };
+    let was_tapped = s.card_pool.get(iid).map(|i| i.tapped).unwrap_or(false);
+    s.set_tapped(&iid.to_string(), tapped);
+    s.bump_action(if tapped { "tap" } else { "untap" }, owner);
+    // Slice 11: an EXTERNAL tap (from inside a Lua handler via
+    // game.set_tapped) becomes a DEFERRED OnTapped. It can't fire here —
+    // we're inside the caller's Lua borrow — so enqueue it for
+    // `fire_self_only` to drain once that handler unwinds. Only on a
+    // genuine untapped→tapped transition, and only when the sleeve
+    // actually carries an on_tapped handler (the attack tap fires its own
+    // OnTapped synchronously from combat, on a different path, so this
+    // never double-fires it).
+    if tapped
+        && !was_tapped
+        && s.card_pool
+            .get(iid)
+            .is_some_and(|i| i.card().handlers.contains_key(&EventName::OnTapped))
+    {
+        s.pending_events
+            .push_back((EventName::OnTapped, iid.to_string()));
     }
     Ok(())
 }
@@ -1450,7 +1466,7 @@ fn handler_outcome_from_lua_result(
                           // (see lua_api.rs:1330 etc). Macro returns
                           // `mlua::Table` at runtime — the 3 yield TDD
                           // tests + 442 lib tests verify the behavior.
-pub(crate) fn fire_self_only(
+fn fire_one(
     lua: &Lua,
     state: &mut GameState,
     oracle: &mut dyn ChoiceOracle,
@@ -1532,6 +1548,54 @@ pub(crate) fn fire_self_only(
     }
 }
 
+/// Fire a self-only event handler, then drain the deferred-event queue
+/// (slice 11). Any event a handler enqueued while it ran — e.g. an
+/// external `game.set_tapped` that owes an `OnTapped` — fires here, now
+/// that the triggering handler has unwound and its Lua borrow is
+/// released. Every existing caller of `fire_self_only` gets draining for
+/// free; the actual per-handler work lives in `fire_one`.
+pub(crate) fn fire_self_only(
+    lua: &Lua,
+    state: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
+    event: EventName,
+    source: &InstanceId,
+) -> std::result::Result<(), ChoicePending> {
+    fire_one(lua, state, oracle, event, source)?;
+    drain_deferred_events(lua, state, oracle)
+}
+
+/// Drain [`GameState::pending_events`] by firing each queued event via
+/// `fire_one` (which does NOT itself drain, so this loop owns the drain
+/// and there is no re-entrant double-fire). Firing an event may enqueue
+/// more; the loop runs until the queue settles. A hard budget guards a
+/// pathological tap/trigger loop (two creatures tapping each other
+/// forever) — exceeding it surfaces via the sacred-error channel and
+/// clears the queue rather than spinning.
+pub(crate) fn drain_deferred_events(
+    lua: &Lua,
+    state: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
+) -> std::result::Result<(), ChoicePending> {
+    let mut budget: i32 = 1024;
+    while let Some((event, source)) = state.pending_events.pop_front() {
+        budget -= 1;
+        if budget < 0 {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "engine",
+                "deferred-event overflow",
+                "the deferred-event queue exceeded its drain budget — a \
+                 tap/trigger loop is enqueuing events without settling",
+            );
+            state.pending_events.clear();
+            break;
+        }
+        fire_one(lua, state, oracle, event, &source)?;
+    }
+    Ok(())
+}
+
 /// Fire an activated-ability handler. Same shape as fire_self_only
 /// (handler takes `(game, self)`), but the handler is passed in by
 /// reference rather than looked up by event name. Used by
@@ -1561,23 +1625,26 @@ pub(crate) fn fire_activated(
     });
 
     match result {
-        Ok(()) => Ok(()),
+        Ok(()) => {}
         Err(e) => {
             if let Some(pending) = pending_from_mlua_error(&e) {
-                Err(pending)
-            } else {
-                crate::error::emit_region(
-                    crate::error::Severity::Error,
-                    "lua-handler",
-                    "activated",
-                    format!("Lua activated handler for {card_id} failed"),
-                    mlua_error_chain_why(&e),
-                );
-                eprintln!("[lua] activated handler for {card_id} failed: {e}");
-                Ok(())
+                // Owe the human an answer — leave the deferred queue for
+                // the resumed fire to drain.
+                return Err(pending);
             }
+            crate::error::emit_region(
+                crate::error::Severity::Error,
+                "lua-handler",
+                "activated",
+                format!("Lua activated handler for {card_id} failed"),
+                mlua_error_chain_why(&e),
+            );
+            eprintln!("[lua] activated handler for {card_id} failed: {e}");
         }
     }
+    // Slice 11: an activated ability that tapped something externally
+    // owes a deferred OnTapped — drain now that the handler has unwound.
+    drain_deferred_events(lua, state, oracle)
 }
 
 /// Run an activated ability's `validate` hook. Same shape as
@@ -1664,25 +1731,24 @@ pub(crate) fn fire_with_partner(
     match result {
         Ok(()) => {
             credit_fire(state, event, owner);
-            Ok(())
         }
         Err(e) => {
             if let Some(pending) = pending_from_mlua_error(&e) {
-                Err(pending)
-            } else {
-                let event_key = event.lua_key();
-                crate::error::emit_region(
-                    crate::error::Severity::Error,
-                    "lua-handler",
-                    event_key,
-                    format!("Lua {event_key} handler for {card_id} (partner) failed"),
-                    mlua_error_chain_why(&e),
-                );
-                eprintln!("[lua] {event_key} handler for {card_id} failed: {e}");
-                Ok(())
+                return Err(pending);
             }
+            let event_key = event.lua_key();
+            crate::error::emit_region(
+                crate::error::Severity::Error,
+                "lua-handler",
+                event_key,
+                format!("Lua {event_key} handler for {card_id} (partner) failed"),
+                mlua_error_chain_why(&e),
+            );
+            eprintln!("[lua] {event_key} handler for {card_id} failed: {e}");
         }
     }
+    // Slice 11: drain any event the partner handler deferred (external tap).
+    drain_deferred_events(lua, state, oracle)
 }
 
 #[cfg(test)]

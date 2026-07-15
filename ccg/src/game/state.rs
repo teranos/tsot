@@ -390,6 +390,16 @@ pub struct GameState {
     /// lives in to its owner's board, then the queue clears.
     #[serde(default)]
     pub pending_main_phase_returns: Vec<InstanceId>,
+    /// Slice 11: deferred-event queue. An event that cannot fire
+    /// synchronously — because doing so would re-enter a Lua borrow that
+    /// the triggering handler still holds (e.g. `OnTapped` from an
+    /// external `game.set_tapped` inside another handler) — is enqueued
+    /// here and drained by `fire_self_only` once that handler unwinds and
+    /// the borrow is released. Drained to empty before returning to any
+    /// top-level operation, so it is transient working state: not
+    /// journaled, not serialized, always empty at save/rollback points.
+    #[serde(skip, default)]
+    pub pending_events: std::collections::VecDeque<(EventName, InstanceId)>,
 }
 
 impl GameState {
@@ -431,6 +441,7 @@ impl GameState {
             current_cast_payments: None,
             extra_turns_pending: Vec::new(),
             pending_main_phase_returns: Vec::new(),
+            pending_events: std::collections::VecDeque::new(),
         }
     }
 

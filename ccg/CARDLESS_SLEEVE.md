@@ -47,10 +47,10 @@
 - **Slice 9 — the cards + the end-to-end test deck.**
   - **9.1 — DONE.** `attach_cardless_from_deck` (Rust + Lua): search deck
     for cardless sleeves, attach n.
-  - **9.2 — DONE (attack tap only).** `EventName::OnTapped`, fired from
-    combat declare_attacker (gated !vigilant). External taps deferred
-    (firing inside a Lua borrow needs a deferred-event queue). No-op for
-    cards with no `on_tapped` handler.
+  - **9.2 — DONE.** `EventName::OnTapped`, fired from combat
+    declare_attacker (gated !vigilant). External taps (`game.tap` inside
+    a handler) now fire it too, via the slice-11 deferred-event queue.
+    No-op for cards with no `on_tapped` handler.
   - **9.3 — DONE.** `cards/window-cleaner.lua` — azure human, `2 attach`,
     2/3 reach, transparent holes T/TR/UR/R/C. ETB attaches 2 cardless
     (via `attach_cardless_from_deck`); `on_tapped` *may* move an attached
@@ -96,11 +96,15 @@
   transparent + opaque colored-back sleeves that carry color and can satisfy
   color costs). Beyond cardless; touches Z.8e visibility.
 - **Enforcing S.4 legality** — only if/when a deck-legality check exists.
-- **Deferred-event queue** (slice 11 candidate) — a queue for events that
-  can't fire synchronously because they'd re-enter a Lua borrow. Unblocks:
-  OnTapped on *external* taps (`game.set_tapped`, not just attack); the
-  delayed-trigger registry (LIMITATIONS); and Shatter's counter-may prompt.
-  The single most-enabling piece of remaining engine work.
+- **Deferred-event queue — DONE (slice 11).** `GameState::pending_events`
+  (a transient `VecDeque`, not journaled/serialized) plus `fire_one`
+  (fires one handler) + `drain_deferred_events` (fires the queue to
+  empty, budget-capped). `fire_self_only` / `fire_activated` /
+  `fire_with_partner` now drain after their handler unwinds. First
+  consumer: `game.tap` (external taps) enqueues `OnTapped` — it fires
+  once the triggering handler releases its Lua borrow, instead of not at
+  all. Still open on top of this: the delayed-trigger registry and
+  Shatter's counter-may prompt (both can now be built on the queue).
 
 ## Queued tasks
 

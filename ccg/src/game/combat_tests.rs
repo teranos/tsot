@@ -673,6 +673,52 @@ fn registry_with_fixture(name: &str, source: &str) -> crate::card::CardRegistry 
 }
 
 #[test]
+fn external_tap_inside_a_handler_fires_on_tapped_via_deferred_queue() {
+    // Re-entrancy (slice 11): a handler that taps a creature via
+    // game.set_tapped runs INSIDE a Lua borrow, so OnTapped cannot fire
+    // synchronously the way the attack tap does. The deferred-event queue
+    // enqueues it and drains it once the triggering handler unwinds.
+    // Fixture: a creature that taps ITSELF on entering the board and has
+    // an on_tapped trigger — the tap must still reach on_tapped.
+    let registry = registry_with_fixture(
+        "self_tapper",
+        r#"return {
+            id = "self-tapper",
+            on_enter_board = function(game, self)
+                game.tap(self.instance_id)
+            end,
+            on_tapped = function(game, self)
+                _G.deferred_on_tapped = (_G.deferred_on_tapped or 0) + 1
+            end,
+        }"#,
+    );
+    let card = registry.cards().iter().find(|c| c.id == "self-tapper").unwrap().clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card_mut().handlers = card.handlers.clone();
+        inst.card_mut().id = card.id.clone();
+    }
+    put_on_board(&mut s, PlayerId::A, &iid);
+
+    let mut oracle = crate::choice::ScriptedOracle::new(vec![]);
+    crate::game::lua_api::fire_self_only(
+        registry.lua(),
+        &mut s,
+        &mut oracle,
+        crate::card::EventName::OnEnterBoard,
+        &iid,
+    )
+    .expect("on_enter_board answers locally");
+
+    let fired: i32 = registry.lua().globals().get("deferred_on_tapped").unwrap_or(0);
+    assert_eq!(fired, 1, "the external tap fired on_tapped once via the deferred queue");
+    assert!(s.card_pool.get(&iid).unwrap().tapped, "the creature ended up tapped");
+}
+
+#[test]
 fn on_attack_handler_fires_when_attacker_declared() {
     let registry = registry_with_fixture(
         "on_attack",
