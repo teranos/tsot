@@ -152,32 +152,21 @@ impl GameState {
         cast_iid: &InstanceId,
     ) -> usize {
         let cast_ident = self.card_identity(cast_iid);
-        // C.14: transparent payments can only attach to transparent
-        // hosts. For BOARD-placed casts the cast IS the host; exclude
-        // transparent payments unless the cast is also transparent.
-        // For non-BOARD casts no attachment happens; no transparency
-        // gate.
-        let cast_is_board_placed = self
-            .card_pool
-            .get(cast_iid)
-            .map(|i| crate::cast_routing::CastRouting::is_board_placed(&i.card().kind))
-            .unwrap_or(false);
-        let cast_transparent = self.is_transparent(cast_iid);
-        let transparent_payment_excluded = cast_is_board_placed && !cast_transparent;
+        // C.14 lifted: frame no longer gates attachment, so no
+        // transparency exclusion here — any HAND card is an eligible
+        // payment (subject only to P.7a identity below).
         if cast_ident.is_empty() {
             return self
                 .player(player)
                 .hand
                 .iter()
                 .filter(|h| *h != cast_iid)
-                .filter(|h| !transparent_payment_excluded || !self.is_transparent(h))
                 .count();
         }
         self.player(player)
             .hand
             .iter()
             .filter(|h| *h != cast_iid)
-            .filter(|h| !transparent_payment_excluded || !self.is_transparent(h))
             .filter(|h| {
                 let pay_ident = self.card_identity(h);
                 !cast_ident.is_disjoint(&pay_ident)
@@ -197,11 +186,10 @@ impl GameState {
     ///      to creatures only)
     ///   3. target does NOT have `Restriction::CannotBeAttachedTo`
     ///      (glass-insect cycle / glass-damselfly etc.)
-    ///   4. C.14: if the cast is transparent-frame, target must also
-    ///      be transparent-frame. Non-transparent mutations attach
-    ///      to anything (subject to the above).
+    ///   (C.14 lifted: frame no longer gates the target — a transparent
+    ///    mutation attaches to any creature.)
     pub fn eligible_mutation_targets(&self, cast_iid: &InstanceId) -> Vec<InstanceId> {
-        let cast_transparent = self.is_transparent(cast_iid);
+        let _ = cast_iid;
         self.a
             .board
             .iter()
@@ -215,7 +203,6 @@ impl GameState {
             .filter(|t| {
                 !self.has_restriction(t, crate::card::Restriction::CannotBeAttachedTo)
             })
-            .filter(|t| !cast_transparent || self.is_transparent(t))
             // Z.7: skip a full sleeve (host + 3 same-sleeve cards); a 4th
             // mutation is refused, so the picker must not offer it.
             .filter(|t| {
@@ -257,19 +244,14 @@ impl GameState {
     ///
     /// Filters applied (matching play_card exactly):
     ///   1. host is on `player`'s BOARD and controlled by `player`
-    ///   2. C.14: if the cast is BOARD-placed and non-transparent,
-    ///      transparent attached cards are excluded.
+    ///   (C.14 lifted: frame no longer excludes transparent attached
+    ///    cards from paying a non-transparent BOARD-placed cast.)
     pub fn eligible_attached_payments(
         &self,
         player: PlayerId,
         cast_iid: &InstanceId,
     ) -> Vec<InstanceId> {
-        let cast_is_board_placed = self
-            .card_pool
-            .get(cast_iid)
-            .map(|i| crate::cast_routing::CastRouting::is_board_placed(&i.card().kind))
-            .unwrap_or(false);
-        let cast_transparent = self.is_transparent(cast_iid);
+        let _ = cast_iid;
         let mut out = Vec::new();
         for host_iid in &self.player(player).board {
             let Some(host) = self.card_pool.get(host_iid) else { continue };
@@ -277,12 +259,6 @@ impl GameState {
                 continue;
             }
             for aid in &host.attached {
-                if cast_is_board_placed
-                    && !cast_transparent
-                    && self.is_transparent(aid)
-                {
-                    continue;
-                }
                 out.push(aid.clone());
             }
         }
@@ -418,11 +394,9 @@ impl GameState {
             let pay_ident = self.card_identity(hid);
             !cast_ident.is_disjoint(&pay_ident)
         };
-        let cast_is_board_placed = self
-            .card_pool
-            .get(cast_iid)
-            .map(|inst| crate::cast_routing::CastRouting::is_board_placed(&inst.card().kind))
-            .unwrap_or(false);
+        // C.14 lifted: no transparency gate — any HAND card may attach to
+        // any host, so eligibility rests on identity (P.7a) and the
+        // CannotBeCostPaid restriction alone.
         self.player(player)
             .hand
             .iter()
@@ -430,7 +404,6 @@ impl GameState {
             .filter(|iid| {
                 !self.has_restriction(iid, crate::card::Restriction::CannotBeCostPaid)
             })
-            .filter(|iid| !(cast_is_board_placed && self.is_transparent(iid)))
             .filter(|iid| identity_matches(iid))
             .cloned()
             .collect()

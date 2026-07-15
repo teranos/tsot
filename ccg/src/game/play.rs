@@ -622,18 +622,9 @@ impl GameState {
                     return Err(PlayError::HandPaymentIdentityMismatch(hid.clone()));
                 }
             }
-            // C.14: a transparent card can only be attached to another
-            // transparent card. For HAND payments to BOARD-placed casts
-            // (P.6 attaches them), refuse when the payment is transparent
-            // and the cast itself isn't. Transparent ↔ transparent is OK.
-            if card_kind.is_board_placed()
-                && self.is_transparent(hid)
-                && !self.is_transparent(instance)
-            {
-                return Err(PlayError::HandPaymentTransparentForBoardPlaced(
-                    hid.clone(),
-                ));
-            }
+            // C.14 lifted: a transparent HAND payment may attach to any
+            // host, including a non-transparent BOARD-placed cast. Frame
+            // no longer gates attachment (P.6).
         }
 
         // Z.8c: only card-bearing sleeves can be milled, so affordability
@@ -700,12 +691,9 @@ impl GameState {
             if self.has_restriction(target, crate::card::Restriction::CannotBeAttachedTo) {
                 return Err(PlayError::MutationTargetInvalid(target.clone()));
             }
-            // C.14: a transparent mutation can only attach to a
-            // transparent target. Non-transparent mutations attach to
-            // anything.
-            if self.is_transparent(instance) && !self.is_transparent(target) {
-                return Err(PlayError::MutationTargetInvalid(target.clone()));
-            }
+            // C.14 lifted: a transparent mutation may attach to any
+            // creature target, transparent or not. Frame no longer gates
+            // same-sleeve fusion (P.26 / Z.7).
             // Z.7: a sleeve holds at most 4 cards — the host plus up to 3
             // same-sleeve mutations. Refuse a mutation that would be the 4th
             // fused card.
@@ -792,15 +780,8 @@ impl GameState {
             if !valid {
                 return Err(PlayError::AttachedPaymentInvalid(aid.clone()));
             }
-            // C.14: ATTACHED-source payments re-attach to BOARD-placed
-            // casts (P.31). A transparent attached card can only land
-            // on a transparent host.
-            if card_kind.is_board_placed()
-                && self.is_transparent(aid)
-                && !self.is_transparent(instance)
-            {
-                return Err(PlayError::AttachedPaymentInvalid(aid.clone()));
-            }
+            // C.14 lifted: an ATTACHED-source payment (P.31) may re-attach
+            // to any BOARD-placed cast regardless of frame.
         }
 
         // All checks pass — apply mutations through journaled helpers.

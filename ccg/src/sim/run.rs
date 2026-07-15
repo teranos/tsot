@@ -714,10 +714,9 @@ pub(crate) fn build_pattern_b_choices(
     if attached_need > 0 {
         // Use the shared eligibility helper so the picker's
         // attached_have count and the resolver's actual pool never
-        // disagree on which attached iids may pay this cast. Closes
-        // the C.14 attached-transparency gap (transparent attached
-        // can't pay non-transparent board-placed casts) that
-        // produced AttachedPaymentInvalid loops on hollow + clear-*.
+        // disagree on which attached iids may pay this cast. (C.14's
+        // frame gate is lifted; the helper returns all controlled
+        // attached cards.)
         let mut pool = state.eligible_attached_payments(active, picked);
         pool.sort_by_key(|aid| attached_keep_value(state, aid));
         pool.truncate(attached_need);

@@ -3379,7 +3379,11 @@ fn live_bring_down_casts_with_attached_payment_and_exiles_it() {
 }
 
 #[test]
-fn transparent_rejected_as_hand_payment_for_board_placed_cast() {
+fn transparent_hand_payment_attaches_to_a_board_placed_cast_c14_lifted() {
+    // C.14's former frame-based restriction is lifted: a transparent
+    // card may pay a HAND cost for a BOARD-placed cast and attach (P.6)
+    // to the non-transparent host. Previously this was refused with
+    // HandPaymentTransparentForBoardPlaced.
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let cast = s.a.hand[0].clone();
     let pay = s.a.hand[1].clone();
@@ -3394,8 +3398,9 @@ fn transparent_rejected_as_hand_payment_for_board_placed_cast() {
             kind: None,
         }],
     );
-    // Payment: transparent. Per C.14, illegal for board-placed cast.
+    // Payment: transparent onto a non-transparent host — now legal.
     set_identity(&mut s, &pay, &["transparent"], "");
+    assert!(!s.is_transparent(&cast), "the cast is a non-transparent host");
     let result = s.play_card(
         PlayerId::A,
         &cast,
@@ -3405,7 +3410,11 @@ fn transparent_rejected_as_hand_payment_for_board_placed_cast() {
         },
         None,
     );
-    assert_eq!(result, Err(PlayError::HandPaymentTransparentForBoardPlaced(pay)));
+    assert_eq!(result, Ok(()));
+    assert!(
+        s.card_pool.get(&cast).unwrap().attached.contains(&pay),
+        "the transparent payment attached to the non-transparent host (C.14 lifted)",
+    );
 }
 
 #[test]

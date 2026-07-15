@@ -66,7 +66,7 @@ pub fn enumerate_playable_in_hand(
                     // Use the shared eligibility helper so the picker
                     // can't offer a mutation whose only viable targets
                     // get refused at play_card (e.g., glass-insect
-                    // CannotBeAttachedTo or C.14 transparent mismatch).
+                    // CannotBeAttachedTo). C.14's frame gate is lifted.
                     !state.eligible_mutation_targets(iid).is_empty()
                 }
                 // Typeless casts (P.1 default to GRAVEYARD; SelfExile
@@ -483,10 +483,10 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             }
         }
     }
-    // Use the shared eligibility helper so the picker can't over-
-    // count attached payments the resolver will refuse — closes the
-    // C.14 transparent-attached-vs-board-placed-cast disagreement
-    // that produced AttachedPaymentInvalid loops on hollow + clear-*.
+    // Use the shared eligibility helper so the picker and resolver
+    // always agree on which attached iids may pay this cast. (C.14's
+    // frame gate is lifted; the helper now returns all controlled
+    // attached cards.)
     let attached_have: usize = state.eligible_attached_payments(player, iid).len();
     let _ = p;
     // P.12a: a cast with non-empty colors and a GRAVEYARD cost component

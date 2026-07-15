@@ -236,9 +236,6 @@ pub enum PlayError {
     /// (the check runs before any state mutation). Parallel to
     /// `ActivateError::NoLegalTarget` but for cast.
     CastValidateFailed,
-    /// C.14: a transparent card cannot be a HAND-source payment for a
-    /// card placed on the BOARD when played.
-    HandPaymentTransparentForBoardPlaced(InstanceId),
     /// All HAND slots were filled by GY substitutes on a cast that
     /// requires identity matching (cast has non-empty colors or
     /// symbols). Clear View doesn't carry identity, so at least one
