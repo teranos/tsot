@@ -75,6 +75,39 @@ pub fn to_deck(registry: &CardRegistry, genome: &[String]) -> Result<Vec<Card>, 
     Ok(deck)
 }
 
+/// Like [`to_deck`] but produces [`DeckUnit`](crate::game::DeckUnit)s so
+/// a decklist can carry cardless sleeves: the
+/// [`CARDLESS_SLEEVE_ID`](crate::replay::CARDLESS_SLEEVE_ID) sentinel
+/// becomes `DeckUnit::Cardless`, and every other id is looked up and
+/// wrapped as `DeckUnit::Card`. This is the build path for decks that
+/// mix real cards and empty sleeves — the starter presets that ship an
+/// empty sleeve. Returns `UnknownCardId` on the first id (other than the
+/// sentinel) that doesn't resolve.
+pub fn to_units(
+    registry: &CardRegistry,
+    ids: &[String],
+) -> Result<Vec<crate::game::DeckUnit>, GenomeError> {
+    use crate::game::DeckUnit;
+    let mut units = Vec::with_capacity(ids.len());
+    for id in ids {
+        if id == crate::replay::CARDLESS_SLEEVE_ID {
+            units.push(DeckUnit::Cardless);
+        } else {
+            match registry.get(id) {
+                Some(card) => units.push(DeckUnit::Card(card.clone())),
+                None => return Err(GenomeError::UnknownCardId(id.clone())),
+            }
+        }
+    }
+    Ok(units)
+}
+
+/// Shuffle a `DeckUnit` deck in place — the `DeckUnit` twin of
+/// [`shuffle_deck`], for decks that carry cardless sleeves.
+pub fn shuffle_units(units: &mut [crate::game::DeckUnit], rng: &mut StdRng) {
+    units.shuffle(rng);
+}
+
 /// Generate a random genome of `len` card ids drawn from `pool`, with no
 /// id appearing more than `cap` times. Uniform random over the cards
 /// that still have remaining capacity — sample → push → decrement →

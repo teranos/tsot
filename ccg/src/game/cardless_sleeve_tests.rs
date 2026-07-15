@@ -292,3 +292,28 @@ fn attach_cardless_from_deck_finds_scattered_cardless_and_attaches_n() {
     // Only cardless sleeves are taken — no real card is attached.
     assert!(attached.iter().all(|iid| s.is_cardless(iid)), "only cardless sleeves attached");
 }
+
+#[test]
+fn attach_cardless_from_hand_takes_empty_sleeves_out_of_hand() {
+    // Angry Glassblower's on-attack attaches an empty sleeve that comes
+    // out of HAND (not the deck like Window Cleaner).
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let host = s.a.hand[0].clone();
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+    // Two cardless sleeves in hand, one real card between them.
+    let h0 = s.a.hand[0].clone();
+    let real = s.a.hand[1].clone();
+    let h1 = s.a.hand[2].clone();
+    make_cardless(&mut s, &h0);
+    make_cardless(&mut s, &h1);
+
+    let n = s.attach_cardless_from_hand(&host, PlayerId::A, 1);
+
+    assert_eq!(n, 1, "attaches one empty sleeve from hand");
+    let attached = &s.card_pool.get(&host).unwrap().attached;
+    assert!(attached.contains(&h0), "the first hand cardless (hand order) attached");
+    assert!(attached.iter().all(|iid| s.is_cardless(iid)), "only a cardless sleeve was attached");
+    assert!(!s.a.hand.contains(&h0), "the attached sleeve left the hand");
+    assert!(s.a.hand.contains(&h1), "the second sleeve stays in hand");
+    assert!(s.a.hand.contains(&real), "the real card is untouched");
+}

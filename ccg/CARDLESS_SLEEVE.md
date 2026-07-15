@@ -104,12 +104,13 @@
 
 ## Queued tasks
 
-- **Empty sleeve in every starter deck** (user request). Real change, not a
-  one-liner: the runtime deck path (`to_deck → Vec<Card> → shuffle_deck →
-  GameState::new`) is `Vec<Card>` throughout; adding a cardless unit means
-  threading `DeckUnit` through it (the sentinel → `Cardless`, shuffle over
-  units, build via `from_units`) and adding the sentinel to the two starter
-  id lists. Same shape as 8.1 but for the live start pipeline.
+- **Empty sleeve in every starter deck** (user request). **DONE for the red
+  starter.** Added `genome::to_units` (`__cardless__` sentinel → `Cardless`,
+  real ids → `Card`) + `shuffle_units`; both wasm start-game paths now build
+  via `to_units → shuffle_units → GameState::from_units`. `RED_STARTER_DECK_IDS`
+  carries 3 empty sleeves + 2 Angry Glassblowers (swapped for 5 clears).
+  The blue starter still ships without empties — add the sentinel to
+  `STARTER_DECK_IDS` if wanted.
 - **EA drafts cardless sleeves?** — currently NO (the EA pool is
   `Vec<Card>`; genome/deckbuilder never emit cardless). Open design call.
 
@@ -136,16 +137,17 @@
 - Loop: the 2 attached cardless sleeves are attach-cost fuel for the next
   Window Cleaner.
 
-### Angry Glassblower (red creature)
-- 3/4. Cost: 2 HAND + 1 GY.
-- On attack: *may* attach an empty sleeve to it and draw a card.
-- On dealing damage to an opponent: *may* exile an attached card from it; if
-  it was an empty sleeve, draw a card and discard a card.
-- Uses existing events (OnAttack, OnDealtDamageToPlayer) — no OnTapped
-  needed. Writable now given the search/attach + exile-attached primitives.
-- Open: does "attach an empty sleeve" search the library (like Window
-  Cleaner) or create one from nothing? (No create-from-nothing primitive
-  exists yet.)
+### Angry Glassblower (red creature) — DONE
+- `cards/angry-glassblower.lua`. Red human, 3/4, cost 2 HAND + 1 GY.
+- On attack: *may* attach an empty sleeve **from hand** to it and draw
+  (resolved open question: the sleeve comes out of hand). Uses the new
+  `attach_cardless_from_hand` primitive (state.rs + `game.` Lua binding).
+- On dealing damage to a player: *may* exile an attached card; if it was an
+  empty sleeve, draw then discard.
+- Uses OnAttack + OnDealtDamageToPlayer — no OnTapped, no deferred queue.
+- Shipped in the red starter (2 copies) alongside 3 loose empty sleeves.
+- Tests in `game/angry_glassblower_tests.rs` (attach-from-hand, no-sleeve
+  no-op, exile-empty cantrip, exile-real no-cantrip).
 
 ### Shatter Expectations (instant, colourless)
 - Entire top and bottom rows: transparent slots.

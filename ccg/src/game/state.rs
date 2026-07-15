@@ -59,6 +59,7 @@ pub type InstanceId = String;
 /// contain empty sleeves alongside ordinary cards (S.4).
 // `Card` is a large struct; the codebase passes it by value everywhere
 // (e.g. `Vec<Card>`), so this transient builder enum does the same.
+#[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum DeckUnit {
     Card(Card),
@@ -1208,6 +1209,37 @@ impl GameState {
             .collect();
         for iid in &found {
             let _ = self.remove_from_zone(iid, player, Zone::Deck);
+            self.add_attached(host, iid);
+            self.set_face_down(iid, true);
+        }
+        found.len()
+    }
+
+    /// Attach up to `n` cardless sleeves taken out of `player`'s HAND
+    /// (hand order) to `host`, face-down. The hand-side twin of
+    /// [`attach_cardless_from_deck`] — Angry Glassblower's on-attack
+    /// pulls the empty sleeve it attaches out of hand, not the deck.
+    /// Returns how many were attached (fewer than `n` if the hand holds
+    /// fewer empties).
+    pub fn attach_cardless_from_hand(
+        &mut self,
+        host: &InstanceId,
+        player: PlayerId,
+        n: usize,
+    ) -> usize {
+        if !self.card_pool.contains_key(host) {
+            return 0;
+        }
+        let found: Vec<InstanceId> = self
+            .player(player)
+            .hand
+            .clone()
+            .into_iter()
+            .filter(|iid| self.is_cardless(iid))
+            .take(n)
+            .collect();
+        for iid in &found {
+            let _ = self.remove_from_zone(iid, player, Zone::Hand);
             self.add_attached(host, iid);
             self.set_face_down(iid, true);
         }

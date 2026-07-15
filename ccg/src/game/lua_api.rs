@@ -1121,6 +1121,23 @@ macro_rules! build_game_table {
             )?,
         )?;
 
+        // game.attach_cardless_from_hand(host, player, n) — take up to n
+        // cardless sleeves (Z.8) out of `player`'s HAND and attach each
+        // to `host` face-down. Angry Glassblower's on-attack: the empty
+        // sleeve it attaches comes out of hand, not the deck.
+        let cell_ach = &$cell;
+        game.set(
+            "attach_cardless_from_hand",
+            $scope.create_function_mut(
+                move |_, (host, player, n): (String, String, i32)| -> Result<()> {
+                    let pid = parse_pid(&player)?;
+                    let mut s = cell_ach.borrow_mut();
+                    s.attach_cardless_from_hand(&host, pid, n.max(0) as usize);
+                    Ok(())
+                },
+            )?,
+        )?;
+
         // game.attach(host, iid) — take `iid` from whatever zone it's
         // currently in (BOARD search across both players' boards) and
         // attach it to `host`, face-down per P.17. Used by predator
