@@ -155,6 +155,23 @@ pub enum JournalEntry {
         /// Rollback reinserts at the stored positions.
         removed: Vec<(usize, Modifier)>,
     },
+    // --- Scheduled-state registries ---
+    // These `Vec` fields persist ACROSS turns, so — like every other
+    // field — a mutation inside a preview/rollout MUST be journaled or
+    // rollback leaves the real state corrupted. Whole-field was/now, same
+    // shape as `SetCombatState`. See the JOURNALING CONTRACT on GameState.
+    SetDelayedTriggers {
+        was: Vec<super::DelayedTrigger>,
+        now: Vec<super::DelayedTrigger>,
+    },
+    SetPendingMainPhaseReturns {
+        was: Vec<InstanceId>,
+        now: Vec<InstanceId>,
+    },
+    SetExtraTurnsPending {
+        was: Vec<PlayerId>,
+        now: Vec<PlayerId>,
+    },
 }
 
 /// Journal — sequence of mutation entries.
@@ -339,6 +356,15 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::SetCombatState { was, .. } => {
             state.combat = was;
         }
+        JournalEntry::SetDelayedTriggers { was, .. } => {
+            state.delayed_triggers = was;
+        }
+        JournalEntry::SetPendingMainPhaseReturns { was, .. } => {
+            state.pending_main_phase_returns = was;
+        }
+        JournalEntry::SetExtraTurnsPending { was, .. } => {
+            state.extra_turns_pending = was;
+        }
         JournalEntry::SetCreatureAttackedThisTurn { was, .. } => {
             state.creature_attacked_this_turn = was;
         }
@@ -504,6 +530,15 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         }
         JournalEntry::SetCombatState { now, .. } => {
             state.combat = now;
+        }
+        JournalEntry::SetDelayedTriggers { now, .. } => {
+            state.delayed_triggers = now;
+        }
+        JournalEntry::SetPendingMainPhaseReturns { now, .. } => {
+            state.pending_main_phase_returns = now;
+        }
+        JournalEntry::SetExtraTurnsPending { now, .. } => {
+            state.extra_turns_pending = now;
         }
         JournalEntry::SetCreatureAttackedThisTurn { now, .. } => {
             state.creature_attacked_this_turn = now;

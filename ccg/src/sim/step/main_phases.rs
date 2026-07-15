@@ -420,6 +420,10 @@ impl StepEngine {
             if let Some(journal) = self.state.journal.take() {
                 journal.rollback(&mut self.state);
             }
+            // Stale deferred events queued behind the pending one would
+            // double-fire on the replay-from-scratch; they are transient,
+            // so clear them with the rollback.
+            self.state.pending_events.clear();
             bump_preview_rollback(&mut self.stats, active);
             self.set_cursor(EngineCursor::PatternBResolving {
                 picked: picked.clone(),
@@ -865,6 +869,7 @@ impl StepEngine {
             if let Some(journal) = self.state.journal.take() {
                 journal.rollback(&mut self.state);
             }
+            self.state.pending_events.clear();
             bump_preview_rollback(&mut self.stats, active);
             let new_cursor = ctx.on_pending(picked.clone(), history.clone());
             self.set_cursor(new_cursor);
@@ -1011,6 +1016,7 @@ impl StepEngine {
             if let Some(journal) = self.state.journal.take() {
                 journal.rollback(&mut self.state);
             }
+            self.state.pending_events.clear();
             self.set_cursor(EngineCursor::ActivationResolving {
                 iid,
                 ability_index,

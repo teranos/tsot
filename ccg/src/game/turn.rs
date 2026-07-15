@@ -57,8 +57,11 @@ impl GameState {
                 // Extra-turn queue (azure-recursion etc.): if non-empty,
                 // the front entry becomes the next active player instead
                 // of the default opponent swap.
-                let next_active = if !self.extra_turns_pending.is_empty() {
-                    self.extra_turns_pending.remove(0)
+                let next_active = if let Some(&front) = self.extra_turns_pending.first() {
+                    // Journaled pop-front (JOURNALING CONTRACT).
+                    let rest = self.extra_turns_pending[1..].to_vec();
+                    self.set_extra_turns_pending(rest);
+                    front
                 } else {
                     self.active_player.opponent()
                 };
@@ -78,7 +81,10 @@ impl GameState {
             && !self.pending_main_phase_returns.is_empty()
         {
             use super::state::{PlayerId, Zone};
-            let queue = std::mem::take(&mut self.pending_main_phase_returns);
+            // Journaled drain (JOURNALING CONTRACT): read the queue, then
+            // clear it through the setter so a rollout rollback restores it.
+            let queue = self.pending_main_phase_returns.clone();
+            self.set_pending_main_phase_returns(Vec::new());
             for iid in queue {
                 let Some(inst) = self.card_pool.get(&iid) else { continue; };
                 let owner = inst.owner;
@@ -158,14 +164,16 @@ impl GameState {
                 let active = self.active_player;
                 let mut still_pending = Vec::new();
                 let mut due = Vec::new();
-                for t in std::mem::take(&mut self.delayed_triggers) {
+                // Read (clone) — don't `mem::take` — then commit the
+                // remaining set through the journaled setter (CONTRACT).
+                for t in self.delayed_triggers.clone() {
                     if t.fire_for == active {
                         due.push(t.iid);
                     } else {
                         still_pending.push(t);
                     }
                 }
-                self.delayed_triggers = still_pending;
+                self.set_delayed_triggers(still_pending);
                 for iid in due {
                     self.pending_events
                         .push_back((EventName::OnDelayedTrigger, iid));

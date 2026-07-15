@@ -112,6 +112,78 @@ fn delayed_trigger_does_not_fire_on_the_opponents_turn() {
 }
 
 #[test]
+fn every_scheduled_state_setter_round_trips_through_rollback() {
+    // Directly proves the JOURNALING CONTRACT for all three scheduled-
+    // state registries: mutate each through its journaled setter under an
+    // open journal, roll back, and the ENTIRE state must return to the
+    // snapshot. If any setter forgot to journal, the whole-state compare
+    // fails — no card or turn-loop scaffolding needed.
+    let mut s = GameState::new(deck_of(10, "a"), deck_of(10, "b"));
+    let iid = s.a.hand[0].clone();
+    let initial = s.clone();
+
+    s.replay_journal = Some(crate::game::Journal::new());
+    s.schedule_delayed_trigger(crate::game::DelayedTrigger {
+        fire_for: PlayerId::B,
+        iid: iid.clone(),
+    });
+    s.set_pending_main_phase_returns(vec![iid.clone()]);
+    s.set_extra_turns_pending(vec![PlayerId::A]);
+    assert!(
+        !s.delayed_triggers.is_empty()
+            && !s.pending_main_phase_returns.is_empty()
+            && !s.extra_turns_pending.is_empty(),
+        "precondition: all three registries mutated",
+    );
+
+    let journal = s.replay_journal.take().expect("journal open");
+    journal.rollback(&mut s);
+    assert_eq!(
+        format!("{initial:?}"),
+        format!("{s:?}"),
+        "every scheduled-state setter must journal its mutation",
+    );
+}
+
+#[test]
+fn rollback_restores_a_fired_delayed_trigger_and_the_whole_state() {
+    // JOURNALING CONTRACT regression guard: an MCTS/UCT rollout advances
+    // turns on the LIVE state and undoes via the journal. If firing a
+    // delayed trigger isn't journaled, the rollout consumes it and
+    // rollback can't put it back. This asserts the ENTIRE state (not a
+    // hand-picked subset) round-trips through a journaled turn advance
+    // that fires — and removes — a delayed trigger.
+    let registry = fixture_registry();
+    let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+    let iid = probe_on_board(&mut s, &registry);
+    // Schedule it before opening a journal — this is the pre-rollout
+    // state the rollback must restore exactly.
+    s.schedule_delayed_trigger(crate::game::DelayedTrigger { fire_for: PlayerId::A, iid });
+    // Sit at B's End (raw writes — set the scenario BEFORE snapshotting,
+    // so no unjournaled mutation happens after `initial`).
+    s.active_player = PlayerId::B;
+    s.phase = crate::game::Phase::End;
+    let initial = s.clone();
+
+    // Open a journal and advance into A's turn, which fires + removes the
+    // trigger (all mutations journaled).
+    s.replay_journal = Some(crate::game::Journal::new());
+    let mut oracle = ScriptedOracle::new(vec![]);
+    s.next_phase(Some(&mut EventContext::new(registry.lua(), &mut oracle)))
+        .expect("phase advance");
+    assert!(s.delayed_triggers.is_empty(), "precondition: the trigger fired and was removed");
+
+    // Roll the journal back — the entire state must equal the snapshot.
+    let journal = s.replay_journal.take().expect("journal open");
+    journal.rollback(&mut s);
+    assert_eq!(
+        format!("{initial:?}"),
+        format!("{s:?}"),
+        "rollback must restore the ENTIRE state, delayed_triggers included",
+    );
+}
+
+#[test]
 fn premonition_draws_two_at_your_next_turn_from_the_graveyard() {
     // The shipped card that uses the registry: cast Premonition (it
     // resolves to the graveyard now), and the draw fires at the start of

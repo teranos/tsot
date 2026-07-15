@@ -323,6 +323,35 @@ pub struct DelayedTrigger {
 }
 
 /// The full game state.
+///
+/// # JOURNALING CONTRACT (non-negotiable)
+///
+/// The engine's ONLY rollback mechanism is the journal: MCTS/UCT
+/// rollouts and the sim's preview-and-rollback run on the LIVE state and
+/// undo by replaying the journal in reverse. Therefore **every mutation
+/// of every non-transient field on this struct MUST be journaled** (push
+/// a [`JournalEntry`](super::JournalEntry) via [`Self::active_journal`]),
+/// or a rollback silently leaves the real game corrupted.
+///
+/// There is no "this field is just scheduling, it doesn't need
+/// journaling" exception. That reasoning shipped the delayed-trigger
+/// regression: a Premonition draft consumed by a rollout was never
+/// restored. The three scheduled-state registries below
+/// (`delayed_triggers`, `pending_main_phase_returns`,
+/// `extra_turns_pending`) are mutated only through their journaled
+/// setters for exactly this reason — do the same for any field you add.
+///
+/// Two fields are exempt because they are strictly TRANSIENT — provably
+/// empty/None at every point a journal is taken or a rollback runs:
+/// `pending_events` (drained to empty before returning to any top-level
+/// op) and `current_activation_x` / `current_cast_payments` (reset per
+/// call). If you add a field, it is journaled unless you can prove it is
+/// transient in this sense.
+///
+/// The invariant is enforced, not merely documented: the full-game
+/// rollback tests compare the ENTIRE state (not a hand-picked subset of
+/// fields), and the rollout paths self-verify the round-trip under
+/// `debug_assertions`. A non-journaled mutation fails those.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GameState {
     pub a: PlayerState,
@@ -697,6 +726,46 @@ impl GameState {
         self.priority = now.clone();
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetPriorityState { was, now });
+        }
+    }
+
+    // --- Scheduled-state registries (JOURNALING CONTRACT) ---
+    // These `Vec` fields persist across turns. Mutate them ONLY through
+    // these journaled setters — never `self.<field>.push()` /
+    // `mem::take` directly — or a preview/rollout rollback leaves the
+    // real state corrupted (the delayed-trigger regression).
+
+    /// Journaled replace of the delayed-trigger registry.
+    pub fn set_delayed_triggers(&mut self, now: Vec<DelayedTrigger>) {
+        let was = self.delayed_triggers.clone();
+        self.delayed_triggers = now.clone();
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetDelayedTriggers { was, now });
+        }
+    }
+
+    /// Journaled push onto the delayed-trigger registry.
+    pub fn schedule_delayed_trigger(&mut self, trigger: DelayedTrigger) {
+        let mut v = self.delayed_triggers.clone();
+        v.push(trigger);
+        self.set_delayed_triggers(v);
+    }
+
+    /// Journaled replace of the next-main-phase return queue.
+    pub fn set_pending_main_phase_returns(&mut self, now: Vec<InstanceId>) {
+        let was = self.pending_main_phase_returns.clone();
+        self.pending_main_phase_returns = now.clone();
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetPendingMainPhaseReturns { was, now });
+        }
+    }
+
+    /// Journaled replace of the extra-turn queue.
+    pub fn set_extra_turns_pending(&mut self, now: Vec<PlayerId>) {
+        let was = self.extra_turns_pending.clone();
+        self.extra_turns_pending = now.clone();
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetExtraTurnsPending { was, now });
         }
     }
 

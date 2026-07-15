@@ -2269,6 +2269,17 @@ mod tests {
             }
         }
         assert_eq!(format!("{:?}", initial.card_pool), format!("{:?}", state.card_pool), "card_pool differs in some field not covered by per-field checks ({entry_count} journal entries)");
+
+        // JOURNALING CONTRACT backstop: compare the ENTIRE GameState, not
+        // a hand-picked subset. The per-field checks above give nice
+        // messages; THIS one is unfalsifiable — any field a mutation
+        // touched without journaling (the delayed-trigger class of bug)
+        // fails here regardless of what anyone remembered to assert.
+        assert_eq!(
+            format!("{:?}", initial),
+            format!("{:?}", state),
+            "rollback did not restore the ENTIRE state — a field mutated without being journaled",
+        );
     }
 
     #[test]

@@ -752,7 +752,10 @@ macro_rules! build_game_table {
             "grant_extra_turn",
             $scope.create_function_mut(move |_, pid_str: String| -> Result<()> {
                 let pid = parse_pid(&pid_str)?;
-                cell_ext.borrow_mut().extra_turns_pending.push(pid);
+                let mut s = cell_ext.borrow_mut();
+                let mut v = s.extra_turns_pending.clone();
+                v.push(pid);
+                s.set_extra_turns_pending(v);
                 Ok(())
             })?,
         )?;
@@ -771,7 +774,9 @@ macro_rules! build_game_table {
                 if !s.card_pool.contains_key(&iid) {
                     return Ok(());
                 }
-                s.pending_main_phase_returns.push(iid);
+                let mut v = s.pending_main_phase_returns.clone();
+                v.push(iid);
+                s.set_pending_main_phase_returns(v);
                 Ok(())
             })?,
         )?;
@@ -787,8 +792,7 @@ macro_rules! build_game_table {
             $scope.create_function_mut(move |_, iid: String| -> Result<()> {
                 let mut s = cell_sched.borrow_mut();
                 if let Some(owner) = s.card_pool.get(&iid).map(|i| i.owner) {
-                    s.delayed_triggers
-                        .push(crate::game::DelayedTrigger { fire_for: owner, iid });
+                    s.schedule_delayed_trigger(crate::game::DelayedTrigger { fire_for: owner, iid });
                 }
                 Ok(())
             })?,
