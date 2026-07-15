@@ -215,11 +215,49 @@ mod tests {
             0x8D87FD212FE5B8BE, // house_04 seed 5
         ];
         if actual != EXPECTED {
+            // Errors are sacred (ERROR.md #5): don't just say "drifted" and
+            // dump 28 opaque hashes — name WHICH building changed and show
+            // expected-vs-got, so the reader knows exactly what to verify
+            // before re-pinning. Labels track the canonical order
+            // load_building_templates emits: 4 one-offs, then each house
+            // layout × 6 palette seeds.
+            let labels: Vec<String> = {
+                let mut v: Vec<String> =
+                    ["garage", "shed", "daycare", "school"].iter().map(|s| s.to_string()).collect();
+                for h in 1..=4 {
+                    for seed in 0..6 {
+                        v.push(format!("house_{h:02} seed {seed}"));
+                    }
+                }
+                v
+            };
+            let mut drifted = Vec::new();
+            for i in 0..actual.len().max(EXPECTED.len()) {
+                let (e, a) = (EXPECTED.get(i), actual.get(i));
+                if e == a {
+                    continue;
+                }
+                let label = labels.get(i).map(String::as_str).unwrap_or("<template beyond the pinned set>");
+                match (e, a) {
+                    (Some(e), Some(a)) => {
+                        drifted.push(format!("  [{i}] {label}: expected 0x{e:016X}, got 0x{a:016X}"))
+                    }
+                    (Some(e), None) => drifted
+                        .push(format!("  [{i}] {label}: expected 0x{e:016X}, MISSING (template count shrank)")),
+                    (None, Some(a)) => drifted
+                        .push(format!("  [{i}] {label}: UNEXPECTED extra template, got 0x{a:016X}")),
+                    (None, None) => {}
+                }
+            }
             let dump: Vec<String> =
                 actual.iter().map(|d| format!("0x{d:016X}")).collect();
             panic!(
-                "building digests drifted from the golden master. \
-                 Confirm the change is intended, then update EXPECTED to:\n[\n  {},\n]",
+                "building digests drifted from the golden master — {} of {} templates changed.\n\
+                 WHICH changed (confirm EACH is an intended geometry/palette change before re-pinning):\n{}\n\n\
+                 If every change above is intended, update EXPECTED to:\n[\n  {},\n]",
+                drifted.len(),
+                actual.len().max(EXPECTED.len()),
+                drifted.join("\n"),
                 dump.join(",\n  ")
             );
         }
