@@ -76,8 +76,11 @@ pub struct PresetDeck {
 pub const STARTER_DECK_IDS: &[&str] = &[
     "blue-monkey", "blue-monkey",
     "clear-blue", "clear-blue", "clear-blue", "clear-blue", "clear-blue",
-    "clear-blue", "clear-blue", "clear-blue", "clear-blue", "clear-blue",
-    "clear-blue",
+    "clear-blue", "clear-blue", "clear-blue", "clear-blue",
+    // Two empty sleeves, swapped in for two clears — drawn free (Z.8b)
+    // and usable as generic payment bodies.
+    crate::replay::CARDLESS_SLEEVE_ID,
+    crate::replay::CARDLESS_SLEEVE_ID,
     "blue-ax-symbol", "blue-ax-symbol",
     "blue-ix-symbol", "blue-ix-symbol",
     "blue-am-symbol", "blue-am-symbol",
@@ -465,5 +468,20 @@ mod tests {
             .values()
             .any(|s| !s.is_cardless() && s.card().id == "angry-glassblower");
         assert!(has_glassblower, "red starter contains Angry Glassblower");
+    }
+
+    #[test]
+    fn blue_starter_builds_with_empty_sleeves() {
+        use crate::game::GameState;
+        use crate::sim::genome::to_units;
+
+        let reg = registry();
+        let ids: Vec<String> = STARTER_DECK_IDS.iter().map(|s| s.to_string()).collect();
+        let units = to_units(&reg, &ids).expect("blue starter builds as DeckUnits");
+        assert_eq!(units.len(), 50, "blue starter is 50 sleeve-units");
+
+        let state = GameState::from_units(units.clone(), units);
+        let cardless = state.card_pool.values().filter(|s| s.is_cardless()).count();
+        assert!(cardless >= 2, "blue starter carries loose empty sleeves");
     }
 }
