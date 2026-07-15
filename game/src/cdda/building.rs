@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn imports_garage_with_oriented_walls_furniture_and_roof() {
+    fn imports_garage_with_oriented_walls_and_roof() {
         let t = garage_template().expect("garage should import");
         let n = |k: PropKind| t.props.iter().filter(|p| p.kind == k).count();
         let walls = n(PropKind::Wall) + n(PropKind::WallNS) + n(PropKind::WallEW);
@@ -226,10 +226,6 @@ mod tests {
         assert!(
             n(PropKind::WallNS) + n(PropKind::WallEW) > 0,
             "walls should be oriented into thin runs"
-        );
-        assert!(
-            n(PropKind::Chair) + n(PropKind::Table) > 0,
-            "expected some furniture"
         );
         assert!(n(PropKind::Roof) > 0, "expected a roof");
         // The roof sits at ROOF_HEIGHT.
@@ -241,25 +237,6 @@ mod tests {
         // Grid is centred on the anchor: offsets straddle zero on both axes.
         assert!(t.props.iter().any(|p| p.offset.x < 0.0));
         assert!(t.props.iter().any(|p| p.offset.x > 0.0));
-    }
-
-    #[test]
-    fn seeds_can_resolve_a_more_furnished_variant() {
-        // At least one seed picks a variant palette (the hoarder) that
-        // resolves visibly more furniture than the plainest one.
-        let count = |seed: u32| {
-            let t = assemble_building(HOUSE01_JSON, "house_01", "house_01_roof", seed).unwrap();
-            t.props
-                .iter()
-                .filter(|p| p.kind == PropKind::Furniture)
-                .count()
-        };
-        let counts: Vec<usize> = (0..HOUSE_VARIANTS).map(count).collect();
-        let (min, max) = (
-            *counts.iter().min().unwrap(),
-            *counts.iter().max().unwrap(),
-        );
-        assert!(max > min, "expected some variant to be more furnished: {counts:?}");
     }
 
     #[test]
@@ -283,15 +260,13 @@ mod tests {
     }
 
     #[test]
-    fn imports_palette_driven_house_with_walls_and_furniture() {
-        // house_01 is fully palette-driven — walls + the domestic
-        // furniture vocabulary come from resolving its 3 palettes.
+    fn imports_palette_driven_house_with_walls_and_roof() {
+        // house_01 is fully palette-driven — the wall outline comes from
+        // resolving its 3 palettes (not inline terrain).
         let t = house_template().expect("house should import");
         let n = |k: PropKind| t.props.iter().filter(|p| p.kind == k).count();
         let walls = n(PropKind::Wall) + n(PropKind::WallNS) + n(PropKind::WallEW);
         assert!(walls > 10, "expected a resolved wall outline, got {walls}");
-        let furniture = n(PropKind::Chair) + n(PropKind::Table) + n(PropKind::Furniture);
-        assert!(furniture > 3, "expected resolved furniture, got {furniture}");
         assert!(n(PropKind::Roof) > 0, "expected a roof");
     }
 

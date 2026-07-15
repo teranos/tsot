@@ -9,29 +9,6 @@ use crate::template::PropKind;
 /// Glass windows — a light-blue thin panel sitting in the wall line.
 pub(crate) const WINDOW_COLOR: [f32; 3] = [0.50, 0.68, 0.82];
 
-/// Map a furniture id to a prop. Seats → Chair, work surfaces → Table,
-/// other solid furniture → a generic Furniture box; decorative bits
-/// (plants, lamps, mailboxes…) → None (skipped).
-pub(crate) fn furniture_prop(id: &str) -> Option<PropKind> {
-    let has = |needles: &[&str]| needles.iter().any(|n| id.contains(n));
-    if has(&["chair", "stool", "bench", "sofa", "armchair"]) {
-        return Some(PropKind::Chair);
-    }
-    if has(&["table", "counter", "desk", "workbench"]) {
-        return Some(PropKind::Table);
-    }
-    const SOLID: &[&str] = &[
-        "bed", "dresser", "fridge", "oven", "stove", "sink", "toilet", "bookcase", "wardrobe",
-        "cabinet", "locker", "rack", "shelf", "cupboard", "washer", "dryer", "dishwasher",
-        "bathtub", "shower", "chest", "safe", "fireplace", "furnace", "piano", "crate",
-        "entertainment", "displaycase", "glass_",
-    ];
-    if has(SOLID) {
-        return Some(PropKind::Furniture);
-    }
-    None
-}
-
 /// Wall/fence colour by material, so parametrized wall variation shows
 /// as differently-coloured houses (brick/wood/concrete/log/…).
 pub(crate) fn wall_color(id: &str) -> [f32; 3] {
@@ -53,17 +30,11 @@ pub(crate) fn wall_color(id: &str) -> [f32; 3] {
 }
 
 /// Map a cell's char to (prop kind, optional colour) via the resolved
-/// char→id maps — furniture first (it sits on the floor), then terrain.
-/// Walls carry a material colour. Unmapped → None.
+/// terrain char→id map. Walls carry a material colour. Unmapped → None.
 pub(crate) fn cell_to_prop(
     ch: char,
     terrain: &HashMap<char, String>,
-    furniture: &HashMap<char, String>,
 ) -> Option<(PropKind, Option<[f32; 3]>)> {
-    if let Some(f) = furniture.get(&ch) {
-        // Furniture char — its prop (or None); don't fall through to terrain.
-        return furniture_prop(f).map(|k| (k, None));
-    }
     if let Some(t) = terrain.get(&ch) {
         // A window is a translucent glass panel that sits in (and
         // orients with) the wall run — see-through from outside, drawn
@@ -109,34 +80,22 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let furniture: HashMap<char, String> = [
-            ('h', s("f_chair")),
-            ('c', s("f_counter")),
-            ('t', s("f_toilet")),
-            ('b', s("f_bed")),
-        ]
-        .into_iter()
-        .collect();
 
-        let kind = |ch: char| cell_to_prop(ch, &terrain, &furniture).map(|(k, _)| k);
+        let kind = |ch: char| cell_to_prop(ch, &terrain).map(|(k, _)| k);
         assert_eq!(kind('w'), Some(PropKind::Wall));
         assert_eq!(kind('W'), Some(PropKind::Wall));
         assert_eq!(kind('^'), None); // gate skipped
-        assert_eq!(kind('h'), Some(PropKind::Chair));
-        assert_eq!(kind('c'), Some(PropKind::Table));
-        assert_eq!(kind('b'), Some(PropKind::Furniture)); // bed
-        assert_eq!(kind('t'), Some(PropKind::Furniture)); // toilet
         assert_eq!(kind('.'), None); // floor skipped
         assert_eq!(kind(' '), None); // unknown
         // Walls carry a material colour, and materials differ.
-        assert!(cell_to_prop('w', &terrain, &furniture).unwrap().1.is_some());
+        assert!(cell_to_prop('w', &terrain).unwrap().1.is_some());
         assert_ne!(wall_color("t_brick_wall"), wall_color("t_wall_log"));
 
         // A window becomes a translucent glass panel (its own kind),
         // tinted, sitting in the wall line.
         let win: HashMap<char, String> = [(':', s("t_window"))].into_iter().collect();
         assert_eq!(
-            cell_to_prop(':', &win, &HashMap::new()),
+            cell_to_prop(':', &win),
             Some((PropKind::Window, Some(WINDOW_COLOR)))
         );
     }

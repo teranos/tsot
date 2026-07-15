@@ -19,8 +19,6 @@ pub(crate) struct Obj {
     #[serde(default)]
     pub terrain: HashMap<String, Value>,
     #[serde(default)]
-    pub furniture: HashMap<String, Value>,
-    #[serde(default)]
     pub palettes: Vec<Value>,
 }
 

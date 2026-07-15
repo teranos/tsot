@@ -71,21 +71,17 @@ pub fn mapgen_to_template(
         .object
         .as_ref()
         .ok_or_else(|| CddaError::NoObject(om_terrain.to_string()))?;
-    // Resolve referenced palettes into flat char→id maps, then overlay
-    // the inline terrain/furniture (inline overrides the palettes).
-    let (mut terrain, mut furniture) = if obj.palettes.is_empty() {
-        (HashMap::new(), HashMap::new())
+    // Resolve referenced palettes into a flat char→id terrain map, then
+    // overlay the inline terrain (inline overrides the palettes). The
+    // palette's furniture map is dropped: no furniture is spawned yet.
+    let mut terrain = if obj.palettes.is_empty() {
+        HashMap::new()
     } else {
-        crate::palette::resolve(&obj.palettes, seed)
+        crate::palette::resolve(&obj.palettes, seed).0
     };
     for (sym, val) in &obj.terrain {
         if let (Some(ch), Some(id)) = (sym.chars().next(), first_id(val)) {
             terrain.insert(ch, id.to_string());
-        }
-    }
-    for (sym, val) in &obj.furniture {
-        if let (Some(ch), Some(id)) = (sym.chars().next(), first_id(val)) {
-            furniture.insert(ch, id.to_string());
         }
     }
 
@@ -100,7 +96,7 @@ pub fn mapgen_to_template(
         .map(|row| {
             let mut cells: Vec<_> = row
                 .chars()
-                .map(|ch| cell_to_prop(ch, &terrain, &furniture))
+                .map(|ch| cell_to_prop(ch, &terrain))
                 .collect();
             cells.resize(width, None);
             cells
@@ -300,16 +296,13 @@ pub fn mapgen_to_template(
             let mut emit_e = ext_e;
             let mut emit_w = ext_w;
 
-            // Divider: perp direct interiors on both sides.
-            if hn && hs {
-                // Rooms N and S → walls on N + S outer edges.
-                emit_n = true;
-                emit_s = true;
-            }
-            if ve && vw {
-                emit_e = true;
-                emit_w = true;
-            }
+            // Divider: perp direct interiors on both sides. Neither side
+            // is "outer" (both are rooms), so emitting on both faces would
+            // put two parallel walls in the same cell with a 56-unit gap
+            // — the "double wall" visual. Emit ONE wall, centred in the
+            // cell, same 24-unit thickness as any other wall.
+            let divider_ew = hn && hs;
+            let divider_ns = ve && vw;
 
             // Corner / T-junction: diagonal interiors imply walls on
             // outer edges opposite that diagonal (interior at SE → walls
@@ -372,9 +365,18 @@ pub fn mapgen_to_template(
             if emit_w {
                 emit(cx_world - half + WALL_HALF_THICKNESS, cz_world, ns_kind(base));
             }
+            // Divider case: single centred wall (no ±half shift), one
+            // per orientation. A cell that's a divider on BOTH axes (a
+            // wall in the middle of a 4-room cross) gets both.
+            if divider_ew {
+                emit(cx_world, cz_world, ew_kind(base));
+            }
+            if divider_ns {
+                emit(cx_world, cz_world, ns_kind(base));
+            }
             // No neighbours at all matched — isolated wall cell.
             // Emit a centered thin bar rather than a block.
-            if !emit_n && !emit_s && !emit_e && !emit_w {
+            if !emit_n && !emit_s && !emit_e && !emit_w && !divider_ew && !divider_ns {
                 emit(cx_world, cz_world, ew_kind(base));
             }
         }
@@ -497,23 +499,37 @@ mod tests {
     }
 
     #[test]
-    fn divider_between_two_rooms_shifts_positive() {
-        // 3×5 mapgen: two 1×1 rooms separated by a divider at (1, 2).
-        // "Always positive" divider: wall inside its cell, inner face on
-        // the +x boundary → centre at east_edge − WALL_HALF_THICKNESS.
+    fn divider_between_two_rooms_is_a_single_centred_wall() {
+        // 3×5 mapgen: two 1×1 rooms separated by a divider at (1, 2). A
+        // divider has interior on BOTH perpendicular sides (rooms east
+        // AND west), so neither side is "outer". Emitting on both outer
+        // edges would give two parallel walls with a 56-unit gap — the
+        // "double wall" visual. The rule: one WallNS, centred in the
+        // cell (no ±half shift), same 24-unit thickness.
         let json = synthetic_mapgen(&["wwwww", "w.w.w", "wwwww"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
         // Cell (1, 2) centre: x = (2 − 2.5) × 80 = −40, z = (1 − 1.5) × 80 = −40.
-        // East edge: x = 0. Shift back by 12 → x = −12.
-        let has_divider = t.props.iter().any(|p| {
-            matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-12.0)).abs() < 1e-3
-                && (p.offset.z - (-40.0)).abs() < 1e-3
-        });
+        let divider_walls: Vec<_> = t
+            .props
+            .iter()
+            .filter(|p| {
+                matches!(p.kind, PropKind::WallNS)
+                    && (p.offset.z - (-40.0)).abs() < 1e-3
+                    && p.offset.x > -80.0
+                    && p.offset.x < 0.0
+            })
+            .collect();
+        assert_eq!(
+            divider_walls.len(),
+            1,
+            "divider should be a SINGLE centred wall, not one per face; got: {:?}",
+            divider_walls
+        );
+        let d = divider_walls[0];
         assert!(
-            has_divider,
-            "divider vertical segment should live inside its wall cell (x = east_edge − 12); got: {:?}",
-            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
+            (d.offset.x - (-40.0)).abs() < 1e-3,
+            "divider centred in its cell (x = −40); got x = {}",
+            d.offset.x
         );
     }
 
