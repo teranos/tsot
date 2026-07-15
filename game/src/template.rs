@@ -17,7 +17,7 @@ use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 
 use crate::campfire::{self, Campfire};
-use crate::physics::{AabbCollider, Position};
+use crate::physics::{AabbCollider, FenceMarker, Position};
 
 /// What a single template entry becomes when stamped. Grows as the
 /// world gains props (tents, chairs, walls, floors, CDDA furniture…).
@@ -314,14 +314,17 @@ pub fn stamp_template_where(
                     AabbCollider::cuboid(Vec3::new(80.0, 220.0, 24.0)),
                 ))
                 .id(),
-            // Fence — short (60 tall) barrier, blocks movement. Collider
-            // spans the whole cell along its axis so the fence line is
-            // unbroken even with the see-through visual.
+            // Fence — short (60 tall) barrier, blocks movement UNTIL
+            // the player sustains a push into it (see FenceMarker in
+            // physics.rs → hop-over). Collider spans the whole cell
+            // along its axis so the fence line is unbroken even with
+            // the see-through visual.
             PropKind::Fence => commands
                 .spawn((
                     sp(PropKind::Fence),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(80.0, 60.0, 80.0)),
+                    FenceMarker,
                 ))
                 .id(),
             PropKind::FenceNS => commands
@@ -329,6 +332,7 @@ pub fn stamp_template_where(
                     sp(PropKind::FenceNS),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(8.0, 60.0, 80.0)),
+                    FenceMarker,
                 ))
                 .id(),
             PropKind::FenceEW => commands
@@ -336,6 +340,7 @@ pub fn stamp_template_where(
                     sp(PropKind::FenceEW),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(80.0, 60.0, 8.0)),
+                    FenceMarker,
                 ))
                 .id(),
         };
