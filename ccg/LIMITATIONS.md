@@ -13,7 +13,7 @@ T:Sac this, Search your library for a card called Amsterdam and put it on the bo
 
 - **`OnDealtDamageToPlayer`** — **shipped + corpus migrated.** `EventName::OnDealtDamageToPlayer` at `src/card.rs:516` fires per-attacker post-mill at `src/game/combat.rs:421-432`, including for every card attached to the successful attacker (klotho-style mutations declare the handler and receive `self = the mutation`). `OnAttack` also iterates the attacker's attached list as of 2026-06-20 (combat.rs declare_attacker, same iteration shape — TNF / VEGF wired). Cinder Wurm migrated from the on_attack workaround to `on_dealt_damage_to_player` 2026-06-20.
 - **Phase-entry triggers** — `on_turn_end`, `on_upkeep`, `on_untap_step`. Coupled with the delayed-trigger registry; usually wired together.
-- **Delayed-trigger registry** — handlers can't queue future triggers. Required by slow-recall (recurring exile return), attach-shuffler (delayed bounce), bitter-dawn's effect 2 (next-turn sacrifice).
+- **Delayed-trigger registry** — **shipped (next-turn scope).** A handler calls `game.schedule_next_turn(iid)` to queue an `OnDelayedTrigger` that fires on `iid` at the start of its owner's next turn; the turn loop drains due entries through the deferred-event queue at Untap entry, and re-scheduling from inside `on_delayed_trigger` makes it recurring (slow-recall shape). Still open: schedule points other than "next turn begin" (end-of-turn, next-untap-of-either-player) — add more `DelayedTrigger` firing sites / a `when` field as cards need them. Also un-journaled like the other scheduled-state queues, so a preview that schedules a trigger won't un-schedule it on rollback.
 
 ## dev-tool
 

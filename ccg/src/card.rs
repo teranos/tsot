@@ -527,11 +527,16 @@ pub enum EventName {
     OnCreatureDies,
     /// Fires on a creature the moment it becomes tapped by attacking
     /// (declare_attacker). Handler receives `self` = the tapped creature.
-    /// Window Cleaner's "whenever this becomes tapped" trigger. Note: only
-    /// the attack tap fires this today — an external tap via `game.set_tapped`
-    /// happens inside a Lua borrow, so firing there needs a deferred-event
-    /// queue (tracked with the delayed-trigger registry).
+    /// Window Cleaner's "whenever this becomes tapped" trigger. Fires on
+    /// the attack tap synchronously, and on external taps (`game.tap`
+    /// inside a handler) via the deferred-event queue.
     OnTapped,
+    /// Fires on a card when a delayed trigger it scheduled via
+    /// `game.schedule_next_turn` comes due — at the start of the
+    /// scheduling player's next turn, routed through the deferred-event
+    /// queue. Re-scheduling from inside the handler makes it recurring.
+    /// "At the beginning of your next turn, <do the scheduled thing>."
+    OnDelayedTrigger,
 }
 
 impl EventName {
@@ -549,11 +554,12 @@ impl EventName {
             EventName::OnTurnBegin => "on_turn_begin",
             EventName::OnCreatureDies => "on_creature_dies",
             EventName::OnTapped => "on_tapped",
+            EventName::OnDelayedTrigger => "on_delayed_trigger",
         }
     }
 
     /// All known event names, for loader iteration.
-    pub const ALL: [EventName; 11] = [
+    pub const ALL: [EventName; 12] = [
         EventName::OnEnterBoard,
         EventName::OnDie,
         EventName::OnAttack,
@@ -565,6 +571,7 @@ impl EventName {
         EventName::OnTurnBegin,
         EventName::OnCreatureDies,
         EventName::OnTapped,
+        EventName::OnDelayedTrigger,
     ];
 }
 

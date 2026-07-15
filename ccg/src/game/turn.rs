@@ -150,6 +150,28 @@ impl GameState {
                         .map_err(TurnError::ChoicePending)?;
                     }
                 }
+                // Slice-11 follow-up: delayed triggers scheduled for this
+                // player (via game.schedule_next_turn) come due now. Move
+                // the due entries onto the deferred-event queue and drain,
+                // so OnDelayedTrigger fires through the same path as any
+                // other deferred event.
+                let active = self.active_player;
+                let mut still_pending = Vec::new();
+                let mut due = Vec::new();
+                for t in std::mem::take(&mut self.delayed_triggers) {
+                    if t.fire_for == active {
+                        due.push(t.iid);
+                    } else {
+                        still_pending.push(t);
+                    }
+                }
+                self.delayed_triggers = still_pending;
+                for iid in due {
+                    self.pending_events
+                        .push_back((EventName::OnDelayedTrigger, iid));
+                }
+                lua_api::drain_deferred_events(c.lua, self, c.oracle())
+                    .map_err(TurnError::ChoicePending)?;
             }
         }
         self.enter_phase_action();

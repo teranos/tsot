@@ -111,8 +111,12 @@
   `fire_with_partner` now drain after their handler unwinds. First
   consumer: `game.tap` (external taps) enqueues `OnTapped` — it fires
   once the triggering handler releases its Lua borrow, instead of not at
-  all. Still open on top of this: the delayed-trigger registry and
-  Shatter's counter-may prompt (both can now be built on the queue).
+  all. **Second consumer — DONE:** the delayed-trigger registry
+  (`GameState::delayed_triggers` + `EventName::OnDelayedTrigger` +
+  `game.schedule_next_turn(iid)`); the turn loop flushes due triggers
+  through `pending_events` at the scheduling player's Untap entry.
+  (Shatter's counter-may turned out synchronous via `confirm_for` — it
+  did not need the queue.)
 
 ## Queued tasks
 

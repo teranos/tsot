@@ -311,6 +311,17 @@ pub struct CastPayments {
     pub sacrifice: Vec<InstanceId>,
 }
 
+/// A delayed trigger: `OnDelayedTrigger` owed to `iid` at the start of
+/// `fire_for`'s next turn. Scheduled by `game.schedule_next_turn`,
+/// flushed by the turn loop at that player's Untap entry (through the
+/// deferred-event queue). One-shot — the handler may re-schedule for a
+/// recurring effect.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DelayedTrigger {
+    pub fire_for: PlayerId,
+    pub iid: InstanceId,
+}
+
 /// The full game state.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GameState {
@@ -400,6 +411,15 @@ pub struct GameState {
     /// journaled, not serialized, always empty at save/rollback points.
     #[serde(skip, default)]
     pub pending_events: std::collections::VecDeque<(EventName, InstanceId)>,
+    /// Slice-11 follow-up: delayed-trigger registry. Handlers schedule a
+    /// future `OnDelayedTrigger` via `game.schedule_next_turn`; the turn
+    /// loop fires the due entries at the scheduling player's next Untap
+    /// entry, through `pending_events`. Persists across turns (unlike the
+    /// transient `pending_events`); follows the codebase convention that
+    /// scheduled state (`pending_main_phase_returns`, `extra_turns_pending`)
+    /// is serialized but not journaled.
+    #[serde(default)]
+    pub delayed_triggers: Vec<DelayedTrigger>,
 }
 
 impl GameState {
@@ -442,6 +462,7 @@ impl GameState {
             extra_turns_pending: Vec::new(),
             pending_main_phase_returns: Vec::new(),
             pending_events: std::collections::VecDeque::new(),
+            delayed_triggers: Vec::new(),
         }
     }
 

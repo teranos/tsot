@@ -776,6 +776,24 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.schedule_next_turn(iid) — schedule `OnDelayedTrigger` to
+        // fire on `iid` at the start of iid's owner's NEXT turn (their
+        // next Untap entry). The card's `on_delayed_trigger` handler runs
+        // then; re-scheduling from inside it makes the trigger recurring.
+        // Silent no-op if `iid` isn't in the pool.
+        let cell_sched = &$cell;
+        game.set(
+            "schedule_next_turn",
+            $scope.create_function_mut(move |_, iid: String| -> Result<()> {
+                let mut s = cell_sched.borrow_mut();
+                if let Some(owner) = s.card_pool.get(&iid).map(|i| i.owner) {
+                    s.delayed_triggers
+                        .push(crate::game::DelayedTrigger { fire_for: owner, iid });
+                }
+                Ok(())
+            })?,
+        )?;
+
         let cell_atk_q = &$cell;
         game.set(
             "creature_attacked_this_turn",

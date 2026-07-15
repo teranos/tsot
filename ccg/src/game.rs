@@ -36,14 +36,17 @@ mod angry_glassblower_tests;
 #[cfg(test)]
 mod shatter_tests;
 
+#[cfg(test)]
+mod delayed_trigger_tests;
+
 pub use combat::{CombatError, CombatOutcome};
 pub use context::EventContext;
 pub use journal::{Journal, JournalEntry};
 pub use movement::MoveError;
 pub use play::{ActivateChoices, ActivateError, PlayChoices, PlayError};
 pub use state::{
-    AttackDecl, DeckUnit, Sleeve, CombatState, GameState, InstanceId, Modifier, Phase, PlayerId,
-    PlayerState, PriorityError, PriorityState, StackItem, StatusEffect, Zone,
+    AttackDecl, DeckUnit, DelayedTrigger, Sleeve, CombatState, GameState, InstanceId, Modifier,
+    Phase, PlayerId, PlayerState, PriorityError, PriorityState, StackItem, StatusEffect, Zone,
 };
 
 /// Global timeout/spin counter shared across the sim run. Both the
