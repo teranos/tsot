@@ -435,57 +435,65 @@ mod tests {
     }
 
     #[test]
-    fn perimeter_wall_sits_entirely_inside_its_wall_cell() {
-        // 3×3 room: solid perimeter, one floor at (1, 1). The top-middle
-        // wall at (0, 1) has interior south. Space-maximising: wall
-        // geometry lives entirely in the wall cell, inner face on the
-        // grid boundary → centre at row_south − WALL_HALF_THICKNESS.
+    fn perimeter_wall_hugs_the_exterior_edge_of_its_cell() {
+        // 3×3 room: solid perimeter, one floor at (1, 1). Each wall cell
+        // carries its wall on its OUTWARD-facing boundary — the wall
+        // traces the building's outside outline, inner face on the grid
+        // line so it hugs the exterior and the interior floor stays
+        // maximal. The top-middle cell (0, 1) faces exterior to the NORTH
+        // (its south neighbour is the floor), so it emits one WallEW on
+        // its north outer edge.
         let json = synthetic_mapgen(&["www", "w.w", "www"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
         // Cell (0, 1) centre: x = (1 − 1.5) × 80 = −40, z = (0 − 1.5) × 80 = −120.
-        // South edge of the cell: z = −80. Shift back by 12 → z = −92.
-        let has_shifted = t.props.iter().any(|p| {
+        // North outer edge: z = −160. Wall centre = edge + WALL_HALF_THICKNESS
+        // (12), sitting entirely inside the cell → z = −148.
+        let has_outer = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallEW)
                 && (p.offset.x - (-40.0)).abs() < 1e-3
-                && (p.offset.z - (-92.0)).abs() < 1e-3
+                && (p.offset.z - (-148.0)).abs() < 1e-3
         });
         assert!(
-            has_shifted,
-            "top-middle wall should sit entirely in its wall cell (z = row_south − 12); got: {:?}",
+            has_outer,
+            "top-middle wall should hug its north outer edge (z = north_edge + 12 = −148); got: {:?}",
             t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn corner_cell_emits_no_wall_segments() {
-        // The old L-emit-both at corners produced an X-cross in iso view
-        // (walls extended past the corner point in all 4 directions).
-        // Now the corner cell emits NOTHING; the two adjacent cells'
-        // walls meet at the corner point and form the L.
+    fn corner_cell_emits_both_outward_faces() {
+        // Each wall cell carries its wall on its outward-facing edges, so
+        // a corner cell — facing exterior on two sides — emits two
+        // segments: the L that turns the building's outline at the
+        // corner. NW corner (0, 0) faces north and west.
         let json = synthetic_mapgen(&["www", "w.w", "www"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
-        // Cell (0, 0) centre: x = −120, z = −120. Nothing should sit at
-        // its area — no WallEW anywhere around row 0 col 0, no WallNS
-        // around col 0 row 0.
-        for p in &t.props {
-            if matches!(p.kind, PropKind::WallEW)
+        // Cell (0, 0) centre: x = −120, z = −120. North outer edge z = −160
+        // → WallEW centre z = −148. West outer edge x = −160 → WallNS
+        // centre x = −148.
+        let has_north = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallEW)
                 && (p.offset.x - (-120.0)).abs() < 1e-3
-            {
-                panic!("NW corner cell should not emit a WallEW: {:?}", p);
-            }
-            if matches!(p.kind, PropKind::WallNS)
+                && (p.offset.z - (-148.0)).abs() < 1e-3
+        });
+        let has_west = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallNS)
+                && (p.offset.x - (-148.0)).abs() < 1e-3
                 && (p.offset.z - (-120.0)).abs() < 1e-3
-            {
-                panic!("NW corner cell should not emit a WallNS: {:?}", p);
-            }
-        }
-        // But the four perimeter middles do emit — one per side.
+        });
+        assert!(
+            has_north && has_west,
+            "NW corner should emit its north + west outer faces; got: {:?}",
+            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
+        );
+        // Outer outline of a 3×3 room: 4 corners × 2 faces + 4 edge-middles
+        // × 1 face = 12 segments.
         let count = t
             .props
             .iter()
             .filter(|p| matches!(p.kind, PropKind::WallEW | PropKind::WallNS))
             .count();
-        assert_eq!(count, 4, "expected 4 perimeter walls (one per side), got {count}");
+        assert_eq!(count, 12, "expected 12 outer-outline segments, got {count}");
     }
 
     #[test]
@@ -511,16 +519,19 @@ mod tests {
 
     #[test]
     fn windows_use_the_same_placement_rules_as_walls() {
+        // A window cell obeys the same outer-edge rule as a wall cell.
+        // The window at (0, 1) faces exterior north → WindowEW on the
+        // north outer edge (z = −148), exactly where a WallEW would sit.
         let json = synthetic_mapgen(&["w:w", "w.w", "www"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
         let has_window = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WindowEW)
                 && (p.offset.x - (-40.0)).abs() < 1e-3
-                && (p.offset.z - (-92.0)).abs() < 1e-3
+                && (p.offset.z - (-148.0)).abs() < 1e-3
         });
         assert!(
             has_window,
-            "window should follow WallEW placement (inside wall cell, inner face on grid line); got: {:?}",
+            "window should follow the outer-edge rule (north outer edge, z = −148); got: {:?}",
             t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
         );
     }
