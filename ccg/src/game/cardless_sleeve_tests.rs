@@ -134,6 +134,9 @@ fn z8c_cardless_pays_a_hand_cost_for_a_wildcard_cast() {
     make_cardless(&mut s, &sleeve);
     set_cost(&mut s, &cast, vec![hand_cost(1)]);
 
+    // Non-transparent host — proves C.14 doesn't gate the cardless body.
+    assert!(!s.is_transparent(&cast), "the cast is a non-transparent host");
+
     let res = s.play_card(
         PlayerId::A,
         &cast,
@@ -141,6 +144,13 @@ fn z8c_cardless_pays_a_hand_cost_for_a_wildcard_cast() {
         None,
     );
     assert!(res.is_ok(), "cardless pays a wildcard hand cost: {res:?}");
+    // Z.8d / C.14: a cardless sleeve has no frame, so it is a
+    // non-transparent attachee and attaches to ANY host — here it pitched
+    // (P.6) onto the non-transparent cast.
+    assert!(
+        s.card_pool.get(&cast).unwrap().attached.contains(&sleeve),
+        "the cardless sleeve attached to the non-transparent host it paid for",
+    );
 }
 
 #[test]

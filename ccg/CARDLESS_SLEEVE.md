@@ -89,11 +89,17 @@
 ## Open questions (user input)
 
 - Is "clear" = transparent-frame (C.13/C.14)? (Very likely yes.)
-- **Deckbuilding format** — how a cardless sleeve is expressed in a decklist
-  / EA genome; slice-8 uses a hand-authored fixture, EA-genome TBD.
-- **C.14 for cardless sleeves** — a cardless sleeve is frameless; can it
-  attach to any host, or only transparent ones?
-- **EA valuation** — should the EA draft cardless sleeves? (Affects genome.)
+- **Deckbuilding format — RESOLVED.** A cardless sleeve is the
+  `__cardless__` sentinel in a decklist / EA genome; `to_units` turns it
+  into a real empty sleeve at build time.
+- **C.14 for cardless sleeves — RESOLVED: any host.** Frameless → a
+  non-transparent attachee, so C.14 never restricts it (already the code
+  behavior; is_transparent(cardless) = false). This fires on every
+  hand-cost cast paid with a cardless body (P.6 attaches it to the cast).
+  Stated in Z.8d; locked by the z8c wildcard-hand-cost test.
+- **EA valuation — RESOLVED: yes.** The EA drafts cardless sleeves (the
+  sentinel is a first-class capped gene in random_genome / mutate /
+  repair; fitness builds via to_units).
 
 ## Deferred
 

@@ -57,7 +57,7 @@ The following zones are part of the game.
   - **Z.8a** It cannot be targeted.
   - **Z.8b** It is not a card. On top of the DECK it is taken into HAND for free and the draw continues to the next unit.
   - **Z.8c** It pays as a plain body for HAND, GRAVEYARD, and ATTACHED costs — never MILL, and never the symbol part of a cost (P.7a / P.12a).
-  - **Z.8d** An effect can attach it to a card; while attached it can pay an ATTACHED cost.
+  - **Z.8d** An effect — or a HAND payment (P.6) — can attach it to any host; having no frame it is a non-transparent attachee, so C.14 never restricts it. While attached it can pay an ATTACHED cost.
   - **Z.8e** On top of the DECK a clear one counts as fully transparent (V.8); an opaque one does not.
   - **Z.8f** In HAND it does not count toward the maximum hand size (U.10).
 
