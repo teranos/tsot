@@ -145,17 +145,21 @@ pub fn run_curate_baselines(
         for opp in &baseline_decks {
             for _ in 0..args.games {
                 let state = GameState::new(cand_cards.to_vec(), opp.clone());
-                let mut game_rng = StdRng::seed_from_u64(rng.gen());
+                let game_seed = rng.gen();
+                let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log: Vec<String> = Vec::new();
-                let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais);
+                let (stats, _) =
+                    sim::run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais, game_seed);
                 if stats.winner == tsot::game::PlayerId::A {
                     wins += 1;
                 }
                 games += 1;
                 let state = GameState::new(opp.clone(), cand_cards.to_vec());
-                let mut game_rng = StdRng::seed_from_u64(rng.gen());
+                let game_seed = rng.gen();
+                let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log = Vec::new();
-                let (stats, _) = sim::run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais);
+                let (stats, _) =
+                    sim::run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais, game_seed);
                 if stats.winner == tsot::game::PlayerId::B {
                     wins += 1;
                 }

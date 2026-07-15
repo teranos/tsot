@@ -289,6 +289,7 @@ fn fresh_game_stats() -> GameStats {
     GameStats {
         turns: 0,
         winner: PlayerId::A,
+        game_seed: 0,
         variant_a: DeckVariant::Ra,
         variant_b: DeckVariant::Rb,
         token_a: String::new(),

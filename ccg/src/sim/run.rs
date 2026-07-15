@@ -56,9 +56,10 @@ pub fn run_game(
     rng: &mut StdRng,
     log: &mut Vec<String>,
     registry: &std::sync::Arc<CardRegistry>,
+    game_seed: u64,
 ) -> (GameStats, crate::game::Journal) {
     let ais = [super::AiKind::Heuristic, super::AiKind::Heuristic];
-    run_game_with_ai(state, rng, log, registry, &ais)
+    run_game_with_ai(state, rng, log, registry, &ais, game_seed)
 }
 
 /// Like [`run_game`] but with per-player AI selection. Used by the
@@ -71,9 +72,10 @@ pub fn run_game_with_ai(
     log: &mut Vec<String>,
     registry: &std::sync::Arc<CardRegistry>,
     ais: &[super::AiKind; 2],
+    game_seed: u64,
 ) -> (GameStats, crate::game::Journal) {
     state.replay_journal = Some(crate::game::Journal::new());
-    let mut stats = run_game_continue(&mut state, rng, log, registry, ais);
+    let mut stats = run_game_continue(&mut state, rng, log, registry, ais, game_seed);
     let replay_journal = state.replay_journal.take().unwrap_or_default();
     stats.replay_journal_entries = replay_journal.len() as u64;
     (stats, replay_journal)
@@ -781,6 +783,7 @@ pub fn run_game_continue(
     log: &mut Vec<String>,
     registry: &std::sync::Arc<CardRegistry>,
     ais: &[super::AiKind; 2],
+    game_seed: u64,
 ) -> GameStats {
     let lua = registry.lua();
     let oracle_seed: u64 = rng.gen();
@@ -804,6 +807,7 @@ pub fn run_game_continue(
     let mut stats = GameStats {
         turns: 0,
         winner: PlayerId::A,
+        game_seed,
         variant_a: DeckVariant::Ra,
         variant_b: DeckVariant::Rb,
         token_a: String::new(),
@@ -882,6 +886,7 @@ pub fn run_game_continue(
             report_game_timeout(
                 state,
                 "outer turn loop",
+                game_seed,
                 last_picked.as_ref(),
                 last_activated.as_ref(),
                 Some(&pick_timing),
@@ -952,6 +957,7 @@ pub fn run_game_continue(
                 report_game_timeout(
                     state,
                     "Pattern B inner loop",
+                    game_seed,
                     last_picked.as_ref(),
                     last_activated.as_ref(),
                     Some(&pick_timing),
@@ -964,6 +970,7 @@ pub fn run_game_continue(
                 report_game_timeout(
                     state,
                     "Pattern B inner loop (wall-clock)",
+                    game_seed,
                     last_picked.as_ref(),
                     last_activated.as_ref(),
                     Some(&pick_timing),
@@ -1672,6 +1679,7 @@ pub(crate) fn run_activation_pass(
 fn report_game_timeout(
     state: &GameState,
     site: &str,
+    game_seed: u64,
     last_picked: Option<&InstanceId>,
     last_activated: Option<&(InstanceId, usize)>,
     pick_timing: Option<&PickTiming>,
@@ -1696,8 +1704,13 @@ fn report_game_timeout(
     let c = format!("\x1b[38;5;{game_color}m");
     let z = "\x1b[0m";
     eprintln!(
-        "{c}[GAME TIMEOUT] site={site} turn={} active={:?} winner={:?}{z}",
+        "{c}[GAME TIMEOUT] site={site} game_seed=0x{game_seed:016x} \
+         turn={} active={:?} winner={:?}{z}",
         state.turn, state.active_player, state.winner,
+    );
+    eprintln!(
+        "{c}  reproduce: run_game(state, &mut StdRng::seed_from_u64(0x{game_seed:016x}), \
+         &mut log, registry, 0x{game_seed:016x}){z}",
     );
     if let Some(p) = last_picked {
         eprintln!("{c}  last_picked: {} ({}){z}", p, card_id_of(p));
@@ -1783,6 +1796,63 @@ mod tests {
     use super::*;
     use crate::card::CardRegistry;
 
+    /// A vanilla 50-card deck of the simplest creature in `cards/`.
+    /// Used by seed/determinism tests that need a runnable game without
+    /// caring about specific card effects.
+    fn vanilla_deck(registry: &CardRegistry) -> Vec<crate::card::Card> {
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| {
+                matches!(c.kind, crate::card::CardType::Creature)
+                    && c.handlers.is_empty()
+                    && c.cost.len() == 1
+                    && !c.cost[0].is_x
+            })
+            .expect("a vanilla creature should exist in cards/")
+            .clone();
+        (0..50).map(|_| template.clone()).collect()
+    }
+
+    /// The [GAME TIMEOUT] dump can only reproduce a hung game if the
+    /// game's seed is faithfully surfaced. Guard: the seed `run_game`
+    /// records must be the seed that actually drove the game — reseeding
+    /// a fresh run from `stats.game_seed` must reproduce the outcome. A
+    /// caller that threads a `game_seed` not matching its rng fails here.
+    #[test]
+    fn game_seed_is_recorded_and_reproduces_the_game() {
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+        let deck = vanilla_deck(&registry);
+        let seed: u64 = 0x5EED_1234_ABCD_0001;
+
+        let state1 = GameState::new(deck.clone(), deck.clone());
+        let mut rng1 = StdRng::seed_from_u64(seed);
+        let mut log1: Vec<String> = Vec::new();
+        let (stats1, _) = run_game(state1, &mut rng1, &mut log1, &registry, seed);
+
+        assert_eq!(
+            stats1.game_seed, seed,
+            "recorded game_seed must equal the seed that drove the game",
+        );
+
+        // Reproduce strictly from the reported seed.
+        let state2 = GameState::new(deck.clone(), deck.clone());
+        let mut rng2 = StdRng::seed_from_u64(stats1.game_seed);
+        let mut log2: Vec<String> = Vec::new();
+        let (stats2, _) = run_game(state2, &mut rng2, &mut log2, &registry, stats1.game_seed);
+
+        assert_eq!(
+            format!("{:?}", stats1.winner),
+            format!("{:?}", stats2.winner),
+            "reported game_seed did not reproduce the winner",
+        );
+        assert_eq!(
+            stats1.turns, stats2.turns,
+            "reported game_seed did not reproduce the turn count",
+        );
+    }
+
     /// EA prerequisite: fitness(genome) is meaningful only if
     /// `run_game(state, &mut rng, &mut log, lua)` produces byte-identical
     /// outputs for byte-identical inputs. If this ever fails, the EA's
@@ -1828,7 +1898,7 @@ mod tests {
                 let mut rng = StdRng::seed_from_u64(seed);
                 let mut log: Vec<String> = Vec::new();
                 let (stats, _journal) =
-                    run_game(state, &mut rng, &mut log, &registry);
+                    run_game(state, &mut rng, &mut log, &registry, seed);
                 total_transfer += stats
                     .action_counts
                     .get("attached_payment_transfer")
@@ -2109,7 +2179,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0xC0FFEE);
         let mut log: Vec<String> = Vec::new();
         let ais = [super::super::AiKind::Heuristic, super::super::AiKind::Heuristic];
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0xC0FFEE);
 
         assert!(state.winner.is_some(), "game should have a winner");
         assert!(stats.turns > 0, "stats should record turns");
@@ -2187,8 +2257,8 @@ mod tests {
         let mut log_1: Vec<String> = Vec::new();
         let mut log_2: Vec<String> = Vec::new();
 
-        let (stats_1, journal_1) = run_game(state_1, &mut rng_1, &mut log_1, &registry);
-        let (stats_2, journal_2) = run_game(state_2, &mut rng_2, &mut log_2, &registry);
+        let (stats_1, journal_1) = run_game(state_1, &mut rng_1, &mut log_1, &registry, 0xEA_C8);
+        let (stats_2, journal_2) = run_game(state_2, &mut rng_2, &mut log_2, &registry, 0xEA_C8);
 
         assert_eq!(log_1, log_2, "logs diverged across identical runs");
         assert_eq!(
@@ -2245,7 +2315,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x5133_1E55);
         let mut log: Vec<String> = Vec::new();
         let ais = [super::super::AiKind::Heuristic, super::super::AiKind::Heuristic];
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0x5133_1E55);
 
         assert!(state.winner.is_some(), "game should have a winner");
         assert!(stats.turns > 0);
@@ -2320,8 +2390,8 @@ mod tests {
         let mut rng2 = StdRng::seed_from_u64(0xC0FFEE);
         let mut log1: Vec<String> = Vec::new();
         let mut log2: Vec<String> = Vec::new();
-        let (stats1, j1) = run_game(s1, &mut rng1, &mut log1, &registry);
-        let (stats2, j2) = run_game(s2, &mut rng2, &mut log2, &registry);
+        let (stats1, j1) = run_game(s1, &mut rng1, &mut log1, &registry, 0xC0FFEE);
+        let (stats2, j2) = run_game(s2, &mut rng2, &mut log2, &registry, 0xC0FFEE);
 
         assert_eq!(log1, log2, "logs diverged with cardless sleeves present");
         assert_eq!(format!("{stats1:?}"), format!("{stats2:?}"));

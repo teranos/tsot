@@ -199,7 +199,7 @@ pub fn run_curve_sample(
             let _ = tsot::sim::instrument::drain_failures();
             let game_t0 = std::time::Instant::now();
             let (stats, _) =
-                sim::run_game_with_ai(state, &mut game_rng, &mut log, &reg, &ais);
+                sim::run_game_with_ai(state, &mut game_rng, &mut log, &reg, &ais, spec.seed);
             let game_elapsed = game_t0.elapsed();
             // Fold every failure message this game produced into the
             // game's engine log. The failed-game classifier picks

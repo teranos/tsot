@@ -95,7 +95,7 @@ pub fn run_matchup_evolved(
                 let game_seed: u64 = rng.gen();
                 let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log: Vec<String> = Vec::new();
-                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry);
+                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry, game_seed);
                 if stats.winner == tsot::game::PlayerId::A {
                     wins[i][j] += 1;
                 }

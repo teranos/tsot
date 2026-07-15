@@ -864,7 +864,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0xC0DE);
         let mut log: Vec<String> = Vec::new();
         let ais = [AiKind::Uct(cfg.clone()), AiKind::Uct(cfg)];
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0xC0DE);
 
         assert!(state.winner.is_some(), "UCT game produced no winner");
         assert!(stats.turns > 0, "UCT game recorded zero turns");

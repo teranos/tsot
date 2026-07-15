@@ -323,18 +323,20 @@ pub fn run_prune_champions(
             for _ in 0..args.games {
                 // candidate as A
                 let state = GameState::new(cards.to_vec(), opp.clone());
-                let mut game_rng = StdRng::seed_from_u64(rng.gen());
+                let game_seed = rng.gen();
+                let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log: Vec<String> = Vec::new();
-                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry);
+                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry, game_seed);
                 if stats.winner == tsot::game::PlayerId::A {
                     wins += 1;
                 }
                 games += 1;
                 // candidate as B
                 let state = GameState::new(opp.clone(), cards.to_vec());
-                let mut game_rng = StdRng::seed_from_u64(rng.gen());
+                let game_seed = rng.gen();
+                let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log = Vec::new();
-                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry);
+                let (stats, _) = sim::run_game(state, &mut game_rng, &mut log, registry, game_seed);
                 if stats.winner == tsot::game::PlayerId::B {
                     wins += 1;
                 }

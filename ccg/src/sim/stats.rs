@@ -19,6 +19,13 @@ use super::variants::DeckVariant;
 pub struct GameStats {
     pub turns: u32,
     pub winner: PlayerId,
+    /// Seed that drove this game's rng. Reseeding a fresh
+    /// `run_game(..., game_seed)` from this value reproduces the game
+    /// exactly, so the `[GAME TIMEOUT]` dump can name the offending
+    /// game. Threaded from the caller (the only place the seed is
+    /// known); `0` in contexts that don't run a seeded game loop
+    /// (e.g. `StepEngine` rollouts, which carry their own seed).
+    pub game_seed: u64,
     pub variant_a: DeckVariant,
     pub variant_b: DeckVariant,
     /// Deck token encoding A's deck (Crockford base32, 16 chars).

@@ -128,7 +128,7 @@ fn play_one(
     state.replay_journal = Some(tsot::game::Journal::new());
     let mut rng = StdRng::seed_from_u64(game_seed);
     let mut log: Vec<String> = Vec::new();
-    let stats = run_game_continue(&mut state, &mut rng, &mut log, registry, ais);
+    let stats = run_game_continue(&mut state, &mut rng, &mut log, registry, ais, game_seed);
     stats.winner
 }
 

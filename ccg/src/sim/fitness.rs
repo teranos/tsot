@@ -147,9 +147,13 @@ pub fn fitness_breakdown(
             crate::sim::genome::shuffle_deck(&mut deck_g_a, &mut shuf_rng_a);
             crate::sim::genome::shuffle_deck(&mut deck_opp_a, &mut shuf_rng_b);
             let state = GameState::new(deck_g_a, deck_opp_a);
-            let mut game_rng = StdRng::seed_from_u64(rng.gen());
+            // One seed drives the game AND identifies it in the timeout
+            // dump — bind it once so the two can never disagree.
+            let game_seed = rng.gen();
+            let mut game_rng = StdRng::seed_from_u64(game_seed);
             let mut log: Vec<String> = Vec::new();
-            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_a);
+            let (stats, _) =
+                run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_a, game_seed);
             if !crate::sim::instrument::drain_failures().is_empty() {
                 failed_games_total += 1;
             }
@@ -165,9 +169,11 @@ pub fn fitness_breakdown(
             crate::sim::genome::shuffle_deck(&mut deck_opp_b, &mut shuf_rng_a);
             crate::sim::genome::shuffle_deck(&mut deck_g_b, &mut shuf_rng_b);
             let state = GameState::new(deck_opp_b, deck_g_b);
-            let mut game_rng = StdRng::seed_from_u64(rng.gen());
+            let game_seed = rng.gen();
+            let mut game_rng = StdRng::seed_from_u64(game_seed);
             let mut log = Vec::new();
-            let (stats, _) = run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_b);
+            let (stats, _) =
+                run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_b, game_seed);
             if !crate::sim::instrument::drain_failures().is_empty() {
                 failed_games_total += 1;
             }

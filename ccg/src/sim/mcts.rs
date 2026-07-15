@@ -419,6 +419,7 @@ mod tests {
             &mut log,
             &registry,
             &ais,
+            0xC0DE,
         );
         assert!(state.winner.is_some(), "MCTS game produced no winner");
         assert!(stats.turns > 0, "MCTS game recorded zero turns");

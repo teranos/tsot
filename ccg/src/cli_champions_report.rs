@@ -349,10 +349,11 @@ pub fn run_champions_report(
                                 (cards.clone(), opp.clone())
                             };
                             let state = GameState::new(a, b);
-                            let mut game_rng = StdRng::seed_from_u64(rng.gen());
+                            let game_seed = rng.gen();
+                            let mut game_rng = StdRng::seed_from_u64(game_seed);
                             let mut log: Vec<String> = Vec::new();
                             let (stats, _) =
-                                sim::run_game(state, &mut game_rng, &mut log, registry);
+                                sim::run_game(state, &mut game_rng, &mut log, registry, game_seed);
                             s.turns.push(stats.turns);
                             if swap {
                                 s.attacks += stats.b_attacks as u64;
