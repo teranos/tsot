@@ -185,9 +185,12 @@ fn z8c_cardless_body_plus_real_anchor_pays_an_identity_hand_cost() {
 }
 
 #[test]
-fn z8c_cardless_sleeve_is_not_millable() {
-    // A cardless sleeve never counts for MILL (Z.8c): a mill:1 cost skips
-    // the cardless sleeves on top and mills the first card-bearing sleeve.
+fn z8c_cardless_sleeve_is_milled_uncounted_not_skipped() {
+    // Z.8c MILL: a cardless sleeve CAN be milled — it is skimmed into the
+    // graveyard along the way — it just doesn't COUNT toward the cost. So
+    // a mill:1 cost with two cardless sleeves on top of the deck is still
+    // castable: both empties go uncounted into the graveyard and the mill
+    // is paid by the first card-bearing sleeve underneath.
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let cast = s.a.hand[0].clone();
     let d0 = s.a.deck[0].clone();
@@ -198,8 +201,15 @@ fn z8c_cardless_sleeve_is_not_millable() {
     set_cost(&mut s, &cast, vec![cost(CostSource::Mill, 1)]);
 
     let res = s.play_card(PlayerId::A, &cast, PlayChoices::default(), None);
-    assert!(res.is_ok(), "{res:?}");
-    assert!(s.a.graveyard.contains(&real), "a card-bearing sleeve was milled, not a cardless one");
+    assert!(res.is_ok(), "mill cost is castable with cardless on top: {res:?}");
+
+    // The counted mill: the card-bearing sleeve was milled.
+    assert!(s.a.graveyard.contains(&real), "the real card paid the mill and is in the graveyard");
+    // The empties went UNCOUNTED INTO the graveyard — not skipped, not left
+    // on the deck.
+    assert!(s.a.graveyard.contains(&d0) && s.a.graveyard.contains(&d1), "cardless sleeves milled into the graveyard");
+    assert!(!s.a.deck.contains(&d0) && !s.a.deck.contains(&d1), "cardless sleeves left the deck");
+    assert!(!s.a.deck.contains(&real), "the milled real card left the deck");
 }
 
 // ---- 8.2: AI affordability agrees with the resolver on cardless ----
