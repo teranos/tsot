@@ -5,7 +5,10 @@
 //!
 //! - `card_identity` (P.7a identity = colors ∪ symbols)
 //! - Jewel-tap helpers (P.24)
-//! - `identity_matching_hand_count` (sim AI affordability)
+//! - `hand_/attached_/mutation_..._item_error` — the per-item payment
+//!   eligibility predicates shared by `play_card` and the `eligible_*`
+//!   set-builders (single source of truth; picker can't offer what the
+//!   validator refuses)
 //! - `find_attached_payments` (P.31)
 //! - `resolve_graveyard_payment` (P.12 + P.12a color-anchor)
 //! - `find_gy_hand_substitutes` (Clear View pattern)
@@ -14,6 +17,7 @@
 use std::collections::BTreeSet;
 
 use super::super::state::{GameState, InstanceId, PlayerId};
+use super::PlayError;
 use crate::choice::{ChoiceOracle, ChooseCardRequest};
 
 impl GameState {
@@ -142,75 +146,139 @@ impl GameState {
             .cloned()
     }
 
-    /// Count cards in `player`'s hand whose identity intersects the
-    /// cast card's identity per P.7a. Used by the sim AI to decide
-    /// whether Clear View substitutes are needed to cover slots the
-    /// hand can't fill with identity-matching cards.
-    pub fn identity_matching_hand_count(
+    // ---- Per-item payment eligibility: the single source of truth ----
+    //
+    // These three predicates are the ONLY definition of "may this one id
+    // pay/attach for this cast." `play_card`'s validation loop calls them,
+    // and the `eligible_*` set-builders below filter on them. Because the
+    // picker and resolver build payments exclusively from those builders,
+    // this makes per-item drift between picker and validator structurally
+    // impossible — there is nothing to keep "in agreement" by hand.
+    //
+    // Set-level rules (coverage/count, duplicate detection, the all-
+    // cardless-can't-anchor gate) are NOT per-item facts and stay in
+    // `play_card`.
+
+    /// Per-item HAND-payment eligibility (P.6 / P.7a). `Some(err)` is the
+    /// exact error `play_card` would return for this id; `None` = eligible.
+    ///
+    /// - `gy_anchor`: a color-matching GRAVEYARD pitch was supplied for
+    ///   this cast, so P.12b suspends the per-card P.7a identity match.
+    /// - `allow_cardless_body`: treat a cardless sleeve (Z.8c) as a
+    ///   generic wildcard body, exempt from P.7a. `play_card` passes
+    ///   `true`; the sim helper passes `false` so the picker stays
+    ///   conservative (it does not yet assemble cardless bodies for an
+    ///   *identity* HAND cost — the slice-8.2 deferral). Both flags are
+    ///   monotonic: `false` is strictly more restrictive than `true`, so
+    ///   the helper's offer set is always a subset of what `play_card`
+    ///   accepts. C.14's frame gate is gone entirely — no transparency
+    ///   check here.
+    pub fn hand_payment_item_error(
         &self,
-        player: PlayerId,
         cast_iid: &InstanceId,
-    ) -> usize {
-        let cast_ident = self.card_identity(cast_iid);
-        // C.14 lifted: frame no longer gates attachment, so no
-        // transparency exclusion here — any HAND card is an eligible
-        // payment (subject only to P.7a identity below).
-        if cast_ident.is_empty() {
-            return self
-                .player(player)
-                .hand
-                .iter()
-                .filter(|h| *h != cast_iid)
-                .count();
+        hid: &InstanceId,
+        player: PlayerId,
+        gy_anchor: bool,
+        allow_cardless_body: bool,
+    ) -> Option<PlayError> {
+        if hid == cast_iid {
+            return Some(PlayError::HandPaymentInvalid(hid.clone()));
         }
-        self.player(player)
-            .hand
-            .iter()
-            .filter(|h| *h != cast_iid)
-            .filter(|h| {
-                let pay_ident = self.card_identity(h);
-                !cast_ident.is_disjoint(&pay_ident)
-            })
-            .count()
+        if !self.player(player).hand.contains(hid) {
+            return Some(PlayError::HandPaymentInvalid(hid.clone()));
+        }
+        // P.24: a static restriction can forbid a card as a HAND cost.
+        if self.has_restriction(hid, crate::card::Restriction::CannotBeCostPaid) {
+            return Some(PlayError::HandPaymentForbidden(hid.clone()));
+        }
+        // P.7a identity, unless a GY anchor suspends it (P.12b) or the
+        // body is an exempt cardless sleeve (Z.8c).
+        let cast_ident = self.card_identity(cast_iid);
+        let needs_identity_match = !(cast_ident.is_empty()
+            || gy_anchor
+            || (allow_cardless_body && self.is_cardless(hid)));
+        if needs_identity_match {
+            let pay_ident = self.card_identity(hid);
+            if cast_ident.is_disjoint(&pay_ident) {
+                return Some(PlayError::HandPaymentIdentityMismatch(hid.clone()));
+            }
+        }
+        None
     }
 
-    /// SHARED predicate — the canonical mutation-target eligibility
-    /// set for a cast. Both the picker (sim/ai.rs::enumerate_playable_in_hand)
-    /// and the resolver (sim/run.rs::build_pattern_b_choices) must
-    /// use this so play_card's mutation-target validation
-    /// (game/play.rs:455-481) never sees a target the picker offered.
-    ///
-    /// Filters applied (matching play_card exactly):
-    ///   1. target is on A's or B's BOARD
-    ///   2. target is a creature (C.6 implicit — mutations attach
-    ///      to creatures only)
-    ///   3. target does NOT have `Restriction::CannotBeAttachedTo`
-    ///      (glass-insect cycle / glass-damselfly etc.)
-    ///   (C.14 lifted: frame no longer gates the target — a transparent
-    ///    mutation attaches to any creature.)
+    /// Per-item ATTACHED-payment eligibility (P.31). `Some(err)` mirrors
+    /// `play_card`; `None` = eligible. C.14's frame gate is lifted, so
+    /// the only rule left is host-on-your-BOARD-and-controlled-by-you.
+    pub fn attached_payment_item_error(
+        &self,
+        aid: &InstanceId,
+        player: PlayerId,
+    ) -> Option<PlayError> {
+        let ok = match self.host_of(aid) {
+            Some(h) => {
+                self.player(player).board.contains(&h)
+                    && self
+                        .card_pool
+                        .get(&h)
+                        .map(|i| i.controller == player)
+                        .unwrap_or(false)
+            }
+            None => false,
+        };
+        if ok {
+            None
+        } else {
+            Some(PlayError::AttachedPaymentInvalid(aid.clone()))
+        }
+    }
+
+    /// Per-item Mutation-target eligibility (P.26 / Z.7). `Some(err)`
+    /// mirrors `play_card`; `None` = eligible. C.14's frame gate is
+    /// lifted — a transparent mutation attaches to any creature.
+    pub fn mutation_target_item_error(&self, target: &InstanceId) -> Option<PlayError> {
+        let on_board = self.a.board.contains(target) || self.b.board.contains(target);
+        let is_creature = self
+            .card_pool
+            .get(target)
+            .map(|i| i.card().kind == crate::card::CardType::Creature)
+            .unwrap_or(false);
+        if !on_board || !is_creature {
+            return Some(PlayError::MutationTargetInvalid(target.clone()));
+        }
+        if self.has_restriction(target, crate::card::Restriction::CannotBeAttachedTo) {
+            return Some(PlayError::MutationTargetInvalid(target.clone()));
+        }
+        // Z.7: a sleeve holds at most 4 cards (host + 3 fused). A 4th
+        // mutation is refused.
+        let fused = self
+            .card_pool
+            .get(target)
+            .map(|i| i.same_sleeve.len())
+            .unwrap_or(0);
+        if fused >= 3 {
+            return Some(PlayError::SleeveFull(target.clone()));
+        }
+        None
+    }
+
+    /// The canonical mutation-target set the picker
+    /// (sim/ai.rs::enumerate_playable_in_hand) and resolver
+    /// (sim/run.rs::build_pattern_b_choices) both draw from. Every BOARD
+    /// creature is run through `mutation_target_item_error` — the same
+    /// per-item predicate play_card validates with — so play_card never
+    /// sees a target the picker offered. Eligible = on-board creature,
+    /// not `CannotBeAttachedTo`, sleeve not full (Z.7). C.14's frame gate
+    /// is lifted, so a transparent mutation attaches to any creature.
     pub fn eligible_mutation_targets(&self, cast_iid: &InstanceId) -> Vec<InstanceId> {
         let _ = cast_iid;
+        // Filter every BOARD creature through the same per-item predicate
+        // play_card validates with — so the picker can never offer a
+        // target play_card would refuse.
         self.a
             .board
             .iter()
             .chain(self.b.board.iter())
-            .filter(|t| {
-                self.card_pool
-                    .get(*t)
-                    .map(|i| i.card().kind == crate::card::CardType::Creature)
-                    .unwrap_or(false)
-            })
-            .filter(|t| {
-                !self.has_restriction(t, crate::card::Restriction::CannotBeAttachedTo)
-            })
-            // Z.7: skip a full sleeve (host + 3 same-sleeve cards); a 4th
-            // mutation is refused, so the picker must not offer it.
-            .filter(|t| {
-                self.card_pool
-                    .get(*t)
-                    .map(|i| i.same_sleeve.len() < 3)
-                    .unwrap_or(false)
-            })
+            .filter(|t| self.mutation_target_item_error(t).is_none())
             .cloned()
             .collect()
     }
@@ -242,10 +310,10 @@ impl GameState {
     /// validation (game/play.rs:619-650) never sees an attached iid
     /// the picker offered.
     ///
-    /// Filters applied (matching play_card exactly):
-    ///   1. host is on `player`'s BOARD and controlled by `player`
-    ///   (C.14 lifted: frame no longer excludes transparent attached
-    ///    cards from paying a non-transparent BOARD-placed cast.)
+    /// Every attached id is run through `attached_payment_item_error` —
+    /// the same per-item predicate play_card validates with — so the
+    /// picker can never offer an attached payment play_card would refuse.
+    /// (C.14 lifted: frame no longer excludes transparent attached cards.)
     pub fn eligible_attached_payments(
         &self,
         player: PlayerId,
@@ -255,11 +323,10 @@ impl GameState {
         let mut out = Vec::new();
         for host_iid in &self.player(player).board {
             let Some(host) = self.card_pool.get(host_iid) else { continue };
-            if host.controller != player {
-                continue;
-            }
             for aid in &host.attached {
-                out.push(aid.clone());
+                if self.attached_payment_item_error(aid, player).is_none() {
+                    out.push(aid.clone());
+                }
             }
         }
         out
@@ -363,48 +430,29 @@ impl GameState {
     /// Fallback: if the oracle returns None (RandomOracle for empty pool, or
     /// a future oracle that declines), we pick the first remaining eligible
     /// card — payment is mandatory, so we can't skip a slot.
-    /// SHARED predicate — the canonical hand-payment eligibility set
-    /// for a cast. Both the sim AI's affordability check and the
-    /// resolver's per-slot pool must use this so they can never
-    /// disagree on what counts as a payable hand card. Filters
-    /// applied (in order):
-    ///   1. exclude the cast card itself
-    ///   2. exclude cards with `Restriction::CannotBeCostPaid`
-    ///      (e.g., flesh-eating-plant suppresses opponent insects)
-    ///   3. C.14: exclude transparent-frame cards when the cast is
-    ///      BOARD-placed (creature/artifact/environment)
-    ///   4. P.7a identity match — payment shares ≥1 element of
-    ///      colors ∪ symbols with the cast. Empty-identity cast is
-    ///      a wildcard so identity check passes.
+    /// The canonical hand-payment eligibility set the picker and
+    /// resolver both draw from. Every candidate is run through
+    /// `hand_payment_item_error` — the same per-item predicate
+    /// `play_card` validates with — so an offered id can never be one
+    /// `play_card` refuses.
     ///
-    /// This function is the SINGLE SOURCE OF TRUTH for "which hand
-    /// cards can pay this cast". When picker and resolver agree on
-    /// `eligible_hand_payments(...).len()`, no pick/resolve loop is
-    /// possible.
+    /// Called with `gy_anchor = false, allow_cardless_body = false`: the
+    /// most restrictive settings, so the offer set is a strict subset of
+    /// what `play_card` accepts (which may relax both). That subset is the
+    /// safety property — the sim stays conservative (no cardless bodies
+    /// for an identity cast, no anticipating a GY anchor) and never loops.
     pub fn eligible_hand_payments(
         &self,
         player: PlayerId,
         cast_iid: &InstanceId,
     ) -> Vec<InstanceId> {
-        let cast_ident = self.card_identity(cast_iid);
-        let identity_matches = |hid: &InstanceId| -> bool {
-            if cast_ident.is_empty() {
-                return true;
-            }
-            let pay_ident = self.card_identity(hid);
-            !cast_ident.is_disjoint(&pay_ident)
-        };
-        // C.14 lifted: no transparency gate — any HAND card may attach to
-        // any host, so eligibility rests on identity (P.7a) and the
-        // CannotBeCostPaid restriction alone.
         self.player(player)
             .hand
             .iter()
-            .filter(|iid| *iid != cast_iid)
-            .filter(|iid| {
-                !self.has_restriction(iid, crate::card::Restriction::CannotBeCostPaid)
+            .filter(|hid| {
+                self.hand_payment_item_error(cast_iid, hid, player, false, false)
+                    .is_none()
             })
-            .filter(|iid| identity_matches(iid))
             .cloned()
             .collect()
     }

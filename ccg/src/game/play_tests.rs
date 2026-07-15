@@ -3830,3 +3830,204 @@ fn mixed_hand_and_gy_with_color_anchor_bypasses_p7a_on_hand() {
     assert!(s.a.exile.contains(&gy_seed));
     assert!(s.card_pool.get(&cast).unwrap().attached.contains(&hand_pay));
 }
+
+// ---- Payment-eligibility guarantee (picker/validator drift-proofing) ----
+//
+// The picker and resolver build every payment exclusively from the
+// `eligible_*` helpers, and those helpers filter on the very same per-item
+// predicates `play_card` validates with (`hand_/attached_/mutation_..._
+// item_error`). These tests encode the guarantee end-to-end: every id a
+// helper offers is one `play_card` accepts per-item. If a future edit
+// reintroduces a per-item check in `play_card` that a helper doesn't mirror
+// (the C.14 class of bug), an offered-but-refused id trips the assertion.
+
+fn is_per_item_hand_error(r: &Result<(), PlayError>) -> bool {
+    matches!(
+        r,
+        Err(PlayError::HandPaymentInvalid(_))
+            | Err(PlayError::HandPaymentForbidden(_))
+            | Err(PlayError::HandPaymentIdentityMismatch(_))
+    )
+}
+
+#[test]
+fn every_offered_hand_payment_is_accepted_by_play_card() {
+    // Sweep casts × hand payments across a spread of identities (empty
+    // wildcard, single/dual colors, symbol, transparent frame). For every
+    // hand id the shared helper offers, driving real play_card with it as
+    // the sole payment must not yield a per-item HAND refusal.
+    let idents: [&[&str]; 5] =
+        [&[], &["red"], &["blue"], &["red", "blue"], &["transparent"]];
+    let syms = ["", "X"];
+    for (ci, cast_colors) in idents.iter().enumerate() {
+        for (si, cast_sym) in syms.iter().enumerate() {
+            let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+            let cast = s.a.hand[0].clone();
+            set_identity(&mut s, &cast, cast_colors, cast_sym);
+            set_cost(
+                &mut s,
+                &cast,
+                vec![CostComponent {
+                    amount: 1,
+                    source: CostSource::Hand,
+                    is_x: false,
+                    kind: None,
+                }],
+            );
+            // Spread varied identities across the rest of the hand.
+            let hand = s.a.hand.clone();
+            for (k, h) in hand.iter().enumerate().skip(1) {
+                let hc = idents[(k + ci) % idents.len()];
+                let hs = syms[(k + si) % syms.len()];
+                set_identity(&mut s, h, hc, hs);
+            }
+            let eligible = s.eligible_hand_payments(PlayerId::A, &cast);
+            for hid in &eligible {
+                let mut clone = s.clone();
+                let r = clone.play_card(
+                    PlayerId::A,
+                    &cast,
+                    PlayChoices {
+                        hand_payment_ids: vec![hid.clone()],
+                        ..PlayChoices::default()
+                    },
+                    None,
+                );
+                assert!(
+                    !is_per_item_hand_error(&r),
+                    "eligible_hand_payments offered {hid} for cast \
+                     {cast_colors:?}/{cast_sym:?} but play_card refused it \
+                     per-item: {r:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn every_offered_attached_payment_is_accepted_and_enemy_fuel_is_refused() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    // A controls a host on the board carrying an attached payment (fuel).
+    let host = s.a.hand[0].clone();
+    let fuel = s.a.hand[1].clone();
+    let cast = s.a.hand[2].clone();
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+    let _ = s.move_card(&fuel, PlayerId::A, Zone::Hand, Zone::Exile); // off hand
+    s.add_attached(&host, &fuel);
+    // B controls its own host + attached card — not payable by A (P.31).
+    let enemy_host = s.b.hand[0].clone();
+    let enemy_fuel = s.b.hand[1].clone();
+    let _ = s.move_card(&enemy_host, PlayerId::B, Zone::Hand, Zone::Board);
+    let _ = s.move_card(&enemy_fuel, PlayerId::B, Zone::Hand, Zone::Exile);
+    s.add_attached(&enemy_host, &enemy_fuel);
+    // Cast needs one ATTACHED payment.
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Attached,
+            is_x: false,
+            kind: None,
+        }],
+    );
+
+    let eligible = s.eligible_attached_payments(PlayerId::A, &cast);
+    assert!(eligible.contains(&fuel), "A's own attached card must be offered");
+    assert!(
+        !eligible.contains(&enemy_fuel),
+        "enemy-controlled attached card must not be offered"
+    );
+    for aid in &eligible {
+        let mut clone = s.clone();
+        let r = clone.play_card(
+            PlayerId::A,
+            &cast,
+            PlayChoices {
+                attached_payment_ids: vec![aid.clone()],
+                ..PlayChoices::default()
+            },
+            None,
+        );
+        assert!(
+            !matches!(r, Err(PlayError::AttachedPaymentInvalid(_))),
+            "offered attached {aid} refused per-item by play_card: {r:?}"
+        );
+    }
+    // The withheld enemy fuel is indeed what play_card refuses.
+    let mut clone = s.clone();
+    let r = clone.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            attached_payment_ids: vec![enemy_fuel.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(r, Err(PlayError::AttachedPaymentInvalid(enemy_fuel)));
+}
+
+#[test]
+fn every_offered_mutation_target_is_accepted_and_full_sleeve_is_refused() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    // Snapshot iids up front — moving cards out of a zone shifts indices.
+    // Board creatures come from the 5-card opening hand; the 3 fused
+    // children come off the deck (the hand is too small for all six).
+    let h = s.a.hand.clone();
+    let d = s.a.deck.clone();
+    // A valid creature target on A's board.
+    let target = h[0].clone();
+    let _ = s.move_card(&target, PlayerId::A, Zone::Hand, Zone::Board);
+    // A full sleeve: host + 3 fused same-sleeve cards (Z.7) — no room for
+    // a 4th, so it must be excluded and refused with SleeveFull.
+    let full = h[1].clone();
+    let _ = s.move_card(&full, PlayerId::A, Zone::Hand, Zone::Board);
+    for child in d.iter().take(3) {
+        let _ = s.move_card(child, PlayerId::A, Zone::Deck, Zone::Exile);
+        s.add_same_sleeve(&full, child);
+    }
+    // The cast is a free Mutation.
+    let cast = h[2].clone();
+    {
+        let entry = s.card_pool.get_mut(&cast).unwrap();
+        entry.card_mut().kind = CardType::Mutation;
+        entry.card_mut().stats = None;
+    }
+    set_cost(&mut s, &cast, vec![]);
+
+    let eligible = s.eligible_mutation_targets(&cast);
+    assert!(eligible.contains(&target), "an empty-sleeve creature must be offered");
+    assert!(!eligible.contains(&full), "a full sleeve (Z.7) must not be offered");
+    for t in &eligible {
+        let mut clone = s.clone();
+        let r = clone.play_card(
+            PlayerId::A,
+            &cast,
+            PlayChoices {
+                mutation_target: Some(t.clone()),
+                ..PlayChoices::default()
+            },
+            None,
+        );
+        assert!(
+            !matches!(
+                r,
+                Err(PlayError::MutationTargetInvalid(_)) | Err(PlayError::SleeveFull(_))
+            ),
+            "offered mutation target {t} refused per-item by play_card: {r:?}"
+        );
+    }
+    // The withheld full sleeve is indeed what play_card refuses.
+    let mut clone = s.clone();
+    let r = clone.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            mutation_target: Some(full.clone()),
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(r, Err(PlayError::SleeveFull(full)));
+}

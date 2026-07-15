@@ -588,43 +588,23 @@ impl GameState {
 
         let mut seen: BTreeSet<&InstanceId> = BTreeSet::new();
         for hid in &choices.hand_payment_ids {
+            // Duplicate detection is a set-level rule and stays here; the
+            // per-item legality (not-self, in-hand, P.24, P.7a-with-P.12b-
+            // and-Z.8c-exemptions) is the single shared predicate the
+            // eligibility helpers filter on, so the picker can never offer
+            // a payment this loop refuses.
             if !seen.insert(hid) {
                 return Err(PlayError::DuplicateHandPayment(hid.clone()));
             }
-            if hid == instance {
-                return Err(PlayError::HandPaymentInvalid(hid.clone()));
+            if let Some(e) = self.hand_payment_item_error(
+                instance,
+                hid,
+                player,
+                gy_supplies_color_anchor,
+                true,
+            ) {
+                return Err(e);
             }
-            if !self.player(player).hand.contains(hid) {
-                return Err(PlayError::HandPaymentInvalid(hid.clone()));
-            }
-            // P.24/Phase 3: a static restriction can make a card unpayable
-            // as a HAND cost (flesh-eating-plant on opponent insects).
-            if self.has_restriction(hid, crate::card::Restriction::CannotBeCostPaid) {
-                return Err(PlayError::HandPaymentForbidden(hid.clone()));
-            }
-            // Identity match: discard must share ≥1 color OR the
-            // (non-empty) symbol with the casting card. Colorless +
-            // no-symbol CASTS are wildcards (take any discard);
-            // colorless + no-symbol discards are NOT — they must
-            // still find identity overlap, which empty sets can't,
-            // so they can't pay for any identified card.
-            //
-            // P.12b: when a color-matching GRAVEYARD pitch was supplied
-            // for the same cast, P.7a is suspended — the anchor pitch
-            // supplies the thematic alignment for the whole bundle.
-            // Z.8c: a cardless sleeve is a generic body — exempt from the
-            // per-card P.7a match. An all-cardless payment can't anchor
-            // identity and is caught by the coverage gate above.
-            let cast_ident = self.card_identity(instance);
-            if !cast_ident.is_empty() && !gy_supplies_color_anchor && !self.is_cardless(hid) {
-                let pay_ident = self.card_identity(hid);
-                if cast_ident.is_disjoint(&pay_ident) {
-                    return Err(PlayError::HandPaymentIdentityMismatch(hid.clone()));
-                }
-            }
-            // C.14 lifted: a transparent HAND payment may attach to any
-            // host, including a non-transparent BOARD-placed cast. Frame
-            // no longer gates attachment (P.6).
         }
 
         // Z.8c: only card-bearing sleeves can be milled, so affordability
@@ -675,35 +655,15 @@ impl GameState {
         // on either BOARD to attach to. Any creature qualifies — except
         // ones with a `CannotBeAttachedTo` restriction (glass-insect cycle).
         if matches!(card_kind, CardType::Mutation) {
+            // Target presence is set-level (the choice must exist); the
+            // per-item legality (on-board creature, not CannotBeAttachedTo,
+            // sleeve not full) is the shared predicate the picker's
+            // eligible_mutation_targets filters on.
             let Some(target) = &choices.mutation_target else {
                 return Err(PlayError::MutationTargetMissing);
             };
-            let on_a = self.a.board.contains(target);
-            let on_b = self.b.board.contains(target);
-            let is_creature = self
-                .card_pool
-                .get(target)
-                .map(|i| i.card().kind == CardType::Creature)
-                .unwrap_or(false);
-            if !(on_a || on_b) || !is_creature {
-                return Err(PlayError::MutationTargetInvalid(target.clone()));
-            }
-            if self.has_restriction(target, crate::card::Restriction::CannotBeAttachedTo) {
-                return Err(PlayError::MutationTargetInvalid(target.clone()));
-            }
-            // C.14 lifted: a transparent mutation may attach to any
-            // creature target, transparent or not. Frame no longer gates
-            // same-sleeve fusion (P.26 / Z.7).
-            // Z.7: a sleeve holds at most 4 cards — the host plus up to 3
-            // same-sleeve mutations. Refuse a mutation that would be the 4th
-            // fused card.
-            let fused = self
-                .card_pool
-                .get(target)
-                .map(|i| i.same_sleeve.len())
-                .unwrap_or(0);
-            if fused >= 3 {
-                return Err(PlayError::SleeveFull(target.clone()));
+            if let Some(e) = self.mutation_target_item_error(target) {
+                return Err(e);
             }
         }
 
@@ -762,26 +722,15 @@ impl GameState {
         }
         let mut att_seen: BTreeSet<&InstanceId> = BTreeSet::new();
         for aid in &choices.attached_payment_ids {
+            // Duplicate detection stays here (set-level); host-on-your-
+            // BOARD legality is the shared predicate eligible_attached_
+            // payments filters on. (C.14 lifted: frame no longer gates it.)
             if !att_seen.insert(aid) {
                 return Err(PlayError::DuplicateAttachedPayment(aid.clone()));
             }
-            let host = self.host_of(aid);
-            let valid = match host {
-                Some(h) => {
-                    self.player(player).board.contains(&h)
-                        && self
-                            .card_pool
-                            .get(&h)
-                            .map(|i| i.controller == player)
-                            .unwrap_or(false)
-                }
-                None => false,
-            };
-            if !valid {
-                return Err(PlayError::AttachedPaymentInvalid(aid.clone()));
+            if let Some(e) = self.attached_payment_item_error(aid, player) {
+                return Err(e);
             }
-            // C.14 lifted: an ATTACHED-source payment (P.31) may re-attach
-            // to any BOARD-placed cast regardless of frame.
         }
 
         // All checks pass — apply mutations through journaled helpers.
