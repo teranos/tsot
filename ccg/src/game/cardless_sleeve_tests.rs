@@ -265,3 +265,30 @@ fn z8_can_pay_identity_hand_needs_a_real_anchor_not_just_cardless() {
         "identity hand:1 not affordable with only cardless (no anchor)"
     );
 }
+
+// ---- 9.1: search library for cardless sleeves ----
+
+#[test]
+fn attach_cardless_from_deck_finds_scattered_cardless_and_attaches_n() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let host = s.a.hand[0].clone();
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+    // Three cardless sleeves scattered through the deck.
+    let c1 = s.a.deck[2].clone();
+    let c2 = s.a.deck[10].clone();
+    let c3 = s.a.deck[20].clone();
+    for c in [&c1, &c2, &c3] {
+        make_cardless(&mut s, c);
+    }
+
+    let n = s.attach_cardless_from_deck(&host, PlayerId::A, 2);
+
+    assert_eq!(n, 2, "attaches up to 2 cardless sleeves");
+    let attached = &s.card_pool.get(&host).unwrap().attached;
+    assert!(attached.contains(&c1) && attached.contains(&c2), "first two (deck order) attached");
+    assert!(!attached.contains(&c3), "the third is left in the deck");
+    assert!(!s.a.deck.contains(&c1) && !s.a.deck.contains(&c2), "attached ones left the deck");
+    assert!(s.a.deck.contains(&c3), "the third stays in the deck");
+    // Only cardless sleeves are taken — no real card is attached.
+    assert!(attached.iter().all(|iid| s.is_cardless(iid)), "only cardless sleeves attached");
+}

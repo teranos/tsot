@@ -1185,6 +1185,35 @@ impl GameState {
         true
     }
 
+    /// Z.8 / Window Cleaner: search `player`'s DECK for up to `n` cardless
+    /// sleeves and attach each to `host` (Z.6), face-down. Deck order, so
+    /// deterministic. All moves go through journaled helpers. Returns how
+    /// many were attached.
+    pub fn attach_cardless_from_deck(
+        &mut self,
+        host: &InstanceId,
+        player: PlayerId,
+        n: usize,
+    ) -> usize {
+        if !self.card_pool.contains_key(host) {
+            return 0;
+        }
+        let found: Vec<InstanceId> = self
+            .player(player)
+            .deck
+            .clone()
+            .into_iter()
+            .filter(|iid| self.is_cardless(iid))
+            .take(n)
+            .collect();
+        for iid in &found {
+            let _ = self.remove_from_zone(iid, player, Zone::Deck);
+            self.add_attached(host, iid);
+            self.set_face_down(iid, true);
+        }
+        found.len()
+    }
+
     /// Engine helper: credit a `game.*` action invocation to the affected player.
     pub fn bump_action(&mut self, action: &str, who: PlayerId) {
         let entry = self

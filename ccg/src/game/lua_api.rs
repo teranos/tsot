@@ -1092,6 +1092,22 @@ macro_rules! build_game_table {
             )?,
         )?;
 
+        // game.attach_cardless_from_deck(host, player, n) — search
+        // `player`'s DECK for up to n cardless sleeves (Z.8) and attach
+        // each to `host` face-down (Z.6). Window Cleaner's ETB search.
+        let cell_acd = &$cell;
+        game.set(
+            "attach_cardless_from_deck",
+            $scope.create_function_mut(
+                move |_, (host, player, n): (String, String, i32)| -> Result<()> {
+                    let pid = parse_pid(&player)?;
+                    let mut s = cell_acd.borrow_mut();
+                    s.attach_cardless_from_deck(&host, pid, n.max(0) as usize);
+                    Ok(())
+                },
+            )?,
+        )?;
+
         // game.attach(host, iid) — take `iid` from whatever zone it's
         // currently in (BOARD search across both players' boards) and
         // attach it to `host`, face-down per P.17. Used by predator
