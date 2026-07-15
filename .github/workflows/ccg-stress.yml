@@ -1,0 +1,46 @@
+# ccg weekly engine soak.
+#
+# Runs the `#[ignore]`d `stress_soak_*` test (src/sim/stress_tests.rs)
+# with `--ignored` and a raised game count. It plays thousands of full
+# games on random pool decks under `AiKind::Stress` on both seats and
+# asserts the engine never hangs, never panics, and every game
+# terminates with a winner. A stuck game surfaces as a failed assertion
+# naming the `game_seed`, which reproduces it exactly via
+# `run_game(state, &mut StdRng::seed_from_u64(seed), .., seed)`.
+#
+# Not on the PR path — this is the deliberate weekly soak. Trigger it
+# on demand from the Actions tab (workflow_dispatch), optionally with a
+# custom game count.
+
+name: ccg-stress
+
+on:
+  schedule:
+    # 06:00 UTC every Monday.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      games:
+        description: 'Games to play in the soak (TSOT_STRESS_GAMES)'
+        required: false
+        default: '3000'
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ccg
+
+      - name: Stress soak
+        working-directory: ccg
+        env:
+          TSOT_STRESS_GAMES: ${{ github.event.inputs.games || '3000' }}
+        run: cargo test --release --lib stress_soak -- --ignored --nocapture

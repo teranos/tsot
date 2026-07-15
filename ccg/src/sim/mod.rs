@@ -28,6 +28,8 @@ pub mod run;
 pub mod snapshot;
 pub mod stats;
 pub mod step;
+#[cfg(test)]
+mod stress_tests;
 pub mod uct;
 pub mod variants;
 
