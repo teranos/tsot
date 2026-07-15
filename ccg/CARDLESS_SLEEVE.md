@@ -58,9 +58,14 @@
     (cardless-aware cards pick an empty sleeve out of `self.attached`).
     Tests in `game/window_cleaner_tests.rs` (ETB, tap-confirmed,
     tap-declined). Clears (`clear-azure`) and azure symbols already exist.
-  - **9.4 — test deck end-to-end** (user's target): a deck of Window
-    Cleaners, clears, an azure symbol, and cardless sleeves plays a full
-    game.
+  - **9.4 — DONE (user's target).** Not a hand-authored fixture: the
+    shipped blue starter deck, copied, with a slice of its `clear-blue`
+    swapped for the azure cardless stack (4 Window Cleaners, 4
+    `clear-azure`, 4 loose cardless sleeves) and its blue ix symbols
+    swapped for azure. The real cards in a real deck play a full game to
+    a winner with rollback + determinism holding. Tests in `sim/run.rs`
+    (`full_game_on_a_window_cleaner_deck_runs_and_rolls_back` +
+    `..._is_deterministic`). Slice 9 complete.
 - **Slice 10 (later) — Shatter Expectations** (see backlog). Needs
   counter-with-alternative-cost + composition-derived X + multi-zone exile.
 

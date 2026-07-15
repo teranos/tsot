@@ -2430,4 +2430,146 @@ mod tests {
         assert_eq!(format!("{stats1:?}"), format!("{stats2:?}"));
         assert_eq!(format!("{j1:?}"), format!("{j2:?}"), "journals diverged");
     }
+
+    /// Slice 9.4 — the end-to-end test deck.
+    ///
+    /// Not a hand-authored fixture: take the shipped blue starter deck,
+    /// copy it, and swap a slice of its clears for the azure cardless
+    /// stack — Window Cleaners, `clear-azure`, an azure symbol — plus a
+    /// few loose cardless sleeves for Window Cleaner's ETB to find. The
+    /// real cards, in a real deck, must play a full game to a winner
+    /// with the rollback + determinism invariants still holding.
+    fn window_cleaner_deck(registry: &CardRegistry) -> Vec<crate::game::DeckUnit> {
+        use crate::game::DeckUnit;
+        use crate::replay::CARDLESS_SLEEVE_ID;
+
+        fn replace_first_n(ids: &mut [String], from: &str, to: &str, n: usize) {
+            let mut done = 0;
+            for id in ids.iter_mut() {
+                if done >= n {
+                    break;
+                }
+                if id == from {
+                    *id = to.to_string();
+                    done += 1;
+                }
+            }
+        }
+
+        let lookup = |id: &str| -> crate::card::Card {
+            registry
+                .cards()
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap_or_else(|| panic!("card {id} missing from registry"))
+                .clone()
+        };
+
+        // Copy the shipped blue starter, then convert its 12 `clear-blue`
+        // slots into the azure cardless stack: 4 Window Cleaners, 4
+        // `clear-azure`, 4 loose cardless sleeves. Swap the blue ix
+        // symbols for azure ones so the deck can pay an azure identity.
+        let mut ids: Vec<String> = crate::sim::deck_presets::STARTER_DECK_IDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        replace_first_n(&mut ids, "clear-blue", "window-cleaner", 4);
+        replace_first_n(&mut ids, "clear-blue", "clear-azure", 4);
+        replace_first_n(&mut ids, "clear-blue", CARDLESS_SLEEVE_ID, 4);
+        replace_first_n(&mut ids, "blue-ix-symbol", "azure-ix-symbol", 2);
+
+        ids.iter()
+            .map(|id| {
+                if id == CARDLESS_SLEEVE_ID {
+                    DeckUnit::Cardless
+                } else {
+                    DeckUnit::Card(lookup(id))
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn full_game_on_a_window_cleaner_deck_runs_and_rolls_back() {
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+
+        let mut state = GameState::from_units(
+            window_cleaner_deck(&registry),
+            window_cleaner_deck(&registry),
+        );
+
+        // Build sanity: the copied-and-swapped deck really carries the
+        // cardless stack, not just the blue starter.
+        let has_window_cleaner = state
+            .card_pool
+            .values()
+            .any(|s| !s.is_cardless() && s.card().id == "window-cleaner");
+        let cardless = state.card_pool.values().filter(|s| s.is_cardless()).count();
+        assert!(has_window_cleaner, "deck must contain Window Cleaners");
+        assert!(cardless > 0, "deck must contain loose cardless sleeves");
+
+        let initial = state.clone();
+        state.replay_journal = Some(crate::game::Journal::new());
+        let mut rng = StdRng::seed_from_u64(0x9A4_5EED);
+        let mut log: Vec<String> = Vec::new();
+        let ais = [super::super::AiKind::Fast, super::super::AiKind::Fast];
+        let stats =
+            run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0x9A4_5EED);
+
+        assert!(state.winner.is_some(), "the deck should play to a winner");
+        assert!(stats.turns > 0, "the game should take turns");
+
+        let journal = state.replay_journal.take().expect("replay_journal open");
+        assert!(!journal.is_empty(), "a full game produces journal entries");
+        journal.rollback(&mut state);
+
+        assert_eq!(
+            format!("{:?}", initial.a),
+            format!("{:?}", state.a),
+            "A zones not rolled back after a Window Cleaner game"
+        );
+        assert_eq!(
+            format!("{:?}", initial.b),
+            format!("{:?}", state.b),
+            "B zones not rolled back after a Window Cleaner game"
+        );
+        for (iid, post) in &state.card_pool {
+            let init = initial
+                .card_pool
+                .get(iid)
+                .unwrap_or_else(|| panic!("instance {iid} appeared post-rollback"));
+            assert_eq!(
+                format!("{:?}", init.attached),
+                format!("{:?}", post.attached),
+                "{iid}.attached not rolled back"
+            );
+            assert_eq!(init.is_cardless(), post.is_cardless(), "{iid} cardless-ness changed");
+        }
+    }
+
+    #[test]
+    fn full_game_on_a_window_cleaner_deck_is_deterministic() {
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+
+        let s1 = GameState::from_units(
+            window_cleaner_deck(&registry),
+            window_cleaner_deck(&registry),
+        );
+        let s2 = GameState::from_units(
+            window_cleaner_deck(&registry),
+            window_cleaner_deck(&registry),
+        );
+        let mut rng1 = StdRng::seed_from_u64(0x9A4_C0FFEE);
+        let mut rng2 = StdRng::seed_from_u64(0x9A4_C0FFEE);
+        let mut log1: Vec<String> = Vec::new();
+        let mut log2: Vec<String> = Vec::new();
+        let (stats1, j1) = run_game(s1, &mut rng1, &mut log1, &registry, 0x9A4_C0FFEE);
+        let (stats2, j2) = run_game(s2, &mut rng2, &mut log2, &registry, 0x9A4_C0FFEE);
+
+        assert_eq!(log1, log2, "logs diverged on the Window Cleaner deck");
+        assert_eq!(format!("{stats1:?}"), format!("{stats2:?}"), "stats diverged");
+        assert_eq!(format!("{j1:?}"), format!("{j2:?}"), "journals diverged");
+    }
 }
