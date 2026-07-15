@@ -51,9 +51,13 @@
     combat declare_attacker (gated !vigilant). External taps deferred
     (firing inside a Lua borrow needs a deferred-event queue). No-op for
     cards with no `on_tapped` handler.
-  - **9.3 — cards.** Window Cleaner (ETB attach 2 cardless; `on_tapped` →
-    may move an attached cardless to GY + draw), clears (transparent), an
-    azure symbol.
+  - **9.3 — DONE.** `cards/window-cleaner.lua` — azure human, `2 attach`,
+    2/3 reach, transparent holes T/TR/UR/R/C. ETB attaches 2 cardless
+    (via `attach_cardless_from_deck`); `on_tapped` *may* move an attached
+    cardless to GY + draw. Added the `game.is_cardless(iid)` Lua primitive
+    (cardless-aware cards pick an empty sleeve out of `self.attached`).
+    Tests in `game/window_cleaner_tests.rs` (ETB, tap-confirmed,
+    tap-declined). Clears (`clear-azure`) and azure symbols already exist.
   - **9.4 — test deck end-to-end** (user's target): a deck of Window
     Cleaners, clears, an azure symbol, and cardless sleeves plays a full
     game.

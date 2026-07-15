@@ -1055,6 +1055,19 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.is_cardless(iid) → bool. True when the sleeve holds no
+        // card (Z.8). Lets a cardless-aware card (Window Cleaner) pick
+        // an empty sleeve out of its own attached list. Unknown iid →
+        // false (a missing sleeve is not "an empty sleeve").
+        let cell_ic = &$cell;
+        game.set(
+            "is_cardless",
+            $scope.create_function_mut(move |_, iid: String| -> Result<bool> {
+                let s = cell_ic.borrow();
+                Ok(s.is_cardless(&iid))
+            })?,
+        )?;
+
         // game.attach_from_deck(host, player, n) — take top n cards of
         // `player`'s DECK and attach each to `host` face-down (P.17).
         // Respects C.14 — a transparent card is skipped if `host`
