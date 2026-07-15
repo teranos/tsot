@@ -87,6 +87,34 @@
   transparent + opaque colored-back sleeves that carry color and can satisfy
   color costs). Beyond cardless; touches Z.8e visibility.
 - **Enforcing S.4 legality** — only if/when a deck-legality check exists.
+- **Deferred-event queue** (slice 11 candidate) — a queue for events that
+  can't fire synchronously because they'd re-enter a Lua borrow. Unblocks:
+  OnTapped on *external* taps (`game.set_tapped`, not just attack); the
+  delayed-trigger registry (LIMITATIONS); and Shatter's counter-may prompt.
+  The single most-enabling piece of remaining engine work.
+
+## Queued tasks
+
+- **Empty sleeve in every starter deck** (user request). Real change, not a
+  one-liner: the runtime deck path (`to_deck → Vec<Card> → shuffle_deck →
+  GameState::new`) is `Vec<Card>` throughout; adding a cardless unit means
+  threading `DeckUnit` through it (the sentinel → `Cardless`, shuffle over
+  units, build via `from_units`) and adding the sentinel to the two starter
+  id lists. Same shape as 8.1 but for the live start pipeline.
+- **EA drafts cardless sleeves?** — currently NO (the EA pool is
+  `Vec<Card>`; genome/deckbuilder never emit cardless). Open design call.
+
+## Known issues
+
+- **`diversity_alpha_widens_final_population_diversity` — flaky under load,
+  not a real bug.** The sim's wall-clock watchdogs (`run.rs`,
+  `TSOT_GAME_TIMEOUT_SECS`, `watchdog_pattern_b_walltime`) assign a winner by
+  *elapsed time*, so under heavy parallel CPU load some games trip the
+  timeout → outcomes shift → this EA-diversity comparison flips. Deterministic
+  in isolation; flaky under `--tests`. Reproduce by lowering
+  `TSOT_GAME_TIMEOUT_SECS` or running under load. Not reproducible as a single
+  game (it's an aggregate metric, and the non-determinism is wall-clock, not
+  seed). Real fix would be a count-based (not wall-clock) watchdog.
 
 ## Card backlog
 
@@ -98,6 +126,17 @@
   a card. **No inherent tap ability** — tapped by an attack or another effect.
 - Loop: the 2 attached cardless sleeves are attach-cost fuel for the next
   Window Cleaner.
+
+### Angry Glassblower (red creature)
+- 3/4. Cost: 2 HAND + 1 GY.
+- On attack: *may* attach an empty sleeve to it and draw a card.
+- On dealing damage to an opponent: *may* exile an attached card from it; if
+  it was an empty sleeve, draw a card and discard a card.
+- Uses existing events (OnAttack, OnDealtDamageToPlayer) — no OnTapped
+  needed. Writable now given the search/attach + exile-attached primitives.
+- Open: does "attach an empty sleeve" search the library (like Window
+  Cleaner) or create one from nothing? (No create-from-nothing primitive
+  exists yet.)
 
 ### Shatter Expectations (instant, colourless)
 - Entire top and bottom rows: transparent slots.
