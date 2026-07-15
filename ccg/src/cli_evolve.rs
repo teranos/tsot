@@ -64,8 +64,8 @@ pub struct EvolveArgs {
     /// AI used by **both** seats of every fitness mirror — candidate
     /// and opponent. `uct` (default) makes fitness measure "this deck
     /// played by UCT vs gauntlet decks played by UCT," which is the
-    /// signal the EA actually wants. `heuristic` is faster but the
-    /// score becomes "does this deck win when both players are dumb"
+    /// signal the EA actually wants. `game` (alias: `heuristic`) is
+    /// faster but the score becomes "does this deck win when both dumb"
     /// — useful for smoke tests, not for steering evolution. `mcts`
     /// is similar to `uct` with a different search shape. (Flag
     /// retains its historical `opponent-ai` name; both seats now
@@ -186,7 +186,7 @@ pub fn run_ea(
     args: &EvolveArgs,
 ) -> mlua::Result<()> {
     let opponent_ai = match args.opponent_ai.to_ascii_lowercase().as_str() {
-        "heuristic" => tsot::sim::AiKind::Game,
+        "game" | "heuristic" => tsot::sim::AiKind::Game,
         "mcts" => tsot::sim::AiKind::Mcts(tsot::sim::mcts::MctsConfig {
             rollouts_per_candidate: args.opponent_mcts_rollouts,
             max_candidates: args.opponent_mcts_max_candidates,

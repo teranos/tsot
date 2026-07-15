@@ -298,7 +298,10 @@ pub(crate) fn tsot_run_auto_game_impl(args_json: &str) -> Result<String, String>
 
     fn parse_auto_ai(name: &str, seed: u64) -> Result<AiKind, String> {
         Ok(match name {
-            "heuristic" => AiKind::Game,
+            // "game" is canonical; "heuristic" is a back-compat alias the
+            // Elm dropdown still sends (assets/src/Main.elm) — drop it once
+            // the Elm branch renames its option value to "game".
+            "game" | "heuristic" => AiKind::Game,
             "mcts" => AiKind::Mcts(crate::sim::mcts::MctsConfig {
                 base_seed: seed,
                 ..Default::default()
@@ -485,7 +488,7 @@ pub(crate) fn tsot_load_game_impl(args_json: &str) -> Result<String, String> {
         .map_err(|e| format!("load_game[rebind handlers]: {e}"))?;
 
     let opp = match args.opp_ai.as_str() {
-        "heuristic" => AiKind::Game,
+        "game" | "heuristic" => AiKind::Game,
         "mcts" => AiKind::Mcts(crate::sim::mcts::MctsConfig {
             base_seed: args.seed.wrapping_add(0xCAFE_BABE),
             ..Default::default()
@@ -683,7 +686,7 @@ fn build_engine(args: &StartGameArgs) -> Result<StepEngine, String> {
     let iface = Arc::new(iface);
 
     let opp = match args.opp_ai.as_str() {
-        "heuristic" => AiKind::Game,
+        "game" | "heuristic" => AiKind::Game,
         "mcts" => AiKind::Mcts(crate::sim::mcts::MctsConfig {
             base_seed: args.seed.wrapping_add(0xCAFE_BABE),
             ..Default::default()

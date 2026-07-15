@@ -125,14 +125,14 @@ pub fn run_curate_baselines(
     let mut rng = StdRng::seed_from_u64(args.seed);
 
     let ai_kind = match args.opponent_ai.to_ascii_lowercase().as_str() {
-        "heuristic" => tsot::sim::AiKind::Game,
+        "game" | "heuristic" => tsot::sim::AiKind::Game,
         "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
             exploration_c: args.opponent_uct_c,
             ..Default::default()
         }),
         other => {
-            eprintln!("error: --opponent-ai must be 'heuristic' | 'uct', got {other:?}");
+            eprintln!("error: --opponent-ai must be 'game' | 'uct' ('heuristic' accepted as legacy alias), got {other:?}");
             std::process::exit(2);
         }
     };

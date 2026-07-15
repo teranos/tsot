@@ -93,7 +93,7 @@ pub struct BalanceProbeArgs {
     pub json_prefix: String,
     /// Opponent AI for fitness evaluation. Default `uct` (UCB1
     /// tree-search MCTS — stronger play, the variant deltas mean
-    /// more). `heuristic` is the legacy fast option. Candidate side
+    /// more). `game` is the fast baseline (alias: `heuristic`). Candidate side
     /// stays Heuristic regardless. Mirrors `tsot evolve`'s flag.
     #[arg(long = "opponent-ai", default_value = "uct")]
     pub opponent_ai: String,
@@ -202,14 +202,14 @@ fn probe_one_card(
     card: &Card,
 ) -> ProbeResult {
     let opponent_ai = match args.opponent_ai.to_ascii_lowercase().as_str() {
-        "heuristic" => tsot::sim::AiKind::Game,
+        "game" | "heuristic" => tsot::sim::AiKind::Game,
         "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
             exploration_c: args.opponent_uct_c,
             ..Default::default()
         }),
         other => {
-            eprintln!("error: --opponent-ai must be 'heuristic' | 'uct', got {other:?}");
+            eprintln!("error: --opponent-ai must be 'game' | 'uct' ('heuristic' accepted as legacy alias), got {other:?}");
             std::process::exit(2);
         }
     };
