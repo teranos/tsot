@@ -114,7 +114,7 @@ impl Default for MctsConfig {
 ///
 /// The rollout policy is the existing heuristic AI — no recursive
 /// MCTS. Each rollout opens a fresh journal, applies the candidate,
-/// runs `run_game_continue` to completion with `AiKind::Heuristic`,
+/// runs `run_game_continue` to completion with `AiKind::Game`,
 /// scores the result, then rolls the journal back. After all rollouts
 /// the state is byte-identical to the input.
 pub fn pick_play(
@@ -336,7 +336,7 @@ fn simulate_rollout(
         let ais = if budget > 0 {
             [AiKind::Mcts(cfg.clone()), AiKind::Mcts(cfg.clone())]
         } else {
-            [AiKind::Heuristic, AiKind::Heuristic]
+            [AiKind::Game, AiKind::Game]
         };
         // S12: state-swap MCTS rollout finish into a StepEngine.
         // Swap state out of the caller's `&mut`, hand it to the

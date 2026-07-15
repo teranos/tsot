@@ -202,7 +202,7 @@ fn probe_one_card(
     card: &Card,
 ) -> ProbeResult {
     let opponent_ai = match args.opponent_ai.to_ascii_lowercase().as_str() {
-        "heuristic" => tsot::sim::AiKind::Heuristic,
+        "heuristic" => tsot::sim::AiKind::Game,
         "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
             exploration_c: args.opponent_uct_c,

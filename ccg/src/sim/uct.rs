@@ -486,7 +486,7 @@ pub fn pick_play_uct(
         //    back to heuristic for the rest of the game.
         UCT_PLAN.with(|p| *p.borrow_mut() = path.clone());
         UCT_PLAN_IDX.with(|i| *i.borrow_mut() = 0);
-        let ais = [AiKind::Heuristic, AiKind::Heuristic];
+        let ais = [AiKind::Game, AiKind::Game];
         // S12: state-swap UCT rollout finish into a StepEngine. Same
         // pattern as the MCTS rollout — swap, run, swap back. The
         // per-iteration journal travels with the state.

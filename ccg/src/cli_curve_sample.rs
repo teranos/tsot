@@ -123,7 +123,7 @@ pub fn run_curve_sample(
     let mut total_plays: u64 = 0;
 
     let ai_kind = match args.opponent_ai.to_ascii_lowercase().as_str() {
-        "heuristic" => tsot::sim::AiKind::Heuristic,
+        "heuristic" => tsot::sim::AiKind::Game,
         "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
             exploration_c: args.opponent_uct_c,

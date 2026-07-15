@@ -43,7 +43,7 @@ impl StepEngine {
         }
         let active = self.state.active_player;
         let attackers = match &self.ais[active.index()] {
-            AiKind::Heuristic | AiKind::Mcts(_) | AiKind::Uct(_) => {
+            AiKind::Game | AiKind::Fast | AiKind::Stress | AiKind::Mcts(_) | AiKind::Uct(_) => {
                 select_attackers(&self.state, active)
             }
             AiKind::Human(_) => match pending {
@@ -156,7 +156,7 @@ impl StepEngine {
         let active = self.state.active_player;
         let defender = active.opponent();
         let assignments = match &self.ais[defender.index()] {
-            AiKind::Heuristic | AiKind::Mcts(_) | AiKind::Uct(_) => {
+            AiKind::Game | AiKind::Fast | AiKind::Stress | AiKind::Mcts(_) | AiKind::Uct(_) => {
                 pick_blocks(&self.state, defender)
             }
             AiKind::Human(_) => match pending {

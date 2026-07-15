@@ -58,7 +58,7 @@ pub fn run_game(
     registry: &std::sync::Arc<CardRegistry>,
     game_seed: u64,
 ) -> (GameStats, crate::game::Journal) {
-    let ais = [super::AiKind::Heuristic, super::AiKind::Heuristic];
+    let ais = [super::AiKind::Game, super::AiKind::Game];
     run_game_with_ai(state, rng, log, registry, &ais, game_seed)
 }
 
@@ -996,13 +996,13 @@ pub fn run_game_continue(
             ));
             let pick_t0 = Instant::now();
             let pick = match &ais[active.index()] {
-                super::AiKind::Heuristic => {
-                    // UCT iteration mode: while a search is running,
-                    // pick_play calls (on either side) consume planned
-                    // actions from the UCT plan first. When the plan
-                    // runs out, fall back to the random-weighted
-                    // heuristic picker. The UCT search ALWAYS uses
-                    // `AiKind::Heuristic` for its rollouts (the
+                super::AiKind::Game | super::AiKind::Fast | super::AiKind::Stress => {
+                    // The shared no-search policy. UCT iteration mode:
+                    // while a search is running, pick_play calls (on
+                    // either side) consume planned actions from the UCT
+                    // plan first. When the plan runs out, fall back to
+                    // the random-weighted heuristic picker. The UCT
+                    // search ALWAYS rolls out with `AiKind::Game` (the
                     // override is the steering wheel).
                     if let Some(planned) = super::uct::take_planned_action() {
                         Some(planned)
@@ -1298,9 +1298,11 @@ pub fn run_game_continue(
 
         let defender = active.opponent();
         let attackers: Vec<InstanceId> = match &ais[active.index()] {
-            super::AiKind::Heuristic | super::AiKind::Mcts(_) | super::AiKind::Uct(_) => {
-                select_attackers(state, active)
-            }
+            super::AiKind::Game
+            | super::AiKind::Fast
+            | super::AiKind::Stress
+            | super::AiKind::Mcts(_)
+            | super::AiKind::Uct(_) => select_attackers(state, active),
             super::AiKind::Human(iface) => {
                 let eligible = super::ai::eligible_attackers(state, active);
                 iface.pick_attackers(state, active, eligible)
@@ -1319,9 +1321,11 @@ pub fn run_game_continue(
         if declared_atk_count > 0 {
             state.confirm_attacks().unwrap();
             let assignments = match &ais[defender.index()] {
-                super::AiKind::Heuristic | super::AiKind::Mcts(_) | super::AiKind::Uct(_) => {
-                    pick_blocks(state, defender)
-                }
+                super::AiKind::Game
+                | super::AiKind::Fast
+                | super::AiKind::Stress
+                | super::AiKind::Mcts(_)
+                | super::AiKind::Uct(_) => pick_blocks(state, defender),
                 super::AiKind::Human(iface) => {
                     use crate::game::CombatState;
                     let declared: Vec<InstanceId> = match &state.combat {
@@ -1814,6 +1818,35 @@ mod tests {
         (0..50).map(|_| template.clone()).collect()
     }
 
+    /// `Game` / `Fast` / `Stress` are three intent-named views of one
+    /// shared no-search picker — the split is metadata, not behaviour.
+    /// Same seed + same decks must produce a byte-identical game across
+    /// all three, or "behaviour-preserving" is a lie and a call site
+    /// silently got a different opponent.
+    #[test]
+    fn game_fast_stress_are_behaviourally_identical() {
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+        let deck = vanilla_deck(&registry);
+        let seed: u64 = 0x1DEA_5EED_0000_0007;
+
+        let run = |kind: super::super::AiKind| {
+            let mut state = GameState::new(deck.clone(), deck.clone());
+            state.replay_journal = Some(crate::game::Journal::new());
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut log: Vec<String> = Vec::new();
+            let ais = [kind.clone(), kind];
+            let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, seed);
+            (format!("{:?}", stats.winner), stats.turns, log)
+        };
+
+        let g = run(super::super::AiKind::Game);
+        let f = run(super::super::AiKind::Fast);
+        let s = run(super::super::AiKind::Stress);
+        assert_eq!(g, f, "Game and Fast diverged — the split is not behaviour-preserving");
+        assert_eq!(g, s, "Game and Stress diverged — the split is not behaviour-preserving");
+    }
+
     /// The [GAME TIMEOUT] dump can only reproduce a hung game if the
     /// game's seed is faithfully surfaced. Guard: the seed `run_game`
     /// records must be the seed that actually drove the game — reseeding
@@ -2178,7 +2211,7 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(0xC0FFEE);
         let mut log: Vec<String> = Vec::new();
-        let ais = [super::super::AiKind::Heuristic, super::super::AiKind::Heuristic];
+        let ais = [super::super::AiKind::Fast, super::super::AiKind::Fast];
         let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0xC0FFEE);
 
         assert!(state.winner.is_some(), "game should have a winner");
@@ -2314,7 +2347,7 @@ mod tests {
         state.replay_journal = Some(crate::game::Journal::new());
         let mut rng = StdRng::seed_from_u64(0x5133_1E55);
         let mut log: Vec<String> = Vec::new();
-        let ais = [super::super::AiKind::Heuristic, super::super::AiKind::Heuristic];
+        let ais = [super::super::AiKind::Fast, super::super::AiKind::Fast];
         let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0x5133_1E55);
 
         assert!(state.winner.is_some(), "game should have a winner");

@@ -106,7 +106,7 @@ impl Default for EvolveConfig {
             pinned_card_id: None,
             pinned_count: 0,
             diversity_alpha: 0.0,
-            opponent_ai: super::AiKind::Heuristic,
+            opponent_ai: super::AiKind::Game,
         }
     }
 }
@@ -414,7 +414,7 @@ mod tests {
             pinned_card_id: None,
             pinned_count: 0,
             diversity_alpha: 0.0,
-            opponent_ai: super::super::AiKind::Heuristic,
+            opponent_ai: super::super::AiKind::Fast,
         }
     }
 

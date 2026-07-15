@@ -269,8 +269,8 @@ mod tests {
         // Tiny genome built from the gauntlet's first deck — guaranteed
         // to be in the registry, no GenomeError on to_deck.
         let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
-        let f_1 = fitness(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Heuristic).unwrap();
-        let f_2 = fitness(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Heuristic).unwrap();
+        let f_1 = fitness(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Fast).unwrap();
+        let f_2 = fitness(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Fast).unwrap();
         assert_eq!(f_1, f_2, "fitness diverged across identical calls");
     }
 
@@ -280,7 +280,7 @@ mod tests {
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
-        let f = fitness(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Heuristic).unwrap();
+        let f = fitness(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Fast).unwrap();
         assert!((0.0..=1.0).contains(&f), "fitness {f} out of [0, 1]");
     }
 
@@ -290,7 +290,7 @@ mod tests {
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let bogus = vec!["nonexistent-card-id".to_string()];
-        let err = fitness(&reg, &bogus, &gauntlet, 1, 0xC0DE, &AiKind::Heuristic).unwrap_err();
+        let err = fitness(&reg, &bogus, &gauntlet, 1, 0xC0DE, &AiKind::Fast).unwrap_err();
         assert_eq!(err, GenomeError::UnknownCardId("nonexistent-card-id".into()));
     }
 
@@ -300,7 +300,7 @@ mod tests {
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
-        let b = fitness_breakdown(&reg, &genome, &gauntlet, 2, 0xC0DE, &AiKind::Heuristic).unwrap();
+        let b = fitness_breakdown(&reg, &genome, &gauntlet, 2, 0xC0DE, &AiKind::Fast).unwrap();
         assert_eq!(b.per_opponent.len(), gauntlet.len());
         let mean = b.per_opponent.iter().sum::<f64>() / b.per_opponent.len() as f64;
         assert!(
@@ -327,7 +327,7 @@ mod tests {
         crate::sim::instrument::push_failure("pre-existing entry".to_string());
         crate::sim::instrument::push_failure("another pre-existing entry".to_string());
         let breakdown =
-            fitness_breakdown(&reg, &[], &[], 0, 0xC0DE, &AiKind::Heuristic).unwrap();
+            fitness_breakdown(&reg, &[], &[], 0, 0xC0DE, &AiKind::Fast).unwrap();
         let leftover = crate::sim::instrument::drain_failures();
         assert!(
             leftover.is_empty(),
@@ -350,7 +350,7 @@ mod tests {
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
         let breakdown =
-            fitness_breakdown(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Heuristic).unwrap();
+            fitness_breakdown(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Fast).unwrap();
         let total_games = (gauntlet.len() as u32) * 2; // 2 per opponent at n_per_side=1
         assert!(
             breakdown.failed_games_total <= total_games,
@@ -368,8 +368,8 @@ mod tests {
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
-        let scalar = fitness(&reg, &genome, &gauntlet, 2, 0xC0DE, &AiKind::Heuristic).unwrap();
-        let breakdown = fitness_breakdown(&reg, &genome, &gauntlet, 2, 0xC0DE, &AiKind::Heuristic).unwrap();
+        let scalar = fitness(&reg, &genome, &gauntlet, 2, 0xC0DE, &AiKind::Fast).unwrap();
+        let breakdown = fitness_breakdown(&reg, &genome, &gauntlet, 2, 0xC0DE, &AiKind::Fast).unwrap();
         assert_eq!(scalar, breakdown.total);
     }
 
@@ -380,12 +380,12 @@ mod tests {
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
         assert_eq!(
-            fitness(&reg, &genome, &[], 1, 0xC0DE, &AiKind::Heuristic).unwrap(),
+            fitness(&reg, &genome, &[], 1, 0xC0DE, &AiKind::Fast).unwrap(),
             0.0,
             "empty gauntlet should short-circuit to 0.0"
         );
         assert_eq!(
-            fitness(&reg, &genome, &gauntlet, 0, 0xC0DE, &AiKind::Heuristic).unwrap(),
+            fitness(&reg, &genome, &gauntlet, 0, 0xC0DE, &AiKind::Fast).unwrap(),
             0.0,
             "n=0 should short-circuit to 0.0"
         );
@@ -446,7 +446,7 @@ mod tests {
         for &n in &n_values {
             let t0 = std::time::Instant::now();
             let xs: Vec<f64> = (0..k_seeds)
-                .map(|s| fitness(&reg, &baseline, &gauntlet, n, 0xD00D + s, &AiKind::Heuristic).unwrap())
+                .map(|s| fitness(&reg, &baseline, &gauntlet, n, 0xD00D + s, &AiKind::Fast).unwrap())
                 .collect();
             let elapsed = t0.elapsed();
             let (mean, stddev) = mean_stddev(&xs);
@@ -473,7 +473,7 @@ mod tests {
         for &n in &n_values {
             let xs: Vec<f64> = genomes
                 .iter()
-                .map(|g| fitness(&reg, g, &gauntlet, n, 0xD00D, &AiKind::Heuristic).unwrap())
+                .map(|g| fitness(&reg, g, &gauntlet, n, 0xD00D, &AiKind::Fast).unwrap())
                 .collect();
             let (mean, stddev) = mean_stddev(&xs);
             let min = xs.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -490,7 +490,7 @@ mod tests {
         println!("{:>4}  {:>8}  {:>8}  {:>6}", "n", "within", "between", "SNR");
         for &n in &n_values {
             let within_xs: Vec<f64> = (0..k_seeds)
-                .map(|s| fitness(&reg, &baseline, &gauntlet, n, 0xD00D + s, &AiKind::Heuristic).unwrap())
+                .map(|s| fitness(&reg, &baseline, &gauntlet, n, 0xD00D + s, &AiKind::Fast).unwrap())
                 .collect();
             let (_, within_sd) = mean_stddev(&within_xs);
             let between_sd = between_stddev_by_n

@@ -186,7 +186,7 @@ pub fn run_ea(
     args: &EvolveArgs,
 ) -> mlua::Result<()> {
     let opponent_ai = match args.opponent_ai.to_ascii_lowercase().as_str() {
-        "heuristic" => tsot::sim::AiKind::Heuristic,
+        "heuristic" => tsot::sim::AiKind::Game,
         "mcts" => tsot::sim::AiKind::Mcts(tsot::sim::mcts::MctsConfig {
             rollouts_per_candidate: args.opponent_mcts_rollouts,
             max_candidates: args.opponent_mcts_max_candidates,

@@ -178,7 +178,7 @@ impl StepEngine {
         // AI / human path.
         let mut uct_trace_log: Option<String> = None;
         let pick = match &self.ais[active.index()] {
-            AiKind::Heuristic => pick_heuristic_playable_in_hand(
+            AiKind::Game | AiKind::Fast | AiKind::Stress => pick_heuristic_playable_in_hand(
                 &self.state,
                 active,
                 &mut self.rng,

@@ -186,7 +186,7 @@ pub fn run_matchup_mcts(
             ..mcts_cfg.clone()
         })
     } else {
-        AiKind::Heuristic
+        AiKind::Game
     };
 
     println!();
