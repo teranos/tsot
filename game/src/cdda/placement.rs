@@ -164,56 +164,60 @@ pub fn mapgen_to_template(
         !exterior[r as usize][c as usize] && !is_solid(r, c)
     };
 
-    // Interior side of the horizontal run containing (r, c): walk the
-    // contiguous solid cells left and right, aggregate whether any of
-    // them has interior directly N or S. Ditto for vertical.
-    let horiz_run_interior = |r: i32, c: i32| -> (bool, bool) {
-        let (mut int_n, mut int_s) = (false, false);
+    // Per-cell interior sides. Previously aggregated over the whole run,
+    // which mislabelled the bottom-room's west wall as a "divider" just
+    // because one cell of the same column was between two rooms — a
+    // single wall column can be a perimeter for one room and a divider
+    // between others.
+    let horiz_at = |r: i32, c: i32| -> (bool, bool) {
+        (is_interior(r - 1, c), is_interior(r + 1, c))
+    };
+    let vert_at = |r: i32, c: i32| -> (bool, bool) {
+        (is_interior(r, c + 1), is_interior(r, c - 1))
+    };
+    // Run-scope aligns emission side for cells that have no direct
+    // interior clue on their own — a T-junction wall cell whose direct
+    // neighbours are all wall_line still needs to render along the same
+    // outer edge as the rest of its horizontal / vertical run. NOT used
+    // to classify dividers (that's per-cell); used only to determine
+    // WHICH edge (N vs S, E vs W) an already-detected wall sits on.
+    let is_ext_check = |rr: i32, cc: i32| -> bool {
+        if rr < 0 || cc < 0 || (rr as usize) >= height || (cc as usize) >= width {
+            return true;
+        }
+        exterior[rr as usize][cc as usize]
+    };
+    let horiz_run_side = |r: i32, c: i32| -> (bool, bool) {
+        let (mut ext_n, mut ext_s) = (false, false);
         let mut cc = c;
         while is_solid(r, cc) {
-            if is_interior(r - 1, cc) {
-                int_n = true;
-            }
-            if is_interior(r + 1, cc) {
-                int_s = true;
-            }
+            if is_ext_check(r - 1, cc) { ext_n = true; }
+            if is_ext_check(r + 1, cc) { ext_s = true; }
             cc -= 1;
         }
         let mut cc = c + 1;
         while is_solid(r, cc) {
-            if is_interior(r - 1, cc) {
-                int_n = true;
-            }
-            if is_interior(r + 1, cc) {
-                int_s = true;
-            }
+            if is_ext_check(r - 1, cc) { ext_n = true; }
+            if is_ext_check(r + 1, cc) { ext_s = true; }
             cc += 1;
         }
-        (int_n, int_s)
+        (ext_n, ext_s)
     };
-    let vert_run_interior = |r: i32, c: i32| -> (bool, bool) {
-        let (mut int_e, mut int_w) = (false, false);
+    let vert_run_side = |r: i32, c: i32| -> (bool, bool) {
+        let (mut ext_e, mut ext_w) = (false, false);
         let mut rr = r;
         while is_solid(rr, c) {
-            if is_interior(rr, c + 1) {
-                int_e = true;
-            }
-            if is_interior(rr, c - 1) {
-                int_w = true;
-            }
+            if is_ext_check(rr, c + 1) { ext_e = true; }
+            if is_ext_check(rr, c - 1) { ext_w = true; }
             rr -= 1;
         }
         let mut rr = r + 1;
         while is_solid(rr, c) {
-            if is_interior(rr, c + 1) {
-                int_e = true;
-            }
-            if is_interior(rr, c - 1) {
-                int_w = true;
-            }
+            if is_ext_check(rr, c + 1) { ext_e = true; }
+            if is_ext_check(rr, c - 1) { ext_w = true; }
             rr += 1;
         }
-        (int_e, int_w)
+        (ext_e, ext_w)
     };
 
     let ew_kind = |base: PropKind| match base {
@@ -263,78 +267,115 @@ pub fn mapgen_to_template(
                 continue;
             }
 
-            let horiz = is_solid(r, c - 1) || is_solid(r, c + 1);
-            let vert = is_solid(r - 1, c) || is_solid(r + 1, c);
-            if !horiz && !vert {
-                // Isolated pillar: full-tile at centre.
-                emit(cx_world, cz_world, base);
-                continue;
-            }
-
-            let (hn, hs) = if horiz {
-                horiz_run_interior(r, c)
-            } else {
-                (false, false)
+            // Unified rule (no full-tile blocks anywhere):
+            //   1. For each of 4 sides, if the direct neighbour is
+            //      EXTERIOR (reachable by flood-fill from mapgen
+            //      boundary), emit a thin wall on that outer edge —
+            //      that's a perimeter wall.
+            //   2. Divider: if a wall cell has interior on both perp
+            //      direct neighbours (rooms on both sides), emit walls
+            //      on both perp outer edges — one wall facing each
+            //      room. No arbitrary +positive convention needed.
+            //   3. Diagonal corner: if no direct exterior and no direct
+            //      divider case, but a diagonal is interior, emit walls
+            //      on the two outer edges opposite that diagonal
+            //      (interior at SE → walls on N + W). Multiple diagonals
+            //      interior → union of their edge pairs (T-junction
+            //      cells can end up with walls on 3 or 4 sides).
+            let (hn, hs) = horiz_at(r, c);
+            let (ve, vw) = vert_at(r, c);
+            let is_ext = |rr: i32, cc: i32| -> bool {
+                if rr < 0 || cc < 0 || (rr as usize) >= height || (cc as usize) >= width {
+                    return true; // OOB counts as exterior for perimeter emission
+                }
+                exterior[rr as usize][cc as usize]
             };
-            let (ve, vw) = if vert {
-                vert_run_interior(r, c)
-            } else {
-                (false, false)
-            };
-            if !hn && !hs && !ve && !vw {
-                // Runs present but no interior anywhere in perp (e.g. a
-                // + cross-junction fully surrounded by walls). Fall back
-                // to a full-tile centred block.
-                emit(cx_world, cz_world, base);
-                continue;
+            let ext_n = is_ext(r - 1, c);
+            let ext_s = is_ext(r + 1, c);
+            let ext_e = is_ext(r, c + 1);
+            let ext_w = is_ext(r, c - 1);
+
+            let mut emit_n = ext_n;
+            let mut emit_s = ext_s;
+            let mut emit_e = ext_e;
+            let mut emit_w = ext_w;
+
+            // Divider: perp direct interiors on both sides.
+            if hn && hs {
+                // Rooms N and S → walls on N + S outer edges.
+                emit_n = true;
+                emit_s = true;
+            }
+            if ve && vw {
+                emit_e = true;
+                emit_w = true;
             }
 
-            // T-junction skip: at a cell where BOTH runs are active, a
-            // one-sided end of a DIVIDER run would poke a wall pillar
-            // into the perpendicular perimeter wall. Skip that side's
-            // emission — the perimeter and next cell in the divider run
-            // form the T cleanly.
-            //
-            // Corner skip: at a cell where BOTH runs are one-sided AND
-            // each run has a single-side interior (i.e. two adjacent
-            // wall neighbours + interior at the diagonal), the cell is
-            // an outer corner. Neither wall component should extend
-            // past the corner point — the adjacent cells' walls meet
-            // there to form the L. So skip BOTH emissions here.
-            let horiz_one_sided = is_solid(r, c - 1) != is_solid(r, c + 1);
-            let vert_one_sided = is_solid(r - 1, c) != is_solid(r + 1, c);
-            let is_corner = horiz_one_sided
-                && vert_one_sided
-                && (hn || hs)
-                && (ve || vw)
-                && !(hn && hs)
-                && !(ve && vw);
-            let skip_horiz = is_corner || (horiz && hn && hs && horiz_one_sided && vert);
-            let skip_vert = is_corner || (vert && ve && vw && vert_one_sided && horiz);
-
-            if horiz && (hn || hs) && !skip_horiz {
-                // (true, true) divider → +z convention.
-                // (false, true) interior south → +z. (true, false) → -z.
-                // Wall lives entirely inside its own wall cell — inner
-                // face on the grid line, back edge WALL_HALF_THICKNESS
-                // into the cell. Neither face crosses into the floor.
-                let z_off = match (hn, hs) {
-                    (true, true) | (false, true) => half - WALL_HALF_THICKNESS,
-                    (true, false) => -half + WALL_HALF_THICKNESS,
-                    (false, false) => 0.0,
-                };
-                emit(cx_world, cz_world + z_off, ew_kind(base));
+            // Corner / T-junction: diagonal interiors imply walls on
+            // outer edges opposite that diagonal (interior at SE → walls
+            // on N + W). Gated on the direct neighbour on that side NOT
+            // being a wall_line cell — otherwise the "wall" would sit
+            // inside another wall (invisible, and over-counts the
+            // geometry when the neighbouring cell already emits there).
+            let d_nw = is_interior(r - 1, c - 1);
+            let d_ne = is_interior(r - 1, c + 1);
+            let d_sw = is_interior(r + 1, c - 1);
+            let d_se = is_interior(r + 1, c + 1);
+            let n_open = !is_solid(r - 1, c);
+            let s_open = !is_solid(r + 1, c);
+            let e_open = !is_solid(r, c + 1);
+            let w_open = !is_solid(r, c - 1);
+            if d_se {
+                emit_n = emit_n || n_open;
+                emit_w = emit_w || w_open;
             }
-            if vert && (ve || vw) && !skip_vert {
-                // (true, true) divider → +x convention.
-                // (true, false) interior east → +x. (false, true) → -x.
-                // Same space-maximising shift — wall entirely in cell.
-                let x_off = match (ve, vw) {
-                    (true, true) | (true, false) => half - WALL_HALF_THICKNESS,
-                    (false, true) => -half + WALL_HALF_THICKNESS,
-                    (false, false) => 0.0,
-                };
-                emit(cx_world + x_off, cz_world, ns_kind(base));
+            if d_sw {
+                emit_n = emit_n || n_open;
+                emit_e = emit_e || e_open;
+            }
+            if d_ne {
+                emit_s = emit_s || s_open;
+                emit_w = emit_w || w_open;
+            }
+            if d_nw {
+                emit_s = emit_s || s_open;
+                emit_e = emit_e || e_open;
+            }
+
+            // If per-cell decided no horizontal wall but this cell IS
+            // part of a horizontal run, align to the run's outer edge
+            // (any cell in the run with a direct exterior on N or S).
+            // Same for vertical. Fixes T-junction cells whose direct
+            // neighbours are all wall_line so the per-cell rule finds
+            // no orientation, but the RUN through them has a clear
+            // edge from other cells.
+            if !emit_n && !emit_s && (is_solid(r, c - 1) || is_solid(r, c + 1)) {
+                let (run_n, run_s) = horiz_run_side(r, c);
+                emit_n = run_n;
+                emit_s = run_s;
+            }
+            if !emit_e && !emit_w && (is_solid(r - 1, c) || is_solid(r + 1, c)) {
+                let (run_e, run_w) = vert_run_side(r, c);
+                emit_e = run_e;
+                emit_w = run_w;
+            }
+
+            if emit_n {
+                emit(cx_world, cz_world - half + WALL_HALF_THICKNESS, ew_kind(base));
+            }
+            if emit_s {
+                emit(cx_world, cz_world + half - WALL_HALF_THICKNESS, ew_kind(base));
+            }
+            if emit_e {
+                emit(cx_world + half - WALL_HALF_THICKNESS, cz_world, ns_kind(base));
+            }
+            if emit_w {
+                emit(cx_world - half + WALL_HALF_THICKNESS, cz_world, ns_kind(base));
+            }
+            // No neighbours at all matched — isolated wall cell.
+            // Emit a centered thin bar rather than a block.
+            if !emit_n && !emit_s && !emit_e && !emit_w {
+                emit(cx_world, cz_world, ew_kind(base));
             }
         }
     }
@@ -524,6 +565,60 @@ mod tests {
                 && p.offset.z.abs() < 1e-3
         });
         assert!(mid_1 && mid_2, "the divider still emits at rows 1 and 2");
+    }
+
+    /// User's typed spec, verbatim. Runs the current importer and
+    /// dumps every emitted prop for user review — no assertions.
+    ///
+    ///   Row 0: wwwww
+    ///   Row 1: o d w
+    ///   Row 2: wdwdw
+    ///   Row 3:   w w
+    ///   Row 4:   w o
+    ///   Row 5:   www
+    ///
+    /// w=wall, o=window, d=door, space=floor/exterior.
+    #[test]
+    #[ignore = "dump-only for user review; run with `cargo test -- --ignored`"]
+    fn dump_user_p_shape_building() {
+        let json = r#"[{
+            "om_terrain": "p_shape",
+            "object": {
+                "rows": [
+                    "wwwww",
+                    "o d w",
+                    "wdwdw",
+                    "  w w",
+                    "  w o",
+                    "  www"
+                ],
+                "terrain": {
+                    "w": "t_wall",
+                    "o": "t_window",
+                    "d": "t_door_c"
+                }
+            }
+        }]"#;
+        let t = mapgen_to_template(json, "p_shape", CDDA_TILE, 0).unwrap();
+        let mut lines = Vec::new();
+        lines.push(format!("=== {} props emitted ===", t.props.len()));
+        lines.push(String::from(
+            "cx=2.5 cz=3.0 tile=80 → col_c = (c-2.5)*80, row_r = (r-3)*80",
+        ));
+        lines.push(String::from(
+            "col centres:  0=-200  1=-120  2=-40  3=40  4=120",
+        ));
+        lines.push(String::from(
+            "row centres:  0=-240  1=-160  2=-80  3=0    4=80   5=160",
+        ));
+        lines.push(String::new());
+        for p in &t.props {
+            lines.push(format!(
+                "  {:?} at x={:>7.1} z={:>7.1}",
+                p.kind, p.offset.x, p.offset.z
+            ));
+        }
+        panic!("\n{}\n", lines.join("\n"));
     }
 
     #[test]
