@@ -16,3 +16,6 @@ Enforced by `crates/seer-imports-check`.
 Rust owns the render pipeline.
 
 See [Architecture.md](./Architecture.md) for the artifact axioms.
+
+Never claim performance from intuition. Point at seer's `[perf]`;
+extend seer if it can't measure yet.
