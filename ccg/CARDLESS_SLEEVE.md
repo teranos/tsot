@@ -45,11 +45,18 @@
     runs are byte-identical (determinism). No integration fixes were needed —
     the whole 4→8 arc holds in a real game.
 - **Slice 9 — the cards + the end-to-end test deck.**
-  - `search library for cardless sleeves` primitive.
-  - Window Cleaner (see backlog). OnTapped trigger — verify/add.
-  - Supporting cards: clears (transparent) + an azure symbol.
-  - Acceptance (user's target): a deck of Window Cleaners, clears, an azure
-    symbol, and cardless sleeves plays a full game.
+  - **9.1 — DONE.** `attach_cardless_from_deck` (Rust + Lua): search deck
+    for cardless sleeves, attach n.
+  - **9.2 — DONE (attack tap only).** `EventName::OnTapped`, fired from
+    combat declare_attacker (gated !vigilant). External taps deferred
+    (firing inside a Lua borrow needs a deferred-event queue). No-op for
+    cards with no `on_tapped` handler.
+  - **9.3 — cards.** Window Cleaner (ETB attach 2 cardless; `on_tapped` →
+    may move an attached cardless to GY + draw), clears (transparent), an
+    azure symbol.
+  - **9.4 — test deck end-to-end** (user's target): a deck of Window
+    Cleaners, clears, an azure symbol, and cardless sleeves plays a full
+    game.
 - **Slice 10 (later) — Shatter Expectations** (see backlog). Needs
   counter-with-alternative-cost + composition-derived X + multi-zone exile.
 
