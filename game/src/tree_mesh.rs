@@ -177,6 +177,146 @@ pub fn canopy_stations(count: u32, canopy_radius: f32) -> Vec<CanopyStation> {
     stations
 }
 
+/// One sphere placed along a limb of the branch skeleton. `pos` is in
+/// UNIT tree space (trunk base at the origin, trunk ≈ 1 tall) so a
+/// consumer scales by the tree's height exactly like `canopy_stations`
+/// scales by `canopy_radius`. `radius` is a thickness ratio (also ×
+/// height at emit time). `is_tip` marks a terminal limb end — where a
+/// leaf cluster anchors, so foliage follows the branches instead of
+/// hanging in a cloud around the trunk.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BranchPoint {
+    pub pos: [f32; 3],
+    pub radius: f32,
+    pub is_tip: bool,
+}
+
+/// Deterministic recursive branch skeleton for one tree. `seed` varies
+/// the structure per tree (peers pass the same seed → identical tree);
+/// the whole thing lives in unit space so the caller scales by height.
+/// Primary limbs leave the upper trunk, each recursing into child
+/// limbs to `BRANCH_MAX_DEPTH` — branches, and branches' branches —
+/// with terminal tips flagged as leaf anchors. Pure: same seed → the
+/// same Vec, byte for byte.
+/// Recursion depth: trunk-limb → branch → branch's branch → tip. ≥2 so
+/// "branches, and branches' branches" is literally true.
+const BRANCH_MAX_DEPTH: u32 = 3;
+/// A sphere every ~this much unit-length along a limb — dense enough
+/// the limb reads as a solid stroke, not a dotted line.
+const BRANCH_SAMPLE_STEP: f32 = 0.045;
+/// Thickness ratio of a primary limb where it leaves the trunk.
+const BRANCH_PRIMARY_RADIUS: f32 = 0.03;
+
+// Deterministic PRNG (splitmix32) + minimal vec3 helpers. No external
+// rng, no floats-from-time — the skeleton is a pure function of `seed`
+// so every peer draws the identical tree.
+fn splitmix32(state: &mut u32) -> u32 {
+    *state = state.wrapping_add(0x9E37_79B9);
+    let mut z = *state;
+    z = (z ^ (z >> 16)).wrapping_mul(0x21f0_aaad);
+    z = (z ^ (z >> 15)).wrapping_mul(0x735a_2d97);
+    z ^ (z >> 15)
+}
+fn randf(state: &mut u32) -> f32 {
+    (splitmix32(state) >> 8) as f32 / (1u32 << 24) as f32
+}
+fn v_add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+fn v_scale(a: [f32; 3], s: f32) -> [f32; 3] {
+    [a[0] * s, a[1] * s, a[2] * s]
+}
+fn v_norm(a: [f32; 3]) -> [f32; 3] {
+    let m = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt().max(f32::EPSILON);
+    [a[0] / m, a[1] / m, a[2] / m]
+}
+fn v_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+/// Orthonormal basis (u, v) spanning the plane ⟂ `dir`.
+fn perp_basis(dir: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let refv = if dir[1].abs() < 0.9 {
+        [0.0, 1.0, 0.0]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    let u = v_norm(v_cross(refv, dir));
+    let v = v_cross(dir, u);
+    (u, v)
+}
+
+/// Grow one limb from `base` along `dir` for `len`, sampling spheres
+/// down it, then recurse into `depth` more child limbs fanned around
+/// the tip at golden-angle azimuths. At depth 0 the tip is flagged as a
+/// leaf anchor.
+fn grow_limb(
+    out: &mut Vec<BranchPoint>,
+    base: [f32; 3],
+    dir: [f32; 3],
+    len: f32,
+    radius: f32,
+    depth: u32,
+    rng: &mut u32,
+) {
+    let steps = (len / BRANCH_SAMPLE_STEP).ceil().max(1.0) as usize;
+    for s in 1..=steps {
+        let t = s as f32 / steps as f32;
+        out.push(BranchPoint {
+            pos: v_add(base, v_scale(dir, len * t)),
+            radius: radius * (1.0 - 0.25 * t),
+            is_tip: false,
+        });
+    }
+    let tip = v_add(base, v_scale(dir, len));
+    if depth == 0 {
+        out.push(BranchPoint {
+            pos: tip,
+            radius: radius * 0.7,
+            is_tip: true,
+        });
+        return;
+    }
+    let children = 2 + (splitmix32(rng) % 2) as usize; // 2 or 3
+    let (u, v) = perp_basis(dir);
+    let azim0 = randf(rng) * std::f32::consts::TAU;
+    for c in 0..children {
+        let spread = 0.5 + randf(rng) * 0.4; // 0.5..0.9 rad off the parent
+        let phi = azim0 + (c as f32) * GOLDEN_ANGLE_RAD;
+        let radial = v_add(v_scale(u, phi.cos()), v_scale(v, phi.sin()));
+        let child_dir = v_norm(v_add(v_scale(dir, spread.cos()), v_scale(radial, spread.sin())));
+        let child_len = len * (0.6 + randf(rng) * 0.12);
+        grow_limb(out, tip, child_dir, child_len, radius * 0.62, depth - 1, rng);
+    }
+}
+
+pub fn tree_branches(seed: u32) -> Vec<BranchPoint> {
+    // Spread the seed through the state and force it odd/non-zero so
+    // even seed 0 gives a non-degenerate tree.
+    let mut rng = seed.wrapping_mul(2_654_435_761).wrapping_add(0x9E37_79B9) | 1;
+    let mut out = Vec::new();
+    let primaries = 3 + (splitmix32(&mut rng) % 2) as usize; // 3 or 4
+    let azim0 = randf(&mut rng) * std::f32::consts::TAU;
+    for c in 0..primaries {
+        // Primaries leave the upper trunk over a spread of heights, each
+        // angled up-and-outward, so the crown fans instead of bursting
+        // from one point. Range sits within the trunk (≈0.40 tall in
+        // unit space) so limbs emerge from wood, not mid-air.
+        let base_y = 0.22 + (c as f32 / primaries as f32) * 0.16;
+        let base = [0.0, base_y, 0.0];
+        let spread = 0.45 + randf(&mut rng) * 0.35; // 0.45..0.8 rad off vertical
+        let phi = azim0 + (c as f32) * GOLDEN_ANGLE_RAD;
+        let radial = [phi.cos(), 0.0, phi.sin()];
+        let dir = v_norm(v_add([0.0, spread.cos(), 0.0], v_scale(radial, spread.sin())));
+        let len = 0.26 + randf(&mut rng) * 0.08;
+        grow_limb(&mut out, base, dir, len, BRANCH_PRIMARY_RADIUS, BRANCH_MAX_DEPTH, &mut rng);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,5 +534,72 @@ mod tests {
         let s1 = canopy_stations(20, 30.0);
         let s2 = canopy_stations(20, 30.0);
         assert_eq!(s1, s2);
+    }
+
+    // ---- branch skeleton contract ----
+
+    #[test]
+    fn branches_are_deterministic_in_the_seed() {
+        // Peers pass the same seed and must resolve the same tree.
+        assert_eq!(tree_branches(42), tree_branches(42));
+    }
+
+    #[test]
+    fn different_seeds_give_different_trees() {
+        // The whole point: variety. Two seeds must not clone.
+        assert_ne!(tree_branches(1), tree_branches(2));
+    }
+
+    #[test]
+    fn recursion_produces_leaf_tips() {
+        // "branches, and branches' branches" — terminal tips exist and
+        // there are several of them (not a lone trunk).
+        let tips = tree_branches(7).iter().filter(|p| p.is_tip).count();
+        assert!(tips >= 4, "expected several leaf tips, got {tips}");
+    }
+
+    #[test]
+    fn branches_taper_with_depth() {
+        // A terminal tip is thinner than the thickest (trunk-side) limb.
+        let pts = tree_branches(7);
+        let max_r = pts.iter().map(|p| p.radius).fold(0.0_f32, f32::max);
+        let tip_r = pts
+            .iter()
+            .filter(|p| p.is_tip)
+            .map(|p| p.radius)
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            tip_r < max_r,
+            "tips ({tip_r}) should be thinner than the base ({max_r})"
+        );
+    }
+
+    #[test]
+    fn branches_grow_up_into_the_crown_and_stay_in_unit_space() {
+        // Unit space so the caller scales by height: everything above
+        // ground, within a sane bound. Tips reach up into the crown.
+        let pts = tree_branches(7);
+        assert!(!pts.is_empty(), "no branch points emitted");
+        for p in &pts {
+            assert!(p.pos[1] >= -EPS, "point below ground: {:?}", p.pos);
+            assert!(p.pos[1] <= 1.5, "point too tall for unit space: {:?}", p.pos);
+            let rxz = (p.pos[0] * p.pos[0] + p.pos[2] * p.pos[2]).sqrt();
+            assert!(rxz <= 1.0, "point too wide for unit space: {:?}", p.pos);
+        }
+        let max_tip_y = pts
+            .iter()
+            .filter(|p| p.is_tip)
+            .map(|p| p.pos[1])
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_tip_y > 0.5,
+            "tips should reach the upper crown, got max tip y = {max_tip_y}"
+        );
+    }
+
+    #[test]
+    fn branch_recursion_terminates() {
+        // No explosion — recursion must be bounded.
+        assert!(tree_branches(7).len() < 2000);
     }
 }

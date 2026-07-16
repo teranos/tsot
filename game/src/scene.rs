@@ -783,14 +783,25 @@ pub const TREE_CANOPY_RADIUS_RATIO: f32 = 0.18;
 pub const TREE_CANOPY_ELEMENT_RATIO: f32 = 0.025;
 pub const TREE_TRUNK_COLOR: [f32; 3] = [0.30, 0.20, 0.11];
 pub const TREE_CANOPY_COLOR: [f32; 3] = [0.13, 0.77, 0.37];
-/// Phyllotactic stations per tree. Bumped 24 → 256 (with the element
-/// ratio dropped 0.08 → 0.025) to trade a handful of half-crown blobs
-/// for many small leaves — foliage that reads as leaves, not clumps.
-/// Coverage held roughly constant (element_r² × count ≈ unchanged) so
-/// the smaller leaves still fill the crown. This is ~11× the canopy
-/// instance count per tree; its per-frame cost is a seer `[perf]`
-/// question, not an intuition — read the frame-time delta, don't guess.
-pub const CANOPY_STATIONS_PER_TREE: u32 = 256;
+/// Colour of the branch spheres (limb wood) — a touch lighter than the
+/// trunk so limbs read against it.
+pub const BRANCH_COLOR: [f32; 3] = [0.34, 0.23, 0.13];
+/// Leaves clustered at each terminal branch tip — foliage follows the
+/// branches instead of hanging in one cloud around the trunk.
+pub const BRANCH_LEAVES_PER_TIP: u32 = 8;
+/// Radius of a tip's leaf ball, × tree height.
+pub const BRANCH_LEAF_CLUSTER_RADIUS_RATIO: f32 = 0.06;
+
+/// Deterministic per-tree seed from world position — same tile → same
+/// seed on every peer, so the branch skeleton is identical everywhere.
+fn tree_seed(x: f32, z: f32) -> u32 {
+    let mut h: u32 = 2_166_136_261;
+    for b in x.to_bits().to_le_bytes().iter().chain(z.to_bits().to_le_bytes().iter()) {
+        h ^= *b as u32;
+        h = h.wrapping_mul(16_777_619);
+    }
+    h
+}
 
 /// Two flat instance lists — trunks and canopy elements — that both
 /// feed the SAME mesh pipeline. Every trunk instance draws the shared
@@ -802,19 +813,19 @@ pub struct MeshTreeInstances {
 }
 
 /// Build the mesh-pipeline instance lists from the scene snapshot.
-/// Deterministic in the snapshot's tree list. Emits `N` trunk
-/// instances and `N × CANOPY_STATIONS_PER_TREE` canopy element
-/// instances; the render loop packs both into one instance buffer
-/// (trunks first) and issues two `render_mesh` calls with the right
-/// `first_instance` offset.
+/// Deterministic in the snapshot's tree list. Emits `N` trunk cone
+/// instances plus, per tree, a recursive branch skeleton
+/// (`tree_branches`) rendered as brown limb spheres with green leaf
+/// clusters at each terminal tip — all packed into `canopy_elements`
+/// with per-instance colour. The render loop packs trunks + canopy
+/// elements into one instance buffer (trunks first) and issues two
+/// `render_mesh` calls with the right `first_instance` offset.
 pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
+    use crate::tree_mesh::{GOLDEN_ANGLE_RAD, tree_branches};
     let mut trunks = Vec::with_capacity(snap.trees.len());
-    let mut canopy_elements =
-        Vec::with_capacity(snap.trees.len() * CANOPY_STATIONS_PER_TREE as usize);
-    // Unit-canopy stations (radius ∈ [0,1]); the per-tree canopy radius
-    // multiplies through when each element gets placed. Computed once
-    // per snapshot, not per tree — the pattern is identical across trees.
-    let stations = crate::tree_mesh::canopy_stations(CANOPY_STATIONS_PER_TREE, 1.0);
+    // Rough budget: a few hundred branch spheres + leaf-cluster leaves
+    // per tree. Over-reserving is cheaper than regrowing mid-loop.
+    let mut canopy_elements = Vec::with_capacity(snap.trees.len() * 512);
     for (t, h) in &snap.trees {
         let h = *h;
         trunks.push(SceneInstance {
@@ -826,21 +837,41 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                 h * TREE_TRUNK_BASE_R_RATIO,
             ],
         });
-        let canopy_r = h * TREE_CANOPY_RADIUS_RATIO;
-        let canopy_base_y = h * TREE_CANOPY_BASE_Y_RATIO;
-        let canopy_span_y = h * TREE_CANOPY_VERTICAL_RATIO;
+        // Per-tree branch skeleton (unit space, scaled by height here).
+        // Deterministic in the tile position so every peer grows the
+        // same tree.
         let element_r = h * TREE_CANOPY_ELEMENT_RATIO;
-        for s in &stations {
-            let (sin_a, cos_a) = s.angle.sin_cos();
+        let cluster_r = h * BRANCH_LEAF_CLUSTER_RADIUS_RATIO;
+        for bp in tree_branches(tree_seed(t.x, t.z)) {
+            let wx = t.x + bp.pos[0] * h;
+            let wy = bp.pos[1] * h;
+            let wz = t.z + bp.pos[2] * h;
+            // The limb itself: a brown sphere sized to the limb radius.
+            let br = bp.radius * h;
             canopy_elements.push(SceneInstance {
-                pos: [
-                    t.x + s.radius * canopy_r * cos_a,
-                    canopy_base_y + s.height_frac * canopy_span_y,
-                    t.z + s.radius * canopy_r * sin_a,
-                ],
-                color: TREE_CANOPY_COLOR,
-                scale: [element_r, element_r, element_r],
+                pos: [wx, wy, wz],
+                color: BRANCH_COLOR,
+                scale: [br, br, br],
             });
+            if !bp.is_tip {
+                continue;
+            }
+            // Terminal tip → a small ball of leaves (Fibonacci sphere,
+            // even coverage) so foliage sits at the branch ends.
+            for k in 0..BRANCH_LEAVES_PER_TIP {
+                let ky = 1.0 - 2.0 * (k as f32 + 0.5) / (BRANCH_LEAVES_PER_TIP as f32);
+                let kr = (1.0 - ky * ky).max(0.0).sqrt();
+                let kt = (k as f32) * GOLDEN_ANGLE_RAD;
+                canopy_elements.push(SceneInstance {
+                    pos: [
+                        wx + cluster_r * kr * kt.cos(),
+                        wy + cluster_r * ky,
+                        wz + cluster_r * kr * kt.sin(),
+                    ],
+                    color: TREE_CANOPY_COLOR,
+                    scale: [element_r, element_r, element_r],
+                });
+            }
         }
     }
     MeshTreeInstances { trunks, canopy_elements }
