@@ -71,17 +71,23 @@ pub fn mapgen_to_template(
         .object
         .as_ref()
         .ok_or_else(|| CddaError::NoObject(om_terrain.to_string()))?;
-    // Resolve referenced palettes into a flat char→id terrain map, then
-    // overlay the inline terrain (inline overrides the palettes). The
-    // palette's furniture map is dropped: no furniture is spawned yet.
-    let mut terrain = if obj.palettes.is_empty() {
-        HashMap::new()
+    // Resolve referenced palettes into flat char→id maps, then overlay
+    // the inline terrain / furniture (inline overrides the palettes).
+    // Almost all furniture is dropped by `cell_to_prop`; toilets are
+    // the current carve-out.
+    let (mut terrain, mut furniture) = if obj.palettes.is_empty() {
+        (HashMap::new(), HashMap::new())
     } else {
-        crate::palette::resolve(&obj.palettes, seed).0
+        crate::palette::resolve(&obj.palettes, seed)
     };
     for (sym, val) in &obj.terrain {
         if let (Some(ch), Some(id)) = (sym.chars().next(), first_id(val)) {
             terrain.insert(ch, id.to_string());
+        }
+    }
+    for (sym, val) in &obj.furniture {
+        if let (Some(ch), Some(id)) = (sym.chars().next(), first_id(val)) {
+            furniture.insert(ch, id.to_string());
         }
     }
 
@@ -96,7 +102,7 @@ pub fn mapgen_to_template(
         .map(|row| {
             let mut cells: Vec<_> = row
                 .chars()
-                .map(|ch| cell_to_prop(ch, &terrain))
+                .map(|ch| cell_to_prop(ch, &terrain, &furniture))
                 .collect();
             cells.resize(width, None);
             cells
@@ -437,6 +443,60 @@ pub fn mapgen_to_template(
             && a.idx == b.idx
     });
 
+    // Junction cleanup: build a per-cell map of which slot kinds are
+    // present, so runs can be SHORTENED at their ends when they meet a
+    // perpendicular segment. Rule: NS-oriented runs (EastOuter,
+    // WestOuter, CentreNS) shrink by WALL_THICKNESS at each end where
+    // the end cell also carries an EW segment (NorthOuter, SouthOuter,
+    // CentreEW). EW runs stay full-length. This eliminates the 24×24
+    // corner overlap that produced z-fighting spikes in iso view: at a
+    // corner or T-junction, the NS wall now stops flush against the EW
+    // wall's inner face, no shared 3D volume.
+    use std::collections::HashSet;
+    let mut cell_ew_slots: HashSet<(i32, i32)> = HashSet::new();
+    let mut cell_ns_slots: HashSet<(i32, i32)> = HashSet::new();
+    for seg in &segments {
+        let cell = match seg.slot_kind {
+            SlotKind::NorthOuter | SlotKind::SouthOuter | SlotKind::CentreEW => {
+                cell_ew_slots.insert((seg.line, seg.idx));
+                (seg.line, seg.idx)
+            }
+            SlotKind::EastOuter | SlotKind::WestOuter | SlotKind::CentreNS => {
+                cell_ns_slots.insert((seg.idx, seg.line));
+                (seg.idx, seg.line)
+            }
+        };
+        let _ = cell;
+    }
+    // Wall-material colour lookup — for a window run to render its
+    // frame (bottom + top layers) in the neighbouring wall's material
+    // colour, not the glass tint. Look at the cells one step off the
+    // run's line (perpendicular direction) and take the first Wall
+    // colour we find in the grid.
+    let wall_color_near = |seg: &Seg| -> Option<[f32; 3]> {
+        // The run lives on `seg.line` (row for horizontal, col for
+        // vertical). Adjacent perpendicular cells are one step off in
+        // the line direction.
+        let (r0, c0, r1, c1) = match seg.slot_kind {
+            SlotKind::NorthOuter | SlotKind::SouthOuter | SlotKind::CentreEW => {
+                (seg.line - 1, seg.idx, seg.line + 1, seg.idx)
+            }
+            SlotKind::EastOuter | SlotKind::WestOuter | SlotKind::CentreNS => {
+                (seg.idx, seg.line - 1, seg.idx, seg.line + 1)
+            }
+        };
+        let lookup = |r: i32, c: i32| -> Option<[f32; 3]> {
+            if r < 0 || c < 0 || (r as usize) >= height || (c as usize) >= width {
+                return None;
+            }
+            match grid[r as usize][c as usize] {
+                Some((PropKind::Wall, Some(col))) => Some(col),
+                _ => None,
+            }
+        };
+        lookup(r0, c0).or_else(|| lookup(r1, c1))
+    };
+
     let mut i = 0;
     while i < segments.len() {
         let start = i;
@@ -452,14 +512,41 @@ pub fn mapgen_to_template(
         let seg = segments[start];
         let end_idx = segments[i].idx;
         let run_cells = (end_idx - seg.idx + 1) as f32;
-        let along_size = run_cells * tile_size;
-        // Position: midpoint of first-cell centre and last-cell centre
-        // along the run axis; line-axis offset per slot type.
+        let mut along_size = run_cells * tile_size;
         let idx_centre = (seg.idx as f32 + (run_cells - 1.0) * 0.5) * tile_size;
+
+        // Junction shortening for NS runs.
+        let mut idx_shift = 0.0_f32;
+        let is_ns_run = matches!(
+            seg.slot_kind,
+            SlotKind::EastOuter | SlotKind::WestOuter | SlotKind::CentreNS
+        );
+        if is_ns_run {
+            // Start cell (top of run) — check if it has an EW segment.
+            let start_cell = (seg.idx, seg.line);
+            if cell_ew_slots.contains(&start_cell) {
+                along_size -= WALL_THICKNESS;
+                idx_shift += WALL_HALF_THICKNESS;
+            }
+            // End cell (bottom of run).
+            let end_cell = (end_idx, seg.line);
+            if cell_ew_slots.contains(&end_cell) {
+                along_size -= WALL_THICKNESS;
+                idx_shift -= WALL_HALF_THICKNESS;
+            }
+        }
+        // Guard against negative sizes (e.g., 1-cell NS run whose only
+        // cell has EW segments would shorten to negative). Snap to a
+        // tiny positive so the prop still renders somewhere sensible.
+        if along_size < 1.0 {
+            along_size = 1.0;
+        }
+
+        // Emit position/size/kind per slot.
         let (offset, size, kind) = match seg.slot_kind {
             SlotKind::NorthOuter => {
                 let z = (seg.line as f32 - cz) * tile_size - half + WALL_HALF_THICKNESS;
-                let x = idx_centre - cx * tile_size;
+                let x = idx_centre - cx * tile_size + idx_shift;
                 (
                     Vec3::new(x, 0.0, z),
                     Vec3::new(along_size, 220.0, WALL_THICKNESS),
@@ -468,7 +555,7 @@ pub fn mapgen_to_template(
             }
             SlotKind::SouthOuter => {
                 let z = (seg.line as f32 - cz) * tile_size + half - WALL_HALF_THICKNESS;
-                let x = idx_centre - cx * tile_size;
+                let x = idx_centre - cx * tile_size + idx_shift;
                 (
                     Vec3::new(x, 0.0, z),
                     Vec3::new(along_size, 220.0, WALL_THICKNESS),
@@ -477,7 +564,7 @@ pub fn mapgen_to_template(
             }
             SlotKind::CentreEW => {
                 let z = (seg.line as f32 - cz) * tile_size;
-                let x = idx_centre - cx * tile_size;
+                let x = idx_centre - cx * tile_size + idx_shift;
                 (
                     Vec3::new(x, 0.0, z),
                     Vec3::new(along_size, 220.0, WALL_THICKNESS),
@@ -486,7 +573,7 @@ pub fn mapgen_to_template(
             }
             SlotKind::EastOuter => {
                 let x = (seg.line as f32 - cx) * tile_size + half - WALL_HALF_THICKNESS;
-                let z = idx_centre - cz * tile_size;
+                let z = idx_centre - cz * tile_size + idx_shift;
                 (
                     Vec3::new(x, 0.0, z),
                     Vec3::new(WALL_THICKNESS, 220.0, along_size),
@@ -495,7 +582,7 @@ pub fn mapgen_to_template(
             }
             SlotKind::WestOuter => {
                 let x = (seg.line as f32 - cx) * tile_size - half + WALL_HALF_THICKNESS;
-                let z = idx_centre - cz * tile_size;
+                let z = idx_centre - cz * tile_size + idx_shift;
                 (
                     Vec3::new(x, 0.0, z),
                     Vec3::new(WALL_THICKNESS, 220.0, along_size),
@@ -504,7 +591,7 @@ pub fn mapgen_to_template(
             }
             SlotKind::CentreNS => {
                 let x = (seg.line as f32 - cx) * tile_size;
-                let z = idx_centre - cz * tile_size;
+                let z = idx_centre - cz * tile_size + idx_shift;
                 (
                     Vec3::new(x, 0.0, z),
                     Vec3::new(WALL_THICKNESS, 220.0, along_size),
@@ -512,7 +599,40 @@ pub fn mapgen_to_template(
                 )
             }
         };
-        props.push(Prop::sized(offset, kind, seg.color, size));
+
+        // Layered emission for window runs: instead of one full-height
+        // glass panel (which reads as a translucent wall floor-to-
+        // ceiling and doesn't look like a window), emit three stacked
+        // props — bottom wall + glass strip + top wall — using the
+        // neighbouring wall's material colour for the frame layers.
+        if matches!(seg.base, PropKind::Window) {
+            const SILL_TOP: f32 = 60.0;
+            const HEAD_BOTTOM: f32 = 180.0;
+            const HEIGHT: f32 = 220.0;
+            let frame_color = wall_color_near(&seg);
+            let bottom_size = Vec3::new(
+                size.x,
+                SILL_TOP,
+                size.z,
+            );
+            let bottom_offset = Vec3::new(offset.x, 0.0, offset.z);
+            let middle_size = Vec3::new(size.x, HEAD_BOTTOM - SILL_TOP, size.z);
+            let middle_offset = Vec3::new(offset.x, SILL_TOP, offset.z);
+            let top_size = Vec3::new(size.x, HEIGHT - HEAD_BOTTOM, size.z);
+            let top_offset = Vec3::new(offset.x, HEAD_BOTTOM, offset.z);
+            let wall_kind = ew_kind(PropKind::Wall);
+            // Bottom + top use the wall variant (opaque, wall-coloured).
+            let wall_variant = match kind {
+                PropKind::WindowEW => PropKind::WallEW,
+                PropKind::WindowNS => PropKind::WallNS,
+                _ => wall_kind,
+            };
+            props.push(Prop::sized(bottom_offset, wall_variant, frame_color, bottom_size));
+            props.push(Prop::sized(middle_offset, kind, seg.color, middle_size));
+            props.push(Prop::sized(top_offset, wall_variant, frame_color, top_size));
+        } else {
+            props.push(Prop::sized(offset, kind, seg.color, size));
+        }
         i += 1;
     }
 
@@ -608,29 +728,32 @@ mod tests {
         // Room centre at origin (3×3, cx=cz=1.5). Each side's run spans
         // 3 cells = 240 wide, sits at the outer edge (z or x = ±148),
         // centred on the run's axis (x or z = 0).
-        // 3×3, cx=cz=1.5. Cell centres at −120, −40, 40. Run of 3 cells
-        // centred at midpoint of first and last cell centres = −40.
-        // Outer-edge walls: N at z=−148, S at z=68, E at x=68, W at
-        // x=−148 (12 units inside the room's outer boundary).
+        // 3×3, cx=cz=1.5. Cell centres at −120, −40, 40. EW runs of 3
+        // cells centred at −40 span the FULL width (240) since EW
+        // extends to the corners. NS runs shorten by WALL_THICKNESS at
+        // each end where the corner cell also carries an EW segment
+        // (the NW/NE/SW/SE corners do), giving span 240 − 48 = 192.
+        // This eliminates the 24×24 corner overlap that used to
+        // z-fight and read as a distinct pillar in iso view.
         let sides = [
-            (-40.0, -148.0, PropKind::WallEW), // north
-            (-40.0, 68.0, PropKind::WallEW),   // south
-            (68.0, -40.0, PropKind::WallNS),   // east
-            (-148.0, -40.0, PropKind::WallNS), // west
+            (-40.0, -148.0, PropKind::WallEW, 240.0), // north
+            (-40.0, 68.0, PropKind::WallEW, 240.0),   // south
+            (68.0, -40.0, PropKind::WallNS, 192.0),   // east
+            (-148.0, -40.0, PropKind::WallNS, 192.0), // west
         ];
-        for (ex, ez, kind) in sides {
+        for (ex, ez, kind, expected_span) in sides {
             let found = t.props.iter().any(|p| {
                 p.kind == kind
                     && (p.offset.x - ex).abs() < 1e-3
                     && (p.offset.z - ez).abs() < 1e-3
                     && p.size.map(|s| {
-                        (matches!(kind, PropKind::WallEW) && (s.x - 240.0).abs() < 1e-3)
-                            || (matches!(kind, PropKind::WallNS) && (s.z - 240.0).abs() < 1e-3)
+                        (matches!(kind, PropKind::WallEW) && (s.x - expected_span).abs() < 1e-3)
+                            || (matches!(kind, PropKind::WallNS) && (s.z - expected_span).abs() < 1e-3)
                     }).unwrap_or(false)
             });
             assert!(
                 found,
-                "missing {kind:?} run at ({ex}, {ez}) with span 240; got: {:?}",
+                "missing {kind:?} run at ({ex}, {ez}) with span {expected_span}; got: {:?}",
                 t.props.iter()
                     .filter(|p| matches!(p.kind, PropKind::WallEW | PropKind::WallNS))
                     .map(|p| (p.kind, p.offset, p.size))
@@ -809,7 +932,13 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         let sz = full.unwrap().size.unwrap();
-        assert!((sz.z - 240.0).abs() < 1e-3, "coalesced run spans 3 rows; got z={}", sz.z);
+        // 3-row span = 240 units, shortened by 24 at each junction end
+        // (top and bottom perimeter cells carry EW segments) → 192.
+        assert!(
+            (sz.z - 192.0).abs() < 1e-3,
+            "3-row run minus 48 units junction shortening = 192; got z={}",
+            sz.z
+        );
     }
 
     #[test]
@@ -881,9 +1010,14 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         let sz = full_run.unwrap().size.expect("run-based prop carries size");
+        // Full 4-row span = 320 units, minus WALL_THICKNESS (24) at
+        // each end where the T-junction perimeter carries an EW
+        // segment → 320 − 48 = 272. The NS wall stops flush against
+        // the EW perimeter's inner face at top and bottom, no shared
+        // 3D volume, no z-fight.
         assert!(
-            (sz.z - 320.0).abs() < 1e-3,
-            "coalesced run spans all 4 rows (320 units); got z={}",
+            (sz.z - 272.0).abs() < 1e-3,
+            "coalesced run spans 4 rows minus junction shortening (272 units); got z={}",
             sz.z
         );
     }
