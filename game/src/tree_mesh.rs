@@ -120,6 +120,44 @@ pub fn trunk_mesh(
 /// (sunflower packing — dense near the trunk, thinning at the
 /// periphery). Height fractions distribute through [0, 1] so the
 /// crown has vertical volume, not just a disc.
+/// Small spherical element placed at every canopy station. A unit
+/// icosahedron (12 verts, 20 tris) — smooth-shaded via radial
+/// normals since a vertex on the unit sphere IS its own normal.
+/// Baked once per program; every canopy element on every tree is
+/// one instanced draw of this shared geometry, transformed by the
+/// per-instance world position + colour + scale.
+///
+/// Coordinates use the standard `(±1, ±φ, 0)` permutation, scaled
+/// to unit length by dividing by `√(1 + φ²)`. Index triples are the
+/// canonical icosahedron winding, oriented CCW as seen from outside
+/// so front-face-CCW backface culling shows the outside.
+pub fn canopy_element_mesh() -> (Vec<MeshVertex>, Vec<u32>) {
+    let phi = (1.0_f32 + 5.0_f32.sqrt()) * 0.5;
+    let inv = 1.0 / (1.0 + phi * phi).sqrt();
+    let p = phi * inv;
+    let q = inv;
+    let raw: [[f32; 3]; 12] = [
+        [-q,  p,  0.0], [ q,  p,  0.0], [-q, -p,  0.0], [ q, -p,  0.0],
+        [ 0.0, -q,  p], [ 0.0,  q,  p], [ 0.0, -q, -p], [ 0.0,  q, -p],
+        [ p,  0.0, -q], [ p,  0.0,  q], [-p,  0.0, -q], [-p,  0.0,  q],
+    ];
+    let verts = raw
+        .into_iter()
+        .map(|pos| MeshVertex {
+            pos,
+            normal: pos,
+            uv: [0.5, 0.5],
+        })
+        .collect();
+    let indices: Vec<u32> = vec![
+        0, 11, 5,   0, 5, 1,    0, 1, 7,    0, 7, 10,   0, 10, 11,
+        1, 5, 9,    5, 11, 4,   11, 10, 2,  10, 7, 6,   7, 1, 8,
+        3, 9, 4,    3, 4, 2,    3, 2, 6,    3, 6, 8,    3, 8, 9,
+        4, 9, 5,    2, 4, 11,   6, 2, 10,   8, 6, 7,    9, 8, 1,
+    ];
+    (verts, indices)
+}
+
 pub fn canopy_stations(count: u32, canopy_radius: f32) -> Vec<CanopyStation> {
     let n = count as usize;
     let mut stations = Vec::with_capacity(n);
@@ -283,6 +321,65 @@ mod tests {
             "canopy should have vertical volume, height span was {}",
             max - min
         );
+    }
+
+    #[test]
+    fn canopy_element_topology_is_icosahedron() {
+        let (verts, indices) = canopy_element_mesh();
+        assert_eq!(verts.len(), 12, "icosahedron has 12 vertices");
+        assert_eq!(indices.len(), 60, "20 triangles × 3 indices");
+        for &i in &indices {
+            assert!((i as usize) < verts.len(), "index {i} out of range");
+        }
+    }
+
+    #[test]
+    fn canopy_element_verts_lie_on_unit_sphere() {
+        let (verts, _) = canopy_element_mesh();
+        for v in &verts {
+            let r = (v.pos[0].powi(2) + v.pos[1].powi(2) + v.pos[2].powi(2)).sqrt();
+            assert!((r - 1.0).abs() < 1e-5, "vertex not on unit sphere: r={r}");
+        }
+    }
+
+    #[test]
+    fn canopy_element_faces_are_outward() {
+        // For every triangle, the face normal (cross of two edges) must
+        // point in the same hemisphere as the face centroid — i.e. away
+        // from the sphere centre. Guards against a mistranscribed index
+        // table that would flip winding on any face.
+        let (verts, indices) = canopy_element_mesh();
+        for tri in indices.chunks_exact(3) {
+            let a = verts[tri[0] as usize].pos;
+            let b = verts[tri[1] as usize].pos;
+            let c = verts[tri[2] as usize].pos;
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let n = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            let centroid = [
+                (a[0] + b[0] + c[0]) / 3.0,
+                (a[1] + b[1] + c[1]) / 3.0,
+                (a[2] + b[2] + c[2]) / 3.0,
+            ];
+            let dot = n[0] * centroid[0] + n[1] * centroid[1] + n[2] * centroid[2];
+            assert!(
+                dot > 0.0,
+                "face {:?} has inward normal (dot with centroid = {dot})",
+                tri
+            );
+        }
+    }
+
+    #[test]
+    fn canopy_element_is_deterministic() {
+        let (v1, i1) = canopy_element_mesh();
+        let (v2, i2) = canopy_element_mesh();
+        assert_eq!(v1, v2);
+        assert_eq!(i1, i2);
     }
 
     #[test]
