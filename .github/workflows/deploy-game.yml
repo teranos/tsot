@@ -9,6 +9,7 @@ on:
     branches: ['**']
     paths:
       - 'game/**'
+      - 'crates/cdda/**'
       - '.github/workflows/deploy-game.yml'
   workflow_dispatch:
 

@@ -18,10 +18,12 @@ on:
     branches: ['**']
     paths:
       - 'game/**'
+      - 'crates/cdda/**'
       - '.github/workflows/game-tests.yml'
   pull_request:
     paths:
       - 'game/**'
+      - 'crates/cdda/**'
       - '.github/workflows/game-tests.yml'
   workflow_dispatch:
 
