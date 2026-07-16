@@ -31,7 +31,7 @@ clean:
 
 # Walk the pinned CDDA mapgen tree, resolve every om_terrain through
 # our importer, print resolved/empty/skipped/failed + top unhandled
-# features + ranked candidates. HANDOVER checklist #2 — "add buildings"
-# is measured, not guessed.
+# features + ranked candidates. "Add buildings" is measured, not
+# guessed — see the coverage report output for the top blockers.
 coverage:
 	@cargo +nightly run --manifest-path ../crates/cdda/Cargo.toml --bin cdda-coverage --release
