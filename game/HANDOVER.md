@@ -1,15 +1,18 @@
-# game — handover
 
-What's not in PR #16. The delivered work is described in the PR body;
-the watermark top-right in-game is ground truth for what's running.
+## Next steps
 
-## Open — not in the PR
-
-- **Drive the un-verified flows on device.** Music/SFX persist across
-  reload, both sliders, ESC/gear close, jukebox toggle visible,
-  ghost + cut-away between two adjacent buildings.
-- **Pre-merge:** squash the vendoring churn + scrub the CC-BY-SA JSON
-  blobs from history before merging.
+- **Move off the cube-instance renderer.** The current pipeline is
+  hardcoded to instanced-cube rendering; it structurally cannot draw a
+  continuous polyhedron per building. Adjacent boxes always render as
+  separate shaded pieces (double walls at every junction, no matter
+  where the boxes sit). The wall-render dissatisfaction on this branch
+  is a rendering-substrate limitation, not a placement one. The next
+  branch replaces / augments the renderer with a mesh pipeline (new
+  env.* imports, new shader, new collider strategy alongside the box
+  colliders) and re-does wall emission as one traced polyhedron per
+  building with door/window cutouts. Estimated 10–20 hours of
+  infrastructure work before it produces its first correct-looking
+  wall — hence its own branch, not a squeeze into this one.
 
 ## The frontier (open research)
 
@@ -35,44 +38,3 @@ the watermark top-right in-game is ground truth for what's running.
    PvP; CDDA mapgen carries monster spawns. A building's authored
    spawns → encounters resolved by ccg — map as encounter source, not
    just architecture.
-
-## Not a defect — leave it alone
-
-- **Glass** looks correct — user-verified on device. The glass pass
-  draws panes unsorted with depth-write off (theoretically
-  order-dependent). In practice it's fine. Only if you ever see wrong
-  blending where many panes overlap, add a back-to-front sort in
-  `scene::snapshot_to_glass_instances`. Do not pre-emptively "fix" it.
-
-## Environment gotchas
-
-- **No GPU in the dev sandbox** — native wgpu render + any visual
-  check fails (`No suitable graphics adapter`). Only the user's device
-  confirms visuals. "Tests pass" is necessary, not sufficient.
-- **`api.github.com` blocked** — nix flake *input* resolution via
-  `github:` fails; the git mirror works (`builtins.fetchGit`, plain
-  `git clone` succeed). CDDA hash verified via `builtins.fetchGit` +
-  `nix hash path`, not full `nix build`; `flake.lock` couldn't be
-  generated in the sandbox.
-- **`imports.allow` is enforced** — every wasm↔JS crossing is a
-  hand-wired `env.*` import; adding one edits `imports.allow` +
-  `main.ts` + the Rust extern, and CI diffs it.
-
-## Lessons — don't repeat these
-
-- **Counts are not performance.** `game/CLAUDE.md` says "Observed by
-  seer" — no perf claim without a seer `[perf]` line. Standing in a
-  3,755-prop school costs ~0.4ms/frame steady-state; the only real
-  cost is a one-frame load hitch.
-- **A green pipeline is not a live measurement.** For 9 commits the
-  deploy was broken because "live == HEAD" was asserted once and never
-  re-checked; the flake hash was a function of the file list, so
-  adding a building silently broke `nix build .#cdda-src` in CI while
-  local cargo (which uses the `.cdda-src` fetch path — no hash check)
-  stayed green. Fixed by decoupling the fetch from the manifest;
-  verify `build-info.json` == HEAD after any deploy-affecting push.
-- **A swallowed error rots for days.** seer looked alive (green jobs,
-  frame PNGs uploading) but was measuring **nothing** for the whole
-  branch because 11 wasm imports weren't mirrored into seer-host's
-  linker and the run step piped through `tee` (masking the crash).
-  Errors are sacred — read the artifact, not the job colour.
