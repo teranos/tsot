@@ -31,12 +31,17 @@
     deck → fixed to count `!is_cardless` cards. The rest already agree:
     wildcard-hand and attach include cardless in `eligible_hand_payments` /
     `attached_have`; GY is guarded by the P.12a anchor check. Tests in
-    `game/cardless_sleeve_tests.rs` per cost source. **Deferred optimization
-    (not a loop):** the AI does not yet exploit cardless as bodies for an
-    *identity* HAND cost — it stays conservative (no anchor → refuse), which
-    matches the resolver, so it never loops, it just misses some castable
-    plays. Wiring that needs anchor-first hand selection; revisit if a card
-    makes it matter.
+    `game/cardless_sleeve_tests.rs` per cost source. **Former deferral —
+    NOW DONE (anchor-first hand selection):** the AI now uses cardless
+    sleeves as non-anchor bodies for an *identity* HAND cost, mirroring the
+    Clear View GY-substitute path. Affordability counts cardless bodies
+    (identity casts only, so no wildcard double-count) on top of a required
+    real identity anchor; the resolver fills the shortfall with cardless
+    bodies after identity matches + GY substitutes, always leaving ≥1 real
+    anchor so play_card's all-cardless gate never fires. Proven loop-free by
+    a 2000-game `AiKind::Stress` soak on random cardless decks. Tests in
+    `game/cardless_sleeve_tests.rs`
+    (`z8_can_pay_identity_hand2_with_one_real_anchor_plus_a_cardless_body`).
   - **8.3 End-to-end acceptance — DONE.** `sim/run.rs` tests build a deck
     from `DeckUnit`s with cardless sleeves and run a full Heuristic-vs-
     Heuristic game: it completes with a winner, the Z.8b free draw pulls a

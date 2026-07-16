@@ -539,12 +539,33 @@ pub(crate) fn build_pattern_b_choices(
                 hand_needed -= used;
             }
         }
+        // Z.8c: fill any remaining shortfall with cardless bodies from hand
+        // (non-anchor, the cardless analogue of GY substitutes). Identity
+        // casts only — a wildcard cast draws cardless through
+        // resolve_hand_payment's own pool. Affordability guarantees
+        // identity_match_count >= 1 here, so this always leaves >=1 slot
+        // for resolve_hand_payment to fill with a real anchor; the bundle
+        // is never all-cardless (which play_card would reject).
+        if hand_needed > 0 && !state.card_identity(picked).is_empty() {
+            let identity_match_count = state.eligible_hand_payments(active, picked).len();
+            if identity_match_count < hand_needed {
+                let want = hand_needed - identity_match_count;
+                let bodies = state.find_cardless_hand_bodies(
+                    active,
+                    picked,
+                    &choices.hand_payment_ids,
+                    want,
+                );
+                let used = bodies.len();
+                choices.hand_payment_ids.extend(bodies);
+                hand_needed -= used;
+            }
+        }
         if hand_needed > 0 {
-            choices.hand_payment_ids =
-                match state.resolve_hand_payment(active, picked, hand_needed, oracle) {
-                    Ok(ids) => ids,
-                    Err(pending) => return BuildChoiceResult::Pending(pending),
-                };
+            match state.resolve_hand_payment(active, picked, hand_needed, oracle) {
+                Ok(ids) => choices.hand_payment_ids.extend(ids),
+                Err(pending) => return BuildChoiceResult::Pending(pending),
+            }
         }
         if gy_needed > 0 {
             choices.graveyard_payment_ids =
@@ -616,12 +637,33 @@ pub(crate) fn build_pattern_b_choices(
                 hand_needed -= used;
             }
         }
+        // Z.8c: fill any remaining shortfall with cardless bodies from hand
+        // (non-anchor, the cardless analogue of GY substitutes). Identity
+        // casts only — a wildcard cast draws cardless through
+        // resolve_hand_payment's own pool. Affordability guarantees
+        // identity_match_count >= 1 here, so this always leaves >=1 slot
+        // for resolve_hand_payment to fill with a real anchor; the bundle
+        // is never all-cardless (which play_card would reject).
+        if hand_needed > 0 && !state.card_identity(picked).is_empty() {
+            let identity_match_count = state.eligible_hand_payments(active, picked).len();
+            if identity_match_count < hand_needed {
+                let want = hand_needed - identity_match_count;
+                let bodies = state.find_cardless_hand_bodies(
+                    active,
+                    picked,
+                    &choices.hand_payment_ids,
+                    want,
+                );
+                let used = bodies.len();
+                choices.hand_payment_ids.extend(bodies);
+                hand_needed -= used;
+            }
+        }
         if hand_needed > 0 {
-            choices.hand_payment_ids =
-                match state.resolve_hand_payment(active, picked, hand_needed, oracle) {
-                    Ok(ids) => ids,
-                    Err(pending) => return BuildChoiceResult::Pending(pending),
-                };
+            match state.resolve_hand_payment(active, picked, hand_needed, oracle) {
+                Ok(ids) => choices.hand_payment_ids.extend(ids),
+                Err(pending) => return BuildChoiceResult::Pending(pending),
+            }
         }
         if gy_needed > 0 {
             choices.graveyard_payment_ids =

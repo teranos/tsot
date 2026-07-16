@@ -421,6 +421,32 @@ impl GameState {
             .collect()
     }
 
+    /// Pick up to `max_count` cardless sleeves (Z.8) from `player`'s HAND,
+    /// in hand order, to use as non-anchor HAND-cost bodies (Z.8c) — the
+    /// cardless analogue of `find_gy_hand_substitutes`. Excludes the cast
+    /// itself and any iids in `exclude` (already picked for this payment).
+    /// A cardless body carries no identity, so it can only fill slots a
+    /// real identity-matching card leaves over; the caller keeps ≥1 real
+    /// anchor, and play_card's all-cardless gate (P.7a) refuses a payment
+    /// with no anchor.
+    pub fn find_cardless_hand_bodies(
+        &self,
+        player: PlayerId,
+        cast_iid: &InstanceId,
+        exclude: &[InstanceId],
+        max_count: usize,
+    ) -> Vec<InstanceId> {
+        self.player(player)
+            .hand
+            .iter()
+            .filter(|iid| *iid != cast_iid)
+            .filter(|iid| !exclude.contains(iid))
+            .filter(|iid| self.is_cardless(iid))
+            .take(max_count)
+            .cloned()
+            .collect()
+    }
+
     /// Build a HAND payment vector by asking `oracle.choose_card` once per
     /// payment slot. Pool is `player.hand` minus the card being played and
     /// any cards already picked for this payment. Pure read of state; the

@@ -286,6 +286,37 @@ fn z8_can_pay_identity_hand_needs_a_real_anchor_not_just_cardless() {
     );
 }
 
+#[test]
+fn z8_can_pay_identity_hand2_with_one_real_anchor_plus_a_cardless_body() {
+    // Identity cast, hand:2 — one real identity-matching card anchors
+    // (P.7a) and a cardless sleeve fills the second, non-anchor slot
+    // (Z.8c). The engine already accepts this bundle; the sim must now
+    // fund it (previously it stayed conservative and refused).
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    s.card_pool.get_mut(&cast).unwrap().card_mut().colors = vec!["green".to_string()];
+    // One real green anchor.
+    let anchor = s.a.hand[1].clone();
+    s.card_pool.get_mut(&anchor).unwrap().card_mut().colors = vec!["green".to_string()];
+    // The rest are cardless bodies.
+    let bodies: Vec<InstanceId> = s
+        .a
+        .hand
+        .iter()
+        .filter(|h| **h != cast && **h != anchor)
+        .cloned()
+        .collect();
+    for iid in &bodies {
+        make_cardless(&mut s, iid);
+    }
+    set_cost(&mut s, &cast, vec![hand_cost(2)]);
+
+    assert!(
+        crate::sim::ai::can_pay_instant_cost(&s, PlayerId::A, &cast),
+        "identity hand:2 affordable via one real anchor + a cardless body"
+    );
+}
+
 // ---- 9.1: search library for cardless sleeves ----
 
 #[test]

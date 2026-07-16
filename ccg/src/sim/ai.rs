@@ -405,7 +405,23 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
                 .unwrap_or(false)
         })
         .count();
-    let hand_have = hand_have_identity + gy_subs_available;
+    // Z.8c: cardless sleeves in hand are non-anchor bodies — like Clear
+    // View GY-substitutes, they fill HAND slots the identity cards can't.
+    // Only counted for an identity cast: for a wildcard cast they already
+    // count inside hand_have_identity (empty identity = every payment
+    // matches), so adding them again would double-count. The anchor gate
+    // below still requires hand_have_identity >= 1 for an identity cast,
+    // so cardless only ADDS capacity beyond a real anchor — never funds a
+    // cast alone (which play_card would reject with NoHandPaymentForIdentity).
+    let cardless_bodies = if cast_ident.is_empty() {
+        0
+    } else {
+        p.hand
+            .iter()
+            .filter(|h| *h != iid && state.is_cardless(h))
+            .count()
+    };
+    let hand_have = hand_have_identity + gy_subs_available + cardless_bodies;
     // P.12b identity-coverage gate (matches game/play.rs:359-363):
     // when the cast has any identity (colors ∪ symbols), substitutes
     // alone cannot fund payment unless the GY pitch supplies a
