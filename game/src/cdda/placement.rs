@@ -410,9 +410,45 @@ pub fn mapgen_to_template(
             if divider_ns {
                 emit(cx_world, cz_world, ns_kind(base));
             }
+            // T-junction stub: if a perpendicular divider is adjacent,
+            // this cell's perimeter wall doesn't reach into the divider
+            // (they sit on different planes — perimeter on the outer
+            // edge, divider on the cell centre — leaving a ~56-unit
+            // gap at the T). Emit a centred stub on the perpendicular
+            // axis, spanning the cell, to bridge them. Different axis
+            // from the perimeter, so the "one wall per axis per cell"
+            // invariant is preserved.
+            let neighbour_is_ns_divider = |rr: i32, cc: i32| -> bool {
+                is_solid(rr, cc)
+                    && is_interior(rr, cc + 1)
+                    && is_interior(rr, cc - 1)
+            };
+            let neighbour_is_ew_divider = |rr: i32, cc: i32| -> bool {
+                is_solid(rr, cc)
+                    && is_interior(rr - 1, cc)
+                    && is_interior(rr + 1, cc)
+            };
+            let need_ns_stub = !divider_ns
+                && (neighbour_is_ns_divider(r - 1, c) || neighbour_is_ns_divider(r + 1, c));
+            let need_ew_stub = !divider_ew
+                && (neighbour_is_ew_divider(r, c - 1) || neighbour_is_ew_divider(r, c + 1));
+            if need_ns_stub {
+                emit(cx_world, cz_world, ns_kind(base));
+            }
+            if need_ew_stub {
+                emit(cx_world, cz_world, ew_kind(base));
+            }
             // No neighbours at all matched — isolated wall cell.
             // Emit a centered thin bar rather than a block.
-            if !emit_n && !emit_s && !emit_e && !emit_w && !divider_ew && !divider_ns {
+            if !emit_n
+                && !emit_s
+                && !emit_e
+                && !emit_w
+                && !divider_ew
+                && !divider_ns
+                && !need_ns_stub
+                && !need_ew_stub
+            {
                 emit(cx_world, cz_world, ew_kind(base));
             }
         }
@@ -672,6 +708,38 @@ mod tests {
     }
 
     #[test]
+    fn t_junction_perimeter_cell_emits_a_stub_to_the_divider() {
+        // 3×5: single row of rooms with a vertical divider at col 2.
+        // Cell (0, 2) is the top perimeter cell where the divider meets
+        // the outer wall — it must emit a centred WallNS stub that
+        // reaches down into the divider at (1, 2), otherwise there's a
+        // visible ~56-unit gap between the perimeter WallEW and the
+        // divider WallNS below.
+        let json = synthetic_mapgen(&["wwwww", "w.w.w", "wwwww"]);
+        let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
+        // Cell (0, 2) centre: x = (2−2.5)×80 = −40, z = (0−1.5)×80 = −120.
+        // The stub is a centred WallNS at (−40, −120).
+        let has_stub = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallNS)
+                && (p.offset.x - (-40.0)).abs() < 1e-3
+                && (p.offset.z - (-120.0)).abs() < 1e-3
+        });
+        assert!(
+            has_stub,
+            "top T-junction cell (0, 2) should emit a centred WallNS \
+             stub to bridge the divider; got: {:?}",
+            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
+        );
+        // Same for the bottom T-junction (2, 2), row 2 centre z = +40.
+        let has_stub_s = t.props.iter().any(|p| {
+            matches!(p.kind, PropKind::WallNS)
+                && (p.offset.x - (-40.0)).abs() < 1e-3
+                && (p.offset.z - 40.0).abs() < 1e-3
+        });
+        assert!(has_stub_s, "bottom T-junction (2, 2) should also emit a stub");
+    }
+
+    #[test]
     fn a_cell_never_emits_more_than_one_wall_per_axis() {
         // Regression: divider + diagonal + perimeter rules were all
         // additive on the same axis, so a divider cell whose diagonals
@@ -713,35 +781,17 @@ mod tests {
     }
 
     #[test]
-    fn t_junction_divider_doesnt_protrude_into_the_perimeter_cell() {
-        // 4×5: two 1×1 rooms separated by a divider at col 2. Perimeter
-        // walls all around. The T-junction cells (0, 2) and (3, 2) are
-        // where the divider meets the top and bottom perimeter — the
-        // vertical divider should NOT emit at those cells.
+    fn divider_between_two_rooms_extends_through_its_full_run() {
+        // 4×5: two 1×1 rooms separated by a divider at col 2.
+        // The two middle cells (1, 2) and (2, 2) are dividers (interior
+        // E + interior W) and emit a centred WallNS each. The perimeter
+        // cells (0, 2) and (3, 2) at the T-junctions emit a centred
+        // WallNS STUB — different concern from divider emission, tested
+        // by `t_junction_perimeter_cell_emits_a_stub_to_the_divider`.
         let json = synthetic_mapgen(&["wwwww", "w.w.w", "w.w.w", "wwwww"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
-        // For 4×5 with tile=80: cx=2.5, cz=2.0.
-        // Divider cells (1, 2) and (2, 2) have room E + room W → centred
-        // WallNS at cell centre x=−40, at their z. T-junction cells
-        // (0, 2) and (3, 2) are perimeter (N-facing / S-facing exterior)
-        // and must NOT emit a vertical divider.
-        let has_top_protrusion = t.props.iter().any(|p| {
-            matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-40.0)).abs() < 1e-3
-                && (p.offset.z - (-160.0)).abs() < 1e-3
-        });
-        assert!(
-            !has_top_protrusion,
-            "top T-junction should not emit a vertical divider at (0, 2); got: {:?}",
-            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
-        );
-        let has_bottom_protrusion = t.props.iter().any(|p| {
-            matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-40.0)).abs() < 1e-3
-                && (p.offset.z - 80.0).abs() < 1e-3
-        });
-        assert!(!has_bottom_protrusion, "bottom T-junction should not emit vertical");
-        // Divider present at the two middle cells, single centred wall each.
+        // Cx=2.5, Cz=2.0. Divider centre wall at x=−40; rows 1 and 2
+        // at z=−80 and z=0.
         let mid_1 = t.props.iter().any(|p| {
             matches!(p.kind, PropKind::WallNS)
                 && (p.offset.x - (-40.0)).abs() < 1e-3
@@ -752,7 +802,7 @@ mod tests {
                 && (p.offset.x - (-40.0)).abs() < 1e-3
                 && p.offset.z.abs() < 1e-3
         });
-        assert!(mid_1 && mid_2, "the divider still emits at rows 1 and 2");
+        assert!(mid_1 && mid_2, "the divider emits at rows 1 and 2");
     }
 
     /// User's typed spec, verbatim. Runs the current importer and
