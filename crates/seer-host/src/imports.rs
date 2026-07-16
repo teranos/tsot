@@ -400,7 +400,143 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         },
     )?;
 
+    // Glass + ghost render passes. Same no-GPU treatment as the cube/UI
+    // pipelines above: pipeline-create hands back a fake handle, the
+    // draw call is inert. These landed on this branch; without them
+    // game.wasm won't instantiate under wasmtime (see the imports.allow
+    // conformance test at the bottom of this file).
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_pipeline_create_glass",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _pipeline_layout: u32, _shader: u32, _vertex_stride: u32,
+         _instance_stride: u32, _color_format: u32, _depth_format: u32,
+         _label_ptr: u32, _label_len: u32|
+         -> Result<u32> { Ok(1) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_glass",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _target: u32, _pipeline: u32, _bind_group: u32,
+         _vertex_buf: u32, _instance_buf: u32,
+         _vertex_count: u32, _instance_count: u32|
+         -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_pipeline_create_ghost",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _pipeline_layout: u32, _shader: u32, _vertex_stride: u32,
+         _instance_stride: u32, _color_format: u32, _depth_format: u32,
+         _label_ptr: u32, _label_len: u32|
+         -> Result<u32> { Ok(1) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_ghost",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _target: u32, _pipeline: u32, _bind_group: u32,
+         _vertex_buf: u32, _instance_buf: u32,
+         _vertex_count: u32, _instance_count: u32|
+         -> Result<u32> { Ok(0) },
+    )?;
+
+    // Persistence. No IndexedDB under wasmtime — every load returns 0
+    // ("not found") so Rust falls back to its defaults deterministically,
+    // and every save is a no-op.
+    linker.func_wrap(
+        "env",
+        "game_position_load",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _out_ptr: i32| -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_position_save",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _bytes_ptr: i32, _bytes_len: u32|
+         -> Result<()> { Ok(()) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_music_state_load",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _out_ptr: i32| -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_music_state_save",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _bytes_ptr: i32, _bytes_len: u32|
+         -> Result<()> { Ok(()) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_sfx_state_load",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _out_ptr: i32| -> Result<u32> { Ok(0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_sfx_state_save",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _bytes_ptr: i32, _bytes_len: u32|
+         -> Result<()> { Ok(()) },
+    )?;
+
+    // Audio volume — no AudioContext under wasmtime, so this is inert.
+    linker.func_wrap(
+        "env",
+        "game_audio_set_volume",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>, _handle: u32, _volume_x1000: u32|
+         -> Result<()> { Ok(()) },
+    )?;
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `env.*` crossing the game is allowed to declare
+    /// (`game/imports.allow`) must be satisfiable by this linker. When
+    /// the game adds a boundary crossing (glass/ghost render, persistence,
+    /// audio volume, …) and nobody mirrors it here, game.wasm fails to
+    /// instantiate under wasmtime with `unknown import: env::…`. In CI the
+    /// run step pipes through `tee`, so that crash exits 0 and the job
+    /// stays green while seer measures *nothing* — history and summary
+    /// freeze silently. This test turns that drift into a red `cargo test`
+    /// at the source, so the error lands in front of us instead of rotting
+    /// as stale S3 data.
+    #[test]
+    fn linker_satisfies_every_allowed_import() {
+        let allow = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../game/imports.allow"
+        ));
+        let engine = Engine::default();
+        let state = Arc::new(Mutex::new(HostState::new()));
+        let mut store: Store<Arc<Mutex<HostState>>> = Store::new(&engine, state);
+        let mut linker: Linker<Arc<Mutex<HostState>>> = Linker::new(&engine);
+        wire_imports(&mut linker).expect("wire_imports");
+
+        let mut missing = Vec::new();
+        for line in allow.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (module, name) = line
+                .split_once('.')
+                .unwrap_or_else(|| panic!("imports.allow entry is not module.name: {line:?}"));
+            if linker.get(&mut store, module, name).is_none() {
+                missing.push(line.to_string());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "seer-host linker is missing {} import(s) present in game/imports.allow — game.wasm \
+             will fail to instantiate under wasmtime and seer will measure nothing:\n  {}",
+            missing.len(),
+            missing.join("\n  ")
+        );
+    }
 }
 
 fn render_wasm_backtrace(bt: &WasmBacktrace) -> String {

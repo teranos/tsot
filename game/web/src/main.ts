@@ -8,6 +8,13 @@
 
 let memory: WebAssembly.Memory | null = null
 
+// Injected at bundle time by build.ts (Bun `define`): the commit this JS
+// is built for. Compared against the running wasm's own embedded commit
+// to close the build loop. 'unknown' with no CI env, matching
+// build_info.rs — so a local cargo+bun pair both say 'unknown' and match.
+declare const __BUILD_COMMIT__: string
+const EXPECTED_COMMIT = __BUILD_COMMIT__
+
 function decodeString(ptr: number, len: number): string {
   if (!memory) return ''
   const bytes = new Uint8Array(memory.buffer, ptr, len)
@@ -79,17 +86,6 @@ async function preInitGpu(): Promise<{ status: number; device: unknown }> {
   }
 }
 
-async function loadBuildInfo() {
-  const el = document.getElementById('game-loading-build')
-  if (!el) return
-  try {
-    const r = await fetch('/build-info.json', { cache: 'no-cache' })
-    if (!r.ok) return
-    const info = await r.json() as { short: string; built_at: string }
-    el.textContent = `build: ${info.short} · ${info.built_at}`
-  } catch (_) {}
-}
-
 // WASD input state — a u32 bitmask (W=1, A=2, S=4, D=8) maintained
 // by window keydown/keyup listeners. Wasm polls via game_input_state.
 let inputBits = 0
@@ -97,12 +93,14 @@ const KEY_W = 0x01
 const KEY_A = 0x02
 const KEY_S = 0x04
 const KEY_D = 0x08
+const KEY_ESC = 0x10
 function keyBit(k: string): number {
   switch (k.toLowerCase()) {
     case 'w': return KEY_W
     case 'a': return KEY_A
     case 's': return KEY_S
     case 'd': return KEY_D
+    case 'escape': return KEY_ESC
     default: return 0
   }
 }
@@ -331,20 +329,15 @@ window.addEventListener('keydown', unlockAudioOnGesture, { once: false })
 window.addEventListener('pointerdown', unlockAudioOnGesture, { once: false })
 
 // Remote-players proxy — thin WebSocket bridge to relaye's R16 WS
-// gateway (see game/docs/relaye-game-gateway.md). Defaults to the
-// deployed endpoint so game.sbvh.nl works out of the box; override
-// with ?proxy=ws://... for local dev, or ?proxy=off to disable.
-// Incoming messages are one GamePosition JSON each; we frame them
-// length-prefixed (u32 LE + bytes) so Rust drains one buffer per
-// tick and slices with parse_frames.
-const DEFAULT_PROXY_WS = 'wss://relaye.sbvh.nl/ws/rave-positions/v1'
-const proxyParam = new URLSearchParams(location.search).get('proxy')
-const PROXY_WS_URL = proxyParam === 'off' ? '' : (proxyParam || DEFAULT_PROXY_WS)
+// gateway (see game/docs/relaye-game-gateway.md). Incoming messages
+// are one GamePosition JSON each; we frame them length-prefixed
+// (u32 LE + bytes) so Rust drains one buffer per tick and slices
+// with parse_frames.
+const PROXY_WS_URL = 'wss://relaye.sbvh.nl/ws/rave-positions/v1'
 let proxyWs: WebSocket | null = null
 let proxyRxBuf: Uint8Array = new Uint8Array(0)
 
 function connectProxy() {
-  if (!PROXY_WS_URL) return
   try {
     proxyWs = new WebSocket(PROXY_WS_URL)
     proxyWs.binaryType = 'arraybuffer'
@@ -373,34 +366,21 @@ function connectProxy() {
 }
 connectProxy()
 
-// Exclamation overlay — Rust computes clip-space coords above the NPC
-// each frame and passes them here; JS maps to canvas pixels and shows
-// a boxed "!" above that point. Repeated calls refresh the timeout so
-// it lingers for a short tail after the overlap ends.
-const bangEl = document.getElementById('game-bang')
-let bangTimeout: ReturnType<typeof setTimeout> | null = null
-function showBang(clipX: number, clipY: number) {
-  if (!bangEl) return
-  const canvas = document.getElementById('game-canvas')
-  if (canvas) {
-    const rect = canvas.getBoundingClientRect()
-    const xPx = rect.left + (clipX + 1) * 0.5 * rect.width
-    const yPx = rect.top + (1 - clipY) * 0.5 * rect.height
-    bangEl.style.left = `${xPx}px`
-    bangEl.style.top = `${yPx}px`
-  }
-  bangEl.classList.add('shown')
-  if (bangTimeout) clearTimeout(bangTimeout)
-  bangTimeout = setTimeout(() => bangEl.classList.remove('shown'), 1200)
-}
-
 async function main() {
-  loadBuildInfo()
   const gpuPromise = preInitGpu()
   const identityPromise = loadIdentityFromDb().catch(e => {
     console.warn('[game] identity load failed:', e)
     return null
   })
+  // No URL parameters — banned repo-wide. The CDN's cache policy
+  // (Managed-CachingOptimized) strips them anyway, so `?v=<commit>`
+  // only ever busted the browser cache. The two mechanisms that
+  // actually keep this loop closed:
+  //   1. Deploy invalidates `/game.wasm` at CloudFront, so the CDN
+  //      serves the new bytes once the invalidation completes.
+  //   2. The boot-time build-match guard below reads the wasm's own
+  //      commit and halts if it disagrees with the bundle's, catching
+  //      any window where a browser still has the previous wasm cached.
   const wasmBytes = await streamWasmBytes('/game.wasm')
   const gpu = await gpuPromise
   identityBytes = await identityPromise
@@ -727,7 +707,6 @@ async function main() {
           return 1
         }
       },
-      game_show_exclamation: (clipX: number, clipY: number) => showBang(clipX, clipY),
       game_identity_load: (outPtr: number): number => {
         if (!memory || !identityBytes || identityBytes.length !== 32) return 0
         new Uint8Array(memory.buffer, outPtr, 32).set(identityBytes)
@@ -744,6 +723,65 @@ async function main() {
         if (!memory) return
         const view = new Uint8Array(memory.buffer, outPtr, outLen)
         crypto.getRandomValues(view)
+      },
+      // Persistent player position (3 × f32 LE). localStorage: Rust owns
+      // the bytes, JS owns the store, same as identity.
+      game_position_load: (outPtr: number): number => {
+        if (!memory) return 0
+        const s = localStorage.getItem('game_position')
+        if (!s) return 0
+        try {
+          const arr = Uint8Array.from(atob(s), c => c.charCodeAt(0))
+          if (arr.length !== 12) return 0
+          new Uint8Array(memory.buffer, outPtr, 12).set(arr)
+          return 12
+        } catch {
+          return 0
+        }
+      },
+      game_position_save: (bytesPtr: number, bytesLen: number) => {
+        if (!memory) return
+        const copy = new Uint8Array(memory.buffer, bytesPtr, bytesLen).slice()
+        localStorage.setItem('game_position', btoa(String.fromCharCode(...copy)))
+      },
+      // Music preference (playing flag + volume) — 5 bytes, same
+      // localStorage-through-Rust pattern as the position above.
+      game_music_state_load: (outPtr: number): number => {
+        if (!memory) return 0
+        const s = localStorage.getItem('game_music')
+        if (!s) return 0
+        try {
+          const arr = Uint8Array.from(atob(s), c => c.charCodeAt(0))
+          if (arr.length !== 5) return 0
+          new Uint8Array(memory.buffer, outPtr, 5).set(arr)
+          return 5
+        } catch {
+          return 0
+        }
+      },
+      game_music_state_save: (bytesPtr: number, bytesLen: number) => {
+        if (!memory) return
+        const copy = new Uint8Array(memory.buffer, bytesPtr, bytesLen).slice()
+        localStorage.setItem('game_music', btoa(String.fromCharCode(...copy)))
+      },
+      // SFX preference (volume, 4 bytes = f32 LE) — parallels music.
+      game_sfx_state_load: (outPtr: number): number => {
+        if (!memory) return 0
+        const s = localStorage.getItem('game_sfx')
+        if (!s) return 0
+        try {
+          const arr = Uint8Array.from(atob(s), c => c.charCodeAt(0))
+          if (arr.length !== 4) return 0
+          new Uint8Array(memory.buffer, outPtr, 4).set(arr)
+          return 4
+        } catch {
+          return 0
+        }
+      },
+      game_sfx_state_save: (bytesPtr: number, bytesLen: number) => {
+        if (!memory) return
+        const copy = new Uint8Array(memory.buffer, bytesPtr, bytesLen).slice()
+        localStorage.setItem('game_sfx', btoa(String.fromCharCode(...copy)))
       },
       game_peers_pending: (): number => proxyRxBuf.length,
       game_peers_recv: (outPtr: number, outLen: number): number => {
@@ -776,6 +814,17 @@ async function main() {
         audioPlay(h, volX1000 / 1000, loopFlag !== 0)
       },
       game_audio_stop: (h: number) => audioStop(h),
+      // Live volume via the slot's GainNode — no stop/reload. Also
+      // update pending-play intent so a not-yet-started track begins at
+      // the right level. Powers the music toggle (mute = 0) + the
+      // settings volume slider.
+      game_audio_set_volume: (h: number, volX1000: number) => {
+        const slot = audioSlots.get(h)
+        if (!slot) return
+        const v = volX1000 / 1000
+        if (slot.gain) slot.gain.gain.value = v
+        if (slot.pendingPlay) slot.pendingPlay.volume = v
+      },
       // Rust-generated PCM samples → dumb WebAudio sink. Copy the
       // Float32Array out of wasm memory (memory can grow between calls,
       // and we want playback independent of wasm's lifetime), wrap in
@@ -842,11 +891,231 @@ async function main() {
           return 0
         }
       },
+      // Glass pipeline — same cube vertex + instance layout, but
+      // alpha-blended with depth-write OFF (depth-test stays on) so
+      // translucent panes blend over the opaque world without occluding
+      // each other. Drawn by game_gpu_render_glass in a load-op pass.
+      game_gpu_render_pipeline_create_glass: (
+        pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
+        colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,
+      ): number => {
+        if (!device) return 0
+        const pl = pipelineLayouts.get(pipelineLayoutH)
+        const shader = shaders.get(shaderH)
+        if (!pl || !shader) return 0
+        const colorFmt = COLOR_FORMATS[colorFormat]
+        const depthFmt = DEPTH_FORMATS[depthFormat]
+        if (!colorFmt || !depthFmt) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const pipeline = device.createRenderPipeline({
+            label,
+            layout: pl,
+            vertex: {
+              module: shader,
+              entryPoint: 'vs',
+              buffers: [
+                { arrayStride: vertexStride, stepMode: 'vertex', attributes: [
+                  { shaderLocation: 0, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 1, offset: 12, format: 'float32x3' },
+                ] },
+                { arrayStride: instanceStride, stepMode: 'instance', attributes: [
+                  { shaderLocation: 2, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 3, offset: 12, format: 'float32x3' },
+                  { shaderLocation: 4, offset: 24, format: 'float32x3' },
+                ] },
+              ],
+            },
+            primitive: { topology: 'triangle-list', frontFace: 'ccw', cullMode: 'back' },
+            depthStencil: { format: depthFmt, depthWriteEnabled: false, depthCompare: 'less' },
+            fragment: {
+              module: shader,
+              entryPoint: 'fs',
+              targets: [{
+                format: colorFmt,
+                blend: {
+                  color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                  alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                },
+              }],
+            },
+          })
+          const h = nextHandle++
+          renderPipelines.set(h, pipeline)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_render_pipeline_create_glass]', e)
+          return 0
+        }
+      },
+      // Ghost pipeline — same shape as glass (alpha-blended, depth-test
+      // on, depth-write off) but drawn LAST so the cut-away outline sits
+      // on top of both opaque and glass. Distinct pipeline so its blend
+      // and future tuning evolve without touching glass.
+      game_gpu_render_pipeline_create_ghost: (
+        pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
+        colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,
+      ): number => {
+        if (!device) return 0
+        const pl = pipelineLayouts.get(pipelineLayoutH)
+        const shader = shaders.get(shaderH)
+        if (!pl || !shader) return 0
+        const colorFmt = COLOR_FORMATS[colorFormat]
+        const depthFmt = DEPTH_FORMATS[depthFormat]
+        if (!colorFmt || !depthFmt) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const pipeline = device.createRenderPipeline({
+            label,
+            layout: pl,
+            vertex: {
+              module: shader,
+              entryPoint: 'vs',
+              buffers: [
+                { arrayStride: vertexStride, stepMode: 'vertex', attributes: [
+                  { shaderLocation: 0, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 1, offset: 12, format: 'float32x3' },
+                ] },
+                { arrayStride: instanceStride, stepMode: 'instance', attributes: [
+                  { shaderLocation: 2, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 3, offset: 12, format: 'float32x3' },
+                  { shaderLocation: 4, offset: 24, format: 'float32x3' },
+                ] },
+              ],
+            },
+            primitive: { topology: 'triangle-list', frontFace: 'ccw', cullMode: 'back' },
+            depthStencil: { format: depthFmt, depthWriteEnabled: false, depthCompare: 'less' },
+            fragment: {
+              module: shader,
+              entryPoint: 'fs',
+              targets: [{
+                format: colorFmt,
+                blend: {
+                  color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                  alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                },
+              }],
+            },
+          })
+          const h = nextHandle++
+          renderPipelines.set(h, pipeline)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_render_pipeline_create_ghost]', e)
+          return 0
+        }
+      },
+      // Ghost pass — LOAD the world's colour + depth, blend the outlines
+      // of cut-away walls/roof on top.
+      game_gpu_render_ghost: (
+        targetH: number, pipelineH: number, bindGroupH: number,
+        vertexBufH: number, instanceBufH: number,
+        vertexCount: number, instanceCount: number,
+      ): number => {
+        if (!device) return 1
+        const target = renderTargets.get(targetH)
+        const pipeline = renderPipelines.get(pipelineH)
+        const bindGroup = bindGroups.get(bindGroupH)
+        const vertexBuf = buffers.get(vertexBufH)
+        const instanceBuf = buffers.get(instanceBufH)
+        if (!target || !pipeline || !bindGroup || !vertexBuf || !instanceBuf) return 1
+        try {
+          const colorView = target.context.getCurrentTexture().createView({ label: 'game.ghost.color' })
+          const encoder = device.createCommandEncoder({ label: 'game.ghost.encoder' })
+          const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+              view: colorView,
+              loadOp: 'load',
+              storeOp: 'store',
+            }],
+            depthStencilAttachment: {
+              view: target.depthView,
+              depthLoadOp: 'load',
+              depthStoreOp: 'store',
+            },
+          })
+          pass.setPipeline(pipeline)
+          pass.setBindGroup(0, bindGroup)
+          pass.setVertexBuffer(0, vertexBuf)
+          pass.setVertexBuffer(1, instanceBuf)
+          pass.draw(vertexCount, instanceCount)
+          pass.end()
+          device.queue.submit([encoder.finish()])
+          return 0
+        } catch (e) {
+          console.error('[game.gpu_render_ghost]', e)
+          return 1
+        }
+      },
+      // Glass pass — LOAD the world's colour + depth (opaque already
+      // drew + wrote depth), blend the panes, keep depth read-only.
+      game_gpu_render_glass: (
+        targetH: number, pipelineH: number, bindGroupH: number,
+        vertexBufH: number, instanceBufH: number,
+        vertexCount: number, instanceCount: number,
+      ): number => {
+        if (!device) return 1
+        const target = renderTargets.get(targetH)
+        const pipeline = renderPipelines.get(pipelineH)
+        const bindGroup = bindGroups.get(bindGroupH)
+        const vertexBuf = buffers.get(vertexBufH)
+        const instanceBuf = buffers.get(instanceBufH)
+        if (!target || !pipeline || !bindGroup || !vertexBuf || !instanceBuf) return 1
+        try {
+          const colorView = target.context.getCurrentTexture().createView({ label: 'game.glass.color' })
+          const encoder = device.createCommandEncoder({ label: 'game.glass.encoder' })
+          const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+              view: colorView,
+              loadOp: 'load',
+              storeOp: 'store',
+            }],
+            depthStencilAttachment: {
+              view: target.depthView,
+              depthLoadOp: 'load',
+              depthStoreOp: 'store',
+            },
+          })
+          pass.setPipeline(pipeline)
+          pass.setBindGroup(0, bindGroup)
+          pass.setVertexBuffer(0, vertexBuf)
+          pass.setVertexBuffer(1, instanceBuf)
+          pass.draw(vertexCount, instanceCount)
+          pass.end()
+          device.queue.submit([encoder.finish()])
+          return 0
+        } catch (e) {
+          console.error('[game.gpu_render_glass]', e)
+          return 1
+        }
+      },
     },
   }
 
   const { instance } = await WebAssembly.instantiate(wasmBytes, imports)
   memory = instance.exports.memory as WebAssembly.Memory
+
+  // Loop closure: the running wasm reports its own embedded commit;
+  // refuse to boot if it isn't the build this JS was made for. A stale
+  // artifact — wasm or JS — surfaces here as a hard stop at the cursor,
+  // never a silent half-stale run that looks fine but isn't.
+  const readWasmStr = (ptrExport: string, lenExport: string): string => {
+    const ptrFn = instance.exports[ptrExport] as (() => number) | undefined
+    const lenFn = instance.exports[lenExport] as (() => number) | undefined
+    if (typeof ptrFn !== 'function' || typeof lenFn !== 'function') return 'unknown'
+    return decodeString(ptrFn(), lenFn())
+  }
+  const runningCommit = readWasmStr('build_commit_ptr', 'build_commit_len')
+  const shortSha = (s: string) => (s === 'unknown' ? s : s.slice(0, 7))
+  if (
+    EXPECTED_COMMIT !== 'unknown' &&
+    runningCommit !== 'unknown' &&
+    EXPECTED_COMMIT !== runningCommit
+  ) {
+    const msg = `build mismatch — page is ${shortSha(EXPECTED_COMMIT)} but wasm is ${shortSha(runningCommit)}; a stale artifact is being served`
+    if (loadingText) loadingText.textContent = `boot halted: ${msg}`
+    throw new Error(msg)
+  }
 
   const init = instance.exports.init as (() => void) | undefined
   const frame = instance.exports.frame as (() => number) | undefined
@@ -854,10 +1123,45 @@ async function main() {
     throw new Error(`game.wasm missing init/frame — exports: ${Object.keys(instance.exports).join(', ')}`)
   }
 
+  // The visible commit is drawn IN the game, by Rust, via the UI
+  // overlay (see watermark.rs) — not a DOM badge. JS only guards the
+  // build match above; the render owns what you see.
   init()
   document.body.classList.add('loaded')
 
+  // Real per-frame wall time on the actual device. rAF-to-rAF delta is
+  // what the player perceives, unlike the native sim frame time seer
+  // already reports. Every ~1s (60 frames) we emit a p50/p95/p99 line
+  // to the console with the [game.perf.frame] tag so a future browser-
+  // telemetry collector can scrape a real device number, not just the
+  // native tour's timings. Counts are not performance; this IS.
+  const PERF_WINDOW_FRAMES = 60
+  const PERF_KEEP_MAX = 300
+  let perfDeltas: number[] = []
+  let perfLastTs = 0
+  let perfFramesSinceLog = 0
   const loop = () => {
+    const now = performance.now()
+    if (perfLastTs > 0) {
+      perfDeltas.push(now - perfLastTs)
+      perfFramesSinceLog++
+      if (perfFramesSinceLog >= PERF_WINDOW_FRAMES) {
+        const sorted = [...perfDeltas].sort((a, b) => a - b)
+        const pick = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))]
+        const p50 = pick(0.5)
+        const p95 = pick(0.95)
+        const p99 = pick(0.99)
+        console.log(
+          `[game.perf.frame] n=${sorted.length} p50=${p50.toFixed(2)}ms p95=${p95.toFixed(2)}ms p99=${p99.toFixed(2)}ms`
+        )
+        // Keep a rolling tail so the next window has recent context.
+        if (perfDeltas.length > PERF_KEEP_MAX) {
+          perfDeltas = perfDeltas.slice(-PERF_KEEP_MAX)
+        }
+        perfFramesSinceLog = 0
+      }
+    }
+    perfLastTs = now
     const done = frame()
     if (done !== 0) return
     requestAnimationFrame(loop)

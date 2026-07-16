@@ -1,4 +1,11 @@
-.PHONY: music web build clean
+.PHONY: music web build clean cdda coverage
+
+# Fetch the CDDA map corpus (a pinned dependency, never vendored) into
+# crates/cdda/.cdda-src/ so bare `cargo build`/`cargo test` can compile
+# it in. Nix users don't need this — the flake sets CDDA_SRC. Pinned to
+# the crate's RELEASE file.
+cdda:
+	@../crates/cdda/tools/fetch.sh
 
 # Generate the placeholder track and encode as OGG Vorbis. Output
 # lands in web/assets/ so build.ts picks it up when it copies assets/
@@ -21,3 +28,10 @@ build: music
 
 clean:
 	@rm -rf web/dist web/node_modules web/assets/rave.ogg
+
+# Walk the pinned CDDA mapgen tree, resolve every om_terrain through
+# our importer, print resolved/empty/skipped/failed + top unhandled
+# features + ranked candidates. "Add buildings" is measured, not
+# guessed — see the coverage report output for the top blockers.
+coverage:
+	@cargo +nightly run --manifest-path ../crates/cdda/Cargo.toml --bin cdda-coverage --release

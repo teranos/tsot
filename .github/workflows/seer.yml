@@ -5,13 +5,14 @@ name: seer
 # under wasmtime, recording every boundary crossing. Both upload
 # stdout as artifacts.
 
+# seer runs regardless — every push to any branch, plus nightly even
+# when nothing is pushed. No paths gate: perf is measured continuously,
+# not only when game/ changes, so a regression anywhere is caught.
 on:
   push:
     branches: ['**']
-    paths:
-      - 'game/**'
-      - 'crates/seer-host/**'
-      - '.github/workflows/seer.yml'
+  schedule:
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -33,6 +34,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+
+      # CDDA map corpus — pinned dependency, realised hash-verified via
+      # the flake; $CDDA_SRC hands the store path to build.rs.
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Realise CDDA corpus (pinned, hash-verified)
+        working-directory: game
+        run: echo "CDDA_SRC=$(nix build .#cdda-src --no-link --print-out-paths)" >> "$GITHUB_ENV"
 
       - name: Build game-native
         working-directory: game
@@ -83,15 +95,31 @@ jobs:
             done
           done
 
+      - name: Upload native log to seer
+        # Publishes the game-native run's log — including its
+        # [perf.frame] lines — to the seer site so real live
+        # performance is visible on seer.sbvh.nl next to the wasm
+        # summary. Previously log lived only in CI upload-artifact,
+        # so the measurement Brandon cares about was invisible.
+        if: success() && vars.SEER_DISTRIBUTION_ID != ''
+        run: |
+          if [ ! -f game/out/game-native.log ]; then exit 0; fi
+          for prefix in "perf/${{ github.sha }}" "perf/latest"; do
+            aws s3 cp game/out/game-native.log \
+              "s3://seer-sbvh-static/$prefix/game-native.log" \
+              --cache-control "public, max-age=300" \
+              --content-type "text/plain; charset=utf-8"
+          done
+
       - name: Invalidate CloudFront (frames)
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.SEER_DISTRIBUTION_ID }}" \
-            --paths '/perf/latest/frame.png' '/perf/latest/frame-0.png' '/perf/latest/frame-1.png' '/perf/latest/frame-2.png' '/perf/latest/frame-3.png' \
+            --paths '/perf/latest/frame.png' '/perf/latest/frame-0.png' '/perf/latest/frame-1.png' '/perf/latest/frame-2.png' '/perf/latest/frame-3.png' '/perf/latest/game-native.log' \
             --query 'Invalidation.Id' --output text
 
-      - name: Upload native log
+      - name: Upload native log (CI artifact)
         if: always()
         uses: actions/upload-artifact@v5
         with:
@@ -123,6 +151,15 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Realise CDDA corpus (pinned, hash-verified)
+        working-directory: game
+        run: echo "CDDA_SRC=$(nix build .#cdda-src --no-link --print-out-paths)" >> "$GITHUB_ENV"
 
       - name: Build game.wasm
         working-directory: game
@@ -170,10 +207,21 @@ jobs:
         run: |
           mkdir -p out
           [ -f out/history-in.json ] || echo '[]' > out/history-in.json
+          # `| tee` returns tee's exit status (0), so a seer-host crash —
+          # e.g. `unknown import: env::…` when a boundary crossing wasn't
+          # mirrored into the host — used to leave this step green while
+          # seer measured NOTHING and the stale S3 data rotted silently.
+          # Errors are sacred: preserve seer-host's own exit code and turn
+          # the job red so the failure lands in front of us.
           ./crates/seer-host/target/release/seer-host \
             game/target/wasm32-unknown-unknown/release/game.wasm \
             2>&1 | tee out/seer-host.log
+          status=${PIPESTATUS[0]}
           ls -la out/
+          if [ "$status" -ne 0 ]; then
+            echo "::error::seer-host exited $status — game.wasm failed to run under wasmtime; seer measured nothing this run"
+            exit "$status"
+          fi
 
       - name: Upload host log
         if: always()

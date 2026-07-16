@@ -1,0 +1,73 @@
+name: game-tests
+
+# Fast correctness gate for game/.
+#
+# The 98 lib tests + the determinism golden-master run here in seconds,
+# BEFORE the ~5-minute seer pipeline. seer measures runtime behaviour
+# (heap / GPU / frame time / boundary crossings) on a single run — it
+# never runs these unit tests, so a red golden-master (a cross-peer
+# desync waiting to ship) sails straight through a green seer. This is
+# the cheap, decisive check that catches the glaringly-obvious first.
+#
+# Runs on every push to ANY branch so a feature branch is gated too,
+# not only master — the whole point is to know fast, on the branch,
+# not after a merge.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'game/**'
+      - 'crates/cdda/**'
+      - '.github/workflows/game-tests.yml'
+  pull_request:
+    paths:
+      - 'game/**'
+      - 'crates/cdda/**'
+      - '.github/workflows/game-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo:
+    name: game — cargo +nightly test + clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install nightly toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup component add clippy --toolchain nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: game
+
+      # Same pinned, hash-verified CDDA corpus the seer jobs use —
+      # build.rs materialises the mapgen/palette JSON from $CDDA_SRC, so
+      # the lib won't even compile (let alone resolve buildings) without
+      # it. Realising it here keeps the gate self-contained.
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Realise CDDA corpus (pinned, hash-verified)
+        working-directory: game
+        run: echo "CDDA_SRC=$(nix build .#cdda-src --no-link --print-out-paths)" >> "$GITHUB_ENV"
+
+      # The gate. Includes every_shipped_building_digests_stably — the
+      # determinism golden-master — which names exactly which building
+      # drifted and its expected-vs-got digest when it fails (ERROR.md
+      # #5: an error without context is unactionable).
+      - name: game — cargo +nightly test --lib
+        working-directory: game
+        run: cargo +nightly test --lib
+
+      - name: game — cargo +nightly clippy
+        working-directory: game
+        run: cargo +nightly clippy --lib -- -D warnings

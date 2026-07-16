@@ -1,0 +1,19 @@
+[package]
+name = "cdda"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "The seam between Cataclysm: Dark Days Ahead mapgen JSON and our world — parse + palette resolve + placement rules + building assembly, producing Template values consumers can stamp into an ECS. CDDA corpus is a pinned build-time dependency, never vendored."
+
+[lib]
+name = "cdda"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cdda-coverage"
+path = "src/bin/coverage.rs"
+
+[dependencies]
+bevy_math = "=0.19.0"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.143"

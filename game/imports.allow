@@ -30,13 +30,22 @@ env.game_gpu_render_target_configure
 env.game_gpu_render_frame
 env.game_gpu_render_pipeline_create_ui
 env.game_gpu_render_ui_overlay
+env.game_gpu_render_pipeline_create_glass
+env.game_gpu_render_glass
+env.game_gpu_render_pipeline_create_ghost
+env.game_gpu_render_ghost
 env.game_touch_state
 env.game_viewport_size
 env.game_input_state
-env.game_show_exclamation
 env.game_identity_load
 env.game_identity_save
 env.game_random_bytes
+env.game_position_load
+env.game_position_save
+env.game_music_state_load
+env.game_music_state_save
+env.game_sfx_state_load
+env.game_sfx_state_save
 
 env.game_peers_pending
 env.game_peers_recv
@@ -47,3 +56,4 @@ env.game_audio_load
 env.game_audio_play
 env.game_audio_stop
 env.game_audio_play_samples
+env.game_audio_set_volume

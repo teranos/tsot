@@ -6,23 +6,34 @@
 use std::cell::RefCell;
 
 pub mod audio;
+pub mod bang;
 pub mod build_info;
+pub mod buildings;
 pub mod campfire;
+pub mod campsite;
+pub mod chunk;
 pub mod dpad;
 pub mod error;
+pub mod hash;
 pub mod health;
+pub mod hud;
 pub mod identity;
 pub mod input;
+pub mod jukebox;
 pub mod map;
+pub mod music;
 pub mod net;
 pub mod obs;
+pub mod persist;
 pub mod physics;
 pub mod remote_players;
 pub mod room;
 pub mod scene;
+pub mod sfx;
+pub mod template;
 pub mod trail;
 pub mod trees;
-pub mod ui;
+pub mod watermark;
 
 pub mod gpu_web;
 
@@ -63,6 +74,140 @@ struct NativeRunState {
     checkpoints: Vec<u32>,
     snapshots: Vec<scene::SceneSnapshot>,
     multi_dir: Option<String>,
+    /// Wall-clock microseconds for each `app.update()` — the real
+    /// per-frame cost of the simulation. This is the measurement; prop
+    /// counts are not.
+    frame_us: Vec<u32>,
+    /// Tour stop labels, so frame timings can be attributed to what was
+    /// on screen (school / house / campsite / forest).
+    tour_labels: Vec<String>,
+}
+
+/// A deterministic tour of representative world content, so the seer run
+/// actually *encounters* buildings instead of wandering empty forest.
+/// The player teleports to each stop for a slice of the frame budget;
+/// the frame timings then cover real load, and the render checkpoints
+/// show a variety of stamps.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource, Default)]
+struct SeerTour {
+    stops: Vec<(String, Vec3)>,
+    budget: u32,
+}
+
+/// How far outside each tour stop the player teleports before walking
+/// the last stretch in — one CDDA overmap-tile's worth, so the approach
+/// crosses one or two chunk boundaries at a time (the real per-boundary
+/// load spike), not the inflated bulk-load a teleport straight to the
+/// target would produce.
+#[cfg(not(target_arch = "wasm32"))]
+const TOUR_APPROACH_DISTANCE: f32 = 800.0;
+
+/// Native input: drive the player through the tour stops. On the first
+/// frame of each new stop, teleport to `target − TOUR_APPROACH_DISTANCE`
+/// in +z (north of the stop), then walk toward the target every frame
+/// after — so each stop's chunks stream in the way they would for a
+/// player physically walking up, not all at once.
+#[cfg(not(target_arch = "wasm32"))]
+fn seer_tour_input(
+    frame: Res<FrameCount>,
+    tour: Res<SeerTour>,
+    mut q: Query<(&mut Position, &mut Velocity), With<PlayerMarker>>,
+) {
+    if tour.stops.is_empty() {
+        return;
+    }
+    let n = tour.stops.len();
+    let budget = tour.budget.max(1) as usize;
+    let idx = ((frame.0.saturating_sub(1)) as usize * n / budget).min(n - 1);
+    let prev_idx = if frame.0 >= 2 {
+        Some(((frame.0 - 2) as usize * n / budget).min(n - 1))
+    } else {
+        None
+    };
+    let target = tour.stops[idx].1;
+    let approach = target + Vec3::new(0.0, 0.0, -TOUR_APPROACH_DISTANCE);
+    let entering_new_stop = prev_idx != Some(idx);
+    for (mut p, mut v) in q.iter_mut() {
+        if entering_new_stop {
+            p.0 = approach;
+        }
+        let toward = target - p.0;
+        let dist_sq = toward.length_squared();
+        if dist_sq > (physics::KEYBOARD_SPEED * physics::KEYBOARD_SPEED) {
+            let dir = toward.normalize();
+            v.0 = dir * physics::KEYBOARD_SPEED;
+        } else {
+            // Within one step of the target — snap and stop, so the
+            // remaining budget at this stop is measured at rest.
+            p.0 = target;
+            v.0 = Vec3::ZERO;
+        }
+    }
+}
+
+/// Scan chunks outward from the origin for the first matching one.
+#[cfg(not(target_arch = "wasm32"))]
+fn scan_chunk(pred: impl Fn(chunk::ChunkCoord) -> bool) -> Option<chunk::ChunkCoord> {
+    for radius in 1..400i32 {
+        for x in -radius..=radius {
+            for z in -radius..=radius {
+                if x.abs() != radius && z.abs() != radius {
+                    continue; // ring only
+                }
+                let c = chunk::ChunkCoord { x, z };
+                if pred(c) {
+                    return Some(c);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Build the tour: the nearest school, a house, a campsite, and a patch
+/// of deep forest — the variety of stamps the run should encounter.
+#[cfg(not(target_arch = "wasm32"))]
+fn seer_tour_from(bt: &crate::buildings::BuildingTemplates) -> SeerTour {
+    let num = bt.templates.len().max(1);
+    // The school is the largest-footprint template.
+    let school_idx = bt
+        .half_extents
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let cs = chunk::CHUNK_SIZE;
+    let school = scan_chunk(|c| {
+        cdda::building_anchor_in_chunk(c.x, c.z, cs).is_some()
+            && cdda::building_index(c.x, c.z, num) == school_idx
+    })
+    .and_then(|c| cdda::building_anchor_in_chunk(c.x, c.z, cs));
+    let house = scan_chunk(|c| {
+        cdda::building_anchor_in_chunk(c.x, c.z, cs).is_some()
+            && cdda::building_index(c.x, c.z, num) != school_idx
+    })
+    .and_then(|c| cdda::building_anchor_in_chunk(c.x, c.z, cs));
+    let camp = scan_chunk(|c| campsite::campsite_in_chunk(c).is_some())
+        .and_then(campsite::campsite_in_chunk);
+    let forest = Vec3::new(7.5 * chunk::CHUNK_SIZE, 20.0, 7.5 * chunk::CHUNK_SIZE);
+
+    let mut stops = Vec::new();
+    if let Some(w) = school {
+        stops.push(("school".to_string(), w));
+    }
+    if let Some(w) = house {
+        stops.push(("house".to_string(), w));
+    }
+    if let Some(w) = camp {
+        stops.push(("campsite".to_string(), w));
+    }
+    stops.push(("forest".to_string(), forest));
+    for (label, w) in &stops {
+        obs::emit(&format!("[seer.tour] stop {label} at ({:.0}, {:.0})", w.x, w.z));
+    }
+    SeerTour { stops, budget: frame_budget() }
 }
 
 #[derive(Resource, Default)]
@@ -71,16 +216,25 @@ struct FrameCount(u32);
 #[derive(Resource, Default, Clone)]
 struct SelfPeer(String);
 
-// Held so Drop → game_audio_stop fires on app teardown. Non-Send is
-// fine — App is single-threaded on wasm and native tests.
-#[allow(dead_code)]
-#[derive(Resource)]
-struct MusicHandle(audio::GameAudioHandle);
-
+// The looped track starts playing at the last session's mix (mute +
+// volume level, if any — else default). Its handle lives in the
+// `music::Music` resource, whose Drop → game_audio_stop fires on app
+// teardown. The HUD toggle, the jukebox, and the settings slider all
+// drive this one resource, and each change is persisted back so the
+// next boot resumes with the same mix.
 fn setup_music(mut commands: Commands) {
     let handle = audio::load_music();
-    audio::play(&handle, audio::DEFAULT_VOLUME, true);
-    commands.insert_resource(MusicHandle(handle));
+    let (playing, volume) =
+        persist::load_music().unwrap_or((true, audio::DEFAULT_VOLUME));
+    // Start silent when muted so the browser never audibly plays a
+    // frame at the wrong level before the mute state is applied.
+    let start_volume = if playing { volume } else { 0.0 };
+    audio::play(&handle, start_volume, true);
+    commands.insert_resource(music::Music {
+        handle,
+        playing,
+        volume,
+    });
 }
 
 #[derive(Resource, Default)]
@@ -135,7 +289,8 @@ fn setup(mut commands: Commands) {
 
     commands.spawn((
         PlayerMarker,
-        Position(room::SPAWN_POS),
+        // Resume where we left off if a position was saved.
+        Position(persist::load().unwrap_or(room::SPAWN_POS)),
         Velocity(Vec3::new(1.5, 0.0, 0.7)),
     ));
     // Circling NPC — same wander pattern as the deterministic native
@@ -237,6 +392,34 @@ fn publish_self_position_system(
     }
 }
 
+fn persist_position_system(
+    frame: Res<FrameCount>,
+    player_q: Query<&Position, With<PlayerMarker>>,
+    structures: Query<(&Position, &template::StructureProp)>,
+    npcs: Query<&Position, With<NpcMarker>>,
+    mut was_safe_inside: Local<bool>,
+) {
+    if !frame.0.is_multiple_of(15) {
+        return;
+    }
+    let Ok(player) = player_q.single() else {
+        return;
+    };
+    // "Inside" = a roof tile roughly overhead.
+    let inside = structures.iter().any(|(p, s)| {
+        s.kind == template::PropKind::Roof
+            && (p.0.x - player.0.x).abs() < 80.0
+            && (p.0.z - player.0.z).abs() < 80.0
+    });
+    let enemy_near = npcs.iter().any(|n| (n.0 - player.0).length() < 800.0);
+    let safe_inside = inside && !enemy_near;
+    // Checkpoint: save on entering a safe, enclosed area.
+    if safe_inside && !*was_safe_inside {
+        persist::save(player.0);
+    }
+    *was_safe_inside = safe_inside;
+}
+
 fn drain_remote_positions_system(
     mut remotes: ResMut<remote_players::RemotePlayers>,
     self_peer: Res<SelfPeer>,
@@ -285,6 +468,33 @@ pub extern "C" fn finalize() {
     _finalize();
 }
 
+// The running binary reports its own identity. These expose the
+// compile-time build_info (SEER_BUILD_COMMIT / SEER_BUILD_TIME) so the
+// JS shim can paint a persistent on-screen badge sourced from THIS
+// wasm — not from build-info.json, which is a separate file that can
+// skew from the actual binary. "What version is running" then has one
+// unambiguous answer: what the wasm says about itself.
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn build_commit_ptr() -> *const u8 {
+    build_info::COMMIT.as_ptr()
+}
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn build_commit_len() -> u32 {
+    build_info::COMMIT.len() as u32
+}
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn build_time_ptr() -> *const u8 {
+    build_info::BUILT_AT.as_ptr()
+}
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn build_time_len() -> u32 {
+    build_info::BUILT_AT.len() as u32
+}
+
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn run() {
@@ -323,14 +533,25 @@ fn _init() {
     }
     let mut app = App::new();
     app.insert_resource(SelfPeer(id.as_hex()));
+    app.insert_resource(chunk::LoadedChunks::default());
+    let (building_templates, cdda_failures) = crate::buildings::BuildingTemplates::load();
+    for msg in &cdda_failures {
+        obs::emit(msg);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let tour = seer_tour_from(&building_templates);
+    app.insert_resource(building_templates);
     app.add_systems(
         Startup,
         (
             setup,
-            trees::setup_trees.after(setup),
+            bang::setup_bang.after(setup),
             campfire::setup_campfire.after(setup),
             dpad::setup_dpad.after(setup),
+            hud::setup_hud.after(setup),
+            jukebox::setup_jukebox.after(setup),
             map::setup_pins.after(setup),
+            sfx::setup_sfx.after(setup),
             trail::setup_trail.after(setup),
             setup_music.after(setup),
         ),
@@ -338,7 +559,7 @@ fn _init() {
     #[cfg(target_arch = "wasm32")]
     let input_system = physics::keyboard_input;
     #[cfg(not(target_arch = "wasm32"))]
-    let input_system = physics::wander_input;
+    let input_system = seer_tour_input;
     app.add_systems(
         Update,
         (
@@ -348,14 +569,18 @@ fn _init() {
             physics::advance_npc.after(physics::wander_npc),
             physics::resolve_collisions.after(physics::advance_player),
             physics::resolve_remote_player_collisions.after(physics::resolve_collisions),
-            room::world_bounds_clamp.after(physics::resolve_remote_player_collisions),
             physics::check_npc_bump.after(physics::advance_npc),
-            campfire::flicker_fire.after(room::world_bounds_clamp),
+            bang::age_and_publish.after(physics::check_npc_bump),
+            chunk::stream_chunks.after(physics::resolve_remote_player_collisions),
+            campfire::flicker_fire.after(physics::resolve_remote_player_collisions),
             campfire::campfire_crackle_system.after(campfire::flicker_fire),
             dpad::dpad_input_system.after(campfire::campfire_crackle_system),
+            hud::hud_input_system.after(dpad::dpad_input_system),
+            jukebox::jukebox_proximity_system.after(physics::resolve_collisions),
             tick.after(campfire::flicker_fire),
             drain_remote_positions_system.after(tick),
             publish_self_position_system.after(physics::advance_player),
+            persist_position_system.after(physics::advance_player),
             report_player_pos.after(tick),
         ),
     );
@@ -363,6 +588,10 @@ fn _init() {
     obs::emit(&format!(
         "[seer.boot] Bevy App built, entering update loop for {frames} frames"
     ));
+    #[cfg(not(target_arch = "wasm32"))]
+    let tour_labels: Vec<String> = tour.stops.iter().map(|(l, _)| l.clone()).collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    app.insert_resource(tour);
     APP_STATE.with(|c| *c.borrow_mut() = Some(app));
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -380,15 +609,26 @@ fn _init() {
                 checkpoints,
                 snapshots: Vec::new(),
                 multi_dir,
+                frame_us: Vec::new(),
+                tour_labels,
             });
         });
     }
 }
 
 fn _frame() -> u32 {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _t0 = std::time::Instant::now();
     APP_STATE.with(|c| {
         if let Some(app) = c.borrow_mut().as_mut() {
             app.update();
+        }
+    });
+    // The real measurement: wall-clock time for this frame's simulation.
+    #[cfg(not(target_arch = "wasm32"))]
+    NATIVE_STATE.with(|c| {
+        if let Some(ns) = c.borrow_mut().as_mut() {
+            ns.frame_us.push(_t0.elapsed().as_micros() as u32);
         }
     });
 
@@ -434,6 +674,38 @@ fn _finalize() {
     NATIVE_STATE.with(|c| {
         let ns_opt = c.borrow();
         if let Some(ns) = ns_opt.as_ref() {
+            // The perf report: real per-frame simulation time, overall +
+            // attributed to what the player was standing in. THIS is the
+            // measurement — not counts.
+            if !ns.frame_us.is_empty() {
+                let us = &ns.frame_us;
+                let mut sorted = us.clone();
+                sorted.sort_unstable();
+                let n = sorted.len();
+                let avg = us.iter().map(|&x| x as u64).sum::<u64>() / n as u64;
+                let pct = |q: f64| sorted[(((n as f64) * q) as usize).min(n - 1)];
+                obs::emit(&format!(
+                    "[perf] app.update() over {n} frames: avg={avg}us p50={}us p95={}us max={}us",
+                    pct(0.5),
+                    pct(0.95),
+                    sorted[n - 1],
+                ));
+                let stops = ns.tour_labels.len().max(1);
+                for (i, label) in ns.tour_labels.iter().enumerate() {
+                    let lo = i * n / stops;
+                    let hi = ((i + 1) * n / stops).min(n);
+                    if lo >= hi {
+                        continue;
+                    }
+                    let slice = &us[lo..hi];
+                    let savg = slice.iter().map(|&x| x as u64).sum::<u64>() / slice.len() as u64;
+                    let smax = *slice.iter().max().unwrap();
+                    obs::emit(&format!(
+                        "[perf] stop={label}: avg={savg}us max={smax}us over {} frames",
+                        slice.len()
+                    ));
+                }
+            }
             if let Some(dir) = &ns.multi_dir {
                 match render_snapshots(&ns.snapshots, dir) {
                     Ok(paths) => obs::emit(&format!(
@@ -494,11 +766,12 @@ fn render_single(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (dev, queue) = init_wgpu()?;
     let instances = scene::snapshot_to_instances(snap);
+    let glass = scene::snapshot_to_glass_instances(snap);
     let camera = scene::SceneCamera::follow(
         [snap.player.x, snap.player.y, snap.player.z],
         room::FLOOR_HALF,
     );
-    render::render_scene(&dev, &queue, &camera, &instances, out_path)?;
+    render::render_scene(&dev, &queue, &camera, &instances, &glass, out_path)?;
     Ok(())
 }
 
@@ -513,11 +786,12 @@ fn render_snapshots(
     for (i, snap) in snapshots.iter().enumerate() {
         let out_path = format!("{dir}/frame-{i}.png");
         let instances = scene::snapshot_to_instances(snap);
+        let glass = scene::snapshot_to_glass_instances(snap);
         let camera = scene::SceneCamera::follow(
             [snap.player.x, snap.player.y, snap.player.z],
             room::FLOOR_HALF,
         );
-        render::render_scene(&dev, &queue, &camera, &instances, &out_path)?;
+        render::render_scene(&dev, &queue, &camera, &instances, &glass, &out_path)?;
         out_paths.push(out_path);
     }
     Ok(out_paths)
