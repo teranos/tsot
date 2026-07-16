@@ -856,8 +856,43 @@ pub struct MeshTreeInstances {
 /// with per-instance colour. The render loop packs trunks + canopy
 /// elements into one instance buffer (trunks first) and issues two
 /// `render_mesh` calls with the right `first_instance` offset.
+/// Hash a per-leaf index to a uniform [0,1) — deterministic, so a leaf's
+/// autumn tint is identical on every peer.
+fn leaf_hash01(seed: u32, idx: u32) -> f32 {
+    let mut h = seed ^ idx.wrapping_mul(0x9E37_79B9);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x21f0_aaad);
+    h ^= h >> 15;
+    (h >> 8) as f32 / (1u32 << 24) as f32
+}
+
+/// Map a leaf's `age` ∈ [0,1] through the autumn ramp: the species' green
+/// → yellow → orange → red → brown. age 0 keeps the leaf green.
+fn autumn_ramp(green: [f32; 3], age: f32) -> [f32; 3] {
+    const YELLOW: [f32; 3] = [0.85, 0.75, 0.15];
+    const ORANGE: [f32; 3] = [0.85, 0.45, 0.10];
+    const RED: [f32; 3] = [0.62, 0.14, 0.10];
+    const BROWN: [f32; 3] = [0.36, 0.24, 0.12];
+    let mix = |a: [f32; 3], b: [f32; 3], t: f32| {
+        [
+            a[0] + (b[0] - a[0]) * t,
+            a[1] + (b[1] - a[1]) * t,
+            a[2] + (b[2] - a[2]) * t,
+        ]
+    };
+    if age <= 0.4 {
+        mix(green, YELLOW, age / 0.4)
+    } else if age <= 0.6 {
+        mix(YELLOW, ORANGE, (age - 0.4) / 0.2)
+    } else if age <= 0.8 {
+        mix(ORANGE, RED, (age - 0.6) / 0.2)
+    } else {
+        mix(RED, BROWN, (age - 0.8) / 0.2)
+    }
+}
+
 pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
-    use crate::tree_mesh::{GOLDEN_ANGLE_RAD, tree_branches};
+    use crate::tree_mesh::{GOLDEN_ANGLE_RAD, species_for, tree_branches};
     const UP: [f32; 3] = [0.0, 1.0, 0.0];
     // `trunks` draws the shared unit cone (trunk + every branch segment);
     // `canopy_elements` draws the shared icosahedron (leaf clusters).
@@ -865,28 +900,26 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
     let mut canopy_elements = Vec::with_capacity(snap.trees.len() * 256);
     for (t, h) in &snap.trees {
         let h = *h;
+        // Species is a deterministic function of the tile — pine / oak /
+        // birch, each a different silhouette + palette from the same code.
+        let seed = tree_seed(t.x, t.z);
+        let sp = species_for(seed);
         // Main trunk: vertical cone, axis +Y (identity rotation).
         trunks.push(MeshInstance {
             pos: [t.x, 0.0, t.z],
-            color: TREE_TRUNK_COLOR,
-            scale: [
-                h * TREE_TRUNK_BASE_R_RATIO,
-                h * TREE_TRUNK_H_RATIO,
-                h * TREE_TRUNK_BASE_R_RATIO,
-            ],
+            color: sp.trunk_color,
+            scale: [h * sp.trunk_r_ratio, h * sp.trunk_h_ratio, h * sp.trunk_r_ratio],
             axis: UP,
         });
-        // Per-tree branch skeleton (unit space, scaled by height here),
-        // deterministic in the tile position so every peer grows the
-        // same tree.
-        let element_r = h * TREE_CANOPY_ELEMENT_RATIO;
-        let cluster_r = h * BRANCH_LEAF_CLUSTER_RADIUS_RATIO;
-        for seg in tree_branches(tree_seed(t.x, t.z)) {
+        let element_r = h * sp.leaf_element_ratio;
+        let cluster_r = h * sp.cluster_radius_ratio;
+        let mut leaf_i = 0u32;
+        for seg in tree_branches(seed, sp) {
             // The limb: the unit cone (base r=1, height 1 along +Y)
             // scaled to [radius, length, radius] and rotated +Y → axis.
             trunks.push(MeshInstance {
                 pos: [t.x + seg.base[0] * h, seg.base[1] * h, t.z + seg.base[2] * h],
-                color: BRANCH_COLOR,
+                color: sp.branch_color,
                 scale: [seg.base_radius * h, seg.length * h, seg.base_radius * h],
                 axis: seg.axis,
             });
@@ -894,20 +927,25 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                 continue;
             }
             // Terminal tip → a small Fibonacci-sphere ball of leaves so
-            // foliage sits at the branch ends.
+            // foliage sits at the branch ends. Each leaf gets an autumn
+            // age: mostly green (roll²), ceilinged by the species' autumn
+            // — pine stays green, oak reddens, birch yellows.
             let tip = seg.tip();
             let (wx, wy, wz) = (t.x + tip[0] * h, tip[1] * h, t.z + tip[2] * h);
-            for k in 0..BRANCH_LEAVES_PER_TIP {
-                let ky = 1.0 - 2.0 * (k as f32 + 0.5) / (BRANCH_LEAVES_PER_TIP as f32);
+            for k in 0..sp.leaves_per_tip {
+                let ky = 1.0 - 2.0 * (k as f32 + 0.5) / (sp.leaves_per_tip as f32);
                 let kr = (1.0 - ky * ky).max(0.0).sqrt();
                 let kt = (k as f32) * GOLDEN_ANGLE_RAD;
+                let roll = leaf_hash01(seed, leaf_i);
+                leaf_i += 1;
+                let age = roll * roll * sp.autumn;
                 canopy_elements.push(MeshInstance {
                     pos: [
                         wx + cluster_r * kr * kt.cos(),
                         wy + cluster_r * ky,
                         wz + cluster_r * kr * kt.sin(),
                     ],
-                    color: TREE_CANOPY_COLOR,
+                    color: autumn_ramp(sp.leaf_green, age),
                     scale: [element_r, element_r, element_r],
                     axis: UP,
                 });

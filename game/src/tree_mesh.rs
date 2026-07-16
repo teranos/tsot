@@ -211,11 +211,124 @@ impl BranchSegment {
 /// limbs to `BRANCH_MAX_DEPTH` — branches, and branches' branches —
 /// with terminal tips flagged as leaf anchors. Pure: same seed → the
 /// same Vec, byte for byte.
-/// Recursion depth: trunk-limb → branch → branch's branch → tip. ≥2 so
-/// "branches, and branches' branches" is literally true.
-const BRANCH_MAX_DEPTH: u32 = 3;
-/// Thickness ratio of a primary limb where it leaves the trunk.
-const BRANCH_PRIMARY_RADIUS: f32 = 0.03;
+/// Per-species tree shape + appearance. One struct fed to the generator
+/// and the emit turns the same code into a pine, an oak, or a birch.
+/// `(lo, hi)` pairs are sampled per limb from the tree's seed. Geometry
+/// fields are unit-space; appearance fields (× height, colours) are read
+/// by `snapshot_to_mesh_instances`.
+#[derive(Clone, Copy, Debug)]
+pub struct TreeSpecies {
+    pub primaries: (u32, u32),
+    pub base_y: (f32, f32),
+    /// Radians off vertical for a primary limb — the biggest silhouette
+    /// axis: pine wide/horizontal, birch narrow/upright, oak moderate.
+    pub primary_spread: (f32, f32),
+    pub primary_len: (f32, f32),
+    /// trunk-limb → branch → … → tip. ≥1; deeper = gnarlier.
+    pub max_depth: u32,
+    pub child_spread: (f32, f32),
+    pub len_shrink: f32,
+    pub radius_shrink: f32,
+    pub primary_radius: f32,
+    pub trunk_h_ratio: f32,
+    pub trunk_r_ratio: f32,
+    pub trunk_color: [f32; 3],
+    pub branch_color: [f32; 3],
+    pub leaves_per_tip: u32,
+    pub cluster_radius_ratio: f32,
+    pub leaf_element_ratio: f32,
+    pub leaf_green: [f32; 3],
+    /// Ceiling of the per-leaf autumn-age ramp: 0 = evergreen (pine),
+    /// higher = more/warmer turn (oak → red, birch → yellow).
+    pub autumn: f32,
+}
+
+/// Conifer: tall narrow column, many short near-horizontal whorls
+/// shrinking toward a point, shallow recursion, dark dense evergreen.
+pub static PINE: TreeSpecies = TreeSpecies {
+    primaries: (7, 9),
+    base_y: (0.15, 0.85),
+    primary_spread: (1.0, 1.3),
+    primary_len: (0.12, 0.22),
+    max_depth: 1,
+    child_spread: (0.3, 0.6),
+    len_shrink: 0.6,
+    radius_shrink: 0.6,
+    primary_radius: 0.025,
+    trunk_h_ratio: 0.75,
+    trunk_r_ratio: 0.02,
+    trunk_color: [0.22, 0.15, 0.10],
+    branch_color: [0.25, 0.17, 0.11],
+    leaves_per_tip: 10,
+    cluster_radius_ratio: 0.045,
+    leaf_element_ratio: 0.02,
+    leaf_green: [0.08, 0.42, 0.22],
+    autumn: 0.0,
+};
+
+/// Broadleaf spreader: thick trunk, few long forking limbs, deep
+/// recursion (gnarled), broad round crown that turns in autumn.
+pub static OAK: TreeSpecies = TreeSpecies {
+    primaries: (3, 4),
+    base_y: (0.30, 0.55),
+    primary_spread: (0.5, 0.9),
+    primary_len: (0.24, 0.34),
+    max_depth: 3,
+    child_spread: (0.5, 0.95),
+    len_shrink: 0.62,
+    radius_shrink: 0.62,
+    primary_radius: 0.035,
+    trunk_h_ratio: 0.40,
+    trunk_r_ratio: 0.035,
+    trunk_color: [0.30, 0.20, 0.11],
+    branch_color: [0.34, 0.23, 0.13],
+    leaves_per_tip: 8,
+    cluster_radius_ratio: 0.07,
+    leaf_element_ratio: 0.028,
+    leaf_green: [0.13, 0.70, 0.32],
+    autumn: 0.85,
+};
+
+/// Slender upright: thin pale trunk, branches that point up, airy
+/// canopy, bright-yellow autumn.
+pub static BIRCH: TreeSpecies = TreeSpecies {
+    primaries: (3, 5),
+    base_y: (0.35, 0.75),
+    primary_spread: (0.2, 0.5),
+    primary_len: (0.18, 0.28),
+    max_depth: 2,
+    child_spread: (0.3, 0.6),
+    len_shrink: 0.6,
+    radius_shrink: 0.6,
+    primary_radius: 0.02,
+    trunk_h_ratio: 0.60,
+    trunk_r_ratio: 0.018,
+    trunk_color: [0.72, 0.72, 0.68],
+    branch_color: [0.55, 0.55, 0.50],
+    leaves_per_tip: 6,
+    cluster_radius_ratio: 0.05,
+    leaf_element_ratio: 0.024,
+    leaf_green: [0.35, 0.72, 0.28],
+    autumn: 0.45,
+};
+
+/// Deterministic species pick for a tree seed — a mixed woodland: oak
+/// common, pine and birch less so. Peers pass the same seed → same
+/// species.
+pub fn species_for(seed: u32) -> &'static TreeSpecies {
+    match (seed >> 13) % 10 {
+        0..=4 => &OAK,
+        5..=7 => &PINE,
+        _ => &BIRCH,
+    }
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+fn rangef(rng: &mut u32, (lo, hi): (f32, f32)) -> f32 {
+    lo + randf(rng) * (hi - lo)
+}
 
 // Deterministic PRNG (splitmix32) + minimal vec3 helpers. No external
 // rng, no floats-from-time — the skeleton is a pure function of `seed`
@@ -270,6 +383,7 @@ fn grow_limb(
     len: f32,
     radius: f32,
     depth: u32,
+    sp: &TreeSpecies,
     rng: &mut u32,
 ) {
     out.push(BranchSegment {
@@ -287,35 +401,44 @@ fn grow_limb(
     let (u, v) = perp_basis(dir);
     let azim0 = randf(rng) * std::f32::consts::TAU;
     for c in 0..children {
-        let spread = 0.5 + randf(rng) * 0.4; // 0.5..0.9 rad off the parent
+        let spread = rangef(rng, sp.child_spread); // off the parent
         let phi = azim0 + (c as f32) * GOLDEN_ANGLE_RAD;
         let radial = v_add(v_scale(u, phi.cos()), v_scale(v, phi.sin()));
         let child_dir = v_norm(v_add(v_scale(dir, spread.cos()), v_scale(radial, spread.sin())));
-        let child_len = len * (0.6 + randf(rng) * 0.12);
-        grow_limb(out, tip, child_dir, child_len, radius * 0.62, depth - 1, rng);
+        grow_limb(
+            out,
+            tip,
+            child_dir,
+            len * sp.len_shrink,
+            radius * sp.radius_shrink,
+            depth - 1,
+            sp,
+            rng,
+        );
     }
 }
 
-pub fn tree_branches(seed: u32) -> Vec<BranchSegment> {
+pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
     // Spread the seed through the state and force it odd/non-zero so
     // even seed 0 gives a non-degenerate tree.
     let mut rng = seed.wrapping_mul(2_654_435_761).wrapping_add(0x9E37_79B9) | 1;
     let mut out = Vec::new();
-    let primaries = 3 + (splitmix32(&mut rng) % 2) as usize; // 3 or 4
+    let span = (sp.primaries.1 - sp.primaries.0 + 1).max(1);
+    let primaries = sp.primaries.0 + splitmix32(&mut rng) % span;
     let azim0 = randf(&mut rng) * std::f32::consts::TAU;
     for c in 0..primaries {
-        // Primaries leave the upper trunk over a spread of heights, each
-        // angled up-and-outward, so the crown fans instead of bursting
-        // from one point. Range sits within the trunk (≈0.40 tall in
-        // unit space) so limbs emerge from wood, not mid-air.
-        let base_y = 0.22 + (c as f32 / primaries as f32) * 0.16;
-        let base = [0.0, base_y, 0.0];
-        let spread = 0.45 + randf(&mut rng) * 0.35; // 0.45..0.8 rad off vertical
+        // Primaries leave the trunk over a spread of heights, angled
+        // up-and-outward, so the crown fans instead of bursting from one
+        // point. Higher whorls are shorter (× (1 − 0.4·frac)) so the
+        // crown tapers to a point — most visible on the pine.
+        let frac = c as f32 / primaries.max(1) as f32;
+        let base = [0.0, lerp(sp.base_y.0, sp.base_y.1, frac), 0.0];
+        let spread = rangef(&mut rng, sp.primary_spread);
         let phi = azim0 + (c as f32) * GOLDEN_ANGLE_RAD;
         let radial = [phi.cos(), 0.0, phi.sin()];
         let dir = v_norm(v_add([0.0, spread.cos(), 0.0], v_scale(radial, spread.sin())));
-        let len = 0.26 + randf(&mut rng) * 0.08;
-        grow_limb(&mut out, base, dir, len, BRANCH_PRIMARY_RADIUS, BRANCH_MAX_DEPTH, &mut rng);
+        let len = rangef(&mut rng, sp.primary_len) * (1.0 - 0.4 * frac);
+        grow_limb(&mut out, base, dir, len, sp.primary_radius, sp.max_depth, sp, &mut rng);
     }
     out
 }
@@ -541,30 +664,32 @@ mod tests {
 
     // ---- branch skeleton contract ----
 
+    const SPECIES: [&TreeSpecies; 3] = [&PINE, &OAK, &BIRCH];
+
     #[test]
     fn branches_are_deterministic_in_the_seed() {
-        // Peers pass the same seed and must resolve the same tree.
-        assert_eq!(tree_branches(42), tree_branches(42));
+        // Peers pass the same seed + species and must resolve the same tree.
+        assert_eq!(tree_branches(42, &OAK), tree_branches(42, &OAK));
     }
 
     #[test]
     fn different_seeds_give_different_trees() {
         // The whole point: variety. Two seeds must not clone.
-        assert_ne!(tree_branches(1), tree_branches(2));
+        assert_ne!(tree_branches(1, &OAK), tree_branches(2, &OAK));
     }
 
     #[test]
     fn recursion_produces_leaf_tips() {
         // "branches, and branches' branches" — terminal tips exist and
         // there are several of them (not a lone trunk).
-        let tips = tree_branches(7).iter().filter(|p| p.is_tip).count();
+        let tips = tree_branches(7, &OAK).iter().filter(|p| p.is_tip).count();
         assert!(tips >= 4, "expected several leaf tips, got {tips}");
     }
 
     #[test]
     fn branches_taper_with_depth() {
         // A terminal limb is thinner than the thickest (trunk-side) one.
-        let segs = tree_branches(7);
+        let segs = tree_branches(7, &OAK);
         let max_r = segs.iter().map(|s| s.base_radius).fold(0.0_f32, f32::max);
         let tip_r = segs
             .iter()
@@ -578,33 +703,53 @@ mod tests {
     }
 
     #[test]
-    fn branches_grow_up_into_the_crown_and_stay_in_unit_space() {
-        // Unit space so the caller scales by height: every limb endpoint
-        // above ground, within a sane bound. Tips reach up into the crown.
-        let segs = tree_branches(7);
-        assert!(!segs.is_empty(), "no branch segments emitted");
-        for s in &segs {
-            for pt in [s.base, s.tip()] {
-                assert!(pt[1] >= -EPS, "endpoint below ground: {pt:?}");
-                assert!(pt[1] <= 1.5, "endpoint too tall for unit space: {pt:?}");
-                let rxz = (pt[0] * pt[0] + pt[2] * pt[2]).sqrt();
-                assert!(rxz <= 1.0, "endpoint too wide for unit space: {pt:?}");
+    fn every_species_stays_in_unit_space_with_tips_in_the_crown() {
+        // Every species must keep its limbs in unit space (so the caller
+        // scales by height) and reach tips up into the crown.
+        for sp in SPECIES {
+            for seed in [1u32, 7, 42, 1000] {
+                let segs = tree_branches(seed, sp);
+                assert!(!segs.is_empty(), "no segments for a species");
+                for s in &segs {
+                    for pt in [s.base, s.tip()] {
+                        assert!(pt[1] >= -EPS, "endpoint below ground: {pt:?}");
+                        assert!(pt[1] <= 1.6, "endpoint too tall: {pt:?}");
+                        let rxz = (pt[0] * pt[0] + pt[2] * pt[2]).sqrt();
+                        assert!(rxz <= 1.0, "endpoint too wide: {pt:?}");
+                    }
+                }
+                let max_tip_y = segs
+                    .iter()
+                    .filter(|s| s.is_tip)
+                    .map(|s| s.tip()[1])
+                    .fold(0.0_f32, f32::max);
+                assert!(max_tip_y > 0.5, "tips should reach the crown, got {max_tip_y}");
             }
         }
-        let max_tip_y = segs
-            .iter()
-            .filter(|s| s.is_tip)
-            .map(|s| s.tip()[1])
-            .fold(0.0_f32, f32::max);
-        assert!(
-            max_tip_y > 0.5,
-            "tips should reach the upper crown, got max tip y = {max_tip_y}"
-        );
     }
 
     #[test]
-    fn branch_recursion_terminates() {
-        // No explosion — recursion must be bounded.
-        assert!(tree_branches(7).len() < 2000);
+    fn branch_recursion_terminates_for_every_species() {
+        for sp in SPECIES {
+            assert!(tree_branches(7, sp).len() < 4000);
+        }
+    }
+
+    #[test]
+    fn species_pick_is_deterministic_and_varied() {
+        // Same seed → same species; across seeds we see more than one.
+        assert!(std::ptr::eq(species_for(12345), species_for(12345)));
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..200u32 {
+            seen.insert(species_for(seed.wrapping_mul(2_654_435_761)).primaries);
+        }
+        assert!(seen.len() >= 2, "species pick collapsed to one variety");
+    }
+
+    #[test]
+    fn species_shape_the_tree_differently() {
+        // Same seed, different species → different trees (pine's many
+        // shallow whorls vs birch's few upright limbs can't coincide).
+        assert_ne!(tree_branches(7, &PINE), tree_branches(7, &BIRCH));
     }
 }
