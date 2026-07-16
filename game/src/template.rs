@@ -72,6 +72,8 @@ pub struct StructureProp {
     pub kind: PropKind,
     /// Colour override; `None` → the kind's default appearance.
     pub color: Option<[f32; 3]>,
+    /// Size override; `None` → the kind's default size (from `scene.rs`).
+    pub size: Option<Vec3>,
 }
 
 /// One prop, positioned relative to the template's anchor.
@@ -81,16 +83,26 @@ pub struct Prop {
     pub kind: PropKind,
     /// Colour override; `None` → the kind's default appearance.
     pub color: Option<[f32; 3]>,
+    /// Size override; `None` → the kind's default size (from `scene.rs`).
+    /// Used by the run-based wall importer to emit one long WallEW/WallNS
+    /// for a continuous straight run of cells instead of one prop per cell
+    /// — with a single prop there's no seam between the pieces because
+    /// they ARE the same piece.
+    pub size: Option<Vec3>,
 }
 
 impl Prop {
     /// A prop with the default appearance for its kind.
     pub fn at(offset: Vec3, kind: PropKind) -> Self {
-        Self { offset, kind, color: None }
+        Self { offset, kind, color: None, size: None }
     }
     /// A prop with an explicit colour (e.g. a wall tinted by material).
     pub fn colored(offset: Vec3, kind: PropKind, color: [f32; 3]) -> Self {
-        Self { offset, kind, color: Some(color) }
+        Self { offset, kind, color: Some(color), size: None }
+    }
+    /// A prop with an explicit size (a run of cells emitted as one prop).
+    pub fn sized(offset: Vec3, kind: PropKind, color: Option<[f32; 3]>, size: Vec3) -> Self {
+        Self { offset, kind, color, size: Some(size) }
     }
 }
 
@@ -134,6 +146,15 @@ impl Template {
                     mix_bytes(&c[0].to_le_bytes(), &mut mix);
                     mix_bytes(&c[1].to_le_bytes(), &mut mix);
                     mix_bytes(&c[2].to_le_bytes(), &mut mix);
+                }
+            }
+            match p.size {
+                None => mix(0),
+                Some(s) => {
+                    mix(1);
+                    mix_bytes(&s.x.to_le_bytes(), &mut mix);
+                    mix_bytes(&s.y.to_le_bytes(), &mut mix);
+                    mix_bytes(&s.z.to_le_bytes(), &mut mix);
                 }
             }
         }
@@ -201,7 +222,12 @@ pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
             } else {
                 p.kind
             };
-            Prop { offset: Vec3::new(rx, p.offset.y, rz), kind, color: p.color }
+            // Size follows kind: an odd-turn rotation swaps a run's long
+            // and thin axes, so size.x and size.z swap too.
+            let size = p.size.map(|s| {
+                if q % 2 == 1 { Vec3::new(s.z, s.y, s.x) } else { s }
+            });
+            Prop { offset: Vec3::new(rx, p.offset.y, rz), kind, color: p.color, size }
         })
         .collect();
     Template { props }
@@ -239,7 +265,7 @@ pub fn stamp_template_where(
         }
         // StructureProp carrying this prop's colour override (walls
         // tinted by material; None elsewhere → kind default).
-        let sp = |kind: PropKind| StructureProp { kind, color: prop.color };
+        let sp = |kind: PropKind| StructureProp { kind, color: prop.color, size: prop.size };
         let entity = match prop.kind {
             PropKind::Campfire => commands
                 .spawn((
@@ -262,25 +288,28 @@ pub fn stamp_template_where(
                 ))
                 .id(),
             // Solid, one CDDA tile square. Wall sizes match scene.rs.
+            // The run-based importer stores the run's length in prop.size
+            // (one prop per continuous straight run), so the collider
+            // needs to match the actual prop size when present.
             PropKind::Wall => commands
                 .spawn((
                     sp(PropKind::Wall),
                     Position(pos),
-                    AabbCollider::cuboid(Vec3::new(80.0, 220.0, 80.0)),
+                    AabbCollider::cuboid(prop.size.unwrap_or(Vec3::new(80.0, 220.0, 80.0))),
                 ))
                 .id(),
             PropKind::WallNS => commands
                 .spawn((
                     sp(PropKind::WallNS),
                     Position(pos),
-                    AabbCollider::cuboid(Vec3::new(24.0, 220.0, 80.0)),
+                    AabbCollider::cuboid(prop.size.unwrap_or(Vec3::new(24.0, 220.0, 80.0))),
                 ))
                 .id(),
             PropKind::WallEW => commands
                 .spawn((
                     sp(PropKind::WallEW),
                     Position(pos),
-                    AabbCollider::cuboid(Vec3::new(80.0, 220.0, 24.0)),
+                    AabbCollider::cuboid(prop.size.unwrap_or(Vec3::new(80.0, 220.0, 24.0))),
                 ))
                 .id(),
             // Overhead — no collider; the player walks under it.
@@ -297,21 +326,21 @@ pub fn stamp_template_where(
                 .spawn((
                     sp(PropKind::Window),
                     Position(pos),
-                    AabbCollider::cuboid(Vec3::new(80.0, 220.0, 80.0)),
+                    AabbCollider::cuboid(prop.size.unwrap_or(Vec3::new(80.0, 220.0, 80.0))),
                 ))
                 .id(),
             PropKind::WindowNS => commands
                 .spawn((
                     sp(PropKind::WindowNS),
                     Position(pos),
-                    AabbCollider::cuboid(Vec3::new(24.0, 220.0, 80.0)),
+                    AabbCollider::cuboid(prop.size.unwrap_or(Vec3::new(24.0, 220.0, 80.0))),
                 ))
                 .id(),
             PropKind::WindowEW => commands
                 .spawn((
                     sp(PropKind::WindowEW),
                     Position(pos),
-                    AabbCollider::cuboid(Vec3::new(80.0, 220.0, 24.0)),
+                    AabbCollider::cuboid(prop.size.unwrap_or(Vec3::new(80.0, 220.0, 24.0))),
                 ))
                 .id(),
             // Fence — short (60 tall) barrier, blocks movement.

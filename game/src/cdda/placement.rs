@@ -227,41 +227,64 @@ pub fn mapgen_to_template(
         other => other,
     };
 
-    // Pass 2: place each cell. Walls/windows follow the edge-placement
-    // rules; every other prop stays centred on its tile. Wall geometry
-    // sits ENTIRELY within its own wall cell (space-maximising for the
-    // adjacent floor cell) — the wall's inner face is exactly on the
-    // grid boundary; the wall extends `WALL_HALF_THICKNESS` back into
-    // the wall cell, never into the room.
+    // Pass 2: RUN-BASED.
+    //
+    // The previous per-cell approach emitted one prop per wall cell,
+    // producing a mosaic of 80-wide bars that had to hope they lined up
+    // at seams — every visual artifact was a seam where two per-cell
+    // decisions met. Now:
+    //
+    //   1. For each wall/window cell, classify which SLOTS it emits into
+    //      (N/S/E/W outer edges + centred EW/NS divider + stubs). This
+    //      is the same body of rules as before — perimeter, divider,
+    //      diagonal-corner, run-scope alignment, T-junction stub.
+    //   2. Collect segments as (slot_kind, line, idx, base, colour) tuples
+    //      keyed to a lattice: horizontal slots by row (line=row) and
+    //      column (idx=col along the run); vertical slots by col and row.
+    //   3. Sort + walk the segments, coalescing contiguous same-key
+    //      same-idx+1 segments into a single RUN.
+    //   4. Emit one prop per run, sized to cover the whole run in world
+    //      units. Adjacent perimeter cells become ONE long prop — no
+    //      seams between pieces because they ARE one piece.
+    //
+    // Non-wall props (fence, other) still emit one-per-cell.
     let cx = width as f32 / 2.0;
     let cz = height as f32 / 2.0;
     let half = tile_size / 2.0;
-    // Half of a wall's thin-axis extent (WallEW/WallNS are 24 wide in
-    // prop_appearance → 12 half). Kept local since prop_appearance
-    // lives in scene.rs; if the wall thickness ever changes there,
-    // update this too.
     const WALL_HALF_THICKNESS: f32 = 12.0;
+    const WALL_THICKNESS: f32 = 2.0 * WALL_HALF_THICKNESS;
     let mut props = Vec::new();
-    for (r_idx, row_cells) in grid.iter().enumerate() {
-        for (c_idx, cell) in row_cells.iter().enumerate() {
-            let Some((base, color)) = *cell else { continue };
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum SlotKind {
+        NorthOuter, // horizontal, N outer edge of row
+        SouthOuter, // horizontal, S outer edge of row
+        CentreEW,   // horizontal, cell-centre of row (divider or stub)
+        EastOuter,  // vertical, E outer edge of col
+        WestOuter,  // vertical, W outer edge of col
+        CentreNS,   // vertical, cell-centre of col (divider or stub)
+    }
+    #[derive(Clone, Copy)]
+    struct Seg {
+        slot_kind: SlotKind,
+        line: i32, // horizontal slots: row; vertical slots: col
+        idx: i32,  // horizontal slots: col; vertical slots: row (position along run)
+        base: PropKind,
+        color: Option<[f32; 3]>,
+    }
+    let mut segments: Vec<Seg> = Vec::new();
+
+    for r_idx in 0..height {
+        for c_idx in 0..width {
+            let Some((base, color)) = grid[r_idx][c_idx] else { continue };
             let r = r_idx as i32;
             let c = c_idx as i32;
             let cx_world = (c_idx as f32 - cx) * tile_size;
             let cz_world = (r_idx as f32 - cz) * tile_size;
-            let mut emit = |x: f32, z: f32, kind: PropKind| {
-                let offset = Vec3::new(x, 0.0, z);
-                props.push(match color {
-                    Some(col) => Prop::colored(offset, kind, col),
-                    None => Prop::at(offset, kind),
-                });
-            };
 
-            // Fence: emit one centred prop per cell, oriented by whether
-            // its neighbours (horizontal vs vertical) are also fences.
-            // Fences don't participate in the wall edge-placement rules
-            // — they're a yard boundary, not a room seal (excluded from
-            // is_wall_line_char so flood-fill passes through).
+            // Fence: one prop per cell, oriented by fence neighbours.
+            // Kept per-cell for now — fence visual is post+rail per cell,
+            // not a single long bar.
             if matches!(base, PropKind::Fence) {
                 let is_fence_at = |rr: i32, cc: i32| -> bool {
                     if rr < 0 || cc < 0 || (rr as usize) >= height || (cc as usize) >= width {
@@ -274,38 +297,35 @@ pub fn mapgen_to_template(
                 let kind = match (horiz, vert) {
                     (true, false) => PropKind::FenceEW,
                     (false, true) => PropKind::FenceNS,
-                    _ => PropKind::Fence, // isolated post or 4-way junction
+                    _ => PropKind::Fence,
                 };
-                emit(cx_world, cz_world, kind);
+                let offset = Vec3::new(cx_world, 0.0, cz_world);
+                props.push(match color {
+                    Some(col) => Prop::colored(offset, kind, col),
+                    None => Prop::at(offset, kind),
+                });
                 continue;
             }
 
             let is_wall_or_window = matches!(base, PropKind::Wall | PropKind::Window);
             if !is_wall_or_window {
-                emit(cx_world, cz_world, base);
+                // Chair / Table / other centred prop.
+                let offset = Vec3::new(cx_world, 0.0, cz_world);
+                props.push(match color {
+                    Some(col) => Prop::colored(offset, base, col),
+                    None => Prop::at(offset, base),
+                });
                 continue;
             }
 
-            // Unified rule (no full-tile blocks anywhere):
-            //   1. For each of 4 sides, if the direct neighbour is
-            //      EXTERIOR (reachable by flood-fill from mapgen
-            //      boundary), emit a thin wall on that outer edge —
-            //      that's a perimeter wall.
-            //   2. Divider: if a wall cell has interior on both perp
-            //      direct neighbours (rooms on both sides), emit walls
-            //      on both perp outer edges — one wall facing each
-            //      room. No arbitrary +positive convention needed.
-            //   3. Diagonal corner: if no direct exterior and no direct
-            //      divider case, but a diagonal is interior, emit walls
-            //      on the two outer edges opposite that diagonal
-            //      (interior at SE → walls on N + W). Multiple diagonals
-            //      interior → union of their edge pairs (T-junction
-            //      cells can end up with walls on 3 or 4 sides).
+            // Wall / window classification: which slots does this cell
+            // contribute a segment to? Rules unchanged from per-cell
+            // version; only the EMIT step differs (segments now, coalesced).
             let (hn, hs) = horiz_at(r, c);
             let (ve, vw) = vert_at(r, c);
             let is_ext = |rr: i32, cc: i32| -> bool {
                 if rr < 0 || cc < 0 || (rr as usize) >= height || (cc as usize) >= width {
-                    return true; // OOB counts as exterior for perimeter emission
+                    return true; // OOB is exterior for perimeter emission
                 }
                 exterior[rr as usize][cc as usize]
             };
@@ -313,26 +333,14 @@ pub fn mapgen_to_template(
             let ext_s = is_ext(r + 1, c);
             let ext_e = is_ext(r, c + 1);
             let ext_w = is_ext(r, c - 1);
-
             let mut emit_n = ext_n;
             let mut emit_s = ext_s;
             let mut emit_e = ext_e;
             let mut emit_w = ext_w;
 
-            // Divider: perp direct interiors on both sides. Neither side
-            // is "outer" (both are rooms), so emitting on both faces would
-            // put two parallel walls in the same cell with a 56-unit gap
-            // — the "double wall" visual. Emit ONE wall, centred in the
-            // cell, same 24-unit thickness as any other wall.
             let divider_ew = hn && hs;
             let divider_ns = ve && vw;
 
-            // Corner / T-junction: diagonal interiors imply walls on
-            // outer edges opposite that diagonal (interior at SE → walls
-            // on N + W). Gated on the direct neighbour on that side NOT
-            // being a wall_line cell — otherwise the "wall" would sit
-            // inside another wall (invisible, and over-counts the
-            // geometry when the neighbouring cell already emits there).
             let d_nw = is_interior(r - 1, c - 1);
             let d_ne = is_interior(r - 1, c + 1);
             let d_sw = is_interior(r + 1, c - 1);
@@ -341,118 +349,173 @@ pub fn mapgen_to_template(
             let s_open = !is_solid(r + 1, c);
             let e_open = !is_solid(r, c + 1);
             let w_open = !is_solid(r, c - 1);
-            if d_se {
-                emit_n = emit_n || n_open;
-                emit_w = emit_w || w_open;
-            }
-            if d_sw {
-                emit_n = emit_n || n_open;
-                emit_e = emit_e || e_open;
-            }
-            if d_ne {
-                emit_s = emit_s || s_open;
-                emit_w = emit_w || w_open;
-            }
-            if d_nw {
-                emit_s = emit_s || s_open;
-                emit_e = emit_e || e_open;
-            }
+            if d_se { emit_n |= n_open; emit_w |= w_open; }
+            if d_sw { emit_n |= n_open; emit_e |= e_open; }
+            if d_ne { emit_s |= s_open; emit_w |= w_open; }
+            if d_nw { emit_s |= s_open; emit_e |= e_open; }
 
-            // Divider takes precedence per axis: a single centred wall
-            // serves both rooms, so the perimeter/diagonal emissions on
-            // the same axis (which would give N-outer + S-outer + centre
-            // = three parallel walls) must be suppressed.
-            if divider_ew {
-                emit_n = false;
-                emit_s = false;
-            }
-            if divider_ns {
-                emit_e = false;
-                emit_w = false;
-            }
+            if divider_ew { emit_n = false; emit_s = false; }
+            if divider_ns { emit_e = false; emit_w = false; }
 
-            // If per-cell decided no horizontal wall but this cell IS
-            // part of a horizontal run, align to the run's outer edge
-            // (any cell in the run with a direct exterior on N or S).
-            // Same for vertical. Fixes T-junction cells whose direct
-            // neighbours are all wall_line so the per-cell rule finds
-            // no orientation, but the RUN through them has a clear
-            // edge from other cells.
-            if !emit_n && !emit_s && !divider_ew && (is_solid(r, c - 1) || is_solid(r, c + 1)) {
+            if !emit_n && !emit_s && !divider_ew
+                && (is_solid(r, c - 1) || is_solid(r, c + 1))
+            {
                 let (run_n, run_s) = horiz_run_side(r, c);
                 emit_n = run_n;
                 emit_s = run_s;
             }
-            if !emit_e && !emit_w && !divider_ns && (is_solid(r - 1, c) || is_solid(r + 1, c)) {
+            if !emit_e && !emit_w && !divider_ns
+                && (is_solid(r - 1, c) || is_solid(r + 1, c))
+            {
                 let (run_e, run_w) = vert_run_side(r, c);
                 emit_e = run_e;
                 emit_w = run_w;
             }
 
-            if emit_n {
-                emit(cx_world, cz_world - half + WALL_HALF_THICKNESS, ew_kind(base));
-            }
-            if emit_s {
-                emit(cx_world, cz_world + half - WALL_HALF_THICKNESS, ew_kind(base));
-            }
-            if emit_e {
-                emit(cx_world + half - WALL_HALF_THICKNESS, cz_world, ns_kind(base));
-            }
-            if emit_w {
-                emit(cx_world - half + WALL_HALF_THICKNESS, cz_world, ns_kind(base));
-            }
-            // Divider case: single centred wall (no ±half shift), one
-            // per orientation. A cell that's a divider on BOTH axes (a
-            // wall in the middle of a 4-room cross) gets both.
-            if divider_ew {
-                emit(cx_world, cz_world, ew_kind(base));
-            }
-            if divider_ns {
-                emit(cx_world, cz_world, ns_kind(base));
-            }
-            // T-junction stub: if a perpendicular divider is adjacent,
-            // this cell's perimeter wall doesn't reach into the divider
-            // (they sit on different planes — perimeter on the outer
-            // edge, divider on the cell centre — leaving a ~56-unit
-            // gap at the T). Emit a centred stub on the perpendicular
-            // axis, spanning the cell, to bridge them. Different axis
-            // from the perimeter, so the "one wall per axis per cell"
-            // invariant is preserved.
             let neighbour_is_ns_divider = |rr: i32, cc: i32| -> bool {
-                is_solid(rr, cc)
-                    && is_interior(rr, cc + 1)
-                    && is_interior(rr, cc - 1)
+                is_solid(rr, cc) && is_interior(rr, cc + 1) && is_interior(rr, cc - 1)
             };
             let neighbour_is_ew_divider = |rr: i32, cc: i32| -> bool {
-                is_solid(rr, cc)
-                    && is_interior(rr - 1, cc)
-                    && is_interior(rr + 1, cc)
+                is_solid(rr, cc) && is_interior(rr - 1, cc) && is_interior(rr + 1, cc)
             };
             let need_ns_stub = !divider_ns
                 && (neighbour_is_ns_divider(r - 1, c) || neighbour_is_ns_divider(r + 1, c));
             let need_ew_stub = !divider_ew
                 && (neighbour_is_ew_divider(r, c - 1) || neighbour_is_ew_divider(r, c + 1));
-            if need_ns_stub {
-                emit(cx_world, cz_world, ns_kind(base));
-            }
-            if need_ew_stub {
-                emit(cx_world, cz_world, ew_kind(base));
-            }
-            // No neighbours at all matched — isolated wall cell.
-            // Emit a centered thin bar rather than a block.
-            if !emit_n
-                && !emit_s
-                && !emit_e
-                && !emit_w
-                && !divider_ew
-                && !divider_ns
-                && !need_ns_stub
-                && !need_ew_stub
-            {
-                emit(cx_world, cz_world, ew_kind(base));
+
+            // Add segments (horizontal slots use line=row + idx=col;
+            // vertical slots use line=col + idx=row — the "line" is the
+            // constant across a run, "idx" is the position along it).
+            let h_seg = |sk: SlotKind| Seg { slot_kind: sk, line: r, idx: c, base, color };
+            let v_seg = |sk: SlotKind| Seg { slot_kind: sk, line: c, idx: r, base, color };
+            if emit_n { segments.push(h_seg(SlotKind::NorthOuter)); }
+            if emit_s { segments.push(h_seg(SlotKind::SouthOuter)); }
+            if divider_ew { segments.push(h_seg(SlotKind::CentreEW)); }
+            if need_ew_stub { segments.push(h_seg(SlotKind::CentreEW)); }
+            if emit_e { segments.push(v_seg(SlotKind::EastOuter)); }
+            if emit_w { segments.push(v_seg(SlotKind::WestOuter)); }
+            if divider_ns { segments.push(v_seg(SlotKind::CentreNS)); }
+            if need_ns_stub { segments.push(v_seg(SlotKind::CentreNS)); }
+
+            // Isolated fallback: wall cell with nothing else to emit
+            // becomes a single centred segment (length 1 run).
+            let anything = emit_n || emit_s || emit_e || emit_w
+                || divider_ew || divider_ns || need_ns_stub || need_ew_stub;
+            if !anything {
+                segments.push(h_seg(SlotKind::CentreEW));
             }
         }
     }
+
+    // Coalesce segments into runs.
+    let slot_ord = |k: SlotKind| match k {
+        SlotKind::NorthOuter => 0u8,
+        SlotKind::SouthOuter => 1,
+        SlotKind::CentreEW => 2,
+        SlotKind::EastOuter => 3,
+        SlotKind::WestOuter => 4,
+        SlotKind::CentreNS => 5,
+    };
+    let base_ord = |b: PropKind| match b {
+        PropKind::Wall => 0u8,
+        PropKind::Window => 1,
+        _ => 255,
+    };
+    let color_bits = |c: Option<[f32; 3]>| c.map(|a| [a[0].to_bits(), a[1].to_bits(), a[2].to_bits()]);
+    segments.sort_by(|a, b| {
+        (slot_ord(a.slot_kind), a.line, base_ord(a.base), color_bits(a.color), a.idx).cmp(
+            &(slot_ord(b.slot_kind), b.line, base_ord(b.base), color_bits(b.color), b.idx),
+        )
+    });
+    // Deduplicate identical segments (two rules can independently
+    // request the same centred stub for the same cell).
+    segments.dedup_by(|a, b| {
+        a.slot_kind == b.slot_kind
+            && a.line == b.line
+            && a.base == b.base
+            && a.color == b.color
+            && a.idx == b.idx
+    });
+
+    let mut i = 0;
+    while i < segments.len() {
+        let start = i;
+        while i + 1 < segments.len()
+            && segments[i + 1].slot_kind == segments[start].slot_kind
+            && segments[i + 1].line == segments[start].line
+            && segments[i + 1].base == segments[start].base
+            && segments[i + 1].color == segments[start].color
+            && segments[i + 1].idx == segments[i].idx + 1
+        {
+            i += 1;
+        }
+        let seg = segments[start];
+        let end_idx = segments[i].idx;
+        let run_cells = (end_idx - seg.idx + 1) as f32;
+        let along_size = run_cells * tile_size;
+        // Position: midpoint of first-cell centre and last-cell centre
+        // along the run axis; line-axis offset per slot type.
+        let idx_centre = (seg.idx as f32 + (run_cells - 1.0) * 0.5) * tile_size;
+        let (offset, size, kind) = match seg.slot_kind {
+            SlotKind::NorthOuter => {
+                let z = (seg.line as f32 - cz) * tile_size - half + WALL_HALF_THICKNESS;
+                let x = idx_centre - cx * tile_size;
+                (
+                    Vec3::new(x, 0.0, z),
+                    Vec3::new(along_size, 220.0, WALL_THICKNESS),
+                    ew_kind(seg.base),
+                )
+            }
+            SlotKind::SouthOuter => {
+                let z = (seg.line as f32 - cz) * tile_size + half - WALL_HALF_THICKNESS;
+                let x = idx_centre - cx * tile_size;
+                (
+                    Vec3::new(x, 0.0, z),
+                    Vec3::new(along_size, 220.0, WALL_THICKNESS),
+                    ew_kind(seg.base),
+                )
+            }
+            SlotKind::CentreEW => {
+                let z = (seg.line as f32 - cz) * tile_size;
+                let x = idx_centre - cx * tile_size;
+                (
+                    Vec3::new(x, 0.0, z),
+                    Vec3::new(along_size, 220.0, WALL_THICKNESS),
+                    ew_kind(seg.base),
+                )
+            }
+            SlotKind::EastOuter => {
+                let x = (seg.line as f32 - cx) * tile_size + half - WALL_HALF_THICKNESS;
+                let z = idx_centre - cz * tile_size;
+                (
+                    Vec3::new(x, 0.0, z),
+                    Vec3::new(WALL_THICKNESS, 220.0, along_size),
+                    ns_kind(seg.base),
+                )
+            }
+            SlotKind::WestOuter => {
+                let x = (seg.line as f32 - cx) * tile_size - half + WALL_HALF_THICKNESS;
+                let z = idx_centre - cz * tile_size;
+                (
+                    Vec3::new(x, 0.0, z),
+                    Vec3::new(WALL_THICKNESS, 220.0, along_size),
+                    ns_kind(seg.base),
+                )
+            }
+            SlotKind::CentreNS => {
+                let x = (seg.line as f32 - cx) * tile_size;
+                let z = idx_centre - cz * tile_size;
+                (
+                    Vec3::new(x, 0.0, z),
+                    Vec3::new(WALL_THICKNESS, 220.0, along_size),
+                    ns_kind(seg.base),
+                )
+            }
+        };
+        props.push(Prop::sized(offset, kind, seg.color, size));
+        i += 1;
+    }
+
     Ok(Template { props })
 }
 
@@ -535,39 +598,52 @@ mod tests {
     }
 
     #[test]
-    fn corner_cell_emits_both_outward_faces() {
-        // Each wall cell carries its wall on its outward-facing edges, so
-        // a corner cell — facing exterior on two sides — emits two
-        // segments: the L that turns the building's outline at the
-        // corner. NW corner (0, 0) faces north and west.
+    fn perimeter_is_four_runs_one_per_side() {
+        // Run-based: a 3×3 room's outer outline is FOUR long walls —
+        // one per side — each spanning all 3 cells. Adjacent per-cell
+        // segments coalesce into a single prop, so there are no seams
+        // between them and the corners share the endpoint cells cleanly.
         let json = synthetic_mapgen(&["www", "w.w", "www"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
-        // Cell (0, 0) centre: x = −120, z = −120. North outer edge z = −160
-        // → WallEW centre z = −148. West outer edge x = −160 → WallNS
-        // centre x = −148.
-        let has_north = t.props.iter().any(|p| {
-            matches!(p.kind, PropKind::WallEW)
-                && (p.offset.x - (-120.0)).abs() < 1e-3
-                && (p.offset.z - (-148.0)).abs() < 1e-3
-        });
-        let has_west = t.props.iter().any(|p| {
-            matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-148.0)).abs() < 1e-3
-                && (p.offset.z - (-120.0)).abs() < 1e-3
-        });
-        assert!(
-            has_north && has_west,
-            "NW corner should emit its north + west outer faces; got: {:?}",
-            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
-        );
-        // Outer outline of a 3×3 room: 4 corners × 2 faces + 4 edge-middles
-        // × 1 face = 12 segments.
+        // Room centre at origin (3×3, cx=cz=1.5). Each side's run spans
+        // 3 cells = 240 wide, sits at the outer edge (z or x = ±148),
+        // centred on the run's axis (x or z = 0).
+        // 3×3, cx=cz=1.5. Cell centres at −120, −40, 40. Run of 3 cells
+        // centred at midpoint of first and last cell centres = −40.
+        // Outer-edge walls: N at z=−148, S at z=68, E at x=68, W at
+        // x=−148 (12 units inside the room's outer boundary).
+        let sides = [
+            (-40.0, -148.0, PropKind::WallEW), // north
+            (-40.0, 68.0, PropKind::WallEW),   // south
+            (68.0, -40.0, PropKind::WallNS),   // east
+            (-148.0, -40.0, PropKind::WallNS), // west
+        ];
+        for (ex, ez, kind) in sides {
+            let found = t.props.iter().any(|p| {
+                p.kind == kind
+                    && (p.offset.x - ex).abs() < 1e-3
+                    && (p.offset.z - ez).abs() < 1e-3
+                    && p.size.map(|s| {
+                        (matches!(kind, PropKind::WallEW) && (s.x - 240.0).abs() < 1e-3)
+                            || (matches!(kind, PropKind::WallNS) && (s.z - 240.0).abs() < 1e-3)
+                    }).unwrap_or(false)
+            });
+            assert!(
+                found,
+                "missing {kind:?} run at ({ex}, {ez}) with span 240; got: {:?}",
+                t.props.iter()
+                    .filter(|p| matches!(p.kind, PropKind::WallEW | PropKind::WallNS))
+                    .map(|p| (p.kind, p.offset, p.size))
+                    .collect::<Vec<_>>()
+            );
+        }
+        // Exactly 4 wall props total (no extras).
         let count = t
             .props
             .iter()
             .filter(|p| matches!(p.kind, PropKind::WallEW | PropKind::WallNS))
             .count();
-        assert_eq!(count, 12, "expected 12 outer-outline segments, got {count}");
+        assert_eq!(count, 4, "3×3 room should be 4 outer-side runs, got {count}");
     }
 
     #[test]
@@ -708,35 +784,32 @@ mod tests {
     }
 
     #[test]
-    fn t_junction_perimeter_cell_emits_a_stub_to_the_divider() {
-        // 3×5: single row of rooms with a vertical divider at col 2.
-        // Cell (0, 2) is the top perimeter cell where the divider meets
-        // the outer wall — it must emit a centred WallNS stub that
-        // reaches down into the divider at (1, 2), otherwise there's a
-        // visible ~56-unit gap between the perimeter WallEW and the
-        // divider WallNS below.
+    fn t_junction_perimeter_cell_stub_coalesces_with_divider() {
+        // 3×5: rooms either side of a divider at col 2. Divider at
+        // (1, 2) plus stubs at the T-junction perimeter cells (0, 2)
+        // and (2, 2) all live on the col-2 CentreNS lattice, contiguous
+        // rows 0..2 → coalesce into ONE run that reaches from the top
+        // perimeter to the bottom perimeter (no gap possible because
+        // it's a single prop).
         let json = synthetic_mapgen(&["wwwww", "w.w.w", "wwwww"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
-        // Cell (0, 2) centre: x = (2−2.5)×80 = −40, z = (0−1.5)×80 = −120.
-        // The stub is a centred WallNS at (−40, −120).
-        let has_stub = t.props.iter().any(|p| {
+        // Col 2 centre x = −40. Run centre z = midpoint of row 0 and
+        // row 2 = midpoint of (−120, 40) = −40. Span = 3 × 80 = 240.
+        let full = t.props.iter().find(|p| {
             matches!(p.kind, PropKind::WallNS)
                 && (p.offset.x - (-40.0)).abs() < 1e-3
-                && (p.offset.z - (-120.0)).abs() < 1e-3
+                && (p.offset.z - (-40.0)).abs() < 1e-3
         });
         assert!(
-            has_stub,
-            "top T-junction cell (0, 2) should emit a centred WallNS \
-             stub to bridge the divider; got: {:?}",
-            t.props.iter().map(|p| (p.kind, p.offset)).collect::<Vec<_>>()
+            full.is_some(),
+            "stub + divider + stub should coalesce into one WallNS at (−40, −40); got: {:?}",
+            t.props.iter()
+                .filter(|p| matches!(p.kind, PropKind::WallNS))
+                .map(|p| (p.offset, p.size))
+                .collect::<Vec<_>>()
         );
-        // Same for the bottom T-junction (2, 2), row 2 centre z = +40.
-        let has_stub_s = t.props.iter().any(|p| {
-            matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-40.0)).abs() < 1e-3
-                && (p.offset.z - 40.0).abs() < 1e-3
-        });
-        assert!(has_stub_s, "bottom T-junction (2, 2) should also emit a stub");
+        let sz = full.unwrap().size.unwrap();
+        assert!((sz.z - 240.0).abs() < 1e-3, "coalesced run spans 3 rows; got z={}", sz.z);
     }
 
     #[test]
@@ -781,28 +854,38 @@ mod tests {
     }
 
     #[test]
-    fn divider_between_two_rooms_extends_through_its_full_run() {
-        // 4×5: two 1×1 rooms separated by a divider at col 2.
-        // The two middle cells (1, 2) and (2, 2) are dividers (interior
-        // E + interior W) and emit a centred WallNS each. The perimeter
-        // cells (0, 2) and (3, 2) at the T-junctions emit a centred
-        // WallNS STUB — different concern from divider emission, tested
-        // by `t_junction_perimeter_cell_emits_a_stub_to_the_divider`.
+    fn divider_between_two_rooms_coalesces_into_one_run() {
+        // 4×5: two 1×1 rooms separated by a divider at col 2. Divider
+        // cells (1, 2) and (2, 2) both emit a CentreNS segment. The
+        // T-junction perimeter cells (0, 2) and (3, 2) also emit
+        // CentreNS stubs on the same col-2 lattice. All four segments
+        // are contiguous rows 0..3 on col 2 → coalesce into ONE run
+        // spanning the full 4 rows.
         let json = synthetic_mapgen(&["wwwww", "w.w.w", "w.w.w", "wwwww"]);
         let t = mapgen_to_template(&json, "tt", CDDA_TILE, 0).unwrap();
-        // Cx=2.5, Cz=2.0. Divider centre wall at x=−40; rows 1 and 2
-        // at z=−80 and z=0.
-        let mid_1 = t.props.iter().any(|p| {
+        // Col 2 centre x = (2−2.5)*80 = −40. Full 4-row run centre z =
+        // midpoint of row 0 (z=−160) and row 3 (z=80) centres = −40.
+        // Span = 4 * 80 = 320.
+        let full_run = t.props.iter().find(|p| {
             matches!(p.kind, PropKind::WallNS)
                 && (p.offset.x - (-40.0)).abs() < 1e-3
-                && (p.offset.z - (-80.0)).abs() < 1e-3
+                && (p.offset.z - (-40.0)).abs() < 1e-3
         });
-        let mid_2 = t.props.iter().any(|p| {
-            matches!(p.kind, PropKind::WallNS)
-                && (p.offset.x - (-40.0)).abs() < 1e-3
-                && p.offset.z.abs() < 1e-3
-        });
-        assert!(mid_1 && mid_2, "the divider emits at rows 1 and 2");
+        assert!(
+            full_run.is_some(),
+            "divider + stubs should coalesce into one WallNS at (−40, −20); got: {:?}",
+            t.props
+                .iter()
+                .filter(|p| matches!(p.kind, PropKind::WallNS))
+                .map(|p| (p.offset, p.size))
+                .collect::<Vec<_>>()
+        );
+        let sz = full_run.unwrap().size.expect("run-based prop carries size");
+        assert!(
+            (sz.z - 320.0).abs() < 1e-3,
+            "coalesced run spans all 4 rows (320 units); got z={}",
+            sz.z
+        );
     }
 
     /// User's typed spec, verbatim. Runs the current importer and

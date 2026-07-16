@@ -349,6 +349,11 @@ pub struct RemotePeerDot {
     pub color: [f32; 3],
 }
 
+/// One structure prop in the snapshot: position, kind, colour override,
+/// size override. Named to keep the SceneSnapshot type readable and
+/// clippy quiet.
+pub type StructureSnap = (Vec3, PropKind, Option<[f32; 3]>, Option<Vec3>);
+
 pub struct SceneSnapshot {
     pub trees: Vec<(Vec3, f32)>,
     pub obstacles: Vec<Vec3>,
@@ -357,7 +362,7 @@ pub struct SceneSnapshot {
     pub pins: Vec<Vec3>,
     pub trails: Vec<Vec3>,
     pub remote_peers: Vec<RemotePeerDot>,
-    pub structures: Vec<(Vec3, PropKind, Option<[f32; 3]>)>,
+    pub structures: Vec<StructureSnap>,
     pub jukeboxes: Vec<Vec3>,
     pub player: Vec3,
 }
@@ -407,9 +412,9 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         })
         .unwrap_or_default();
     let mut struct_q = world.query::<(&Position, &StructureProp)>();
-    let structures: Vec<(Vec3, PropKind, Option<[f32; 3]>)> = struct_q
+    let structures: Vec<StructureSnap> = struct_q
         .iter(world)
-        .map(|(p, s)| (p.0, s.kind, s.color))
+        .map(|(p, s)| (p.0, s.kind, s.color, s.size))
         .collect();
     SceneSnapshot {
         trees,
@@ -489,12 +494,15 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         color: [0.09, 0.11, 0.15],
         scale: [FLOOR_FOLLOW_HALF * 2.0, 100.0, FLOOR_FOLLOW_HALF * 2.0],
     });
-    // Dev grid: one CDDA tile = 80 world units. Faint lines on the floor
-    // so wall placement can be eyeballed against the cell boundaries
-    // without knowing which building spawned. Bounded around the player,
-    // snapped to the grid so lines stay stationary as the player moves.
+    // Dev grid: HALF a CDDA tile per line (40 units), so BOTH cell
+    // corners AND cell centres land on a line — necessary because
+    // odd-width mapgens (cx = width/2 = 2.5) offset their cell corners
+    // by 40 units from any 80-multiple, while even-width mapgens hit
+    // 80-multiples directly. At 40 spacing, every cell edge and centre
+    // aligns regardless of parity. Snapped to the grid so lines stay
+    // stationary as the player moves.
     const GRID_HALF: f32 = 2000.0;
-    const GRID_STEP: f32 = 80.0;
+    const GRID_STEP: f32 = 40.0;
     const GRID_COLOR: [f32; 3] = [0.14, 0.16, 0.20];
     const GRID_THICK: f32 = 2.0;
     let px_snap = (snap.player.x / GRID_STEP).round() * GRID_STEP;
@@ -588,7 +596,7 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     // player, so a neighbouring building's roof/walls stay solid even
     // when they'd be within the player's own cut radius.
     let roof_half = crate::cdda::CDDA_TILE / 2.0;
-    let overhead = snap.structures.iter().find(|(p, k, _)| {
+    let overhead = snap.structures.iter().find(|(p, k, _, _)| {
         *k == PropKind::Roof
             && (p.x - snap.player.x).abs() <= roof_half
             && (p.z - snap.player.z).abs() <= roof_half
@@ -599,7 +607,7 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     // different structure), loose enough to reach a big CDDA house's
     // far perimeter from the overhead cell.
     let cutaway_radius = 800.0_f32;
-    let overhead_pos = overhead.map(|(p, _, _)| *p).unwrap_or(snap.player);
+    let overhead_pos = overhead.map(|(p, _, _, _)| *p).unwrap_or(snap.player);
     // The isometric camera looks from +x,+z, so nearer props have a
     // larger x+z. When inside, hide this building's roof AND its
     // camera-facing walls (in front of the player) so the interior
@@ -610,7 +618,7 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     // kind; colour is the prop's own tint (walls by material) or the
     // kind default. Ground props sit on the floor (base at y=0);
     // elevated props (the roof) carry their height in pos.y.
-    for (pos, kind, tint) in &snap.structures {
+    for (pos, kind, tint, size_override) in &snap.structures {
         // Glass panes are drawn in the separate alpha-blended pass
         // (see `snapshot_to_glass_instances`), never here.
         if kind.is_window() {
@@ -628,8 +636,11 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
                 continue; // see-through camera-facing wall
             }
         }
-        let (default_color, scale) = prop_appearance(*kind);
+        let (default_color, default_scale) = prop_appearance(*kind);
         let color = tint.unwrap_or(default_color);
+        let scale = size_override
+            .map(|s| [s.x, s.y, s.z])
+            .unwrap_or(default_scale);
         if is_fence(*kind) {
             // Bottom + top rail, gap between. Two thin bars per fence cell.
             instances.push(SceneInstance {
@@ -696,7 +707,7 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
 /// opaque pass skips (never the other way around, so no double-draw).
 pub fn snapshot_to_ghost_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let roof_half = crate::cdda::CDDA_TILE / 2.0;
-    let overhead = snap.structures.iter().find(|(p, k, _)| {
+    let overhead = snap.structures.iter().find(|(p, k, _, _)| {
         *k == PropKind::Roof
             && (p.x - snap.player.x).abs() <= roof_half
             && (p.z - snap.player.z).abs() <= roof_half
@@ -708,7 +719,7 @@ pub fn snapshot_to_ghost_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let cutaway_radius = 800.0_f32;
     let player_depth = snap.player.x + snap.player.z;
     let mut out = Vec::new();
-    for (pos, kind, tint) in &snap.structures {
+    for (pos, kind, tint, size_override) in &snap.structures {
         if kind.is_window() {
             continue;
         }
@@ -725,8 +736,11 @@ pub fn snapshot_to_ghost_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         if !is_ghost {
             continue;
         }
-        let (default_color, scale) = prop_appearance(*kind);
+        let (default_color, default_scale) = prop_appearance(*kind);
         let color = tint.unwrap_or(default_color);
+        let scale = size_override
+            .map(|s| [s.x, s.y, s.z])
+            .unwrap_or(default_scale);
         out.push(SceneInstance {
             pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
             color,
@@ -743,12 +757,15 @@ pub fn snapshot_to_ghost_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
 /// never cut away when the player is inside.
 pub fn snapshot_to_glass_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let mut out = Vec::new();
-    for (pos, kind, tint) in &snap.structures {
+    for (pos, kind, tint, size_override) in &snap.structures {
         if !kind.is_window() {
             continue;
         }
-        let (default_color, scale) = prop_appearance(*kind);
+        let (default_color, default_scale) = prop_appearance(*kind);
         let color = tint.unwrap_or(default_color);
+        let scale = size_override
+            .map(|s| [s.x, s.y, s.z])
+            .unwrap_or(default_scale);
         out.push(SceneInstance {
             pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
             color,
@@ -792,7 +809,7 @@ mod tests {
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
-            structures: vec![(Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None)],
+            structures: vec![(Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None, None)],
             jukeboxes: vec![],
             player: Vec3::new(px, 20.0, 0.0),
         };
@@ -809,8 +826,13 @@ mod tests {
         );
     }
 
-    fn structure_at(x: f32, y: f32, z: f32, kind: PropKind) -> (Vec3, PropKind, Option<[f32; 3]>) {
-        (Vec3::new(x, y, z), kind, None)
+    fn structure_at(
+        x: f32,
+        y: f32,
+        z: f32,
+        kind: PropKind,
+    ) -> (Vec3, PropKind, Option<[f32; 3]>, Option<Vec3>) {
+        (Vec3::new(x, y, z), kind, None, None)
     }
 
     #[test]
@@ -859,9 +881,9 @@ mod tests {
             trails: vec![],
             remote_peers: vec![],
             structures: vec![
-                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None), // overhead → inside
-                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None), // camera-facing (x+z>0)
-                (Vec3::new(-300.0, 0.0, -300.0), PropKind::Wall, None), // far side
+                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None, None), // overhead → inside
+                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None, None), // camera-facing (x+z>0)
+                (Vec3::new(-300.0, 0.0, -300.0), PropKind::Wall, None, None), // far side
             ],
             jukeboxes: vec![],
             player: Vec3::ZERO,
@@ -884,9 +906,9 @@ mod tests {
             trails: vec![],
             remote_peers: vec![],
             structures: vec![
-                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None), // overhead → inside
-                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None), // camera-facing (x+z>0)
-                (Vec3::new(-300.0, 0.0, -300.0), PropKind::Wall, None), // far side (still opaque)
+                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None, None), // overhead → inside
+                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None, None), // camera-facing (x+z>0)
+                (Vec3::new(-300.0, 0.0, -300.0), PropKind::Wall, None, None), // far side (still opaque)
             ],
             jukeboxes: vec![],
             player: Vec3::ZERO,
@@ -918,8 +940,8 @@ mod tests {
             trails: vec![],
             remote_peers: vec![],
             structures: vec![
-                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None),
-                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None),
+                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None, None),
+                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None, None),
             ],
             jukeboxes: vec![],
             player: Vec3::new(5000.0, 0.0, 5000.0), // far from any roof
@@ -938,8 +960,8 @@ mod tests {
             trails: vec![],
             remote_peers: vec![],
             structures: vec![
-                (Vec3::new(300.0, 0.0, 0.0), PropKind::WallNS, None),
-                (Vec3::new(300.0, 0.0, 80.0), PropKind::WindowNS, Some([0.5, 0.68, 0.82])),
+                (Vec3::new(300.0, 0.0, 0.0), PropKind::WallNS, None, None),
+                (Vec3::new(300.0, 0.0, 80.0), PropKind::WindowNS, Some([0.5, 0.68, 0.82]), None),
             ],
             jukeboxes: vec![],
             player: Vec3::ZERO,
