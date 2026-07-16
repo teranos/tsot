@@ -780,12 +780,17 @@ pub const TREE_TRUNK_H_RATIO: f32 = 0.40;
 pub const TREE_CANOPY_BASE_Y_RATIO: f32 = 0.34;
 pub const TREE_CANOPY_VERTICAL_RATIO: f32 = 0.66;
 pub const TREE_CANOPY_RADIUS_RATIO: f32 = 0.18;
-pub const TREE_CANOPY_ELEMENT_RATIO: f32 = 0.08;
+pub const TREE_CANOPY_ELEMENT_RATIO: f32 = 0.025;
 pub const TREE_TRUNK_COLOR: [f32; 3] = [0.30, 0.20, 0.11];
 pub const TREE_CANOPY_COLOR: [f32; 3] = [0.13, 0.77, 0.37];
-/// Phyllotactic stations per tree. Dense enough to read as foliage,
-/// sparse enough that N × trees is a cheap per-frame count.
-pub const CANOPY_STATIONS_PER_TREE: u32 = 24;
+/// Phyllotactic stations per tree. Bumped 24 → 256 (with the element
+/// ratio dropped 0.08 → 0.025) to trade a handful of half-crown blobs
+/// for many small leaves — foliage that reads as leaves, not clumps.
+/// Coverage held roughly constant (element_r² × count ≈ unchanged) so
+/// the smaller leaves still fill the crown. This is ~11× the canopy
+/// instance count per tree; its per-frame cost is a seer `[perf]`
+/// question, not an intuition — read the frame-time delta, don't guess.
+pub const CANOPY_STATIONS_PER_TREE: u32 = 256;
 
 /// Two flat instance lists — trunks and canopy elements — that both
 /// feed the SAME mesh pipeline. Every trunk instance draws the shared
