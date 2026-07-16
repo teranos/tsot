@@ -442,6 +442,29 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
          -> Result<u32> { Ok(0) },
     )?;
 
+    // Mesh pipeline — indexed-draw crossing added for the tree-on-mesh
+    // scope. Same no-GPU treatment as glass/ghost above: pipeline-create
+    // hands back a fake handle, the draw call is inert. Presence here is
+    // what keeps `linker_satisfies_every_allowed_import` green.
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_pipeline_create_mesh",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _pipeline_layout: u32, _shader: u32, _vertex_stride: u32,
+         _instance_stride: u32, _color_format: u32, _depth_format: u32,
+         _label_ptr: u32, _label_len: u32|
+         -> Result<u32> { Ok(1) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_mesh",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _target: u32, _pipeline: u32, _bind_group: u32,
+         _vertex_buf: u32, _index_buf: u32, _instance_buf: u32,
+         _index_count: u32, _instance_count: u32, _first_instance: u32|
+         -> Result<u32> { Ok(0) },
+    )?;
+
     // Persistence. No IndexedDB under wasmtime — every load returns 0
     // ("not found") so Rust falls back to its defaults deterministically,
     // and every save is a no-op.

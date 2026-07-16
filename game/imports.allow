@@ -34,6 +34,8 @@ env.game_gpu_render_pipeline_create_glass
 env.game_gpu_render_glass
 env.game_gpu_render_pipeline_create_ghost
 env.game_gpu_render_ghost
+env.game_gpu_render_pipeline_create_mesh
+env.game_gpu_render_mesh
 env.game_touch_state
 env.game_viewport_size
 env.game_input_state

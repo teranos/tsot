@@ -146,6 +146,27 @@ unsafe extern "C" {
         vertex_count: u32,
         instance_count: u32,
     ) -> u32;
+    fn game_gpu_render_pipeline_create_mesh(
+        pipeline_layout: u32,
+        shader: u32,
+        vertex_stride: u32,
+        instance_stride: u32,
+        color_format: u32,
+        depth_format: u32,
+        label_ptr: *const u8,
+        label_len: u32,
+    ) -> u32;
+    fn game_gpu_render_mesh(
+        target: u32,
+        pipeline: u32,
+        bind_group: u32,
+        vertex_buf: u32,
+        index_buf: u32,
+        instance_buf: u32,
+        index_count: u32,
+        instance_count: u32,
+        first_instance: u32,
+    ) -> u32;
     fn game_touch_state(out_ptr: *mut u8, out_max: u32) -> u32;
     fn game_viewport_size(out_ptr: *mut u8);
 }
@@ -428,6 +449,40 @@ pub fn render_glass(
     }
 }
 
+/// Mesh render pass — indexed draw of a shared geometry, instanced
+/// per world entity (tree trunks, canopy elements, wall runs later).
+/// LoadOp::Load on colour + depth so it draws over the opaque cube pass
+/// without clearing. Depth-write ON — mesh geometry occludes properly.
+/// `first_instance` lets the caller pack multiple mesh types into ONE
+/// instance buffer and dispatch each with the right offset.
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
+pub fn render_mesh(
+    target: &GameRenderTarget,
+    pipeline: &GameRenderPipeline,
+    bind_group: &GameBindGroup,
+    vertex_buf: &GameBuffer,
+    index_buf: &GameBuffer,
+    instance_buf: &GameBuffer,
+    index_count: u32,
+    instance_count: u32,
+    first_instance: u32,
+) -> u32 {
+    unsafe {
+        game_gpu_render_mesh(
+            target.handle,
+            pipeline.handle,
+            bind_group.handle,
+            vertex_buf.handle,
+            index_buf.handle,
+            instance_buf.handle,
+            index_count,
+            instance_count,
+            first_instance,
+        )
+    }
+}
+
 /// Ghost render pass — cut-away walls + roofs drawn at low alpha so the
 /// player still sees an outline of the geometry they're standing inside.
 /// Same pipeline shape as glass (alpha-blended, depth-test on,
@@ -502,6 +557,36 @@ impl GameRenderPipeline {
     ) -> Option<Self> {
         let h = unsafe {
             game_gpu_render_pipeline_create_ghost(
+                pipeline_layout.handle,
+                shader.handle,
+                vertex_stride,
+                instance_stride,
+                color_format,
+                depth_format,
+                label.as_ptr(),
+                label.len() as u32,
+            )
+        };
+        if h == 0 { None } else { Some(Self { handle: h }) }
+    }
+
+    /// Mesh pipeline — indexed draw. Vertex layout at slot 0 is
+    /// (pos: f32x3, normal: f32x3, uv: f32x2) — stride 32 — the format
+    /// tree_mesh::MeshVertex emits. Instance layout at slot 1 is
+    /// (i_pos, i_color, i_scale), all float32x3 — SceneInstance shape.
+    /// Depth-write ON so mesh geometry occludes correctly. Index format
+    /// is uint32; buffers uploaded with usage::INDEX drive the pass.
+    pub fn create_mesh(
+        pipeline_layout: &GamePipelineLayout,
+        shader: &GameShaderModule,
+        vertex_stride: u32,
+        instance_stride: u32,
+        color_format: u32,
+        depth_format: u32,
+        label: &str,
+    ) -> Option<Self> {
+        let h = unsafe {
+            game_gpu_render_pipeline_create_mesh(
                 pipeline_layout.handle,
                 shader.handle,
                 vertex_stride,

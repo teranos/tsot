@@ -164,6 +164,62 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Mesh pipeline shader. Vertex format is (pos, normal, uv) at
+/// locations 0/1/2; the extra `uv` attribute is the day-one
+/// commitment for downstream damage textures — the fragment stage
+/// ignores it today. Instance layout (i_pos, i_color, i_scale)
+/// shifts to locations 3/4/5 to make room for the vertex UV. Normals
+/// receive the inverse-transpose correction for non-uniform
+/// per-instance scale: dividing by `i_scale` per-component is the
+/// diagonal case of the inverse-transpose transform, and the
+/// re-normalize keeps the length at 1 no matter what scale was
+/// applied. Depth-write ON — mesh geometry occludes correctly.
+pub const MESH_SHADER_WGSL: &str = r#"
+struct Camera { view_proj: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> camera: Camera;
+
+struct VIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+};
+
+struct IIn {
+    @location(3) i_pos: vec3<f32>,
+    @location(4) i_color: vec3<f32>,
+    @location(5) i_scale: vec3<f32>,
+};
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) color: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(v: VIn, i: IIn) -> VOut {
+    let world = v.pos * i.i_scale + i.i_pos;
+    var o: VOut;
+    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    o.normal = normalize(v.normal / i.i_scale);
+    o.color = i.i_color;
+    o.uv = v.uv;
+    return o;
+}
+
+const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
+const AMBIENT: f32 = 0.25;
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let l = normalize(LIGHT_DIR);
+    let ndotl = max(dot(normalize(in.normal), l), 0.0);
+    let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
+    return vec4<f32>(in.color * k, 1.0);
+}
+"#;
+
 pub const SHADER_WGSL: &str = r#"
 struct Camera { view_proj: mat4x4<f32> };
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -560,22 +616,9 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             scale: [crate::trail::TRAIL_WIDTH, 1.0, trail_length],
         });
     }
-    for (t, h) in &snap.trees {
-        // A brown trunk under a green canopy, sized by the tree's own
-        // height (varied, all taller than the 220 buildings).
-        let trunk_h = h * 0.40;
-        let canopy_h = h * 0.66;
-        instances.push(SceneInstance {
-            pos: [t.x, trunk_h * 0.5, t.z],
-            color: [0.30, 0.20, 0.11],
-            scale: [h * 0.06, trunk_h, h * 0.06],
-        });
-        instances.push(SceneInstance {
-            pos: [t.x, trunk_h + canopy_h * 0.5 - h * 0.06, t.z],
-            color: [0.13, 0.77, 0.37],
-            scale: [h * 0.22, canopy_h, h * 0.22],
-        });
-    }
+    // Trees are no longer emitted here — they render through the mesh
+    // pipeline (tapered trunk mesh + compound-instanced icosahedron
+    // canopy). See `snapshot_to_mesh_instances` and `game/docs/RENDER.md`.
     for o in &snap.obstacles {
         instances.push(SceneInstance {
             pos: [o.x, 40.0, o.z],
@@ -725,6 +768,77 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         scale: [70.0, 140.0, 70.0],
     });
     instances
+}
+
+/// Per-tree constants matched to the previous cube visual so the tree's
+/// overall footprint stays the same and only the shape changes. All
+/// ratios multiply the per-tree `height`, so trees at different heights
+/// share proportions but scale together.
+pub const TREE_TRUNK_BASE_R_RATIO: f32 = 0.03;
+pub const TREE_TRUNK_TOP_R_RATIO: f32 = 0.018;
+pub const TREE_TRUNK_H_RATIO: f32 = 0.40;
+pub const TREE_CANOPY_BASE_Y_RATIO: f32 = 0.34;
+pub const TREE_CANOPY_VERTICAL_RATIO: f32 = 0.66;
+pub const TREE_CANOPY_RADIUS_RATIO: f32 = 0.18;
+pub const TREE_CANOPY_ELEMENT_RATIO: f32 = 0.08;
+pub const TREE_TRUNK_COLOR: [f32; 3] = [0.30, 0.20, 0.11];
+pub const TREE_CANOPY_COLOR: [f32; 3] = [0.13, 0.77, 0.37];
+/// Phyllotactic stations per tree. Dense enough to read as foliage,
+/// sparse enough that N × trees is a cheap per-frame count.
+pub const CANOPY_STATIONS_PER_TREE: u32 = 24;
+
+/// Two flat instance lists — trunks and canopy elements — that both
+/// feed the SAME mesh pipeline. Every trunk instance draws the shared
+/// tapered-cone geometry; every canopy element draws the shared unit
+/// icosahedron at a phyllotactically-placed world offset from its tree.
+pub struct MeshTreeInstances {
+    pub trunks: Vec<SceneInstance>,
+    pub canopy_elements: Vec<SceneInstance>,
+}
+
+/// Build the mesh-pipeline instance lists from the scene snapshot.
+/// Deterministic in the snapshot's tree list. Emits `N` trunk
+/// instances and `N × CANOPY_STATIONS_PER_TREE` canopy element
+/// instances; the render loop packs both into one instance buffer
+/// (trunks first) and issues two `render_mesh` calls with the right
+/// `first_instance` offset.
+pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
+    let mut trunks = Vec::with_capacity(snap.trees.len());
+    let mut canopy_elements =
+        Vec::with_capacity(snap.trees.len() * CANOPY_STATIONS_PER_TREE as usize);
+    // Unit-canopy stations (radius ∈ [0,1]); the per-tree canopy radius
+    // multiplies through when each element gets placed. Computed once
+    // per snapshot, not per tree — the pattern is identical across trees.
+    let stations = crate::tree_mesh::canopy_stations(CANOPY_STATIONS_PER_TREE, 1.0);
+    for (t, h) in &snap.trees {
+        let h = *h;
+        trunks.push(SceneInstance {
+            pos: [t.x, 0.0, t.z],
+            color: TREE_TRUNK_COLOR,
+            scale: [
+                h * TREE_TRUNK_BASE_R_RATIO,
+                h * TREE_TRUNK_H_RATIO,
+                h * TREE_TRUNK_BASE_R_RATIO,
+            ],
+        });
+        let canopy_r = h * TREE_CANOPY_RADIUS_RATIO;
+        let canopy_base_y = h * TREE_CANOPY_BASE_Y_RATIO;
+        let canopy_span_y = h * TREE_CANOPY_VERTICAL_RATIO;
+        let element_r = h * TREE_CANOPY_ELEMENT_RATIO;
+        for s in &stations {
+            let (sin_a, cos_a) = s.angle.sin_cos();
+            canopy_elements.push(SceneInstance {
+                pos: [
+                    t.x + s.radius * canopy_r * cos_a,
+                    canopy_base_y + s.height_frac * canopy_span_y,
+                    t.z + s.radius * canopy_r * sin_a,
+                ],
+                color: TREE_CANOPY_COLOR,
+                scale: [element_r, element_r, element_r],
+            });
+        }
+    }
+    MeshTreeInstances { trunks, canopy_elements }
 }
 
 /// Every wall/roof cut away by `snapshot_to_instances` — surfaced here

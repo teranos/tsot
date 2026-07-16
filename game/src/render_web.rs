@@ -13,9 +13,10 @@ use crate::gpu_web;
 use crate::hud;
 use crate::obs;
 use crate::scene::{
-    self, GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, GpuVertex, SHADER_WGSL, SceneCamera, SceneInstance,
-    UI_SHADER_WGSL, as_bytes, cube_geometry,
+    self, GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, GpuVertex, MESH_SHADER_WGSL, SHADER_WGSL,
+    SceneCamera, SceneInstance, UI_SHADER_WGSL, as_bytes, cube_geometry,
 };
+use crate::tree_mesh::{self, MeshVertex};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -46,6 +47,22 @@ struct RenderWebState {
     ui_pipeline: gpu_web::GameUiPipeline,
     ui_instance_buf: Option<gpu_web::GameBuffer>,
     ui_instance_capacity: usize,
+    // Mesh pipeline — indexed draw of shared tree meshes (trunk cone +
+    // canopy icosahedron) instanced per tree / per canopy station.
+    // Vertex + index buffers uploaded ONCE at init (both meshes are
+    // deterministic pure functions of no inputs). The instance buffer
+    // grows with the tree count and holds trunks first, canopy elements
+    // second — one buffer, two draw calls dispatched with a first_instance
+    // offset for the canopy pass.
+    mesh_pipeline: gpu_web::GameRenderPipeline,
+    trunk_vertex_buf: gpu_web::GameBuffer,
+    trunk_index_buf: gpu_web::GameBuffer,
+    trunk_index_count: u32,
+    canopy_vertex_buf: gpu_web::GameBuffer,
+    canopy_index_buf: gpu_web::GameBuffer,
+    canopy_index_count: u32,
+    mesh_instance_buf: Option<gpu_web::GameBuffer>,
+    mesh_instance_capacity: usize,
 }
 
 thread_local! {
@@ -170,6 +187,73 @@ pub fn init(canvas_id: &str) -> bool {
         return false;
     };
 
+    // Mesh pipeline. Its shader adds a UV attribute (day-one commitment
+    // for damage textures) and does the inverse-transpose normal fix
+    // for non-uniform per-instance scale — see MESH_SHADER_WGSL.
+    let mesh_shader = gpu_web::GameShaderModule::create(MESH_SHADER_WGSL, "render_web.mesh.shader");
+    let Some(mesh_shader) = mesh_shader else {
+        obs::emit("[render_web] init: mesh shader null");
+        return false;
+    };
+    let mesh_pipeline = gpu_web::GameRenderPipeline::create_mesh(
+        &pl_layout,
+        &mesh_shader,
+        std::mem::size_of::<MeshVertex>() as u32,
+        std::mem::size_of::<SceneInstance>() as u32,
+        gpu_web::color_format::BGRA8UNORM,
+        gpu_web::depth_format::DEPTH32FLOAT,
+        "render_web.mesh.pipeline",
+    );
+    let Some(mesh_pipeline) = mesh_pipeline else {
+        obs::emit("[render_web] init: mesh pipeline null");
+        return false;
+    };
+
+    // Bake the two shared tree geometries. Trunk = tapered cone at
+    // (base=1, top=0.6, height=1) — per-tree instances uniform-scale
+    // this to their (height × ratio) dims, and the shader's
+    // inverse-transpose normal correction absorbs any residual scale
+    // asymmetry. Canopy = unit icosahedron, per-station instances
+    // scale to element radius.
+    let (trunk_verts, trunk_indices) = tree_mesh::trunk_mesh(12, 1.0, 0.6, 1.0);
+    let (canopy_verts, canopy_indices) = tree_mesh::canopy_element_mesh();
+    let trunk_vertex_buf = gpu_web::GameBuffer::create(
+        std::mem::size_of_val(&trunk_verts[..]) as u32,
+        gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+        "render_web.mesh.trunk.vertex",
+    );
+    let trunk_index_buf = gpu_web::GameBuffer::create(
+        std::mem::size_of_val(&trunk_indices[..]) as u32,
+        gpu_web::usage::INDEX | gpu_web::usage::COPY_DST,
+        "render_web.mesh.trunk.index",
+    );
+    let canopy_vertex_buf = gpu_web::GameBuffer::create(
+        std::mem::size_of_val(&canopy_verts[..]) as u32,
+        gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+        "render_web.mesh.canopy.vertex",
+    );
+    let canopy_index_buf = gpu_web::GameBuffer::create(
+        std::mem::size_of_val(&canopy_indices[..]) as u32,
+        gpu_web::usage::INDEX | gpu_web::usage::COPY_DST,
+        "render_web.mesh.canopy.index",
+    );
+    let (
+        Some(trunk_vertex_buf),
+        Some(trunk_index_buf),
+        Some(canopy_vertex_buf),
+        Some(canopy_index_buf),
+    ) = (trunk_vertex_buf, trunk_index_buf, canopy_vertex_buf, canopy_index_buf)
+    else {
+        obs::emit("[render_web] init: mesh geometry buffer null");
+        return false;
+    };
+    trunk_vertex_buf.write(as_bytes(&trunk_verts));
+    trunk_index_buf.write(as_bytes(&trunk_indices));
+    canopy_vertex_buf.write(as_bytes(&canopy_verts));
+    canopy_index_buf.write(as_bytes(&canopy_indices));
+    let trunk_index_count = trunk_indices.len() as u32;
+    let canopy_index_count = canopy_indices.len() as u32;
+
     STATE.with(|c| {
         *c.borrow_mut() = Some(RenderWebState {
             target,
@@ -189,6 +273,15 @@ pub fn init(canvas_id: &str) -> bool {
             ui_pipeline,
             ui_instance_buf: None,
             ui_instance_capacity: 0,
+            mesh_pipeline,
+            trunk_vertex_buf,
+            trunk_index_buf,
+            trunk_index_count,
+            canopy_vertex_buf,
+            canopy_index_buf,
+            canopy_index_count,
+            mesh_instance_buf: None,
+            mesh_instance_capacity: 0,
         });
     });
     obs::emit(&format!(
@@ -319,6 +412,75 @@ pub fn frame_ghost(instances: &[SceneInstance]) -> u32 {
     })
 }
 
+/// Mesh pass — one instance buffer packs trunks first, then canopy
+/// elements; two `render_mesh` calls dispatch with the right index
+/// buffer + first_instance offset so both shapes share the pipeline
+/// and the upload. A no-op success when there are no trees in view.
+pub fn frame_mesh(trunks: &[SceneInstance], canopy: &[SceneInstance]) -> u32 {
+    let total = trunks.len() + canopy.len();
+    if total == 0 {
+        return 0;
+    }
+    STATE.with(|c| {
+        let mut opt = c.borrow_mut();
+        let Some(state) = opt.as_mut() else {
+            return 2;
+        };
+        if state.mesh_instance_buf.is_none() || total > state.mesh_instance_capacity {
+            let new_cap = total.max(64);
+            let new_size = (new_cap * std::mem::size_of::<SceneInstance>()) as u32;
+            state.mesh_instance_buf = gpu_web::GameBuffer::create(
+                new_size,
+                gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+                "render_web.mesh.instance",
+            );
+            state.mesh_instance_capacity = new_cap;
+        }
+        let Some(mesh_buf) = state.mesh_instance_buf.as_ref() else {
+            return 3;
+        };
+        // One buffer, two contiguous slices — write in one go.
+        let mut packed: Vec<SceneInstance> = Vec::with_capacity(total);
+        packed.extend_from_slice(trunks);
+        packed.extend_from_slice(canopy);
+        mesh_buf.write(as_bytes(&packed));
+
+        if !trunks.is_empty() {
+            let r = gpu_web::render_mesh(
+                &state.target,
+                &state.mesh_pipeline,
+                &state.bind_group,
+                &state.trunk_vertex_buf,
+                &state.trunk_index_buf,
+                mesh_buf,
+                state.trunk_index_count,
+                trunks.len() as u32,
+                0,
+            );
+            if r != 0 {
+                return r;
+            }
+        }
+        if !canopy.is_empty() {
+            let r = gpu_web::render_mesh(
+                &state.target,
+                &state.mesh_pipeline,
+                &state.bind_group,
+                &state.canopy_vertex_buf,
+                &state.canopy_index_buf,
+                mesh_buf,
+                state.canopy_index_count,
+                canopy.len() as u32,
+                trunks.len() as u32,
+            );
+            if r != 0 {
+                return r;
+            }
+        }
+        0
+    })
+}
+
 /// UI overlay pass — draws the D-pad + HUD quads on top of everything.
 /// Grows the UI instance buffer as the quad count changes (the HUD's
 /// settings panel adds quads when open), then runs the load-op pass.
@@ -361,6 +523,7 @@ pub fn frame_ui(instances: &[dpad::DpadInstance]) -> u32 {
 pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     let snap = scene::snapshot_scene(app);
     let instances = scene::snapshot_to_instances(&snap);
+    let mesh_trees = scene::snapshot_to_mesh_instances(&snap);
     let glass = scene::snapshot_to_glass_instances(&snap);
     let ghost = scene::snapshot_to_ghost_instances(&snap);
     let camera = SceneCamera::follow(
@@ -370,6 +533,14 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     let world_result = frame(&camera, &instances);
     if world_result != 0 {
         return world_result;
+    }
+    // Mesh pass runs after the opaque cube pass (which cleared colour +
+    // depth) and before glass/ghost. Its LoadOp::Load reads the depth
+    // buffer already populated by cubes, so tree trunks and canopy
+    // elements are correctly occluded by buildings in front of them.
+    let mesh_result = frame_mesh(&mesh_trees.trunks, &mesh_trees.canopy_elements);
+    if mesh_result != 0 {
+        return mesh_result;
     }
     let glass_result = frame_glass(&glass);
     if glass_result != 0 {

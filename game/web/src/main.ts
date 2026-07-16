@@ -1089,6 +1089,105 @@ async function main() {
           return 1
         }
       },
+      // Mesh pipeline — indexed draw, depth-write ON. Vertex layout is
+      // (pos: f32x3, normal: f32x3, uv: f32x2) at slot 0 (stride 32);
+      // instance layout is (i_pos, i_color, i_scale), all float32x3 at
+      // slot 1 (stride 36). UV is reserved for damage textures / posters
+      // downstream; the current fragment shader ignores it, but the
+      // vertex format ships with the slot so a later texture-sampling
+      // pass doesn't require reshaping every mesh buffer in the world.
+      game_gpu_render_pipeline_create_mesh: (
+        pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
+        colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,
+      ): number => {
+        if (!device) return 0
+        const pl = pipelineLayouts.get(pipelineLayoutH)
+        const shader = shaders.get(shaderH)
+        if (!pl || !shader) return 0
+        const colorFmt = COLOR_FORMATS[colorFormat]
+        const depthFmt = DEPTH_FORMATS[depthFormat]
+        if (!colorFmt || !depthFmt) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const pipeline = device.createRenderPipeline({
+            label,
+            layout: pl,
+            vertex: {
+              module: shader,
+              entryPoint: 'vs',
+              buffers: [
+                { arrayStride: vertexStride, stepMode: 'vertex', attributes: [
+                  { shaderLocation: 0, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 1, offset: 12, format: 'float32x3' },
+                  { shaderLocation: 2, offset: 24, format: 'float32x2' },
+                ] },
+                { arrayStride: instanceStride, stepMode: 'instance', attributes: [
+                  { shaderLocation: 3, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 4, offset: 12, format: 'float32x3' },
+                  { shaderLocation: 5, offset: 24, format: 'float32x3' },
+                ] },
+              ],
+            },
+            primitive: { topology: 'triangle-list', frontFace: 'ccw', cullMode: 'back' },
+            depthStencil: { format: depthFmt, depthWriteEnabled: true, depthCompare: 'less' },
+            fragment: { module: shader, entryPoint: 'fs', targets: [{ format: colorFmt }] },
+          })
+          const h = nextHandle++
+          renderPipelines.set(h, pipeline)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_render_pipeline_create_mesh]', e)
+          return 0
+        }
+      },
+      // Mesh render pass — LOAD colour + depth (the opaque cube pass
+      // already cleared + drew), setIndexBuffer + drawIndexed with
+      // first_instance so ONE instance buffer can pack multiple mesh
+      // types (trunks first, canopy elements second) and each dispatch
+      // pulls the right slice.
+      game_gpu_render_mesh: (
+        targetH: number, pipelineH: number, bindGroupH: number,
+        vertexBufH: number, indexBufH: number, instanceBufH: number,
+        indexCount: number, instanceCount: number, firstInstance: number,
+      ): number => {
+        if (!device) return 1
+        if (instanceCount === 0) return 0
+        const target = renderTargets.get(targetH)
+        const pipeline = renderPipelines.get(pipelineH)
+        const bindGroup = bindGroups.get(bindGroupH)
+        const vertexBuf = buffers.get(vertexBufH)
+        const indexBuf = buffers.get(indexBufH)
+        const instanceBuf = buffers.get(instanceBufH)
+        if (!target || !pipeline || !bindGroup || !vertexBuf || !indexBuf || !instanceBuf) return 1
+        try {
+          const colorView = target.context.getCurrentTexture().createView({ label: 'game.mesh.color' })
+          const encoder = device.createCommandEncoder({ label: 'game.mesh.encoder' })
+          const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+              view: colorView,
+              loadOp: 'load',
+              storeOp: 'store',
+            }],
+            depthStencilAttachment: {
+              view: target.depthView,
+              depthLoadOp: 'load',
+              depthStoreOp: 'store',
+            },
+          })
+          pass.setPipeline(pipeline)
+          pass.setBindGroup(0, bindGroup)
+          pass.setVertexBuffer(0, vertexBuf)
+          pass.setVertexBuffer(1, instanceBuf)
+          pass.setIndexBuffer(indexBuf, 'uint32')
+          pass.drawIndexed(indexCount, instanceCount, 0, 0, firstInstance)
+          pass.end()
+          device.queue.submit([encoder.finish()])
+          return 0
+        } catch (e) {
+          console.error('[game.gpu_render_mesh]', e)
+          return 1
+        }
+      },
     },
   }
 

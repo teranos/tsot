@@ -23,9 +23,10 @@ use wgpu::{Device, Queue};
 use crate::gpu::SeerDevice;
 use crate::obs;
 use crate::scene::{
-    GLASS_SHADER_WGSL, GpuVertex, SceneCamera, SceneInstance, SHADER_WGSL, as_bytes,
-    cube_geometry,
+    GLASS_SHADER_WGSL, GpuVertex, MESH_SHADER_WGSL, MeshTreeInstances, SceneCamera, SceneInstance,
+    SHADER_WGSL, as_bytes, cube_geometry,
 };
+use crate::tree_mesh::{self, MeshVertex};
 
 const TARGET_SIZE: u32 = 512;
 const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -47,6 +48,7 @@ pub fn render_scene(
     camera: &SceneCamera,
     instances: &[SceneInstance],
     glass_instances: &[SceneInstance],
+    mesh_trees: &MeshTreeInstances,
     out_path: &str,
 ) -> Result<()> {
     let device: &Device = dev.wgpu();
@@ -78,6 +80,56 @@ pub fn render_scene(
     });
     if !glass_instances.is_empty() {
         queue.write_buffer(glass_buf.wgpu(), 0, as_bytes(glass_instances));
+    }
+
+    // Mesh geometry + packed instance buffer. Same design as the wasm
+    // path in render_web.rs: bake once, pack trunk instances then canopy
+    // instances into one buffer, dispatch two indexed draw calls with
+    // first_instance = trunk_count for the canopy pass.
+    let (trunk_verts, trunk_indices) = tree_mesh::trunk_mesh(12, 1.0, 0.6, 1.0);
+    let (canopy_verts, canopy_indices) = tree_mesh::canopy_element_mesh();
+    let trunk_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.trunk.vertex"),
+        size: std::mem::size_of_val(&trunk_verts[..]) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(trunk_vertex_buf.wgpu(), 0, as_bytes(&trunk_verts));
+    let trunk_index_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.trunk.index"),
+        size: std::mem::size_of_val(&trunk_indices[..]) as u64,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(trunk_index_buf.wgpu(), 0, as_bytes(&trunk_indices));
+    let canopy_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.canopy.vertex"),
+        size: std::mem::size_of_val(&canopy_verts[..]) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(canopy_vertex_buf.wgpu(), 0, as_bytes(&canopy_verts));
+    let canopy_index_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.canopy.index"),
+        size: std::mem::size_of_val(&canopy_indices[..]) as u64,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(canopy_index_buf.wgpu(), 0, as_bytes(&canopy_indices));
+
+    let total_mesh_instances =
+        mesh_trees.trunks.len() + mesh_trees.canopy_elements.len();
+    let mesh_instance_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.instance"),
+        size: (total_mesh_instances.max(1) * std::mem::size_of::<SceneInstance>()) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    if total_mesh_instances > 0 {
+        let mut packed: Vec<SceneInstance> = Vec::with_capacity(total_mesh_instances);
+        packed.extend_from_slice(&mesh_trees.trunks);
+        packed.extend_from_slice(&mesh_trees.canopy_elements);
+        queue.write_buffer(mesh_instance_buf.wgpu(), 0, as_bytes(&packed));
     }
 
     let camera_data = GpuCamera {
@@ -268,6 +320,75 @@ pub fn render_scene(
         cache: None,
     });
 
+    // Mesh pipeline. Same pipeline_layout + bind group as the cube path
+    // (shares the camera uniform), but vertex layout carries UV in the
+    // extra slot (24-byte offset, float32x2) and instance attributes
+    // shift to locations 3/4/5 so the vertex UV can sit at location 2.
+    // Depth-write ON — trunks and canopy elements occlude each other and
+    // whatever comes later (glass, ghost pass with depth Load).
+    let mesh_shader = dev.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("seer.render.mesh.shader"),
+        source: wgpu::ShaderSource::Wgsl(MESH_SHADER_WGSL.into()),
+    });
+    let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("seer.render.mesh.pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: mesh_shader.wgpu(),
+            entry_point: Some("vs"),
+            compilation_options: Default::default(),
+            buffers: &[
+                wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MeshVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3,
+                        1 => Float32x3,
+                        2 => Float32x2
+                    ],
+                },
+                wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<SceneInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        3 => Float32x3,
+                        4 => Float32x3,
+                        5 => Float32x3
+                    ],
+                },
+            ],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Back),
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: mesh_shader.wgpu(),
+            entry_point: Some("fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: TARGET_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+
     // Readback path: color texture → staging buffer → CPU → PNG.
     // Row pitch must be a multiple of 256 bytes (COPY_BYTES_PER_ROW
     // _ALIGNMENT); at 512 * 4 = 2048 it already is, so no padding.
@@ -317,6 +438,55 @@ pub fn render_scene(
         pass.set_vertex_buffer(0, vertex_buf.wgpu().slice(..));
         pass.set_vertex_buffer(1, instance_buf.wgpu().slice(..));
         pass.draw(0..vertices.len() as u32, 0..instances.len() as u32);
+    }
+    if total_mesh_instances > 0 {
+        // Mesh pass — indexed draw, ONE pass, TWO dispatches. Trunk
+        // instances live at [0..trunk_count) in the packed buffer;
+        // canopy elements live at [trunk_count..total). Same pipeline,
+        // same bind group; different vertex + index buffers per draw.
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("seer.render.mesh.pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &color_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&mesh_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_vertex_buffer(1, mesh_instance_buf.wgpu().slice(..));
+        if !mesh_trees.trunks.is_empty() {
+            pass.set_vertex_buffer(0, trunk_vertex_buf.wgpu().slice(..));
+            pass.set_index_buffer(trunk_index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
+            let trunk_count = mesh_trees.trunks.len() as u32;
+            pass.draw_indexed(0..trunk_indices.len() as u32, 0, 0..trunk_count);
+        }
+        if !mesh_trees.canopy_elements.is_empty() {
+            pass.set_vertex_buffer(0, canopy_vertex_buf.wgpu().slice(..));
+            pass.set_index_buffer(canopy_index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
+            let trunk_count = mesh_trees.trunks.len() as u32;
+            let canopy_count = mesh_trees.canopy_elements.len() as u32;
+            pass.draw_indexed(
+                0..canopy_indices.len() as u32,
+                0,
+                trunk_count..trunk_count + canopy_count,
+            );
+        }
     }
     if !glass_instances.is_empty() {
         // Glass pass: load the opaque colour + depth, blend the panes.
@@ -396,9 +566,11 @@ pub fn render_scene(
     writer.write_image_data(&pixels).context("png write")?;
 
     obs::emit(&format!(
-        "[render] wrote {out_path} ({} instances, {} vertices)",
+        "[render] wrote {out_path} ({} cube instances, {} vertices, {} mesh trunks, {} mesh canopy elements)",
         instances.len(),
-        vertices.len()
+        vertices.len(),
+        mesh_trees.trunks.len(),
+        mesh_trees.canopy_elements.len(),
     ));
     Ok(())
 }
