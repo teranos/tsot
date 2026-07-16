@@ -55,8 +55,64 @@ pub fn trunk_mesh(
     top_radius: f32,
     height: f32,
 ) -> (Vec<MeshVertex>, Vec<u32>) {
-    let _ = (sides, base_radius, top_radius, height);
-    todo!("tree_mesh::trunk_mesh — implement to make the failing test pass")
+    let n = sides as usize;
+    let mut verts = Vec::with_capacity(2 * n);
+    let dr = top_radius - base_radius;
+    // Normal slope: for a tapered cone the true outward surface normal
+    // tilts upward by atan(-dr / height) — narrower-at-top surfaces
+    // reflect light as though facing slightly skyward, which shades a
+    // trunk correctly instead of ignoring the taper. See derivation in
+    // the module head: normal ∝ (height·cos, −dr, height·sin).
+    let normal_mag = (height * height + dr * dr).sqrt().max(f32::EPSILON);
+    let ny = -dr / normal_mag;
+    let n_horiz = height / normal_mag;
+    for i in 0..n {
+        let theta = (i as f32) * std::f32::consts::TAU / (n as f32);
+        let (s, c) = theta.sin_cos();
+        let nx = n_horiz * c;
+        let nz = n_horiz * s;
+        // UVs wrap once around theta at v=0 (base) and v=1 (top). Even
+        // spacing so a brick texture tiles cleanly across the trunk.
+        let u = (i as f32) / (n as f32);
+        verts.push(MeshVertex {
+            pos: [base_radius * c, 0.0, base_radius * s],
+            normal: [nx, ny, nz],
+            uv: [u, 0.0],
+        });
+    }
+    for i in 0..n {
+        let theta = (i as f32) * std::f32::consts::TAU / (n as f32);
+        let (s, c) = theta.sin_cos();
+        let nx = n_horiz * c;
+        let nz = n_horiz * s;
+        let u = (i as f32) / (n as f32);
+        verts.push(MeshVertex {
+            pos: [top_radius * c, height, top_radius * s],
+            normal: [nx, ny, nz],
+            uv: [u, 1.0],
+        });
+    }
+    // Side quads: two CCW-outward triangles per facet. Winding is
+    // (base[i], top[i], base[i+1]) then (base[i+1], top[i], top[i+1]),
+    // both producing normals in the +radial direction when the base
+    // ring is oriented CCW-from-above (which it is: cos/sin of
+    // increasing theta traces +X → +Z → −X → −Z, i.e. CCW in the
+    // right-handed +Y-up frame). Front-face-CCW backface culling then
+    // shows the outside of the trunk.
+    let mut indices = Vec::with_capacity(6 * n);
+    for i in 0..n {
+        let a = i as u32;
+        let b = ((i + 1) % n) as u32;
+        let a_top = (i + n) as u32;
+        let b_top = ((i + 1) % n + n) as u32;
+        indices.push(a);
+        indices.push(a_top);
+        indices.push(b);
+        indices.push(b);
+        indices.push(a_top);
+        indices.push(b_top);
+    }
+    (verts, indices)
 }
 
 /// Place `count` canopy elements around the trunk axis at successive
@@ -65,8 +121,22 @@ pub fn trunk_mesh(
 /// periphery). Height fractions distribute through [0, 1] so the
 /// crown has vertical volume, not just a disc.
 pub fn canopy_stations(count: u32, canopy_radius: f32) -> Vec<CanopyStation> {
-    let _ = (count, canopy_radius);
-    todo!("tree_mesh::canopy_stations — implement to make the failing test pass")
+    let n = count as usize;
+    let mut stations = Vec::with_capacity(n);
+    // Normalize so station 0 sits at radius 0 (at the trunk) and
+    // station (count-1) sits at exactly `canopy_radius`. `denom` is
+    // (count-1) to make that last-station equality exact; if count==1
+    // we fall back to placing the sole station on-axis.
+    let denom = ((n.saturating_sub(1)) as f32).max(1.0);
+    for i in 0..n {
+        let frac = (i as f32) / denom;
+        stations.push(CanopyStation {
+            angle: (i as f32) * GOLDEN_ANGLE_RAD,
+            radius: canopy_radius * frac.sqrt(),
+            height_frac: frac,
+        });
+    }
+    stations
 }
 
 #[cfg(test)]
