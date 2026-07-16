@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use game::cdda::placement::{CDDA_TILE, CddaError, mapgen_to_template};
+use cdda::placement::{CDDA_TILE, CddaError, mapgen_to_template};
 use serde_json::Value;
 
 fn corpus_root() -> PathBuf {

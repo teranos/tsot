@@ -32,7 +32,9 @@
         # prints the real hash to paste in place of `lib.fakeHash`
         # (trust-on-first-use); bumping the release = edit CDDA_RELEASE,
         # blank the hash, rebuild, commit the new hash — all reviewable.
-        cddaRelease = pkgs.lib.removeSuffix "\n" (builtins.readFile ./CDDA_RELEASE);
+        # CDDA_RELEASE + hash live with the extracted cdda crate, not
+        # in game/, since the corpus is that crate's concern.
+        cddaRelease = pkgs.lib.removeSuffix "\n" (builtins.readFile ../crates/cdda/RELEASE);
         # Fetch the whole mapgen + palette SUBTREES — NOT the exact files
         # in cdda-files.txt. This decouples the fetch from the manifest:
         # adding a building is one line in cdda-files.txt and does NOT

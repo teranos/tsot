@@ -57,7 +57,7 @@ fn registry() -> &'static Registry {
         // (e.g. the school's `school_palette`). CDDA registers every
         // `type: palette` object globally regardless of which file it's
         // in; mirror that so those buildings resolve.
-        for src in crate::cdda::building::SHIPPED_MAPGEN {
+        for src in crate::building::SHIPPED_MAPGEN {
             if let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(src) {
                 for e in entries {
                     if e.get("type").and_then(Value::as_str) == Some("palette")

@@ -1,10 +1,10 @@
 //! Which chunks host a building, which template variant they pick, and
 //! how they're rotated — all pure hashes so every peer sees the same
-//! world.
+//! world. Takes chunk coordinates + chunk size as primitives so the
+//! consumer's ChunkCoord type isn't imported across the seam.
 
 use bevy_math::Vec3;
 
-use crate::chunk::{CHUNK_SIZE, ChunkCoord};
 use crate::hash::wang_hash;
 
 /// Buildings are rarer than campsites — roughly 1 chunk in 20.
@@ -23,14 +23,17 @@ const BUILDING_TRAIL_HALF: f32 = 220.0 + BUILDING_FOOTPRINT_HALF;
 /// Does this chunk carry a building, and where? Pure. Anchor is the
 /// chunk centre — buildings aren't jittered, so they fit inside their
 /// own chunk. `None` inside the central clearing or the trail corridor.
-pub fn building_anchor_in_chunk(c: ChunkCoord) -> Option<Vec3> {
-    if wang_hash(c.x, c.z, BUILDING_SALT) >= BUILDING_CHUNK_CHANCE {
+///
+/// `chunk_size` is the world-unit side of one chunk (consumer's
+/// concept; kept out of the crate).
+pub fn building_anchor_in_chunk(x: i32, z: i32, chunk_size: f32) -> Option<Vec3> {
+    if wang_hash(x, z, BUILDING_SALT) >= BUILDING_CHUNK_CHANCE {
         return None;
     }
     let anchor = Vec3::new(
-        (c.x as f32 + 0.5) * CHUNK_SIZE,
+        (x as f32 + 0.5) * chunk_size,
         0.0,
-        (c.z as f32 + 0.5) * CHUNK_SIZE,
+        (z as f32 + 0.5) * chunk_size,
     );
     if anchor.x.hypot(anchor.z) < BUILDING_CLEARING_EXCLUSION {
         return None;
@@ -43,29 +46,35 @@ pub fn building_anchor_in_chunk(c: ChunkCoord) -> Option<Vec3> {
 
 /// Which cached template a building-chunk uses — a deterministic hash
 /// pick, so the same chunk is the same building on every peer.
-pub fn building_index(c: ChunkCoord, num: usize) -> usize {
-    (wang_hash(c.x, c.z, BUILDING_PICK_SALT) as usize) % num
+pub fn building_index(x: i32, z: i32, num: usize) -> usize {
+    (wang_hash(x, z, BUILDING_PICK_SALT) as usize) % num
 }
 
 /// Deterministic quarter-turn rotation (0..4) for a building-chunk, so
 /// two buildings of the same type face different ways.
-pub fn building_rotation(c: ChunkCoord) -> u8 {
-    (wang_hash(c.x, c.z, BUILDING_ROT_SALT) % 4) as u8
+pub fn building_rotation(x: i32, z: i32) -> u8 {
+    (wang_hash(x, z, BUILDING_ROT_SALT) % 4) as u8
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Same chunk size the game uses (20 cells × 120 units per cell).
+    /// Kept local so this crate's tests don't depend on game constants.
+    const TEST_CHUNK_SIZE: f32 = 2400.0;
+
     #[test]
     fn buildings_are_rare_deterministic_and_center_clear() {
-        let c = ChunkCoord { x: 7, z: -3 };
-        assert_eq!(building_anchor_in_chunk(c), building_anchor_in_chunk(c));
+        assert_eq!(
+            building_anchor_in_chunk(7, -3, TEST_CHUNK_SIZE),
+            building_anchor_in_chunk(7, -3, TEST_CHUNK_SIZE)
+        );
         let (mut n, mut total) = (0, 0);
         for x in -25..25 {
             for z in -25..25 {
                 total += 1;
-                if let Some(a) = building_anchor_in_chunk(ChunkCoord { x, z }) {
+                if let Some(a) = building_anchor_in_chunk(x, z, TEST_CHUNK_SIZE) {
                     n += 1;
                     assert!(a.x.hypot(a.z) >= BUILDING_CLEARING_EXCLUSION);
                 }

@@ -623,7 +623,7 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     // The cut-away is anchored to the FOUND overhead roof cell, not the
     // player, so a neighbouring building's roof/walls stay solid even
     // when they'd be within the player's own cut radius.
-    let roof_half = crate::cdda::CDDA_TILE / 2.0;
+    let roof_half = cdda::CDDA_TILE / 2.0;
     let overhead = snap.structures.iter().find(|(p, k, _, _)| {
         *k == PropKind::Roof
             && (p.x - snap.player.x).abs() <= roof_half
@@ -734,7 +734,7 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
 /// `snapshot_to_instances`, inverted: this returns exactly what the
 /// opaque pass skips (never the other way around, so no double-draw).
 pub fn snapshot_to_ghost_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
-    let roof_half = crate::cdda::CDDA_TILE / 2.0;
+    let roof_half = cdda::CDDA_TILE / 2.0;
     let overhead = snap.structures.iter().find(|(p, k, _, _)| {
         *k == PropKind::Roof
             && (p.x - snap.player.x).abs() <= roof_half

@@ -17,7 +17,6 @@ use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 
 use crate::campsite;
-use crate::cdda;
 use crate::physics::{AabbCollider, Position, PlayerMarker};
 use crate::template::stamp_template;
 use crate::trees::{self, TreeTrunk};
@@ -66,7 +65,7 @@ const TREE_YARD_MARGIN: f32 = 90.0;
 /// A prop at `half` from the anchor (which sits at a chunk centre) lands
 /// at most `(half + CHUNK_SIZE/2)/CHUNK_SIZE` chunks away, rounded up.
 /// Single-tile buildings give 1; a multi-tile school reaches further.
-pub fn building_reach(buildings: &cdda::BuildingTemplates) -> i32 {
+pub fn building_reach(buildings: &crate::buildings::BuildingTemplates) -> i32 {
     let max_half = buildings.half_extents.iter().copied().fold(0.0_f32, f32::max);
     ((max_half + CHUNK_SIZE * 0.5) / CHUNK_SIZE).ceil() as i32
 }
@@ -78,7 +77,7 @@ pub fn building_reach(buildings: &cdda::BuildingTemplates) -> i32 {
 /// approach it from.
 pub fn buildings_reaching(
     c: ChunkCoord,
-    buildings: &cdda::BuildingTemplates,
+    buildings: &crate::buildings::BuildingTemplates,
     reach: i32,
 ) -> Vec<(Vec3, usize, u8)> {
     let mut out = Vec::new();
@@ -88,9 +87,9 @@ pub fn buildings_reaching(
     for dx in -reach..=reach {
         for dz in -reach..=reach {
             let a = ChunkCoord { x: c.x + dx, z: c.z + dz };
-            if let Some(anchor) = cdda::building_anchor_in_chunk(a) {
-                let idx = cdda::building_index(a, buildings.len());
-                out.push((anchor, idx, cdda::building_rotation(a)));
+            if let Some(anchor) = cdda::building_anchor_in_chunk(a.x, a.z, CHUNK_SIZE) {
+                let idx = cdda::building_index(a.x, a.z, buildings.len());
+                out.push((anchor, idx, cdda::building_rotation(a.x, a.z)));
             }
         }
     }
@@ -102,7 +101,7 @@ pub fn buildings_reaching(
 /// through a nearby building's footprint (a multi-tile building's yard
 /// reaches into neighbouring chunks, so we clear against every building
 /// that reaches this one, sized to its own footprint). Pure.
-pub fn trees_in_chunk(c: ChunkCoord, buildings: &cdda::BuildingTemplates) -> Vec<(Vec3, f32)> {
+pub fn trees_in_chunk(c: ChunkCoord, buildings: &crate::buildings::BuildingTemplates) -> Vec<(Vec3, f32)> {
     let reach = building_reach(buildings);
     let yards: Vec<(Vec3, f32)> = buildings_reaching(c, buildings, reach)
         .into_iter()
@@ -151,7 +150,7 @@ pub fn stream_chunks(
     mut commands: Commands,
     player_q: Query<&Position, With<PlayerMarker>>,
     mut loaded: ResMut<LoadedChunks>,
-    buildings: Res<cdda::BuildingTemplates>,
+    buildings: Res<crate::buildings::BuildingTemplates>,
 ) {
     let Some(player) = player_q.iter().next() else {
         return;
@@ -243,8 +242,8 @@ mod tests {
         assert!(!a.contains(&ChunkCoord { x: 7, z: -2 }));
     }
 
-    fn no_buildings() -> cdda::BuildingTemplates {
-        cdda::BuildingTemplates::default()
+    fn no_buildings() -> crate::buildings::BuildingTemplates {
+        crate::buildings::BuildingTemplates::default()
     }
 
     #[test]
@@ -266,20 +265,20 @@ mod tests {
 
     #[test]
     fn trees_dont_grow_through_a_building() {
-        let buildings = cdda::load_building_templates();
+        let (buildings, _) = crate::buildings::BuildingTemplates::load();
         // Find a chunk that carries a building.
         let mut found = None;
         'search: for x in 0..80 {
             for z in 0..80 {
                 let c = ChunkCoord { x, z };
-                if let Some(a) = cdda::building_anchor_in_chunk(c) {
+                if let Some(a) = cdda::building_anchor_in_chunk(c.x, c.z, CHUNK_SIZE) {
                     found = Some((c, a));
                     break 'search;
                 }
             }
         }
         let (c, anchor) = found.expect("a building chunk should exist");
-        let idx = cdda::building_index(c, buildings.len());
+        let idx = cdda::building_index(c.x, c.z, buildings.len());
         let half = buildings.half_extents[idx];
         for (base, _) in trees_in_chunk(c, &buildings) {
             let inside = (base.x - anchor.x).abs() < half && (base.z - anchor.z).abs() < half;
@@ -304,7 +303,7 @@ mod tests {
             .collect();
         let big = Template { props };
         let half = big.props.iter().fold(0.0_f32, |m, p| m.max(p.offset.x.abs()));
-        let bt = cdda::BuildingTemplates { templates: vec![big.clone()], half_extents: vec![half] };
+        let bt = crate::buildings::BuildingTemplates { templates: vec![big.clone()], half_extents: vec![half] };
         // Reach must extend past a single chunk.
         assert!(building_reach(&bt) >= 1, "reach should cover a multi-chunk building");
         // Anchored at a chunk centre, its props land in more than one chunk.
@@ -324,7 +323,7 @@ mod tests {
             .step_by(80)
             .map(|x| Prop::at(Vec3::new(x as f32, 0.0, 0.0), PropKind::Wall))
             .collect();
-        let bt = cdda::BuildingTemplates {
+        let bt = crate::buildings::BuildingTemplates {
             templates: vec![Template { props }],
             half_extents: vec![span as f32],
         };
@@ -333,14 +332,14 @@ mod tests {
         'outer: for x in 0..200 {
             for z in 0..200 {
                 let c = ChunkCoord { x, z };
-                if cdda::building_anchor_in_chunk(c).is_some() {
+                if cdda::building_anchor_in_chunk(c.x, c.z, CHUNK_SIZE).is_some() {
                     bc = Some(c);
                     break 'outer;
                 }
             }
         }
         let bc = bc.expect("a building chunk exists");
-        let anchor = cdda::building_anchor_in_chunk(bc).unwrap();
+        let anchor = cdda::building_anchor_in_chunk(bc.x, bc.z, CHUNK_SIZE).unwrap();
 
         let mut world = World::new();
         world.insert_resource(LoadedChunks::default());
@@ -375,7 +374,7 @@ mod tests {
 
         let mut world = World::new();
         world.insert_resource(LoadedChunks::default());
-        world.insert_resource(cdda::load_building_templates());
+        world.insert_resource(crate::buildings::BuildingTemplates::load().0);
         let player = world
             .spawn((PlayerMarker, Position(Vec3::new(0.0, 20.0, 0.0))))
             .id();

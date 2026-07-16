@@ -1,10 +1,11 @@
 .PHONY: music web build clean cdda coverage
 
 # Fetch the CDDA map corpus (a pinned dependency, never vendored) into
-# .cdda-src/ so bare `cargo build`/`cargo test` can compile it in. Nix
-# users don't need this — the flake sets CDDA_SRC. Pinned to CDDA_RELEASE.
+# crates/cdda/.cdda-src/ so bare `cargo build`/`cargo test` can compile
+# it in. Nix users don't need this — the flake sets CDDA_SRC. Pinned to
+# the crate's RELEASE file.
 cdda:
-	@./tools/fetch-cdda.sh
+	@../crates/cdda/tools/fetch.sh
 
 # Generate the placeholder track and encode as OGG Vorbis. Output
 # lands in web/assets/ so build.ts picks it up when it copies assets/
@@ -33,4 +34,4 @@ clean:
 # features + ranked candidates. HANDOVER checklist #2 — "add buildings"
 # is measured, not guessed.
 coverage:
-	@cargo +nightly run --bin cdda-coverage --release
+	@cargo +nightly run --manifest-path ../crates/cdda/Cargo.toml --bin cdda-coverage --release

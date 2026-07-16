@@ -12,10 +12,6 @@ crate-type = ["cdylib", "rlib"]
 name = "game-native"
 path = "src/main.rs"
 
-[[bin]]
-name = "cdda-coverage"
-path = "src/bin/cdda_coverage.rs"
-
 [profile.release]
 opt-level = "s"
 lto = true
@@ -31,6 +27,7 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.143"
 sacred-error = { path = "../crates/sacred-error" }
 seer-obs = { path = "../crates/seer-obs" }
+cdda = { path = "../crates/cdda" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.anyhow]
 version = "=1.0.100"

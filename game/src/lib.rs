@@ -8,9 +8,9 @@ use std::cell::RefCell;
 pub mod audio;
 pub mod bang;
 pub mod build_info;
+pub mod buildings;
 pub mod campfire;
 pub mod campsite;
-pub mod cdda;
 pub mod chunk;
 pub mod dpad;
 pub mod error;
@@ -24,7 +24,6 @@ pub mod map;
 pub mod music;
 pub mod net;
 pub mod obs;
-pub mod palette;
 pub mod persist;
 pub mod physics;
 pub mod remote_players;
@@ -169,7 +168,7 @@ fn scan_chunk(pred: impl Fn(chunk::ChunkCoord) -> bool) -> Option<chunk::ChunkCo
 /// Build the tour: the nearest school, a house, a campsite, and a patch
 /// of deep forest — the variety of stamps the run should encounter.
 #[cfg(not(target_arch = "wasm32"))]
-fn seer_tour_from(bt: &cdda::BuildingTemplates) -> SeerTour {
+fn seer_tour_from(bt: &crate::buildings::BuildingTemplates) -> SeerTour {
     let num = bt.templates.len().max(1);
     // The school is the largest-footprint template.
     let school_idx = bt
@@ -179,14 +178,17 @@ fn seer_tour_from(bt: &cdda::BuildingTemplates) -> SeerTour {
         .max_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i)
         .unwrap_or(0);
+    let cs = chunk::CHUNK_SIZE;
     let school = scan_chunk(|c| {
-        cdda::building_anchor_in_chunk(c).is_some() && cdda::building_index(c, num) == school_idx
+        cdda::building_anchor_in_chunk(c.x, c.z, cs).is_some()
+            && cdda::building_index(c.x, c.z, num) == school_idx
     })
-    .and_then(cdda::building_anchor_in_chunk);
+    .and_then(|c| cdda::building_anchor_in_chunk(c.x, c.z, cs));
     let house = scan_chunk(|c| {
-        cdda::building_anchor_in_chunk(c).is_some() && cdda::building_index(c, num) != school_idx
+        cdda::building_anchor_in_chunk(c.x, c.z, cs).is_some()
+            && cdda::building_index(c.x, c.z, num) != school_idx
     })
-    .and_then(cdda::building_anchor_in_chunk);
+    .and_then(|c| cdda::building_anchor_in_chunk(c.x, c.z, cs));
     let camp = scan_chunk(|c| campsite::campsite_in_chunk(c).is_some())
         .and_then(campsite::campsite_in_chunk);
     let forest = Vec3::new(7.5 * chunk::CHUNK_SIZE, 20.0, 7.5 * chunk::CHUNK_SIZE);
@@ -532,7 +534,10 @@ fn _init() {
     let mut app = App::new();
     app.insert_resource(SelfPeer(id.as_hex()));
     app.insert_resource(chunk::LoadedChunks::default());
-    let building_templates = cdda::load_building_templates();
+    let (building_templates, cdda_failures) = crate::buildings::BuildingTemplates::load();
+    for msg in &cdda_failures {
+        obs::emit(msg);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     let tour = seer_tour_from(&building_templates);
     app.insert_resource(building_templates);

@@ -1,9 +1,6 @@
 //! Canonical buildings the game ships — assembly (ground floor + roof)
 //! and the startup registry the streamer picks from.
 
-use bevy_ecs::prelude::*;
-
-use crate::obs;
 use crate::template::Template;
 
 use super::placement::{CDDA_TILE, CddaError, ROOF_HEIGHT, mapgen_to_template, roof_to_props};
@@ -108,7 +105,7 @@ pub fn assemble_building(
 
 /// Parsed building templates, cached once at startup so the chunk
 /// streamer stamps from memory instead of re-parsing JSON per chunk.
-#[derive(Resource, Default)]
+#[derive(Default)]
 pub struct BuildingTemplates {
     pub templates: Vec<Template>,
     /// Per-template footprint half-extent — the largest `|offset.x|` or
@@ -135,9 +132,11 @@ fn footprint_half(t: &Template) -> f32 {
         .fold(0.0_f32, |m, p| m.max(p.offset.x.abs()).max(p.offset.z.abs()))
 }
 
-/// Parse every building we ship, once. Import failures surface on the
-/// obs bus (sacred); the building simply won't appear.
-pub fn load_building_templates() -> BuildingTemplates {
+/// Parse every building we ship, once. Import failures are returned
+/// alongside the templates (sacred — never dropped) so the consumer
+/// can route them to its observability bus. Cdda-the-crate stays
+/// framework-agnostic; game routes these to obs.
+pub fn load_building_templates() -> (BuildingTemplates, Vec<String>) {
     let mut specs: Vec<(String, Result<Template, CddaError>)> = vec![
         ("garage".to_string(), garage_template()),
         ("shed".to_string(), shed_template()),
@@ -155,14 +154,15 @@ pub fn load_building_templates() -> BuildingTemplates {
         }
     }
     let mut templates = Vec::new();
+    let mut failures = Vec::new();
     for (name, result) in specs {
         match result {
             Ok(t) => templates.push(t),
-            Err(e) => obs::emit(&format!("[cdda] {name} import failed: {e}")),
+            Err(e) => failures.push(format!("[cdda] {name} import failed: {e}")),
         }
     }
     let half_extents = templates.iter().map(footprint_half).collect();
-    BuildingTemplates { templates, half_extents }
+    (BuildingTemplates { templates, half_extents }, failures)
 }
 
 #[cfg(test)]
@@ -187,8 +187,8 @@ mod tests {
     /// value.) See `template::Template::stable_digest`.
     #[test]
     fn every_shipped_building_resolves_deterministically() {
-        let a = load_building_templates();
-        let b = load_building_templates();
+        let (a, _) = load_building_templates();
+        let (b, _) = load_building_templates();
         assert!(!a.templates.is_empty(), "no buildings resolved at all");
         assert_eq!(
             a.templates.len(),
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn building_templates_load_the_garage() {
-        let t = load_building_templates();
+        let (t, _) = load_building_templates();
         assert!(!t.is_empty(), "garage should parse");
         assert!(t.templates[0].props.len() > 50, "garage should be many props");
         assert_eq!(t.templates.len(), t.half_extents.len(), "extents track templates");
@@ -306,7 +306,7 @@ mod tests {
             .iter()
             .fold(0.0_f32, |m, p| m.max(p.offset.x.abs()).max(p.offset.z.abs()));
         assert!(
-            half > crate::cdda::CDDA_TILE * 18.0,
+            half > crate::CDDA_TILE * 18.0,
             "school should span multiple om tiles, half-extent={half}"
         );
     }

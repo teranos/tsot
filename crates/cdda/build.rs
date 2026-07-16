@@ -2,11 +2,11 @@
 //!
 //! CDDA is a *dependency*, not vendored source. The mapgen + palette
 //! JSON never lives in git. It comes from a CDDA source tree pinned to
-//! a stable letter release (see `CDDA_RELEASE`):
+//! a stable letter release (see `RELEASE`):
 //!
 //!   - Nix build: the `cataclysm-dda` flake input sets `$CDDA_SRC` to
 //!     the pinned store path (provenance locked in flake.lock).
-//!   - Bare cargo / CI: `tools/fetch-cdda.sh` populates `.cdda-src/`
+//!   - Bare cargo / CI: `tools/fetch.sh` populates `.cdda-src/`
 //!     (gitignored) from the same pinned release.
 //!
 //! This script copies the referenced files out of that tree into
@@ -20,9 +20,9 @@ use std::path::{Path, PathBuf};
 
 /// The one manifest of CDDA corpus files the game references, by their
 /// path within the pinned source tree. Shared verbatim by the Nix
-/// `sparseCheckout` and `tools/fetch-cdda.sh`, so "which files" has a
+/// `sparseCheckout` and `tools/fetch.sh`, so "which files" has a
 /// single source of truth. Adding a building = one line there.
-const MANIFEST: &str = "cdda-files.txt";
+const MANIFEST: &str = "files.txt";
 
 /// Resolve the CDDA source-tree root: the Nix-pinned input if present,
 /// else the local `.cdda-src/` cache. Missing → a loud, actionable
@@ -43,15 +43,15 @@ fn cdda_src_root() -> PathBuf {
     assert!(
         local.is_dir(),
         "CDDA corpus not found. Set $CDDA_SRC (the Nix flake does this) \
-         or run `make cdda` / `tools/fetch-cdda.sh` to populate {}",
+         or run `make cdda` / `tools/fetch.sh` to populate {}",
         local.display()
     );
-    // Staleness guard: fetch-cdda.sh stamps .rev with CDDA_RELEASE; if
-    // someone bumps CDDA_RELEASE without re-fetching, we'd silently
+    // Staleness guard: fetch.sh stamps .rev with RELEASE; if
+    // someone bumps RELEASE without re-fetching, we'd silently
     // compile the old corpus. Fail loudly with the fix in the message.
     // (Nix-provided CDDA_SRC skips this — it's already hash-pinned.)
-    let release = std::fs::read_to_string(manifest.join("CDDA_RELEASE"))
-        .expect("reading CDDA_RELEASE")
+    let release = std::fs::read_to_string(manifest.join("RELEASE"))
+        .expect("reading RELEASE")
         .trim()
         .to_string();
     let rev_path = local.join(".rev");
@@ -60,7 +60,7 @@ fn cdda_src_root() -> PathBuf {
         .unwrap_or_default();
     assert!(
         rev == release,
-        ".cdda-src is stale: CDDA_RELEASE is {release:?} but .cdda-src/.rev is {rev:?}. \
+        ".cdda-src is stale: RELEASE is {release:?} but .cdda-src/.rev is {rev:?}. \
          Run `make cdda` to refresh."
     );
     local
@@ -90,7 +90,7 @@ fn main() {
         let name = Path::new(rel).file_name().unwrap().to_str().unwrap();
         if let Some(prev) = seen.insert(name, rel) {
             panic!(
-                "cdda-files.txt has two entries whose basename collides on OUT_DIR/cdda/{name}: \
+                "files.txt has two entries whose basename collides on OUT_DIR/cdda/{name}: \
                  {prev} and {rel} — rename one or copy under the full relative path"
             );
         }
@@ -115,6 +115,6 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={MANIFEST}");
-    println!("cargo:rerun-if-changed=CDDA_RELEASE");
+    println!("cargo:rerun-if-changed=RELEASE");
     println!("cargo:rerun-if-env-changed=CDDA_SRC");
 }
