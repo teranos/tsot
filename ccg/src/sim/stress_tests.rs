@@ -24,7 +24,7 @@ use rand::{Rng, SeedableRng};
 
 use crate::card::CardRegistry;
 use crate::game::{GameState, Journal};
-use crate::sim::genome::{random_genome, to_deck};
+use crate::sim::genome::{random_genome, to_units};
 use crate::sim::playable_pool::playable_pool;
 use crate::sim::run::run_game_continue;
 use crate::sim::AiKind;
@@ -51,11 +51,14 @@ fn stress_soak_random_decks_terminate_and_roll_back() {
     for i in 0..n {
         let ga = random_genome(&pool, 50, 3, &mut master).expect("random genome A");
         let gb = random_genome(&pool, 50, 3, &mut master).expect("random genome B");
-        let deck_a = to_deck(&registry, &ga).expect("to_deck A");
-        let deck_b = to_deck(&registry, &gb).expect("to_deck B");
+        // Build via `to_units`, not `to_deck` — `random_genome` drafts the
+        // `__cardless__` sentinel (Z.8), which `to_units` materializes into
+        // a real empty sleeve; `to_deck` chokes on it with UnknownCardId.
+        let units_a = to_units(&registry, &ga).expect("to_units A");
+        let units_b = to_units(&registry, &gb).expect("to_units B");
         let game_seed: u64 = master.gen();
 
-        let mut state = GameState::new(deck_a, deck_b);
+        let mut state = GameState::from_units(units_a, units_b);
         state.replay_journal = Some(Journal::new());
         let mut rng = StdRng::seed_from_u64(game_seed);
         let mut log: Vec<String> = Vec::new();
