@@ -32,6 +32,7 @@ pub mod scene;
 pub mod sfx;
 pub mod template;
 pub mod trail;
+pub mod tree_mesh;
 pub mod trees;
 pub mod watermark;
 
