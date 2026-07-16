@@ -107,9 +107,26 @@ fn main() {
             rel,
             root.display()
         );
+        // If a previous build left the destination present + read-only
+        // (fs::copy preserves the Nix-store 0444 bit onto the OUT_DIR
+        // copy), a re-run would fail with "Permission denied". Clear
+        // the write bit before copying over.
+        if dst.exists() {
+            let mut perms = std::fs::metadata(&dst).unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            std::fs::set_permissions(&dst, perms).ok();
+        }
         std::fs::copy(&src, &dst).unwrap_or_else(|e| {
             panic!("copying {} -> {}: {e}", src.display(), dst.display())
         });
+        // Make the OUT_DIR copy writable so subsequent build.rs runs
+        // can overwrite it (the Nix-store source is 0444; fs::copy
+        // preserves that mode onto the destination).
+        let mut perms = std::fs::metadata(&dst).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&dst, perms).ok();
         // Rebuild if the pinned source file changes.
         println!("cargo:rerun-if-changed={}", src.display());
     }
