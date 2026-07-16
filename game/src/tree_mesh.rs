@@ -177,18 +177,31 @@ pub fn canopy_stations(count: u32, canopy_radius: f32) -> Vec<CanopyStation> {
     stations
 }
 
-/// One sphere placed along a limb of the branch skeleton. `pos` is in
-/// UNIT tree space (trunk base at the origin, trunk ≈ 1 tall) so a
-/// consumer scales by the tree's height exactly like `canopy_stations`
-/// scales by `canopy_radius`. `radius` is a thickness ratio (also ×
-/// height at emit time). `is_tip` marks a terminal limb end — where a
-/// leaf cluster anchors, so foliage follows the branches instead of
-/// hanging in a cloud around the trunk.
+/// One limb of the branch skeleton — a tapered cone from `base` along
+/// `axis` for `length`, `base_radius` thick at the base. Everything is
+/// in UNIT tree space (trunk base at the origin, trunk ≈ 1 tall) so the
+/// consumer scales by the tree's height, exactly like `canopy_stations`
+/// scales by `canopy_radius`. `is_tip` marks a terminal limb — a leaf
+/// cluster anchors at its tip (`base + axis*length`), so foliage follows
+/// the branches instead of hanging in a cloud around the trunk.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BranchPoint {
-    pub pos: [f32; 3],
-    pub radius: f32,
+pub struct BranchSegment {
+    pub base: [f32; 3],
+    pub axis: [f32; 3],
+    pub length: f32,
+    pub base_radius: f32,
     pub is_tip: bool,
+}
+
+impl BranchSegment {
+    /// World-space (unit) tip of the limb.
+    pub fn tip(&self) -> [f32; 3] {
+        [
+            self.base[0] + self.axis[0] * self.length,
+            self.base[1] + self.axis[1] * self.length,
+            self.base[2] + self.axis[2] * self.length,
+        ]
+    }
 }
 
 /// Deterministic recursive branch skeleton for one tree. `seed` varies
@@ -201,9 +214,6 @@ pub struct BranchPoint {
 /// Recursion depth: trunk-limb → branch → branch's branch → tip. ≥2 so
 /// "branches, and branches' branches" is literally true.
 const BRANCH_MAX_DEPTH: u32 = 3;
-/// A sphere every ~this much unit-length along a limb — dense enough
-/// the limb reads as a solid stroke, not a dotted line.
-const BRANCH_SAMPLE_STEP: f32 = 0.045;
 /// Thickness ratio of a primary limb where it leaves the trunk.
 const BRANCH_PRIMARY_RADIUS: f32 = 0.03;
 
@@ -249,12 +259,12 @@ fn perp_basis(dir: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     (u, v)
 }
 
-/// Grow one limb from `base` along `dir` for `len`, sampling spheres
-/// down it, then recurse into `depth` more child limbs fanned around
-/// the tip at golden-angle azimuths. At depth 0 the tip is flagged as a
-/// leaf anchor.
+/// Grow one limb from `base` along `dir` for `len` as a single tapered
+/// cone segment, then recurse into `depth` more child limbs fanned
+/// around the tip at golden-angle azimuths. At depth 0 the segment is a
+/// terminal — its tip is a leaf anchor.
 fn grow_limb(
-    out: &mut Vec<BranchPoint>,
+    out: &mut Vec<BranchSegment>,
     base: [f32; 3],
     dir: [f32; 3],
     len: f32,
@@ -262,24 +272,17 @@ fn grow_limb(
     depth: u32,
     rng: &mut u32,
 ) {
-    let steps = (len / BRANCH_SAMPLE_STEP).ceil().max(1.0) as usize;
-    for s in 1..=steps {
-        let t = s as f32 / steps as f32;
-        out.push(BranchPoint {
-            pos: v_add(base, v_scale(dir, len * t)),
-            radius: radius * (1.0 - 0.25 * t),
-            is_tip: false,
-        });
-    }
-    let tip = v_add(base, v_scale(dir, len));
+    out.push(BranchSegment {
+        base,
+        axis: dir,
+        length: len,
+        base_radius: radius,
+        is_tip: depth == 0,
+    });
     if depth == 0 {
-        out.push(BranchPoint {
-            pos: tip,
-            radius: radius * 0.7,
-            is_tip: true,
-        });
         return;
     }
+    let tip = v_add(base, v_scale(dir, len));
     let children = 2 + (splitmix32(rng) % 2) as usize; // 2 or 3
     let (u, v) = perp_basis(dir);
     let azim0 = randf(rng) * std::f32::consts::TAU;
@@ -293,7 +296,7 @@ fn grow_limb(
     }
 }
 
-pub fn tree_branches(seed: u32) -> Vec<BranchPoint> {
+pub fn tree_branches(seed: u32) -> Vec<BranchSegment> {
     // Spread the seed through the state and force it odd/non-zero so
     // even seed 0 gives a non-degenerate tree.
     let mut rng = seed.wrapping_mul(2_654_435_761).wrapping_add(0x9E37_79B9) | 1;
@@ -560,36 +563,38 @@ mod tests {
 
     #[test]
     fn branches_taper_with_depth() {
-        // A terminal tip is thinner than the thickest (trunk-side) limb.
-        let pts = tree_branches(7);
-        let max_r = pts.iter().map(|p| p.radius).fold(0.0_f32, f32::max);
-        let tip_r = pts
+        // A terminal limb is thinner than the thickest (trunk-side) one.
+        let segs = tree_branches(7);
+        let max_r = segs.iter().map(|s| s.base_radius).fold(0.0_f32, f32::max);
+        let tip_r = segs
             .iter()
-            .filter(|p| p.is_tip)
-            .map(|p| p.radius)
+            .filter(|s| s.is_tip)
+            .map(|s| s.base_radius)
             .fold(f32::INFINITY, f32::min);
         assert!(
             tip_r < max_r,
-            "tips ({tip_r}) should be thinner than the base ({max_r})"
+            "terminal limbs ({tip_r}) should be thinner than the base ({max_r})"
         );
     }
 
     #[test]
     fn branches_grow_up_into_the_crown_and_stay_in_unit_space() {
-        // Unit space so the caller scales by height: everything above
-        // ground, within a sane bound. Tips reach up into the crown.
-        let pts = tree_branches(7);
-        assert!(!pts.is_empty(), "no branch points emitted");
-        for p in &pts {
-            assert!(p.pos[1] >= -EPS, "point below ground: {:?}", p.pos);
-            assert!(p.pos[1] <= 1.5, "point too tall for unit space: {:?}", p.pos);
-            let rxz = (p.pos[0] * p.pos[0] + p.pos[2] * p.pos[2]).sqrt();
-            assert!(rxz <= 1.0, "point too wide for unit space: {:?}", p.pos);
+        // Unit space so the caller scales by height: every limb endpoint
+        // above ground, within a sane bound. Tips reach up into the crown.
+        let segs = tree_branches(7);
+        assert!(!segs.is_empty(), "no branch segments emitted");
+        for s in &segs {
+            for pt in [s.base, s.tip()] {
+                assert!(pt[1] >= -EPS, "endpoint below ground: {pt:?}");
+                assert!(pt[1] <= 1.5, "endpoint too tall for unit space: {pt:?}");
+                let rxz = (pt[0] * pt[0] + pt[2] * pt[2]).sqrt();
+                assert!(rxz <= 1.0, "endpoint too wide for unit space: {pt:?}");
+            }
         }
-        let max_tip_y = pts
+        let max_tip_y = segs
             .iter()
-            .filter(|p| p.is_tip)
-            .map(|p| p.pos[1])
+            .filter(|s| s.is_tip)
+            .map(|s| s.tip()[1])
             .fold(0.0_f32, f32::max);
         assert!(
             max_tip_y > 0.5,

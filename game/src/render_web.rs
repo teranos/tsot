@@ -13,8 +13,8 @@ use crate::gpu_web;
 use crate::hud;
 use crate::obs;
 use crate::scene::{
-    self, GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, GpuVertex, MESH_SHADER_WGSL, SHADER_WGSL,
-    SceneCamera, SceneInstance, UI_SHADER_WGSL, as_bytes, cube_geometry,
+    self, GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, GpuVertex, MESH_SHADER_WGSL, MeshInstance,
+    SHADER_WGSL, SceneCamera, SceneInstance, UI_SHADER_WGSL, as_bytes, cube_geometry,
 };
 use crate::tree_mesh::{self, MeshVertex};
 
@@ -199,7 +199,7 @@ pub fn init(canvas_id: &str) -> bool {
         &pl_layout,
         &mesh_shader,
         std::mem::size_of::<MeshVertex>() as u32,
-        std::mem::size_of::<SceneInstance>() as u32,
+        std::mem::size_of::<MeshInstance>() as u32,
         gpu_web::color_format::BGRA8UNORM,
         gpu_web::depth_format::DEPTH32FLOAT,
         "render_web.mesh.pipeline",
@@ -416,7 +416,7 @@ pub fn frame_ghost(instances: &[SceneInstance]) -> u32 {
 /// elements; two `render_mesh` calls dispatch with the right index
 /// buffer + first_instance offset so both shapes share the pipeline
 /// and the upload. A no-op success when there are no trees in view.
-pub fn frame_mesh(trunks: &[SceneInstance], canopy: &[SceneInstance]) -> u32 {
+pub fn frame_mesh(trunks: &[MeshInstance], canopy: &[MeshInstance]) -> u32 {
     let total = trunks.len() + canopy.len();
     if total == 0 {
         return 0;
@@ -428,7 +428,7 @@ pub fn frame_mesh(trunks: &[SceneInstance], canopy: &[SceneInstance]) -> u32 {
         };
         if state.mesh_instance_buf.is_none() || total > state.mesh_instance_capacity {
             let new_cap = total.max(64);
-            let new_size = (new_cap * std::mem::size_of::<SceneInstance>()) as u32;
+            let new_size = (new_cap * std::mem::size_of::<MeshInstance>()) as u32;
             state.mesh_instance_buf = gpu_web::GameBuffer::create(
                 new_size,
                 gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
@@ -440,7 +440,7 @@ pub fn frame_mesh(trunks: &[SceneInstance], canopy: &[SceneInstance]) -> u32 {
             return 3;
         };
         // One buffer, two contiguous slices — write in one go.
-        let mut packed: Vec<SceneInstance> = Vec::with_capacity(total);
+        let mut packed: Vec<MeshInstance> = Vec::with_capacity(total);
         packed.extend_from_slice(trunks);
         packed.extend_from_slice(canopy);
         mesh_buf.write(as_bytes(&packed));

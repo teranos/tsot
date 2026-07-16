@@ -23,7 +23,8 @@ use wgpu::{Device, Queue};
 use crate::gpu::SeerDevice;
 use crate::obs;
 use crate::scene::{
-    GLASS_SHADER_WGSL, GpuVertex, MESH_SHADER_WGSL, MeshTreeInstances, SceneCamera, SceneInstance,
+    GLASS_SHADER_WGSL, GpuVertex, MESH_SHADER_WGSL, MeshInstance, MeshTreeInstances, SceneCamera,
+    SceneInstance,
     SHADER_WGSL, as_bytes, cube_geometry,
 };
 use crate::tree_mesh::{self, MeshVertex};
@@ -121,12 +122,12 @@ pub fn render_scene(
         mesh_trees.trunks.len() + mesh_trees.canopy_elements.len();
     let mesh_instance_buf = dev.create_buffer(&wgpu::BufferDescriptor {
         label: Some("seer.render.mesh.instance"),
-        size: (total_mesh_instances.max(1) * std::mem::size_of::<SceneInstance>()) as u64,
+        size: (total_mesh_instances.max(1) * std::mem::size_of::<MeshInstance>()) as u64,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     if total_mesh_instances > 0 {
-        let mut packed: Vec<SceneInstance> = Vec::with_capacity(total_mesh_instances);
+        let mut packed: Vec<MeshInstance> = Vec::with_capacity(total_mesh_instances);
         packed.extend_from_slice(&mesh_trees.trunks);
         packed.extend_from_slice(&mesh_trees.canopy_elements);
         queue.write_buffer(mesh_instance_buf.wgpu(), 0, as_bytes(&packed));
@@ -348,12 +349,13 @@ pub fn render_scene(
                     ],
                 },
                 wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<SceneInstance>() as u64,
+                    array_stride: std::mem::size_of::<MeshInstance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &wgpu::vertex_attr_array![
                         3 => Float32x3,
                         4 => Float32x3,
-                        5 => Float32x3
+                        5 => Float32x3,
+                        6 => Float32x3
                     ],
                 },
             ],

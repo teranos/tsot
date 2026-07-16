@@ -188,6 +188,7 @@ struct IIn {
     @location(3) i_pos: vec3<f32>,
     @location(4) i_color: vec3<f32>,
     @location(5) i_scale: vec3<f32>,
+    @location(6) i_axis: vec3<f32>,
 };
 
 struct VOut {
@@ -197,12 +198,31 @@ struct VOut {
     @location(2) uv: vec2<f32>,
 };
 
+// Rotation mapping the local +Y axis onto `axis`. A cone/cylinder is
+// symmetric about its length axis, so roll is irrelevant — any rotation
+// taking +Y to the (unit) axis orients the limb correctly. Columns
+// (right, up, fwd) → local (x,y,z) map to (right, axis, fwd); axis = +Y
+// yields the identity, so trunks (axis = +Y) and leaf spheres pass
+// through unchanged.
+fn basis_from_axis(axis: vec3<f32>) -> mat3x3<f32> {
+    let up = normalize(axis);
+    let refv = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(1.0, 0.0, 0.0), abs(up.z) > 0.9);
+    let right = normalize(cross(up, refv));
+    let fwd = cross(right, up);
+    return mat3x3<f32>(right, up, fwd);
+}
+
 @vertex
 fn vs(v: VIn, i: IIn) -> VOut {
-    let world = v.pos * i.i_scale + i.i_pos;
+    let rot = basis_from_axis(i.i_axis);
+    // Scale in the limb's local +Y frame, rotate onto the axis, translate.
+    let world = rot * (v.pos * i.i_scale) + i.i_pos;
     var o: VOut;
     o.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    o.normal = normalize(v.normal / i.i_scale);
+    // Inverse-transpose for the diagonal scale (divide by scale), then
+    // the same rotation — normals stay correct under non-uniform scale
+    // AND orientation.
+    o.normal = normalize(rot * (v.normal / i.i_scale));
     o.color = i.i_color;
     o.uv = v.uv;
     return o;
@@ -350,6 +370,22 @@ pub struct SceneInstance {
     pub pos: [f32; 3],
     pub color: [f32; 3],
     pub scale: [f32; 3],
+}
+
+/// Instance for the MESH pipeline. Same as `SceneInstance` plus a unit
+/// `axis` the shader rotates the geometry's local +Y onto — that's what
+/// lets one baked cone draw as a limb pointing any direction. 48 bytes,
+/// `#[repr(C)]`: layout must match MESH_SHADER_WGSL's IIn (loc 3/4/5/6
+/// at offsets 0/12/24/36) and the vertex-buffer layouts on both render
+/// paths. A leaf sphere or the vertical trunk sets `axis = [0,1,0]`
+/// (identity rotation).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MeshInstance {
+    pub pos: [f32; 3],
+    pub color: [f32; 3],
+    pub scale: [f32; 3],
+    pub axis: [f32; 3],
 }
 
 #[repr(C)]
@@ -808,8 +844,8 @@ fn tree_seed(x: f32, z: f32) -> u32 {
 /// tapered-cone geometry; every canopy element draws the shared unit
 /// icosahedron at a phyllotactically-placed world offset from its tree.
 pub struct MeshTreeInstances {
-    pub trunks: Vec<SceneInstance>,
-    pub canopy_elements: Vec<SceneInstance>,
+    pub trunks: Vec<MeshInstance>,
+    pub canopy_elements: Vec<MeshInstance>,
 }
 
 /// Build the mesh-pipeline instance lists from the scene snapshot.
@@ -822,13 +858,15 @@ pub struct MeshTreeInstances {
 /// `render_mesh` calls with the right `first_instance` offset.
 pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
     use crate::tree_mesh::{GOLDEN_ANGLE_RAD, tree_branches};
-    let mut trunks = Vec::with_capacity(snap.trees.len());
-    // Rough budget: a few hundred branch spheres + leaf-cluster leaves
-    // per tree. Over-reserving is cheaper than regrowing mid-loop.
-    let mut canopy_elements = Vec::with_capacity(snap.trees.len() * 512);
+    const UP: [f32; 3] = [0.0, 1.0, 0.0];
+    // `trunks` draws the shared unit cone (trunk + every branch segment);
+    // `canopy_elements` draws the shared icosahedron (leaf clusters).
+    let mut trunks = Vec::with_capacity(snap.trees.len() * 48);
+    let mut canopy_elements = Vec::with_capacity(snap.trees.len() * 256);
     for (t, h) in &snap.trees {
         let h = *h;
-        trunks.push(SceneInstance {
+        // Main trunk: vertical cone, axis +Y (identity rotation).
+        trunks.push(MeshInstance {
             pos: [t.x, 0.0, t.z],
             color: TREE_TRUNK_COLOR,
             scale: [
@@ -836,33 +874,34 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                 h * TREE_TRUNK_H_RATIO,
                 h * TREE_TRUNK_BASE_R_RATIO,
             ],
+            axis: UP,
         });
-        // Per-tree branch skeleton (unit space, scaled by height here).
-        // Deterministic in the tile position so every peer grows the
+        // Per-tree branch skeleton (unit space, scaled by height here),
+        // deterministic in the tile position so every peer grows the
         // same tree.
         let element_r = h * TREE_CANOPY_ELEMENT_RATIO;
         let cluster_r = h * BRANCH_LEAF_CLUSTER_RADIUS_RATIO;
-        for bp in tree_branches(tree_seed(t.x, t.z)) {
-            let wx = t.x + bp.pos[0] * h;
-            let wy = bp.pos[1] * h;
-            let wz = t.z + bp.pos[2] * h;
-            // The limb itself: a brown sphere sized to the limb radius.
-            let br = bp.radius * h;
-            canopy_elements.push(SceneInstance {
-                pos: [wx, wy, wz],
+        for seg in tree_branches(tree_seed(t.x, t.z)) {
+            // The limb: the unit cone (base r=1, height 1 along +Y)
+            // scaled to [radius, length, radius] and rotated +Y → axis.
+            trunks.push(MeshInstance {
+                pos: [t.x + seg.base[0] * h, seg.base[1] * h, t.z + seg.base[2] * h],
                 color: BRANCH_COLOR,
-                scale: [br, br, br],
+                scale: [seg.base_radius * h, seg.length * h, seg.base_radius * h],
+                axis: seg.axis,
             });
-            if !bp.is_tip {
+            if !seg.is_tip {
                 continue;
             }
-            // Terminal tip → a small ball of leaves (Fibonacci sphere,
-            // even coverage) so foliage sits at the branch ends.
+            // Terminal tip → a small Fibonacci-sphere ball of leaves so
+            // foliage sits at the branch ends.
+            let tip = seg.tip();
+            let (wx, wy, wz) = (t.x + tip[0] * h, tip[1] * h, t.z + tip[2] * h);
             for k in 0..BRANCH_LEAVES_PER_TIP {
                 let ky = 1.0 - 2.0 * (k as f32 + 0.5) / (BRANCH_LEAVES_PER_TIP as f32);
                 let kr = (1.0 - ky * ky).max(0.0).sqrt();
                 let kt = (k as f32) * GOLDEN_ANGLE_RAD;
-                canopy_elements.push(SceneInstance {
+                canopy_elements.push(MeshInstance {
                     pos: [
                         wx + cluster_r * kr * kt.cos(),
                         wy + cluster_r * ky,
@@ -870,6 +909,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                     ],
                     color: TREE_CANOPY_COLOR,
                     scale: [element_r, element_r, element_r],
+                    axis: UP,
                 });
             }
         }

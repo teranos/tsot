@@ -1125,6 +1125,7 @@ async function main() {
                   { shaderLocation: 3, offset: 0, format: 'float32x3' },
                   { shaderLocation: 4, offset: 12, format: 'float32x3' },
                   { shaderLocation: 5, offset: 24, format: 'float32x3' },
+                  { shaderLocation: 6, offset: 36, format: 'float32x3' },
                 ] },
               ],
             },
