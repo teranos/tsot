@@ -54,6 +54,8 @@ pub enum PropKind {
     FenceNS,
     /// Fence running E–W (along X).
     FenceEW,
+    /// A toilet. White ceramic box, blocks movement.
+    Toilet,
 }
 
 impl PropKind {
@@ -180,6 +182,7 @@ fn prop_kind_tag(k: PropKind) -> u8 {
         PropKind::Fence => 11,
         PropKind::FenceNS => 12,
         PropKind::FenceEW => 13,
+        PropKind::Toilet => 14,
     }
 }
 
@@ -365,6 +368,14 @@ pub fn stamp_template_where(
                     sp(PropKind::FenceEW),
                     Position(pos),
                     AabbCollider::cuboid(Vec3::new(80.0, 60.0, 8.0)),
+                ))
+                .id(),
+            // Toilet — small white ceramic block, blocks movement.
+            PropKind::Toilet => commands
+                .spawn((
+                    sp(PropKind::Toilet),
+                    Position(pos),
+                    AabbCollider::cuboid(Vec3::new(36.0, 50.0, 44.0)),
                 ))
                 .id(),
         };

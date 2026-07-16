@@ -43,10 +43,22 @@ pub(crate) fn fence_color(id: &str) -> [f32; 3] {
 
 /// Map a cell's char to (prop kind, optional colour) via the resolved
 /// terrain char→id map. Walls carry a material colour. Unmapped → None.
+///
+/// Furniture is intentionally NOT spawned (no pickup mechanic yet), but
+/// toilets are a specific carve-out: they're placed by the CDDA `f_toilet`
+/// furniture id and matter for the compound to feel like a real place
+/// (you can walk up to one).
 pub(crate) fn cell_to_prop(
     ch: char,
     terrain: &HashMap<char, String>,
+    furniture: &HashMap<char, String>,
 ) -> Option<(PropKind, Option<[f32; 3]>)> {
+    if let Some(f) = furniture.get(&ch)
+        && f.contains("toilet")
+    {
+        return Some((PropKind::Toilet, None));
+    }
+    // Every other furniture char is dropped for now.
     if let Some(t) = terrain.get(&ch) {
         // A window is a translucent glass panel that sits in (and
         // orients with) the wall run — see-through from outside, drawn
@@ -100,22 +112,30 @@ mod tests {
         ]
         .into_iter()
         .collect();
+        let furniture: HashMap<char, String> = [
+            ('t', s("f_toilet")),
+            ('b', s("f_bed")), // furniture that stays disabled
+        ]
+        .into_iter()
+        .collect();
 
-        let kind = |ch: char| cell_to_prop(ch, &terrain).map(|(k, _)| k);
+        let kind = |ch: char| cell_to_prop(ch, &terrain, &furniture).map(|(k, _)| k);
         assert_eq!(kind('w'), Some(PropKind::Wall));
         assert_eq!(kind('W'), Some(PropKind::Fence));
         assert_eq!(kind('^'), None); // gate skipped
         assert_eq!(kind('.'), None); // floor skipped
         assert_eq!(kind(' '), None); // unknown
+        assert_eq!(kind('t'), Some(PropKind::Toilet)); // f_toilet carve-out
+        assert_eq!(kind('b'), None); // other furniture disabled
         // Walls carry a material colour, and materials differ.
-        assert!(cell_to_prop('w', &terrain).unwrap().1.is_some());
+        assert!(cell_to_prop('w', &terrain, &furniture).unwrap().1.is_some());
         assert_ne!(wall_color("t_brick_wall"), wall_color("t_wall_log"));
 
         // A window becomes a translucent glass panel (its own kind),
         // tinted, sitting in the wall line.
         let win: HashMap<char, String> = [(':', s("t_window"))].into_iter().collect();
         assert_eq!(
-            cell_to_prop(':', &win),
+            cell_to_prop(':', &win, &HashMap::new()),
             Some((PropKind::Window, Some(WINDOW_COLOR)))
         );
     }
