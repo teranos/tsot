@@ -13,6 +13,7 @@ pub mod key {
     pub const A: u32 = 0x0002;
     pub const S: u32 = 0x0004;
     pub const D: u32 = 0x0008;
+    pub const ESC: u32 = 0x0010;
 }
 
 #[cfg(target_arch = "wasm32")]

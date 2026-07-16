@@ -9,6 +9,7 @@ on:
     branches: ['**']
     paths:
       - 'game/**'
+      - 'crates/cdda/**'
       - '.github/workflows/deploy-game.yml'
   workflow_dispatch:
 
@@ -44,6 +45,18 @@ jobs:
         with:
           bun-version: '1.3.9'
 
+      # CDDA map corpus is a pinned dependency, not vendored. Realise it
+      # via the flake's hash-verified fetch and hand the store path to
+      # build.rs through $CDDA_SRC.
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Realise CDDA corpus (pinned, hash-verified)
+        working-directory: game
+        run: echo "CDDA_SRC=$(nix build .#cdda-src --no-link --print-out-paths)" >> "$GITHUB_ENV"
+
       - name: Build game.wasm
         working-directory: game
         env:
@@ -75,6 +88,11 @@ jobs:
 
       - name: Build web bundle
         working-directory: game/web
+        env:
+          # Same commit the wasm build embeds, so the bundle bakes the
+          # matching value and the boot-time build-loop check passes on a
+          # coherent deploy (and fails loud on a skewed one).
+          SEER_BUILD_COMMIT: ${{ github.sha }}
         run: bun run build.ts
 
       - name: Generate build-info.json
@@ -133,9 +151,12 @@ jobs:
       - name: Invalidate CloudFront
         if: env.STATIC_DISTRIBUTION_ID != ''
         run: |
+          # The JS bundle is content-hashed (main-<hash>.js) and served
+          # from a fresh name each deploy, so it never needs invalidating
+          # — index.html (no-store) references the new name directly.
           INVALIDATION_ID=$(aws cloudfront create-invalidation \
             --distribution-id "${{ env.STATIC_DISTRIBUTION_ID }}" \
-            --paths '/index.html' '/main.js' '/game.wasm' '/build-info.json' \
+            --paths '/index.html' '/game.wasm' '/build-info.json' \
             --query 'Invalidation.Id' \
             --output text)
           aws cloudfront wait invalidation-completed \

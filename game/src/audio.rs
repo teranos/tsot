@@ -5,6 +5,12 @@
 //   game_audio_load(path_ptr, path_len) -> u32
 //   game_audio_play(handle, volume_x1000, loop_flag)
 //   game_audio_stop(handle)
+//   game_audio_set_volume(handle, volume_x1000)
+//
+// set_volume rides the per-slot GainNode the JS shim already keeps, so
+// a muted/quieter track is a live gain change — no stop + reload. This
+// is what lets the music toggle and the settings volume slider act on
+// the running track instantly.
 //
 // Async load — JS fetches + decodes off-thread. Play before decode
 // finishes is a silent no-op on the JS side. Browsers also require a
@@ -24,6 +30,10 @@ unsafe extern "C" {
     fn game_audio_load(path_ptr: *const u8, path_len: u32) -> u32;
     fn game_audio_play(handle: u32, volume_x1000: u32, loop_flag: u32);
     fn game_audio_stop(handle: u32);
+    /// Live-set the playing track's volume via its GainNode. No effect
+    /// if the handle never started (JS updates the pending-play volume
+    /// so the level is correct once it does start).
+    fn game_audio_set_volume(handle: u32, volume_x1000: u32);
     /// Play a PCM sample buffer through the browser's AudioContext.
     /// JS wraps the samples in an AudioBuffer and starts a one-shot
     /// BufferSourceNode. Samples must remain valid for the duration
@@ -109,6 +119,41 @@ fn play_samples(samples: &[f32]) {
     }
 }
 
+// One global SFX gain — a u32 storing volume × 1000. Every play_*
+// scales its samples by this before handing them to JS. Kept in a
+// static atomic so the free-function play paths (physics, campfire)
+// can read it without threading a Bevy resource through every call.
+// Default 1000 (=1.0) so the SFX slider starts at "full" and the
+// existing per-sound gains stay unchanged until the user turns it down.
+static SFX_VOLUME_X1000: AtomicU64 = AtomicU64::new(1000);
+
+pub fn set_sfx_volume(v: f32) {
+    let clamped = v.clamp(0.0, 1.0);
+    SFX_VOLUME_X1000.store((clamped * 1000.0) as u64, Ordering::Relaxed);
+}
+
+pub fn sfx_volume() -> f32 {
+    SFX_VOLUME_X1000.load(Ordering::Relaxed) as f32 / 1000.0
+}
+
+/// Multiply a sample slice by the current SFX gain before playing. A
+/// gain of 1.0 skips the copy for the hot path.
+fn play_samples_scaled(samples: &[f32]) {
+    let gain = sfx_volume();
+    if samples.is_empty() {
+        return;
+    }
+    if (gain - 1.0).abs() < 1e-3 {
+        play_samples(samples);
+        return;
+    }
+    if gain < 1e-3 {
+        return;
+    }
+    let scaled: Vec<f32> = samples.iter().map(|s| s * gain).collect();
+    play_samples(&scaled);
+}
+
 // Debounce per-kind — sliding along a wall or grinding into a peer
 // shouldn't fire every frame.
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -116,6 +161,7 @@ const IMPACT_DEBOUNCE_MS: u64 = 180;
 static LAST_THUMP_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_BUNK_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_POCK_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_ALERT_MS: AtomicU64 = AtomicU64::new(0);
 
 fn debounced(last: &AtomicU64) -> bool {
     let now = crate::remote_players::now_ms();
@@ -134,7 +180,7 @@ pub fn play_thump() {
         return;
     }
     let samples = synthesize_impact(120.0, 45.0, 0.13, WaveType::Sine, 0.25);
-    play_samples(&samples);
+    play_samples_scaled(&samples);
 }
 
 /// Cliff-block impact — mid-frequency "bunk" (unused until cliffs land).
@@ -143,7 +189,7 @@ pub fn play_bunk() {
         return;
     }
     let samples = synthesize_impact(220.0, 90.0, 0.09, WaveType::Triangle, 0.2);
-    play_samples(&samples);
+    play_samples_scaled(&samples);
 }
 
 /// Player-vs-player or player-vs-NPC — high, short "pock".
@@ -152,7 +198,39 @@ pub fn play_pock() {
         return;
     }
     let samples = synthesize_impact(650.0, 260.0, 0.05, WaveType::Square, 0.15);
-    play_samples(&samples);
+    play_samples_scaled(&samples);
+}
+
+/// The MGS "!" alert cadence — four short square blips at ~1400 Hz.
+/// Iconic accompaniment to the "!" pop-over above the NPC.
+pub fn synthesize_alert() -> Vec<f32> {
+    const BLIP_HZ: f32 = 1400.0;
+    const BLIP_SEC: f32 = 0.045;
+    const GAP_SEC: f32 = 0.035;
+    const REPEATS: usize = 4;
+    let gap_len = (GAP_SEC * SAMPLE_RATE as f32) as usize;
+    let mut out = Vec::new();
+    for i in 0..REPEATS {
+        out.extend(synthesize_impact(BLIP_HZ, BLIP_HZ, BLIP_SEC, WaveType::Square, 0.2));
+        if i + 1 < REPEATS {
+            out.extend(std::iter::repeat_n(0.0, gap_len));
+        }
+    }
+    out
+}
+
+/// Play the "!" alert. Debounced by the alert's own duration so a
+/// lingering overlap doesn't retrigger the cadence mid-flight.
+const ALERT_DEBOUNCE_MS: u64 = 600;
+pub fn play_alert() {
+    let now = crate::remote_players::now_ms();
+    let prev = LAST_ALERT_MS.load(Ordering::Relaxed);
+    if now.saturating_sub(prev) < ALERT_DEBOUNCE_MS {
+        return;
+    }
+    LAST_ALERT_MS.store(now, Ordering::Relaxed);
+    let samples = synthesize_alert();
+    play_samples_scaled(&samples);
 }
 
 /// Firewood crackle — soft rolling texture with sparse, gentle pops.
@@ -217,7 +295,7 @@ pub fn play_crackle(dur_sec: f32, volume: f32) {
         .wrapping_add(1);
     let samples = synthesize_crackle(dur_sec, seed);
     let scaled: Vec<f32> = samples.iter().map(|s| s * volume).collect();
-    play_samples(&scaled);
+    play_samples_scaled(&scaled);
 }
 
 pub struct GameAudioHandle(u32);
@@ -225,6 +303,13 @@ pub struct GameAudioHandle(u32);
 impl GameAudioHandle {
     pub fn raw(&self) -> u32 {
         self.0
+    }
+
+    /// Construct a handle from a raw id — test-only, so the music
+    /// state machine can be exercised without a live AudioContext.
+    #[cfg(test)]
+    pub fn from_raw_for_test(raw: u32) -> Self {
+        Self(raw)
     }
 }
 
@@ -275,5 +360,23 @@ pub fn stop(handle: &GameAudioHandle) {
     if handle.0 != 0 {
         #[cfg(target_arch = "wasm32")]
         unsafe { game_audio_stop(handle.0) }
+    }
+}
+
+/// Live-set the volume of a playing (or pending) track. Clamped to
+/// [0,1] then scaled ×1000 for the integer boundary. A no-op on the
+/// null handle (native / missing asset).
+pub fn set_volume(handle: &GameAudioHandle, volume: f32) {
+    if handle.0 == 0 {
+        return;
+    }
+    let vol = (volume.clamp(0.0, 1.0) * 1000.0) as u32;
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        game_audio_set_volume(handle.0, vol);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = vol;
     }
 }

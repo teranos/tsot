@@ -108,6 +108,44 @@ unsafe extern "C" {
         instance_buf: u32,
         instance_count: u32,
     ) -> u32;
+    fn game_gpu_render_pipeline_create_glass(
+        pipeline_layout: u32,
+        shader: u32,
+        vertex_stride: u32,
+        instance_stride: u32,
+        color_format: u32,
+        depth_format: u32,
+        label_ptr: *const u8,
+        label_len: u32,
+    ) -> u32;
+    fn game_gpu_render_glass(
+        target: u32,
+        pipeline: u32,
+        bind_group: u32,
+        vertex_buf: u32,
+        instance_buf: u32,
+        vertex_count: u32,
+        instance_count: u32,
+    ) -> u32;
+    fn game_gpu_render_pipeline_create_ghost(
+        pipeline_layout: u32,
+        shader: u32,
+        vertex_stride: u32,
+        instance_stride: u32,
+        color_format: u32,
+        depth_format: u32,
+        label_ptr: *const u8,
+        label_len: u32,
+    ) -> u32;
+    fn game_gpu_render_ghost(
+        target: u32,
+        pipeline: u32,
+        bind_group: u32,
+        vertex_buf: u32,
+        instance_buf: u32,
+        vertex_count: u32,
+        instance_count: u32,
+    ) -> u32;
     fn game_touch_state(out_ptr: *mut u8, out_max: u32) -> u32;
     fn game_viewport_size(out_ptr: *mut u8);
 }
@@ -362,10 +400,121 @@ pub fn render_ui_overlay(
     }
 }
 
+/// Glass render pass — LOAD the world's colour AND depth attachments
+/// (opaque already drew + wrote depth), alpha-blend the translucent
+/// panes on top, depth-test but do not depth-write. Same vertex +
+/// instance buffers as the world pass. Returns 0 on success.
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
+pub fn render_glass(
+    target: &GameRenderTarget,
+    pipeline: &GameRenderPipeline,
+    bind_group: &GameBindGroup,
+    vertex_buf: &GameBuffer,
+    instance_buf: &GameBuffer,
+    vertex_count: u32,
+    instance_count: u32,
+) -> u32 {
+    unsafe {
+        game_gpu_render_glass(
+            target.handle,
+            pipeline.handle,
+            bind_group.handle,
+            vertex_buf.handle,
+            instance_buf.handle,
+            vertex_count,
+            instance_count,
+        )
+    }
+}
+
+/// Ghost render pass — cut-away walls + roofs drawn at low alpha so the
+/// player still sees an outline of the geometry they're standing inside.
+/// Same pipeline shape as glass (alpha-blended, depth-test on,
+/// depth-write off, load-op colour + depth). Distinct pipeline so the
+/// ghost's alpha and future colour treatment evolve independently.
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
+pub fn render_ghost(
+    target: &GameRenderTarget,
+    pipeline: &GameRenderPipeline,
+    bind_group: &GameBindGroup,
+    vertex_buf: &GameBuffer,
+    instance_buf: &GameBuffer,
+    vertex_count: u32,
+    instance_count: u32,
+) -> u32 {
+    unsafe {
+        game_gpu_render_ghost(
+            target.handle,
+            pipeline.handle,
+            bind_group.handle,
+            vertex_buf.handle,
+            instance_buf.handle,
+            vertex_count,
+            instance_count,
+        )
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 pub struct GameRenderPipeline { handle: u32 }
 #[cfg(target_arch = "wasm32")]
 impl GameRenderPipeline {
+    /// Translucent glass pipeline — same cube vertex + instance layout,
+    /// but alpha-blended with depth-write disabled (depth-test still on)
+    /// so panes blend over the opaque world without occluding each other.
+    pub fn create_glass(
+        pipeline_layout: &GamePipelineLayout,
+        shader: &GameShaderModule,
+        vertex_stride: u32,
+        instance_stride: u32,
+        color_format: u32,
+        depth_format: u32,
+        label: &str,
+    ) -> Option<Self> {
+        let h = unsafe {
+            game_gpu_render_pipeline_create_glass(
+                pipeline_layout.handle,
+                shader.handle,
+                vertex_stride,
+                instance_stride,
+                color_format,
+                depth_format,
+                label.as_ptr(),
+                label.len() as u32,
+            )
+        };
+        if h == 0 { None } else { Some(Self { handle: h }) }
+    }
+
+    /// Ghost pipeline — same shape as glass (alpha-blended, depth-test
+    /// on, depth-write off). Distinct so its alpha (and future colour
+    /// treatment) can evolve without touching glass.
+    pub fn create_ghost(
+        pipeline_layout: &GamePipelineLayout,
+        shader: &GameShaderModule,
+        vertex_stride: u32,
+        instance_stride: u32,
+        color_format: u32,
+        depth_format: u32,
+        label: &str,
+    ) -> Option<Self> {
+        let h = unsafe {
+            game_gpu_render_pipeline_create_ghost(
+                pipeline_layout.handle,
+                shader.handle,
+                vertex_stride,
+                instance_stride,
+                color_format,
+                depth_format,
+                label.as_ptr(),
+                label.len() as u32,
+            )
+        };
+        if h == 0 { None } else { Some(Self { handle: h }) }
+    }
+
     /// Specialized cube pipeline — matches render.rs's shape:
     /// vertex buffer at slot 0 (pos+normal, both float32x3),
     /// instance buffer at slot 1 (i_pos+i_color+i_scale, all float32x3).

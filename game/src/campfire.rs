@@ -14,7 +14,8 @@
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 
-use crate::physics::{AabbCollider, Position};
+use crate::physics::Position;
+use crate::template::{stamp_template, Prop, PropKind, Template};
 
 /// Marker + per-fire state. `intensity` is a unitless multiplier
 /// around 1.0 that `flicker_fire` mutates each tick. Rendered as a
@@ -57,16 +58,18 @@ pub fn flicker_modulator(t: f32) -> f32 {
     1.0 + noise * 0.5
 }
 
+/// The campfire expressed as a one-prop template — the degenerate
+/// case of the structure-template primitive. Procedural placement,
+/// CDDA-imported buildings, and player-placed structures all produce
+/// `Template`s the same way; the campfire is simply the smallest one.
+pub fn campfire_template() -> Template {
+    Template {
+        props: vec![Prop::at(Vec3::ZERO, PropKind::Campfire)],
+    }
+}
+
 pub fn setup_campfire(mut commands: Commands) {
-    commands.spawn((
-        Campfire {
-            intensity: BASE_INTENSITY,
-        },
-        Position(SPAWN_POS),
-        AabbCollider {
-            half_extents: COLLIDER_HALF,
-        },
-    ));
+    stamp_template(&mut commands, &campfire_template(), SPAWN_POS);
 }
 
 /// System — advances the flicker by one tick per invocation and

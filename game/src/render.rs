@@ -23,7 +23,8 @@ use wgpu::{Device, Queue};
 use crate::gpu::SeerDevice;
 use crate::obs;
 use crate::scene::{
-    GpuVertex, SceneCamera, SceneInstance, SHADER_WGSL, as_bytes, cube_geometry,
+    GLASS_SHADER_WGSL, GpuVertex, SceneCamera, SceneInstance, SHADER_WGSL, as_bytes,
+    cube_geometry,
 };
 
 const TARGET_SIZE: u32 = 512;
@@ -45,6 +46,7 @@ pub fn render_scene(
     queue: &Queue,
     camera: &SceneCamera,
     instances: &[SceneInstance],
+    glass_instances: &[SceneInstance],
     out_path: &str,
 ) -> Result<()> {
     let device: &Device = dev.wgpu();
@@ -65,6 +67,18 @@ pub fn render_scene(
         mapped_at_creation: false,
     });
     queue.write_buffer(instance_buf.wgpu(), 0, as_bytes(instances));
+
+    // Glass instances get their own buffer (may be empty → we skip the
+    // pass). Sized min 1 so the allocation never has size 0.
+    let glass_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.glass.instance"),
+        size: (std::mem::size_of_val(glass_instances) as u64).max(std::mem::size_of::<SceneInstance>() as u64),
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    if !glass_instances.is_empty() {
+        queue.write_buffer(glass_buf.wgpu(), 0, as_bytes(glass_instances));
+    }
 
     let camera_data = GpuCamera {
         view_proj: camera.view_proj(),
@@ -196,6 +210,64 @@ pub fn render_scene(
         cache: None,
     });
 
+    // Glass pipeline — same layout, alpha-blended, depth-tested but not
+    // depth-writing, so translucent panes blend over the opaque world
+    // and don't occlude one another. Mirrors the wasm glass pipeline.
+    let glass_shader = dev.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("seer.render.glass.shader"),
+        source: wgpu::ShaderSource::Wgsl(GLASS_SHADER_WGSL.into()),
+    });
+    let glass_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("seer.render.glass.pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: glass_shader.wgpu(),
+            entry_point: Some("vs"),
+            compilation_options: Default::default(),
+            buffers: &[
+                wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<GpuVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+                },
+                wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<SceneInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![2 => Float32x3, 3 => Float32x3, 4 => Float32x3],
+                },
+            ],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Back),
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: glass_shader.wgpu(),
+            entry_point: Some("fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: TARGET_FORMAT,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+
     // Readback path: color texture → staging buffer → CPU → PNG.
     // Row pitch must be a multiple of 256 bytes (COPY_BYTES_PER_ROW
     // _ALIGNMENT); at 512 * 4 = 2048 it already is, so no padding.
@@ -245,6 +317,37 @@ pub fn render_scene(
         pass.set_vertex_buffer(0, vertex_buf.wgpu().slice(..));
         pass.set_vertex_buffer(1, instance_buf.wgpu().slice(..));
         pass.draw(0..vertices.len() as u32, 0..instances.len() as u32);
+    }
+    if !glass_instances.is_empty() {
+        // Glass pass: load the opaque colour + depth, blend the panes.
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("seer.render.glass.pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &color_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&glass_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_vertex_buffer(0, vertex_buf.wgpu().slice(..));
+        pass.set_vertex_buffer(1, glass_buf.wgpu().slice(..));
+        pass.draw(0..vertices.len() as u32, 0..glass_instances.len() as u32);
     }
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
