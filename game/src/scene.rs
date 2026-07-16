@@ -463,6 +463,8 @@ fn prop_appearance(kind: PropKind) -> ([f32; 3], [f32; 3]) {
         PropKind::Fence => (FENCE_COLOR, [8.0, 6.0, 8.0]),
         PropKind::FenceNS => (FENCE_COLOR, [8.0, 6.0, 80.0]),
         PropKind::FenceEW => (FENCE_COLOR, [80.0, 6.0, 8.0]),
+        // Toilet — white ceramic block, roughly toilet-sized.
+        PropKind::Toilet => ([0.92, 0.94, 0.94], [36.0, 50.0, 44.0]),
     }
 }
 
@@ -494,31 +496,57 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         color: [0.09, 0.11, 0.15],
         scale: [FLOOR_FOLLOW_HALF * 2.0, 100.0, FLOOR_FOLLOW_HALF * 2.0],
     });
-    // Dev grid: HALF a CDDA tile per line (40 units), so BOTH cell
-    // corners AND cell centres land on a line — necessary because
-    // odd-width mapgens (cx = width/2 = 2.5) offset their cell corners
-    // by 40 units from any 80-multiple, while even-width mapgens hit
-    // 80-multiples directly. At 40 spacing, every cell edge and centre
-    // aligns regardless of parity. Snapped to the grid so lines stay
-    // stationary as the player moves.
+    // Dev grid.
+    //
+    // Two layers so wall placement can be eyeballed unambiguously:
+    //   * MAJOR (80 units, brighter) — CDDA cell boundaries. Walls
+    //     sit either on these lines (outer edges) or exactly between
+    //     them (dividers at cell centre).
+    //   * MINOR (40 units, fainter) — cell centres. Odd-width mapgens
+    //     (cx = width/2 = 2.5) offset cell corners by 40 from any
+    //     80-multiple, so the minor lines also hit the corners for
+    //     those buildings. Together the two layers show every place
+    //     a wall segment can legitimately land.
+    //
+    // Snapped to the grid so lines stay stationary as the player moves.
     const GRID_HALF: f32 = 2000.0;
-    const GRID_STEP: f32 = 40.0;
-    const GRID_COLOR: [f32; 3] = [0.14, 0.16, 0.20];
+    const CELL_STEP: f32 = 80.0;
+    const HALF_STEP: f32 = 40.0;
+    const MINOR_COLOR: [f32; 3] = [0.13, 0.15, 0.19];
+    const MAJOR_COLOR: [f32; 3] = [0.22, 0.24, 0.30];
     const GRID_THICK: f32 = 2.0;
-    let px_snap = (snap.player.x / GRID_STEP).round() * GRID_STEP;
-    let pz_snap = (snap.player.z / GRID_STEP).round() * GRID_STEP;
-    let n = (GRID_HALF / GRID_STEP) as i32;
-    for i in -n..=n {
-        let x = px_snap + (i as f32) * GRID_STEP;
+    let px_major = (snap.player.x / CELL_STEP).round() * CELL_STEP;
+    let pz_major = (snap.player.z / CELL_STEP).round() * CELL_STEP;
+    let n_major = (GRID_HALF / CELL_STEP) as i32;
+    for i in -n_major..=n_major {
+        let x = px_major + (i as f32) * CELL_STEP;
         instances.push(SceneInstance {
-            pos: [x, 0.1, pz_snap],
-            color: GRID_COLOR,
+            pos: [x, 0.1, pz_major],
+            color: MAJOR_COLOR,
             scale: [GRID_THICK, 1.0, GRID_HALF * 2.0],
         });
-        let z = pz_snap + (i as f32) * GRID_STEP;
+        let z = pz_major + (i as f32) * CELL_STEP;
         instances.push(SceneInstance {
-            pos: [px_snap, 0.1, z],
-            color: GRID_COLOR,
+            pos: [px_major, 0.1, z],
+            color: MAJOR_COLOR,
+            scale: [GRID_HALF * 2.0, 1.0, GRID_THICK],
+        });
+    }
+    // Minor grid at cell centres — offset by half a cell from the
+    // major grid so it never overlaps with a major line.
+    let px_minor = px_major + HALF_STEP;
+    let pz_minor = pz_major + HALF_STEP;
+    for i in -n_major..=n_major {
+        let x = px_minor + (i as f32) * CELL_STEP;
+        instances.push(SceneInstance {
+            pos: [x, 0.1, pz_minor],
+            color: MINOR_COLOR,
+            scale: [GRID_THICK, 1.0, GRID_HALF * 2.0],
+        });
+        let z = pz_minor + (i as f32) * CELL_STEP;
+        instances.push(SceneInstance {
+            pos: [px_minor, 0.1, z],
+            color: MINOR_COLOR,
             scale: [GRID_HALF * 2.0, 1.0, GRID_THICK],
         });
     }
