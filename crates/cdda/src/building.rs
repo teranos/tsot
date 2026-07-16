@@ -26,7 +26,7 @@ const DAYCARE_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/daycare.
 const SCHOOL_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/school_1.json"));
 /// A shed — CDDA has no standalone one, so this is an original inline
 /// mapgen in the same format (ours, so it stays vendored in-tree).
-const SHED_JSON: &str = include_str!("../../assets/buildings/shed.json");
+const SHED_JSON: &str = include_str!("../assets/buildings/shed.json");
 
 /// Every shipped mapgen JSON. Exposed so the palette resolver can
 /// register palettes a building declares *inline* in its own file —
