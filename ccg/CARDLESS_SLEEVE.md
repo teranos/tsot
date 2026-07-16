@@ -79,8 +79,15 @@
 
 ## Watch-outs
 
-- **`card_mut()` invariant.** Panics on a cardless sleeve by design (no card
-  to mutate). Once cardless sleeves exist, confirm no write path reaches one.
+- **`card_mut()` invariant — AUDITED CLEAN.** Panics on a cardless sleeve by
+  design (no card to mutate). Audit of every non-test `card_mut()` call site:
+  the only production path is `replay.rs::rebind_handlers`, which `continue`s
+  past cardless sleeves (guarded, line 30). Runtime mutations (tapped, stats,
+  modifiers) never touch card content — they go through Sleeve-level journaled
+  setters and the effective-stats system, so a cardless sleeve is structurally
+  never handed to `card_mut()`. The weekly stress soak (thousands of
+  cardless-deck games) is the standing regression guard: any reachable
+  unguarded path would panic there.
 - **Visibility opacity.** `effective_top_of_deck_symbols` treats every
   cardless sleeve as transparent — correct while all are clear; gate on
   sleeve opacity once opaque colored sleeves are modeled (an opaque one
