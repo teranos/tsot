@@ -27,6 +27,11 @@ const SCHOOL_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/cdda/school_1.
 /// A shed — CDDA has no standalone one, so this is an original inline
 /// mapgen in the same format (ours, so it stays vendored in-tree).
 const SHED_JSON: &str = include_str!("../assets/buildings/shed.json");
+/// An apple orchard — an original inline mapgen in CDDA's format
+/// (vendored in-tree). All `t_tree_apple` cells, so it resolves to a
+/// `Template` with empty props + a deterministic `trees` grid: the first
+/// authored outdoor CDDA content placed in the world.
+const ORCHARD_JSON: &str = include_str!("../assets/buildings/orchard.json");
 
 /// Every shipped mapgen JSON. Exposed so the palette resolver can
 /// register palettes a building declares *inline* in its own file —
@@ -74,6 +79,13 @@ pub fn house_template() -> Result<Template, CddaError> {
 /// A small shed (original inline mapgen, no palettes).
 pub fn shed_template() -> Result<Template, CddaError> {
     assemble_building(SHED_JSON, "shed_1", "shed_roof", 0)
+}
+
+/// An apple orchard — no walls or roof, just a deterministic grid of
+/// apple trees resolved from `t_tree_apple` terrain (empty props, a
+/// populated `trees` vector).
+pub fn orchard_template() -> Result<Template, CddaError> {
+    mapgen_to_template(ORCHARD_JSON, "orchard_apple", CDDA_TILE, 0)
 }
 
 /// The daycare — inline walls/windows, one flat roof; no seeded variants
@@ -127,9 +139,14 @@ impl BuildingTemplates {
 
 /// The footprint half-extent of one template (max `|x|`/`|z|` offset).
 fn footprint_half(t: &Template) -> f32 {
-    t.props
+    let with_props = t
+        .props
         .iter()
-        .fold(0.0_f32, |m, p| m.max(p.offset.x.abs()).max(p.offset.z.abs()))
+        .fold(0.0_f32, |m, p| m.max(p.offset.x.abs()).max(p.offset.z.abs()));
+    // A tree field (orchard) has no props — its reach is the trees.
+    t.trees
+        .iter()
+        .fold(with_props, |m, tp| m.max(tp.offset.x.abs()).max(tp.offset.z.abs()))
 }
 
 /// Parse every building we ship, once. Import failures are returned
@@ -142,6 +159,7 @@ pub fn load_building_templates() -> (BuildingTemplates, Vec<String>) {
         ("shed".to_string(), shed_template()),
         ("daycare".to_string(), daycare_template()),
         ("school".to_string(), school_template()),
+        ("orchard".to_string(), orchard_template()),
     ];
     // Every house layout × every palette seed — so the streamer lands on
     // different floor plans AND different material/furniture variants.
@@ -169,6 +187,20 @@ pub fn load_building_templates() -> (BuildingTemplates, Vec<String>) {
 mod tests {
     use super::*;
     use crate::template::PropKind;
+
+    #[test]
+    fn orchard_resolves_to_a_grid_of_apple_trees() {
+        // The authored-CDDA-tree pipeline end to end: `t_tree_apple`
+        // terrain → TreePlacements, no building props.
+        use crate::template::TreeKind;
+        let t = orchard_template().expect("orchard imports");
+        assert!(t.props.is_empty(), "an orchard has no building props");
+        assert_eq!(t.trees.len(), 36, "6×6 apple grid = 36 trees");
+        assert!(
+            t.trees.iter().all(|tp| tp.kind == TreeKind::Apple),
+            "every orchard tree is an apple"
+        );
+    }
 
     /// Determinism property: every seeded building resolves to the same
     /// bytes every time it's resolved — the cross-peer invariant that

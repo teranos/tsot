@@ -1,0 +1,26 @@
+[
+  {
+    "type": "mapgen",
+    "method": "json",
+    "om_terrain": "orchard_apple",
+    "object": {
+      "rows": [
+        "T.T.T.T.T.T",
+        "...........",
+        "T.T.T.T.T.T",
+        "...........",
+        "T.T.T.T.T.T",
+        "...........",
+        "T.T.T.T.T.T",
+        "...........",
+        "T.T.T.T.T.T",
+        "...........",
+        "T.T.T.T.T.T"
+      ],
+      "terrain": {
+        ".": "t_dirt",
+        "T": "t_tree_apple"
+      }
+    }
+  }
+]

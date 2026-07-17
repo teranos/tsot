@@ -379,10 +379,49 @@ pub fn species_for(seed: u32) -> &'static TreeSpecies {
     }
 }
 
+/// Small round fruit tree — short trunk, dense rounded crown, broad
+/// leaves. The orchard species (CDDA `t_tree_apple` and friends).
+pub static APPLE: TreeSpecies = TreeSpecies {
+    primaries: (4, 6),
+    base_y: (0.22, 0.42),
+    primary_spread: (0.7, 1.1),
+    primary_len: (0.16, 0.24),
+    max_depth: 2,
+    child_spread: (0.5, 0.9),
+    len_shrink: 0.62,
+    radius_shrink: 0.62,
+    primary_radius: 0.03,
+    trunk_h_ratio: 0.30,
+    trunk_r_ratio: 0.03,
+    trunk_color: [0.32, 0.22, 0.13],
+    branch_color: [0.36, 0.25, 0.15],
+    leaves_per_tip: 18,
+    cluster_radius_ratio: 0.09,
+    leaf_element_ratio: 0.026,
+    leaf_aspect: 1.2,
+    leaf_green: [0.16, 0.62, 0.26],
+    autumn: 0.2,
+};
+
+/// Map the importer's framework-free `TreeKind` (from CDDA `t_tree_*`)
+/// to the game's rendered species. This is the game-side half of the
+/// bridge — the importer says "apple here", we decide what an apple
+/// looks like.
+pub fn species_for_kind(kind: cdda::TreeKind) -> &'static TreeSpecies {
+    match kind {
+        cdda::TreeKind::Apple => &APPLE,
+        cdda::TreeKind::Pine => &PINE,
+        cdda::TreeKind::Oak => &OAK,
+        cdda::TreeKind::Birch => &BIRCH,
+        cdda::TreeKind::Willow => &WILLOW,
+        cdda::TreeKind::Generic => &OAK,
+    }
+}
+
 /// Deterministic per-position species — a stable hash of the tile the
 /// tree stands on. The seam the CDDA bridge plugs into: procedural
-/// trees pick here, authored (CDDA `t_tree_*`) trees will override with
-/// the species the map names.
+/// trees pick here, authored (CDDA `t_tree_*`) trees override with
+/// `species_for_kind`.
 pub fn species_for_pos(x: f32, z: f32) -> &'static TreeSpecies {
     let mut h: u32 = 2_166_136_261;
     for b in x.to_bits().to_le_bytes().iter().chain(z.to_bits().to_le_bytes().iter()) {
@@ -751,7 +790,7 @@ mod tests {
 
     // ---- branch skeleton contract ----
 
-    const SPECIES: [&TreeSpecies; 4] = [&PINE, &OAK, &BIRCH, &WILLOW];
+    const SPECIES: [&TreeSpecies; 5] = [&PINE, &OAK, &BIRCH, &WILLOW, &APPLE];
 
     #[test]
     fn branches_are_deterministic_in_the_seed() {

@@ -192,6 +192,15 @@ fn seer_tour_from(bt: &crate::buildings::BuildingTemplates) -> SeerTour {
     .and_then(|c| cdda::building_anchor_in_chunk(c.x, c.z, cs));
     let camp = scan_chunk(|c| campsite::campsite_in_chunk(c).is_some())
         .and_then(campsite::campsite_in_chunk);
+    // The orchard is the only template that carries authored trees.
+    let orchard_idx = bt.templates.iter().position(|t| !t.trees.is_empty());
+    let orchard = orchard_idx.and_then(|oi| {
+        scan_chunk(|c| {
+            cdda::building_anchor_in_chunk(c.x, c.z, cs).is_some()
+                && cdda::building_index(c.x, c.z, num) == oi
+        })
+        .and_then(|c| cdda::building_anchor_in_chunk(c.x, c.z, cs))
+    });
     let forest = Vec3::new(7.5 * chunk::CHUNK_SIZE, 20.0, 7.5 * chunk::CHUNK_SIZE);
 
     let mut stops = Vec::new();
@@ -200,6 +209,9 @@ fn seer_tour_from(bt: &crate::buildings::BuildingTemplates) -> SeerTour {
     }
     if let Some(w) = house {
         stops.push(("house".to_string(), w));
+    }
+    if let Some(w) = orchard {
+        stops.push(("orchard".to_string(), w));
     }
     if let Some(w) = camp {
         stops.push(("campsite".to_string(), w));

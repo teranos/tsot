@@ -131,14 +131,18 @@ pub fn trees_in_chunk(c: ChunkCoord, buildings: &crate::buildings::BuildingTempl
 #[derive(Resource, Default)]
 pub struct LoadedChunks(pub BTreeMap<ChunkCoord, Vec<Entity>>);
 
-/// Spawn the trunk + foliage entities for one tree base position.
-fn spawn_tree(commands: &mut Commands, base: Vec3, height: f32) -> Entity {
+/// Spawn the trunk + foliage entities for one tree base position, with
+/// an explicit species — procedural trees pass `species_for_pos`,
+/// authored (CDDA) trees pass the species their map named.
+fn spawn_tree(
+    commands: &mut Commands,
+    base: Vec3,
+    height: f32,
+    species: &'static crate::tree_mesh::TreeSpecies,
+) -> Entity {
     commands
         .spawn((
-            TreeTrunk {
-                height,
-                species: crate::tree_mesh::species_for_pos(base.x, base.z),
-            },
+            TreeTrunk { height, species },
             Position(Vec3::new(base.x, 0.0, base.z)),
             AabbCollider::cuboid(Vec3::new(24.0, 200.0, 24.0)),
         ))
@@ -183,7 +187,8 @@ pub fn stream_chunks(
         }
         let mut entities = Vec::new();
         for (base, height) in trees_in_chunk(c, &buildings) {
-            entities.push(spawn_tree(&mut commands, base, height));
+            let species = crate::tree_mesh::species_for_pos(base.x, base.z);
+            entities.push(spawn_tree(&mut commands, base, height, species));
         }
         if let Some(anchor) = campsite::campsite_in_chunk(c) {
             entities.extend(stamp_template(
@@ -218,6 +223,19 @@ pub fn stream_chunks(
                 anchor,
                 |w| world_to_chunk(w) == c,
             ));
+            // Authored trees (e.g. an apple orchard) — spawn each tree that
+            // lands in this chunk, with the species its map named. Same
+            // per-chunk keep filter as the props, so a multi-tile tree
+            // field streams slice by slice.
+            for tp in &rotated.trees {
+                let base = anchor + tp.offset;
+                if world_to_chunk(base) != c {
+                    continue;
+                }
+                let species = crate::tree_mesh::species_for_kind(tp.kind);
+                let height = trees::authored_height(base.x, base.z);
+                entities.push(spawn_tree(&mut commands, base, height, species));
+            }
         }
         loaded.0.insert(c, entities);
     }
@@ -304,7 +322,7 @@ mod tests {
             .step_by(80)
             .map(|x| Prop::at(Vec3::new(x as f32, 0.0, 0.0), PropKind::Wall))
             .collect();
-        let big = Template { props };
+        let big = Template { props, trees: vec![] };
         let half = big.props.iter().fold(0.0_f32, |m, p| m.max(p.offset.x.abs()));
         let bt = crate::buildings::BuildingTemplates { templates: vec![big.clone()], half_extents: vec![half] };
         // Reach must extend past a single chunk.
@@ -327,7 +345,7 @@ mod tests {
             .map(|x| Prop::at(Vec3::new(x as f32, 0.0, 0.0), PropKind::Wall))
             .collect();
         let bt = crate::buildings::BuildingTemplates {
-            templates: vec![Template { props }],
+            templates: vec![Template { props, trees: vec![] }],
             half_extents: vec![span as f32],
         };
         // Anchor it at a real (deterministic) building chunk.

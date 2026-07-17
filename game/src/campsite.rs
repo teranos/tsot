@@ -36,7 +36,7 @@ pub fn campsite_template() -> Template {
     }
     props.push(Prop::at(Vec3::new(160.0, 0.0, 70.0), PropKind::Table));
     props.push(Prop::at(Vec3::new(-150.0, 0.0, -60.0), PropKind::Table));
-    Template { props }
+    Template { props, trees: vec![] }
 }
 
 /// The campsite anchor for a chunk, if the hash gates one in and it

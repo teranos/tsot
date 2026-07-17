@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::template::PropKind;
+use crate::template::{PropKind, TreeKind};
 
 /// Glass windows — a light-blue thin panel sitting in the wall line.
 pub(crate) const WINDOW_COLOR: [f32; 3] = [0.50, 0.68, 0.82];
@@ -79,6 +79,34 @@ pub(crate) fn cell_to_prop(
         }
     }
     None
+}
+
+/// Map a cell's char to a tree species via the resolved terrain map.
+/// CDDA authors trees as `t_tree_*` terrain (`t_tree_apple`, `_pine`,
+/// `_birch`, `_willow`, `_maple`, …); we fold its many species onto the
+/// handful we render. Non-tree terrain, and dead/young/stump variants we
+/// don't yet have geometry for, → None.
+pub(crate) fn cell_to_tree(ch: char, terrain: &HashMap<char, String>) -> Option<TreeKind> {
+    let t = terrain.get(&ch)?;
+    if !t.contains("tree") || t.contains("dead") || t.contains("stump") || t.contains("young") {
+        return None;
+    }
+    // Fruit/nut orchard trees → the round fruit-tree form.
+    let fruit = ["apple", "pear", "cherry", "peach", "plum", "apricot", "mulberry",
+                 "walnut", "pecan", "hazelnut", "hickory", "chestnut", "elderberry"];
+    Some(if fruit.iter().any(|f| t.contains(f)) {
+        TreeKind::Apple
+    } else if t.contains("pine") || t.contains("fir") || t.contains("conifer") || t.contains("spruce") {
+        TreeKind::Pine
+    } else if t.contains("birch") {
+        TreeKind::Birch
+    } else if t.contains("willow") {
+        TreeKind::Willow
+    } else if t.contains("maple") || t.contains("oak") || t.contains("elm") || t.contains("beech") {
+        TreeKind::Oak
+    } else {
+        TreeKind::Generic
+    })
 }
 
 /// Does a char's resolved terrain id form part of the wall LINE — the
