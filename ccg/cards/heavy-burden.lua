@@ -24,7 +24,21 @@ return {
     game.set_intent("remove_threat")
     local target = game.choose_card(pool, {prompt = "kill which big creature?"})
     if target then
-      game.move(target, "graveyard")
+      -- Re-verify target is still on a board before moving.
+      -- Between our pool build and move, another handler / oracle
+      -- side-effect may have relocated it (LIMITATIONS.md: no
+      -- target-validity recomputation). game.move errors hard on
+      -- an off-board iid, so guard here.
+      local on_board = false
+      for _, side in ipairs({self.owner, game.opponent(self.owner)}) do
+        for _, iid in ipairs(game.zones(side).board) do
+          if iid == target then on_board = true; break end
+        end
+        if on_board then break end
+      end
+      if on_board then
+        game.move(target, "graveyard")
+      end
     end
   end,
 }
