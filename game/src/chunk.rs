@@ -60,6 +60,9 @@ pub fn active_chunks(center: ChunkCoord, radius: i32) -> Vec<ChunkCoord> {
 
 /// A yard cleared of trees just beyond a building's own footprint.
 const TREE_YARD_MARGIN: f32 = 90.0;
+/// A tree field (orchard) clears a much wider ring so its planted rows
+/// stand alone in the open, not crowded by the wild forest around them.
+const ORCHARD_YARD_MARGIN: f32 = 380.0;
 
 /// How many chunks a building's props can reach from its anchor chunk.
 /// A prop at `half` from the anchor (which sits at a chunk centre) lands
@@ -105,7 +108,17 @@ pub fn trees_in_chunk(c: ChunkCoord, buildings: &crate::buildings::BuildingTempl
     let reach = building_reach(buildings);
     let yards: Vec<(Vec3, f32)> = buildings_reaching(c, buildings, reach)
         .into_iter()
-        .map(|(anchor, idx, _rot)| (anchor, buildings.half_extents[idx] + TREE_YARD_MARGIN))
+        .map(|(anchor, idx, _rot)| {
+            let t = &buildings.templates[idx];
+            // A tree field (orchard: trees, no props) clears a wide open
+            // ring; a building just clears its immediate yard.
+            let margin = if t.props.is_empty() && !t.trees.is_empty() {
+                ORCHARD_YARD_MARGIN
+            } else {
+                TREE_YARD_MARGIN
+            };
+            (anchor, buildings.half_extents[idx] + margin)
+        })
         .collect();
     let mut out = Vec::new();
     for lx in 0..CHUNK_CELLS {
