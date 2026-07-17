@@ -216,6 +216,11 @@ pub struct BranchSegment {
     pub length: f32,
     pub base_radius: f32,
     pub is_tip: bool,
+    /// A terminal twig that died — greyed limb, no leaf cluster. A
+    /// scatter of these on a living tree reads as real (not every branch
+    /// leafs out); on the fungal species they're where witch's snot
+    /// clings. Only ever set on tips (`is_tip`).
+    pub is_dead: bool,
 }
 
 impl BranchSegment {
@@ -270,11 +275,22 @@ pub struct TreeSpecies {
     /// higher = more/warmer turn (oak → red, birch → yellow).
     pub autumn: f32,
     /// If the species fruits, the fruit colour. `Some` → some trees of
-    /// this species hang a scatter of small round fruit in the crown
-    /// (apples); `None` → no fruit ever. Which trees bear is a per-tree
-    /// roll off the tree seed, so an orchard is a mix of fruiting and
-    /// bare trees, not all-or-nothing.
+    /// this species grow a scatter of small round bodies (apples in the
+    /// crown, or witch's snot on dead limbs — see `fruit_on_dead_limbs`);
+    /// `None` → nothing grows. Which trees bear is a per-tree roll off the
+    /// tree seed, so a stand is a mix of fruiting and bare trees.
     pub fruit_color: Option<[f32; 3]>,
+    /// Where the fruit bodies grow. `false` → apples: hang below LIVE
+    /// tips, most trees, ~a third of tips. `true` → witch's snot: clings
+    /// at DEAD tips (`BranchSegment::is_dead`), nearly every tree, most
+    /// dead tips (the fungal species — "find a mushroom" made visual).
+    pub fruit_on_dead_limbs: bool,
+    /// Per-TREE probability this species carries any dead twigs. Only
+    /// SOME trees do (it's a probability < 1, rolled once off the tree
+    /// seed), and only trees of a species that can — a sapling sets this
+    /// to 0.0 so young trees are never gnarled with deadwood. Within a
+    /// bearing tree, each tip then dies with `DEAD_TIP_CHANCE`.
+    pub dead_limb_odds: f32,
     /// Size multiplier for AUTHORED (CDDA-placed) trees of this species,
     /// applied on top of the near-uniform authored height. 1.0 = the
     /// base tended height; an orchard apple sits a touch above 1 so it
@@ -307,6 +323,8 @@ pub static PINE: TreeSpecies = TreeSpecies {
     autumn: 0.0,
     fruit_color: None,
     authored_scale: 1.0,
+    fruit_on_dead_limbs: false,
+    dead_limb_odds: 0.4,
 };
 
 /// Broadleaf spreader: thick trunk, few long forking limbs, deep
@@ -333,6 +351,8 @@ pub static OAK: TreeSpecies = TreeSpecies {
     autumn: 0.5,
     fruit_color: None,
     authored_scale: 1.0,
+    fruit_on_dead_limbs: false,
+    dead_limb_odds: 0.45,
 };
 
 /// Slender upright: thin pale trunk, branches that point up, airy
@@ -359,6 +379,8 @@ pub static BIRCH: TreeSpecies = TreeSpecies {
     autumn: 0.3,
     fruit_color: None,
     authored_scale: 1.0,
+    fruit_on_dead_limbs: false,
+    dead_limb_odds: 0.40,
 };
 
 /// Broad, low, drooping umbrella: many near-horizontal limbs, dense
@@ -385,6 +407,8 @@ pub static WILLOW: TreeSpecies = TreeSpecies {
     autumn: 0.25,
     fruit_color: None,
     authored_scale: 1.0,
+    fruit_on_dead_limbs: false,
+    dead_limb_odds: 0.40,
 };
 
 /// Deterministic species pick for a tree seed — a mixed woodland: oak
@@ -426,6 +450,8 @@ pub static MAPLE: TreeSpecies = TreeSpecies {
     autumn: 1.0,
     fruit_color: None,
     authored_scale: 1.0,
+    fruit_on_dead_limbs: false,
+    dead_limb_odds: 0.45,
 };
 
 /// Alien fungal growth — greyish trunk, muted purple foliage, evergreen.
@@ -449,8 +475,10 @@ pub static FUNGAL: TreeSpecies = TreeSpecies {
     leaf_aspect: 1.4,
     leaf_green: [0.55, 0.30, 0.62],
     autumn: 0.0,
-    fruit_color: None,
+    fruit_color: Some([0.80, 0.85, 0.32]),
     authored_scale: 1.0,
+    fruit_on_dead_limbs: true,
+    dead_limb_odds: 0.70,
 };
 
 /// A dead snag — bare branch skeleton, no foliage (`leaves_per_tip = 0`),
@@ -477,6 +505,8 @@ pub static DEAD: TreeSpecies = TreeSpecies {
     autumn: 0.0,
     fruit_color: None,
     authored_scale: 1.0,
+    fruit_on_dead_limbs: false,
+    dead_limb_odds: 0.0,
 };
 
 /// Small round fruit tree — short trunk, dense rounded crown, broad
@@ -503,6 +533,8 @@ pub static APPLE: TreeSpecies = TreeSpecies {
     autumn: 0.2,
     fruit_color: Some([0.80, 0.14, 0.11]),
     authored_scale: 1.3,
+    fruit_on_dead_limbs: false,
+    dead_limb_odds: 0.30,
 };
 
 /// Map the importer's framework-free `TreeKind` (from CDDA `t_tree_*`)
@@ -589,6 +621,9 @@ fn perp_basis(dir: [f32; 3]) -> ([f32; 3], [f32; 3]) {
 /// cone segment, then recurse into `depth` more child limbs fanned
 /// around the tip at golden-angle azimuths. At depth 0 the segment is a
 /// terminal — its tip is a leaf anchor.
+/// Chance a tip on a deadwood-bearing tree is a bare dead twig.
+const DEAD_TIP_CHANCE: f32 = 0.18;
+
 fn grow_limb(
     out: &mut Vec<BranchSegment>,
     base: [f32; 3],
@@ -597,14 +632,23 @@ fn grow_limb(
     radius: f32,
     depth: u32,
     sp: &TreeSpecies,
+    tree_dead: bool,
     rng: &mut u32,
 ) {
+    // A terminal twig dies with a small probability, but ONLY on a tree
+    // that bears deadwood at all (`tree_dead`, decided once per tree) —
+    // so deadwood is a trait of some trees, not a uniform speckle on
+    // every tree. Deterministic (drawn from the tree's rng, peers agree).
+    // Only tips can die; interior limbs always carry on.
+    let is_tip = depth == 0;
+    let is_dead = is_tip && tree_dead && (splitmix32(rng) % 1000) < (DEAD_TIP_CHANCE * 1000.0) as u32;
     out.push(BranchSegment {
         base,
         axis: dir,
         length: len,
         base_radius: radius,
-        is_tip: depth == 0,
+        is_tip,
+        is_dead,
     });
     if depth == 0 {
         return;
@@ -626,6 +670,7 @@ fn grow_limb(
             radius * sp.radius_shrink,
             depth - 1,
             sp,
+            tree_dead,
             rng,
         );
     }
@@ -636,6 +681,9 @@ pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
     // even seed 0 gives a non-degenerate tree.
     let mut rng = seed.wrapping_mul(2_654_435_761).wrapping_add(0x9E37_79B9) | 1;
     let mut out = Vec::new();
+    // Decide ONCE whether this whole tree carries deadwood — only some
+    // trees of a species do, and a sapling species (odds 0) never does.
+    let tree_dead = randf(&mut rng) < sp.dead_limb_odds;
     let span = (sp.primaries.1 - sp.primaries.0 + 1).max(1);
     let primaries = sp.primaries.0 + splitmix32(&mut rng) % span;
     let azim0 = randf(&mut rng) * std::f32::consts::TAU;
@@ -651,7 +699,7 @@ pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
         let radial = [phi.cos(), 0.0, phi.sin()];
         let dir = v_norm(v_add([0.0, spread.cos(), 0.0], v_scale(radial, spread.sin())));
         let len = rangef(&mut rng, sp.primary_len) * (1.0 - 0.4 * frac);
-        grow_limb(&mut out, base, dir, len, sp.primary_radius, sp.max_depth, sp, &mut rng);
+        grow_limb(&mut out, base, dir, len, sp.primary_radius, sp.max_depth, sp, tree_dead, &mut rng);
     }
     out
 }
@@ -916,6 +964,37 @@ mod tests {
         // there are several of them (not a lone trunk).
         let tips = tree_branches(7, &OAK).iter().filter(|p| p.is_tip).count();
         assert!(tips >= 4, "expected several leaf tips, got {tips}");
+    }
+
+    #[test]
+    fn deadwood_is_a_per_tree_trait_bounded_by_species_odds() {
+        // A sapling-like species (odds 0.0 — DEAD stands in) never grows
+        // dead twigs: young/opted-out trees aren't gnarled with deadwood.
+        for seed in 0..200u32 {
+            assert!(
+                tree_branches(seed, &DEAD).iter().all(|s| !s.is_dead),
+                "an odds-0 species must have zero deadwood"
+            );
+        }
+        // OAK (odds 0.45) carries deadwood on SOME trees, not all — it's a
+        // per-tree trait, not a uniform speckle on every tree.
+        let (mut with, mut without) = (0, 0);
+        for seed in 0..200u32 {
+            if tree_branches(seed, &OAK).iter().any(|s| s.is_dead) {
+                with += 1;
+            } else {
+                without += 1;
+            }
+        }
+        assert!(with > 0 && without > 0, "deadwood must vary tree-to-tree: {with} with, {without} without");
+        // And only tips ever die — interior limbs always carry on.
+        for seed in 0..80u32 {
+            for s in tree_branches(seed, &OAK) {
+                if s.is_dead {
+                    assert!(s.is_tip, "only tips may be dead");
+                }
+            }
+        }
     }
 
     #[test]

@@ -251,7 +251,16 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let l = normalize(LIGHT_DIR);
     let ndotl = max(dot(normalize(in.normal), l), 0.0);
     let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
-    return vec4<f32>(in.color * k, 1.0);
+    // Procedural bark: vertical furrows around the stem (u wraps once per
+    // revolution) with lengthwise grain (v), darkening the grooves. Cheap
+    // and self-generated from the day-one UV — no texture image, no
+    // sampler, no new env.* crossing. This is the first real material on
+    // the mesh substrate; a sampled bark/brick image is the next step up
+    // (and the walls-on-mesh prerequisite).
+    let furrow = 0.5 + 0.5 * sin(in.uv.x * 6.2831853 * 7.0);
+    let grain = 0.88 + 0.12 * sin(in.uv.y * 40.0 + furrow * 4.0);
+    let bark = mix(0.70, 1.0, furrow) * grain;
+    return vec4<f32>(in.color * k * bark, 1.0);
 }
 "#
 );
@@ -980,30 +989,56 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         });
         let element_r = h * sp.leaf_element_ratio;
         let cluster_r = h * sp.cluster_radius_ratio;
+        // A weathered grey-brown for dead twigs, so a bare limb reads as
+        // deadwood among the living branches.
+        const DEAD_LIMB_COLOR: [f32; 3] = [0.34, 0.30, 0.25];
         // Fruit: SOME trees of a fruiting species bear (a per-tree roll,
-        // so an orchard is a mix of laden and bare trees, not uniform).
-        let bears_fruit =
-            sp.fruit_color.is_some() && leaf_hash01(seed, 0xF00D_0001) < 0.6;
+        // so a stand is a mix of laden and bare trees). Witch's snot on
+        // the fungal species bears on nearly every tree; apples less so.
+        let bears_fruit = sp.fruit_color.is_some()
+            && leaf_hash01(seed, 0xF00D_0001) < if sp.fruit_on_dead_limbs { 0.95 } else { 0.6 };
         let mut leaf_i = 0u32;
         let mut tip_i = 0u32;
         for seg in tree_branches(seed, sp) {
             // The limb: the unit cone (base r=1, height 1 along +Y)
             // scaled to [radius, length, radius] and rotated +Y → axis.
+            // A dead tip greys out — deadwood, not foliage.
             trunks.push(MeshInstance {
                 pos: [t.x + seg.base[0] * h, seg.base[1] * h, t.z + seg.base[2] * h],
-                color: sp.branch_color,
+                color: if seg.is_dead { DEAD_LIMB_COLOR } else { sp.branch_color },
                 scale: [seg.base_radius * h, seg.length * h, seg.base_radius * h],
                 axis: seg.axis,
             });
             if !seg.is_tip {
                 continue;
             }
-            // Terminal tip → a small Fibonacci-sphere ball of leaves so
+            let tip = seg.tip();
+            let (wx, wy, wz) = (t.x + tip[0] * h, tip[1] * h, t.z + tip[2] * h);
+            if seg.is_dead {
+                // A dead twig grows no leaves. On the fungal species it's
+                // where witch's snot clings — a fat round glob AT the tip
+                // (not hanging), the sickly fruit-colour, on most dead tips
+                // of a bearing tree. "Finding a mushroom", made visual.
+                if let Some(fruit) = sp.fruit_color
+                    && bears_fruit
+                    && sp.fruit_on_dead_limbs
+                    && leaf_hash01(seed, 0x5A0F_0000 ^ tip_i) < 0.8
+                {
+                    let gr = element_r * 3.0;
+                    canopy_elements.push(MeshInstance {
+                        pos: [wx, wy, wz],
+                        color: fruit,
+                        scale: [gr, gr, gr],
+                        axis: [0.0, -1.0, 0.0],
+                    });
+                }
+                tip_i += 1;
+                continue;
+            }
+            // Live tip → a small Fibonacci-sphere ball of leaves so
             // foliage sits at the branch ends. Each leaf gets an autumn
             // age: mostly green (roll²), ceilinged by the species' autumn
             // — pine stays green, oak reddens, birch yellows.
-            let tip = seg.tip();
-            let (wx, wy, wz) = (t.x + tip[0] * h, tip[1] * h, t.z + tip[2] * h);
             for k in 0..sp.leaves_per_tip {
                 // Fibonacci-sphere direction — also the leaf card's facing
                 // (`axis`), so cards fan outward and catch light per-face
@@ -1027,11 +1062,13 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                     axis: dir,
                 });
             }
-            // Hang a fruit at some tips of a bearing tree — a small round
-            // card in the fruit colour, dropped just below the tip and
-            // facing down so it reads as a hanging apple, not a red leaf.
+            // Hang a fruit at some LIVE tips of a bearing apple-type tree —
+            // a small round card in the fruit colour, dropped just below
+            // the tip and facing down so it reads as a hanging apple, not a
+            // red leaf. (Dead-limb bearers grew their snot above.)
             if let Some(fruit) = sp.fruit_color
                 && bears_fruit
+                && !sp.fruit_on_dead_limbs
                 && leaf_hash01(seed, 0x0FF0_0000 ^ tip_i) < 0.35
             {
                 let fr = element_r * 2.2;
@@ -1169,6 +1206,41 @@ mod tests {
         // SOME apple trees bear, not all — an orchard is a mix.
         assert!(fruiting > 0, "no apple tree bore fruit");
         assert!(fruiting < n, "every apple tree bore fruit — expected a mix");
+    }
+
+    #[test]
+    fn fungal_grows_witches_snot_where_apples_and_pines_grow_none() {
+        use crate::tree_mesh::{APPLE, FUNGAL, PINE};
+        let snot = FUNGAL.fruit_color.expect("fungal bears witch's snot");
+        // Snot is pushed with the EXACT fungal fruit colour; leaves (fungal
+        // is evergreen-purple) and apple fruit (red) never land on it.
+        let snot_count = |sp: &'static crate::tree_mesh::TreeSpecies| {
+            let mut total = 0;
+            for k in 0..60 {
+                let pos = Vec3::new(k as f32 * 240.0, 0.0, 900.0);
+                total += snapshot_to_mesh_instances(&tree_snapshot(pos, sp))
+                    .canopy_elements
+                    .iter()
+                    .filter(|e| e.color == snot)
+                    .count();
+            }
+            total
+        };
+        assert!(snot_count(&FUNGAL) > 0, "fungal trees should grow witch's snot");
+        assert_eq!(snot_count(&APPLE), 0, "apple trees never grow snot");
+        assert_eq!(snot_count(&PINE), 0, "pine trees never grow snot");
+    }
+
+    #[test]
+    fn trunk_fragment_paints_bark_from_the_uv() {
+        // The mesh (trunk/branch) fragment now reads the day-one UV to
+        // paint procedural bark — the first real material on the substrate,
+        // self-generated, no texture resource. Leaves use the UV for their
+        // silhouette; trunks use it for bark.
+        assert!(
+            MESH_SHADER_WGSL.contains("in.uv.x") && MESH_SHADER_WGSL.contains("bark"),
+            "trunk fragment must derive bark from the UV"
+        );
     }
 
     #[test]
