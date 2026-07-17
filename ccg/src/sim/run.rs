@@ -1623,6 +1623,19 @@ pub fn run_game_continue(
                     }
                 }
                 oracle.clear();
+                // Structural guard against picker/resolver disagreement
+                // (debug/test builds only; compiled out of release EA).
+                // The picker must never build a PlayChoices the resolver
+                // rejects — validate_play runs the resolver's OWN
+                // validation, so a mismatch here is a genuine disagreement
+                // (the class the crystal-tap bug belonged to). Panic loudly
+                // rather than let play_card swallow it into the sink.
+                debug_assert!(
+                    state.validate_play(active, &picked, &choices).is_ok(),
+                    "picker/resolver disagreement on card {:?}: {:?}",
+                    state.card_pool.get(&picked).map(|c| c.card().id.clone()),
+                    state.validate_play(active, &picked, &choices),
+                );
                 state.journal = Some(crate::game::Journal::new());
                 let opponent_of_active = active.opponent();
                 // Per-cast wall-clock tripwire: a single cast resolving for >1s

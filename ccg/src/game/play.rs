@@ -123,6 +123,28 @@ impl GameState {
         result
     }
 
+    /// Dry-run of [`play_card`]: returns the same `Result` it would, without
+    /// mutating `self`. The resolver is the single source of truth — a caller
+    /// (the sim picker) that gates on this can never hand `play_card` a
+    /// `PlayChoices` the resolver rejects, because it is literally running the
+    /// resolver's own validation. Structurally closes the picker/resolver
+    /// disagreement class (e.g. the crystal-tap-without-hand-cost bug).
+    ///
+    /// Clones the state and runs with a null `EventContext`: cost/payment
+    /// validation is context-independent, so the `Ok`/`Err` verdict is exact;
+    /// on-play handlers simply don't fire on the discarded clone. Journal is
+    /// dropped so the probe carries no round-trip overhead.
+    pub fn validate_play(
+        &self,
+        player: PlayerId,
+        instance: &InstanceId,
+        choices: &PlayChoices,
+    ) -> Result<(), PlayError> {
+        let mut probe = self.clone();
+        probe.journal = None;
+        probe.play_card(player, instance, choices.clone(), None)
+    }
+
     fn play_card_inner(
         &mut self,
         player: PlayerId,

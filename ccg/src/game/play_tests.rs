@@ -4264,3 +4264,37 @@ fn tap_cost_rejects_already_tapped_permanent() {
     );
     assert_eq!(result, Err(PlayError::InvalidTapPayment(tapped)));
 }
+
+/// validate_play is a non-mutating mirror of play_card: identical verdict,
+/// zero state change. This is the contract the sim picker gates on so it
+/// is structurally unable to hand play_card a choice the resolver rejects.
+#[test]
+fn validate_play_mirrors_play_card_without_mutating() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    let pay = s.a.hand[1].clone();
+    set_identity(&mut s, &cast, &["green"], "");
+    set_identity(&mut s, &pay, &["green"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent { amount: 1, source: CostSource::Hand, is_x: false, kind: None }],
+    );
+
+    let good = PlayChoices { hand_payment_ids: vec![pay], ..PlayChoices::default() };
+    let bad = PlayChoices::default(); // wrong hand-payment count
+
+    let snap = format!("{s:?}");
+    let v_good = s.validate_play(PlayerId::A, &cast, &good);
+    let v_bad = s.validate_play(PlayerId::A, &cast, &bad);
+    assert_eq!(snap, format!("{s:?}"), "validate_play mutated self");
+
+    // Same verdict as the real resolver on a fresh clone — exact PlayError.
+    let mut s_good = s.clone();
+    assert_eq!(v_good, s_good.play_card(PlayerId::A, &cast, good, None));
+    let mut s_bad = s.clone();
+    assert_eq!(v_bad, s_bad.play_card(PlayerId::A, &cast, bad, None));
+
+    assert!(v_good.is_ok(), "expected valid cast to pass: {v_good:?}");
+    assert!(v_bad.is_err(), "expected wrong-count cast to fail");
+}
