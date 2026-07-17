@@ -958,7 +958,12 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         });
         let element_r = h * sp.leaf_element_ratio;
         let cluster_r = h * sp.cluster_radius_ratio;
+        // Fruit: SOME trees of a fruiting species bear (a per-tree roll,
+        // so an orchard is a mix of laden and bare trees, not uniform).
+        let bears_fruit =
+            sp.fruit_color.is_some() && leaf_hash01(seed, 0xF00D_0001) < 0.6;
         let mut leaf_i = 0u32;
+        let mut tip_i = 0u32;
         for seg in tree_branches(seed, sp) {
             // The limb: the unit cone (base r=1, height 1 along +Y)
             // scaled to [radius, length, radius] and rotated +Y → axis.
@@ -1000,6 +1005,22 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                     axis: dir,
                 });
             }
+            // Hang a fruit at some tips of a bearing tree — a small round
+            // card in the fruit colour, dropped just below the tip and
+            // facing down so it reads as a hanging apple, not a red leaf.
+            if let Some(fruit) = sp.fruit_color
+                && bears_fruit
+                && leaf_hash01(seed, 0x0FF0_0000 ^ tip_i) < 0.35
+            {
+                let fr = element_r * 2.2;
+                canopy_elements.push(MeshInstance {
+                    pos: [wx, wy - fr, wz],
+                    color: fruit,
+                    scale: [fr, fr, fr],
+                    axis: [0.0, -1.0, 0.0],
+                });
+            }
+            tip_i += 1;
         }
     }
     MeshTreeInstances { trunks, canopy_elements }
@@ -1084,6 +1105,49 @@ pub fn snapshot_to_glass_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tree_snapshot(pos: Vec3, sp: &'static crate::tree_mesh::TreeSpecies) -> SceneSnapshot {
+        SceneSnapshot {
+            trees: vec![(pos, 300.0, sp)],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![],
+            jukeboxes: vec![],
+            player: Vec3::ZERO,
+        }
+    }
+
+    #[test]
+    fn some_apple_trees_bear_fruit_and_pines_never_do() {
+        use crate::tree_mesh::{APPLE, PINE};
+        let fruit = APPLE.fruit_color.expect("apple fruits");
+        // Fruit are canopy elements pushed with the EXACT fruit colour;
+        // leaves go through autumn_ramp and never land on it precisely.
+        let fruit_count = |snap: &SceneSnapshot| {
+            snapshot_to_mesh_instances(snap)
+                .canopy_elements
+                .iter()
+                .filter(|e| e.color == fruit)
+                .count()
+        };
+        let mut fruiting = 0;
+        let n = 40;
+        for k in 0..n {
+            let pos = Vec3::new(k as f32 * 240.0, 0.0, -720.0);
+            // No pine ever grows an apple.
+            assert_eq!(fruit_count(&tree_snapshot(pos, &PINE)), 0);
+            if fruit_count(&tree_snapshot(pos, &APPLE)) > 0 {
+                fruiting += 1;
+            }
+        }
+        // SOME apple trees bear, not all — an orchard is a mix.
+        assert!(fruiting > 0, "no apple tree bore fruit");
+        assert!(fruiting < n, "every apple tree bore fruit — expected a mix");
+    }
 
     #[test]
     fn mesh_and_leaf_shaders_share_one_vertex_prelude() {

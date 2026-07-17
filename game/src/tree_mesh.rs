@@ -269,6 +269,18 @@ pub struct TreeSpecies {
     /// Ceiling of the per-leaf autumn-age ramp: 0 = evergreen (pine),
     /// higher = more/warmer turn (oak → red, birch → yellow).
     pub autumn: f32,
+    /// If the species fruits, the fruit colour. `Some` → some trees of
+    /// this species hang a scatter of small round fruit in the crown
+    /// (apples); `None` → no fruit ever. Which trees bear is a per-tree
+    /// roll off the tree seed, so an orchard is a mix of fruiting and
+    /// bare trees, not all-or-nothing.
+    pub fruit_color: Option<[f32; 3]>,
+    /// Size multiplier for AUTHORED (CDDA-placed) trees of this species,
+    /// applied on top of the near-uniform authored height. 1.0 = the
+    /// base tended height; an orchard apple sits a touch above 1 so it
+    /// reads bigger than a yard sapling without becoming wild old-growth.
+    /// Procedural forest trees ignore this (they size off `tree_at_cell`).
+    pub authored_scale: f32,
 }
 
 /// Conifer: tall narrow column, many short near-horizontal whorls
@@ -293,6 +305,8 @@ pub static PINE: TreeSpecies = TreeSpecies {
     leaf_aspect: 4.0,
     leaf_green: [0.08, 0.42, 0.22],
     autumn: 0.0,
+    fruit_color: None,
+    authored_scale: 1.0,
 };
 
 /// Broadleaf spreader: thick trunk, few long forking limbs, deep
@@ -317,6 +331,8 @@ pub static OAK: TreeSpecies = TreeSpecies {
     leaf_aspect: 1.3,
     leaf_green: [0.13, 0.70, 0.32],
     autumn: 0.5,
+    fruit_color: None,
+    authored_scale: 1.0,
 };
 
 /// Slender upright: thin pale trunk, branches that point up, airy
@@ -341,6 +357,8 @@ pub static BIRCH: TreeSpecies = TreeSpecies {
     leaf_aspect: 1.8,
     leaf_green: [0.35, 0.72, 0.28],
     autumn: 0.3,
+    fruit_color: None,
+    authored_scale: 1.0,
 };
 
 /// Broad, low, drooping umbrella: many near-horizontal limbs, dense
@@ -365,6 +383,8 @@ pub static WILLOW: TreeSpecies = TreeSpecies {
     leaf_aspect: 2.5,
     leaf_green: [0.30, 0.68, 0.32],
     autumn: 0.25,
+    fruit_color: None,
+    authored_scale: 1.0,
 };
 
 /// Deterministic species pick for a tree seed — a mixed woodland: oak
@@ -404,6 +424,8 @@ pub static MAPLE: TreeSpecies = TreeSpecies {
     leaf_aspect: 1.3,
     leaf_green: [0.62, 0.58, 0.16],
     autumn: 1.0,
+    fruit_color: None,
+    authored_scale: 1.0,
 };
 
 /// Alien fungal growth — greyish trunk, muted purple foliage, evergreen.
@@ -427,6 +449,8 @@ pub static FUNGAL: TreeSpecies = TreeSpecies {
     leaf_aspect: 1.4,
     leaf_green: [0.55, 0.30, 0.62],
     autumn: 0.0,
+    fruit_color: None,
+    authored_scale: 1.0,
 };
 
 /// A dead snag — bare branch skeleton, no foliage (`leaves_per_tip = 0`),
@@ -451,6 +475,8 @@ pub static DEAD: TreeSpecies = TreeSpecies {
     leaf_aspect: 1.0,
     leaf_green: [0.0, 0.0, 0.0],
     autumn: 0.0,
+    fruit_color: None,
+    authored_scale: 1.0,
 };
 
 /// Small round fruit tree — short trunk, dense rounded crown, broad
@@ -475,6 +501,8 @@ pub static APPLE: TreeSpecies = TreeSpecies {
     leaf_aspect: 1.2,
     leaf_green: [0.16, 0.62, 0.26],
     autumn: 0.2,
+    fruit_color: Some([0.80, 0.14, 0.11]),
+    authored_scale: 1.3,
 };
 
 /// Map the importer's framework-free `TreeKind` (from CDDA `t_tree_*`)

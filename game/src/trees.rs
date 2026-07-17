@@ -51,12 +51,15 @@ fn hash01(ix: i32, iz: i32, salt: u32) -> f32 {
 
 /// Height for an authored (CDDA) tree at a world position — short and
 /// NEARLY uniform (tended, planted trees, not wild old-growth), so an
-/// orchard's rows line up instead of a jumble of mismatched crowns.
-/// Deterministic — peers agree via the pure tile hash.
-pub fn authored_height(x: f32, z: f32) -> f32 {
+/// orchard's rows line up instead of a jumble of mismatched crowns. The
+/// species' `authored_scale` lifts it off the shared base (an apple
+/// reads a touch bigger than a plain sapling) without reintroducing the
+/// wild height jumble. Deterministic — peers agree via the pure tile
+/// hash.
+pub fn authored_height(x: f32, z: f32, species: &crate::tree_mesh::TreeSpecies) -> f32 {
     let ix = (x / CELL).round() as i32;
     let iz = (z / CELL).round() as i32;
-    260.0 + hash01(ix, iz, TREE_HEIGHT_SALT) * 40.0
+    (260.0 + hash01(ix, iz, TREE_HEIGHT_SALT) * 40.0) * species.authored_scale
 }
 
 /// Smooth value noise in [0,1] at world (x,z) — bilinear-interpolated
@@ -110,6 +113,19 @@ mod tests {
     #[test]
     fn tree_at_cell_is_deterministic() {
         assert_eq!(tree_at_cell(17, -23), tree_at_cell(17, -23));
+    }
+
+    #[test]
+    fn authored_apple_stands_a_little_taller_than_a_plain_authored_tree() {
+        use crate::tree_mesh::{APPLE, OAK};
+        // Authored height is near-uniform, but species scale it: an
+        // orchard apple should read bigger than a yard oak/sapling at the
+        // SAME tile (so `authored_scale` actually reaches the height).
+        for &(x, z) in &[(0.0, 0.0), (240.0, -720.0), (-3600.0, 1200.0)] {
+            let apple = authored_height(x, z, &APPLE);
+            let oak = authored_height(x, z, &OAK);
+            assert!(apple > oak, "apple {apple} should top oak {oak} at ({x},{z})");
+        }
     }
 
     #[test]

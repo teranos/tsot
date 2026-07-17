@@ -246,7 +246,7 @@ pub fn stream_chunks(
                     continue;
                 }
                 let species = crate::tree_mesh::species_for_kind(tp.kind);
-                let height = trees::authored_height(base.x, base.z);
+                let height = trees::authored_height(base.x, base.z, species);
                 entities.push(spawn_tree(&mut commands, base, height, species));
             }
         }
