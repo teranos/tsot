@@ -144,6 +144,11 @@ The following are not part of this game.
 - **P.40b — Color only.** The anchor tests printed *colors*, not symbols — contrast P.7a (colors ∪ symbols). The `transparent` frame is not a color and never satisfies it.
 - **P.40c — Any card type.** Unlike `N hand` (P.13), a `tap` component may sit on a card of any type; nothing is attached or consumed, so there's no BOARD-placement restriction.
 - **P.40d — Summoning sickness.** B.3 does not prevent a creature from being tapped to pay `tap` — this uses the permanent as a resource, distinct from A.6's `T:` activation of the creature's own ability (which does gate on B.3). A creature that entered the BOARD this turn may still be tapped to pay `tap`.
+- **P.41 — Cast-zone declaration.** By default a card is cast from HAND (P.33); Symbol cards additionally cast from DECK-top (P.38). A card may declare an alternate cast zone. All normal cast-time checks — cost, timing, targets, per-turn and uniqueness caps — still run; only the source zone differs. The cast iid leaves its declared zone at announcement (P.33) and, on resolution, moves to its type's destination (creature/artifact → BOARD per P.2/P.19; spell → GRAVEYARD per C.10). If countered it moves to GRAVEYARD (P.33).
+  - **P.41a — Graveyard cast.** A card declaring GRAVEYARD as a cast zone may be cast from its controller's GRAVEYARD as if from HAND. On announcement it leaves GRAVEYARD for the STACK.
+  - **P.41b — Graveyard-only.** A card whose *only* declared cast zone is GRAVEYARD cannot be cast from HAND; the HAND cast is refused before any cost is paid. Such a card is inert in HAND until it reaches the GRAVEYARD.
+  - **P.41c — No self-payment.** Because the cast card leaves GRAVEYARD at announcement (P.33), it is not available to pay its own GRAVEYARD-source cost — those payments come from *other* GRAVEYARD cards. If none is eligible, the GRAVEYARD component can't be paid and the cast is refused via the normal insufficient-payment path.
+  - **P.41d — Graveyard casts exile, they don't recycle.** When a card is cast from the GRAVEYARD (P.41a), any resolution destination that would be GRAVEYARD becomes **EXILE** instead. So a spell cast from the GRAVEYARD is exiled on resolution rather than returning there (C.10), and can't be cast from the GRAVEYARD again. BOARD destinations (creature/artifact per P.2/P.19) are unchanged. A countered GY cast is likewise exiled, not returned to GRAVEYARD (P.33), by the same rewrite.
 
 ## Abilities (A)
 
@@ -213,6 +218,7 @@ The following are not part of this game.
 - **B.13** A tapped creature cannot attack.
 - **B.14** **Unblockable** is a keyword ability: a creature with this keyword cannot be blocked.
 - **B.15** **Haste** is a keyword ability: a creature with this keyword may attack the turn it enters the BOARD, overriding B.3.
-- **B.16** **Vigilance** is a keyword ability: a creature with this keyword does not tap when it attacks, overriding B.4.
+- **B.16** **Vigilance** is a keyword ability: a creature with this keyword does not tap when it attacks (B.4) **or when it blocks (B.19)**, overriding both.
 - **B.17** **Defender** is a keyword ability: a creature with this keyword cannot attack.
 - **B.18** **cannot-block** is a keyword ability: a creature with this keyword cannot be declared as a blocker. The mirror of defender — defender prevents attacking, cannot-block prevents blocking.
+- **B.19** **Blocking taps the blocker.** When a creature is declared as a blocker (B.5) it becomes tapped, as an attacker does when it attacks (B.4). A creature must be untapped to be declared a blocker (B.12); declaration then taps it. The tap happens at declaration and persists regardless of how combat resolves — the creature untaps normally at its controller's next Untap (U.2). Vigilance (B.16) exempts a creature from this tap.
