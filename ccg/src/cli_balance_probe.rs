@@ -131,7 +131,7 @@ struct ProbeResult {
     mean_fitness_curve: Vec<f64>,
 }
 
-fn load_baselines(registry: &CardRegistry, dir: &str) -> (Vec<Vec<Card>>, Vec<String>) {
+fn load_baselines(registry: &CardRegistry, dir: &str) -> (Vec<Vec<tsot::game::DeckUnit>>, Vec<String>) {
     let mut paths: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(rd) => rd
             .flatten()
@@ -144,14 +144,14 @@ fn load_baselines(registry: &CardRegistry, dir: &str) -> (Vec<Vec<Card>>, Vec<St
         }
     };
     paths.sort();
-    let mut decks: Vec<Vec<Card>> = Vec::new();
+    let mut decks: Vec<Vec<tsot::game::DeckUnit>> = Vec::new();
     let mut labels: Vec<String> = Vec::new();
     for p in &paths {
         match EvolvedDeck::load(p) {
-            Ok(saved) => match saved.to_cards(registry) {
-                Ok(cards) => {
+            Ok(saved) => match saved.to_units(registry) {
+                Ok(units) => {
                     labels.push(saved.label.clone());
-                    decks.push(cards);
+                    decks.push(units);
                 }
                 Err(e) => eprintln!("  ! baseline {} unloadable: {e}", p.display()),
             },
@@ -197,7 +197,7 @@ fn discover_base_ids_with_variants(registry: &CardRegistry) -> Vec<String> {
 fn probe_one_card(
     registry: &std::sync::Arc<CardRegistry>,
     pool: &[Card],
-    gauntlet: &[Vec<Card>],
+    gauntlet: &[Vec<tsot::game::DeckUnit>],
     args: &BalanceProbeArgs,
     card: &Card,
 ) -> ProbeResult {
@@ -265,7 +265,7 @@ fn probe_one_card(
             );
             t_prev = now;
         };
-        run_evolve(registry, &pool_with_pin, gauntlet, &cfg, cb)
+        run_evolve(registry, &pool_with_pin, gauntlet, &cfg, cb, None)
     };
 
     let final_best = &result.final_population[0];

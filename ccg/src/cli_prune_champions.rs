@@ -223,9 +223,9 @@ pub fn run_prune_champions(
         std::process::exit(2);
     }
 
-    let baseline_decks: Vec<Vec<Card>> = baseline_paths
+    let baseline_decks: Vec<Vec<tsot::game::DeckUnit>> = baseline_paths
         .iter()
-        .filter_map(|p| EvolvedDeck::load(p).ok()?.to_cards(registry).ok())
+        .filter_map(|p| EvolvedDeck::load(p).ok()?.to_units(registry).ok())
         .collect();
 
     // Load champions.
@@ -248,7 +248,7 @@ pub fn run_prune_champions(
     // Parse each champion: keep path + materialized cards + id set.
     struct ChampEntry {
         path: PathBuf,
-        cards: Vec<Card>,
+        units: Vec<tsot::game::DeckUnit>,
         ids: BTreeSet<String>,
     }
     let mut champs: Vec<ChampEntry> = Vec::new();
@@ -257,14 +257,14 @@ pub fn run_prune_champions(
             eprintln!("warn: skipping unloadable {}", p.display());
             continue;
         };
-        let Ok(cards) = deck.to_cards(registry) else {
-            eprintln!("warn: skipping (cards: missing card id) {}", p.display());
+        let Ok(units) = deck.to_units(registry) else {
+            eprintln!("warn: skipping (units: missing card id) {}", p.display());
             continue;
         };
         let ids: BTreeSet<String> = deck.card_ids.iter().cloned().collect();
         champs.push(ChampEntry {
             path: p.clone(),
-            cards,
+            units,
             ids,
         });
     }
@@ -316,13 +316,13 @@ pub fn run_prune_champions(
 
     // Live-eval each champion against the baselines.
     let mut rng = StdRng::seed_from_u64(args.seed);
-    let evaluate = |cards: &[Card], rng: &mut StdRng| -> f64 {
+    let evaluate = |units: &[tsot::game::DeckUnit], rng: &mut StdRng| -> f64 {
         let mut wins = 0u32;
         let mut games = 0u32;
         for opp in &baseline_decks {
             for _ in 0..args.games {
                 // candidate as A
-                let state = GameState::new(cards.to_vec(), opp.clone());
+                let state = GameState::from_units(units.to_vec(), opp.clone());
                 let game_seed = rng.gen();
                 let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log: Vec<String> = Vec::new();
@@ -332,7 +332,7 @@ pub fn run_prune_champions(
                 }
                 games += 1;
                 // candidate as B
-                let state = GameState::new(opp.clone(), cards.to_vec());
+                let state = GameState::from_units(opp.clone(), units.to_vec());
                 let game_seed = rng.gen();
                 let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log = Vec::new();
@@ -356,7 +356,7 @@ pub fn run_prune_champions(
         println!("Cluster {} ({} member{}):", cidx + 1, size, if size == 1 { "" } else { "s" });
         let mut scored: Vec<(usize, f64)> = Vec::with_capacity(size);
         for &i in indices {
-            let live = evaluate(&champs[i].cards, &mut rng);
+            let live = evaluate(&champs[i].units, &mut rng);
             scored.push((i, live));
             println!(
                 "  {:<35}  live={:.3}",

@@ -20,14 +20,14 @@ return {
     {amount = 1, source = "hand"},
   },
   abilities = {
-    "at the beginning of your next turn, draw two cards.",
+    "at the beginning of your next turn, draw three cards.",
   },
   on_play = function(game, self)
     -- Don't draw now — schedule the draw for the start of your next turn.
     game.schedule_next_turn(self.instance_id)
   end,
   on_delayed_trigger = function(game, self)
-    game.draw(self.owner, 2)
+    game.draw(self.owner, 3)
   end,
   flavor = "You already knew.",
 }

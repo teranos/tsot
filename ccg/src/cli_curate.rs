@@ -11,7 +11,7 @@ use clap::Parser;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use tsot::card::{Card, CardRegistry};
+use tsot::card::CardRegistry;
 use tsot::game::GameState;
 
 use crate::parse_u64_hex_or_dec;
@@ -104,11 +104,11 @@ pub fn run_curate_baselines(
     }
     champion_paths.sort();
 
-    let mut load = |path: &PathBuf| -> Option<(PathBuf, EvolvedDeck, Vec<Card>, BTreeSet<String>)> {
+    let mut load = |path: &PathBuf| -> Option<(PathBuf, EvolvedDeck, Vec<tsot::game::DeckUnit>, BTreeSet<String>)> {
         let deck = EvolvedDeck::load(path).ok()?;
-        let cards = deck.to_cards(registry).ok()?;
+        let units = deck.to_units(registry).ok()?;
         let id_set: BTreeSet<String> = deck.card_ids.iter().cloned().collect();
-        Some((path.clone(), deck, cards, id_set))
+        Some((path.clone(), deck, units, id_set))
     };
     let baselines: Vec<_> = baseline_paths.iter().filter_map(&mut load).collect();
     let champions: Vec<_> = champion_paths.iter().filter_map(&mut load).collect();
@@ -121,7 +121,7 @@ pub fn run_curate_baselines(
         args.games
     );
 
-    let baseline_decks: Vec<Vec<Card>> = baselines.iter().map(|(_, _, c, _)| c.clone()).collect();
+    let baseline_decks: Vec<Vec<tsot::game::DeckUnit>> = baselines.iter().map(|(_, _, c, _)| c.clone()).collect();
     let mut rng = StdRng::seed_from_u64(args.seed);
 
     let ai_kind = match args.opponent_ai.to_ascii_lowercase().as_str() {
@@ -139,12 +139,12 @@ pub fn run_curate_baselines(
     let ais = [ai_kind.clone(), ai_kind.clone()];
     println!("Live AI: {:?} (both seats)", ai_kind);
 
-    let evaluate = |cand_cards: &[Card], rng: &mut StdRng| -> f64 {
+    let evaluate = |cand_units: &[tsot::game::DeckUnit], rng: &mut StdRng| -> f64 {
         let mut wins = 0u32;
         let mut games = 0u32;
         for opp in &baseline_decks {
             for _ in 0..args.games {
-                let state = GameState::new(cand_cards.to_vec(), opp.clone());
+                let state = GameState::from_units(cand_units.to_vec(), opp.clone());
                 let game_seed = rng.gen();
                 let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log: Vec<String> = Vec::new();
@@ -154,7 +154,7 @@ pub fn run_curate_baselines(
                     wins += 1;
                 }
                 games += 1;
-                let state = GameState::new(opp.clone(), cand_cards.to_vec());
+                let state = GameState::from_units(opp.clone(), cand_units.to_vec());
                 let game_seed = rng.gen();
                 let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log = Vec::new();
@@ -172,7 +172,7 @@ pub fn run_curate_baselines(
     let mut changes = 0u32;
     let mut all_matched: BTreeSet<PathBuf> = BTreeSet::new();
     for (bidx, (bpath, bdata, _bcards, bset)) in baselines.iter().enumerate() {
-        let mut cluster: Vec<(PathBuf, &EvolvedDeck, &Vec<Card>)> = Vec::new();
+        let mut cluster: Vec<(PathBuf, &EvolvedDeck, &Vec<tsot::game::DeckUnit>)> = Vec::new();
         cluster.push((bpath.clone(), bdata, &baselines[bidx].2));
         for (cpath, cdata, ccards, cset) in &champions {
             let jacc = jaccard(bset, cset);
@@ -262,7 +262,7 @@ pub fn run_curate_baselines(
     // variations of one new attractor (e.g. a single round's rank-1..5
     // when --save-top 5 saved one cluster's worth of clones).
     if args.promote_unmatched > 0 && !unmatched.is_empty() {
-        let unmatched_entries: Vec<&(PathBuf, EvolvedDeck, Vec<Card>, BTreeSet<String>)> =
+        let unmatched_entries: Vec<&(PathBuf, EvolvedDeck, Vec<tsot::game::DeckUnit>, BTreeSet<String>)> =
             champions
                 .iter()
                 .filter(|(p, _, _, _)| !all_matched.contains(p))

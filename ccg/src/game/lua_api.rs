@@ -1520,6 +1520,13 @@ fn fire_one(
     // trace is off.
     let trace_active = crate::trace::is_enabled();
     let t0 = trace_active.then(std::time::Instant::now);
+    // Handler-timing accumulator — always on. Cost: one Instant read
+    // + one HashMap update per fire, dwarfed by the handler itself.
+    // Feeds the heartbeat's `handlers=[card:event:ms ...]` breakdown
+    // so slow-game diagnosis names the specific handler burning CPU
+    // without a replay round-trip.
+    let ht0 = std::time::Instant::now();
+    let turn_at_fire = state.turn;
 
     let state_cell = RefCell::new(&mut *state);
     let oracle_cell = RefCell::new(&mut *oracle);
@@ -1529,6 +1536,14 @@ fn fire_one(
         handler.call::<()>((game, self_table))?;
         Ok(())
     });
+
+    let ht_wall_us = ht0.elapsed().as_micros();
+    crate::sim::run::record_handler_fire(
+        turn_at_fire,
+        card_id.clone(),
+        event.lua_key(),
+        ht_wall_us,
+    );
 
     if let Some(t0) = t0 {
         crate::trace::push(crate::trace::TraceEvent::Handler {

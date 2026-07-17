@@ -29,7 +29,7 @@ use tsot::game::{GameState, PlayerId};
 
 use crate::parse_u64_hex_or_dec;
 use tsot::sim::evolved_deck::EvolvedDeck;
-use tsot::sim::genome::{random_genome, to_deck};
+use tsot::sim::genome::{random_genome, to_units};
 use tsot::sim::mcts::{
     self, MctsConfig, MCTS_PICK_CALLS, MCTS_SEARCHED_PICKS, MCTS_TOTAL_CANDIDATES,
 };
@@ -119,12 +119,12 @@ pub struct MatchupMctsArgs {
 /// `ai_b` driving player B on `deck_b`. Returns the winning PlayerId.
 fn play_one(
     registry: &std::sync::Arc<CardRegistry>,
-    deck_a: &[Card],
-    deck_b: &[Card],
+    deck_a: &[tsot::game::DeckUnit],
+    deck_b: &[tsot::game::DeckUnit],
     game_seed: u64,
     ais: &[AiKind; 2],
 ) -> PlayerId {
-    let mut state = GameState::new(deck_a.to_vec(), deck_b.to_vec());
+    let mut state = GameState::from_units(deck_a.to_vec(), deck_b.to_vec());
     state.replay_journal = Some(tsot::game::Journal::new());
     let mut rng = StdRng::seed_from_u64(game_seed);
     let mut log: Vec<String> = Vec::new();
@@ -132,21 +132,22 @@ fn play_one(
     stats.winner
 }
 
-/// Load one EvolvedDeck JSON into a `(Vec<Card>, label, fitness)` triple.
+/// Load one EvolvedDeck JSON into a `(Vec<DeckUnit>, label, fitness)` triple.
 /// `fitness` is the saved local-to-evolution-run fitness — useful as a
 /// rough deck-strength proxy for the handicap flag, not as an absolute
-/// ranking across runs.
+/// ranking across runs. Cardless-safe: `__cardless__` slots become
+/// `DeckUnit::Cardless`.
 fn load_deck(
     registry: &std::sync::Arc<CardRegistry>,
     path: &str,
-) -> mlua::Result<(Vec<Card>, String, f64)> {
+) -> mlua::Result<(Vec<tsot::game::DeckUnit>, String, f64)> {
     let saved = EvolvedDeck::load(std::path::Path::new(path))
         .map_err(|e| mlua::Error::runtime(format!("load deck {path}: {e}")))?;
-    let cards = saved
-        .to_cards(registry)
+    let units = saved
+        .to_units(registry)
         .map_err(|e| mlua::Error::runtime(format!("materialize deck {path}: {e}")))?;
     Ok((
-        cards,
+        units,
         format!("{path} (label={}, fitness={:.3})", saved.label, saved.fitness),
         saved.fitness,
     ))
@@ -244,9 +245,9 @@ pub fn run_matchup_mcts(
             0 => {
                 let genome = random_genome(playable_pool, 50, 3, &mut rng)
                     .map_err(|e| mlua::Error::runtime(format!("random_genome: {e}")))?;
-                let cards = to_deck(registry, &genome)
-                    .map_err(|e| mlua::Error::runtime(format!("to_deck: {e}")))?;
-                (cards.clone(), cards, "mirror — random-genome (no baselines/)".to_string())
+                let units = to_units(registry, &genome)
+                    .map_err(|e| mlua::Error::runtime(format!("to_units: {e}")))?;
+                (units.clone(), units, "mirror — random-genome (no baselines/)".to_string())
             }
             1 => {
                 let (deck, label, _) = load_deck(registry, &baseline_paths[0].to_string_lossy())?;

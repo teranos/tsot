@@ -184,7 +184,7 @@ fn rollback_restores_a_fired_delayed_trigger_and_the_whole_state() {
 }
 
 #[test]
-fn premonition_draws_two_at_your_next_turn_from_the_graveyard() {
+fn premonition_draws_three_at_your_next_turn_from_the_graveyard() {
     // The shipped card that uses the registry: cast Premonition (it
     // resolves to the graveyard now), and the draw fires at the start of
     // your next turn — from the graveyard, where no on_turn_begin could
@@ -212,6 +212,6 @@ fn premonition_draws_two_at_your_next_turn_from_the_graveyard() {
     s.next_phase(Some(&mut EventContext::new(registry.lua(), &mut oracle)))
         .expect("phase advance");
 
-    assert_eq!(s.a.deck.len(), deck_before - 2, "Premonition drew two at A's next turn");
+    assert_eq!(s.a.deck.len(), deck_before - 3, "Premonition drew three at A's next turn");
     assert!(s.delayed_triggers.is_empty(), "the one-shot draw is spent");
 }

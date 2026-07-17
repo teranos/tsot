@@ -119,9 +119,9 @@ evolve-shallow:
 	done; \
 	NUM=$$(($$(echo $$EXTRAS | wc -w | xargs) / 2)); \
 	echo "=== shallow round $$N (seed=$$SEED, gauntlet: 5 baselines + $$NUM extras, alpha=$(ALPHA)) ==="; \
-	echo "    pop=25 gens=10 n=5 — fast smoke check, noisy fitness"; \
+	echo "    pop=25 gens=10 n=4 — fast smoke check, noisy fitness"; \
 	cargo run --release -- evolve --seed $$SEED \
-		--pop 25 --gens 10 --n 5 --stop-at-ceiling 3 \
+		--pop 25 --gens 10 --n 4 --stop-at-ceiling 3 \
 		--diversity-alpha $(ALPHA) \
 		--stop-at-plateau $(PLATEAU_K) --plateau-eps $(PLATEAU_EPS) \
 		--save-top 5 \

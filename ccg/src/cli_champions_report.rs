@@ -297,7 +297,7 @@ pub fn run_champions_report(
     let per_champ_game_stats: Vec<ChampGameStats> = if args.sample_games > 0 {
         use rand::Rng;
         let baselines_dir = std::path::Path::new(&args.baselines);
-        let mut baseline_decks: Vec<Vec<Card>> = Vec::new();
+        let mut baseline_decks: Vec<Vec<tsot::game::DeckUnit>> = Vec::new();
         if let Ok(rd) = std::fs::read_dir(baselines_dir) {
             let mut paths: Vec<std::path::PathBuf> = rd
                 .flatten()
@@ -307,8 +307,8 @@ pub fn run_champions_report(
             paths.sort();
             for p in &paths {
                 if let Ok(d) = EvolvedDeck::load(p) {
-                    if let Ok(cards) = d.to_cards(registry) {
-                        baseline_decks.push(cards);
+                    if let Ok(units) = d.to_units(registry) {
+                        baseline_decks.push(units);
                     }
                 }
             }
@@ -332,7 +332,7 @@ pub fn run_champions_report(
             let mut rng = StdRng::seed_from_u64(args.seed);
             let mut out: Vec<ChampGameStats> = Vec::with_capacity(champions.len());
             for champ in &champions {
-                let cards = match EvolvedDeck::to_cards(champ, registry) {
+                let units = match EvolvedDeck::to_units(champ, registry) {
                     Ok(c) => c,
                     Err(_) => {
                         out.push(ChampGameStats::default());
@@ -344,11 +344,11 @@ pub fn run_champions_report(
                     for _ in 0..args.sample_games {
                         for swap in [false, true] {
                             let (a, b) = if swap {
-                                (opp.clone(), cards.clone())
+                                (opp.clone(), units.clone())
                             } else {
-                                (cards.clone(), opp.clone())
+                                (units.clone(), opp.clone())
                             };
-                            let state = GameState::new(a, b);
+                            let state = GameState::from_units(a, b);
                             let game_seed = rng.gen();
                             let mut game_rng = StdRng::seed_from_u64(game_seed);
                             let mut log: Vec<String> = Vec::new();

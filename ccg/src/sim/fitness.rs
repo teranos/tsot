@@ -23,10 +23,12 @@ use crate::card::{Card, CardRegistry};
 use crate::game::{DeckUnit, GameState, PlayerId};
 
 use super::deck_token::{DeckToken, Side};
+use super::game_trace::{GameTrace, TraceSink};
 use super::genome::{shuffle_units, to_units, GenomeError};
 use super::run::run_game_with_ai;
 use super::AiKind;
 use super::variants::{build_random_deck, mandatory_for_variant, variant_pool, VARIANTS};
+
 
 /// Hardcoded master seed for the EA gauntlet. Fixed forever so evolved
 /// fitness numbers are comparable across days, branches, and machines.
@@ -53,7 +55,7 @@ pub struct FitnessBreakdown {
 /// Build the 7 variant-anchored gauntlet decks. Each variant gets one
 /// canonical 50-card deck derived from `master_seed` via [`DeckToken`]'s
 /// per-deck-seed mechanism, so the gauntlet bytes are reproducible.
-pub fn build_gauntlet(playable_pool: &[Card], master_seed: u64) -> Vec<Vec<Card>> {
+pub fn build_gauntlet(playable_pool: &[Card], master_seed: u64) -> Vec<Vec<DeckUnit>> {
     let mut gauntlet = Vec::with_capacity(VARIANTS.len());
     for &v in &VARIANTS {
         let token = DeckToken {
@@ -66,7 +68,7 @@ pub fn build_gauntlet(playable_pool: &[Card], master_seed: u64) -> Vec<Vec<Card>
         let pool = variant_pool(playable_pool, v);
         let mut rng = StdRng::seed_from_u64(token.per_deck_seed());
         let deck = build_random_deck(&pool, &mut rng, 50, mandatory_for_variant(v));
-        gauntlet.push(deck);
+        gauntlet.push(deck.into_iter().map(DeckUnit::Card).collect());
     }
     gauntlet
 }
@@ -81,13 +83,34 @@ pub fn build_gauntlet(playable_pool: &[Card], master_seed: u64) -> Vec<Vec<Card>
 pub fn fitness(
     registry: &std::sync::Arc<CardRegistry>,
     genome: &[String],
-    gauntlet: &[Vec<Card>],
+    gauntlet: &[Vec<DeckUnit>],
     n_per_side: u32,
     base_seed: u64,
     ai: &AiKind,
 ) -> Result<f64, GenomeError> {
     fitness_breakdown(registry, genome, gauntlet, n_per_side, base_seed, ai)
         .map(|b| b.total)
+}
+
+/// Trace-emitting variant of [`fitness`]. When `trace` is `Some`, one
+/// [`GameTrace`] is recorded per game — grepable post-hoc by `seed` to
+/// reconstruct `(genome, opponent, seat, ai)` for that specific game.
+/// Requires `opponent_ids.len() == gauntlet.len()` (one id list per opponent).
+#[allow(clippy::too_many_arguments)]
+pub fn fitness_with_trace(
+    registry: &std::sync::Arc<CardRegistry>,
+    genome: &[String],
+    gauntlet: &[Vec<DeckUnit>],
+    opponent_ids: &[Vec<String>],
+    n_per_side: u32,
+    base_seed: u64,
+    ai: &AiKind,
+    trace: Option<&(dyn TraceSink + 'static)>,
+) -> Result<f64, GenomeError> {
+    fitness_breakdown_with_trace(
+        registry, genome, gauntlet, opponent_ids, n_per_side, base_seed, ai, trace,
+    )
+    .map(|b| b.total)
 }
 
 /// Diagnostic variant of [`fitness`] that exposes per-opponent win-rates.
@@ -98,10 +121,33 @@ pub fn fitness(
 pub fn fitness_breakdown(
     registry: &std::sync::Arc<CardRegistry>,
     genome: &[String],
-    gauntlet: &[Vec<Card>],
+    gauntlet: &[Vec<DeckUnit>],
     n_per_side: u32,
     base_seed: u64,
     ai: &AiKind,
+) -> Result<FitnessBreakdown, GenomeError> {
+    fitness_breakdown_with_trace(
+        registry, genome, gauntlet, &[], n_per_side, base_seed, ai, None,
+    )
+}
+
+/// Trace-emitting variant of [`fitness_breakdown`]. When `trace` is
+/// `Some`, one [`GameTrace`] is recorded per game. `opponent_ids` must
+/// be either empty (no trace) or the same length as `gauntlet` (one
+/// id list per opponent) — a length mismatch when `trace.is_some()`
+/// silently omits the trace for out-of-range opponents. The RNG
+/// derivation and every gameplay call is identical to the untraced
+/// path; the trace is a pure side effect.
+#[allow(clippy::too_many_arguments)]
+pub fn fitness_breakdown_with_trace(
+    registry: &std::sync::Arc<CardRegistry>,
+    genome: &[String],
+    gauntlet: &[Vec<DeckUnit>],
+    opponent_ids: &[Vec<String>],
+    n_per_side: u32,
+    base_seed: u64,
+    ai: &AiKind,
+    trace: Option<&(dyn TraceSink + 'static)>,
 ) -> Result<FitnessBreakdown, GenomeError> {
     // Build as sleeve-units so a genome carrying the cardless sentinel
     // materializes real empty sleeves. Opponent decks are ordinary cards,
@@ -134,26 +180,42 @@ pub fn fitness_breakdown(
     // a smoke test, misleading for evolution.
     let ais_a = [ai.clone(), ai.clone()];
     let ais_b = [ai.clone(), ai.clone()];
-    for opp in gauntlet {
+    for (opp_idx, opp) in gauntlet.iter().enumerate() {
         let mut opp_wins = 0u32;
         let mut opp_games = 0u32;
+        let opp_ids: Option<&[String]> =
+            opponent_ids.get(opp_idx).map(|v| v.as_slice());
         for _ in 0..n_per_side {
             // RULES S.0: shuffle each player's deck before the game
             // so the opening hand isn't a fixed prefix of the
             // genome. Shuffle seeds are drawn from `rng` so the
             // whole gauntlet is replayable from the outer seed.
+            // Draw the two shuffle seeds AS SEEDS (not RNGs) so the
+            // trace can capture and a replay can reconstruct them.
+            let shuffle_seed_a: u64 = rng.gen();
+            let shuffle_seed_b: u64 = rng.gen();
             // genome as side A
             let mut deck_g_a = deck_g.clone();
-            let mut deck_opp_a: Vec<DeckUnit> =
-                opp.iter().cloned().map(DeckUnit::Card).collect();
-            let mut shuf_rng_a = StdRng::seed_from_u64(rng.gen());
-            let mut shuf_rng_b = StdRng::seed_from_u64(rng.gen());
+            let mut deck_opp_a: Vec<DeckUnit> = opp.clone();
+            let mut shuf_rng_a = StdRng::seed_from_u64(shuffle_seed_a);
+            let mut shuf_rng_b = StdRng::seed_from_u64(shuffle_seed_b);
             shuffle_units(&mut deck_g_a, &mut shuf_rng_a);
             shuffle_units(&mut deck_opp_a, &mut shuf_rng_b);
             let state = GameState::from_units(deck_g_a, deck_opp_a);
             // One seed drives the game AND identifies it in the timeout
             // dump — bind it once so the two can never disagree.
             let game_seed = rng.gen();
+            if let (Some(sink), Some(opp_ids)) = (trace, opp_ids) {
+                sink.record(GameTrace {
+                    seed: game_seed,
+                    shuffle_seed_a,
+                    shuffle_seed_b,
+                    genome,
+                    opponent: opp_ids,
+                    seat: 'A',
+                    ai,
+                });
+            }
             let mut game_rng = StdRng::seed_from_u64(game_seed);
             let mut log: Vec<String> = Vec::new();
             let (stats, _) =
@@ -166,15 +228,34 @@ pub fn fitness_breakdown(
             }
             opp_games += 1;
             // genome as side B
-            let mut deck_opp_b: Vec<DeckUnit> =
-                opp.iter().cloned().map(DeckUnit::Card).collect();
+            // Seat-B mirror: seat-A is the opponent-decked player,
+            // seat-B is the genome. Shuffle seed for seat A goes to
+            // the OPPONENT deck, seed for seat B goes to the GENOME
+            // deck — same order the RNG draws them, so the trace's
+            // (shuffle_seed_a, shuffle_seed_b) field always names
+            // "seat-A's shuffle seed, seat-B's shuffle seed" regardless
+            // of who's playing whom.
+            let shuffle_seed_a: u64 = rng.gen();
+            let shuffle_seed_b: u64 = rng.gen();
+            let mut deck_opp_b: Vec<DeckUnit> = opp.clone();
             let mut deck_g_b = deck_g.clone();
-            let mut shuf_rng_a = StdRng::seed_from_u64(rng.gen());
-            let mut shuf_rng_b = StdRng::seed_from_u64(rng.gen());
+            let mut shuf_rng_a = StdRng::seed_from_u64(shuffle_seed_a);
+            let mut shuf_rng_b = StdRng::seed_from_u64(shuffle_seed_b);
             shuffle_units(&mut deck_opp_b, &mut shuf_rng_a);
             shuffle_units(&mut deck_g_b, &mut shuf_rng_b);
             let state = GameState::from_units(deck_opp_b, deck_g_b);
             let game_seed = rng.gen();
+            if let (Some(sink), Some(opp_ids)) = (trace, opp_ids) {
+                sink.record(GameTrace {
+                    seed: game_seed,
+                    shuffle_seed_a,
+                    shuffle_seed_b,
+                    genome,
+                    opponent: opp_ids,
+                    seat: 'B',
+                    ai,
+                });
+            }
             let mut game_rng = StdRng::seed_from_u64(game_seed);
             let mut log = Vec::new();
             let (stats, _) =
@@ -257,11 +338,25 @@ mod tests {
         let g_2 = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let ids_1: Vec<Vec<String>> = g_1
             .iter()
-            .map(|d| d.iter().map(|c| c.id.clone()).collect())
+            .map(|d| {
+                d.iter()
+                    .filter_map(|u| match u {
+                        DeckUnit::Card(c) => Some(c.id.clone()),
+                        DeckUnit::Cardless => None,
+                    })
+                    .collect()
+            })
             .collect();
         let ids_2: Vec<Vec<String>> = g_2
             .iter()
-            .map(|d| d.iter().map(|c| c.id.clone()).collect())
+            .map(|d| {
+                d.iter()
+                    .filter_map(|u| match u {
+                        DeckUnit::Card(c) => Some(c.id.clone()),
+                        DeckUnit::Cardless => None,
+                    })
+                    .collect()
+            })
             .collect();
         assert_eq!(ids_1, ids_2);
     }
@@ -273,7 +368,13 @@ mod tests {
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         // Tiny genome built from the gauntlet's first deck — guaranteed
         // to be in the registry, no GenomeError on to_deck.
-        let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
+        let genome: Vec<String> = gauntlet[0]
+            .iter()
+            .filter_map(|u| match u {
+                DeckUnit::Card(c) => Some(c.id.clone()),
+                DeckUnit::Cardless => None,
+            })
+            .collect();
         let f_1 = fitness(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Fast).unwrap();
         let f_2 = fitness(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Fast).unwrap();
         assert_eq!(f_1, f_2, "fitness diverged across identical calls");
@@ -284,7 +385,13 @@ mod tests {
         let reg = load_registry();
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
-        let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
+        let genome: Vec<String> = gauntlet[0]
+            .iter()
+            .filter_map(|u| match u {
+                DeckUnit::Card(c) => Some(c.id.clone()),
+                DeckUnit::Cardless => None,
+            })
+            .collect();
         let f = fitness(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Fast).unwrap();
         assert!((0.0..=1.0).contains(&f), "fitness {f} out of [0, 1]");
     }
@@ -304,7 +411,13 @@ mod tests {
         let reg = load_registry();
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
-        let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
+        let genome: Vec<String> = gauntlet[0]
+            .iter()
+            .filter_map(|u| match u {
+                DeckUnit::Card(c) => Some(c.id.clone()),
+                DeckUnit::Cardless => None,
+            })
+            .collect();
         let b = fitness_breakdown(&reg, &genome, &gauntlet, 2, 0xC0DE, &AiKind::Fast).unwrap();
         assert_eq!(b.per_opponent.len(), gauntlet.len());
         let mean = b.per_opponent.iter().sum::<f64>() / b.per_opponent.len() as f64;
@@ -353,7 +466,13 @@ mod tests {
         let reg = load_registry();
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
-        let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
+        let genome: Vec<String> = gauntlet[0]
+            .iter()
+            .filter_map(|u| match u {
+                DeckUnit::Card(c) => Some(c.id.clone()),
+                DeckUnit::Cardless => None,
+            })
+            .collect();
         let breakdown =
             fitness_breakdown(&reg, &genome, &gauntlet, 1, 0xC0DE, &AiKind::Fast).unwrap();
         let total_games = (gauntlet.len() as u32) * 2; // 2 per opponent at n_per_side=1
@@ -372,10 +491,81 @@ mod tests {
         let reg = load_registry();
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
-        let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
+        let genome: Vec<String> = gauntlet[0]
+            .iter()
+            .filter_map(|u| match u {
+                DeckUnit::Card(c) => Some(c.id.clone()),
+                DeckUnit::Cardless => None,
+            })
+            .collect();
         let scalar = fitness(&reg, &genome, &gauntlet, 2, 0xC0DE, &AiKind::Fast).unwrap();
         let breakdown = fitness_breakdown(&reg, &genome, &gauntlet, 2, 0xC0DE, &AiKind::Fast).unwrap();
         assert_eq!(scalar, breakdown.total);
+    }
+
+    /// `fitness_with_trace` must emit one [`GameTrace`] per game with
+    /// the same `seed` that `run_game_with_ai` was invoked with,
+    /// covering both seats. Without this guarantee the trace can't
+    /// serve its reproducibility purpose (a missing or drifting seed
+    /// makes the JSONL row unfindable when grepping heartbeat output).
+    #[test]
+    fn fitness_with_trace_emits_one_record_per_game_with_matching_seed() {
+        use crate::sim::game_trace::{GameTrace, TraceSink};
+        use std::sync::Mutex;
+
+        struct Collector {
+            records: Mutex<Vec<(u64, char, String, usize, usize)>>,
+        }
+        impl TraceSink for Collector {
+            fn record(&self, t: GameTrace<'_>) {
+                let ai_dbg = format!("{:?}", t.ai);
+                self.records
+                    .lock()
+                    .unwrap()
+                    .push((t.seed, t.seat, ai_dbg, t.genome.len(), t.opponent.len()));
+            }
+        }
+
+        // Helper: extract card ids from a DeckUnit vec, skipping any
+        // cardless slots (the built-in gauntlet has none, but be safe).
+        fn ids_of(units: &[DeckUnit]) -> Vec<String> {
+            units
+                .iter()
+                .filter_map(|u| match u {
+                    DeckUnit::Card(c) => Some(c.id.clone()),
+                    DeckUnit::Cardless => None,
+                })
+                .collect()
+        }
+
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+        // Trim to one opponent for a small test: n_per_side=1 →
+        // exactly 2 games (seat A + seat B) → exactly 2 trace records.
+        let gauntlet = vec![gauntlet[0].clone()];
+        let opp_ids: Vec<Vec<String>> = gauntlet.iter().map(|d| ids_of(d)).collect();
+        let genome: Vec<String> = ids_of(&gauntlet[0]);
+
+        let sink = Collector { records: Mutex::new(Vec::new()) };
+        let _ = fitness_with_trace(
+            &reg, &genome, &gauntlet, &opp_ids, 1, 0xC0DE, &AiKind::Fast, Some(&sink),
+        )
+        .unwrap();
+
+        let records = sink.records.lock().unwrap();
+        assert_eq!(records.len(), 2, "one record per game (2 games at n=1)");
+        // Seats must be A then B (mirror-match iteration order).
+        assert_eq!(records[0].1, 'A', "first record: seat A");
+        assert_eq!(records[1].1, 'B', "second record: seat B");
+        // ai kind propagates as debug-formatted AiKind.
+        assert_eq!(records[0].2, "Fast");
+        assert_eq!(records[1].2, "Fast");
+        // Genome + opponent id-list sizes match what fitness saw.
+        assert_eq!(records[0].3, genome.len(), "genome length in trace");
+        assert_eq!(records[0].4, opp_ids[0].len(), "opponent length in trace");
+        // Distinct seeds — mirror games draw two `rng.gen()`s.
+        assert_ne!(records[0].0, records[1].0, "seat A and B seeds differ");
     }
 
     #[test]
@@ -383,7 +573,13 @@ mod tests {
         let reg = load_registry();
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
-        let genome: Vec<String> = gauntlet[0].iter().map(|c| c.id.clone()).collect();
+        let genome: Vec<String> = gauntlet[0]
+            .iter()
+            .filter_map(|u| match u {
+                DeckUnit::Card(c) => Some(c.id.clone()),
+                DeckUnit::Cardless => None,
+            })
+            .collect();
         assert_eq!(
             fitness(&reg, &genome, &[], 1, 0xC0DE, &AiKind::Fast).unwrap(),
             0.0,

@@ -71,7 +71,7 @@ pub fn reset_mcts_diagnostics() {
     MCTS_TOTAL_CANDIDATES.store(0, Ordering::SeqCst);
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MctsConfig {
     /// Rollouts per candidate. Default 5. At fitness σ ≈ 0.43 the
     /// per-candidate stddev is ~0.18 — enough to separate obvious

@@ -58,13 +58,13 @@ pub fn run_matchup_evolved(
     }
 
     let mut labels: Vec<String> = Vec::new();
-    let mut decks: Vec<Vec<tsot::card::Card>> = Vec::new();
+    let mut decks: Vec<Vec<tsot::game::DeckUnit>> = Vec::new();
     for path in &paths {
         match EvolvedDeck::load(path) {
-            Ok(saved) => match saved.to_cards(registry) {
-                Ok(cards) => {
+            Ok(saved) => match saved.to_units(registry) {
+                Ok(units) => {
                     labels.push(saved.label.clone());
-                    decks.push(cards);
+                    decks.push(units);
                 }
                 Err(e) => eprintln!("  ! {} unloadable: {e}", path.display()),
             },
@@ -91,7 +91,7 @@ pub fn run_matchup_evolved(
     for i in 0..n {
         for j in 0..n {
             for _ in 0..args.games {
-                let state = GameState::new(decks[i].clone(), decks[j].clone());
+                let state = GameState::from_units(decks[i].clone(), decks[j].clone());
                 let game_seed: u64 = rng.gen();
                 let mut game_rng = StdRng::seed_from_u64(game_seed);
                 let mut log: Vec<String> = Vec::new();

@@ -10,6 +10,7 @@ mod cli_evolve;
 mod cli_matchup_evolved;
 mod cli_matchup_mcts;
 mod cli_prune_champions;
+mod cli_replay;
 mod evolve_report;
 mod report_style;
 // sim/ now lives in src/lib.rs (pub mod sim) — reachable as
@@ -28,6 +29,7 @@ use cli_evolve::EvolveArgs;
 use cli_matchup_evolved::MatchupEvolvedArgs;
 use cli_matchup_mcts::MatchupMctsArgs;
 use cli_prune_champions::PruneChampionsArgs;
+use cli_replay::ReplayArgs;
 
 #[derive(Parser)]
 #[command(
@@ -69,6 +71,10 @@ enum Command {
     /// reports MCTS win rate. Measures whether one-ply rollout
     /// search beats the heuristic picker on the same deck.
     MatchupMcts(MatchupMctsArgs),
+    /// Re-run one game from its `game_seed` (from `[HEARTBEAT]` /
+    /// `[GAME TIMEOUT]` output). Takes the two champion JSONs and
+    /// the AI kind used, produces a byte-identical replay.
+    Replay(ReplayArgs),
 }
 
 /// Parse a u64 from `--seed`, accepting hex (`0xEA03`) or decimal.
@@ -132,6 +138,7 @@ fn main() -> mlua::Result<()> {
         Some(Command::MatchupMcts(args)) => {
             cli_matchup_mcts::run_matchup_mcts(&registry, &playable_pool, &args)
         }
+        Some(Command::Replay(args)) => cli_replay::run_replay(&registry, &args),
         None => {
             eprintln!("no subcommand specified. run with --help to see the available commands.");
             std::process::exit(2);

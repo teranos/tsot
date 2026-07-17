@@ -143,6 +143,18 @@ pub struct EvolveArgs {
     /// Default `evolve-report.html`. Use `-` to skip.
     #[arg(long = "html-report", default_value = "evolve-report.html")]
     pub html_report: String,
+    /// Path to write a per-game trace (JSONL). One line per game with
+    /// `{seed, seat, ai, genome, opponent}`. Grep by `seed` to recover
+    /// which two decks + AI + seat produced a slow game. Unset =
+    /// `./ccg-trace-<outer_seed:x>.jsonl` so concurrent / sequential
+    /// EA runs don't stomp each other's traces — each outer seed
+    /// owns its own trace file, indefinitely replayable via
+    /// `tsot replay --to <heartbeat-token>`.
+    #[arg(long = "trace-games", value_name = "PATH")]
+    pub trace_games: Option<String>,
+    /// Disable per-game trace writing (skips `--trace-games`).
+    #[arg(long = "no-trace-games", default_value_t = false)]
+    pub no_trace_games: bool,
 }
 
 /// Pretty-print a deck's card-id list grouped by count.
@@ -244,11 +256,11 @@ pub fn run_ea(
     println!();
 
     let no_variants = args.no_variants;
-    let (mut gauntlet, mut gauntlet_labels): (Vec<Vec<Card>>, Vec<String>) = if no_variants {
+    let (mut gauntlet, mut gauntlet_labels): (Vec<Vec<tsot::game::DeckUnit>>, Vec<String>) = if no_variants {
         println!("Gauntlet: baselines skipped (--no-variants)");
         (Vec::new(), Vec::new())
     } else {
-        let mut g: Vec<Vec<Card>> = Vec::new();
+        let mut g: Vec<Vec<tsot::game::DeckUnit>> = Vec::new();
         let mut labels: Vec<String> = Vec::new();
         let baselines_dir = std::path::Path::new("baselines");
         let mut paths: Vec<std::path::PathBuf> = Vec::new();
@@ -263,10 +275,10 @@ pub fn run_ea(
         paths.sort();
         for path in &paths {
             match EvolvedDeck::load(path) {
-                Ok(saved) => match saved.to_cards(registry) {
-                    Ok(cards) => {
+                Ok(saved) => match saved.to_units(registry) {
+                    Ok(units) => {
                         labels.push(saved.label.clone());
-                        g.push(cards);
+                        g.push(units);
                     }
                     Err(e) => eprintln!("  ! baseline {} unloadable: {e}", path.display()),
                 },
@@ -292,14 +304,14 @@ pub fn run_ea(
     let mut extras_loaded = 0usize;
     for path in &args.extras {
         match EvolvedDeck::load(std::path::Path::new(path)) {
-            Ok(saved) => match saved.to_cards(registry) {
-                Ok(cards) => {
+            Ok(saved) => match saved.to_units(registry) {
+                Ok(units) => {
                     println!(
                         "  + extra: {} (label={}, prior fitness={:.3}, base_seed={:#x})",
                         path, saved.label, saved.fitness, saved.base_seed
                     );
                     gauntlet_labels.push(saved.label);
-                    gauntlet.push(cards);
+                    gauntlet.push(units);
                     extras_loaded += 1;
                 }
                 Err(e) => eprintln!("  ! failed to materialize {path}: {e}"),
@@ -346,6 +358,34 @@ pub fn run_ea(
     );
     println!();
 
+    // Optional per-game trace. Open BEFORE the run so a bad path
+    // (unwritable dir, no permission) fails fast. Static lifetime
+    // via `Box::leak` so `&(dyn TraceSink + 'static)` can be handed
+    // to parallel workers without an Arc contention layer — the sink
+    // lives for the whole `run_ea` invocation, which is fine because
+    // `run_ea` returns to `main` which then exits.
+    let trace_sink: Option<&'static (dyn tsot::sim::game_trace::TraceSink + 'static)> =
+        if args.no_trace_games {
+            None
+        } else {
+            let path = args
+                .trace_games
+                .clone()
+                .unwrap_or_else(|| format!("./ccg-trace-{:x}.jsonl", args.seed));
+            match tsot::sim::game_trace::JsonlFileTrace::create(std::path::Path::new(&path)) {
+                Ok(sink) => {
+                    println!("  trace: writing per-game records to {path}");
+                    let leaked: &'static mut tsot::sim::game_trace::JsonlFileTrace =
+                        Box::leak(Box::new(sink));
+                    Some(&*leaked)
+                }
+                Err(e) => {
+                    eprintln!("error: cannot open --trace-games {path}: {e}");
+                    std::process::exit(2);
+                }
+            }
+        };
+
     let t_start = std::time::Instant::now();
     let mut t_prev = t_start;
     let mut prev_best: Option<f64> = None;
@@ -375,9 +415,12 @@ pub fn run_ea(
             );
             t_prev = now;
         };
-        run_evolve(registry, playable_pool, &gauntlet, &cfg, cb)
+        run_evolve(registry, playable_pool, &gauntlet, &cfg, cb, trace_sink)
     };
     let elapsed = t_start.elapsed();
+    if let Some(sink) = trace_sink {
+        sink.flush();
+    }
 
     println!();
     let gens_run = result.best_per_generation.len().saturating_sub(1);

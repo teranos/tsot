@@ -17,6 +17,7 @@ pub mod diversity;
 pub mod evolve;
 pub mod evolved_deck;
 pub mod fitness;
+pub mod game_trace;
 pub mod genome;
 pub mod human;
 pub mod instrument;
