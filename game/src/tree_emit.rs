@@ -171,6 +171,28 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                 scale: [br, seg.length * h + seat, br],
                 axis: limb_axis,
             });
+            // A knuckle of wood swells each interior FORK, where this limb's
+            // tip splits into 2-3 children. Bare cones meeting at a point
+            // read as "stacked on top"; a rounded lump at the joint — the
+            // callus a real branch grows at a fork — buries the seams. Not
+            // on the root (its primaries attach ALONG it, not at one point)
+            // nor on tips (no children there). It inherits the limb's sway.
+            if !is_root && !seg.is_tip {
+                let f = seg.tip();
+                let (fx, fy, fz) = (t.x + f[0] * h, f[1] * h, t.z + f[2] * h);
+                let kr = br * 0.95; // envelops the parent tip + child bases
+                let kh = kr * 1.7; // taller than wide so it reads round
+                trunks.push(MeshInstance {
+                    pos: [
+                        fx - seg.axis[0] * kh * 0.5,
+                        fy - seg.axis[1] * kh * 0.5,
+                        fz - seg.axis[2] * kh * 0.5,
+                    ],
+                    color: sp.branch_color,
+                    scale: [kr, kh, kr],
+                    axis: limb_axis,
+                });
+            }
             // Moss creeps on the lower, shaded limbs of a mossy tree — a
             // few dark-green tufts clinging where a limb meets the bole.
             if mossy && seg.base[1] < 0.45 && leaf_hash01(seed, 0x0_5A00 ^ tip_i.wrapping_mul(2654435761)) < 0.35 {
@@ -333,6 +355,24 @@ mod tests {
             jukeboxes: vec![],
             player: Vec3::ZERO,
         }
+    }
+
+    #[test]
+    fn interior_forks_get_a_knuckle() {
+        use crate::tree_mesh::{tree_branches, OAK};
+        let pos = Vec3::new(500.0, 0.0, 500.0);
+        let seed = tree_seed(pos.x, pos.z);
+        let segs = tree_branches(seed, &OAK);
+        // Interior forks = non-root, non-tip segments (their tip splits).
+        let forks = segs.iter().enumerate().filter(|(i, s)| *i > 0 && !s.is_tip).count();
+        assert!(forks > 0, "an oak has interior forks");
+        let m = snapshot_to_mesh_instances(&tree_snapshot(pos, &OAK));
+        // Every segment is a cone; every interior fork adds one knuckle.
+        assert_eq!(
+            m.trunks.len(),
+            segs.len() + forks,
+            "each interior fork should get exactly one knuckle"
+        );
     }
 
     #[test]
