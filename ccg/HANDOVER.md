@@ -27,14 +27,5 @@ re-read the mechanics here; follow the pointers.
    T.3 was added).
    *Done when:* a rule exists that matches `death_replacement_tests.rs`.
 
-5. **Open the PR** vs `master` (6 commits; title "TSOT: sleeve conservation
-   — mutation shed, sleeveless cards, death-replacement hook").
-   *Done when:* PR open, base `master`, the 6 commits, drafted body.
-
-6. **(Optional) White Elephant in a playable pool** — tested but in no deck
-   / EA pool, so never plays a sim game.
-   *Done when:* added to a deck or the draft list and a `sim/run` game
-   including it completes with rollback + determinism.
-
 Larger future branches (worn/opaque sleeves, Elm UI): `CARDLESS_SLEEVE.md`
 "Deferred".

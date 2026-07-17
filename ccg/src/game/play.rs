@@ -1359,9 +1359,11 @@ impl GameState {
     /// Idempotent. Call after every damage application that targets a
     /// BOARD creature.
     /// B.8: every on-board creature whose accumulated damage has reached its
-    /// effective toughness. The shared scan behind both the eager
-    /// `cleanup_b8_damage_deaths` sweep and the deferred, hook-aware
-    /// resolution in `drain_deferred_events`.
+    /// effective toughness. Production path: `drain_deferred_events`
+    /// consumes this and applies the hook-aware death sequence
+    /// (12.3b OnWouldDie window). The historical eager sweep
+    /// `cleanup_b8_damage_deaths` still exists for unit-test convenience
+    /// (`#[cfg(test)]`) but no production code path calls it.
     pub fn damage_lethal_creatures(&self) -> Vec<InstanceId> {
         let mut to_kill: Vec<InstanceId> = Vec::new();
         for iid in self.a.board.iter().chain(self.b.board.iter()) {
@@ -1382,6 +1384,12 @@ impl GameState {
         to_kill
     }
 
+    /// Eager B.8 sweep: kill every damage-lethal creature and cascade
+    /// their attached lists to EXILE. Production-dead since 12.3b —
+    /// real death resolution goes through `drain_deferred_events` +
+    /// OnWouldDie. Kept for unit-test convenience where a test wants
+    /// to exercise the pure "damage → move" step in isolation.
+    #[cfg(test)]
     pub fn cleanup_b8_damage_deaths(&mut self) {
         let to_kill = self.damage_lethal_creatures();
         for iid in &to_kill {
