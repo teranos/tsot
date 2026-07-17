@@ -566,7 +566,25 @@ pub(crate) fn build_pattern_b_choices(
         // / gy_hand_payment_ids / graveyard_payment_ids so build
         // mirrors the engine's apply site at game/play.rs.
         if hand_needed > 0 || gy_needed > 0 {
-            if let Some(sub) = state.find_jewel_tap_candidate(active, picked) {
+            // P.24b: a crystal substitutes for exactly one HAND component
+            // and cannot cover GRAVEYARD. Only offer it when there's a HAND
+            // need — otherwise play_card rejects the cast with
+            // JewelTapWithoutHandCost (the picker/resolver disagreement that
+            // surfaced as ~189 swallowed [play_card-ERR]s per EA run). A jewel
+            // (2-mixed) is always usable when hand or gy is needed.
+            let jewel_candidate = state
+                .find_jewel_tap_candidate(active, picked)
+                .filter(|sub| {
+                    let is_crystal = state
+                        .card_pool
+                        .get(sub)
+                        .map(|i| {
+                            i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal"))
+                        })
+                        .unwrap_or(false);
+                    !(is_crystal && hand_needed == 0)
+                });
+            if let Some(sub) = jewel_candidate {
                 let is_crystal = state
                     .card_pool
                     .get(&sub)
@@ -574,9 +592,7 @@ pub(crate) fn build_pattern_b_choices(
                     .unwrap_or(false);
                 choices.jewel_tap = Some(sub);
                 if is_crystal {
-                    if hand_needed > 0 {
-                        hand_needed = hand_needed.saturating_sub(1);
-                    }
+                    hand_needed = hand_needed.saturating_sub(1);
                 } else {
                     let mut budget: usize = 2;
                     let take_h = hand_needed.min(budget);
@@ -635,7 +651,25 @@ pub(crate) fn build_pattern_b_choices(
         // Differentiate by subtype to match engine's apply site at
         // play.rs:285. Drain HAND first then GRAVEYARD.
         if hand_needed > 0 || gy_needed > 0 {
-            if let Some(sub) = state.find_jewel_tap_candidate(active, picked) {
+            // P.24b: a crystal substitutes for exactly one HAND component
+            // and cannot cover GRAVEYARD. Only offer it when there's a HAND
+            // need — otherwise play_card rejects the cast with
+            // JewelTapWithoutHandCost (the picker/resolver disagreement that
+            // surfaced as ~189 swallowed [play_card-ERR]s per EA run). A jewel
+            // (2-mixed) is always usable when hand or gy is needed.
+            let jewel_candidate = state
+                .find_jewel_tap_candidate(active, picked)
+                .filter(|sub| {
+                    let is_crystal = state
+                        .card_pool
+                        .get(sub)
+                        .map(|i| {
+                            i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal"))
+                        })
+                        .unwrap_or(false);
+                    !(is_crystal && hand_needed == 0)
+                });
+            if let Some(sub) = jewel_candidate {
                 let is_crystal = state
                     .card_pool
                     .get(&sub)
@@ -643,9 +677,7 @@ pub(crate) fn build_pattern_b_choices(
                     .unwrap_or(false);
                 choices.jewel_tap = Some(sub);
                 if is_crystal {
-                    if hand_needed > 0 {
-                        hand_needed = hand_needed.saturating_sub(1);
-                    }
+                    hand_needed = hand_needed.saturating_sub(1);
                 } else {
                     let mut budget: usize = 2;
                     let take_h = hand_needed.min(budget);
@@ -735,7 +767,25 @@ pub(crate) fn build_pattern_b_choices(
         // doesn't will produce NoGraveyardPaymentForColor on cards
         // like witch-bat (1-hand + 1-gy) against a same-color crystal.
         if hand_needed > 0 || gy_needed > 0 {
-            if let Some(sub) = state.find_jewel_tap_candidate(active, picked) {
+            // P.24b: a crystal substitutes for exactly one HAND component
+            // and cannot cover GRAVEYARD. Only offer it when there's a HAND
+            // need — otherwise play_card rejects the cast with
+            // JewelTapWithoutHandCost (the picker/resolver disagreement that
+            // surfaced as ~189 swallowed [play_card-ERR]s per EA run). A jewel
+            // (2-mixed) is always usable when hand or gy is needed.
+            let jewel_candidate = state
+                .find_jewel_tap_candidate(active, picked)
+                .filter(|sub| {
+                    let is_crystal = state
+                        .card_pool
+                        .get(sub)
+                        .map(|i| {
+                            i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal"))
+                        })
+                        .unwrap_or(false);
+                    !(is_crystal && hand_needed == 0)
+                });
+            if let Some(sub) = jewel_candidate {
                 let is_crystal = state
                     .card_pool
                     .get(&sub)
@@ -743,9 +793,7 @@ pub(crate) fn build_pattern_b_choices(
                     .unwrap_or(false);
                 choices.jewel_tap = Some(sub);
                 if is_crystal {
-                    if hand_needed > 0 {
-                        hand_needed = hand_needed.saturating_sub(1);
-                    }
+                    hand_needed = hand_needed.saturating_sub(1);
                 } else {
                     let mut budget: usize = 2;
                     let take_h = hand_needed.min(budget);
