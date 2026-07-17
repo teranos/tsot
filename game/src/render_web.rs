@@ -13,9 +13,11 @@ use crate::gpu_web;
 use crate::hud;
 use crate::obs;
 use crate::scene::{
-    self, GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, GpuVertex, LEAF_SHADER_WGSL, MESH_SHADER_WGSL,
-    MeshInstance,
-    SHADER_WGSL, SceneCamera, SceneInstance, UI_SHADER_WGSL, as_bytes, cube_geometry,
+    self, GpuVertex, MeshInstance, SceneCamera, SceneInstance, as_bytes, cube_geometry,
+};
+use crate::shaders::{
+    GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, LEAF_SHADER_WGSL, MESH_SHADER_WGSL, SHADER_WGSL,
+    UI_SHADER_WGSL,
 };
 use crate::tree_mesh::{self, MeshVertex};
 
@@ -551,7 +553,7 @@ pub fn frame_ui(instances: &[dpad::DpadInstance]) -> u32 {
 pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     let snap = scene::snapshot_scene(app);
     let instances = scene::snapshot_to_instances(&snap);
-    let mesh_trees = scene::snapshot_to_mesh_instances(&snap);
+    let mesh_trees = crate::tree_emit::snapshot_to_mesh_instances(&snap);
     let glass = scene::snapshot_to_glass_instances(&snap);
     let ghost = scene::snapshot_to_ghost_instances(&snap);
     let camera = SceneCamera::follow(

@@ -30,8 +30,10 @@ pub mod remote_players;
 pub mod room;
 pub mod scene;
 pub mod sfx;
+pub mod shaders;
 pub mod template;
 pub mod trail;
+pub mod tree_emit;
 pub mod tree_mesh;
 pub mod trees;
 pub mod watermark;
@@ -791,7 +793,7 @@ fn render_single(
     let (dev, queue) = init_wgpu()?;
     let instances = scene::snapshot_to_instances(snap);
     let glass = scene::snapshot_to_glass_instances(snap);
-    let mesh_trees = scene::snapshot_to_mesh_instances(snap);
+    let mesh_trees = tree_emit::snapshot_to_mesh_instances(snap);
     let camera = scene::SceneCamera::follow(
         [snap.player.x, snap.player.y, snap.player.z],
         room::FLOOR_HALF,
@@ -812,7 +814,7 @@ fn render_snapshots(
         let out_path = format!("{dir}/frame-{i}.png");
         let instances = scene::snapshot_to_instances(snap);
         let glass = scene::snapshot_to_glass_instances(snap);
-        let mesh_trees = scene::snapshot_to_mesh_instances(snap);
+        let mesh_trees = tree_emit::snapshot_to_mesh_instances(snap);
         let camera = scene::SceneCamera::follow(
             [snap.player.x, snap.player.y, snap.player.z],
             room::FLOOR_HALF,

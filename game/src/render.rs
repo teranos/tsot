@@ -22,10 +22,9 @@ use wgpu::{Device, Queue};
 
 use crate::gpu::SeerDevice;
 use crate::obs;
-use crate::scene::{
-    GLASS_SHADER_WGSL, GpuVertex, LEAF_SHADER_WGSL, MESH_SHADER_WGSL, MeshInstance,
-    MeshTreeInstances, SceneCamera, SceneInstance, SHADER_WGSL, as_bytes, cube_geometry,
-};
+use crate::scene::{GpuVertex, MeshInstance, SceneCamera, SceneInstance, as_bytes, cube_geometry};
+use crate::shaders::{GLASS_SHADER_WGSL, LEAF_SHADER_WGSL, MESH_SHADER_WGSL, SHADER_WGSL};
+use crate::tree_emit::MeshTreeInstances;
 use crate::tree_mesh::{self, MeshVertex};
 
 const TARGET_SIZE: u32 = 512;
