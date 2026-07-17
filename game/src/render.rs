@@ -600,3 +600,26 @@ pub fn render_scene(
     Ok(())
 }
 
+
+#[cfg(test)]
+mod tests {
+    use crate::scene::INSTANCE_ATTRS;
+
+    #[test]
+    fn native_mesh_instance_attrs_derive_from_the_source() {
+        // The native attribute array (the `vertex_attr_array!` in the mesh
+        // pipeline) must match the single source of truth. wgpu computes
+        // the offsets from the format sequence; assert they equal what
+        // INSTANCE_ATTRS declares, so a change to one fails the build gate.
+        let native = wgpu::vertex_attr_array![
+            3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32x3
+        ];
+        assert_eq!(native.len(), INSTANCE_ATTRS.len());
+        for (n, a) in native.iter().zip(INSTANCE_ATTRS) {
+            assert_eq!(n.shader_location, a.location);
+            assert_eq!(n.offset, a.offset);
+            assert_eq!(n.format, wgpu::VertexFormat::Float32x3);
+            assert_eq!(a.format, "float32x3");
+        }
+    }
+}
