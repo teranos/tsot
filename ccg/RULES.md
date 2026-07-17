@@ -1,11 +1,10 @@
 # The Symbols of Teranos — Rules
 
-> Working draft. Each rule has a stable identifier for review and reference.
-> The document states only what has been confirmed. Inferences and CCG conventions are not assumed unless explicitly ratified.
-> Rule IDs are **never renumbered**. When a rule is removed, its ID becomes a permanent gap.
+> Rules describe the game in game terms; implementation lives in `LUA.md`. Each concept has one term.
+> Rule identifiers are never renumbered; removed rules leave a permanent gap.
 >
-> Canonical companion docs:
-> - **`SLOTS.md`** — symbol and hole geometry (15-slot grid). When it ships in the engine, C.13 / C.14 / V.8 / V.9 are superseded by the per-slot model declared there.
+> Companion docs:
+> - **`SLOTS.md`** — symbol and hole geometry (15-slot grid).
 
 ## Format (F)
 
