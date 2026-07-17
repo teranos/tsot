@@ -380,6 +380,39 @@ mod tests {
         assert_eq!(f_1, f_2, "fitness diverged across identical calls");
     }
 
+    /// Structural guard against picker/resolver disagreement. Sweeps
+    /// random genomes from every archetype through the full gauntlet and
+    /// asserts no game trips a `[play_card-ERR]`. `failed_games_total`
+    /// counts games where the failure sink was non-empty — i.e. the sim
+    /// picker handed `play_card` a choice the resolver rejected. That must
+    /// be zero: a picker/resolver disagreement is always a bug, never
+    /// expected game flow. (This is the guard that would have caught the
+    /// crystal-tap-without-hand-cost regression at its source.)
+    #[test]
+    fn no_picker_resolver_disagreements_across_random_sweep() {
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+        let mut total_failed = 0u32;
+        let mut total_games = 0u32;
+        for v in VARIANTS {
+            let vpool = variant_pool(&pool, v);
+            for seed in 0..6u64 {
+                let mut rng = StdRng::seed_from_u64(0x5EED_0000 + seed);
+                let deck = build_random_deck(&vpool, &mut rng, 50, mandatory_for_variant(v));
+                let genome: Vec<String> = deck.iter().map(|c| c.id.clone()).collect();
+                let b = fitness_breakdown(&reg, &genome, &gauntlet, 1, 0xC0DE + seed, &AiKind::Fast)
+                    .expect("random genome scores");
+                total_failed += b.failed_games_total;
+                total_games += (gauntlet.len() as u32) * 2;
+            }
+        }
+        assert_eq!(
+            total_failed, 0,
+            "picker/resolver disagreement: {total_failed} of {total_games} games tripped [play_card-ERR]"
+        );
+    }
+
     #[test]
     fn fitness_is_in_unit_interval() {
         let reg = load_registry();
