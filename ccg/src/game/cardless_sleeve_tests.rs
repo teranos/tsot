@@ -368,3 +368,57 @@ fn attach_cardless_from_hand_takes_empty_sleeves_out_of_hand() {
     assert!(s.a.hand.contains(&h1), "the second sleeve stays in hand");
     assert!(s.a.hand.contains(&real), "the real card is untouched");
 }
+
+#[test]
+fn z8_a_card_sheds_its_own_sleeve_and_becomes_sleeveless() {
+    // Sleeveless card (Z.8) — the mirror of the cardless sleeve. A card
+    // pops out of its own sleeve: the card stays put (same id, content
+    // intact) but is now sleeveless, and its vacated sleeve attaches to it
+    // as a cardless sleeve (Z.6). This is the primitive a "survive by
+    // shedding your sleeve" death replacement drives.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let card = s.a.hand[0].clone();
+    let _ = s.move_card(&card, PlayerId::A, Zone::Hand, Zone::Board);
+
+    assert!(!s.card_pool.get(&card).unwrap().sleeveless, "starts sleeved");
+
+    let shed = s.shed_own_sleeve(&card);
+    assert!(shed, "a sleeved card can shed its sleeve");
+
+    let inst = s.card_pool.get(&card).unwrap();
+    assert!(inst.sleeveless, "the card is now sleeveless");
+    assert!(inst.content.is_some(), "the card itself is intact — only the sleeve left");
+    assert_eq!(inst.attached.len(), 1, "the vacated sleeve attaches to the card");
+    let sleeve = inst.attached[0].clone();
+    assert!(s.is_cardless(&sleeve), "the shed sleeve is cardless");
+
+    // Second shed is a no-op: already sleeveless, no sleeve left to shed.
+    let again = s.shed_own_sleeve(&card);
+    assert!(!again, "a sleeveless card has no sleeve to shed");
+    assert_eq!(
+        s.card_pool.get(&card).unwrap().attached.len(),
+        1,
+        "no second sleeve minted on the no-op shed"
+    );
+}
+
+#[test]
+fn z8_shed_own_sleeve_round_trips_through_journal() {
+    // Shedding is three journaled effects — the sleeveless flip, the minted
+    // cardless sleeve, and the self-attach. All three must invert together
+    // or full-game rollback diverges once a sleeveless card exists.
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let card = s.a.hand[0].clone();
+    let _ = s.move_card(&card, PlayerId::A, Zone::Hand, Zone::Board);
+
+    let pool_len = s.card_pool.len();
+    let before = format!("{s:?}");
+    s.journal = Some(crate::game::Journal::new());
+    assert!(s.shed_own_sleeve(&card), "shed happened");
+    assert!(s.card_pool.get(&card).unwrap().sleeveless);
+    assert_eq!(s.card_pool.len(), pool_len + 1, "shed sleeve minted into the pool");
+
+    let journal = s.journal.take().unwrap();
+    journal.rollback(&mut s);
+    assert_eq!(before, format!("{s:?}"), "shed rolls back: flag, mint, and attach");
+}

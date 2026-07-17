@@ -1,9 +1,10 @@
 # Cardless Sleeve & Sleeve-as-Atom — plan of record
 
-> The sleeve is the atomic unit in every zone; a card is optional content
-> inside it. 0 cards = cardless sleeve (Z.8), 1 = a normal card, 2+ = a
-> same-sleeve fusion (Z.7). Rules are canonical in RULES.md (Z.8, S.4);
-> this doc is the roadmap, not the spec.
+> The sleeve-unit is the atom in every zone; a card and a sleeve are each
+> optional occupants of it. 0 cards = cardless sleeve (Z.8), 1 = a normal
+> card, 2+ = a same-sleeve fusion (Z.7); a card with its sleeve removed =
+> a sleeveless card (Z.8, the mirror of the cardless sleeve). Rules are
+> canonical in RULES.md (Z.8, S.4); this doc is the roadmap, not the spec.
 
 ## Status
 
@@ -81,6 +82,38 @@
   via `confirm_for` — the slice-11 queue de-risked it but wasn't required.
   Tests in `game/shatter_tests.rs` (opponent pays, opponent declines →
   counter, X≤0 whiff).
+- **Slice 12 — sleeve conservation: card ↔ sleeve fully decoupled.**
+  - **12.1 Mutation cast sheds its vacated sleeve — DONE.** A mutation sits
+    in HAND inside its own sleeve; casting it (P.26) slides the card into
+    the host's sleeve (Z.7 fusion) and leaves its own sleeve empty. That
+    sleeve is not destroyed — it is minted as a cardless sleeve and
+    `add_attached` to the host (Z.6), counted by `AttachedCount` (the card
+    doesn't count, only the shed sleeve does). New `JournalEntry::
+    MintCardlessSleeve` (forward inserts / inverse removes) so rollback and
+    replay drop the shed sleeve. Test in `game/same_sleeve_tests.rs`
+    (`z7_mutation_cast_sheds_its_vacated_sleeve_as_an_attached_cardless`).
+  - **12.2 Sleeveless state + self-shed — DONE.** `Sleeve.sleeveless: bool`
+    (`#[serde(default)]`, backward-compatible) — the mirror of a cardless
+    sleeve: a card with no sleeve around it. `shed_own_sleeve(iid)` pops a
+    card out of its own sleeve (card stays put, becomes sleeveless) and
+    attaches the vacated sleeve to itself as a cardless sleeve — the
+    mutation-shed shape, self-targeted. No-op if already sleeveless or if
+    the unit is itself cardless. Journaled via `SetSleeveless` + the
+    slice-12.1 mint/attach entries. Tests in `game/cardless_sleeve_tests.rs`
+    (`z8_a_card_sheds_its_own_sleeve_and_becomes_sleeveless`,
+    `z8_shed_own_sleeve_round_trips_through_journal`).
+  - **12.3 Death-replacement hook — NOT STARTED.** The gate for the White
+    elephant (`if this would die: if sleeved, shed to survive; if
+    sleeveless, exile instead`). Death is state-based and immediate today
+    (`damage ≥ Y → GRAVEYARD`); `OnCreatureDies` fires *after* the move, so
+    it cannot prevent death. Needs a replacement layer that intercepts the
+    Board→GY lethal move and lets a card substitute an alternative. This is
+    the real net-new engine work; 12.2 is the primitive it will drive.
+  - **Watch-out — re-sleeve re-arms the ward.** A sleeveless card's shed
+    sleeve is attached *to* it, not *around* it, so it stays sleeveless (no
+    loop). But the deferred worn/fillable-sleeves branch (putting cards into
+    sleeves) would let something re-sleeve it and re-arm any "shed to
+    survive" ward. Cross-branch edge to keep on the list.
 
 ## Watch-outs
 

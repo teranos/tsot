@@ -106,6 +106,13 @@ pub struct Sleeve {
     /// site consults `children()` (attached ∪ same_sleeve), not `attached`.
     #[serde(default)]
     pub same_sleeve: Vec<InstanceId>,
+    /// Z.8 SLEEVELESS: true iff this card has no sleeve around it — the
+    /// mirror of a cardless sleeve (`content: None`). A card becomes
+    /// sleeveless by shedding its own sleeve (`shed_own_sleeve`), which
+    /// pops the card out and attaches the emptied sleeve to it. Default
+    /// false: every card starts sleeved, so old save files load unchanged.
+    #[serde(default)]
+    pub sleeveless: bool,
     pub modifiers: Vec<Modifier>,  // C.12 continuous effects
     pub status_effects: Vec<StatusEffect>,
 }
@@ -163,6 +170,7 @@ impl Sleeve {
             attacked_this_turn: false,
             attached: Vec::new(),
             same_sleeve: Vec::new(),
+            sleeveless: false,
             modifiers: Vec::new(),
             status_effects: Vec::new(),
         }
@@ -1184,6 +1192,50 @@ impl GameState {
         })
     }
 
+    /// Z.8: set the `sleeveless` flag on a card, journaling prior+new so the
+    /// entry rolls back and forward-replays.
+    pub fn set_sleeveless(&mut self, iid: &InstanceId, sleeveless: bool) {
+        let Some(inst) = self.card_pool.get_mut(iid) else {
+            return;
+        };
+        let was = inst.sleeveless;
+        if was == sleeveless {
+            return;
+        }
+        inst.sleeveless = sleeveless;
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetSleeveless {
+                iid: iid.clone(),
+                was,
+                now: sleeveless,
+            });
+        }
+    }
+
+    /// Z.8: a card sheds its own sleeve. The card stays where it is —
+    /// content intact, same id — but becomes sleeveless, and its vacated
+    /// sleeve attaches to it as a cardless sleeve (Z.6), the same shed-and-
+    /// attach shape as a mutation cast (only self-targeted). No-op if the
+    /// card is already sleeveless (nothing left to shed) or is itself a
+    /// cardless sleeve (no card to pop out); returns whether it shed. This
+    /// is the primitive a "survive by shedding your sleeve" death
+    /// replacement drives.
+    pub fn shed_own_sleeve(&mut self, iid: &InstanceId) -> bool {
+        let owner = match self.card_pool.get(iid) {
+            Some(s) if !s.sleeveless && s.content.is_some() => s.owner,
+            _ => return false,
+        };
+        self.set_sleeveless(iid, true);
+        // Id derived from the shedding card; a card sheds at most once (the
+        // sleeveless guard above), so `{iid}:shed` is unique and distinct
+        // from a mutation's `{mutation}:shed`.
+        let shed = format!("{iid}:shed");
+        self.mint_cardless_sleeve(&shed, owner);
+        self.add_attached(iid, &shed);
+        self.set_face_down(&shed, true);
+        true
+    }
+
     /// Z.8: mint a fresh cardless sleeve into the pool, owned+controlled by
     /// `owner`, journaled so rollback removes it. Used when a mutation cast
     /// (P.26) vacates its own sleeve — the empty sleeve is not destroyed, it
@@ -1467,6 +1519,7 @@ impl GameState {
                 attacked_this_turn: false,
                 attached: Vec::new(),
                 same_sleeve: Vec::new(),
+                sleeveless: false,
                 modifiers: Vec::new(),
                 status_effects: Vec::new(),
             };

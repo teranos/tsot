@@ -111,6 +111,12 @@ pub enum JournalEntry {
         iid: InstanceId,
         owner: PlayerId,
     },
+    /// Z.8: flipped a card's `sleeveless` flag (it shed its own sleeve).
+    SetSleeveless {
+        iid: InstanceId,
+        was: bool,
+        now: bool,
+    },
     /// Z.7: fused a card into a host's `same_sleeve` list. Inverse: pop last.
     AddSameSleeve {
         host: InstanceId,
@@ -399,6 +405,11 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::MintCardlessSleeve { iid, .. } => {
             state.card_pool.remove(&iid);
         }
+        JournalEntry::SetSleeveless { iid, was, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.sleeveless = was;
+            }
+        }
         JournalEntry::AddSameSleeve { host, sleeved } => {
             if let Some(inst) = state.card_pool.get_mut(&host) {
                 if let Some(last) = inst.same_sleeve.last() {
@@ -572,6 +583,11 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
             state
                 .card_pool
                 .insert(iid.clone(), Sleeve::cardless(iid, owner));
+        }
+        JournalEntry::SetSleeveless { iid, now, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.sleeveless = now;
+            }
         }
         JournalEntry::AddSameSleeve { host, sleeved } => {
             if let Some(inst) = state.card_pool.get_mut(&host) {
