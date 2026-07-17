@@ -146,6 +146,28 @@ impl Sleeve {
         self.content.is_none()
     }
 
+    /// Z.8: a fresh cardless sleeve — empty content, owned+controlled by
+    /// `owner`, every runtime flag cleared. Used when a mutation cast
+    /// vacates its own sleeve (P.26) and that empty sleeve attaches to the
+    /// host.
+    pub fn cardless(instance_id: InstanceId, owner: PlayerId) -> Self {
+        Sleeve {
+            instance_id,
+            content: None,
+            owner,
+            controller: owner,
+            tapped: false,
+            face_down: false,
+            damage: 0.0,
+            summoning_sick: false,
+            attacked_this_turn: false,
+            attached: Vec::new(),
+            same_sleeve: Vec::new(),
+            modifiers: Vec::new(),
+            status_effects: Vec::new(),
+        }
+    }
+
     /// Every card sharing this card's physical unit: strippable `attached`
     /// payments (Z.6) first, then fused `same_sleeve` cards (Z.7). Effect,
     /// static, and event sites act on the whole unit and MUST iterate this,
@@ -1160,6 +1182,22 @@ impl GameState {
             ActivationZone::Deck => p.deck.contains(iid),
             ActivationZone::Attached => self.host_of(iid).is_some(),
         })
+    }
+
+    /// Z.8: mint a fresh cardless sleeve into the pool, owned+controlled by
+    /// `owner`, journaled so rollback removes it. Used when a mutation cast
+    /// (P.26) vacates its own sleeve — the empty sleeve is not destroyed, it
+    /// becomes an attached cardless sleeve on the host (the caller does the
+    /// `add_attached`).
+    pub fn mint_cardless_sleeve(&mut self, iid: &InstanceId, owner: PlayerId) {
+        self.card_pool
+            .insert(iid.clone(), Sleeve::cardless(iid.clone(), owner));
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::MintCardlessSleeve {
+                iid: iid.clone(),
+                owner,
+            });
+        }
     }
 
     pub fn add_attached(&mut self, host: &InstanceId, attached: &InstanceId) {

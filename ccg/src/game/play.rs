@@ -1270,8 +1270,19 @@ impl GameState {
             // not attach as a strippable object. It therefore rides the
             // host's zone moves (P.29), is exempt from the P.8 cascade, and
             // does not count toward attached-count (C.16).
-            self.add_same_sleeve(target, instance);
-            self.set_face_down(instance, true);
+            if self.add_same_sleeve(target, instance) {
+                self.set_face_down(instance, true);
+                // Z.8 sleeve-as-atom conservation: the mutation card left
+                // its own sleeve to share the host's. That vacated sleeve is
+                // not destroyed — it attaches to the host as a cardless
+                // sleeve (Z.6), strippable and counted by AttachedCount. The
+                // id is derived from the mutation instance, which fuses
+                // exactly once (P.33: it can't be recast once it leaves HAND).
+                let shed = format!("{instance}:shed");
+                self.mint_cardless_sleeve(&shed, player);
+                self.add_attached(target, &shed);
+                self.set_face_down(&shed, true);
+            }
         } else if is_board_placed {
             self.add_to_zone(instance, player, Zone::Board);
             if card_kind.applies_summoning_sickness() {
