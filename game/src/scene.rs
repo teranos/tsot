@@ -1009,7 +1009,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                 let dir = [kr * kt.cos(), ky, kr * kt.sin()];
                 let roll = leaf_hash01(seed, leaf_i);
                 leaf_i += 1;
-                let age = roll * roll * sp.autumn;
+                let age = roll * roll * roll * sp.autumn;
                 canopy_elements.push(MeshInstance {
                     pos: [
                         wx + cluster_r * dir[0],

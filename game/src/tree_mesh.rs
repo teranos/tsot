@@ -287,7 +287,7 @@ pub static PINE: TreeSpecies = TreeSpecies {
     trunk_r_ratio: 0.02,
     trunk_color: [0.22, 0.15, 0.10],
     branch_color: [0.25, 0.17, 0.11],
-    leaves_per_tip: 10,
+    leaves_per_tip: 18,
     cluster_radius_ratio: 0.045,
     leaf_element_ratio: 0.02,
     leaf_aspect: 4.0,
@@ -311,12 +311,12 @@ pub static OAK: TreeSpecies = TreeSpecies {
     trunk_r_ratio: 0.035,
     trunk_color: [0.30, 0.20, 0.11],
     branch_color: [0.34, 0.23, 0.13],
-    leaves_per_tip: 8,
-    cluster_radius_ratio: 0.07,
+    leaves_per_tip: 20,
+    cluster_radius_ratio: 0.08,
     leaf_element_ratio: 0.028,
     leaf_aspect: 1.3,
     leaf_green: [0.13, 0.70, 0.32],
-    autumn: 0.85,
+    autumn: 0.5,
 };
 
 /// Slender upright: thin pale trunk, branches that point up, airy
@@ -335,12 +335,12 @@ pub static BIRCH: TreeSpecies = TreeSpecies {
     trunk_r_ratio: 0.018,
     trunk_color: [0.72, 0.72, 0.68],
     branch_color: [0.55, 0.55, 0.50],
-    leaves_per_tip: 6,
-    cluster_radius_ratio: 0.05,
+    leaves_per_tip: 14,
+    cluster_radius_ratio: 0.06,
     leaf_element_ratio: 0.024,
     leaf_aspect: 1.8,
     leaf_green: [0.35, 0.72, 0.28],
-    autumn: 0.45,
+    autumn: 0.3,
 };
 
 /// Deterministic species pick for a tree seed — a mixed woodland: oak
