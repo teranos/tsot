@@ -133,6 +133,11 @@ impl GameState {
                     // activation slice).
                     return Err(ActivateError::CannotPayComponents);
                 }
+                CostSource::Tap => {
+                    // RULES P.40 `tap` is a cast-only cost source; A.8 does
+                    // not support it in activation costs.
+                    return Err(ActivateError::CannotPayComponents);
+                }
             }
         }
         let p = self.player(controller);
@@ -247,6 +252,9 @@ impl GameState {
                 CostSource::Sacrifice | CostSource::SelfExile => {}
                 CostSource::Attached => {
                     unreachable!("attached rejected at validation");
+                }
+                CostSource::Tap => {
+                    unreachable!("tap rejected at validation");
                 }
             }
         }
@@ -405,6 +413,9 @@ impl GameState {
                     // P.5: source itself pays — already verified on board.
                 }
                 CostSource::Attached => {
+                    return false;
+                }
+                CostSource::Tap => {
                     return false;
                 }
             }

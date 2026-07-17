@@ -417,6 +417,10 @@ pub(crate) fn build_pattern_b_choices(
                 CostSource::Attached => {
                     caps.push(state.eligible_attached_payments(active, picked).len());
                 }
+                // P.40: X-tap not yet driven by the sim builder (tap
+                // affordability is a follow-up); contribute no cap so an
+                // X-tap component doesn't inflate the chosen X.
+                CostSource::Tap => caps.push(0),
             }
         }
         let mut max_x = caps.into_iter().min().unwrap_or(0).min(10) as i32;

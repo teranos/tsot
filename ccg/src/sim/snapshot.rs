@@ -190,6 +190,7 @@ fn format_effective_cost(
                 crate::card::CostSource::Sacrifice => "S",
                 crate::card::CostSource::SelfExile => "X",
                 crate::card::CostSource::Attached => "A",
+                crate::card::CostSource::Tap => "T",
             };
             format!("{amount_str}{source}")
         })
@@ -212,6 +213,7 @@ pub(crate) fn format_cost(components: &[crate::card::CostComponent]) -> String {
                 crate::card::CostSource::Sacrifice => "S",
                 crate::card::CostSource::SelfExile => "X",
                 crate::card::CostSource::Attached => "A",
+                crate::card::CostSource::Tap => "T",
             };
             format!("{amount}{source}")
         })

@@ -292,6 +292,11 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             // No need to count or cap; resolution routes the cast to
             // EXILE instead of its kind's default destination.
             CostSource::SelfExile => {}
+            // P.40: the sim builder does not yet fill `tap_payment_ids`
+            // (tap affordability is a follow-up), so treat any `tap`-cost
+            // card as unplayable rather than let the AI attempt a cast it
+            // can't pay. Conservative; humans can still cast it.
+            CostSource::Tap => return false,
         }
     }
     let hand_red = state.cost_reduction(iid, CostSource::Hand).max(0) as usize;

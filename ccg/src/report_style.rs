@@ -415,6 +415,7 @@ fn source_label(s: CostSource) -> &'static str {
         CostSource::Sacrifice => "sacrifice",
         CostSource::SelfExile => "self-exile",
         CostSource::Attached => "attached",
+        CostSource::Tap => "tap",
     }
 }
 

@@ -216,6 +216,10 @@ pub enum CostSource {
     Sacrifice,
     SelfExile,
     Attached,
+    /// RULES P.40: tap N untapped permanents you control on the BOARD.
+    /// Non-consumptive — the permanents stay and untap at U.2. Cast-only
+    /// (activations reject it). Color anchor per P.40a.
+    Tap,
 }
 
 /// RULES P.32: declarative target categories for cast-time legality. The

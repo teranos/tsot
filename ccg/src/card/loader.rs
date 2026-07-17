@@ -42,6 +42,7 @@ fn parse_source(s: &str) -> Result<CostSource, String> {
         "sacrifice" | "sac" => Ok(CostSource::Sacrifice),
         "self" => Ok(CostSource::SelfExile),
         "attached" | "attach" => Ok(CostSource::Attached),
+        "tap" => Ok(CostSource::Tap),
         other => Err(format!("unknown cost source: {other}")),
     }
 }

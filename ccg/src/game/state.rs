@@ -2135,6 +2135,7 @@ impl GameState {
             crate::card::CostSource::Sacrifice,
             crate::card::CostSource::Attached,
             crate::card::CostSource::SelfExile,
+            crate::card::CostSource::Tap,
         ];
         for source in sources {
             let printed: i32 = inst

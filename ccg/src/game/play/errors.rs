@@ -126,6 +126,12 @@ pub struct PlayChoices {
     /// follow-up slice) needs explicit ids to enforce.
     #[serde(default)]
     pub graveyard_payment_ids: Vec<InstanceId>,
+    /// P.40: one InstanceId per `tap` cost slot. Each id must be an
+    /// untapped permanent the player controls on the BOARD; the engine
+    /// taps them as part of the cost (non-consumptive — they untap at
+    /// U.2). Distinct ids; count must equal the card's total `tap` cost.
+    #[serde(default)]
+    pub tap_payment_ids: Vec<InstanceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,6 +175,18 @@ pub enum PlayError {
     /// lenient: a single color-matching pitch anywhere in the bundle
     /// satisfies it.
     NoGraveyardPaymentForColor,
+    /// P.40: `tap` payment count doesn't equal the card's total `tap` cost.
+    WrongTapPaymentCount { expected: usize, got: usize },
+    /// P.40: a chosen `tap` payment isn't an untapped permanent the player
+    /// controls on the BOARD (not on board, not controlled, already tapped,
+    /// or not in the pool).
+    InvalidTapPayment(InstanceId),
+    /// P.40: a `tap` payment id appears more than once.
+    DuplicateTapPayment(InstanceId),
+    /// P.40a: cast has a `tap` component but no color anchor — no payment
+    /// (tap, HAND, or GRAVEYARD) shares a printed color with the cast, and
+    /// a colorless cast can never anchor.
+    NoTapPaymentForColor,
     /// Card has a variable-X cost component but choices.x_value is None.
     VariableXValueMissing,
     /// RULES P.30: X < 1 on a card that doesn't opt into X = 0

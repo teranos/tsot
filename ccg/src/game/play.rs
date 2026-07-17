@@ -219,6 +219,7 @@ impl GameState {
         let mut graveyard_needed: usize = 0;
         let mut sacrifice_needed: usize = 0;
         let mut attached_needed: usize = 0;
+        let mut tap_needed: usize = 0;
         // Variable-X: if any cost component has is_x, the player must have
         // pre-chosen X (via oracle.choose_int) and supplied it in choices.
         // The same X applies to every variable component.
@@ -254,6 +255,7 @@ impl GameState {
                 CostSource::Graveyard => graveyard_needed += amount,
                 CostSource::Sacrifice => sacrifice_needed += amount,
                 CostSource::Attached => attached_needed += amount,
+                CostSource::Tap => tap_needed += amount,
                 CostSource::SelfExile => {
                     // P.5: routing handled in resolve_played_card_inner;
                     // here the component is trivially satisfied (the
@@ -280,6 +282,8 @@ impl GameState {
             .cost_reduction(instance, CostSource::Attached)
             .max(0) as usize;
         attached_needed = attached_needed.saturating_sub(att_red);
+        let tap_red = self.cost_reduction(instance, CostSource::Tap).max(0) as usize;
+        tap_needed = tap_needed.saturating_sub(tap_red);
 
         // P.24: validate optional jewel-tap. Pull card colors once for both
         // the jewel-color check (here) and any future uses. After validation,
@@ -733,6 +737,59 @@ impl GameState {
             }
         }
 
+        // P.40: `tap` payment validation. Count, then each id must be an
+        // untapped permanent the player controls on the BOARD, distinct.
+        // The tapping itself is applied in the payment-execution block below.
+        if choices.tap_payment_ids.len() != tap_needed {
+            return Err(PlayError::WrongTapPaymentCount {
+                expected: tap_needed,
+                got: choices.tap_payment_ids.len(),
+            });
+        }
+        let mut tap_seen: BTreeSet<&InstanceId> = BTreeSet::new();
+        for tid in &choices.tap_payment_ids {
+            if !tap_seen.insert(tid) {
+                return Err(PlayError::DuplicateTapPayment(tid.clone()));
+            }
+            if !self.player(player).board.contains(tid) {
+                return Err(PlayError::InvalidTapPayment(tid.clone()));
+            }
+            let Some(tap_inst) = self.card_pool.get(tid) else {
+                return Err(PlayError::InvalidTapPayment(tid.clone()));
+            };
+            if tap_inst.controller != player || tap_inst.tapped {
+                return Err(PlayError::InvalidTapPayment(tid.clone()));
+            }
+            // P.40d: no summoning-sickness check — a creature tapped as a
+            // resource is exempt (distinct from A.6's `T:` self-activation).
+        }
+        // P.40a: color anchor. When the cast has a `tap` component, at
+        // least one payment (tap, HAND, or GRAVEYARD) must share a printed
+        // color with the cast. A GRAVEYARD component already forced a color
+        // match via P.12a, so it auto-anchors; a colorless cast can never
+        // anchor.
+        if tap_needed > 0 {
+            let color_set: BTreeSet<String> = cast_card_colors.iter().cloned().collect();
+            let shares = |iid: &InstanceId| -> bool {
+                self.card_pool
+                    .get(iid)
+                    .map(|i| {
+                        i.card()
+                            .colors
+                            .iter()
+                            .any(|c| color_set.contains(&c.to_ascii_lowercase()))
+                    })
+                    .unwrap_or(false)
+            };
+            let anchored = !color_set.is_empty()
+                && (graveyard_needed > 0
+                    || choices.tap_payment_ids.iter().any(|id| shares(id))
+                    || choices.hand_payment_ids.iter().any(|id| shares(id)));
+            if !anchored {
+                return Err(PlayError::NoTapPaymentForColor);
+            }
+        }
+
         // All checks pass — apply mutations through journaled helpers.
 
         // Capture payment-id snapshot for `game.payment_ids()`. Hand and
@@ -831,6 +888,14 @@ impl GameState {
                 );
             }
             self.bump_action("jewel_tap_substitution", player);
+        }
+
+        // P.40: tap the chosen permanents (non-consumptive — they stay on
+        // the BOARD and untap at U.2). Validation above confirmed each is
+        // an untapped permanent the player controls.
+        for tid in choices.tap_payment_ids.clone() {
+            self.set_tapped(&tid, true);
+            self.bump_action("tapped_as_cost", player);
         }
 
         // Clear View-style HAND-substitute payments: each chosen card

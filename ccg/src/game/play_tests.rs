@@ -42,7 +42,7 @@ fn play_subsystem_round_trips_through_journal() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     )
     .unwrap();
@@ -92,7 +92,7 @@ fn play_creature_with_hand_cost_attaches_payments() {
         mutation_target: None,
         gy_hand_payment_ids: vec![],
         attached_payment_ids: vec![],
-        graveyard_payment_ids: vec![],    };
+        graveyard_payment_ids: vec![], tap_payment_ids: vec![] };
     assert!(s
         .play_card(PlayerId::A, &creature, choices, None)
         .is_ok());
@@ -166,7 +166,7 @@ fn play_combined_hand_and_mill_cost() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert!(result.is_ok());
@@ -211,7 +211,7 @@ fn play_card_errors_when_hand_payment_count_wrong() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(
@@ -248,7 +248,7 @@ fn play_card_errors_when_paying_with_self() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::HandPaymentInvalid(creature)));
@@ -280,7 +280,7 @@ fn play_card_errors_on_duplicate_hand_payment() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::DuplicateHandPayment(pay)));
@@ -668,7 +668,7 @@ fn jewel_tap_substitutes_for_one_hand_slot() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -711,7 +711,7 @@ fn jewel_pays_two_hand_components() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -759,7 +759,7 @@ fn jewel_pays_two_graveyard_components() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -809,7 +809,7 @@ fn jewel_pays_one_hand_one_graveyard_mixed() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -834,7 +834,7 @@ fn jewel_tap_rejected_when_jewel_tapped() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::InvalidJewelTap(jewel)));
@@ -856,7 +856,7 @@ fn jewel_tap_rejected_on_color_mismatch() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::InvalidJewelTap(jewel)));
@@ -878,7 +878,7 @@ fn jewel_tap_rejected_on_non_jewel_artifact() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::InvalidJewelTap(jewel)));
@@ -900,7 +900,7 @@ fn jewel_tap_rejected_when_cast_has_no_hand_cost() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::JewelTapWithoutHandCost));
@@ -933,7 +933,7 @@ fn jewel_tap_plus_hand_payment_splits_cost_correctly() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -992,7 +992,7 @@ fn crystal_tap_matches_by_attached_card_color() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -1039,7 +1039,7 @@ fn crystal_tap_rejected_when_no_attached_color_matches() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::InvalidJewelTap(crystal)));
@@ -1089,7 +1089,7 @@ fn symbol_tap_substitutes_for_one_hand_component() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -1131,7 +1131,7 @@ fn symbol_tap_substitutes_for_one_graveyard_component() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -1162,7 +1162,7 @@ fn symbol_tap_no_color_match_required() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -1184,7 +1184,7 @@ fn symbol_tap_rejected_when_already_tapped() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::InvalidJewelTap(symbol)));
@@ -1225,7 +1225,7 @@ fn sacrifice_cost_moves_victim_to_graveyard() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -1254,7 +1254,7 @@ fn sacrifice_count_mismatch_errors() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(
@@ -1282,7 +1282,7 @@ fn sacrifice_rejected_when_victim_not_on_board() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::SacrificePaymentInvalid(phantom)));
@@ -1306,7 +1306,7 @@ fn sacrifice_rejected_when_opponent_controls_victim() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::SacrificePaymentInvalid(opp_card)));
@@ -1428,7 +1428,7 @@ fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         Some(&mut EventContext::new(registry.lua(), &mut oracle)),
     )
     .unwrap();
@@ -1687,7 +1687,7 @@ fn surge_instant_untaps_all_your_creatures_on_play() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         Some(&mut crate::game::EventContext::lua_only(registry.lua())),
     )
     .unwrap();
@@ -1897,7 +1897,7 @@ fn counterspell_resolves_and_removes_underlying_cast() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
     };
     s.open_response_window(a_cast).unwrap();
     s.pass_priority().unwrap(); // A → B
@@ -2073,7 +2073,7 @@ fn hand_payment_color_match_succeeds() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert!(result.is_ok(), "shared color should pay successfully: {result:?}");
@@ -2098,7 +2098,7 @@ fn hand_payment_color_mismatch_rejected() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::HandPaymentIdentityMismatch(pay)));
@@ -2125,7 +2125,7 @@ fn hand_payment_symbol_match_succeeds_across_colors() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert!(result.is_ok(), "shared symbol should pay across colors: {result:?}");
@@ -2155,7 +2155,7 @@ fn hand_payment_matches_when_any_of_multiple_symbols_overlap() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert!(
@@ -2188,7 +2188,7 @@ fn hand_payment_rejected_when_multi_symbol_sets_disjoint() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert!(
@@ -2217,7 +2217,7 @@ fn hand_payment_colorless_cast_takes_any_discard() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert!(result.is_ok(), "colorless cast should accept any discard: {result:?}");
@@ -2245,7 +2245,7 @@ fn hand_payment_no_identity_pay_cannot_satisfy_identified_cast() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::HandPaymentIdentityMismatch(pay)));
@@ -2273,7 +2273,7 @@ fn hand_payment_no_symbol_discard_cannot_pay_for_symboled_cast() {
             mutation_target: None,
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::HandPaymentIdentityMismatch(pay)));
@@ -2869,7 +2869,7 @@ fn clear_view_fills_one_hand_slot_of_a_two_hand_cast() {
             mutation_target: None,
             gy_hand_payment_ids: vec![cv.clone()],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Ok(()));
@@ -2928,7 +2928,7 @@ fn clear_view_cannot_pay_alone_for_one_hand_colored_cast() {
             mutation_target: None,
             gy_hand_payment_ids: vec![cv.clone()],
             attached_payment_ids: vec![],
-            graveyard_payment_ids: vec![],        },
+            graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
         None,
     );
     assert_eq!(result, Err(PlayError::NoHandPaymentForIdentity));
@@ -4030,4 +4030,237 @@ fn every_offered_mutation_target_is_accepted_and_full_sleeve_is_refused() {
         None,
     );
     assert_eq!(r, Err(PlayError::SleeveFull(full)));
+}
+
+// --- P.40 `tap` cost source ---
+
+/// P.40: casting a card with a `tap` cost taps N untapped permanents the
+/// player controls. Cast is green with `tap 2`; the board has a green
+/// permanent (the color anchor, P.40a) and a colorless filler. Both end
+/// tapped, and the cast resolves.
+#[test]
+fn tap_cost_taps_chosen_permanents() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    set_identity(&mut s, &cast, &["green"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 2,
+            source: CostSource::Tap,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let anchor = s.a.deck.drain(0..1).next().unwrap();
+    let filler = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &anchor, &["green"], "");
+    set_identity(&mut s, &filler, &[], "");
+    s.a.board.push(anchor.clone());
+    s.a.board.push(filler.clone());
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            tap_payment_ids: vec![anchor.clone(), filler.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert!(result.is_ok(), "expected ok, got {result:?}");
+    assert!(
+        s.card_pool.get(&anchor).unwrap().tapped,
+        "anchor should be tapped"
+    );
+    assert!(
+        s.card_pool.get(&filler).unwrap().tapped,
+        "filler should be tapped"
+    );
+}
+
+/// P.40a: a tap-only cost needs at least one on-color tap. A green cast
+/// paid entirely with colorless taps is refused.
+#[test]
+fn tap_only_cost_requires_color_anchor() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    set_identity(&mut s, &cast, &["green"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 2,
+            source: CostSource::Tap,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let p1 = s.a.deck.drain(0..1).next().unwrap();
+    let p2 = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &p1, &[], "");
+    set_identity(&mut s, &p2, &[], "");
+    s.a.board.push(p1.clone());
+    s.a.board.push(p2.clone());
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            tap_payment_ids: vec![p1, p2],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::NoTapPaymentForColor));
+}
+
+/// P.40a cross-source anchor: a `gy + tap` cost is anchored by the
+/// mandatory color-matching GY pitch (P.12a), so the taps need not be
+/// on-color. Green cast, colorless taps, one green GY pitch -> ok.
+#[test]
+fn gy_anchor_satisfies_tap_color_requirement() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    set_identity(&mut s, &cast, &["green"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![
+            CostComponent {
+                amount: 1,
+                source: CostSource::Graveyard,
+                is_x: false,
+                kind: None,
+            },
+            CostComponent {
+                amount: 2,
+                source: CostSource::Tap,
+                is_x: false,
+                kind: None,
+            },
+        ],
+    );
+    let gy_pitch = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &gy_pitch, &["green"], "");
+    s.a.graveyard.push(gy_pitch.clone());
+    let p1 = s.a.deck.drain(0..1).next().unwrap();
+    let p2 = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &p1, &[], "");
+    set_identity(&mut s, &p2, &[], "");
+    s.a.board.push(p1.clone());
+    s.a.board.push(p2.clone());
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            graveyard_payment_ids: vec![gy_pitch.clone()],
+            tap_payment_ids: vec![p1.clone(), p2.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert!(result.is_ok(), "expected ok, got {result:?}");
+    assert!(s.card_pool.get(&p1).unwrap().tapped, "p1 should be tapped");
+    assert!(s.card_pool.get(&p2).unwrap().tapped, "p2 should be tapped");
+    assert!(s.a.exile.contains(&gy_pitch), "GY pitch should exile");
+}
+
+/// P.40d: a summoning-sick creature is a legal `tap` payment — tapping a
+/// permanent as a resource is exempt from B.3 (unlike A.6's `T:`).
+#[test]
+fn tap_cost_accepts_summoning_sick_permanent() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    set_identity(&mut s, &cast, &["green"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Tap,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let sick = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &sick, &["green"], "");
+    s.a.board.push(sick.clone());
+    s.set_summoning_sick(&sick, true);
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            tap_payment_ids: vec![sick.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert!(result.is_ok(), "expected ok, got {result:?}");
+    assert!(s.card_pool.get(&sick).unwrap().tapped);
+}
+
+/// P.40: too few `tap` payments for the cost is refused (count mismatch).
+#[test]
+fn tap_cost_wrong_count_refused() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    set_identity(&mut s, &cast, &["green"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 2,
+            source: CostSource::Tap,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let only = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &only, &["green"], "");
+    s.a.board.push(only.clone());
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            tap_payment_ids: vec![only],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(
+        result,
+        Err(PlayError::WrongTapPaymentCount { expected: 2, got: 1 })
+    );
+}
+
+/// P.40: an already-tapped permanent is not a legal `tap` payment.
+#[test]
+fn tap_cost_rejects_already_tapped_permanent() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    set_identity(&mut s, &cast, &["green"], "");
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Tap,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    let tapped = s.a.deck.drain(0..1).next().unwrap();
+    set_identity(&mut s, &tapped, &["green"], "");
+    s.a.board.push(tapped.clone());
+    s.set_tapped(&tapped, true);
+    let result = s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            tap_payment_ids: vec![tapped.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(result, Err(PlayError::InvalidTapPayment(tapped)));
 }
