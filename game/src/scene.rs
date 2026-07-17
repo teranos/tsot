@@ -164,17 +164,23 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// Mesh pipeline shader. Vertex format is (pos, normal, uv) at
-/// locations 0/1/2; the extra `uv` attribute is the day-one
-/// commitment for downstream damage textures — the fragment stage
-/// ignores it today. Instance layout (i_pos, i_color, i_scale)
-/// shifts to locations 3/4/5 to make room for the vertex UV. Normals
-/// receive the inverse-transpose correction for non-uniform
-/// per-instance scale: dividing by `i_scale` per-component is the
-/// diagonal case of the inverse-transpose transform, and the
-/// re-normalize keeps the length at 1 no matter what scale was
-/// applied. Depth-write ON — mesh geometry occludes correctly.
-pub const MESH_SHADER_WGSL: &str = r#"
+/// The vertex half every mesh pipeline shares — Camera + binding, the
+/// (pos, normal, uv) vertex layout at 0/1/2, the (i_pos, i_color,
+/// i_scale, i_axis) instance layout at 3/4/5/6, `basis_from_axis`, the
+/// oriented `vs`, and the light consts. `MESH_SHADER_WGSL` and
+/// `LEAF_SHADER_WGSL` are BOTH this prelude + their own fragment stage,
+/// so the instance/vertex layout can never drift between the two
+/// pipelines. There is exactly one copy of it; a hand-mirrored second
+/// copy is what the pre-refactor code was, and a drift there points
+/// limbs the wrong way in one pipeline only. `vs` gives normals the
+/// inverse-transpose correction for the diagonal per-instance scale
+/// (divide by `i_scale`, renormalize) so tapered limbs shade correctly
+/// under non-uniform scale AND orientation. The vertex `uv` is the
+/// day-one slot for downstream damage/bark textures; the mesh fragment
+/// ignores it, the leaf fragment uses it for the silhouette mask.
+macro_rules! mesh_prelude_wgsl {
+    () => {
+        r#"
 struct Camera { view_proj: mat4x4<f32> };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -230,7 +236,16 @@ fn vs(v: VIn, i: IIn) -> VOut {
 
 const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
 const AMBIENT: f32 = 0.25;
+"#
+    };
+}
 
+/// Mesh pipeline shader for trunks + branch cones — the shared vertex
+/// prelude plus an opaque, single-sided Lambert fragment. Depth-write ON
+/// (set on the pipeline) — mesh geometry occludes correctly.
+pub const MESH_SHADER_WGSL: &str = concat!(
+    mesh_prelude_wgsl!(),
+    r#"
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let l = normalize(LIGHT_DIR);
@@ -238,59 +253,17 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
     return vec4<f32>(in.color * k, 1.0);
 }
-"#;
+"#
+);
 
-/// The mesh shader for LEAF cards: identical vertex stage to
-/// `MESH_SHADER_WGSL` (so the oriented instance layout is shared), but
-/// the fragment stage carves a leaf silhouette out of the quad via its
-/// UV and lights it two-sided. Trunks/branches keep MESH_SHADER; only
-/// the canopy draw uses this pipeline. Vertex half MUST mirror
-/// MESH_SHADER_WGSL — they share the instance/vertex layout.
-pub const LEAF_SHADER_WGSL: &str = r#"
-struct Camera { view_proj: mat4x4<f32> };
-@group(0) @binding(0) var<uniform> camera: Camera;
-
-struct VIn {
-    @location(0) pos: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-};
-struct IIn {
-    @location(3) i_pos: vec3<f32>,
-    @location(4) i_color: vec3<f32>,
-    @location(5) i_scale: vec3<f32>,
-    @location(6) i_axis: vec3<f32>,
-};
-struct VOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) normal: vec3<f32>,
-    @location(1) color: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-};
-
-fn basis_from_axis(axis: vec3<f32>) -> mat3x3<f32> {
-    let up = normalize(axis);
-    let refv = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(1.0, 0.0, 0.0), abs(up.z) > 0.9);
-    let right = normalize(cross(up, refv));
-    let fwd = cross(right, up);
-    return mat3x3<f32>(right, up, fwd);
-}
-
-@vertex
-fn vs(v: VIn, i: IIn) -> VOut {
-    let rot = basis_from_axis(i.i_axis);
-    let world = rot * (v.pos * i.i_scale) + i.i_pos;
-    var o: VOut;
-    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    o.normal = normalize(rot * (v.normal / i.i_scale));
-    o.color = i.i_color;
-    o.uv = v.uv;
-    return o;
-}
-
-const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
-const AMBIENT: f32 = 0.25;
-
+/// Mesh pipeline shader for LEAF cards — the SAME shared vertex prelude
+/// as `MESH_SHADER_WGSL` (so the oriented instance layout is one source,
+/// not a hand-mirrored copy), plus a fragment that carves a leaf
+/// silhouette out of the quad via its UV and lights it two-sided.
+/// Trunks/branches keep MESH_SHADER; only the canopy draw uses this.
+pub const LEAF_SHADER_WGSL: &str = concat!(
+    mesh_prelude_wgsl!(),
+    r#"
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     // Procedural leaf silhouette: a pointed-oval (almond) mask — widest
@@ -305,7 +278,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
     return vec4<f32>(in.color * k, 1.0);
 }
-"#;
+"#
+);
 
 pub const SHADER_WGSL: &str = r#"
 struct Camera { view_proj: mat4x4<f32> };
@@ -1110,6 +1084,24 @@ pub fn snapshot_to_glass_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mesh_and_leaf_shaders_share_one_vertex_prelude() {
+        // The two mesh pipelines differ ONLY in their fragment stage. The
+        // vertex half — Camera, VIn/IIn/VOut, basis_from_axis, vs, light
+        // consts — must be ONE shared source, not two hand-mirrored copies:
+        // a drift there points limbs the wrong way in exactly one pipeline
+        // and only a seer frame would catch it. Assert the two are byte-
+        // identical up to their fragment stage, and each has exactly one.
+        let mesh_prelude = MESH_SHADER_WGSL.split("@fragment").next().unwrap();
+        let leaf_prelude = LEAF_SHADER_WGSL.split("@fragment").next().unwrap();
+        assert_eq!(
+            mesh_prelude, leaf_prelude,
+            "mesh/leaf vertex prelude drifted — they must share one prelude"
+        );
+        assert_eq!(MESH_SHADER_WGSL.matches("@fragment").count(), 1);
+        assert_eq!(LEAF_SHADER_WGSL.matches("@fragment").count(), 1);
+    }
 
     #[test]
     fn floor_follows_the_player_so_there_is_no_world_edge() {
