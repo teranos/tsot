@@ -245,16 +245,31 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             // foliage sits at the branch ends. Each leaf gets an autumn
             // age: mostly green (roll²), ceilinged by the species' autumn
             // — pine stays green, oak reddens, birch yellows.
+            // Each cluster gets its OWN random spin, so no two tips are the
+            // identical Fibonacci spray (without this, leaf k points the
+            // same world direction in every cluster — a lattice of aligned
+            // cards). Each leaf then gets a small directional jitter, so
+            // even within a cluster the cards face — and roll — every which
+            // way, like real foliage.
+            let spin =
+                leaf_hash01(seed, 0xC0FE_0000 ^ tip_i.wrapping_mul(2_654_435_761)) * std::f32::consts::TAU;
             for k in 0..sp.leaves_per_tip {
-                // Fibonacci-sphere direction — also the leaf card's facing
-                // (`axis`), so cards fan outward and catch light per-face
-                // instead of every leaf pointing the same way.
                 let ky = 1.0 - 2.0 * (k as f32 + 0.5) / (sp.leaves_per_tip as f32);
                 let kr = (1.0 - ky * ky).max(0.0).sqrt();
-                let kt = (k as f32) * GOLDEN_ANGLE_RAD;
-                let dir = [kr * kt.cos(), ky, kr * kt.sin()];
+                let kt = (k as f32) * GOLDEN_ANGLE_RAD + spin;
                 let roll = leaf_hash01(seed, leaf_i);
+                let jx = leaf_hash01(seed, leaf_i.wrapping_mul(0x9E37_79B9)) - 0.5;
+                let jy = leaf_hash01(seed, leaf_i.wrapping_mul(0x85EB_CA6B)) - 0.5;
+                let jz = leaf_hash01(seed, leaf_i.wrapping_mul(0xC2B2_AE35)) - 0.5;
                 leaf_i += 1;
+                const JIT: f32 = 0.55; // directional jitter strength
+                let mut dir = [
+                    kr * kt.cos() + jx * JIT,
+                    ky + jy * JIT,
+                    kr * kt.sin() + jz * JIT,
+                ];
+                let dl = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-3);
+                dir = [dir[0] / dl, dir[1] / dl, dir[2] / dl];
                 let age = roll * roll * roll * sp.autumn;
                 canopy_elements.push(MeshInstance {
                     pos: [
