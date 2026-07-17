@@ -494,6 +494,15 @@ pub enum StaticCondition {
 pub enum EventName {
     OnEnterBoard,
     OnDie,
+    /// Fires self-only on a creature the moment it *would* die (a lethal
+    /// Board→GRAVEYARD move), BEFORE any move happens — the one window
+    /// `OnDie` doesn't give (OnDie fires after the move). The handler may
+    /// call `game.prevent_death(self)` (survive on the board, damage
+    /// cleared) or `game.redirect_death(self, zone)` (leave to `zone`
+    /// quietly instead of the graveyard). No call → the death proceeds.
+    /// The White Elephant's "if this would die, shed to survive / else
+    /// exile" replacement.
+    OnWouldDie,
     OnAttack,
     OnBlock,
     OnBlockedBy,
@@ -545,6 +554,7 @@ impl EventName {
         match self {
             EventName::OnEnterBoard => "on_enter_board",
             EventName::OnDie => "on_die",
+            EventName::OnWouldDie => "on_would_die",
             EventName::OnAttack => "on_attack",
             EventName::OnBlock => "on_block",
             EventName::OnBlockedBy => "on_blocked_by",
@@ -559,9 +569,10 @@ impl EventName {
     }
 
     /// All known event names, for loader iteration.
-    pub const ALL: [EventName; 12] = [
+    pub const ALL: [EventName; 13] = [
         EventName::OnEnterBoard,
         EventName::OnDie,
+        EventName::OnWouldDie,
         EventName::OnAttack,
         EventName::OnBlock,
         EventName::OnBlockedBy,

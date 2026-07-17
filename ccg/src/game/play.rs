@@ -8,7 +8,7 @@ mod payments;
 
 use super::context::EventContext;
 use super::lua_api;
-use super::state::{GameState, InstanceId, PlayerId, StackItem, Zone};
+use super::state::{DeathReplacement, GameState, InstanceId, PlayerId, StackItem, Zone};
 use crate::card::{CardType, CostSource, EventName};
 use crate::cast_routing::CastRouting;
 use crate::choice::ResponseAction;
@@ -1427,62 +1427,110 @@ impl GameState {
                 to_kill.push(iid.clone());
             }
         }
-        let mut ctx = ctx;
-        for iid in &to_kill {
-            let owner = self
-                .card_pool
-                .get(iid)
-                .map(|i| i.owner)
-                .unwrap_or(self.active_player);
-            let _ = self.move_card_or_emit(
-                iid,
-                owner,
-                Zone::Board,
-                Zone::Graveyard,
-                "cleanup-zero-y-death",
-            );
-            if let Some(c) = ctx.as_mut() {
-                // cleanup_zero_y_deaths returns () — can't propagate
-                // Pending via `?`. Swallow with a log; the wider engine
-                // sees the death (graveyard move already committed) but
-                // not the handler's pending user-choice request.
-                // TODO(lua-yield): convert this fn to Result<(),
-                // ChoicePending> so death triggers from continuous
-                // checks can suspend like in-play triggers.
-                let _ = lua_api::fire_self_only(
-                    c.lua,
-                    self,
-                    c.oracle(),
-                    EventName::OnDie,
-                    iid,
-                );
-                // OnCreatureDies broadcast to BOARD watchers (excludes
-                // the dying card — already moved to GRAVEYARD above).
-                let watchers: Vec<InstanceId> = self
-                    .a
-                    .board
-                    .iter()
-                    .chain(self.b.board.iter())
-                    .cloned()
-                    .collect();
-                for watcher in &watchers {
-                    let _ = lua_api::fire_with_partner(
-                        c.lua,
-                        self,
-                        c.oracle(),
-                        EventName::OnCreatureDies,
-                        watcher,
-                        iid,
-                    );
-                }
-            }
-            // P.8: cascade attached → EXILE after on_die fires.
-            self.exile_remaining_attached(iid);
-        }
+        // 12.3: route zero-Y deaths through the replacement chokepoint too,
+        // so an OnWouldDie handler can shed-to-survive / redirect here as
+        // well. The continuous check still swallows a ChoicePending (as
+        // before) — the death is committed to state; a handler's pending
+        // user choice can't suspend a continuous cleanup yet.
+        // TODO(lua-yield): make this fn Result<(), ChoicePending> so death
+        // triggers from continuous checks can suspend like in-play triggers.
+        let _ = self.resolve_board_deaths(to_kill, ctx);
     }
 
+    /// 12.3 death-replacement chokepoint. For each creature the caller has
+    /// determined would die, fire `OnWouldDie` (self-only, if a ctx is
+    /// present) BEFORE any move, then act on whatever the handler chose:
+    ///   - `Prevent`  → clear accumulated damage (B.8) and leave it on the
+    ///     BOARD; it did not die.
+    ///   - `Redirect` → move BOARD→zone quietly — no on_die, no
+    ///     `OnCreatureDies` broadcast, no P.8 cascade.
+    ///   - none       → normal death: BOARD→GRAVEYARD, then on_die, the
+    ///     watcher broadcast, and the P.8 attached-cascade.
+    ///
+    /// Returns the iids that actually died (reached the GRAVEYARD) so combat
+    /// can record them. With `ctx = None` no handler runs and every creature
+    /// dies normally — matching the behaviour of any ctx-less death path.
+    pub fn resolve_board_deaths(
+        &mut self,
+        to_kill: Vec<InstanceId>,
+        mut ctx: Option<&mut EventContext>,
+    ) -> Result<Vec<InstanceId>, crate::choice::ChoicePending> {
+        let mut died: Vec<InstanceId> = Vec::new();
+        for iid in to_kill {
+            let owner = self
+                .card_pool
+                .get(&iid)
+                .map(|i| i.owner)
+                .unwrap_or(self.active_player);
 
+            // Fire OnWouldDie BEFORE any move; the handler may record a
+            // replacement via game.prevent_death / game.redirect_death.
+            self.pending_death_replacement = None;
+            if let Some(c) = ctx.as_deref_mut() {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnWouldDie, &iid)?;
+            }
 
+            match self.pending_death_replacement.take() {
+                Some(DeathReplacement::Prevent) => {
+                    // Survive: reset the lethal damage so the next cleanup
+                    // does not immediately re-kill it. Stays on the board.
+                    self.set_damage(&iid, 0.0);
+                }
+                Some(DeathReplacement::Redirect(zone)) => {
+                    // Quiet relocation — no on_die, no broadcast, no cascade.
+                    let _ = self.move_card_or_emit(
+                        &iid,
+                        owner,
+                        Zone::Board,
+                        zone,
+                        "would-die-redirect",
+                    );
+                }
+                None => {
+                    // Normal death: BOARD → GRAVEYARD, then triggers + cascade.
+                    let _ = self.move_card_or_emit(
+                        &iid,
+                        owner,
+                        Zone::Board,
+                        Zone::Graveyard,
+                        "death",
+                    );
+                    died.push(iid.clone());
+                    if let Some(c) = ctx.as_deref_mut() {
+                        lua_api::fire_self_only(
+                            c.lua,
+                            self,
+                            c.oracle(),
+                            EventName::OnDie,
+                            &iid,
+                        )?;
+                        // OnCreatureDies broadcast to BOARD watchers (the
+                        // dead card already left BOARD, so it's excluded).
+                        let watchers: Vec<InstanceId> = self
+                            .a
+                            .board
+                            .iter()
+                            .chain(self.b.board.iter())
+                            .cloned()
+                            .collect();
+                        for watcher in &watchers {
+                            lua_api::fire_with_partner(
+                                c.lua,
+                                self,
+                                c.oracle(),
+                                EventName::OnCreatureDies,
+                                watcher,
+                                &iid,
+                            )?;
+                        }
+                    }
+                    // P.8: cascade attached → EXILE after on_die fires.
+                    self.exile_remaining_attached(&iid);
+                }
+            }
+        }
+        Ok(died)
+    }
 }
 
 #[cfg(test)]

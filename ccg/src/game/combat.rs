@@ -527,56 +527,15 @@ impl GameState {
                 to_kill.push(iid.clone());
             }
         }
-        for iid in &to_kill {
-            let owner = self
-                .card_pool
-                .get(iid)
-                .map(|i| i.owner)
-                .unwrap_or(self.active_player);
-            // Sacred-error sweep: board → graveyard on combat death.
-            let _ = self.move_card_or_emit(
-                iid,
-                owner,
-                Zone::Board,
-                Zone::Graveyard,
-                "combat-death",
-            );
-            outcome.deaths.push(iid.clone());
-            // LUA Phase 1: fire on_die after the Board → Graveyard move so the
-            // handler observes the post-death zone state. Handlers may return
-            // attached cards via game.move; P.8 (auto-exile of leftover
-            // attached) is still TODO and will run after handlers when wired.
-            if let Some(c) = ctx.as_mut() {
-                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid)
-                    .map_err(CombatError::ChoicePending)?;
-                // Broadcast OnCreatureDies to every BOARD watcher (both
-                // sides). The dying card already left BOARD above, so
-                // it's naturally excluded from the snapshot.
-                let watchers: Vec<InstanceId> = self
-                    .a
-                    .board
-                    .iter()
-                    .chain(self.b.board.iter())
-                    .cloned()
-                    .collect();
-                for watcher in &watchers {
-                    lua_api::fire_with_partner(
-                        c.lua,
-                        self,
-                        c.oracle(),
-                        EventName::OnCreatureDies,
-                        watcher,
-                        iid,
-                    )
-                    .map_err(CombatError::ChoicePending)?;
-                }
-            }
-            // P.8: cascade any cards still attached to the dead host
-            // into EXILE. Runs AFTER on_die so handlers like
-            // trustworthy-lender that want to return attached cards to
-            // hand still get the first read.
-            self.exile_remaining_attached(iid);
-        }
+        // 12.3: route combat deaths through the death-replacement
+        // chokepoint. OnWouldDie gets first refusal on each dying creature
+        // (shed-to-survive / redirect-to-exile); with no replacement this is
+        // the same Board→GRAVEYARD + on_die + OnCreatureDies broadcast + P.8
+        // attached-cascade as before.
+        let died = self
+            .resolve_board_deaths(to_kill, ctx)
+            .map_err(CombatError::ChoicePending)?;
+        outcome.deaths.extend(died);
         Ok(outcome)
     }
 }

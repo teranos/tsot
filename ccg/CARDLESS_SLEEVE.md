@@ -102,13 +102,28 @@
     slice-12.1 mint/attach entries. Tests in `game/cardless_sleeve_tests.rs`
     (`z8_a_card_sheds_its_own_sleeve_and_becomes_sleeveless`,
     `z8_shed_own_sleeve_round_trips_through_journal`).
-  - **12.3 Death-replacement hook — NOT STARTED.** The gate for the White
-    elephant (`if this would die: if sleeved, shed to survive; if
-    sleeveless, exile instead`). Death is state-based and immediate today
-    (`damage ≥ Y → GRAVEYARD`); `OnCreatureDies` fires *after* the move, so
-    it cannot prevent death. Needs a replacement layer that intercepts the
-    Board→GY lethal move and lets a card substitute an alternative. This is
-    the real net-new engine work; 12.2 is the primitive it will drive.
+  - **12.3 Death-replacement hook — DONE.** `EventName::OnWouldDie` fires
+    self-only on a dying creature BEFORE any Board→GY move (the window
+    `OnDie` never gave — it fires *after*). The handler signals via two
+    primitives: `game.prevent_death(self)` → survives on the BOARD, engine
+    clears its accumulated damage; `game.redirect_death(self, zone)` → moves
+    Board→zone quietly instead of GRAVEYARD (no on_die, no OnCreatureDies
+    broadcast, no P.8 cascade). No call → normal death. A single chokepoint,
+    `GameState::resolve_board_deaths(to_kill, ctx) -> Vec<InstanceId>`, now
+    owns the death sequence; the combat death loop and `cleanup_zero_y_
+    deaths` both route through it (behaviour-preserving — with no replacement
+    it's the same GY-move + on_die + broadcast + cascade as before). Also
+    exposed the 12.2 primitive to Lua: `game.shed_own_sleeve`,
+    `game.is_sleeveless`. Tests in `game/death_replacement_tests.rs` (shed &
+    survive, sleeveless → exile, ordinary-creature baseline, and a real
+    `confirm_blocks` combat where the elephant survives lethal damage).
+    Scope seam: `cleanup_b8_damage_deaths` (the `game.damage` path) has no
+    Lua ctx today, so a direct-damage spell doesn't yet trigger the ward —
+    it joins when that path gains ctx (pre-existing combat.rs TODO).
+  - **12.4 White Elephant — DONE.** `cards/white-elephant.lua` — white 4/4
+    elephant, `2 hand + 2 attach`, the first consumer of 12.3. `on_would_die`
+    sheds its sleeve and prevents the first lethal death (survives,
+    sleeveless), then redirects to EXILE once sleeveless.
   - **Watch-out — re-sleeve re-arms the ward.** A sleeveless card's shed
     sleeve is attached *to* it, not *around* it, so it stays sleeveless (no
     loop). But the deferred worn/fillable-sleeves branch (putting cards into

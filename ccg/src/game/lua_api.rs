@@ -1106,6 +1106,65 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.is_sleeveless(iid) → bool. True when the card has shed its
+        // sleeve (Z.8) — the mirror of is_cardless (card with no sleeve vs
+        // sleeve with no card). Unknown iid → false. White Elephant's
+        // on_would_die reads this to pick "shed & survive" vs "exile".
+        let cell_isl = &$cell;
+        game.set(
+            "is_sleeveless",
+            $scope.create_function_mut(move |_, iid: String| -> Result<bool> {
+                let s = cell_isl.borrow();
+                Ok(s.card_pool.get(&iid).map(|c| c.sleeveless).unwrap_or(false))
+            })?,
+        )?;
+
+        // game.shed_own_sleeve(iid) → bool. The card pops out of its own
+        // sleeve (Z.8): it becomes sleeveless and the emptied sleeve
+        // attaches to it as a cardless sleeve (Z.6). Returns whether it
+        // actually shed (false if already sleeveless, or itself cardless).
+        let cell_sos = &$cell;
+        game.set(
+            "shed_own_sleeve",
+            $scope.create_function_mut(move |_, iid: String| -> Result<bool> {
+                let mut s = cell_sos.borrow_mut();
+                Ok(s.shed_own_sleeve(&iid))
+            })?,
+        )?;
+
+        // game.prevent_death(iid) — inside an on_would_die handler, mark
+        // that this creature survives its pending death (12.3): it stays on
+        // the BOARD and the engine clears its accumulated damage. The iid
+        // arg is for readability; the decision applies to the death being
+        // resolved right now.
+        let cell_pd = &$cell;
+        game.set(
+            "prevent_death",
+            $scope.create_function_mut(move |_, _iid: String| -> Result<()> {
+                let mut s = cell_pd.borrow_mut();
+                s.pending_death_replacement =
+                    Some(crate::game::state::DeathReplacement::Prevent);
+                Ok(())
+            })?,
+        )?;
+
+        // game.redirect_death(iid, zone) — inside an on_would_die handler,
+        // send this creature to `zone` (e.g. "exile") instead of the
+        // GRAVEYARD (12.3), quietly: no on_die, no broadcast, no cascade.
+        let cell_rd = &$cell;
+        game.set(
+            "redirect_death",
+            $scope.create_function_mut(
+                move |_, (_iid, zone): (String, String)| -> Result<()> {
+                    let z = parse_zone(&zone)?;
+                    let mut s = cell_rd.borrow_mut();
+                    s.pending_death_replacement =
+                        Some(crate::game::state::DeathReplacement::Redirect(z));
+                    Ok(())
+                },
+            )?,
+        )?;
+
         // game.is_clear(iid) → bool. True if the sleeve holds a
         // transparent-frame ("clear") card (C.13). Distinct from a
         // cardless sleeve, which has no frame at all. Shatter

@@ -480,6 +480,28 @@ pub struct GameState {
     /// is serialized but not journaled.
     #[serde(default)]
     pub delayed_triggers: Vec<DelayedTrigger>,
+    /// Transient death-replacement decision set by `game.prevent_death` /
+    /// `game.redirect_death` inside an `OnWouldDie` handler, consumed by
+    /// `resolve_board_deaths` within the same synchronous death resolution.
+    /// Never journaled or serialized — the resulting state changes (damage
+    /// clear, the redirect move) are what get journaled; this decision cell
+    /// is always cleared before and after each death is resolved.
+    #[serde(skip, default)]
+    pub pending_death_replacement: Option<DeathReplacement>,
+}
+
+/// Z.8 death-replacement (12.3): the outcome an `OnWouldDie` handler chose
+/// for a creature about to die. `None` on the state = no replacement, the
+/// death proceeds to GRAVEYARD as usual.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeathReplacement {
+    /// `game.prevent_death` — the creature survives on the BOARD; the
+    /// engine clears its accumulated damage so B.8 doesn't re-kill it.
+    Prevent,
+    /// `game.redirect_death(zone)` — the creature leaves the BOARD to
+    /// `zone` (e.g. EXILE) instead of the GRAVEYARD, quietly: no on_die,
+    /// no watcher broadcast, no P.8 attached-cascade.
+    Redirect(Zone),
 }
 
 impl GameState {
@@ -523,6 +545,7 @@ impl GameState {
             pending_main_phase_returns: Vec::new(),
             pending_events: std::collections::VecDeque::new(),
             delayed_triggers: Vec::new(),
+            pending_death_replacement: None,
         }
     }
 
