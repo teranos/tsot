@@ -533,9 +533,19 @@ impl GameState {
         // the same Board→GRAVEYARD + on_die + OnCreatureDies broadcast + P.8
         // attached-cascade as before.
         let died = self
-            .resolve_board_deaths(to_kill, ctx)
+            .resolve_board_deaths(to_kill, ctx.as_deref_mut())
             .map_err(CombatError::ChoicePending)?;
         outcome.deaths.extend(died);
+        // 12.3b: a combat death's on_die may burn a bystander via
+        // game.damage, which defers that death. resolve_board_deaths ran
+        // under the settling_deaths guard, so its own drains skipped the
+        // damage-settle — run one more drain now (guard released) to resolve
+        // the chained death within this combat, folding it into the report.
+        if let Some(c) = ctx {
+            let chained = lua_api::drain_deferred_events(c.lua, self, c.oracle())
+                .map_err(CombatError::ChoicePending)?;
+            outcome.deaths.extend(chained);
+        }
         Ok(outcome)
     }
 }

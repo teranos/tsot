@@ -129,8 +129,18 @@
     old combat.rs TODO). Re-entrancy guard: `GameState::settling_deaths`
     (transient) makes the nested drains that death-handlers trigger skip the
     scan, so a creature isn't re-killed mid-resolution; chained deaths (a
-    death trigger that burns another creature) surface on the settle loop's
-    next pass. Test: `elephant_survives_a_direct_damage_death`.
+    death trigger that burns another creature) are caught by the settle
+    loop's next pass. Test: `elephant_survives_a_direct_damage_death`.
+  - **12.3c Chained combat deaths settle in-combat — DONE.** `confirm_blocks`
+    resolves its combat deaths once, under the `settling_deaths` guard, so a
+    combat death whose `on_die` burns a bystander used to leave that second
+    death standing until the next drain. `drain_deferred_events` now returns
+    the deaths it settled, and `confirm_blocks` runs one guard-released drain
+    after its combat-death resolution — the chained death resolves within the
+    same combat and is folded into `outcome.deaths` (which sim death-stats
+    read). Behaviour-preserving otherwise: with no chained burn the extra
+    drain finds an empty queue and no lethal creatures. Test:
+    `combat_death_whose_on_die_burns_a_bystander_settles_it_in_combat`.
   - **12.4 White Elephant — DONE.** `cards/white-elephant.lua` — white 4/4
     elephant, `2 hand + 2 attach`, the first consumer of 12.3. `on_would_die`
     sheds its sleeve and prevents the first lethal death (survives,

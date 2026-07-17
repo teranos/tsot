@@ -189,3 +189,63 @@ fn elephant_survives_a_direct_damage_death() {
     assert!(inst.sleeveless, "it shed its sleeve to survive the direct-damage death");
     assert_eq!(inst.damage, 0.0, "its damage was cleared on survival");
 }
+
+#[test]
+fn combat_death_whose_on_die_burns_a_bystander_settles_it_in_combat() {
+    // The chained-death edge: a creature dies in combat, and its on_die
+    // burns a bystander to death via game.damage. That second death must
+    // resolve within the same combat — and be reported in outcome.deaths
+    // (sim death-stats read it) — not left standing until the next drain.
+    let lua = mlua::Lua::new();
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+
+    // Attacker: 3/3 with haste — kills the 1/1 blocker and survives.
+    let atk = s.a.hand[0].clone();
+    {
+        let c = s.card_pool.get_mut(&atk).unwrap().card_mut();
+        c.stats = Some(crate::card::Stats { x: 3.0, y: 3.0 });
+        c.abilities.push("haste".to_string());
+    }
+    s.a.hand.retain(|i| i != &atk);
+    s.a.board.push(atk.clone());
+
+    // Bystander: a 1/1 the blocker's on_die will burn to death.
+    let bystander = s.b.hand[0].clone();
+    s.b.hand.retain(|i| i != &bystander);
+    s.b.board.push(bystander.clone());
+
+    // Blocker: a 1/1 that dies to the attacker; its on_die burns the
+    // bystander for lethal.
+    let blk = s.b.hand[0].clone();
+    let on_die: mlua::Function = lua
+        .load(format!("return function(game, self) game.damage('{bystander}', 5) end"))
+        .eval()
+        .unwrap();
+    s.card_pool
+        .get_mut(&blk)
+        .unwrap()
+        .card_mut()
+        .handlers
+        .insert(crate::card::EventName::OnDie, on_die);
+    s.b.hand.retain(|i| i != &blk);
+    s.b.board.push(blk.clone());
+
+    while s.phase != Phase::Combat {
+        s.next_phase(None).expect("None ctx never yields");
+    }
+    s.declare_attacker(&atk, None).unwrap();
+    s.confirm_attacks().unwrap();
+    s.declare_blocker(&blk, &atk, None).unwrap();
+
+    let mut ctx = EventContext::lua_only(&lua);
+    let outcome = s.confirm_blocks(Some(&mut ctx)).expect("combat resolves");
+
+    assert!(outcome.deaths.contains(&blk), "the blocker died in combat");
+    // The chained death:
+    assert!(!s.b.board.contains(&bystander), "the bystander left the board");
+    assert!(s.b.graveyard.contains(&bystander), "the bystander died to the on_die burn");
+    assert!(
+        outcome.deaths.contains(&bystander),
+        "the chained death is reported in outcome.deaths, resolved within combat"
+    );
+}

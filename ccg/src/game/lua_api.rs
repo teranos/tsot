@@ -1660,7 +1660,7 @@ pub(crate) fn fire_self_only(
     source: &InstanceId,
 ) -> std::result::Result<(), ChoicePending> {
     fire_one(lua, state, oracle, event, source)?;
-    drain_deferred_events(lua, state, oracle)
+    drain_deferred_events(lua, state, oracle).map(|_| ())
 }
 
 /// Drain [`GameState::pending_events`] by firing each queued event via
@@ -1674,7 +1674,8 @@ pub(crate) fn drain_deferred_events(
     lua: &Lua,
     state: &mut GameState,
     oracle: &mut dyn ChoiceOracle,
-) -> std::result::Result<(), ChoicePending> {
+) -> std::result::Result<Vec<InstanceId>, ChoicePending> {
+    let mut died_all: Vec<InstanceId> = Vec::new();
     let mut budget: i32 = 1024;
     loop {
         // Drain queued card events first (OnTapped, delayed triggers, ...).
@@ -1689,7 +1690,7 @@ pub(crate) fn drain_deferred_events(
                      tap/trigger loop is enqueuing events without settling",
                 );
                 state.pending_events.clear();
-                return Ok(());
+                return Ok(died_all);
             }
             fire_one(lua, state, oracle, event, &source)?;
         }
@@ -1728,9 +1729,10 @@ pub(crate) fn drain_deferred_events(
         // run, so the on_die/OnWouldDie fires it triggers won't re-enter
         // this scan. Genuinely new deaths (a death trigger that burns
         // another creature) are caught by this outer loop's next pass.
-        state.resolve_board_deaths(to_kill, Some(&mut ctx))?;
+        let died = state.resolve_board_deaths(to_kill, Some(&mut ctx))?;
+        died_all.extend(died);
     }
-    Ok(())
+    Ok(died_all)
 }
 
 /// Fire an activated-ability handler. Same shape as fire_self_only
@@ -1781,7 +1783,7 @@ pub(crate) fn fire_activated(
     }
     // Slice 11: an activated ability that tapped something externally
     // owes a deferred OnTapped — drain now that the handler has unwound.
-    drain_deferred_events(lua, state, oracle)
+    drain_deferred_events(lua, state, oracle).map(|_| ())
 }
 
 /// Run an activated ability's `validate` hook. Same shape as
@@ -1885,7 +1887,7 @@ pub(crate) fn fire_with_partner(
         }
     }
     // Slice 11: drain any event the partner handler deferred (external tap).
-    drain_deferred_events(lua, state, oracle)
+    drain_deferred_events(lua, state, oracle).map(|_| ())
 }
 
 #[cfg(test)]
