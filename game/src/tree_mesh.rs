@@ -624,6 +624,11 @@ fn perp_basis(dir: [f32; 3]) -> ([f32; 3], [f32; 3]) {
 /// Chance a tip on a deadwood-bearing tree is a bare dead twig.
 const DEAD_TIP_CHANCE: f32 = 0.18;
 
+// A recursive limb generator: the accumulators (out, rng) and the
+// per-limb geometry (base, dir, len, radius, depth) plus the species
+// context genuinely are distinct arguments; bundling them into a struct
+// just to satisfy the arg-count heuristic would obscure the recursion.
+#[allow(clippy::too_many_arguments)]
 fn grow_limb(
     out: &mut Vec<BranchSegment>,
     base: [f32; 3],

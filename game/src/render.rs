@@ -48,6 +48,10 @@ struct GpuCamera {
 /// creates the pipeline, allocates buffers/textures, submits, reads
 /// back, writes PNG, drops everything. Not optimised for repeated
 /// frames — this is once-per-commit CI output, not a game loop.
+// A GPU render entry point: device, queue, camera, three distinct
+// instance sets, time, and an output path are each genuinely their own
+// argument — grouping them into a struct would be an artificial vehicle.
+#[allow(clippy::too_many_arguments)]
 pub fn render_scene(
     dev: &SeerDevice,
     queue: &Queue,
