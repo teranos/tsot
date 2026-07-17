@@ -83,13 +83,16 @@ jobs:
               --content-type "image/png"
           done
 
-      - name: Upload multi-frame render (frame-0..3.png)
+      - name: Upload multi-frame render (one frame per tour stop)
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
         run: |
-          for i in 0 1 2 3; do
-            if [ ! -f "game/out/frame-$i.png" ]; then continue; fi
+          # One frame per tour stop (school/house/orchard/campsite/forest)
+          # — glob so it scales with however many the tour produced.
+          for f in game/out/frame-*.png; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
             for prefix in "perf/${{ github.sha }}" "perf/latest"; do
-              aws s3 cp "game/out/frame-$i.png" "s3://seer-sbvh-static/$prefix/frame-$i.png" \
+              aws s3 cp "$f" "s3://seer-sbvh-static/$prefix/$name" \
                 --cache-control "public, max-age=300" \
                 --content-type "image/png"
             done
@@ -116,7 +119,7 @@ jobs:
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.SEER_DISTRIBUTION_ID }}" \
-            --paths '/perf/latest/frame.png' '/perf/latest/frame-0.png' '/perf/latest/frame-1.png' '/perf/latest/frame-2.png' '/perf/latest/frame-3.png' '/perf/latest/game-native.log' \
+            --paths '/perf/latest/frame.png' '/perf/latest/frame-*.png' '/perf/latest/game-native.log' \
             --query 'Invalidation.Id' --output text
 
       - name: Upload native log (CI artifact)

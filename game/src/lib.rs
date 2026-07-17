@@ -611,7 +611,13 @@ fn _init() {
     {
         let multi_dir = std::env::var("SEER_MULTI_FRAME_DIR").ok();
         let checkpoints: Vec<u32> = if multi_dir.is_some() {
-            vec![frames / 4, frames / 2, 3 * frames / 4, frames]
+            // One frame per tour stop, at the END of its window — by then
+            // the player has walked the last stretch in and is at rest at
+            // the target, so each stop (school / house / orchard / …) is
+            // captured standing in it, not while still approaching. Scales
+            // to however many stops the tour found.
+            let n = tour_labels.len().max(1) as u32;
+            (1..=n).map(|i| (i * frames / n).max(1)).collect()
         } else {
             vec![frames]
         };
