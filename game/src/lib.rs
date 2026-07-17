@@ -796,7 +796,7 @@ fn render_single(
         [snap.player.x, snap.player.y, snap.player.z],
         room::FLOOR_HALF,
     );
-    render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, out_path)?;
+    render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, 0.0, out_path)?;
     Ok(())
 }
 
@@ -817,7 +817,11 @@ fn render_snapshots(
             [snap.player.x, snap.player.y, snap.player.z],
             room::FLOOR_HALF,
         );
-        render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, &out_path)?;
+        // Each tour stop gets a distinct wind phase so the still frames
+        // aren't all the identical leaf offset (a single PNG can't show
+        // motion; the browser animates continuously off its frame count).
+        let time = i as f32 * 0.7;
+        render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, time, &out_path)?;
         out_paths.push(out_path);
     }
     Ok(out_paths)

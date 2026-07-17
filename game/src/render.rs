@@ -36,6 +36,12 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 #[derive(Clone, Copy)]
 struct GpuCamera {
     view_proj: [[f32; 4]; 4],
+    /// `x` = elapsed seconds driving leaf-wind sway (synthetic ticks, no
+    /// `bevy_time`); `yzw` spare. Matches `Camera.wind` in the mesh/leaf
+    /// WGSL. Non-mesh shaders declare only `view_proj` and ignore the
+    /// extra 16 bytes — a larger uniform buffer than a shader reads is
+    /// valid.
+    wind: [f32; 4],
 }
 
 /// Render the scene to a PNG at `out_path`. Independent per invocation:
@@ -49,6 +55,7 @@ pub fn render_scene(
     instances: &[SceneInstance],
     glass_instances: &[SceneInstance],
     mesh_trees: &MeshTreeInstances,
+    time: f32,
     out_path: &str,
 ) -> Result<()> {
     let device: &Device = dev.wgpu();
@@ -134,6 +141,7 @@ pub fn render_scene(
 
     let camera_data = GpuCamera {
         view_proj: camera.view_proj(),
+        wind: [time, 0.0, 0.0, 0.0],
     };
     let camera_buf = dev.create_buffer(&wgpu::BufferDescriptor {
         label: Some("seer.render.camera"),

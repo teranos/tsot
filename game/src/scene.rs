@@ -164,24 +164,23 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// The vertex half every mesh pipeline shares — Camera + binding, the
-/// (pos, normal, uv) vertex layout at 0/1/2, the (i_pos, i_color,
-/// i_scale, i_axis) instance layout at 3/4/5/6, `basis_from_axis`, the
-/// oriented `vs`, and the light consts. `MESH_SHADER_WGSL` and
-/// `LEAF_SHADER_WGSL` are BOTH this prelude + their own fragment stage,
-/// so the instance/vertex layout can never drift between the two
-/// pipelines. There is exactly one copy of it; a hand-mirrored second
-/// copy is what the pre-refactor code was, and a drift there points
-/// limbs the wrong way in one pipeline only. `vs` gives normals the
-/// inverse-transpose correction for the diagonal per-instance scale
-/// (divide by `i_scale`, renormalize) so tapered limbs shade correctly
-/// under non-uniform scale AND orientation. The vertex `uv` is the
-/// day-one slot for downstream damage/bark textures; the mesh fragment
-/// ignores it, the leaf fragment uses it for the silhouette mask.
-macro_rules! mesh_prelude_wgsl {
+/// The shared LAYOUT every mesh pipeline binds — Camera + binding (with
+/// the `wind` slot), the (pos, normal, uv) vertex layout at 0/1/2, the
+/// (i_pos, i_color, i_scale, i_axis) instance layout at 3/4/5/6,
+/// `basis_from_axis`, and the light consts. `MESH_SHADER_WGSL` and
+/// `LEAF_SHADER_WGSL` BOTH begin with this, so the instance/vertex ABI
+/// can never drift between the two pipelines — the real cross-pipeline
+/// hazard (a mistyped location points limbs the wrong way in one
+/// pipeline only). The per-pipeline VERTEX stage is deliberately NOT
+/// shared: the mesh `vs` is rigid, the leaf `vs` adds wind sway, so
+/// trunks stand still while foliage moves. `wind.x` is elapsed seconds
+/// (synthetic ticks — no `bevy_time`, same model as the campfire
+/// flicker); `.yzw` are spare. The vertex `uv` is the day-one slot for
+/// downstream damage/bark textures.
+macro_rules! mesh_layout_wgsl {
     () => {
         r#"
-struct Camera { view_proj: mat4x4<f32> };
+struct Camera { view_proj: mat4x4<f32>, wind: vec4<f32> };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
 struct VIn {
@@ -218,6 +217,19 @@ fn basis_from_axis(axis: vec3<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(right, up, fwd);
 }
 
+const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
+const AMBIENT: f32 = 0.25;
+"#
+    };
+}
+
+/// Mesh pipeline shader for trunks + branch cones — the shared layout, a
+/// RIGID vertex stage (no wind — a trunk doesn't flutter), and an
+/// opaque single-sided Lambert fragment. Depth-write ON (set on the
+/// pipeline) so mesh geometry occludes correctly.
+pub const MESH_SHADER_WGSL: &str = concat!(
+    mesh_layout_wgsl!(),
+    r#"
 @vertex
 fn vs(v: VIn, i: IIn) -> VOut {
     let rot = basis_from_axis(i.i_axis);
@@ -234,18 +246,6 @@ fn vs(v: VIn, i: IIn) -> VOut {
     return o;
 }
 
-const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
-const AMBIENT: f32 = 0.25;
-"#
-    };
-}
-
-/// Mesh pipeline shader for trunks + branch cones — the shared vertex
-/// prelude plus an opaque, single-sided Lambert fragment. Depth-write ON
-/// (set on the pipeline) — mesh geometry occludes correctly.
-pub const MESH_SHADER_WGSL: &str = concat!(
-    mesh_prelude_wgsl!(),
-    r#"
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let l = normalize(LIGHT_DIR);
@@ -256,14 +256,36 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 "#
 );
 
-/// Mesh pipeline shader for LEAF cards — the SAME shared vertex prelude
-/// as `MESH_SHADER_WGSL` (so the oriented instance layout is one source,
-/// not a hand-mirrored copy), plus a fragment that carves a leaf
+/// Mesh pipeline shader for LEAF cards — the SAME shared layout as
+/// `MESH_SHADER_WGSL` (so the instance/vertex ABI is one source), a
+/// vertex stage that adds WIND SWAY, and a fragment that carves a leaf
 /// silhouette out of the quad via its UV and lights it two-sided.
 /// Trunks/branches keep MESH_SHADER; only the canopy draw uses this.
 pub const LEAF_SHADER_WGSL: &str = concat!(
-    mesh_prelude_wgsl!(),
+    mesh_layout_wgsl!(),
     r#"
+@vertex
+fn vs(v: VIn, i: IIn) -> VOut {
+    let rot = basis_from_axis(i.i_axis);
+    var world = rot * (v.pos * i.i_scale) + i.i_pos;
+    // Wind: sway each leaf card horizontally by a time-varying offset,
+    // phased by its world position so the canopy ripples as a field
+    // rather than sliding as one slab. Amplitude is a few world units —
+    // a leaf card is ~8 units, so this is a gentle flutter, not a
+    // detachment. `camera.wind.x` is elapsed seconds. Trunks/branches
+    // use the rigid mesh vs and never move.
+    let t = camera.wind.x;
+    let phase = world.x * 0.010 + world.z * 0.013;
+    world.x = world.x + 5.0 * sin(t * 1.6 + phase);
+    world.z = world.z + 3.0 * sin(t * 1.2 + phase * 1.7);
+    var o: VOut;
+    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    o.normal = normalize(rot * (v.normal / i.i_scale));
+    o.color = i.i_color;
+    o.uv = v.uv;
+    return o;
+}
+
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     // Procedural leaf silhouette: a pointed-oval (almond) mask — widest
@@ -1150,21 +1172,50 @@ mod tests {
     }
 
     #[test]
-    fn mesh_and_leaf_shaders_share_one_vertex_prelude() {
-        // The two mesh pipelines differ ONLY in their fragment stage. The
-        // vertex half — Camera, VIn/IIn/VOut, basis_from_axis, vs, light
-        // consts — must be ONE shared source, not two hand-mirrored copies:
-        // a drift there points limbs the wrong way in exactly one pipeline
-        // and only a seer frame would catch it. Assert the two are byte-
-        // identical up to their fragment stage, and each has exactly one.
-        let mesh_prelude = MESH_SHADER_WGSL.split("@fragment").next().unwrap();
-        let leaf_prelude = LEAF_SHADER_WGSL.split("@fragment").next().unwrap();
-        assert_eq!(
-            mesh_prelude, leaf_prelude,
-            "mesh/leaf vertex prelude drifted — they must share one prelude"
+    fn mesh_and_leaf_shaders_share_one_layout() {
+        // The instance/vertex ABI (Camera, VIn/IIn/VOut, basis_from_axis,
+        // light consts) must be ONE shared source, not two hand-mirrored
+        // copies — a drift there points limbs the wrong way in exactly one
+        // pipeline and only a seer frame would catch it. Both shaders BEGIN
+        // with the shared layout; each then adds its own single vertex +
+        // fragment stage (the vertex stages differ — leaves sway, trunks
+        // don't — which is why the layout, not the whole vertex half, is
+        // what's shared).
+        let layout = mesh_layout_wgsl!();
+        assert!(
+            MESH_SHADER_WGSL.starts_with(layout),
+            "mesh shader must begin with the shared layout"
         );
-        assert_eq!(MESH_SHADER_WGSL.matches("@fragment").count(), 1);
-        assert_eq!(LEAF_SHADER_WGSL.matches("@fragment").count(), 1);
+        assert!(
+            LEAF_SHADER_WGSL.starts_with(layout),
+            "leaf shader must begin with the shared layout"
+        );
+        for src in [MESH_SHADER_WGSL, LEAF_SHADER_WGSL] {
+            assert_eq!(src.matches("@vertex").count(), 1);
+            assert_eq!(src.matches("@fragment").count(), 1);
+        }
+    }
+
+    #[test]
+    fn wind_sways_leaves_but_not_trunks() {
+        // The leaf pipeline reads elapsed time (`camera.wind`) in its
+        // vertex stage and displaces the card; the mesh (trunk/branch)
+        // pipeline never references it and stays rigid. So a breeze moves
+        // foliage while trunks stand still. Both still DECLARE `wind` (the
+        // shared Camera struct must match the uniform buffer), but only the
+        // leaf vs USES it.
+        assert!(
+            LEAF_SHADER_WGSL.contains("camera.wind"),
+            "leaf vertex stage must read camera.wind"
+        );
+        assert!(
+            !MESH_SHADER_WGSL.contains("camera.wind"),
+            "trunk/branch vertex stage must NOT sway with wind"
+        );
+        assert!(
+            MESH_SHADER_WGSL.contains("wind: vec4"),
+            "mesh Camera struct must still declare wind to match the uniform buffer"
+        );
     }
 
     #[test]

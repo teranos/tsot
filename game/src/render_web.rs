@@ -23,6 +23,9 @@ use crate::tree_mesh::{self, MeshVertex};
 #[derive(Clone, Copy)]
 struct GpuCamera {
     view_proj: [[f32; 4]; 4],
+    /// `x` = elapsed seconds driving leaf-wind sway; `yzw` spare. Mirrors
+    /// `Camera.wind` in the mesh/leaf WGSL and the native `GpuCamera`.
+    wind: [f32; 4],
 }
 
 struct RenderWebState {
@@ -317,7 +320,7 @@ pub fn init(canvas_id: &str) -> bool {
 
 /// Per-frame render. Writes camera + instances; recreates the instance
 /// buffer if the scene grew past its capacity.
-pub fn frame(camera: &SceneCamera, instances: &[SceneInstance]) -> u32 {
+pub fn frame(camera: &SceneCamera, instances: &[SceneInstance], time: f32) -> u32 {
     STATE.with(|c| {
         let mut opt = c.borrow_mut();
         let Some(state) = opt.as_mut() else {
@@ -326,6 +329,7 @@ pub fn frame(camera: &SceneCamera, instances: &[SceneInstance]) -> u32 {
 
         let gpu_camera = GpuCamera {
             view_proj: camera.view_proj(),
+            wind: [time, 0.0, 0.0, 0.0],
         };
         state.camera_buf.write(as_bytes(std::slice::from_ref(&gpu_camera)));
 
@@ -554,7 +558,16 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
         [snap.player.x, snap.player.y, snap.player.z],
         crate::room::FLOOR_HALF,
     );
-    let world_result = frame(&camera, &instances);
+    // Elapsed seconds for leaf-wind sway — synthetic ticks (no bevy_time,
+    // same model as the campfire flicker). Advances every frame, so the
+    // browser canopy ripples continuously.
+    let time = app
+        .world()
+        .get_resource::<crate::FrameCount>()
+        .map(|f| f.0)
+        .unwrap_or(0) as f32
+        * crate::campfire::TICK_SECONDS;
+    let world_result = frame(&camera, &instances, time);
     if world_result != 0 {
         return world_result;
     }
