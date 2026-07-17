@@ -13,7 +13,8 @@ use crate::gpu_web;
 use crate::hud;
 use crate::obs;
 use crate::scene::{
-    self, GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, GpuVertex, MESH_SHADER_WGSL, MeshInstance,
+    self, GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, GpuVertex, LEAF_SHADER_WGSL, MESH_SHADER_WGSL,
+    MeshInstance,
     SHADER_WGSL, SceneCamera, SceneInstance, UI_SHADER_WGSL, as_bytes, cube_geometry,
 };
 use crate::tree_mesh::{self, MeshVertex};
@@ -55,6 +56,7 @@ struct RenderWebState {
     // second — one buffer, two draw calls dispatched with a first_instance
     // offset for the canopy pass.
     mesh_pipeline: gpu_web::GameRenderPipeline,
+    leaf_pipeline: gpu_web::GameRenderPipeline,
     trunk_vertex_buf: gpu_web::GameBuffer,
     trunk_index_buf: gpu_web::GameBuffer,
     trunk_index_count: u32,
@@ -208,6 +210,27 @@ pub fn init(canvas_id: &str) -> bool {
         obs::emit("[render_web] init: mesh pipeline null");
         return false;
     };
+    // Leaf pipeline: same vertex/instance layout, a fragment shader that
+    // carves a leaf silhouette from the card (LEAF_SHADER_WGSL). Only the
+    // canopy draw uses it; trunks/branches keep the mesh pipeline.
+    let leaf_shader = gpu_web::GameShaderModule::create(LEAF_SHADER_WGSL, "render_web.leaf.shader");
+    let Some(leaf_shader) = leaf_shader else {
+        obs::emit("[render_web] init: leaf shader null");
+        return false;
+    };
+    let leaf_pipeline = gpu_web::GameRenderPipeline::create_mesh(
+        &pl_layout,
+        &leaf_shader,
+        std::mem::size_of::<MeshVertex>() as u32,
+        std::mem::size_of::<MeshInstance>() as u32,
+        gpu_web::color_format::BGRA8UNORM,
+        gpu_web::depth_format::DEPTH32FLOAT,
+        "render_web.leaf.pipeline",
+    );
+    let Some(leaf_pipeline) = leaf_pipeline else {
+        obs::emit("[render_web] init: leaf pipeline null");
+        return false;
+    };
 
     // Bake the two shared tree geometries. Trunk = tapered cone at
     // (base=1, top=0.6, height=1) — per-tree instances uniform-scale
@@ -274,6 +297,7 @@ pub fn init(canvas_id: &str) -> bool {
             ui_instance_buf: None,
             ui_instance_capacity: 0,
             mesh_pipeline,
+            leaf_pipeline,
             trunk_vertex_buf,
             trunk_index_buf,
             trunk_index_count,
@@ -464,7 +488,7 @@ pub fn frame_mesh(trunks: &[MeshInstance], canopy: &[MeshInstance]) -> u32 {
         if !canopy.is_empty() {
             let r = gpu_web::render_mesh(
                 &state.target,
-                &state.mesh_pipeline,
+                &state.leaf_pipeline,
                 &state.bind_group,
                 &state.canopy_vertex_buf,
                 &state.canopy_index_buf,

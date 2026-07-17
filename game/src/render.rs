@@ -23,9 +23,8 @@ use wgpu::{Device, Queue};
 use crate::gpu::SeerDevice;
 use crate::obs;
 use crate::scene::{
-    GLASS_SHADER_WGSL, GpuVertex, MESH_SHADER_WGSL, MeshInstance, MeshTreeInstances, SceneCamera,
-    SceneInstance,
-    SHADER_WGSL, as_bytes, cube_geometry,
+    GLASS_SHADER_WGSL, GpuVertex, LEAF_SHADER_WGSL, MESH_SHADER_WGSL, MeshInstance,
+    MeshTreeInstances, SceneCamera, SceneInstance, SHADER_WGSL, as_bytes, cube_geometry,
 };
 use crate::tree_mesh::{self, MeshVertex};
 
@@ -331,65 +330,77 @@ pub fn render_scene(
         label: Some("seer.render.mesh.shader"),
         source: wgpu::ShaderSource::Wgsl(MESH_SHADER_WGSL.into()),
     });
-    let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("seer.render.mesh.pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: mesh_shader.wgpu(),
-            entry_point: Some("vs"),
-            compilation_options: Default::default(),
-            buffers: &[
-                wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<MeshVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3,
-                        1 => Float32x3,
-                        2 => Float32x2
-                    ],
-                },
-                wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<MeshInstance>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![
-                        3 => Float32x3,
-                        4 => Float32x3,
-                        5 => Float32x3,
-                        6 => Float32x3
-                    ],
-                },
-            ],
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Less),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: mesh_shader.wgpu(),
-            entry_point: Some("fs"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: TARGET_FORMAT,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
+    // Leaf cards use the same vertex stage but a fragment stage that
+    // carves a leaf silhouette from the quad (see LEAF_SHADER_WGSL).
+    let leaf_shader = dev.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("seer.render.leaf.shader"),
+        source: wgpu::ShaderSource::Wgsl(LEAF_SHADER_WGSL.into()),
     });
+    // One descriptor, two pipelines — trunk/branch cones and leaf cards
+    // differ only in the fragment shader.
+    let make_mesh_pipeline = |module: &wgpu::ShaderModule, label: &str| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<MeshVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x3,
+                            1 => Float32x3,
+                            2 => Float32x2
+                        ],
+                    },
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<MeshInstance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![
+                            3 => Float32x3,
+                            4 => Float32x3,
+                            5 => Float32x3,
+                            6 => Float32x3
+                        ],
+                    },
+                ],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: TARGET_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let mesh_pipeline = make_mesh_pipeline(mesh_shader.wgpu(), "seer.render.mesh.pipeline");
+    let leaf_pipeline = make_mesh_pipeline(leaf_shader.wgpu(), "seer.render.leaf.pipeline");
 
     // Readback path: color texture → staging buffer → CPU → PNG.
     // Row pitch must be a multiple of 256 bytes (COPY_BYTES_PER_ROW
@@ -479,6 +490,7 @@ pub fn render_scene(
             pass.draw_indexed(0..trunk_indices.len() as u32, 0, 0..trunk_count);
         }
         if !mesh_trees.canopy_elements.is_empty() {
+            pass.set_pipeline(&leaf_pipeline);
             pass.set_vertex_buffer(0, canopy_vertex_buf.wgpu().slice(..));
             pass.set_index_buffer(canopy_index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
             let trunk_count = mesh_trees.trunks.len() as u32;

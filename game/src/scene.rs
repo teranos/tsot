@@ -240,6 +240,73 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// The mesh shader for LEAF cards: identical vertex stage to
+/// `MESH_SHADER_WGSL` (so the oriented instance layout is shared), but
+/// the fragment stage carves a leaf silhouette out of the quad via its
+/// UV and lights it two-sided. Trunks/branches keep MESH_SHADER; only
+/// the canopy draw uses this pipeline. Vertex half MUST mirror
+/// MESH_SHADER_WGSL — they share the instance/vertex layout.
+pub const LEAF_SHADER_WGSL: &str = r#"
+struct Camera { view_proj: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> camera: Camera;
+
+struct VIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+};
+struct IIn {
+    @location(3) i_pos: vec3<f32>,
+    @location(4) i_color: vec3<f32>,
+    @location(5) i_scale: vec3<f32>,
+    @location(6) i_axis: vec3<f32>,
+};
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) color: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+};
+
+fn basis_from_axis(axis: vec3<f32>) -> mat3x3<f32> {
+    let up = normalize(axis);
+    let refv = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(1.0, 0.0, 0.0), abs(up.z) > 0.9);
+    let right = normalize(cross(up, refv));
+    let fwd = cross(right, up);
+    return mat3x3<f32>(right, up, fwd);
+}
+
+@vertex
+fn vs(v: VIn, i: IIn) -> VOut {
+    let rot = basis_from_axis(i.i_axis);
+    let world = rot * (v.pos * i.i_scale) + i.i_pos;
+    var o: VOut;
+    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    o.normal = normalize(rot * (v.normal / i.i_scale));
+    o.color = i.i_color;
+    o.uv = v.uv;
+    return o;
+}
+
+const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
+const AMBIENT: f32 = 0.25;
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    // Procedural leaf silhouette: a pointed-oval (almond) mask — widest
+    // at v=0.5, tapering to points at v=0 and v=1. Discard outside so a
+    // rectangular card renders as a leaf outline; the card's aspect
+    // (instance scale) makes it a broad blade or a slim needle.
+    let half_w = 0.5 * sin(3.14159265 * in.uv.y);
+    if (abs(in.uv.x - 0.5) > half_w) { discard; }
+    let l = normalize(LIGHT_DIR);
+    // Two-sided: a leaf catches light on whichever face meets the sun.
+    let ndotl = abs(dot(normalize(in.normal), l));
+    let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
+    return vec4<f32>(in.color * k, 1.0);
+}
+"#;
+
 pub const SHADER_WGSL: &str = r#"
 struct Camera { view_proj: mat4x4<f32> };
 @group(0) @binding(0) var<uniform> camera: Camera;
