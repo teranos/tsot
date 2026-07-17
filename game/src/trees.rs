@@ -49,14 +49,14 @@ fn hash01(ix: i32, iz: i32, salt: u32) -> f32 {
     wang_hash(ix, iz, salt) as f32 / u32::MAX as f32
 }
 
-/// Height for an authored (CDDA) tree at a world position — deterministic,
-/// hash-varied, in a shorter range than the wild forest (an orchard is
-/// tended, not old-growth). Peers agree because it's a pure hash of the
-/// tile.
+/// Height for an authored (CDDA) tree at a world position — short and
+/// NEARLY uniform (tended, planted trees, not wild old-growth), so an
+/// orchard's rows line up instead of a jumble of mismatched crowns.
+/// Deterministic — peers agree via the pure tile hash.
 pub fn authored_height(x: f32, z: f32) -> f32 {
     let ix = (x / CELL).round() as i32;
     let iz = (z / CELL).round() as i32;
-    TREE_MIN_H + hash01(ix, iz, TREE_HEIGHT_SALT) * (TREE_MAX_H - TREE_MIN_H) * 0.5
+    260.0 + hash01(ix, iz, TREE_HEIGHT_SALT) * 40.0
 }
 
 /// Smooth value noise in [0,1] at world (x,z) — bilinear-interpolated

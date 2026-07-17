@@ -195,7 +195,7 @@ mod tests {
         use crate::template::TreeKind;
         let t = orchard_template().expect("orchard imports");
         assert!(t.props.is_empty(), "an orchard has no building props");
-        assert_eq!(t.trees.len(), 36, "6×6 apple grid = 36 trees");
+        assert_eq!(t.trees.len(), 25, "5×5 apple grid = 25 trees");
         assert!(
             t.trees.iter().all(|tp| tp.kind == TreeKind::Apple),
             "every orchard tree is an apple"
