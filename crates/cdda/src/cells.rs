@@ -88,8 +88,15 @@ pub(crate) fn cell_to_prop(
 /// don't yet have geometry for, → None.
 pub(crate) fn cell_to_tree(ch: char, terrain: &HashMap<char, String>) -> Option<TreeKind> {
     let t = terrain.get(&ch)?;
-    if !t.contains("tree") || t.contains("dead") || t.contains("stump") || t.contains("young") {
+    if !t.contains("tree") || t.contains("stump") || t.contains("young") {
         return None;
+    }
+    // A dead snag is dead whatever it was; fungal growth is its own thing.
+    if t.contains("dead") {
+        return Some(TreeKind::Dead);
+    }
+    if t.contains("fungal") {
+        return Some(TreeKind::Fungal);
     }
     // Fruit/nut orchard trees → the round fruit-tree form.
     let fruit = ["apple", "pear", "cherry", "peach", "plum", "apricot", "mulberry",
@@ -102,7 +109,9 @@ pub(crate) fn cell_to_tree(ch: char, terrain: &HashMap<char, String>) -> Option<
         TreeKind::Birch
     } else if t.contains("willow") {
         TreeKind::Willow
-    } else if t.contains("maple") || t.contains("oak") || t.contains("elm") || t.contains("beech") {
+    } else if t.contains("maple") {
+        TreeKind::Maple
+    } else if t.contains("oak") || t.contains("elm") || t.contains("beech") {
         TreeKind::Oak
     } else {
         TreeKind::Generic

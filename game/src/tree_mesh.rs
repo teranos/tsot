@@ -371,13 +371,87 @@ pub static WILLOW: TreeSpecies = TreeSpecies {
 /// common, pine and birch less so. Peers pass the same seed → same
 /// species.
 pub fn species_for(seed: u32) -> &'static TreeSpecies {
-    match (seed >> 13) % 10 {
-        0..=3 => &OAK,    // common
-        4..=5 => &PINE,
-        6..=7 => &BIRCH,
-        _ => &WILLOW,
+    match (seed >> 13) % 20 {
+        0..=5 => &OAK, // common
+        6..=8 => &MAPLE,
+        9..=11 => &PINE,
+        12..=14 => &BIRCH,
+        15..=16 => &WILLOW,
+        17 => &DEAD, // a rare snag
+        _ => &OAK,
     }
 }
+
+/// Broadleaf like the oak but a fiery turn — yellow-green running to
+/// orange/red. A maple.
+pub static MAPLE: TreeSpecies = TreeSpecies {
+    primaries: (3, 5),
+    base_y: (0.30, 0.55),
+    primary_spread: (0.5, 0.9),
+    primary_len: (0.24, 0.34),
+    max_depth: 3,
+    child_spread: (0.5, 0.95),
+    len_shrink: 0.62,
+    radius_shrink: 0.62,
+    primary_radius: 0.034,
+    trunk_h_ratio: 0.42,
+    trunk_r_ratio: 0.034,
+    trunk_color: [0.34, 0.22, 0.12],
+    branch_color: [0.38, 0.25, 0.14],
+    leaves_per_tip: 20,
+    cluster_radius_ratio: 0.075,
+    leaf_element_ratio: 0.028,
+    leaf_aspect: 1.3,
+    leaf_green: [0.62, 0.58, 0.16],
+    autumn: 1.0,
+};
+
+/// Alien fungal growth — greyish trunk, muted purple foliage, evergreen.
+pub static FUNGAL: TreeSpecies = TreeSpecies {
+    primaries: (4, 6),
+    base_y: (0.25, 0.55),
+    primary_spread: (0.6, 1.0),
+    primary_len: (0.18, 0.28),
+    max_depth: 2,
+    child_spread: (0.5, 0.9),
+    len_shrink: 0.6,
+    radius_shrink: 0.6,
+    primary_radius: 0.028,
+    trunk_h_ratio: 0.40,
+    trunk_r_ratio: 0.03,
+    trunk_color: [0.45, 0.40, 0.48],
+    branch_color: [0.50, 0.44, 0.54],
+    leaves_per_tip: 16,
+    cluster_radius_ratio: 0.07,
+    leaf_element_ratio: 0.028,
+    leaf_aspect: 1.4,
+    leaf_green: [0.55, 0.30, 0.62],
+    autumn: 0.0,
+};
+
+/// A dead snag — bare branch skeleton, no foliage (`leaves_per_tip = 0`),
+/// weathered grey-brown. A stark silhouette among the leafy trees.
+pub static DEAD: TreeSpecies = TreeSpecies {
+    primaries: (3, 5),
+    base_y: (0.30, 0.60),
+    primary_spread: (0.6, 1.1),
+    primary_len: (0.22, 0.32),
+    max_depth: 3,
+    child_spread: (0.6, 1.1),
+    len_shrink: 0.6,
+    radius_shrink: 0.6,
+    primary_radius: 0.03,
+    trunk_h_ratio: 0.45,
+    trunk_r_ratio: 0.028,
+    trunk_color: [0.30, 0.26, 0.22],
+    branch_color: [0.34, 0.30, 0.25],
+    leaves_per_tip: 0,
+    cluster_radius_ratio: 0.0,
+    leaf_element_ratio: 0.0,
+    leaf_aspect: 1.0,
+    leaf_green: [0.0, 0.0, 0.0],
+    autumn: 0.0,
+};
 
 /// Small round fruit tree — short trunk, dense rounded crown, broad
 /// leaves. The orchard species (CDDA `t_tree_apple` and friends).
@@ -414,6 +488,9 @@ pub fn species_for_kind(kind: cdda::TreeKind) -> &'static TreeSpecies {
         cdda::TreeKind::Oak => &OAK,
         cdda::TreeKind::Birch => &BIRCH,
         cdda::TreeKind::Willow => &WILLOW,
+        cdda::TreeKind::Maple => &MAPLE,
+        cdda::TreeKind::Fungal => &FUNGAL,
+        cdda::TreeKind::Dead => &DEAD,
         cdda::TreeKind::Generic => &OAK,
     }
 }
@@ -790,7 +867,8 @@ mod tests {
 
     // ---- branch skeleton contract ----
 
-    const SPECIES: [&TreeSpecies; 5] = [&PINE, &OAK, &BIRCH, &WILLOW, &APPLE];
+    const SPECIES: [&TreeSpecies; 8] =
+        [&PINE, &OAK, &BIRCH, &WILLOW, &APPLE, &MAPLE, &FUNGAL, &DEAD];
 
     #[test]
     fn branches_are_deterministic_in_the_seed() {

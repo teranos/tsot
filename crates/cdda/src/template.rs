@@ -69,6 +69,11 @@ pub enum TreeKind {
     Oak,
     Birch,
     Willow,
+    Maple,
+    /// Alien fungal growth (CDDA `t_tree_fungal`).
+    Fungal,
+    /// A dead snag — bare branches, no foliage.
+    Dead,
     /// Any tree we don't map to a specific species yet.
     Generic,
 }
@@ -83,6 +88,9 @@ pub(crate) fn tree_kind_tag(k: TreeKind) -> u8 {
         TreeKind::Birch => 3,
         TreeKind::Willow => 4,
         TreeKind::Generic => 5,
+        TreeKind::Maple => 6,
+        TreeKind::Fungal => 7,
+        TreeKind::Dead => 8,
     }
 }
 
