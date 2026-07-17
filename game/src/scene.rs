@@ -514,7 +514,7 @@ pub struct RemotePeerDot {
 pub type StructureSnap = (Vec3, PropKind, Option<[f32; 3]>, Option<Vec3>);
 
 pub struct SceneSnapshot {
-    pub trees: Vec<(Vec3, f32)>,
+    pub trees: Vec<(Vec3, f32, &'static crate::tree_mesh::TreeSpecies)>,
     pub obstacles: Vec<Vec3>,
     pub fires: Vec<(Vec3, f32)>,
     pub npcs: Vec<Vec3>,
@@ -529,7 +529,10 @@ pub struct SceneSnapshot {
 pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
     let world = app.world_mut();
     let mut tree_q = world.query::<(&Position, &trees::TreeTrunk)>();
-    let trees: Vec<(Vec3, f32)> = tree_q.iter(world).map(|(p, t)| (p.0, t.height)).collect();
+    let trees: Vec<(Vec3, f32, &'static crate::tree_mesh::TreeSpecies)> = tree_q
+        .iter(world)
+        .map(|(p, t)| (p.0, t.height, t.species))
+        .collect();
     let mut obs_q = world.query_filtered::<&Position, (
         bevy_ecs::prelude::With<AabbCollider>,
         bevy_ecs::prelude::Without<PlayerMarker>,
@@ -959,18 +962,19 @@ fn autumn_ramp(green: [f32; 3], age: f32) -> [f32; 3] {
 }
 
 pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
-    use crate::tree_mesh::{GOLDEN_ANGLE_RAD, species_for, tree_branches};
+    use crate::tree_mesh::{GOLDEN_ANGLE_RAD, tree_branches};
     const UP: [f32; 3] = [0.0, 1.0, 0.0];
     // `trunks` draws the shared unit cone (trunk + every branch segment);
     // `canopy_elements` draws the shared leaf card (oriented per leaf).
     let mut trunks = Vec::with_capacity(snap.trees.len() * 48);
     let mut canopy_elements = Vec::with_capacity(snap.trees.len() * 256);
-    for (t, h) in &snap.trees {
+    for (t, h, sp) in &snap.trees {
         let h = *h;
-        // Species is a deterministic function of the tile — pine / oak /
-        // birch, each a different silhouette + palette from the same code.
+        // Species is carried on the tree (data, not a render-time hash) —
+        // procedural trees filled it from the tile, authored CDDA trees
+        // will name their own. `seed` still drives per-leaf autumn tint.
+        let sp: &crate::tree_mesh::TreeSpecies = sp;
         let seed = tree_seed(t.x, t.z);
-        let sp = species_for(seed);
         // Main trunk: vertical cone, axis +Y (identity rotation).
         trunks.push(MeshInstance {
             pos: [t.x, 0.0, t.z],

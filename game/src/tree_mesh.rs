@@ -343,15 +343,53 @@ pub static BIRCH: TreeSpecies = TreeSpecies {
     autumn: 0.3,
 };
 
+/// Broad, low, drooping umbrella: many near-horizontal limbs, dense
+/// trailing foliage, soft green with a faint yellow turn — a willow.
+pub static WILLOW: TreeSpecies = TreeSpecies {
+    primaries: (5, 7),
+    base_y: (0.28, 0.50),
+    primary_spread: (1.1, 1.4),
+    primary_len: (0.24, 0.34),
+    max_depth: 2,
+    child_spread: (0.4, 0.9),
+    len_shrink: 0.68,
+    radius_shrink: 0.6,
+    primary_radius: 0.028,
+    trunk_h_ratio: 0.42,
+    trunk_r_ratio: 0.028,
+    trunk_color: [0.28, 0.20, 0.12],
+    branch_color: [0.32, 0.24, 0.14],
+    leaves_per_tip: 16,
+    cluster_radius_ratio: 0.06,
+    leaf_element_ratio: 0.022,
+    leaf_aspect: 2.5,
+    leaf_green: [0.30, 0.68, 0.32],
+    autumn: 0.25,
+};
+
 /// Deterministic species pick for a tree seed — a mixed woodland: oak
 /// common, pine and birch less so. Peers pass the same seed → same
 /// species.
 pub fn species_for(seed: u32) -> &'static TreeSpecies {
     match (seed >> 13) % 10 {
-        0..=4 => &OAK,
-        5..=7 => &PINE,
-        _ => &BIRCH,
+        0..=3 => &OAK,    // common
+        4..=5 => &PINE,
+        6..=7 => &BIRCH,
+        _ => &WILLOW,
     }
+}
+
+/// Deterministic per-position species — a stable hash of the tile the
+/// tree stands on. The seam the CDDA bridge plugs into: procedural
+/// trees pick here, authored (CDDA `t_tree_*`) trees will override with
+/// the species the map names.
+pub fn species_for_pos(x: f32, z: f32) -> &'static TreeSpecies {
+    let mut h: u32 = 2_166_136_261;
+    for b in x.to_bits().to_le_bytes().iter().chain(z.to_bits().to_le_bytes().iter()) {
+        h ^= *b as u32;
+        h = h.wrapping_mul(16_777_619);
+    }
+    species_for(h)
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -713,7 +751,7 @@ mod tests {
 
     // ---- branch skeleton contract ----
 
-    const SPECIES: [&TreeSpecies; 3] = [&PINE, &OAK, &BIRCH];
+    const SPECIES: [&TreeSpecies; 4] = [&PINE, &OAK, &BIRCH, &WILLOW];
 
     #[test]
     fn branches_are_deterministic_in_the_seed() {

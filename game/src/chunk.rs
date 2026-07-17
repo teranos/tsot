@@ -135,7 +135,10 @@ pub struct LoadedChunks(pub BTreeMap<ChunkCoord, Vec<Entity>>);
 fn spawn_tree(commands: &mut Commands, base: Vec3, height: f32) -> Entity {
     commands
         .spawn((
-            TreeTrunk { height },
+            TreeTrunk {
+                height,
+                species: crate::tree_mesh::species_for_pos(base.x, base.z),
+            },
             Position(Vec3::new(base.x, 0.0, base.z)),
             AabbCollider::cuboid(Vec3::new(24.0, 200.0, 24.0)),
         ))

@@ -35,10 +35,14 @@ const NOISE_CELL: f32 = 1600.0;
 const TREE_MIN_H: f32 = 320.0;
 const TREE_MAX_H: f32 = 760.0;
 
-/// A tree: its `height` drives the trunk + canopy render and collider.
+/// A tree: its `height` drives the trunk + canopy render and collider;
+/// `species` is carried DATA (not a render-time hash) so an authored
+/// CDDA tree can be the species its map names, not one guessed from
+/// position. Procedural trees fill it from `species_for_pos`.
 #[derive(Component)]
 pub struct TreeTrunk {
     pub height: f32,
+    pub species: &'static crate::tree_mesh::TreeSpecies,
 }
 
 fn hash01(ix: i32, iz: i32, salt: u32) -> f32 {
