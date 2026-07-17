@@ -147,3 +147,45 @@ fn elephant_survives_lethal_combat_through_the_real_combat_path() {
     assert!(inst.sleeveless, "it shed its sleeve to survive the combat death");
     assert_eq!(inst.damage, 0.0, "its combat damage was cleared on survival");
 }
+
+#[test]
+fn elephant_survives_a_direct_damage_death() {
+    // The seam-closer: a burn effect deals lethal damage via game.damage.
+    // The elephant must still get its OnWouldDie window and shed to survive
+    // — the direct-damage path must reach the replacement hook, not sweep
+    // the creature straight to the graveyard.
+    let lua = mlua::Lua::new();
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let ele = elephant_on_board(&mut s, &lua); // player A's board, 4/4, sleeved
+
+    // A burn source on B whose on_play deals 5 to the elephant via game.damage.
+    let src = s.b.hand[0].clone();
+    s.b.hand.retain(|i| i != &src);
+    s.b.board.push(src.clone());
+    let burn: mlua::Function = lua
+        .load(format!("return function(game, self) game.damage('{ele}', 5) end"))
+        .eval()
+        .unwrap();
+    s.card_pool
+        .get_mut(&src)
+        .unwrap()
+        .card_mut()
+        .handlers
+        .insert(crate::card::EventName::OnPlay, burn);
+
+    let mut oracle = crate::choice::NoopOracle;
+    crate::game::lua_api::fire_self_only(
+        &lua,
+        &mut s,
+        &mut oracle,
+        crate::card::EventName::OnPlay,
+        &src,
+    )
+    .expect("burn resolves");
+
+    assert!(s.a.board.contains(&ele), "the elephant survived the burn — still on board");
+    assert!(!s.a.graveyard.contains(&ele), "it did not go to the graveyard");
+    let inst = s.card_pool.get(&ele).unwrap();
+    assert!(inst.sleeveless, "it shed its sleeve to survive the direct-damage death");
+    assert_eq!(inst.damage, 0.0, "its damage was cleared on survival");
+}

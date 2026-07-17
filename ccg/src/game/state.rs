@@ -488,6 +488,14 @@ pub struct GameState {
     /// is always cleared before and after each death is resolved.
     #[serde(skip, default)]
     pub pending_death_replacement: Option<DeathReplacement>,
+    /// Transient re-entrancy guard for the B.8 damage-death settle in
+    /// `drain_deferred_events`. Resolving a death fires on_die / OnWouldDie
+    /// through `fire_self_only`, which drains again — without this flag the
+    /// nested drain re-scans the creature still mid-resolution and recurses
+    /// forever. While set, a nested drain drains the event queue but skips
+    /// the damage-death scan; new deaths bubble to the outer settle loop.
+    #[serde(skip, default)]
+    pub settling_deaths: bool,
 }
 
 /// Z.8 death-replacement (12.3): the outcome an `OnWouldDie` handler chose
@@ -546,6 +554,7 @@ impl GameState {
             pending_events: std::collections::VecDeque::new(),
             delayed_triggers: Vec::new(),
             pending_death_replacement: None,
+            settling_deaths: false,
         }
     }
 

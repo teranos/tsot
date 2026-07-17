@@ -155,14 +155,13 @@ pub(crate) fn do_damage(s: &mut GameState, target: &str, n: f32) -> Result<()> {
     if let Some(o) = owner {
         s.bump_action("damage", o);
     }
-    // RULES B.8: a creature with accumulated damage ≥ effective Y
-    // dies. Combat damage already runs this check inside
-    // confirm_blocks; Lua-driven damage (game.damage from on_play /
-    // on_attack / etc) used to skip it, leaving creatures with
-    // damage ≥ Y standing on the board (Read the Embers + Ember Bat
-    // bug, 2026-06-16). Reuse the shared sweep so both paths share
-    // semantics.
-    s.cleanup_b8_damage_deaths();
+    // RULES B.8: a creature with accumulated damage ≥ effective Y dies. The
+    // sweep is deliberately NOT run here: do_damage executes inside a live
+    // handler's borrow, so it cannot fire the OnWouldDie replacement window
+    // (that is a re-entrant Lua call — RefCell double-borrow). The death is
+    // resolved at `drain_deferred_events`, after the handler unwinds and a
+    // Lua context is available, routed through `resolve_board_deaths` so a
+    // burn death reaches the same replacement hook as a combat death.
     Ok(())
 }
 
@@ -1677,20 +1676,59 @@ pub(crate) fn drain_deferred_events(
     oracle: &mut dyn ChoiceOracle,
 ) -> std::result::Result<(), ChoicePending> {
     let mut budget: i32 = 1024;
-    while let Some((event, source)) = state.pending_events.pop_front() {
-        budget -= 1;
+    loop {
+        // Drain queued card events first (OnTapped, delayed triggers, ...).
+        while let Some((event, source)) = state.pending_events.pop_front() {
+            budget -= 1;
+            if budget < 0 {
+                crate::error::emit(
+                    crate::error::Severity::Error,
+                    "engine",
+                    "deferred-event overflow",
+                    "the deferred-event queue exceeded its drain budget — a \
+                     tap/trigger loop is enqueuing events without settling",
+                );
+                state.pending_events.clear();
+                return Ok(());
+            }
+            fire_one(lua, state, oracle, event, &source)?;
+        }
+        // B.8: resolve creatures now at lethal damage through the
+        // replacement chokepoint. `game.damage` applies damage but defers
+        // the death to here — the first point after the dealing handler's
+        // borrow releases, so OnWouldDie can fire (a burn death reaches the
+        // same hook as a combat death). on_die may enqueue more events, so
+        // loop until neither the queue nor the board has anything left.
+        //
+        // Re-entrancy: resolving a death fires handlers via fire_self_only,
+        // which drains again. The guard makes those nested drains skip this
+        // scan (they still drain the event queue) so the creature being
+        // resolved isn't re-killed mid-resolution; genuinely new deaths are
+        // caught by this outer loop's next pass.
+        if state.settling_deaths {
+            break;
+        }
+        let to_kill = state.damage_lethal_creatures();
+        if to_kill.is_empty() {
+            break;
+        }
+        budget -= to_kill.len() as i32;
         if budget < 0 {
             crate::error::emit(
                 crate::error::Severity::Error,
                 "engine",
-                "deferred-event overflow",
-                "the deferred-event queue exceeded its drain budget — a \
-                 tap/trigger loop is enqueuing events without settling",
+                "deferred-death overflow",
+                "the B.8 damage-death settle exceeded its budget — a death \
+                 trigger is dealing damage that kills without settling",
             );
-            state.pending_events.clear();
             break;
         }
-        fire_one(lua, state, oracle, event, &source)?;
+        let mut ctx = crate::game::context::EventContext::new(lua, &mut *oracle);
+        // resolve_board_deaths self-guards `settling_deaths` for its whole
+        // run, so the on_die/OnWouldDie fires it triggers won't re-enter
+        // this scan. Genuinely new deaths (a death trigger that burns
+        // another creature) are caught by this outer loop's next pass.
+        state.resolve_board_deaths(to_kill, Some(&mut ctx))?;
     }
     Ok(())
 }

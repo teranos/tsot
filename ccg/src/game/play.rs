@@ -1358,16 +1358,13 @@ impl GameState {
     ///
     /// Idempotent. Call after every damage application that targets a
     /// BOARD creature.
-    pub fn cleanup_b8_damage_deaths(&mut self) {
-        let on_board: Vec<InstanceId> = self
-            .a
-            .board
-            .iter()
-            .chain(self.b.board.iter())
-            .cloned()
-            .collect();
+    /// B.8: every on-board creature whose accumulated damage has reached its
+    /// effective toughness. The shared scan behind both the eager
+    /// `cleanup_b8_damage_deaths` sweep and the deferred, hook-aware
+    /// resolution in `drain_deferred_events`.
+    pub fn damage_lethal_creatures(&self) -> Vec<InstanceId> {
         let mut to_kill: Vec<InstanceId> = Vec::new();
-        for iid in &on_board {
+        for iid in self.a.board.iter().chain(self.b.board.iter()) {
             let is_creature = self
                 .card_pool
                 .get(iid)
@@ -1382,6 +1379,11 @@ impl GameState {
                 to_kill.push(iid.clone());
             }
         }
+        to_kill
+    }
+
+    pub fn cleanup_b8_damage_deaths(&mut self) {
+        let to_kill = self.damage_lethal_creatures();
         for iid in &to_kill {
             let owner = self
                 .card_pool
@@ -1451,6 +1453,24 @@ impl GameState {
     /// can record them. With `ctx = None` no handler runs and every creature
     /// dies normally — matching the behaviour of any ctx-less death path.
     pub fn resolve_board_deaths(
+        &mut self,
+        to_kill: Vec<InstanceId>,
+        ctx: Option<&mut EventContext>,
+    ) -> Result<Vec<InstanceId>, crate::choice::ChoicePending> {
+        // Self-guard `settling_deaths` across the whole resolution: the
+        // on_die / OnWouldDie fires below each drain, and that drain scans
+        // for damage deaths — without the guard it would re-enter and
+        // re-kill the very creature being resolved. Restored to the prior
+        // value so nested resolutions compose; genuinely new deaths surface
+        // at the caller's own settle loop (drain_deferred_events).
+        let prev = self.settling_deaths;
+        self.settling_deaths = true;
+        let result = self.resolve_board_deaths_inner(to_kill, ctx);
+        self.settling_deaths = prev;
+        result
+    }
+
+    fn resolve_board_deaths_inner(
         &mut self,
         to_kill: Vec<InstanceId>,
         mut ctx: Option<&mut EventContext>,

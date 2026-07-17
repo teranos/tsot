@@ -115,11 +115,22 @@
     it's the same GY-move + on_die + broadcast + cascade as before). Also
     exposed the 12.2 primitive to Lua: `game.shed_own_sleeve`,
     `game.is_sleeveless`. Tests in `game/death_replacement_tests.rs` (shed &
-    survive, sleeveless → exile, ordinary-creature baseline, and a real
-    `confirm_blocks` combat where the elephant survives lethal damage).
-    Scope seam: `cleanup_b8_damage_deaths` (the `game.damage` path) has no
-    Lua ctx today, so a direct-damage spell doesn't yet trigger the ward —
-    it joins when that path gains ctx (pre-existing combat.rs TODO).
+    survive, sleeveless → exile, ordinary-creature baseline, a real
+    `confirm_blocks` combat, and a direct `game.damage` burn — all of which
+    the elephant survives).
+  - **12.3b Direct-damage path reaches the hook — DONE.** `game.damage`
+    (`do_damage`) runs inside a live handler's borrow, so it can't fire
+    `OnWouldDie` synchronously (re-entrant Lua = RefCell double-borrow). The
+    B.8 death sweep is no longer done eagerly in `do_damage`; it is deferred
+    to `drain_deferred_events`, which — after the dealing handler unwinds,
+    with a Lua ctx — routes lethal creatures through `resolve_board_deaths`.
+    So a burn death now reaches the same replacement window as a combat
+    death (and, incidentally, now fires `on_die` on burn kills — closing the
+    old combat.rs TODO). Re-entrancy guard: `GameState::settling_deaths`
+    (transient) makes the nested drains that death-handlers trigger skip the
+    scan, so a creature isn't re-killed mid-resolution; chained deaths (a
+    death trigger that burns another creature) surface on the settle loop's
+    next pass. Test: `elephant_survives_a_direct_damage_death`.
   - **12.4 White Elephant — DONE.** `cards/white-elephant.lua` — white 4/4
     elephant, `2 hand + 2 attach`, the first consumer of 12.3. `on_would_die`
     sheds its sleeve and prevents the first lethal death (survives,
