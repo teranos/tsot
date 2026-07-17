@@ -258,10 +258,16 @@ pub struct TreeSpecies {
     pub max_depth: u32,
     pub child_spread: (f32, f32),
     pub len_shrink: f32,
+    /// Each child limb's radius ÷ its parent's. < 1, so radius shrinks
+    /// monotonically from the trunk (root) out to the tips — a branch can
+    /// never be thicker than the wood it grows from.
     pub radius_shrink: f32,
-    pub primary_radius: f32,
-    pub trunk_h_ratio: f32,
-    pub trunk_r_ratio: f32,
+    /// Radius of the ROOT limb (the trunk) in unit tree space. It is the
+    /// depth-0 limb of the same recursion every branch comes from — there
+    /// is no separate "trunk" concept. Its length is `base_y.1` (the bole
+    /// rises to the highest primary); primaries branch off it at
+    /// `base_y.0..base_y.1`, each `trunk_radius × radius_shrink` thick.
+    pub trunk_radius: f32,
     pub trunk_color: [f32; 3],
     pub branch_color: [f32; 3],
     pub leaves_per_tip: u32,
@@ -310,9 +316,7 @@ pub static PINE: TreeSpecies = TreeSpecies {
     child_spread: (0.3, 0.6),
     len_shrink: 0.6,
     radius_shrink: 0.6,
-    primary_radius: 0.025,
-    trunk_h_ratio: 0.75,
-    trunk_r_ratio: 0.02,
+    trunk_radius: 0.02,
     trunk_color: [0.22, 0.15, 0.10],
     branch_color: [0.25, 0.17, 0.11],
     leaves_per_tip: 18,
@@ -338,9 +342,7 @@ pub static OAK: TreeSpecies = TreeSpecies {
     child_spread: (0.5, 0.95),
     len_shrink: 0.62,
     radius_shrink: 0.62,
-    primary_radius: 0.035,
-    trunk_h_ratio: 0.40,
-    trunk_r_ratio: 0.035,
+    trunk_radius: 0.035,
     trunk_color: [0.30, 0.20, 0.11],
     branch_color: [0.34, 0.23, 0.13],
     leaves_per_tip: 20,
@@ -366,9 +368,7 @@ pub static BIRCH: TreeSpecies = TreeSpecies {
     child_spread: (0.3, 0.6),
     len_shrink: 0.6,
     radius_shrink: 0.6,
-    primary_radius: 0.02,
-    trunk_h_ratio: 0.60,
-    trunk_r_ratio: 0.018,
+    trunk_radius: 0.018,
     trunk_color: [0.72, 0.72, 0.68],
     branch_color: [0.55, 0.55, 0.50],
     leaves_per_tip: 14,
@@ -394,9 +394,7 @@ pub static WILLOW: TreeSpecies = TreeSpecies {
     child_spread: (0.4, 0.9),
     len_shrink: 0.68,
     radius_shrink: 0.6,
-    primary_radius: 0.028,
-    trunk_h_ratio: 0.42,
-    trunk_r_ratio: 0.028,
+    trunk_radius: 0.028,
     trunk_color: [0.28, 0.20, 0.12],
     branch_color: [0.32, 0.24, 0.14],
     leaves_per_tip: 16,
@@ -437,9 +435,7 @@ pub static MAPLE: TreeSpecies = TreeSpecies {
     child_spread: (0.5, 0.95),
     len_shrink: 0.62,
     radius_shrink: 0.62,
-    primary_radius: 0.034,
-    trunk_h_ratio: 0.42,
-    trunk_r_ratio: 0.034,
+    trunk_radius: 0.034,
     trunk_color: [0.34, 0.22, 0.12],
     branch_color: [0.38, 0.25, 0.14],
     leaves_per_tip: 20,
@@ -464,9 +460,7 @@ pub static FUNGAL: TreeSpecies = TreeSpecies {
     child_spread: (0.5, 0.9),
     len_shrink: 0.6,
     radius_shrink: 0.6,
-    primary_radius: 0.028,
-    trunk_h_ratio: 0.40,
-    trunk_r_ratio: 0.03,
+    trunk_radius: 0.03,
     trunk_color: [0.45, 0.40, 0.48],
     branch_color: [0.50, 0.44, 0.54],
     leaves_per_tip: 16,
@@ -492,9 +486,7 @@ pub static DEAD: TreeSpecies = TreeSpecies {
     child_spread: (0.6, 1.1),
     len_shrink: 0.6,
     radius_shrink: 0.6,
-    primary_radius: 0.03,
-    trunk_h_ratio: 0.45,
-    trunk_r_ratio: 0.028,
+    trunk_radius: 0.028,
     trunk_color: [0.30, 0.26, 0.22],
     branch_color: [0.34, 0.30, 0.25],
     leaves_per_tip: 0,
@@ -520,9 +512,7 @@ pub static APPLE: TreeSpecies = TreeSpecies {
     child_spread: (0.5, 0.9),
     len_shrink: 0.62,
     radius_shrink: 0.62,
-    primary_radius: 0.03,
-    trunk_h_ratio: 0.30,
-    trunk_r_ratio: 0.03,
+    trunk_radius: 0.03,
     trunk_color: [0.32, 0.22, 0.13],
     branch_color: [0.36, 0.25, 0.15],
     leaves_per_tip: 18,
@@ -693,14 +683,28 @@ pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
     // Decide ONCE whether this whole tree carries deadwood — only some
     // trees of a species do, and a sapling species (odds 0) never does.
     let tree_dead = randf(&mut rng) < sp.dead_limb_odds;
+    // The ROOT limb IS the trunk: a vertical bole from the ground up to the
+    // highest primary attachment (`base_y.1`). It's the depth-0 limb of the
+    // very same recursion every branch comes from — there is no separate
+    // "trunk". Never a tip, never dead; its radius is the tree's thickest,
+    // and every child derives from it, so nothing can out-fatten it.
+    out.push(BranchSegment {
+        base: [0.0, 0.0, 0.0],
+        axis: [0.0, 1.0, 0.0],
+        length: sp.base_y.1,
+        base_radius: sp.trunk_radius,
+        is_tip: false,
+        is_dead: false,
+    });
     let span = (sp.primaries.1 - sp.primaries.0 + 1).max(1);
     let primaries = sp.primaries.0 + splitmix32(&mut rng) % span;
     let azim0 = randf(&mut rng) * std::f32::consts::TAU;
     for c in 0..primaries {
-        // Primaries leave the trunk over a spread of heights, angled
-        // up-and-outward, so the crown fans instead of bursting from one
-        // point. Higher whorls are shorter (× (1 − 0.4·frac)) so the
-        // crown tapers to a point — most visible on the pine.
+        // Primaries branch OFF the root bole over a spread of heights,
+        // angled up-and-outward, so the crown fans instead of bursting from
+        // one point. Higher whorls are shorter (× (1 − 0.4·frac)). Each is
+        // `trunk_radius × radius_shrink` thick — thinner than the bole it
+        // grows from, by construction.
         let frac = c as f32 / primaries.max(1) as f32;
         let base = [0.0, lerp(sp.base_y.0, sp.base_y.1, frac), 0.0];
         let spread = rangef(&mut rng, sp.primary_spread);
@@ -708,7 +712,8 @@ pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
         let radial = [phi.cos(), 0.0, phi.sin()];
         let dir = v_norm(v_add([0.0, spread.cos(), 0.0], v_scale(radial, spread.sin())));
         let len = rangef(&mut rng, sp.primary_len) * (1.0 - 0.4 * frac);
-        grow_limb(&mut out, base, dir, len, sp.primary_radius, sp.max_depth, sp, tree_dead, &mut rng);
+        let primary_radius = sp.trunk_radius * sp.radius_shrink;
+        grow_limb(&mut out, base, dir, len, primary_radius, sp.max_depth, sp, tree_dead, &mut rng);
     }
     out
 }
@@ -973,6 +978,28 @@ mod tests {
         // there are several of them (not a lone trunk).
         let tips = tree_branches(7, &OAK).iter().filter(|p| p.is_tip).count();
         assert!(tips >= 4, "expected several leaf tips, got {tips}");
+    }
+
+    #[test]
+    fn the_trunk_is_segment_zero_and_no_limb_out_fattens_it() {
+        // The trunk is the ROOT of the recursion (segment 0), the tree's
+        // thickest wood; every other limb derives its radius from it via
+        // radius_shrink (< 1), so NO branch can ever be thicker than the
+        // trunk it grows from. This is guaranteed by construction, not by
+        // hand-tuned per-species radii that used to disagree.
+        for sp in SPECIES {
+            let segs = tree_branches(7, sp);
+            let root_r = segs[0].base_radius;
+            assert_eq!(root_r, sp.trunk_radius, "segment 0 must be the trunk");
+            assert!(!segs[0].is_tip, "the trunk is not a leaf tip");
+            for s in &segs[1..] {
+                assert!(
+                    s.base_radius < root_r,
+                    "a limb (r={}) out-fattened the trunk (r={root_r})",
+                    s.base_radius
+                );
+            }
+        }
     }
 
     #[test]

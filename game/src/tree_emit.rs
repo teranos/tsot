@@ -89,15 +89,18 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         // growth vs young), so a stand isn't a row of identical trunks.
         // Squared so most trees are ordinary and a few are notably fat.
         let g = leaf_hash01(seed, 0x61_2711);
+        // One girth factor scales ALL the tree's wood uniformly (the trunk
+        // is the root of the recursion, so the branches derive their radius
+        // from it and inherit the fattening) — a stout tree is stout all
+        // the way out, not a fat bole with mismatched thin limbs.
         let girth = 0.75 + 1.6 * g * g; // ~0.75 .. 2.35, few fat
-        let branch_girth = girth.sqrt(); // limbs thicken less than the bole
         // A stump is the short remainder of a felled tree of THIS species:
         // a stout low bole in the species' bark, capped by a pale cut face
         // (the mesh bark furrows read as rings on the flat top). No crown,
         // no branches — then we're done with this tree.
         if *stump {
             let sh = h * 0.11; // knee-high remainder
-            let sr = h * sp.trunk_r_ratio * girth * 1.4; // stout
+            let sr = h * sp.trunk_radius * girth * 1.4; // stout
             trunks.push(MeshInstance {
                 pos: [t.x, 0.0, t.z],
                 color: sp.trunk_color,
@@ -112,18 +115,10 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             });
             continue;
         }
-        // Main trunk: vertical cone, axis +Y (identity rotation). The bole
-        // rises to the HIGHEST primary attachment (`base_y.1`), not just
-        // `trunk_h_ratio` — otherwise upper primaries start above where the
-        // trunk ends and float with a see-through gap at the junction. The
-        // bole always reaches the wood it carries.
-        let trunk_h = h * sp.trunk_h_ratio.max(sp.base_y.1);
-        trunks.push(MeshInstance {
-            pos: [t.x, 0.0, t.z],
-            color: sp.trunk_color,
-            scale: [h * sp.trunk_r_ratio * girth, trunk_h, h * sp.trunk_r_ratio * girth],
-            axis: UP,
-        });
+        // No special trunk here — the trunk is segment 0 of tree_branches
+        // (the root limb) and is drawn by the loop below like any other
+        // limb, so radius flows continuously from bole to tips and the
+        // trunk→primary junction is a real fork, not two things overlapping.
         let element_r = h * sp.leaf_element_ratio;
         let cluster_r = h * sp.cluster_radius_ratio;
         // A weathered grey-brown for dead twigs, so a bare limb reads as
@@ -148,23 +143,27 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             && leaf_hash01(seed, 0xF00D_0001) < if sp.fruit_on_dead_limbs { 0.95 } else { 0.6 };
         let mut leaf_i = 0u32;
         let mut tip_i = 0u32;
-        for seg in tree_branches(seed, sp) {
+        for (i, seg) in tree_branches(seed, sp).into_iter().enumerate() {
+            // Segment 0 is the ROOT (the trunk) — it starts at the ground,
+            // so it is NOT seated into a parent (there isn't one).
+            let is_root = i == 0;
             // The limb: the unit cone (base r=1, height 1 along +Y)
             // scaled to [radius, length, radius] and rotated +Y → axis.
-            // A dead tip greys out — deadwood, not foliage.
+            // A dead tip greys out — deadwood, not foliage. Girth scales
+            // every limb uniformly (see above).
             let (bx, by, bz) = (t.x + seg.base[0] * h, seg.base[1] * h, t.z + seg.base[2] * h);
+            let br = seg.base_radius * h * girth;
             // Seat the limb's open base INTO its parent: slide the base back
             // along -axis and lengthen to match, so the hollow (uncapped)
             // base ring is buried inside the parent's wood rather than
             // gaping at the junction. The tip is unchanged (base − a + (len
             // + a)·axis = base + len·axis), so foliage still sits at the tip.
-            let br = seg.base_radius * h * branch_girth;
-            let seat = br * 2.5;
-            // Wind sway weight: thinner limbs sway more. A primary (base
-            // radius = primary_radius) is ~0 (stiff), a thin outer twig
-            // ~1 (flutters). Leaves/fruit at this tip inherit it so they
-            // move with the twig. The trunk (emitted above) is rigid.
-            let sway = (1.0 - seg.base_radius / sp.primary_radius).clamp(0.0, 1.0);
+            // The root has no parent, so it isn't seated.
+            let seat = if is_root { 0.0 } else { br * 2.5 };
+            // Wind sway weight: thinner limbs sway more. The root (radius =
+            // trunk_radius) is 0 (rigid); a thin outer twig ~1 (flutters).
+            // Leaves/fruit at a tip inherit it so they move with the twig.
+            let sway = (1.0 - seg.base_radius / sp.trunk_radius).clamp(0.0, 1.0);
             let limb_axis = [seg.axis[0], seg.axis[1], seg.axis[2], sway];
             trunks.push(MeshInstance {
                 pos: [bx - seg.axis[0] * seat, by - seg.axis[1] * seat, bz - seg.axis[2] * seat],
@@ -230,7 +229,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                     // Not a fungal snot-bearer: some broken tips show pale
                     // raw wood — a splinter tear where the limb snapped, a
                     // small bright card capping the grey stub.
-                    let sr = seg.base_radius * h * branch_girth * 1.4;
+                    let sr = seg.base_radius * h * girth * 1.4;
                     canopy_elements.push(MeshInstance {
                         pos: [wx, wy, wz],
                         color: SPLINTER_COLOR,
