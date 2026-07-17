@@ -161,12 +161,15 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 /// `LEAF_SHADER_WGSL` BOTH begin with this, so the instance/vertex ABI
 /// can never drift between the two pipelines — the real cross-pipeline
 /// hazard (a mistyped location points limbs the wrong way in one
-/// pipeline only). The per-pipeline VERTEX stage is deliberately NOT
-/// shared: the mesh `vs` is rigid, the leaf `vs` adds wind sway, so
-/// trunks stand still while foliage moves. `wind.x` is elapsed seconds
-/// (synthetic ticks — no `bevy_time`, same model as the campfire
-/// flicker); `.yzw` are spare. The vertex `uv` is the day-one slot for
-/// downstream damage/bark textures.
+/// pipeline only). The per-pipeline VERTEX stage differs only in HOW MUCH
+/// each instance sways: both call the shared `wind_offset`, but rigidity
+/// is carried PER INSTANCE in `i_axis.w` (the sway weight) — a trunk sets
+/// it to 0 and stands still, a thin twig sets it near 1 and flutters, a
+/// leaf inherits its twig's weight so foliage and branch move together.
+/// `i_axis.xyz` is the orientation; `i_axis.w` the sway weight. `wind.x`
+/// is elapsed seconds (synthetic ticks — no `bevy_time`, same model as
+/// the campfire flicker); `.yzw` spare. The vertex `uv` is the day-one
+/// slot for downstream damage/bark textures.
 macro_rules! mesh_layout_wgsl {
     () => {
         r#"
@@ -183,7 +186,7 @@ struct IIn {
     @location(3) i_pos: vec3<f32>,
     @location(4) i_color: vec3<f32>,
     @location(5) i_scale: vec3<f32>,
-    @location(6) i_axis: vec3<f32>,
+    @location(6) i_axis: vec4<f32>,
 };
 
 struct VOut {
@@ -207,24 +210,39 @@ fn basis_from_axis(axis: vec3<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(right, up, fwd);
 }
 
+// Horizontal wind sway at a world point. ONE shared function so branch
+// tips and the leaves anchored to them move in lockstep (same phase from
+// the same world position, same amplitude) — no drifting-apart foliage.
+// `amp` is world units; callers scale it by the instance's sway weight.
+fn wind_offset(world: vec3<f32>, t: f32, amp: f32) -> vec3<f32> {
+    let phase = world.x * 0.010 + world.z * 0.013;
+    return vec3<f32>(amp * sin(t * 1.7 + phase), 0.0, amp * 0.6 * sin(t * 1.3 + phase * 1.7));
+}
+
 const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
 const AMBIENT: f32 = 0.25;
+const WIND_AMP: f32 = 5.0;
 "#
     };
 }
 
 /// Mesh pipeline shader for trunks + branch cones — the shared layout, a
-/// RIGID vertex stage (no wind — a trunk doesn't flutter), and an
-/// opaque single-sided Lambert fragment. Depth-write ON (set on the
-/// pipeline) so mesh geometry occludes correctly.
+/// vertex stage that sways each limb by its sway weight PIVOTING AT THE
+/// BASE (thin twigs bend most at their tip, the trunk's weight is 0 so it
+/// stays rigid), and an opaque single-sided Lambert fragment. Depth-write
+/// ON (set on the pipeline) so mesh geometry occludes correctly.
 pub const MESH_SHADER_WGSL: &str = concat!(
     mesh_layout_wgsl!(),
     r#"
 @vertex
 fn vs(v: VIn, i: IIn) -> VOut {
-    let rot = basis_from_axis(i.i_axis);
+    let rot = basis_from_axis(i.i_axis.xyz);
     // Scale in the limb's local +Y frame, rotate onto the axis, translate.
-    let world = rot * (v.pos * i.i_scale) + i.i_pos;
+    var world = rot * (v.pos * i.i_scale) + i.i_pos;
+    // Wind: sway by the instance's weight, times v.pos.y so the limb
+    // pivots at its base (base held, tip swings). Trunk weight = 0 → no
+    // motion; a thin twig ~1 → its tip flutters most.
+    world = world + wind_offset(world, camera.wind.x, WIND_AMP * i.i_axis.w * v.pos.y);
     var o: VOut;
     o.clip = camera.view_proj * vec4<f32>(world, 1.0);
     // Inverse-transpose for the diagonal scale (divide by scale), then
@@ -265,18 +283,13 @@ pub const LEAF_SHADER_WGSL: &str = concat!(
     r#"
 @vertex
 fn vs(v: VIn, i: IIn) -> VOut {
-    let rot = basis_from_axis(i.i_axis);
+    let rot = basis_from_axis(i.i_axis.xyz);
     var world = rot * (v.pos * i.i_scale) + i.i_pos;
-    // Wind: sway each leaf card horizontally by a time-varying offset,
-    // phased by its world position so the canopy ripples as a field
-    // rather than sliding as one slab. Amplitude is a few world units —
-    // a leaf card is ~8 units, so this is a gentle flutter, not a
-    // detachment. `camera.wind.x` is elapsed seconds. Trunks/branches
-    // use the rigid mesh vs and never move.
-    let t = camera.wind.x;
-    let phase = world.x * 0.010 + world.z * 0.013;
-    world.x = world.x + 5.0 * sin(t * 1.6 + phase);
-    world.z = world.z + 3.0 * sin(t * 1.2 + phase * 1.7);
+    // Wind: a leaf is a point at its twig's tip, so it sways by the FULL
+    // weight (no v.pos.y taper) — and a leaf carries its twig's sway
+    // weight, so leaf and branch tip share one `wind_offset` at the same
+    // world point and move in lockstep, never drifting apart.
+    world = world + wind_offset(world, camera.wind.x, WIND_AMP * i.i_axis.w);
     var o: VOut;
     o.clip = camera.view_proj * vec4<f32>(world, 1.0);
     o.normal = normalize(rot * (v.normal / i.i_scale));
@@ -387,24 +400,23 @@ mod tests {
     }
 
     #[test]
-    fn wind_sways_leaves_but_not_trunks() {
-        // The leaf pipeline reads elapsed time (`camera.wind`) in its
-        // vertex stage and displaces the card; the mesh (trunk/branch)
-        // pipeline never references it and stays rigid. So a breeze moves
-        // foliage while trunks stand still. Both still DECLARE `wind` (the
-        // shared Camera struct must match the uniform buffer), but only the
-        // leaf vs USES it.
+    fn wind_is_a_shared_offset_weighted_per_instance() {
+        // Wind moves BOTH branches and leaves now; what keeps a trunk rigid
+        // is its per-instance sway weight (i_axis.w = 0), not the shader
+        // lacking wind. Both vertex stages must call the shared
+        // `wind_offset` and scale it by `i_axis.w`, so branch tips and the
+        // leaves anchored to them move in lockstep and a zero-weight trunk
+        // stays put. The instance axis must be a vec4 (xyz + weight).
+        for src in [MESH_SHADER_WGSL, LEAF_SHADER_WGSL] {
+            assert!(src.contains("wind_offset("), "both vertex stages sway via wind_offset");
+            assert!(src.contains("i_axis.w"), "sway must be weighted per instance");
+            assert!(src.contains("i_axis: vec4"), "axis carries orientation + sway weight");
+        }
+        // Only the mesh (limb) stage pivots at the base via v.pos.y; the
+        // leaf is a point and sways by the full weight.
         assert!(
-            LEAF_SHADER_WGSL.contains("camera.wind"),
-            "leaf vertex stage must read camera.wind"
-        );
-        assert!(
-            !MESH_SHADER_WGSL.contains("camera.wind"),
-            "trunk/branch vertex stage must NOT sway with wind"
-        );
-        assert!(
-            MESH_SHADER_WGSL.contains("wind: vec4"),
-            "mesh Camera struct must still declare wind to match the uniform buffer"
+            MESH_SHADER_WGSL.contains("i_axis.w * v.pos.y"),
+            "limbs pivot at the base (weight × v.pos.y)"
         );
     }
 }

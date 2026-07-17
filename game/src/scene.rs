@@ -103,20 +103,21 @@ pub struct SceneInstance {
     pub scale: [f32; 3],
 }
 
-/// Instance for the MESH pipeline. Same as `SceneInstance` plus a unit
-/// `axis` the shader rotates the geometry's local +Y onto — that's what
-/// lets one baked cone draw as a limb pointing any direction. 48 bytes,
-/// `#[repr(C)]`: layout must match MESH_SHADER_WGSL's IIn (loc 3/4/5/6
-/// at offsets 0/12/24/36) and the vertex-buffer layouts on both render
-/// paths. A leaf sphere or the vertical trunk sets `axis = [0,1,0]`
-/// (identity rotation).
+/// Instance for the MESH pipeline. Same as `SceneInstance` plus `axis`:
+/// `xyz` is the unit direction the shader rotates the geometry's local
+/// +Y onto (one baked cone → a limb pointing anywhere), and `w` is the
+/// per-instance WIND SWAY weight (0 = rigid trunk, →1 = a thin twig that
+/// flutters most). 52 bytes, `#[repr(C)]`: layout must match the mesh
+/// WGSL's IIn (loc 3/4/5/6 at offsets 0/12/24/36) and the vertex-buffer
+/// layouts on both render paths — all held to `INSTANCE_ATTRS`. A
+/// vertical trunk sets `axis = [0,1,0,0]` (identity rotation, no sway).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct MeshInstance {
     pub pos: [f32; 3],
     pub color: [f32; 3],
     pub scale: [f32; 3],
-    pub axis: [f32; 3],
+    pub axis: [f32; 4],
 }
 
 /// One per-instance vertex attribute of `MeshInstance`.
@@ -144,7 +145,8 @@ pub const INSTANCE_ATTRS: &[InstanceAttr] = &[
     InstanceAttr { location: 3, offset: 0, format: "float32x3" },
     InstanceAttr { location: 4, offset: 12, format: "float32x3" },
     InstanceAttr { location: 5, offset: 24, format: "float32x3" },
-    InstanceAttr { location: 6, offset: 36, format: "float32x3" },
+    // axis is a vec4: xyz = orientation, w = wind sway weight.
+    InstanceAttr { location: 6, offset: 36, format: "float32x4" },
 ];
 
 /// Stride of the per-instance buffer — the size of one `MeshInstance`.
@@ -659,13 +661,19 @@ mod tests {
         // byte layout it claims to describe: four vec3s at 0/12/24/36 and
         // a 48-byte stride. If MeshInstance changes, this fails first.
         assert_eq!(INSTANCE_ATTRS.len(), 4);
-        let expected = [(3u32, 0u64), (4, 12), (5, 24), (6, 36)];
-        for (a, (loc, off)) in INSTANCE_ATTRS.iter().zip(expected) {
+        // pos/color/scale are vec3 at 0/12/24; axis is a vec4 at 36.
+        let expected = [
+            (3u32, 0u64, "float32x3"),
+            (4, 12, "float32x3"),
+            (5, 24, "float32x3"),
+            (6, 36, "float32x4"),
+        ];
+        for (a, (loc, off, fmt)) in INSTANCE_ATTRS.iter().zip(expected) {
             assert_eq!(a.location, loc);
             assert_eq!(a.offset, off);
-            assert_eq!(a.format, "float32x3");
+            assert_eq!(a.format, fmt);
         }
-        assert_eq!(INSTANCE_STRIDE, 48);
+        assert_eq!(INSTANCE_STRIDE, 52);
         assert_eq!(INSTANCE_STRIDE, std::mem::size_of::<MeshInstance>() as u64);
     }
 

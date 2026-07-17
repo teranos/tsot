@@ -374,7 +374,7 @@ pub fn render_scene(
                             3 => Float32x3,
                             4 => Float32x3,
                             5 => Float32x3,
-                            6 => Float32x3
+                            6 => Float32x4
                         ],
                     },
                 ],
@@ -612,14 +612,18 @@ mod tests {
         // the offsets from the format sequence; assert they equal what
         // INSTANCE_ATTRS declares, so a change to one fails the build gate.
         let native = wgpu::vertex_attr_array![
-            3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32x3
+            3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32x4
         ];
         assert_eq!(native.len(), INSTANCE_ATTRS.len());
+        let js_fmt = |f: wgpu::VertexFormat| match f {
+            wgpu::VertexFormat::Float32x3 => "float32x3",
+            wgpu::VertexFormat::Float32x4 => "float32x4",
+            other => panic!("unmapped instance format {other:?}"),
+        };
         for (n, a) in native.iter().zip(INSTANCE_ATTRS) {
             assert_eq!(n.shader_location, a.location);
             assert_eq!(n.offset, a.offset);
-            assert_eq!(n.format, wgpu::VertexFormat::Float32x3);
-            assert_eq!(a.format, "float32x3");
+            assert_eq!(js_fmt(n.format), a.format);
         }
     }
 }

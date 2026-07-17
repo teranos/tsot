@@ -71,7 +71,9 @@ fn autumn_ramp(green: [f32; 3], age: f32) -> [f32; 3] {
 
 pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
     use crate::tree_mesh::{GOLDEN_ANGLE_RAD, tree_branches};
-    const UP: [f32; 3] = [0.0, 1.0, 0.0];
+    // axis = [dir.xyz, sway]. UP is the vertical, rigid orientation (sway
+    // 0) shared by the trunk, stump, and nest.
+    const UP: [f32; 4] = [0.0, 1.0, 0.0, 0.0];
     // `trunks` draws the shared unit cone (trunk + every branch segment);
     // `canopy_elements` draws the shared leaf card (oriented per leaf).
     let mut trunks = Vec::with_capacity(snap.trees.len() * 48);
@@ -158,11 +160,17 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             // + a)·axis = base + len·axis), so foliage still sits at the tip.
             let br = seg.base_radius * h * branch_girth;
             let seat = br * 2.5;
+            // Wind sway weight: thinner limbs sway more. A primary (base
+            // radius = primary_radius) is ~0 (stiff), a thin outer twig
+            // ~1 (flutters). Leaves/fruit at this tip inherit it so they
+            // move with the twig. The trunk (emitted above) is rigid.
+            let sway = (1.0 - seg.base_radius / sp.primary_radius).clamp(0.0, 1.0);
+            let limb_axis = [seg.axis[0], seg.axis[1], seg.axis[2], sway];
             trunks.push(MeshInstance {
                 pos: [bx - seg.axis[0] * seat, by - seg.axis[1] * seat, bz - seg.axis[2] * seat],
                 color: if seg.is_dead { DEAD_LIMB_COLOR } else { sp.branch_color },
                 scale: [br, seg.length * h + seat, br],
-                axis: seg.axis,
+                axis: limb_axis,
             });
             // Moss creeps on the lower, shaded limbs of a mossy tree — a
             // few dark-green tufts clinging where a limb meets the bole.
@@ -176,7 +184,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                     pos: [bx, by, bz],
                     color: MOSS_COLOR,
                     scale: [mr, mr, mr],
-                    axis: out,
+                    axis: [out[0], out[1], out[2], 0.0], // moss clings low — rigid
                 });
             }
             // A bird's nest wedges into one fork (an interior limb's tip)
@@ -214,7 +222,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                         pos: [wx, wy, wz],
                         color: fruit,
                         scale: [gr, gr, gr],
-                        axis: [0.0, -1.0, 0.0],
+                        axis: [0.0, -1.0, 0.0, sway],
                     });
                 } else if !sp.fruit_on_dead_limbs
                     && leaf_hash01(seed, 0x5311_0000 ^ tip_i) < 0.5
@@ -227,7 +235,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                         pos: [wx, wy, wz],
                         color: SPLINTER_COLOR,
                         scale: [sr, sr, sr],
-                        axis: seg.axis,
+                        axis: [seg.axis[0], seg.axis[1], seg.axis[2], sway],
                     });
                 }
                 tip_i += 1;
@@ -257,7 +265,9 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                     color: autumn_ramp(sp.leaf_green, age),
                     // Flat card: width (x) × length (z = width × aspect).
                     scale: [element_r, element_r, element_r * sp.leaf_aspect],
-                    axis: dir,
+                    // Inherit the twig's sway so leaf and branch tip move
+                    // together (same weight, same world point → lockstep).
+                    axis: [dir[0], dir[1], dir[2], sway],
                 });
             }
             // Hang a fruit at some LIVE tips of a bearing apple-type tree —
@@ -274,7 +284,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                     pos: [wx, wy - fr, wz],
                     color: fruit,
                     scale: [fr, fr, fr],
-                    axis: [0.0, -1.0, 0.0],
+                    axis: [0.0, -1.0, 0.0, sway],
                 });
             }
             tip_i += 1;
@@ -309,6 +319,19 @@ mod tests {
             jukeboxes: vec![],
             player: Vec3::ZERO,
         }
+    }
+
+    #[test]
+    fn wind_weight_is_zero_on_the_trunk_and_rises_on_thin_limbs() {
+        use crate::tree_mesh::OAK;
+        let m = snapshot_to_mesh_instances(&tree_snapshot(Vec3::new(500.0, 0.0, 500.0), &OAK));
+        // The main bole is the first trunk instance — rigid (sway weight 0
+        // in axis.w), so a breeze never bends the trunk.
+        assert_eq!(m.trunks[0].axis[3], 0.0, "the trunk must not sway");
+        // Thinner limbs carry real sway weight, and leaves inherit it so
+        // foliage moves with its twig.
+        assert!(m.trunks.iter().any(|i| i.axis[3] > 0.3), "thin limbs should sway");
+        assert!(m.canopy_elements.iter().any(|e| e.axis[3] > 0.3), "leaves should sway");
     }
 
     #[test]
