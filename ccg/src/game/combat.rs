@@ -178,14 +178,24 @@ impl GameState {
         // expect to receive `self = the mutation` when the host attacks.
         // Snapshot attached before firing so a handler that detaches /
         // moves doesn't desync the iteration.
+        // Z.7: fused same-sleeve mutations (klotho / TNF / VEGF) declare
+        // OnAttack and receive `self = the mutation`, so iterate the whole
+        // unit (attached ∪ same_sleeve), not just attached.
         let attached: Vec<InstanceId> = self
             .card_pool
             .get(attacker)
-            .map(|i| i.attached.clone())
+            .map(|i| i.children().cloned().collect())
             .unwrap_or_default();
         if let Some(c) = ctx.as_deref_mut() {
             lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker)
                 .map_err(CombatError::ChoicePending)?;
+            // OnTapped: attacking just tapped the attacker (unless vigilant).
+            // Window Cleaner's "whenever this becomes tapped" trigger. Only
+            // the attack tap fires OnTapped today (see EventName::OnTapped).
+            if !vigilant {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnTapped, attacker)
+                    .map_err(CombatError::ChoicePending)?;
+            }
         }
         for aid in &attached {
             if let Some(c) = ctx.as_deref_mut() {
@@ -268,7 +278,7 @@ impl GameState {
                 .card_pool
                 .get(attacker)
                 .map(|i| {
-                    i.card
+                    i.card()
                         .subtypes
                         .iter()
                         .map(|s| s.to_ascii_lowercase())
@@ -276,7 +286,7 @@ impl GameState {
                 })
                 .unwrap_or_default();
             blocker_inst
-                .card
+                .card()
                 .can_block_subtypes
                 .iter()
                 .any(|s| attacker_subs.iter().any(|a| a == s))
@@ -296,12 +306,12 @@ impl GameState {
         // `cannot_block_subtypes` intersects with attacker's subtypes.
         // Rats vs cats: rat's `cannot_block_subtypes = ["cat"]` blocks
         // (sic) the block. Case-insensitive.
-        let blocker_cant: &[String] = &blocker_inst.card.cannot_block_subtypes;
+        let blocker_cant: &[String] = &blocker_inst.card().cannot_block_subtypes;
         if !blocker_cant.is_empty() {
             let attacker_subs: Vec<String> = self
                 .card_pool
                 .get(attacker)
-                .map(|i| i.card.subtypes.iter().map(|s| s.to_ascii_lowercase()).collect())
+                .map(|i| i.card().subtypes.iter().map(|s| s.to_ascii_lowercase()).collect())
                 .unwrap_or_default();
             if blocker_cant
                 .iter()
@@ -465,10 +475,12 @@ impl GameState {
         for attacker in &damaged_attackers {
             // Snapshot the attached list before firing so handlers that
             // mutate state (detach, move) don't desync the iteration.
+            // Z.7: same-sleeve mutations declaring OnDealtDamageToPlayer
+            // (cinder-wurm et al.) fire too — iterate the whole unit.
             let attached: Vec<InstanceId> = self
                 .card_pool
                 .get(attacker)
-                .map(|i| i.attached.clone())
+                .map(|i| i.children().cloned().collect())
                 .unwrap_or_default();
             if let Some(c) = ctx.as_deref_mut() {
                 lua_api::fire_self_only(

@@ -49,16 +49,149 @@ fn game_color_for_seed(seed: u64) -> u8 {
     PALETTE[(seed as usize) % PALETTE.len()]
 }
 
-/// scripted multi-game tests, multiplayer rollback) use
-/// `run_game_continue` directly with `&mut GameState`.
+// ---------------------------------------------------------------------
+// Replay stop-at-state mechanism.
+//
+// A `tsot replay --to <token>` invocation runs the game normally, but
+// halts the loop the moment it reaches (turn, phase) — the exact
+// coordinates encoded in the heartbeat's `state=<token>` field. On halt
+// the pre-halt state is snapshotted so the CLI can dump zones/hands/
+// board without re-executing.
+//
+// Isolated from the fitness/EA path by thread-local: parallel fitness
+// workers never call `set_stop_at`, so their loops never check for a
+// halt. Zero cost when unset (one atomic-free Cell load per heartbeat
+// check).
+
+thread_local! {
+    static STOP_AT: std::cell::Cell<Option<(u32, Phase)>> = const { std::cell::Cell::new(None) };
+    static HALT_SNAPSHOT: std::cell::RefCell<Option<HaltSnapshot>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// State captured at replay-halt time. Both fields are clones taken
+/// at the moment `check_and_apply_stop_at` fires — mutating the game
+/// afterward does not affect the snapshot.
+#[derive(Debug, Clone)]
+pub struct HaltSnapshot {
+    pub state: GameState,
+    /// Per-pick wall-clock breakdown accumulated up to the halt.
+    /// Empty if halt fires before any pick has been timed.
+    pub pick_timing: PickTiming,
+}
+
+/// Arm the current thread's stop-at trigger. The next running game in
+/// this thread that reaches `(turn, phase)` snapshots its state and
+/// forces its loop to exit with a sentinel winner. Clear before the
+/// next real game or the sentinel will pollute its outcome.
+pub fn set_stop_at(turn: u32, phase: Phase) {
+    STOP_AT.with(|c| c.set(Some((turn, phase))));
+}
+
+/// Clear this thread's stop-at trigger. Idempotent.
+pub fn clear_stop_at() {
+    STOP_AT.with(|c| c.set(None));
+    HALT_SNAPSHOT.with(|c| *c.borrow_mut() = None);
+}
+
+/// Take the pre-halt snapshot from this thread (if any). Returns
+/// `None` when the game ran to completion without hitting the halt
+/// condition — CLI should surface a "halt condition never reached"
+/// warning in that case.
+pub fn take_halt_snapshot() -> Option<HaltSnapshot> {
+    HALT_SNAPSHOT.with(|c| c.borrow_mut().take())
+}
+
+/// Encode a heartbeat state coordinate as a human-parseable token —
+/// `<seed_hex>@t<turn>p<phase_name>`. Round-trips with
+/// [`parse_state_token`]. Phase names match the enum: `Untap`, `Draw`,
+/// `Main1`, `Combat`, `Main2`, `End`.
+pub fn format_state_token(seed: u64, turn: u32, phase: Phase) -> String {
+    format!("{:016x}@t{}p{}", seed, turn, phase_name(phase))
+}
+
+/// Parse a token produced by [`format_state_token`] back into its
+/// three coordinates. Returns a human-readable string error on any
+/// malformation (missing separator, bad hex, unknown phase).
+pub fn parse_state_token(s: &str) -> Result<(u64, u32, Phase), String> {
+    let (seed_part, rest) = s
+        .split_once('@')
+        .ok_or_else(|| format!("state token missing '@': {s:?}"))?;
+    let rest = rest
+        .strip_prefix('t')
+        .ok_or_else(|| format!("state token missing 't' after '@': {s:?}"))?;
+    let (turn_part, phase_part) = rest
+        .split_once('p')
+        .ok_or_else(|| format!("state token missing 'p<phase>': {s:?}"))?;
+    let seed = u64::from_str_radix(seed_part, 16)
+        .map_err(|e| format!("state token seed hex: {e}"))?;
+    let turn: u32 = turn_part.parse().map_err(|e| format!("state token turn: {e}"))?;
+    let phase = parse_phase_name(phase_part)
+        .ok_or_else(|| format!("state token phase {phase_part:?} unknown"))?;
+    Ok((seed, turn, phase))
+}
+
+/// Per-thread CPU time via POSIX `clock_gettime(CLOCK_THREAD_CPUTIME_ID)`.
+///
+/// Contrast with `Instant::now()` which is wall-clock: a game blocked
+/// waiting for CPU (rayon queue depth > core count) accrues wall-time
+/// while burning zero CPU. The wall/cpu ratio in a heartbeat cleanly
+/// decides "expensive picks" (both high, ratio ≈ 1) vs "scheduler
+/// queuing" (wall high, cpu low, ratio >> 1).
+///
+/// wasm32 has no threads — return zero (heartbeat print will show
+/// cpu=0.0s ratio=inf, which is harmless because wasm never reaches
+/// the heartbeat cadence anyway).
+#[cfg(not(target_arch = "wasm32"))]
+fn thread_cpu_time() -> Duration {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // Safety: `clock_gettime` writes to `ts` only, and CLOCK_THREAD_CPUTIME_ID
+    // is a POSIX-standard clock id — no other side effects.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    if rc != 0 {
+        return Duration::ZERO;
+    }
+    Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn thread_cpu_time() -> Duration {
+    Duration::ZERO
+}
+
+fn phase_name(p: Phase) -> &'static str {
+    match p {
+        Phase::Untap => "Untap",
+        Phase::Draw => "Draw",
+        Phase::Main1 => "Main1",
+        Phase::Combat => "Combat",
+        Phase::Main2 => "Main2",
+        Phase::End => "End",
+    }
+}
+
+fn parse_phase_name(s: &str) -> Option<Phase> {
+    match s {
+        "Untap" => Some(Phase::Untap),
+        "Draw" => Some(Phase::Draw),
+        "Main1" => Some(Phase::Main1),
+        "Combat" => Some(Phase::Combat),
+        "Main2" => Some(Phase::Main2),
+        "End" => Some(Phase::End),
+        _ => None,
+    }
+}
+
 pub fn run_game(
     state: GameState,
     rng: &mut StdRng,
     log: &mut Vec<String>,
     registry: &std::sync::Arc<CardRegistry>,
+    game_seed: u64,
 ) -> (GameStats, crate::game::Journal) {
-    let ais = [super::AiKind::Heuristic, super::AiKind::Heuristic];
-    run_game_with_ai(state, rng, log, registry, &ais)
+    let ais = [super::AiKind::Game, super::AiKind::Game];
+    run_game_with_ai(state, rng, log, registry, &ais, game_seed)
 }
 
 /// Like [`run_game`] but with per-player AI selection. Used by the
@@ -71,9 +204,10 @@ pub fn run_game_with_ai(
     log: &mut Vec<String>,
     registry: &std::sync::Arc<CardRegistry>,
     ais: &[super::AiKind; 2],
+    game_seed: u64,
 ) -> (GameStats, crate::game::Journal) {
     state.replay_journal = Some(crate::game::Journal::new());
-    let mut stats = run_game_continue(&mut state, rng, log, registry, ais);
+    let mut stats = run_game_continue(&mut state, rng, log, registry, ais, game_seed);
     let replay_journal = state.replay_journal.take().unwrap_or_default();
     stats.replay_journal_entries = replay_journal.len() as u64;
     (stats, replay_journal)
@@ -142,14 +276,14 @@ pub(crate) fn build_pattern_b_choices(
     let kind = state
         .card_pool
         .get(picked)
-        .map(|c| c.card.kind)
+        .map(|c| c.card().kind)
         .unwrap_or(CardType::Unspecified);
     let picked_is_creature = matches!(kind, CardType::Creature);
     let mut choices = PlayChoices::default();
     let cost = state
         .card_pool
         .get(picked)
-        .map(|c| c.card.cost.clone())
+        .map(|c| c.card().cost.clone())
         .unwrap_or_default();
     let has_is_x = cost.iter().any(|c| c.is_x);
 
@@ -165,7 +299,7 @@ pub(crate) fn build_pattern_b_choices(
                 state
                     .card_pool
                     .get(*iid)
-                    .map(|i| i.card.kind == CardType::Creature)
+                    .map(|i| i.card().kind == CardType::Creature)
                     .unwrap_or(false)
             })
             .count();
@@ -177,7 +311,7 @@ pub(crate) fn build_pattern_b_choices(
                 state
                     .card_pool
                     .get(*gid)
-                    .map(|i| i.card.gy_hand_substitute)
+                    .map(|i| i.card().gy_hand_substitute)
                     .unwrap_or(false)
             })
             .count();
@@ -200,7 +334,7 @@ pub(crate) fn build_pattern_b_choices(
             let is_crystal = state
                 .card_pool
                 .get(&sub_iid)
-                .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                .map(|i| i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
                 .unwrap_or(false);
             if is_crystal { 1 } else { 2 }
         } else if state.find_symbol_tap_candidate(active).is_some() {
@@ -231,7 +365,7 @@ pub(crate) fn build_pattern_b_choices(
             .card_pool
             .get(picked)
             .map(|i| {
-                i.card
+                i.card()
                     .colors
                     .iter()
                     .map(|c| c.to_ascii_lowercase())
@@ -245,7 +379,7 @@ pub(crate) fn build_pattern_b_choices(
                     .card_pool
                     .get(gid)
                     .map(|i| {
-                        i.card
+                        i.card()
                             .colors
                             .iter()
                             .any(|c| cast_colors_lc.contains(&c.to_ascii_lowercase()))
@@ -325,7 +459,7 @@ pub(crate) fn build_pattern_b_choices(
                     .card_pool
                     .get(&sub_iid)
                     .map(|i| {
-                        i.card
+                        i.card()
                             .subtypes
                             .iter()
                             .any(|s| s.eq_ignore_ascii_case("crystal"))
@@ -432,7 +566,7 @@ pub(crate) fn build_pattern_b_choices(
                 let is_crystal = state
                     .card_pool
                     .get(&sub)
-                    .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                    .map(|i| i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
                     .unwrap_or(false);
                 choices.jewel_tap = Some(sub);
                 if is_crystal {
@@ -501,7 +635,7 @@ pub(crate) fn build_pattern_b_choices(
                 let is_crystal = state
                     .card_pool
                     .get(&sub)
-                    .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                    .map(|i| i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
                     .unwrap_or(false);
                 choices.jewel_tap = Some(sub);
                 if is_crystal {
@@ -537,12 +671,33 @@ pub(crate) fn build_pattern_b_choices(
                 hand_needed -= used;
             }
         }
+        // Z.8c: fill any remaining shortfall with cardless bodies from hand
+        // (non-anchor, the cardless analogue of GY substitutes). Identity
+        // casts only — a wildcard cast draws cardless through
+        // resolve_hand_payment's own pool. Affordability guarantees
+        // identity_match_count >= 1 here, so this always leaves >=1 slot
+        // for resolve_hand_payment to fill with a real anchor; the bundle
+        // is never all-cardless (which play_card would reject).
+        if hand_needed > 0 && !state.card_identity(picked).is_empty() {
+            let identity_match_count = state.eligible_hand_payments(active, picked).len();
+            if identity_match_count < hand_needed {
+                let want = hand_needed - identity_match_count;
+                let bodies = state.find_cardless_hand_bodies(
+                    active,
+                    picked,
+                    &choices.hand_payment_ids,
+                    want,
+                );
+                let used = bodies.len();
+                choices.hand_payment_ids.extend(bodies);
+                hand_needed -= used;
+            }
+        }
         if hand_needed > 0 {
-            choices.hand_payment_ids =
-                match state.resolve_hand_payment(active, picked, hand_needed, oracle) {
-                    Ok(ids) => ids,
-                    Err(pending) => return BuildChoiceResult::Pending(pending),
-                };
+            match state.resolve_hand_payment(active, picked, hand_needed, oracle) {
+                Ok(ids) => choices.hand_payment_ids.extend(ids),
+                Err(pending) => return BuildChoiceResult::Pending(pending),
+            }
         }
         if gy_needed > 0 {
             choices.graveyard_payment_ids =
@@ -580,7 +735,7 @@ pub(crate) fn build_pattern_b_choices(
                 let is_crystal = state
                     .card_pool
                     .get(&sub)
-                    .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
+                    .map(|i| i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("crystal")))
                     .unwrap_or(false);
                 choices.jewel_tap = Some(sub);
                 if is_crystal {
@@ -614,12 +769,33 @@ pub(crate) fn build_pattern_b_choices(
                 hand_needed -= used;
             }
         }
+        // Z.8c: fill any remaining shortfall with cardless bodies from hand
+        // (non-anchor, the cardless analogue of GY substitutes). Identity
+        // casts only — a wildcard cast draws cardless through
+        // resolve_hand_payment's own pool. Affordability guarantees
+        // identity_match_count >= 1 here, so this always leaves >=1 slot
+        // for resolve_hand_payment to fill with a real anchor; the bundle
+        // is never all-cardless (which play_card would reject).
+        if hand_needed > 0 && !state.card_identity(picked).is_empty() {
+            let identity_match_count = state.eligible_hand_payments(active, picked).len();
+            if identity_match_count < hand_needed {
+                let want = hand_needed - identity_match_count;
+                let bodies = state.find_cardless_hand_bodies(
+                    active,
+                    picked,
+                    &choices.hand_payment_ids,
+                    want,
+                );
+                let used = bodies.len();
+                choices.hand_payment_ids.extend(bodies);
+                hand_needed -= used;
+            }
+        }
         if hand_needed > 0 {
-            choices.hand_payment_ids =
-                match state.resolve_hand_payment(active, picked, hand_needed, oracle) {
-                    Ok(ids) => ids,
-                    Err(pending) => return BuildChoiceResult::Pending(pending),
-                };
+            match state.resolve_hand_payment(active, picked, hand_needed, oracle) {
+                Ok(ids) => choices.hand_payment_ids.extend(ids),
+                Err(pending) => return BuildChoiceResult::Pending(pending),
+            }
         }
         if gy_needed > 0 {
             choices.graveyard_payment_ids =
@@ -679,7 +855,7 @@ pub(crate) fn build_pattern_b_choices(
                         state
                             .card_pool
                             .get(*iid)
-                            .map(|i| i.card.kind == k)
+                            .map(|i| i.card().kind == k)
                             .unwrap_or(false)
                     } else {
                         true
@@ -712,10 +888,9 @@ pub(crate) fn build_pattern_b_choices(
     if attached_need > 0 {
         // Use the shared eligibility helper so the picker's
         // attached_have count and the resolver's actual pool never
-        // disagree on which attached iids may pay this cast. Closes
-        // the C.14 attached-transparency gap (transparent attached
-        // can't pay non-transparent board-placed casts) that
-        // produced AttachedPaymentInvalid loops on hollow + clear-*.
+        // disagree on which attached iids may pay this cast. (C.14's
+        // frame gate is lifted; the helper returns all controlled
+        // attached cards.)
         let mut pool = state.eligible_attached_payments(active, picked);
         pool.sort_by_key(|aid| attached_keep_value(state, aid));
         pool.truncate(attached_need);
@@ -737,7 +912,7 @@ pub(crate) fn build_pattern_b_choices(
 /// Used by `PickTiming` so the GAME TIMEOUT dump can answer "where
 /// did the 30s go?" — was it many ordinary picks, or one giant one?
 #[derive(Debug, Clone)]
-struct PickTimingEntry {
+pub struct PickTimingEntry {
     turn: u32,
     active: PlayerId,
     /// What site fired the pick — `pattern_b` for the main-phase
@@ -748,14 +923,106 @@ struct PickTimingEntry {
     /// `"pass"` when the AI declined.
     card_id: String,
     wall_us: u128,
+    /// Number of candidates UCT enumerated at this pick — the
+    /// branching factor at the root. Higher `n` = more variations
+    /// UCT had to consider, direct signal for "which state was
+    /// wide-branching". Zero for the heuristic path (candidates
+    /// aren't threaded through today).
+    candidates: u32,
+    /// Iterations UCT actually completed on this pick (may be less
+    /// than `cfg.iterations` if the per-pick wall cap fired). Divide
+    /// `wall_us` by this for avg-per-iteration cost — the answer to
+    /// "where's the CPU going per iteration".
+    iters: u32,
 }
 
-#[derive(Debug, Default)]
-struct PickTiming {
+#[derive(Debug, Default, Clone)]
+pub struct PickTiming {
     total_picks: u32,
     total_wall_us: u128,
     /// Top-10 slowest entries, kept sorted descending by wall_us.
     top_slowest: Vec<PickTimingEntry>,
+}
+
+/// One Lua-handler-fire wall observation. Written by
+/// [`super::super::game::lua_api::fire_one`] on every handler call
+/// (unconditionally, unlike the trace-gated O9 record). Aggregated
+/// into [`HandlerTiming`] via a thread-local sink so parallel-EA
+/// workers don't stomp each other.
+#[derive(Debug, Clone)]
+pub struct HandlerTimingEntry {
+    pub turn: u32,
+    pub card_id: String,
+    pub event: &'static str,
+    pub wall_us: u128,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct HandlerTiming {
+    pub total_fires: u32,
+    pub total_wall_us: u128,
+    /// Top-10 slowest handler fires, kept sorted descending by
+    /// `wall_us`. `record` keeps the invariant on every insert.
+    pub top_slowest: Vec<HandlerTimingEntry>,
+    /// Cumulative wall-us keyed by `(card_id, event)` — the "which
+    /// handler is systematically expensive" view. `HashMap` because
+    /// insertion order doesn't matter, iteration only happens at
+    /// heartbeat/dump time.
+    pub cumulative_by_card_event: std::collections::BTreeMap<(String, &'static str), u128>,
+}
+
+impl HandlerTiming {
+    fn record(&mut self, entry: HandlerTimingEntry) {
+        self.total_fires += 1;
+        self.total_wall_us += entry.wall_us;
+        *self
+            .cumulative_by_card_event
+            .entry((entry.card_id.clone(), entry.event))
+            .or_insert(0) += entry.wall_us;
+        self.top_slowest.push(entry);
+        self.top_slowest.sort_by_key(|e| std::cmp::Reverse(e.wall_us));
+        self.top_slowest.truncate(10);
+    }
+}
+
+thread_local! {
+    // Not `const` — HashMap::new isn't const yet, so this initializer
+    // runs on first per-thread access. Cheap: empty vec + empty map.
+    static HANDLER_TIMING: std::cell::RefCell<HandlerTiming> =
+        std::cell::RefCell::new(HandlerTiming::default());
+}
+
+/// Reset this thread's [`HandlerTiming`] accumulator. Called at the
+/// top of each game so per-game numbers don't leak between games
+/// (fitness eval reuses the same worker thread for many games).
+pub fn reset_handler_timing() {
+    HANDLER_TIMING.with(|c| *c.borrow_mut() = HandlerTiming::default());
+}
+
+/// Record one handler fire. Called from `lua_api::fire_one` after
+/// the handler unwinds. Always on — the cost is one `Instant`
+/// arithmetic + one `HashMap` update per fire, negligible vs the
+/// handler itself.
+pub fn record_handler_fire(
+    turn: u32,
+    card_id: String,
+    event: &'static str,
+    wall_us: u128,
+) {
+    HANDLER_TIMING.with(|c| {
+        c.borrow_mut().record(HandlerTimingEntry {
+            turn,
+            card_id,
+            event,
+            wall_us,
+        });
+    });
+}
+
+/// Snapshot this thread's current [`HandlerTiming`]. Non-destructive
+/// (unlike `take_*`); used by the heartbeat and halt-snapshot paths.
+pub fn snapshot_handler_timing() -> HandlerTiming {
+    HANDLER_TIMING.with(|c| c.borrow().clone())
 }
 
 impl PickTiming {
@@ -769,6 +1036,154 @@ impl PickTiming {
 }
 
 /// `wasm_ffi`'s session driver (human-mixed).
+/// Sample the game state and emit one `[HEARTBEAT]` line if 30s+
+/// have passed since the previous emit. Callable from anywhere in
+/// the game loop so `state.phase` reflects the actually-current
+/// phase (not just Untap at outer-loop-head). See CALL SITES below
+/// in `run_game_continue` — one call inside each phase-advance loop
+/// plus one at the top of the Main1 pick loop covers every point
+/// where a game can spend seconds.
+#[allow(clippy::too_many_arguments)]
+fn maybe_emit_heartbeat(
+    state: &mut GameState,
+    last_cpu_at_beat: &mut Duration,
+    seed: u64,
+    color: u8,
+    start: Instant,
+    cpu_start: Duration,
+    pick_timing: &PickTiming,
+) {
+    // Halt check is orthogonal to heartbeat cadence — a stop-at match
+    // must fire whether or not 30s have elapsed. Checked first so an
+    // exactly-timed replay doesn't need to wait for the next heartbeat
+    // interval.
+    check_and_apply_stop_at(state, pick_timing);
+
+    // Heartbeat cadence is CPU-time-based, NOT wall-time-based.
+    // Walltime is inflated by rayon queuing (wall/cpu 1.5-2× under
+    // load); triggering on wall makes the sample self-selective on
+    // scheduling luck rather than actual work. Triggering on CPU-time
+    // fires whenever a game has burned 30 s of REAL work regardless
+    // of how lucky its scheduling was — the correct signal for "this
+    // game is doing pathological UCT search."
+    let cpu_now = thread_cpu_time().saturating_sub(cpu_start);
+    if cpu_now.saturating_sub(*last_cpu_at_beat) <= Duration::from_secs(30) {
+        return;
+    }
+    let chain_len = state.priority.as_ref().map(|p| p.chain.len()).unwrap_or(0);
+    let chain_tail = if chain_len > 0 {
+        format!(" chain={chain_len}")
+    } else {
+        String::new()
+    };
+    let token = format_state_token(seed, state.turn, state.phase);
+    // wall/cpu ratio splits scheduler-queuing from real work.
+    // ratio ≈ 1 → CPU-bound (expensive picks).
+    // ratio >> 1 → wall-bound (rayon queuing, oversubscription).
+    let wall = start.elapsed();
+    let cpu = cpu_now;
+    let ratio = if cpu.as_secs_f64() > 0.0 {
+        wall.as_secs_f64() / cpu.as_secs_f64()
+    } else {
+        f64::INFINITY
+    };
+    // Top-3 slowest picks inline — surfaces the AI's search wall
+    // per pick. Recorded card_id is the CHOSEN candidate, not the
+    // one causing the search cost — see `handlers` below for real
+    // attribution.
+    let top_tail = if pick_timing.total_picks > 0 {
+        let entries: Vec<String> = pick_timing
+            .top_slowest
+            .iter()
+            .take(3)
+            .map(|e| {
+                let avg_ms = if e.iters > 0 {
+                    (e.wall_us / e.iters as u128) / 1000
+                } else {
+                    0
+                };
+                format!(
+                    "{}:{}ms(t{}{},n={},i={},avg={}ms)",
+                    e.card_id,
+                    e.wall_us / 1000,
+                    e.turn,
+                    match e.active { PlayerId::A => "A", PlayerId::B => "B" },
+                    e.candidates,
+                    e.iters,
+                    avg_ms,
+                )
+            })
+            .collect();
+        format!(" top=[{}]", entries.join(" "))
+    } else {
+        String::new()
+    };
+    // Top-3 handlers by CUMULATIVE wall — this is the real "which
+    // card is eating CPU" answer. A card whose `on_dealt_damage`
+    // fires 200×/game at 3ms each shows up here even if no single
+    // fire was individually slow. Named per (card_id, event) so the
+    // operator sees which specific handler on which card.
+    let ht_snap = snapshot_handler_timing();
+    let handler_tail = if ht_snap.total_fires > 0 {
+        let mut by_ce: Vec<(&(String, &'static str), &u128)> =
+            ht_snap.cumulative_by_card_event.iter().collect();
+        by_ce.sort_by(|a, b| b.1.cmp(a.1));
+        let entries: Vec<String> = by_ce
+            .iter()
+            .take(3)
+            .map(|((cid, ev), us)| format!("{cid}:{ev}:{}ms", *us / 1000))
+            .collect();
+        format!(
+            " handlers=[{}] handler_total={}ms/{}fires",
+            entries.join(" "),
+            ht_snap.total_wall_us / 1000,
+            ht_snap.total_fires,
+        )
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "\x1b[38;5;{}m[HEARTBEAT] state={} wall={:.1?} cpu={:.1?} wall/cpu={:.1}{}{}{}\x1b[0m",
+        color,
+        token,
+        wall,
+        cpu,
+        ratio,
+        chain_tail,
+        top_tail,
+        handler_tail,
+    );
+    *last_cpu_at_beat = cpu_now;
+}
+
+/// If a stop-at trigger is armed on this thread and the game state
+/// matches it, snapshot the state + pick_timing and set a sentinel
+/// winner to force the loop to unwind. Only one snapshot per armed
+/// trigger — the caller clears via `clear_stop_at` between real games.
+fn check_and_apply_stop_at(state: &mut GameState, pick_timing: &PickTiming) {
+    let stop = STOP_AT.with(|c| c.get());
+    let Some((t, p)) = stop else { return };
+    if state.turn != t || state.phase != p {
+        return;
+    }
+    let already = HALT_SNAPSHOT.with(|c| c.borrow().is_some());
+    if already {
+        return;
+    }
+    HALT_SNAPSHOT.with(|c| {
+        *c.borrow_mut() = Some(HaltSnapshot {
+            state: state.clone(),
+            pick_timing: pick_timing.clone(),
+        });
+    });
+    // Sentinel winner forces the loop to exit at its next
+    // `state.winner.is_none()` check. Replay CLI reads the pre-halt
+    // snapshot via `take_halt_snapshot`; the sentinel winner value
+    // is irrelevant and NOT surfaced as an outcome.
+    let active = state.active_player;
+    state.set_winner(Some(active), "replay_stop_at");
+}
+
 #[deprecated(
     since = "0.1.0",
     note = "use `StepEngine::run_to_end` for AI-only games; the wasm_ffi session driver for \
@@ -781,6 +1196,7 @@ pub fn run_game_continue(
     log: &mut Vec<String>,
     registry: &std::sync::Arc<CardRegistry>,
     ais: &[super::AiKind; 2],
+    game_seed: u64,
 ) -> GameStats {
     let lua = registry.lua();
     let oracle_seed: u64 = rng.gen();
@@ -804,6 +1220,7 @@ pub fn run_game_continue(
     let mut stats = GameStats {
         turns: 0,
         winner: PlayerId::A,
+        game_seed,
         variant_a: DeckVariant::Ra,
         variant_b: DeckVariant::Rb,
         token_a: String::new(),
@@ -860,6 +1277,17 @@ pub fn run_game_continue(
     // from this game wear this color via the `color_print!` macro.
     let game_color: u8 = game_color_for_seed(rng.gen());
     let game_start = Instant::now();
+    let game_cpu_start = thread_cpu_time();
+    // Reset per-thread handler-timing at game start. Fitness eval
+    // reuses the same worker thread for many games; without a reset
+    // the "cumulative_by_card_event" totals would blend across games
+    // and the heartbeat's handler top-N would surface handlers from
+    // prior games in the same worker.
+    reset_handler_timing();
+    // Reset UCT's persistent trees + observation buffers at game
+    // start for the same reason — cross-game bleed would cause the
+    // first pick of a new game to walk into stale tree data.
+    super::uct::reset_persistent_trees();
     // Reset per turn so the timeout report identifies the actual offending
     // card, not a stale pick from an earlier successful turn.
     let mut last_picked: Option<InstanceId> = None;
@@ -871,10 +1299,12 @@ pub fn run_game_continue(
     // multiplier or a search-space explosion). Without this the
     // dumps only show terminal state, not where the seconds went.
     let mut pick_timing = PickTiming::default();
-    // Heartbeat: log progress every 5s for games that don't finish
-    // promptly. Helps identify slow-but-not-hung games before the
-    // wall-clock cap fires.
-    let mut last_heartbeat = game_start;
+    // Heartbeat trigger is CPU-time based (not wall) so scheduling
+    // luck doesn't bias which games get sampled. `last_heartbeat_cpu`
+    // tracks the CPU duration at the last emit; the next emit fires
+    // when 30 s more CPU has elapsed. Starts at zero — first 30 s of
+    // real CPU work triggers the first heartbeat.
+    let mut last_heartbeat_cpu: Duration = Duration::ZERO;
 
     let mut safety = 1000;
     while state.winner.is_none() && safety > 0 {
@@ -882,6 +1312,7 @@ pub fn run_game_continue(
             report_game_timeout(
                 state,
                 "outer turn loop",
+                game_seed,
                 last_picked.as_ref(),
                 last_activated.as_ref(),
                 Some(&pick_timing),
@@ -889,27 +1320,6 @@ pub fn run_game_continue(
             );
             state.set_winner(Some(state.active_player.opponent()), "watchdog_outer_loop");
             break;
-        }
-        // Heartbeat: 30s cadence. Per-pick wall is hard-capped, so
-        // genuinely stuck games surface via [GAME TIMEOUT] / [SLOW
-        // CAST] rather than heartbeat absence; 30s keeps the EA's
-        // parallel stderr readable.
-        if last_heartbeat.elapsed() > Duration::from_secs(30) {
-            eprintln!(
-                "\x1b[38;5;{}m[HEARTBEAT] elapsed={:.1?} turn={} phase={:?} active={:?} \
-                 A_board={} B_board={} A_deck={} B_deck={} chain={}\x1b[0m",
-                game_color,
-                game_start.elapsed(),
-                state.turn,
-                state.phase,
-                state.active_player,
-                state.a.board.len(),
-                state.b.board.len(),
-                state.a.deck.len(),
-                state.b.deck.len(),
-                state.priority.as_ref().map(|p| p.chain.len()).unwrap_or(0),
-            );
-            last_heartbeat = Instant::now();
         }
         safety -= 1;
         let active = state.active_player;
@@ -923,6 +1333,7 @@ pub fn run_game_continue(
         ));
 
         while state.phase != Phase::Main1 && state.winner.is_none() {
+            maybe_emit_heartbeat(state, &mut last_heartbeat_cpu, game_seed, game_color, game_start, game_cpu_start, &pick_timing);
             crate::sim::instrument::set_current_op(format!(
                 "turn {turn} ({active:?}) next_phase from {:?}",
                 state.phase
@@ -947,11 +1358,13 @@ pub fn run_game_continue(
         let mut played_creature = false;
         let mut pattern_b_iter: u32 = 0;
         loop {
+            maybe_emit_heartbeat(state, &mut last_heartbeat_cpu, game_seed, game_color, game_start, game_cpu_start, &pick_timing);
             pattern_b_iter += 1;
             if pattern_b_iter > 200 {
                 report_game_timeout(
                     state,
                     "Pattern B inner loop",
+                    game_seed,
                     last_picked.as_ref(),
                     last_activated.as_ref(),
                     Some(&pick_timing),
@@ -964,6 +1377,7 @@ pub fn run_game_continue(
                 report_game_timeout(
                     state,
                     "Pattern B inner loop (wall-clock)",
+                    game_seed,
                     last_picked.as_ref(),
                     last_activated.as_ref(),
                     Some(&pick_timing),
@@ -988,14 +1402,20 @@ pub fn run_game_continue(
                 state.phase, ais[active.index()], kind_filter
             ));
             let pick_t0 = Instant::now();
+            // Candidate count + iterations for the pick_timing entry.
+            // UCT returns both in its trace; other AIs don't measure
+            // them (populated as 0). Heartbeat's `n=N,i=I` display
+            // consumes them.
+            let mut pick_candidates: u32 = 0;
+            let mut pick_iters: u32 = 0;
             let pick = match &ais[active.index()] {
-                super::AiKind::Heuristic => {
-                    // UCT iteration mode: while a search is running,
-                    // pick_play calls (on either side) consume planned
-                    // actions from the UCT plan first. When the plan
-                    // runs out, fall back to the random-weighted
-                    // heuristic picker. The UCT search ALWAYS uses
-                    // `AiKind::Heuristic` for its rollouts (the
+                super::AiKind::Game | super::AiKind::Fast | super::AiKind::Stress => {
+                    // The shared no-search policy. UCT iteration mode:
+                    // while a search is running, pick_play calls (on
+                    // either side) consume planned actions from the UCT
+                    // plan first. When the plan runs out, fall back to
+                    // the random-weighted heuristic picker. The UCT
+                    // search ALWAYS rolls out with `AiKind::Game` (the
                     // override is the steering wheel).
                     if let Some(planned) = super::uct::take_planned_action() {
                         Some(planned)
@@ -1007,9 +1427,15 @@ pub fn run_game_continue(
                     super::mcts::pick_play(state, active, kind_filter, mcts_cfg, registry)
                 }
                 super::AiKind::Uct(uct_cfg) => {
-                    // Deprecated run_game_continue path: the UCT trace
-                    // is for the wasm UI log only; native runs discard it.
-                    super::uct::pick_play_uct(state, active, kind_filter, uct_cfg, registry).0
+                    // UCT trace carries candidates_count + iters for
+                    // the heartbeat's n=N,i=I display. Rest of the
+                    // trace (subtree snapshot) is discarded on the
+                    // native path — it exists for the wasm UI log.
+                    let (chosen, trace) =
+                        super::uct::pick_play_uct(state, active, kind_filter, uct_cfg, registry);
+                    pick_candidates = trace.candidates_count;
+                    pick_iters = trace.iters_completed;
+                    chosen
                 }
                 super::AiKind::Human(iface) => {
                     let candidates =
@@ -1067,7 +1493,7 @@ pub fn run_game_continue(
             // spent deciding, not what the engine spent validating.
             let pick_card_id = pick
                 .as_ref()
-                .and_then(|iid| state.card_pool.get(iid).map(|c| c.card.id.clone()))
+                .and_then(|iid| state.card_pool.get(iid).map(|c| c.card().id.clone()))
                 .unwrap_or_else(|| "pass".to_string());
             pick_timing.record(PickTimingEntry {
                 turn,
@@ -1075,7 +1501,15 @@ pub fn run_game_continue(
                 site: "pattern_b",
                 card_id: pick_card_id,
                 wall_us: pick_wall_us,
+                candidates: pick_candidates,
+                iters: pick_iters,
             });
+            // Feed UCT's persistent-tree observer so a future
+            // `pick_play_uct` on either player can walk down through
+            // this pick. Called for every pick (including from
+            // non-UCT AIs) because opponent decisions belong in the
+            // observation stream regardless of who made them.
+            super::uct::record_observed_pick(active, pick.as_ref());
             // See parallel comment in sim/step/main_phases.rs: when the
             // pick came from an inner search (UCT/MCTS) that mutated
             // state and rolled back imperfectly, the chosen iid may
@@ -1092,13 +1526,13 @@ pub fn run_game_continue(
             let picked_is_creature = state
                 .card_pool
                 .get(&picked)
-                .map(|c| c.card.kind == CardType::Creature)
+                .map(|c| c.card().kind == CardType::Creature)
                 .unwrap_or(false);
             {
                 let kind = state
                     .card_pool
                     .get(&picked)
-                    .map(|c| c.card.kind)
+                    .map(|c| c.card().kind)
                     .unwrap_or(CardType::Unspecified);
                 // Build PlayChoices via the shared choice-builder (same
                 // function MCTS rollouts use). Sacrifice-stats bumping
@@ -1132,7 +1566,7 @@ pub fn run_game_continue(
                 };
                 // Update sacrifice telemetry from the picked ids.
                 for sac_iid in &choices.sacrifice_ids {
-                    if let Some(card_id) = state.card_pool.get(sac_iid).map(|c| c.card.id.clone()) {
+                    if let Some(card_id) = state.card_pool.get(sac_iid).map(|c| c.card().id.clone()) {
                         *stats.card_sacrificed_count.entry(card_id).or_insert(0) += 1;
                     }
                 }
@@ -1154,7 +1588,7 @@ pub fn run_game_continue(
                     let card_id = state
                         .card_pool
                         .get(&picked)
-                        .map(|c| c.card.id.clone())
+                        .map(|c| c.card().id.clone())
                         .unwrap_or_else(|| format!("?{picked}"));
                     eprintln!(
                         "\x1b[38;5;{}m[SLOW CAST] turn={} active={:?} card={} elapsed={:.2?} result={:?}\x1b[0m",
@@ -1175,7 +1609,7 @@ pub fn run_game_continue(
                     }
                     bump_played(&mut stats, active);
                     if let Some(card_id) =
-                        state.card_pool.get(&picked).map(|c| c.card.id.clone())
+                        state.card_pool.get(&picked).map(|c| c.card().id.clone())
                     {
                         match active {
                             PlayerId::A => {
@@ -1207,7 +1641,7 @@ pub fn run_game_continue(
                             .card_play_turn_events
                             .push((card_id, turn_now, active));
                     }
-                    let timing = state.card_pool.get(&picked).and_then(|c| c.card.timing);
+                    let timing = state.card_pool.get(&picked).and_then(|c| c.card().timing);
                     let label = match kind {
                         CardType::Spell => match timing {
                             Some(crate::Timing::Instant) => format!("instant {}", short(&picked)),
@@ -1239,7 +1673,7 @@ pub fn run_game_continue(
                         let card_id = state
                             .card_pool
                             .get(&picked)
-                            .map(|c| c.card.id.clone())
+                            .map(|c| c.card().id.clone())
                             .unwrap_or_else(|| picked.clone());
                         let active_is_human = matches!(ais[active.index()], super::AiKind::Human(_));
                         crate::sim::instrument::tee_log(log, format!(
@@ -1250,7 +1684,7 @@ pub fn run_game_continue(
                         let card_id = state
                             .card_pool
                             .get(&picked)
-                            .map(|c| c.card.id.clone())
+                            .map(|c| c.card().id.clone())
                             .unwrap_or_else(|| picked.clone());
                         crate::sim::instrument::tee_log(log, format!(
                             "turn {turn} ({active:?}): {card_id} rolled back (would have lost the game)"
@@ -1277,6 +1711,7 @@ pub fn run_game_continue(
         }
 
         while state.phase != Phase::Combat && state.winner.is_none() {
+            maybe_emit_heartbeat(state, &mut last_heartbeat_cpu, game_seed, game_color, game_start, game_cpu_start, &pick_timing);
             let mut oracle = RandomOracle::new(StdRng::seed_from_u64(rng.gen()));
             state
                 .next_phase(Some(&mut EventContext::new(lua, &mut oracle)))
@@ -1291,9 +1726,11 @@ pub fn run_game_continue(
 
         let defender = active.opponent();
         let attackers: Vec<InstanceId> = match &ais[active.index()] {
-            super::AiKind::Heuristic | super::AiKind::Mcts(_) | super::AiKind::Uct(_) => {
-                select_attackers(state, active)
-            }
+            super::AiKind::Game
+            | super::AiKind::Fast
+            | super::AiKind::Stress
+            | super::AiKind::Mcts(_)
+            | super::AiKind::Uct(_) => select_attackers(state, active),
             super::AiKind::Human(iface) => {
                 let eligible = super::ai::eligible_attackers(state, active);
                 iface.pick_attackers(state, active, eligible)
@@ -1312,9 +1749,11 @@ pub fn run_game_continue(
         if declared_atk_count > 0 {
             state.confirm_attacks().unwrap();
             let assignments = match &ais[defender.index()] {
-                super::AiKind::Heuristic | super::AiKind::Mcts(_) | super::AiKind::Uct(_) => {
-                    pick_blocks(state, defender)
-                }
+                super::AiKind::Game
+                | super::AiKind::Fast
+                | super::AiKind::Stress
+                | super::AiKind::Mcts(_)
+                | super::AiKind::Uct(_) => pick_blocks(state, defender),
                 super::AiKind::Human(iface) => {
                     use crate::game::CombatState;
                     let declared: Vec<InstanceId> = match &state.combat {
@@ -1378,6 +1817,7 @@ pub fn run_game_continue(
             // Advance into Main2 explicitly so play_card timing checks
             // (sorcery-speed) accept the cast.
             while state.phase != Phase::Main2 && state.winner.is_none() {
+                maybe_emit_heartbeat(state, &mut last_heartbeat_cpu, game_seed, game_color, game_start, game_cpu_start, &pick_timing);
                 let mut oracle = RandomOracle::new(StdRng::seed_from_u64(rng.gen()));
                 state
                 .next_phase(Some(&mut EventContext::new(lua, &mut oracle)))
@@ -1389,6 +1829,7 @@ pub fn run_game_continue(
             }
             let mut m2_played_creature = false;
             loop {
+                maybe_emit_heartbeat(state, &mut last_heartbeat_cpu, game_seed, game_color, game_start, game_cpu_start, &pick_timing);
                 if state.winner.is_some() {
                     break;
                 }
@@ -1439,7 +1880,7 @@ pub fn run_game_continue(
                         let picked_is_creature = state
                             .card_pool
                             .get(&picked)
-                            .map(|c| c.card.kind == CardType::Creature)
+                            .map(|c| c.card().kind == CardType::Creature)
                             .unwrap_or(false);
                         let build_result = build_pattern_b_choices(
                             state, active, &picked, &mut oracle,
@@ -1462,7 +1903,7 @@ pub fn run_game_continue(
                             let card_id = state
                                 .card_pool
                                 .get(&picked)
-                                .map(|c| c.card.id.clone())
+                                .map(|c| c.card().id.clone())
                                 .unwrap_or_else(|| picked.clone());
                             crate::sim::instrument::tee_log(log, format!(
                                 "turn {turn} ({active:?}): main2 play_card({card_id}) failed: {err:?}"
@@ -1479,6 +1920,7 @@ pub fn run_game_continue(
 
         let starting_turn = state.turn;
         while state.turn == starting_turn && state.winner.is_none() {
+            maybe_emit_heartbeat(state, &mut last_heartbeat_cpu, game_seed, game_color, game_start, game_cpu_start, &pick_timing);
             let mut oracle = RandomOracle::new(StdRng::seed_from_u64(rng.gen()));
             state
                 .next_phase(Some(&mut EventContext::new(lua, &mut oracle)))
@@ -1547,7 +1989,7 @@ pub(crate) fn enumerate_human_activations(
         let card_name = state
             .card_pool
             .get(iid)
-            .map(|i| i.card.name.clone())
+            .map(|i| i.card().name.clone())
             .unwrap_or_else(|| iid.clone());
         for idx in 0..n {
             if !state.can_activate(iid, idx) {
@@ -1598,7 +2040,7 @@ pub(crate) fn run_activation_pass(
     let ids: Vec<InstanceId> = state.player(player).board.clone();
     for iid in &ids {
         let is_creature = match state.card_pool.get(iid) {
-            Some(inst) => inst.card.kind == CardType::Creature,
+            Some(inst) => inst.card().kind == CardType::Creature,
             None => continue,
         };
         // RULES A.5+: total activations = printed (`card.activated`)
@@ -1672,22 +2114,46 @@ pub(crate) fn run_activation_pass(
 fn report_game_timeout(
     state: &GameState,
     site: &str,
+    game_seed: u64,
     last_picked: Option<&InstanceId>,
     last_activated: Option<&(InstanceId, usize)>,
     pick_timing: Option<&PickTiming>,
     game_color: u8,
 ) {
     let _ = crate::game::bump_timeout_and_maybe_halt(site);
+    report_game_state(
+        "GAME TIMEOUT",
+        state, site, game_seed, last_picked, last_activated, pick_timing, game_color,
+    );
+}
+
+/// Print the same zones/attached/pick-timing report as
+/// [`report_game_timeout`] without bumping the global timeout
+/// counter. `label` prefixes the header line (e.g. `"GAME TIMEOUT"`
+/// for the real hard-timeout, `"REPLAY HALT"` for user-requested
+/// `tsot replay --to` inspection) so a stderr grep can distinguish
+/// intentional halts from genuine stalls.
+#[allow(clippy::too_many_arguments)]
+pub fn report_game_state(
+    label: &str,
+    state: &GameState,
+    site: &str,
+    game_seed: u64,
+    last_picked: Option<&InstanceId>,
+    last_activated: Option<&(InstanceId, usize)>,
+    pick_timing: Option<&PickTiming>,
+    game_color: u8,
+) {
     let ids = |iids: &[InstanceId]| -> Vec<String> {
         iids.iter()
-            .filter_map(|i| state.card_pool.get(i).map(|c| c.card.id.clone()))
+            .filter_map(|i| state.card_pool.get(i).map(|c| c.card().id.clone()))
             .collect()
     };
     let card_id_of = |iid: &InstanceId| -> String {
         state
             .card_pool
             .get(iid)
-            .map(|c| c.card.id.clone())
+            .map(|c| c.card().id.clone())
             .unwrap_or_else(|| format!("?{iid}"))
     };
     // Per-game color prefix/suffix so every dump line wears the
@@ -1696,8 +2162,13 @@ fn report_game_timeout(
     let c = format!("\x1b[38;5;{game_color}m");
     let z = "\x1b[0m";
     eprintln!(
-        "{c}[GAME TIMEOUT] site={site} turn={} active={:?} winner={:?}{z}",
+        "{c}[{label}] site={site} game_seed=0x{game_seed:016x} \
+         turn={} active={:?} winner={:?}{z}",
         state.turn, state.active_player, state.winner,
+    );
+    eprintln!(
+        "{c}  reproduce: run_game(state, &mut StdRng::seed_from_u64(0x{game_seed:016x}), \
+         &mut log, registry, 0x{game_seed:016x}){z}",
     );
     if let Some(p) = last_picked {
         eprintln!("{c}  last_picked: {} ({}){z}", p, card_id_of(p));
@@ -1722,7 +2193,7 @@ fn report_game_timeout(
             if host.attached.is_empty() {
                 continue;
             }
-            let host_id = host.card.id.clone();
+            let host_id = host.card().id.clone();
             let att: Vec<String> = host.attached.iter().map(card_id_of).collect();
             eprintln!("{c}  {label} attached: {host_id} <- {att:?}{z}");
         }
@@ -1783,6 +2254,122 @@ mod tests {
     use super::*;
     use crate::card::CardRegistry;
 
+    /// `format_state_token` and `parse_state_token` must round-trip
+    /// for every phase. Any format drift (leading `0x`, phase name
+    /// capitalisation, missing separator) breaks the heartbeat →
+    /// `tsot replay --to` → halt loop, so this pins the format shape.
+    #[test]
+    fn state_token_round_trips_all_phases() {
+        for phase in [
+            Phase::Untap, Phase::Draw, Phase::Main1,
+            Phase::Combat, Phase::Main2, Phase::End,
+        ] {
+            let token = format_state_token(0x1234_5678_9ABC_DEF0, 42, phase);
+            let (s, t, p) = parse_state_token(&token).unwrap();
+            assert_eq!(s, 0x1234_5678_9ABC_DEF0, "seed for phase {phase:?}");
+            assert_eq!(t, 42, "turn for phase {phase:?}");
+            assert_eq!(p, phase, "phase round-trip {phase:?}");
+        }
+    }
+
+    /// Malformed tokens must error, not silently misparse.
+    #[test]
+    fn state_token_rejects_malformed() {
+        assert!(parse_state_token("").is_err());
+        assert!(parse_state_token("no-at-sign").is_err());
+        assert!(parse_state_token("abc123@notT").is_err());
+        assert!(parse_state_token("abc123@t42").is_err(), "no phase segment");
+        assert!(parse_state_token("abc123@t42pWrongPhase").is_err());
+        assert!(parse_state_token("xyz@t42pUntap").is_err(), "bad hex");
+        assert!(parse_state_token("abc123@tXpUntap").is_err(), "bad turn");
+    }
+
+    /// A vanilla 50-card deck of the simplest creature in `cards/`.
+    /// Used by seed/determinism tests that need a runnable game without
+    /// caring about specific card effects.
+    fn vanilla_deck(registry: &CardRegistry) -> Vec<crate::card::Card> {
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| {
+                matches!(c.kind, crate::card::CardType::Creature)
+                    && c.handlers.is_empty()
+                    && c.cost.len() == 1
+                    && !c.cost[0].is_x
+            })
+            .expect("a vanilla creature should exist in cards/")
+            .clone();
+        (0..50).map(|_| template.clone()).collect()
+    }
+
+    /// `Game` / `Fast` / `Stress` are three intent-named views of one
+    /// shared no-search picker — the split is metadata, not behaviour.
+    /// Same seed + same decks must produce a byte-identical game across
+    /// all three, or "behaviour-preserving" is a lie and a call site
+    /// silently got a different opponent.
+    #[test]
+    fn game_fast_stress_are_behaviourally_identical() {
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+        let deck = vanilla_deck(&registry);
+        let seed: u64 = 0x1DEA_5EED_0000_0007;
+
+        let run = |kind: super::super::AiKind| {
+            let mut state = GameState::new(deck.clone(), deck.clone());
+            state.replay_journal = Some(crate::game::Journal::new());
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut log: Vec<String> = Vec::new();
+            let ais = [kind.clone(), kind];
+            let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, seed);
+            (format!("{:?}", stats.winner), stats.turns, log)
+        };
+
+        let g = run(super::super::AiKind::Game);
+        let f = run(super::super::AiKind::Fast);
+        let s = run(super::super::AiKind::Stress);
+        assert_eq!(g, f, "Game and Fast diverged — the split is not behaviour-preserving");
+        assert_eq!(g, s, "Game and Stress diverged — the split is not behaviour-preserving");
+    }
+
+    /// The [GAME TIMEOUT] dump can only reproduce a hung game if the
+    /// game's seed is faithfully surfaced. Guard: the seed `run_game`
+    /// records must be the seed that actually drove the game — reseeding
+    /// a fresh run from `stats.game_seed` must reproduce the outcome. A
+    /// caller that threads a `game_seed` not matching its rng fails here.
+    #[test]
+    fn game_seed_is_recorded_and_reproduces_the_game() {
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+        let deck = vanilla_deck(&registry);
+        let seed: u64 = 0x5EED_1234_ABCD_0001;
+
+        let state1 = GameState::new(deck.clone(), deck.clone());
+        let mut rng1 = StdRng::seed_from_u64(seed);
+        let mut log1: Vec<String> = Vec::new();
+        let (stats1, _) = run_game(state1, &mut rng1, &mut log1, &registry, seed);
+
+        assert_eq!(
+            stats1.game_seed, seed,
+            "recorded game_seed must equal the seed that drove the game",
+        );
+
+        // Reproduce strictly from the reported seed.
+        let state2 = GameState::new(deck.clone(), deck.clone());
+        let mut rng2 = StdRng::seed_from_u64(stats1.game_seed);
+        let mut log2: Vec<String> = Vec::new();
+        let (stats2, _) = run_game(state2, &mut rng2, &mut log2, &registry, stats1.game_seed);
+
+        assert_eq!(
+            format!("{:?}", stats1.winner),
+            format!("{:?}", stats2.winner),
+            "reported game_seed did not reproduce the winner",
+        );
+        assert_eq!(
+            stats1.turns, stats2.turns,
+            "reported game_seed did not reproduce the turn count",
+        );
+    }
+
     /// EA prerequisite: fitness(genome) is meaningful only if
     /// `run_game(state, &mut rng, &mut log, lua)` produces byte-identical
     /// outputs for byte-identical inputs. If this ever fails, the EA's
@@ -1797,7 +2384,7 @@ mod tests {
         use crate::sim::evolved_deck::EvolvedDeck;
         let registry = std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
         let baseline_dir = std::path::Path::new("baselines");
-        let mut decks: Vec<Vec<crate::card::Card>> = Vec::new();
+        let mut decks: Vec<Vec<crate::game::DeckUnit>> = Vec::new();
         let mut labels: Vec<String> = Vec::new();
         for entry in std::fs::read_dir(baseline_dir).unwrap().flatten() {
             let p = entry.path();
@@ -1805,12 +2392,12 @@ mod tests {
                 continue;
             }
             match EvolvedDeck::load(&p) {
-                Ok(saved) => match saved.to_cards(&registry) {
-                    Ok(cards) => {
+                Ok(saved) => match saved.to_units(&registry) {
+                    Ok(units) => {
                         labels.push(p.file_name().unwrap().to_string_lossy().into_owned());
-                        decks.push(cards);
+                        decks.push(units);
                     }
-                    Err(e) => eprintln!("baseline {} to_cards err: {e}", p.display()),
+                    Err(e) => eprintln!("baseline {} to_units err: {e}", p.display()),
                 },
                 Err(e) => eprintln!("baseline {} load err: {e}", p.display()),
             }
@@ -1823,12 +2410,12 @@ mod tests {
         let mut total_exile: u32 = 0;
         for (i, deck_a) in decks.iter().enumerate() {
             for (j, deck_b) in decks.iter().enumerate() {
-                let state = GameState::new(deck_a.clone(), deck_b.clone());
+                let state = GameState::from_units(deck_a.clone(), deck_b.clone());
                 let seed = 0xBA5E0000_u64 + (i as u64) * 100 + (j as u64);
                 let mut rng = StdRng::seed_from_u64(seed);
                 let mut log: Vec<String> = Vec::new();
                 let (stats, _journal) =
-                    run_game(state, &mut rng, &mut log, &registry);
+                    run_game(state, &mut rng, &mut log, &registry, seed);
                 total_transfer += stats
                     .action_counts
                     .get("attached_payment_transfer")
@@ -1899,6 +2486,7 @@ mod tests {
                 activated: Vec::new(),
                 gy_hand_substitute: false,
                 allow_x_zero: false,
+                same_sleeve: false,
                 target: None,
                 is_variant: false,
                 variant_of: None,
@@ -1913,8 +2501,8 @@ mod tests {
         let cast = s.player(active).hand[0].clone();
         {
             let inst = s.card_pool.get_mut(&cast).unwrap();
-            inst.card.colors = vec!["green".to_string()];
-            inst.card.cost = vec![CostComponent {
+            inst.card_mut().colors = vec!["green".to_string()];
+            inst.card_mut().cost = vec![CostComponent {
                 amount: 0,
                 source: CostSource::Hand,
                 is_x: true,
@@ -1926,8 +2514,8 @@ mod tests {
         let symbol = s.player(active).hand[1].clone();
         {
             let inst = s.card_pool.get_mut(&symbol).unwrap();
-            inst.card.kind = CardType::Symbol;
-            inst.card.colors = vec!["blue".to_string()];
+            inst.card_mut().kind = CardType::Symbol;
+            inst.card_mut().colors = vec!["blue".to_string()];
         }
         s.player_mut(active).hand.retain(|x| x != &symbol);
         s.player_mut(active).board.push(symbol.clone());
@@ -1988,6 +2576,7 @@ mod tests {
                 activated: Vec::new(),
                 gy_hand_substitute: false,
                 allow_x_zero: false,
+                same_sleeve: false,
                 target: None,
                 is_variant: false,
                 variant_of: None,
@@ -2001,9 +2590,9 @@ mod tests {
         let cast = s.player(active).hand[0].clone();
         {
             let inst = s.card_pool.get_mut(&cast).unwrap();
-            inst.card.kind = CardType::Spell;
-            inst.card.colors = vec!["red".to_string()];
-            inst.card.cost = vec![
+            inst.card_mut().kind = CardType::Spell;
+            inst.card_mut().colors = vec!["red".to_string()];
+            inst.card_mut().cost = vec![
                 CostComponent {
                     amount: 0,
                     source: CostSource::Hand,
@@ -2026,19 +2615,19 @@ mod tests {
         // Red jewel on A's board → substitution_coverage = 2.
         {
             let j = s.card_pool.get_mut(&jewel).unwrap();
-            j.card.kind = CardType::Artifact;
-            j.card.subtypes = vec!["jewel".to_string()];
-            j.card.colors = vec!["red".to_string()];
+            j.card_mut().kind = CardType::Artifact;
+            j.card_mut().subtypes = vec!["jewel".to_string()];
+            j.card_mut().colors = vec!["red".to_string()];
         }
         s.player_mut(active).hand.retain(|x| x != &jewel);
         s.player_mut(active).board.push(jewel.clone());
         s.card_pool.get_mut(&jewel).unwrap().tapped = false;
         // Identity-matching hand cards so the picker doesn't refuse at
         // the hand-identity gate (we're testing the X-cap, not identity).
-        s.card_pool.get_mut(&red_hand_a).unwrap().card.colors = vec!["red".to_string()];
-        s.card_pool.get_mut(&red_hand_b).unwrap().card.colors = vec!["red".to_string()];
+        s.card_pool.get_mut(&red_hand_a).unwrap().card_mut().colors = vec!["red".to_string()];
+        s.card_pool.get_mut(&red_hand_b).unwrap().card_mut().colors = vec!["red".to_string()];
         // Seed graveyard with a non-red card (no anchor possible).
-        s.card_pool.get_mut(&gy_seed_a).unwrap().card.colors = vec!["blue".to_string()];
+        s.card_pool.get_mut(&gy_seed_a).unwrap().card_mut().colors = vec!["blue".to_string()];
         s.player_mut(active).hand.retain(|x| x != &gy_seed_a);
         s.player_mut(active).graveyard.push(gy_seed_a);
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xC0DE);
@@ -2106,8 +2695,8 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(0xC0FFEE);
         let mut log: Vec<String> = Vec::new();
-        let ais = [super::super::AiKind::Heuristic, super::super::AiKind::Heuristic];
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
+        let ais = [super::super::AiKind::Fast, super::super::AiKind::Fast];
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0xC0FFEE);
 
         assert!(state.winner.is_some(), "game should have a winner");
         assert!(stats.turns > 0, "stats should record turns");
@@ -2121,7 +2710,7 @@ mod tests {
         journal.rollback(&mut state);
 
         // Compare each top-level field; on a card_pool mismatch, walk
-        // per-instance and emit the first divergent CardInstance field.
+        // per-instance and emit the first divergent Sleeve field.
         assert_eq!(format!("{:?}", initial.active_player), format!("{:?}", state.active_player), "active_player not rolled back");
         assert_eq!(initial.turn, state.turn, "turn not rolled back");
         assert_eq!(format!("{:?}", initial.phase), format!("{:?}", state.phase), "phase not rolled back");
@@ -2133,7 +2722,7 @@ mod tests {
         assert_eq!(format!("{:?}", initial.a), format!("{:?}", state.a), "player A's zones not rolled back");
         assert_eq!(format!("{:?}", initial.b), format!("{:?}", state.b), "player B's zones not rolled back");
 
-        // card_pool: narrow to which CardInstance + which field.
+        // card_pool: narrow to which Sleeve + which field.
         for (iid, post_inst) in &state.card_pool {
             let init_inst = initial.card_pool.get(iid)
                 .unwrap_or_else(|| panic!("instance {iid} appeared post-rollback (not in initial pool)"));
@@ -2164,6 +2753,17 @@ mod tests {
             }
         }
         assert_eq!(format!("{:?}", initial.card_pool), format!("{:?}", state.card_pool), "card_pool differs in some field not covered by per-field checks ({entry_count} journal entries)");
+
+        // JOURNALING CONTRACT backstop: compare the ENTIRE GameState, not
+        // a hand-picked subset. The per-field checks above give nice
+        // messages; THIS one is unfalsifiable — any field a mutation
+        // touched without journaling (the delayed-trigger class of bug)
+        // fails here regardless of what anyone remembered to assert.
+        assert_eq!(
+            format!("{:?}", initial),
+            format!("{:?}", state),
+            "rollback did not restore the ENTIRE state — a field mutated without being journaled",
+        );
     }
 
     #[test]
@@ -2185,8 +2785,8 @@ mod tests {
         let mut log_1: Vec<String> = Vec::new();
         let mut log_2: Vec<String> = Vec::new();
 
-        let (stats_1, journal_1) = run_game(state_1, &mut rng_1, &mut log_1, &registry);
-        let (stats_2, journal_2) = run_game(state_2, &mut rng_2, &mut log_2, &registry);
+        let (stats_1, journal_1) = run_game(state_1, &mut rng_1, &mut log_1, &registry, 0xEA_C8);
+        let (stats_2, journal_2) = run_game(state_2, &mut rng_2, &mut log_2, &registry, 0xEA_C8);
 
         assert_eq!(log_1, log_2, "logs diverged across identical runs");
         assert_eq!(
@@ -2199,5 +2799,272 @@ mod tests {
             format!("{journal_2:?}"),
             "journals diverged across identical runs"
         );
+    }
+
+    /// Slice 8.3 acceptance: a deck built from `DeckUnit`s including cardless
+    /// sleeves (S.4) plays a full AI game — exercising the Z.8b free draw —
+    /// and the full-game replay journal rolls back to the exact initial
+    /// state (cardless sleeves included).
+    #[test]
+    fn full_game_with_cardless_sleeves_runs_and_rolls_back() {
+        use crate::game::DeckUnit;
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| {
+                matches!(c.kind, crate::card::CardType::Creature)
+                    && c.handlers.is_empty()
+                    && c.cost.len() == 1
+                    && !c.cost[0].is_x
+            })
+            .expect("a vanilla creature should exist in cards/")
+            .clone();
+        let make_units = || -> Vec<DeckUnit> {
+            (0..50)
+                .map(|i| {
+                    if i >= 5 && i % 6 == 5 {
+                        DeckUnit::Cardless
+                    } else {
+                        DeckUnit::Card(template.clone())
+                    }
+                })
+                .collect()
+        };
+
+        let mut state = GameState::from_units(make_units(), make_units());
+        let initial_cardless =
+            state.card_pool.values().filter(|s| s.is_cardless()).count();
+        assert!(initial_cardless > 0, "test deck must contain cardless sleeves");
+
+        let initial = state.clone();
+        state.replay_journal = Some(crate::game::Journal::new());
+        let mut rng = StdRng::seed_from_u64(0x5133_1E55);
+        let mut log: Vec<String> = Vec::new();
+        let ais = [super::super::AiKind::Fast, super::super::AiKind::Fast];
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0x5133_1E55);
+
+        assert!(state.winner.is_some(), "game should have a winner");
+        assert!(stats.turns > 0);
+        // Z.8b actually fired: at least one cardless sleeve was drawn out of
+        // a deck (collected into a hand / moved on) during the game.
+        let cardless_off_deck = state
+            .card_pool
+            .iter()
+            .filter(|(iid, s)| {
+                s.is_cardless()
+                    && !state.a.deck.contains(*iid)
+                    && !state.b.deck.contains(*iid)
+            })
+            .count();
+        assert!(
+            cardless_off_deck > 0,
+            "the free draw should have pulled a cardless sleeve off a deck"
+        );
+
+        let journal = state.replay_journal.take().expect("replay_journal open");
+        assert!(!journal.is_empty(), "a full game produces journal entries");
+        journal.rollback(&mut state);
+
+        assert_eq!(
+            format!("{:?}", initial.a),
+            format!("{:?}", state.a),
+            "A zones not rolled back"
+        );
+        assert_eq!(
+            format!("{:?}", initial.b),
+            format!("{:?}", state.b),
+            "B zones not rolled back"
+        );
+        assert_eq!(
+            format!("{:?}", initial.card_pool),
+            format!("{:?}", state.card_pool),
+            "card_pool (incl. cardless sleeves) not rolled back"
+        );
+        assert_eq!(
+            state.card_pool.values().filter(|s| s.is_cardless()).count(),
+            initial_cardless,
+            "all cardless sleeves restored by rollback"
+        );
+    }
+
+    #[test]
+    fn full_game_with_cardless_sleeves_is_deterministic() {
+        use crate::game::DeckUnit;
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+        let template = registry
+            .cards()
+            .iter()
+            .find(|c| matches!(c.kind, crate::card::CardType::Creature))
+            .unwrap()
+            .clone();
+        let make_units = || -> Vec<DeckUnit> {
+            (0..50)
+                .map(|i| {
+                    if i >= 5 && i % 6 == 5 {
+                        DeckUnit::Cardless
+                    } else {
+                        DeckUnit::Card(template.clone())
+                    }
+                })
+                .collect()
+        };
+
+        let s1 = GameState::from_units(make_units(), make_units());
+        let s2 = GameState::from_units(make_units(), make_units());
+        let mut rng1 = StdRng::seed_from_u64(0xC0FFEE);
+        let mut rng2 = StdRng::seed_from_u64(0xC0FFEE);
+        let mut log1: Vec<String> = Vec::new();
+        let mut log2: Vec<String> = Vec::new();
+        let (stats1, j1) = run_game(s1, &mut rng1, &mut log1, &registry, 0xC0FFEE);
+        let (stats2, j2) = run_game(s2, &mut rng2, &mut log2, &registry, 0xC0FFEE);
+
+        assert_eq!(log1, log2, "logs diverged with cardless sleeves present");
+        assert_eq!(format!("{stats1:?}"), format!("{stats2:?}"));
+        assert_eq!(format!("{j1:?}"), format!("{j2:?}"), "journals diverged");
+    }
+
+    /// Slice 9.4 — the end-to-end test deck.
+    ///
+    /// Not a hand-authored fixture: take the shipped blue starter deck,
+    /// copy it, and swap a slice of its clears for the azure cardless
+    /// stack — Window Cleaners, `clear-azure`, an azure symbol — plus a
+    /// few loose cardless sleeves for Window Cleaner's ETB to find. The
+    /// real cards, in a real deck, must play a full game to a winner
+    /// with the rollback + determinism invariants still holding.
+    fn window_cleaner_deck(registry: &CardRegistry) -> Vec<crate::game::DeckUnit> {
+        use crate::game::DeckUnit;
+        use crate::replay::CARDLESS_SLEEVE_ID;
+
+        fn replace_first_n(ids: &mut [String], from: &str, to: &str, n: usize) {
+            let mut done = 0;
+            for id in ids.iter_mut() {
+                if done >= n {
+                    break;
+                }
+                if id == from {
+                    *id = to.to_string();
+                    done += 1;
+                }
+            }
+        }
+
+        let lookup = |id: &str| -> crate::card::Card {
+            registry
+                .cards()
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap_or_else(|| panic!("card {id} missing from registry"))
+                .clone()
+        };
+
+        // Copy the shipped blue starter, then convert its 12 `clear-blue`
+        // slots into the azure cardless stack: 4 Window Cleaners, 4
+        // `clear-azure`, 4 loose cardless sleeves. Swap the blue ix
+        // symbols for azure ones so the deck can pay an azure identity.
+        let mut ids: Vec<String> = crate::sim::deck_presets::STARTER_DECK_IDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        replace_first_n(&mut ids, "clear-blue", "window-cleaner", 4);
+        replace_first_n(&mut ids, "clear-blue", "clear-azure", 4);
+        replace_first_n(&mut ids, "clear-blue", CARDLESS_SLEEVE_ID, 4);
+        replace_first_n(&mut ids, "blue-ix-symbol", "azure-ix-symbol", 2);
+
+        ids.iter()
+            .map(|id| {
+                if id == CARDLESS_SLEEVE_ID {
+                    DeckUnit::Cardless
+                } else {
+                    DeckUnit::Card(lookup(id))
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn full_game_on_a_window_cleaner_deck_runs_and_rolls_back() {
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+
+        let mut state = GameState::from_units(
+            window_cleaner_deck(&registry),
+            window_cleaner_deck(&registry),
+        );
+
+        // Build sanity: the copied-and-swapped deck really carries the
+        // cardless stack, not just the blue starter.
+        let has_window_cleaner = state
+            .card_pool
+            .values()
+            .any(|s| !s.is_cardless() && s.card().id == "window-cleaner");
+        let cardless = state.card_pool.values().filter(|s| s.is_cardless()).count();
+        assert!(has_window_cleaner, "deck must contain Window Cleaners");
+        assert!(cardless > 0, "deck must contain loose cardless sleeves");
+
+        let initial = state.clone();
+        state.replay_journal = Some(crate::game::Journal::new());
+        let mut rng = StdRng::seed_from_u64(0x9A4_5EED);
+        let mut log: Vec<String> = Vec::new();
+        let ais = [super::super::AiKind::Fast, super::super::AiKind::Fast];
+        let stats =
+            run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0x9A4_5EED);
+
+        assert!(state.winner.is_some(), "the deck should play to a winner");
+        assert!(stats.turns > 0, "the game should take turns");
+
+        let journal = state.replay_journal.take().expect("replay_journal open");
+        assert!(!journal.is_empty(), "a full game produces journal entries");
+        journal.rollback(&mut state);
+
+        assert_eq!(
+            format!("{:?}", initial.a),
+            format!("{:?}", state.a),
+            "A zones not rolled back after a Window Cleaner game"
+        );
+        assert_eq!(
+            format!("{:?}", initial.b),
+            format!("{:?}", state.b),
+            "B zones not rolled back after a Window Cleaner game"
+        );
+        for (iid, post) in &state.card_pool {
+            let init = initial
+                .card_pool
+                .get(iid)
+                .unwrap_or_else(|| panic!("instance {iid} appeared post-rollback"));
+            assert_eq!(
+                format!("{:?}", init.attached),
+                format!("{:?}", post.attached),
+                "{iid}.attached not rolled back"
+            );
+            assert_eq!(init.is_cardless(), post.is_cardless(), "{iid} cardless-ness changed");
+        }
+    }
+
+    #[test]
+    fn full_game_on_a_window_cleaner_deck_is_deterministic() {
+        let registry =
+            std::sync::Arc::new(CardRegistry::load(std::path::Path::new("cards")).unwrap());
+
+        let s1 = GameState::from_units(
+            window_cleaner_deck(&registry),
+            window_cleaner_deck(&registry),
+        );
+        let s2 = GameState::from_units(
+            window_cleaner_deck(&registry),
+            window_cleaner_deck(&registry),
+        );
+        let mut rng1 = StdRng::seed_from_u64(0x9A4_C0FFEE);
+        let mut rng2 = StdRng::seed_from_u64(0x9A4_C0FFEE);
+        let mut log1: Vec<String> = Vec::new();
+        let mut log2: Vec<String> = Vec::new();
+        let (stats1, j1) = run_game(s1, &mut rng1, &mut log1, &registry, 0x9A4_C0FFEE);
+        let (stats2, j2) = run_game(s2, &mut rng2, &mut log2, &registry, 0x9A4_C0FFEE);
+
+        assert_eq!(log1, log2, "logs diverged on the Window Cleaner deck");
+        assert_eq!(format!("{stats1:?}"), format!("{stats2:?}"), "stats diverged");
+        assert_eq!(format!("{j1:?}"), format!("{j2:?}"), "journals diverged");
     }
 }

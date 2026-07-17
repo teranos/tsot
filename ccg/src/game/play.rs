@@ -54,29 +54,29 @@ impl GameState {
         // Permanent diagnostic — capture the cast snapshot BEFORE
         // play_card_inner runs so it survives the call even when
         // play_card_inner Errs after consuming `choices`.
-        let cast_snapshot = self.card_pool.get(instance).map(|i| i.card.id.clone());
+        let cast_snapshot = self.card_pool.get(instance).map(|i| i.card().id.clone());
         let hand_snapshot: Vec<String> = self
             .player(player)
             .hand
             .iter()
-            .filter_map(|h| self.card_pool.get(h).map(|i| i.card.id.clone()))
+            .filter_map(|h| self.card_pool.get(h).map(|i| i.card().id.clone()))
             .collect();
         let gy_snapshot: Vec<String> = self
             .player(player)
             .graveyard
             .iter()
-            .filter_map(|h| self.card_pool.get(h).map(|i| i.card.id.clone()))
+            .filter_map(|h| self.card_pool.get(h).map(|i| i.card().id.clone()))
             .collect();
         let x_snapshot = choices.x_value;
         let hand_pay_snapshot: Vec<String> = choices
             .hand_payment_ids
             .iter()
-            .filter_map(|h| self.card_pool.get(h).map(|i| i.card.id.clone()))
+            .filter_map(|h| self.card_pool.get(h).map(|i| i.card().id.clone()))
             .collect();
         let gy_pay_snapshot: Vec<String> = choices
             .gy_hand_payment_ids
             .iter()
-            .filter_map(|h| self.card_pool.get(h).map(|i| i.card.id.clone()))
+            .filter_map(|h| self.card_pool.get(h).map(|i| i.card().id.clone()))
             .collect();
         let result = self.play_card_inner(player, instance, choices, ctx);
 
@@ -141,8 +141,8 @@ impl GameState {
         // the source-zone selection differs. The cast iid leaves DECK
         // (not HAND) at announcement and resolves to BOARD per P.37.
         let inst_ref = self.card_pool.get(instance).ok_or(PlayError::NotInHand)?;
-        let card_kind = inst_ref.card.kind;
-        let card_cost = inst_ref.card.cost.clone();
+        let card_kind = inst_ref.card().kind;
+        let card_cost = inst_ref.card().cost.clone();
         let from_hand = self.player(player).hand.contains(instance);
         let from_top_of_deck = matches!(card_kind, CardType::Symbol)
             && self.player(player).deck.first() == Some(instance);
@@ -180,7 +180,7 @@ impl GameState {
         // (not GRAVEYARD / EXILE / HAND): once the first leaves the
         // BOARD the id is castable again.
         if matches!(card_kind, CardType::Symbol) {
-            let cast_card_id = inst_ref.card.id.clone();
+            let cast_card_id = inst_ref.card().id.clone();
             let any_on_board = self
                 .a
                 .board
@@ -189,7 +189,7 @@ impl GameState {
                 .any(|iid| {
                     self.card_pool
                         .get(iid)
-                        .map(|i| i.card.id == cast_card_id)
+                        .map(|i| i.card().id == cast_card_id)
                         .unwrap_or(false)
                 });
             if any_on_board {
@@ -198,7 +198,7 @@ impl GameState {
         }
         // Sorcery timing: a Spell with Timing::Sorcery cannot be cast while
         // a response window is open (main-phase only).
-        let card_timing = inst_ref.card.timing;
+        let card_timing = inst_ref.card().timing;
         if card_timing == Some(crate::card::Timing::Sorcery) && self.priority.is_some() {
             return Err(PlayError::SorceryAtInstantSpeed);
         }
@@ -207,7 +207,7 @@ impl GameState {
         // a target category and no legal target exists, refuse the cast
         // before any state mutation. Counterspell uses `target = "chain"`
         // to refuse when the stack is empty.
-        if let Some(target) = inst_ref.card.target {
+        if let Some(target) = inst_ref.card().target {
             if !self.is_target_legal(target) {
                 return Err(PlayError::CastValidateFailed);
             }
@@ -226,7 +226,7 @@ impl GameState {
         let allow_x_zero = self
             .card_pool
             .get(instance)
-            .map(|i| i.card.allow_x_zero)
+            .map(|i| i.card().allow_x_zero)
             .unwrap_or(false);
         let x_value = if has_variable_x {
             match choices.x_value {
@@ -288,7 +288,7 @@ impl GameState {
             .card_pool
             .get(instance)
             .map(|i| {
-                i.card
+                i.card()
                     .colors
                     .iter()
                     .map(|c| c.to_ascii_lowercase())
@@ -313,11 +313,11 @@ impl GameState {
                 .card_pool
                 .get(sub_iid)
                 .map(|i| {
-                    let subs = &i.card.subtypes;
+                    let subs = &i.card().subtypes;
                     (
                         subs.iter().any(|s| s.eq_ignore_ascii_case("jewel")),
                         subs.iter().any(|s| s.eq_ignore_ascii_case("crystal")),
-                        matches!(i.card.kind, CardType::Symbol),
+                        matches!(i.card().kind, CardType::Symbol),
                     )
                 })
                 .unwrap_or((false, false, false));
@@ -413,7 +413,7 @@ impl GameState {
                     self.card_pool
                         .get(&gy[i])
                         .map(|inst| {
-                            inst.card.colors.iter().any(|c| {
+                            inst.card().colors.iter().any(|c| {
                                 cast_colors_set.contains(&c.to_ascii_lowercase())
                             })
                         })
@@ -458,7 +458,7 @@ impl GameState {
                         .card_pool
                         .get(gid)
                         .map(|i| {
-                            i.card
+                            i.card()
                                 .colors
                                 .iter()
                                 .map(|c| c.to_ascii_lowercase())
@@ -501,7 +501,7 @@ impl GameState {
                 let eligible = self
                     .card_pool
                     .get(gid)
-                    .map(|i| i.card.gy_hand_substitute)
+                    .map(|i| i.card().gy_hand_substitute)
                     .unwrap_or(false);
                 if !eligible {
                     return Err(PlayError::GyHandSubstituteNotEligible(gid.clone()));
@@ -543,14 +543,14 @@ impl GameState {
                 let card_id = self
                     .card_pool
                     .get(instance)
-                    .map(|i| i.card.id.clone())
+                    .map(|i| i.card().id.clone())
                     .unwrap_or_default();
                 let ids = |zone: &[InstanceId]| -> Vec<String> {
                     zone.iter()
                         .map(|h| {
                             self.card_pool
                                 .get(h)
-                                .map(|i| i.card.id.clone())
+                                .map(|i| i.card().id.clone())
                                 .unwrap_or_else(|| h.clone())
                         })
                         .collect()
@@ -573,54 +573,48 @@ impl GameState {
             }
         }
 
+        // Z.8c: cardless sleeves are HAND-cost bodies with no identity. If
+        // the cast has identity, no GY color anchor was supplied, and EVERY
+        // HAND payment is a cardless body, none anchors identity — reject
+        // (parallel to the substitute gate above; a real matching card must
+        // anchor, cardless bodies fill the rest).
+        if !gy_supplies_color_anchor
+            && !choices.hand_payment_ids.is_empty()
+            && choices.hand_payment_ids.iter().all(|h| self.is_cardless(h))
+            && !self.card_identity(instance).is_empty()
+        {
+            return Err(PlayError::NoHandPaymentForIdentity);
+        }
+
         let mut seen: BTreeSet<&InstanceId> = BTreeSet::new();
         for hid in &choices.hand_payment_ids {
+            // Duplicate detection is a set-level rule and stays here; the
+            // per-item legality (not-self, in-hand, P.24, P.7a-with-P.12b-
+            // and-Z.8c-exemptions) is the single shared predicate the
+            // eligibility helpers filter on, so the picker can never offer
+            // a payment this loop refuses.
             if !seen.insert(hid) {
                 return Err(PlayError::DuplicateHandPayment(hid.clone()));
             }
-            if hid == instance {
-                return Err(PlayError::HandPaymentInvalid(hid.clone()));
-            }
-            if !self.player(player).hand.contains(hid) {
-                return Err(PlayError::HandPaymentInvalid(hid.clone()));
-            }
-            // P.24/Phase 3: a static restriction can make a card unpayable
-            // as a HAND cost (flesh-eating-plant on opponent insects).
-            if self.has_restriction(hid, crate::card::Restriction::CannotBeCostPaid) {
-                return Err(PlayError::HandPaymentForbidden(hid.clone()));
-            }
-            // Identity match: discard must share ≥1 color OR the
-            // (non-empty) symbol with the casting card. Colorless +
-            // no-symbol CASTS are wildcards (take any discard);
-            // colorless + no-symbol discards are NOT — they must
-            // still find identity overlap, which empty sets can't,
-            // so they can't pay for any identified card.
-            //
-            // P.12b: when a color-matching GRAVEYARD pitch was supplied
-            // for the same cast, P.7a is suspended — the anchor pitch
-            // supplies the thematic alignment for the whole bundle.
-            let cast_ident = self.card_identity(instance);
-            if !cast_ident.is_empty() && !gy_supplies_color_anchor {
-                let pay_ident = self.card_identity(hid);
-                if cast_ident.is_disjoint(&pay_ident) {
-                    return Err(PlayError::HandPaymentIdentityMismatch(hid.clone()));
-                }
-            }
-            // C.14: a transparent card can only be attached to another
-            // transparent card. For HAND payments to BOARD-placed casts
-            // (P.6 attaches them), refuse when the payment is transparent
-            // and the cast itself isn't. Transparent ↔ transparent is OK.
-            if card_kind.is_board_placed()
-                && self.is_transparent(hid)
-                && !self.is_transparent(instance)
-            {
-                return Err(PlayError::HandPaymentTransparentForBoardPlaced(
-                    hid.clone(),
-                ));
+            if let Some(e) = self.hand_payment_item_error(
+                instance,
+                hid,
+                player,
+                gy_supplies_color_anchor,
+                true,
+            ) {
+                return Err(e);
             }
         }
 
-        let deck_have = self.player(player).deck.len();
+        // Z.8c: only card-bearing sleeves can be milled, so affordability
+        // counts real cards, not cardless sleeves that would be skimmed.
+        let deck_have = self
+            .player(player)
+            .deck
+            .iter()
+            .filter(|iid| !self.is_cardless(iid))
+            .count();
         if deck_have < mill_needed {
             return Err(PlayError::InsufficientDeckForMill {
                 needed: mill_needed,
@@ -661,27 +655,15 @@ impl GameState {
         // on either BOARD to attach to. Any creature qualifies — except
         // ones with a `CannotBeAttachedTo` restriction (glass-insect cycle).
         if matches!(card_kind, CardType::Mutation) {
+            // Target presence is set-level (the choice must exist); the
+            // per-item legality (on-board creature, not CannotBeAttachedTo,
+            // sleeve not full) is the shared predicate the picker's
+            // eligible_mutation_targets filters on.
             let Some(target) = &choices.mutation_target else {
                 return Err(PlayError::MutationTargetMissing);
             };
-            let on_a = self.a.board.contains(target);
-            let on_b = self.b.board.contains(target);
-            let is_creature = self
-                .card_pool
-                .get(target)
-                .map(|i| i.card.kind == CardType::Creature)
-                .unwrap_or(false);
-            if !(on_a || on_b) || !is_creature {
-                return Err(PlayError::MutationTargetInvalid(target.clone()));
-            }
-            if self.has_restriction(target, crate::card::Restriction::CannotBeAttachedTo) {
-                return Err(PlayError::MutationTargetInvalid(target.clone()));
-            }
-            // C.14: a transparent mutation can only attach to a
-            // transparent target. Non-transparent mutations attach to
-            // anything.
-            if self.is_transparent(instance) && !self.is_transparent(target) {
-                return Err(PlayError::MutationTargetInvalid(target.clone()));
+            if let Some(e) = self.mutation_target_item_error(target) {
+                return Err(e);
             }
         }
 
@@ -723,7 +705,7 @@ impl GameState {
                 return Err(PlayError::SacrificePaymentInvalid(sid.clone()));
             }
             if let Some(required_kind) = sac_kinds.get(i).copied().flatten() {
-                if inst.card.kind != required_kind {
+                if inst.card().kind != required_kind {
                     return Err(PlayError::SacrificePaymentInvalid(sid.clone()));
                 }
             }
@@ -740,32 +722,14 @@ impl GameState {
         }
         let mut att_seen: BTreeSet<&InstanceId> = BTreeSet::new();
         for aid in &choices.attached_payment_ids {
+            // Duplicate detection stays here (set-level); host-on-your-
+            // BOARD legality is the shared predicate eligible_attached_
+            // payments filters on. (C.14 lifted: frame no longer gates it.)
             if !att_seen.insert(aid) {
                 return Err(PlayError::DuplicateAttachedPayment(aid.clone()));
             }
-            let host = self.host_of(aid);
-            let valid = match host {
-                Some(h) => {
-                    self.player(player).board.contains(&h)
-                        && self
-                            .card_pool
-                            .get(&h)
-                            .map(|i| i.controller == player)
-                            .unwrap_or(false)
-                }
-                None => false,
-            };
-            if !valid {
-                return Err(PlayError::AttachedPaymentInvalid(aid.clone()));
-            }
-            // C.14: ATTACHED-source payments re-attach to BOARD-placed
-            // casts (P.31). A transparent attached card can only land
-            // on a transparent host.
-            if card_kind.is_board_placed()
-                && self.is_transparent(aid)
-                && !self.is_transparent(instance)
-            {
-                return Err(PlayError::AttachedPaymentInvalid(aid.clone()));
+            if let Some(e) = self.attached_payment_item_error(aid, player) {
+                return Err(e);
             }
         }
 
@@ -782,14 +746,17 @@ impl GameState {
             sacrifice: choices.sacrifice_ids.clone(),
         };
 
-        // MILL cost: top N of DECK → GRAVEYARD (P.11).
-        for _ in 0..mill_needed {
+        // MILL cost: top N CARD-bearing sleeves → GRAVEYARD (P.11). Z.8c: a
+        // cardless sleeve never counts for mill — it is skimmed to GY along
+        // the way without consuming a mill slot (parallel to the Z.8b draw
+        // skip).
+        let mut milled = 0;
+        while milled < mill_needed {
             let Some(top) = self.player(player).deck.first().cloned() else {
                 break;
             };
-            payments_snapshot.mill.push(top.clone());
-            // Sacred-error sweep: was `let _ = self.move_card(...)`.
-            // The `top` came from `deck.first()` two lines up so
+            let is_cardless = self.is_cardless(&top);
+            // Sacred-error sweep: `top` came from `deck.first()` so
             // NotInZone shouldn't be possible — but if it ever happens,
             // it's state corruption that previously hid silently.
             let _ = self.move_card_or_emit(
@@ -799,6 +766,10 @@ impl GameState {
                 Zone::Graveyard,
                 "play-mill-cost",
             );
+            if !is_cardless {
+                payments_snapshot.mill.push(top.clone());
+                milled += 1;
+            }
         }
 
         // GRAVEYARD cost (P.12): if the caller supplied explicit
@@ -847,7 +818,7 @@ impl GameState {
             let is_jewel = self
                 .card_pool
                 .get(&sub_iid)
-                .map(|i| i.card.subtypes.iter().any(|s| s.eq_ignore_ascii_case("jewel")))
+                .map(|i| i.card().subtypes.iter().any(|s| s.eq_ignore_ascii_case("jewel")))
                 .unwrap_or(false);
             self.set_tapped(&sub_iid, true);
             if is_jewel {
@@ -1011,7 +982,7 @@ impl GameState {
                                 let card_id = self
                                     .card_pool
                                     .get(card)
-                                    .map(|inst| inst.card.id.clone())
+                                    .map(|inst| inst.card().id.clone())
                                     .unwrap_or_else(|| format!("?{card}"));
                                 format!("[{i}] {:?}={}", controller, card_id)
                             })
@@ -1057,7 +1028,7 @@ impl GameState {
                             .map(|StackItem::PlayedCard { card, .. }| {
                                 self.card_pool
                                     .get(card)
-                                    .map(|i| i.card.id.clone())
+                                    .map(|i| i.card().id.clone())
                                     .unwrap_or_else(|| format!("?{card}"))
                             })
                             .collect()
@@ -1065,7 +1036,7 @@ impl GameState {
                     .unwrap_or_default();
                 let failed_card_id = last_failed_card
                     .as_ref()
-                    .and_then(|iid| self.card_pool.get(iid).map(|i| i.card.id.clone()))
+                    .and_then(|iid| self.card_pool.get(iid).map(|i| i.card().id.clone()))
                     .unwrap_or_else(|| "(unknown)".to_string());
                 // Sacred-error: the same "response window can't make
                 // progress" infinite-loop guard that surfaces
@@ -1163,7 +1134,7 @@ impl GameState {
         let card_kind = self
             .card_pool
             .get(instance)
-            .map(|i| i.card.kind)
+            .map(|i| i.card().kind)
             .unwrap_or(CardType::Unspecified);
         // Expose the cast-time X value to `OnPlay` handlers via
         // `game.x_value()`. Mirrors the activation path. Saved and
@@ -1207,7 +1178,7 @@ impl GameState {
             .card_pool
             .get(instance)
             .map(|i| {
-                i.card.cost.iter().any(|c| {
+                i.card().cost.iter().any(|c| {
                     matches!(c.source, CostSource::SelfExile) && c.amount.max(0) > 0
                 })
             })
@@ -1295,7 +1266,11 @@ impl GameState {
                 .mutation_target
                 .as_ref()
                 .expect("validated by play_card");
-            self.add_attached(target, instance);
+            // P.26 / Z.7: a mutation fuses into the host's sleeve, it does
+            // not attach as a strippable object. It therefore rides the
+            // host's zone moves (P.29), is exempt from the P.8 cascade, and
+            // does not count toward attached-count (C.16).
+            self.add_same_sleeve(target, instance);
             self.set_face_down(instance, true);
         } else if is_board_placed {
             self.add_to_zone(instance, player, Zone::Board);
@@ -1385,7 +1360,7 @@ impl GameState {
             let is_creature = self
                 .card_pool
                 .get(iid)
-                .map(|i| i.card.kind == crate::card::CardType::Creature)
+                .map(|i| i.card().kind == crate::card::CardType::Creature)
                 .unwrap_or(false);
             if !is_creature {
                 continue;
@@ -1431,7 +1406,7 @@ impl GameState {
             let is_creature = self
                 .card_pool
                 .get(iid)
-                .map(|i| i.card.kind == crate::card::CardType::Creature)
+                .map(|i| i.card().kind == crate::card::CardType::Creature)
                 .unwrap_or(false);
             if !is_creature {
                 continue;

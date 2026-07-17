@@ -76,8 +76,11 @@ pub struct PresetDeck {
 pub const STARTER_DECK_IDS: &[&str] = &[
     "blue-monkey", "blue-monkey",
     "clear-blue", "clear-blue", "clear-blue", "clear-blue", "clear-blue",
-    "clear-blue", "clear-blue", "clear-blue", "clear-blue", "clear-blue",
-    "clear-blue",
+    "clear-blue", "clear-blue", "clear-blue", "clear-blue",
+    // Two empty sleeves, swapped in for two clears — drawn free (Z.8b)
+    // and usable as generic payment bodies.
+    crate::replay::CARDLESS_SLEEVE_ID,
+    crate::replay::CARDLESS_SLEEVE_ID,
     "blue-ax-symbol", "blue-ax-symbol",
     "blue-ix-symbol", "blue-ix-symbol",
     "blue-am-symbol", "blue-am-symbol",
@@ -148,8 +151,14 @@ pub const YIELD_TEST_DECK_IDS: &[&str] = &[
 pub const RED_STARTER_DECK_IDS: &[&str] = &[
     "red-monkey", "red-monkey",
     "clear-red", "clear-red", "clear-red", "clear-red", "clear-red",
-    "clear-red", "clear-red", "clear-red", "clear-red", "clear-red",
     "clear-red",
+    // Two Angry Glassblowers + three empty sleeves, swapped in for five
+    // clears. The loose sleeves are drawn free (Z.8b) into hand, where
+    // the Glassblower blows one onto himself on attack.
+    crate::replay::CARDLESS_SLEEVE_ID,
+    crate::replay::CARDLESS_SLEEVE_ID,
+    crate::replay::CARDLESS_SLEEVE_ID,
+    "angry-glassblower", "angry-glassblower",
     "red-ax-symbol", "red-ax-symbol",
     "red-ix-symbol", "red-ix-symbol",
     "red-am-symbol", "red-am-symbol",
@@ -292,6 +301,11 @@ mod tests {
         let mut violations: Vec<(String, String)> = Vec::new();
         for preset in &presets {
             for card_id in &preset.cards {
+                // The cardless-sleeve sentinel is a legal decklist entry
+                // (an empty sleeve), not a deckbuilder-pool card.
+                if card_id == crate::replay::CARDLESS_SLEEVE_ID {
+                    continue;
+                }
                 if !pool_ids.contains(card_id.as_str()) {
                     violations.push((preset.id.clone(), card_id.clone()));
                 }
@@ -424,10 +438,50 @@ mod tests {
             .chain(RED_STARTER_DECK_IDS.iter())
             .chain(YIELD_TEST_DECK_IDS.iter())
         {
+            // The cardless-sleeve sentinel is a legal decklist entry that
+            // resolves to an empty sleeve, not a card in the registry.
+            if id == crate::replay::CARDLESS_SLEEVE_ID {
+                continue;
+            }
             assert!(
                 by_id.contains(id),
                 "preset references unknown card id {id:?}"
             );
         }
+    }
+
+    #[test]
+    fn red_starter_builds_with_empty_sleeves_and_angry_glassblower() {
+        use crate::game::GameState;
+        use crate::sim::genome::to_units;
+
+        let reg = registry();
+        let ids: Vec<String> = RED_STARTER_DECK_IDS.iter().map(|s| s.to_string()).collect();
+        let units = to_units(&reg, &ids).expect("red starter builds as DeckUnits");
+        assert_eq!(units.len(), 50, "red starter is 50 sleeve-units");
+
+        let state = GameState::from_units(units.clone(), units);
+        let cardless = state.card_pool.values().filter(|s| s.is_cardless()).count();
+        assert!(cardless >= 3, "red starter carries loose empty sleeves");
+        let has_glassblower = state
+            .card_pool
+            .values()
+            .any(|s| !s.is_cardless() && s.card().id == "angry-glassblower");
+        assert!(has_glassblower, "red starter contains Angry Glassblower");
+    }
+
+    #[test]
+    fn blue_starter_builds_with_empty_sleeves() {
+        use crate::game::GameState;
+        use crate::sim::genome::to_units;
+
+        let reg = registry();
+        let ids: Vec<String> = STARTER_DECK_IDS.iter().map(|s| s.to_string()).collect();
+        let units = to_units(&reg, &ids).expect("blue starter builds as DeckUnits");
+        assert_eq!(units.len(), 50, "blue starter is 50 sleeve-units");
+
+        let state = GameState::from_units(units.clone(), units);
+        let cardless = state.card_pool.values().filter(|s| s.is_cardless()).count();
+        assert!(cardless >= 2, "blue starter carries loose empty sleeves");
     }
 }

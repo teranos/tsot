@@ -281,7 +281,7 @@ pub(crate) struct AutoGameArgs {
 pub(crate) fn tsot_run_auto_game_impl(args_json: &str) -> Result<String, String> {
     use crate::card::CardRegistry;
     use crate::game::{GameState, Journal, PlayerId};
-    use crate::sim::genome::{shuffle_deck, to_deck};
+    use crate::sim::genome::{shuffle_units, to_units};
     use crate::sim::snapshot::build_state_view;
     use crate::sim::step::{StepEngine, StepResult};
     use crate::sim::AiKind;
@@ -298,7 +298,10 @@ pub(crate) fn tsot_run_auto_game_impl(args_json: &str) -> Result<String, String>
 
     fn parse_auto_ai(name: &str, seed: u64) -> Result<AiKind, String> {
         Ok(match name {
-            "heuristic" => AiKind::Heuristic,
+            // "game" is canonical; "heuristic" is a back-compat alias the
+            // Elm dropdown still sends (assets/src/Main.elm) — drop it once
+            // the Elm branch renames its option value to "game".
+            "game" | "heuristic" => AiKind::Game,
             "mcts" => AiKind::Mcts(crate::sim::mcts::MctsConfig {
                 base_seed: seed,
                 ..Default::default()
@@ -315,15 +318,15 @@ pub(crate) fn tsot_run_auto_game_impl(args_json: &str) -> Result<String, String>
 
     let registry =
         CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;
-    let mut deck_a = to_deck(&registry, &args.deck_a_ids)
+    let mut deck_a = to_units(&registry, &args.deck_a_ids)
         .map_err(|e| format!("auto_game: deck A: {e:?}"))?;
-    let mut deck_b = to_deck(&registry, &args.deck_b_ids)
+    let mut deck_b = to_units(&registry, &args.deck_b_ids)
         .map_err(|e| format!("auto_game: deck B: {e:?}"))?;
     let mut rng_a = StdRng::seed_from_u64(args.seed.wrapping_add(0xA000_A000));
     let mut rng_b = StdRng::seed_from_u64(args.seed.wrapping_add(0xB000_B000));
-    shuffle_deck(&mut deck_a, &mut rng_a);
-    shuffle_deck(&mut deck_b, &mut rng_b);
-    let mut state = GameState::new(deck_a, deck_b);
+    shuffle_units(&mut deck_a, &mut rng_a);
+    shuffle_units(&mut deck_b, &mut rng_b);
+    let mut state = GameState::from_units(deck_a, deck_b);
     state.replay_journal = Some(Journal::new());
 
     let ais = [ai_a, ai_b];
@@ -485,7 +488,7 @@ pub(crate) fn tsot_load_game_impl(args_json: &str) -> Result<String, String> {
         .map_err(|e| format!("load_game[rebind handlers]: {e}"))?;
 
     let opp = match args.opp_ai.as_str() {
-        "heuristic" => AiKind::Heuristic,
+        "game" | "heuristic" => AiKind::Game,
         "mcts" => AiKind::Mcts(crate::sim::mcts::MctsConfig {
             base_seed: args.seed.wrapping_add(0xCAFE_BABE),
             ..Default::default()
@@ -659,31 +662,31 @@ pub(crate) fn tsot_apply_action_impl(action_json: &str) -> Result<String, String
 fn build_engine(args: &StartGameArgs) -> Result<StepEngine, String> {
     use crate::card::CardRegistry;
     use crate::game::GameState;
-    use crate::sim::genome::{shuffle_deck, to_deck};
+    use crate::sim::genome::{shuffle_units, to_units};
     use crate::sim::AiKind;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
     let registry = CardRegistry::load_embedded().map_err(|e| format!("registry load: {e}"))?;
     let mut deck_a =
-        to_deck(&registry, &args.deck_a_ids).map_err(|e| format!("deck A rebuild: {e:?}"))?;
+        to_units(&registry, &args.deck_a_ids).map_err(|e| format!("deck A rebuild: {e:?}"))?;
     let mut deck_b =
-        to_deck(&registry, &args.deck_b_ids).map_err(|e| format!("deck B rebuild: {e:?}"))?;
+        to_units(&registry, &args.deck_b_ids).map_err(|e| format!("deck B rebuild: {e:?}"))?;
     // RULES S.0: shuffle each deck before drawing the opening 5.
     // Per-deck seed derived from `args.seed` so A and B shuffle
     // independently but the whole game is replayable from one seed.
     let mut rng_a = StdRng::seed_from_u64(args.seed.wrapping_add(0xA000_A000));
     let mut rng_b = StdRng::seed_from_u64(args.seed.wrapping_add(0xB000_B000));
-    shuffle_deck(&mut deck_a, &mut rng_a);
-    shuffle_deck(&mut deck_b, &mut rng_b);
-    let mut state = GameState::new(deck_a, deck_b);
+    shuffle_units(&mut deck_a, &mut rng_a);
+    shuffle_units(&mut deck_b, &mut rng_b);
+    let mut state = GameState::from_units(deck_a, deck_b);
     state.replay_journal = Some(crate::game::Journal::new());
 
     let (iface, _prompt_rx, _action_tx) = HumanInterface::new();
     let iface = Arc::new(iface);
 
     let opp = match args.opp_ai.as_str() {
-        "heuristic" => AiKind::Heuristic,
+        "game" | "heuristic" => AiKind::Game,
         "mcts" => AiKind::Mcts(crate::sim::mcts::MctsConfig {
             base_seed: args.seed.wrapping_add(0xCAFE_BABE),
             ..Default::default()

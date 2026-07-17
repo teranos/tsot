@@ -99,8 +99,11 @@ fn find_zone_of(s: &GameState, owner: PlayerId, iid: &str) -> Option<Zone> {
 /// Search all card_pool instances for an `attached` containing `iid`.
 /// Returns the host's iid if found.
 fn find_host_of_attached(s: &GameState, iid: &str) -> Option<InstanceId> {
+    // Z.7: a fused same-sleeve card has a host too — consult `children()`
+    // (attached ∪ same_sleeve), or mutation handlers calling
+    // `game.host_of(self)` no-op once the mutation is sleeved.
     for (host_iid, host) in &s.card_pool {
-        if host.attached.iter().any(|x| x == iid) {
+        if host.children().any(|x| x == iid) {
             return Some(host_iid.clone());
         }
     }
@@ -180,7 +183,10 @@ fn do_mill(s: &mut GameState, pid_str: &str, n: i32, dest_str: &str) -> Result<(
 fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     let pid = parse_pid(pid_str)?;
     for _ in 0..n.max(0) {
-        if s.player(pid).deck.is_empty() {
+        // Z.8b: draw_one collects any cardless sleeves on top for free and
+        // draws the first card-bearing sleeve. false = the deck emptied
+        // before a card was drawn → L.1 handler-draw deckout.
+        if !s.draw_one(pid) {
             // L.1: effect-draw on an empty deck → drawing player loses.
             // Counted separately from "voluntary suicide" plays caught by
             // preview-rollback (those increment `preview_skip_suicide`).
@@ -191,10 +197,6 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
             s.set_winner(Some(pid.opponent()), "deckout_handler_draw");
             break;
         }
-        let Some(top) = s.player(pid).deck.first().cloned() else {
-            break;
-        };
-        let _ = s.move_card(&top, pid, Zone::Deck, Zone::Hand);
         s.bump_action("draw", pid);
     }
     Ok(())
@@ -251,7 +253,7 @@ pub(crate) fn do_smart_discard(s: &mut GameState, pid: PlayerId, n: usize) {
         // Per-card-id telemetry: bump a prefixed action_counts key. This
         // piggybacks on the existing journaled bump_action plumbing so a
         // preview-and-rollback correctly undoes the count too.
-        let card_id = s.card_pool.get(&iid).map(|c| c.card.id.clone());
+        let card_id = s.card_pool.get(&iid).map(|c| c.card().id.clone());
         let _ = s.move_card(&iid, pid, Zone::Hand, Zone::Graveyard);
         s.bump_action("discard", pid);
         if let Some(cid) = card_id {
@@ -277,7 +279,7 @@ fn discard_score(state: &GameState, iid: &InstanceId) -> i32 {
     let mut s = 0i32;
     let (x, y) = state.effective_stats(iid);
     s -= (x + y).round() as i32;
-    let h = &c.card.handlers;
+    let h = &c.card().handlers;
     if h.contains_key(&crate::card::EventName::OnPlay) {
         s -= 10;
     }
@@ -365,12 +367,28 @@ fn do_add_modifier(
 }
 
 fn do_set_tapped(s: &mut GameState, iid: &str, tapped: bool) -> Result<()> {
-    let owner = s.card_pool.get(iid).map(|i| i.owner);
-    if owner.is_some() {
-        s.set_tapped(&iid.to_string(), tapped);
-    }
-    if let Some(o) = owner {
-        s.bump_action(if tapped { "tap" } else { "untap" }, o);
+    let Some(owner) = s.card_pool.get(iid).map(|i| i.owner) else {
+        return Ok(());
+    };
+    let was_tapped = s.card_pool.get(iid).map(|i| i.tapped).unwrap_or(false);
+    s.set_tapped(&iid.to_string(), tapped);
+    s.bump_action(if tapped { "tap" } else { "untap" }, owner);
+    // Slice 11: an EXTERNAL tap (from inside a Lua handler via
+    // game.set_tapped) becomes a DEFERRED OnTapped. It can't fire here —
+    // we're inside the caller's Lua borrow — so enqueue it for
+    // `fire_self_only` to drain once that handler unwinds. Only on a
+    // genuine untapped→tapped transition, and only when the sleeve
+    // actually carries an on_tapped handler (the attack tap fires its own
+    // OnTapped synchronously from combat, on a different path, so this
+    // never double-fires it).
+    if tapped
+        && !was_tapped
+        && s.card_pool
+            .get(iid)
+            .is_some_and(|i| i.card().handlers.contains_key(&EventName::OnTapped))
+    {
+        s.pending_events
+            .push_back((EventName::OnTapped, iid.to_string()));
     }
     Ok(())
 }
@@ -438,7 +456,7 @@ fn do_move_to(
         let is_creature = s
             .card_pool
             .get(iid)
-            .map(|inst| inst.card.kind == CardType::Creature)
+            .map(|inst| inst.card().kind == CardType::Creature)
             .unwrap_or(false);
         if is_creature {
             s.set_summoning_sick(&iid_owned, true);
@@ -734,7 +752,10 @@ macro_rules! build_game_table {
             "grant_extra_turn",
             $scope.create_function_mut(move |_, pid_str: String| -> Result<()> {
                 let pid = parse_pid(&pid_str)?;
-                cell_ext.borrow_mut().extra_turns_pending.push(pid);
+                let mut s = cell_ext.borrow_mut();
+                let mut v = s.extra_turns_pending.clone();
+                v.push(pid);
+                s.set_extra_turns_pending(v);
                 Ok(())
             })?,
         )?;
@@ -753,7 +774,26 @@ macro_rules! build_game_table {
                 if !s.card_pool.contains_key(&iid) {
                     return Ok(());
                 }
-                s.pending_main_phase_returns.push(iid);
+                let mut v = s.pending_main_phase_returns.clone();
+                v.push(iid);
+                s.set_pending_main_phase_returns(v);
+                Ok(())
+            })?,
+        )?;
+
+        // game.schedule_next_turn(iid) — schedule `OnDelayedTrigger` to
+        // fire on `iid` at the start of iid's owner's NEXT turn (their
+        // next Untap entry). The card's `on_delayed_trigger` handler runs
+        // then; re-scheduling from inside it makes the trigger recurring.
+        // Silent no-op if `iid` isn't in the pool.
+        let cell_sched = &$cell;
+        game.set(
+            "schedule_next_turn",
+            $scope.create_function_mut(move |_, iid: String| -> Result<()> {
+                let mut s = cell_sched.borrow_mut();
+                if let Some(owner) = s.card_pool.get(&iid).map(|i| i.owner) {
+                    s.schedule_delayed_trigger(crate::game::DelayedTrigger { fire_for: owner, iid });
+                }
                 Ok(())
             })?,
         )?;
@@ -1053,11 +1093,38 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.is_cardless(iid) → bool. True when the sleeve holds no
+        // card (Z.8). Lets a cardless-aware card (Window Cleaner) pick
+        // an empty sleeve out of its own attached list. Unknown iid →
+        // false (a missing sleeve is not "an empty sleeve").
+        let cell_ic = &$cell;
+        game.set(
+            "is_cardless",
+            $scope.create_function_mut(move |_, iid: String| -> Result<bool> {
+                let s = cell_ic.borrow();
+                Ok(s.is_cardless(&iid))
+            })?,
+        )?;
+
+        // game.is_clear(iid) → bool. True if the sleeve holds a
+        // transparent-frame ("clear") card (C.13). Distinct from a
+        // cardless sleeve, which has no frame at all. Shatter
+        // Expectations counts clears and cardless sleeves together when
+        // deriving X from its exile composition.
+        let cell_icl = &$cell;
+        game.set(
+            "is_clear",
+            $scope.create_function_mut(move |_, iid: String| -> Result<bool> {
+                let s = cell_icl.borrow();
+                Ok(s.is_transparent(&iid))
+            })?,
+        )?;
+
         // game.attach_from_deck(host, player, n) — take top n cards of
         // `player`'s DECK and attach each to `host` face-down (P.17).
-        // Respects C.14 — a transparent card is skipped if `host`
-        // isn't transparent. Stops early if the deck runs out. Used by
-        // beginning-of-turn "mill to attached" triggers (MYC, ...).
+        // Stops early if the deck runs out. Used by beginning-of-turn
+        // "mill to attached" triggers (MYC, ...). C.14 lifted: frame no
+        // longer gates the attachment, so any top card is taken.
         let cell_afd = &$cell;
         game.set(
             "attach_from_deck",
@@ -1068,23 +1135,50 @@ macro_rules! build_game_table {
                     if !s.card_pool.contains_key(&host) {
                         return Ok(());
                     }
-                    let host_transparent = s.is_transparent(&host);
                     let take = n.max(0) as usize;
                     for _ in 0..take {
                         let Some(top) = s.player(pid).deck.first().cloned() else {
                             break;
                         };
-                        if s.is_transparent(&top) && !host_transparent {
-                            // C.14 violation — skip this card (it stays
-                            // on top of the deck). Caller is responsible
-                            // for choosing not to call this when a glass
-                            // creature is at the top.
-                            break;
-                        }
+                        // C.14 lifted: any top card attaches to any host,
+                        // regardless of frame.
                         let _ = s.remove_from_zone(&top, pid, Zone::Deck);
                         s.add_attached(&host, &top);
                         s.set_face_down(&top, true);
                     }
+                    Ok(())
+                },
+            )?,
+        )?;
+
+        // game.attach_cardless_from_deck(host, player, n) — search
+        // `player`'s DECK for up to n cardless sleeves (Z.8) and attach
+        // each to `host` face-down (Z.6). Window Cleaner's ETB search.
+        let cell_acd = &$cell;
+        game.set(
+            "attach_cardless_from_deck",
+            $scope.create_function_mut(
+                move |_, (host, player, n): (String, String, i32)| -> Result<()> {
+                    let pid = parse_pid(&player)?;
+                    let mut s = cell_acd.borrow_mut();
+                    s.attach_cardless_from_deck(&host, pid, n.max(0) as usize);
+                    Ok(())
+                },
+            )?,
+        )?;
+
+        // game.attach_cardless_from_hand(host, player, n) — take up to n
+        // cardless sleeves (Z.8) out of `player`'s HAND and attach each
+        // to `host` face-down. Angry Glassblower's on-attack: the empty
+        // sleeve it attaches comes out of hand, not the deck.
+        let cell_ach = &$cell;
+        game.set(
+            "attach_cardless_from_hand",
+            $scope.create_function_mut(
+                move |_, (host, player, n): (String, String, i32)| -> Result<()> {
+                    let pid = parse_pid(&player)?;
+                    let mut s = cell_ach.borrow_mut();
+                    s.attach_cardless_from_hand(&host, pid, n.max(0) as usize);
                     Ok(())
                 },
             )?,
@@ -1108,13 +1202,8 @@ macro_rules! build_game_table {
                     {
                         return Ok(());
                     }
-                    // C.14: transparent attachees can only attach to
-                    // transparent hosts. Silent no-op when the rule
-                    // would be violated (matches the existing
-                    // silent-fail convention of this API).
-                    if s.is_transparent(&iid) && !s.is_transparent(&host) {
-                        return Ok(());
-                    }
+                    // C.14 lifted: any attachee attaches to any host,
+                    // regardless of frame.
                     // Use the journaled `remove_from_zone` (instead of
                     // raw `board.retain`) so MCTS rollouts and the full-
                     // game rollback invariant test can reverse this
@@ -1230,12 +1319,12 @@ macro_rules! build_game_table {
                         return Ok(None);
                     };
                     let t = lua.create_table()?;
-                    t.set("id", inst.card.id.clone())?;
+                    t.set("id", inst.card().id.clone())?;
                     t.set("instance_id", iid.clone())?;
-                    t.set("type", card_type_str(&inst.card))?;
+                    t.set("type", card_type_str(&inst.card()))?;
                     t.set(
                         "subtypes",
-                        lua.create_sequence_from(inst.card.subtypes.clone())?,
+                        lua.create_sequence_from(inst.card().subtypes.clone())?,
                     )?;
                     t.set(
                         "colors",
@@ -1243,7 +1332,7 @@ macro_rules! build_game_table {
                     )?;
                     t.set(
                         "symbols",
-                        lua.create_sequence_from(inst.card.symbols.clone())?,
+                        lua.create_sequence_from(inst.card().symbols.clone())?,
                     )?;
                     t.set(
                         "face",
@@ -1402,7 +1491,7 @@ fn handler_outcome_from_lua_result(
                           // (see lua_api.rs:1330 etc). Macro returns
                           // `mlua::Table` at runtime — the 3 yield TDD
                           // tests + 442 lib tests verify the behavior.
-pub(crate) fn fire_self_only(
+fn fire_one(
     lua: &Lua,
     state: &mut GameState,
     oracle: &mut dyn ChoiceOracle,
@@ -1420,17 +1509,24 @@ pub(crate) fn fire_self_only(
     let Some(inst) = state.card_pool.get(source) else {
         return Ok(());
     };
-    let Some(handler) = inst.card.handlers.get(&event).cloned() else {
+    let Some(handler) = inst.card().handlers.get(&event).cloned() else {
         return Ok(());
     };
     let owner = inst.owner;
-    let card_id = inst.card.id.clone();
+    let card_id = inst.card().id.clone();
 
     // O9: bracket the Lua scope with `Instant::now()` so the Handler
     // event records the handler's wall-clock cost. Cheap no-op when
     // trace is off.
     let trace_active = crate::trace::is_enabled();
     let t0 = trace_active.then(std::time::Instant::now);
+    // Handler-timing accumulator — always on. Cost: one Instant read
+    // + one HashMap update per fire, dwarfed by the handler itself.
+    // Feeds the heartbeat's `handlers=[card:event:ms ...]` breakdown
+    // so slow-game diagnosis names the specific handler burning CPU
+    // without a replay round-trip.
+    let ht0 = std::time::Instant::now();
+    let turn_at_fire = state.turn;
 
     let state_cell = RefCell::new(&mut *state);
     let oracle_cell = RefCell::new(&mut *oracle);
@@ -1440,6 +1536,14 @@ pub(crate) fn fire_self_only(
         handler.call::<()>((game, self_table))?;
         Ok(())
     });
+
+    let ht_wall_us = ht0.elapsed().as_micros();
+    crate::sim::run::record_handler_fire(
+        turn_at_fire,
+        card_id.clone(),
+        event.lua_key(),
+        ht_wall_us,
+    );
 
     if let Some(t0) = t0 {
         crate::trace::push(crate::trace::TraceEvent::Handler {
@@ -1484,6 +1588,54 @@ pub(crate) fn fire_self_only(
     }
 }
 
+/// Fire a self-only event handler, then drain the deferred-event queue
+/// (slice 11). Any event a handler enqueued while it ran — e.g. an
+/// external `game.set_tapped` that owes an `OnTapped` — fires here, now
+/// that the triggering handler has unwound and its Lua borrow is
+/// released. Every existing caller of `fire_self_only` gets draining for
+/// free; the actual per-handler work lives in `fire_one`.
+pub(crate) fn fire_self_only(
+    lua: &Lua,
+    state: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
+    event: EventName,
+    source: &InstanceId,
+) -> std::result::Result<(), ChoicePending> {
+    fire_one(lua, state, oracle, event, source)?;
+    drain_deferred_events(lua, state, oracle)
+}
+
+/// Drain [`GameState::pending_events`] by firing each queued event via
+/// `fire_one` (which does NOT itself drain, so this loop owns the drain
+/// and there is no re-entrant double-fire). Firing an event may enqueue
+/// more; the loop runs until the queue settles. A hard budget guards a
+/// pathological tap/trigger loop (two creatures tapping each other
+/// forever) — exceeding it surfaces via the sacred-error channel and
+/// clears the queue rather than spinning.
+pub(crate) fn drain_deferred_events(
+    lua: &Lua,
+    state: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
+) -> std::result::Result<(), ChoicePending> {
+    let mut budget: i32 = 1024;
+    while let Some((event, source)) = state.pending_events.pop_front() {
+        budget -= 1;
+        if budget < 0 {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "engine",
+                "deferred-event overflow",
+                "the deferred-event queue exceeded its drain budget — a \
+                 tap/trigger loop is enqueuing events without settling",
+            );
+            state.pending_events.clear();
+            break;
+        }
+        fire_one(lua, state, oracle, event, &source)?;
+    }
+    Ok(())
+}
+
 /// Fire an activated-ability handler. Same shape as fire_self_only
 /// (handler takes `(game, self)`), but the handler is passed in by
 /// reference rather than looked up by event name. Used by
@@ -1501,7 +1653,7 @@ pub(crate) fn fire_activated(
         return Ok(());
     };
     let owner = inst.owner;
-    let card_id = inst.card.id.clone();
+    let card_id = inst.card().id.clone();
 
     let state_cell = RefCell::new(&mut *state);
     let oracle_cell = RefCell::new(&mut *oracle);
@@ -1513,23 +1665,26 @@ pub(crate) fn fire_activated(
     });
 
     match result {
-        Ok(()) => Ok(()),
+        Ok(()) => {}
         Err(e) => {
             if let Some(pending) = pending_from_mlua_error(&e) {
-                Err(pending)
-            } else {
-                crate::error::emit_region(
-                    crate::error::Severity::Error,
-                    "lua-handler",
-                    "activated",
-                    format!("Lua activated handler for {card_id} failed"),
-                    mlua_error_chain_why(&e),
-                );
-                eprintln!("[lua] activated handler for {card_id} failed: {e}");
-                Ok(())
+                // Owe the human an answer — leave the deferred queue for
+                // the resumed fire to drain.
+                return Err(pending);
             }
+            crate::error::emit_region(
+                crate::error::Severity::Error,
+                "lua-handler",
+                "activated",
+                format!("Lua activated handler for {card_id} failed"),
+                mlua_error_chain_why(&e),
+            );
+            eprintln!("[lua] activated handler for {card_id} failed: {e}");
         }
     }
+    // Slice 11: an activated ability that tapped something externally
+    // owes a deferred OnTapped — drain now that the handler has unwound.
+    drain_deferred_events(lua, state, oracle)
 }
 
 /// Run an activated ability's `validate` hook. Same shape as
@@ -1584,11 +1739,11 @@ pub(crate) fn fire_with_partner(
     let Some(inst) = state.card_pool.get(source) else {
         return Ok(());
     };
-    let Some(handler) = inst.card.handlers.get(&event).cloned() else {
+    let Some(handler) = inst.card().handlers.get(&event).cloned() else {
         return Ok(());
     };
     let owner = inst.owner;
-    let card_id = inst.card.id.clone();
+    let card_id = inst.card().id.clone();
 
     let trace_active = crate::trace::is_enabled();
     let t0 = trace_active.then(std::time::Instant::now);
@@ -1616,25 +1771,24 @@ pub(crate) fn fire_with_partner(
     match result {
         Ok(()) => {
             credit_fire(state, event, owner);
-            Ok(())
         }
         Err(e) => {
             if let Some(pending) = pending_from_mlua_error(&e) {
-                Err(pending)
-            } else {
-                let event_key = event.lua_key();
-                crate::error::emit_region(
-                    crate::error::Severity::Error,
-                    "lua-handler",
-                    event_key,
-                    format!("Lua {event_key} handler for {card_id} (partner) failed"),
-                    mlua_error_chain_why(&e),
-                );
-                eprintln!("[lua] {event_key} handler for {card_id} failed: {e}");
-                Ok(())
+                return Err(pending);
             }
+            let event_key = event.lua_key();
+            crate::error::emit_region(
+                crate::error::Severity::Error,
+                "lua-handler",
+                event_key,
+                format!("Lua {event_key} handler for {card_id} (partner) failed"),
+                mlua_error_chain_why(&e),
+            );
+            eprintln!("[lua] {event_key} handler for {card_id} failed: {e}");
         }
     }
+    // Slice 11: drain any event the partner handler deferred (external tap).
+    drain_deferred_events(lua, state, oracle)
 }
 
 #[cfg(test)]
@@ -1657,7 +1811,7 @@ mod suppress_tests {
             .card_pool
             .get_mut(iid)
             .unwrap()
-            .card
+            .card_mut()
             .handlers
             .insert(EventName::OnDie, handler);
     }
@@ -1688,7 +1842,7 @@ mod suppress_tests {
             .card_pool
             .get_mut(iid)
             .unwrap()
-            .card
+            .card_mut()
             .activated
             .push(ActivatedAbility {
                 cost_tap: true,
@@ -1709,7 +1863,7 @@ mod suppress_tests {
         let mutation = s.a.hand[0].clone();
         let host = s.a.hand[1].clone();
         install_noop_activation(&lua, &mut s, &host);
-        s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(make_suppressor_static());
+        s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(make_suppressor_static());
         s.a.hand.retain(|i| i != &mutation && i != &host);
         s.a.board.push(host.clone());
 
@@ -1741,8 +1895,8 @@ mod suppress_tests {
             .into_iter()
             .find(|c| c.id == "cryogenic-chamber")
             .unwrap();
-        s.card_pool.get_mut(&chamber_iid).unwrap().card = chamber_card;
-        s.card_pool.get_mut(&victim_iid).unwrap().card.kind = CardType::Creature;
+        s.card_pool.get_mut(&chamber_iid).unwrap().content = Some(chamber_card);
+        s.card_pool.get_mut(&victim_iid).unwrap().card_mut().kind = CardType::Creature;
         s.a.hand.retain(|i| i != &chamber_iid);
         s.b.hand.retain(|i| i != &victim_iid);
         s.a.board.push(chamber_iid.clone());
@@ -1782,11 +1936,11 @@ mod suppress_tests {
             .into_iter()
             .find(|c| c.id == "cryogenic-chamber")
             .unwrap();
-        s.card_pool.get_mut(&chamber_iid).unwrap().card = chamber_card;
+        s.card_pool.get_mut(&chamber_iid).unwrap().content = Some(chamber_card);
         // Mark the two non-chamber cards as creatures so they're
         // eligible targets.
-        s.card_pool.get_mut(&victim_iid).unwrap().card.kind = CardType::Creature;
-        s.card_pool.get_mut(&distractor_iid).unwrap().card.kind = CardType::Creature;
+        s.card_pool.get_mut(&victim_iid).unwrap().card_mut().kind = CardType::Creature;
+        s.card_pool.get_mut(&distractor_iid).unwrap().card_mut().kind = CardType::Creature;
         // Put chamber + creatures on board.
         s.a.hand.retain(|i| i != &chamber_iid && i != &distractor_iid);
         s.b.hand.retain(|i| i != &victim_iid);
@@ -1819,7 +1973,7 @@ mod suppress_tests {
         let mutation = s.a.hand[0].clone();
         let host = s.a.hand[1].clone();
         install_draw_handler(&lua, &mut s, &host);
-        s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(make_suppressor_static());
+        s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(make_suppressor_static());
         s.a.hand.retain(|i| i != &mutation && i != &host);
         s.a.board.push(host.clone());
 
@@ -1919,7 +2073,7 @@ mod lua_yield_pending_tests {
             .card_pool
             .get_mut(iid)
             .unwrap()
-            .card
+            .card_mut()
             .handlers
             .insert(EventName::OnDie, handler);
     }
@@ -2004,7 +2158,7 @@ mod lua_yield_pending_tests {
             .card_pool
             .get_mut(&host)
             .unwrap()
-            .card
+            .card_mut()
             .handlers
             .insert(EventName::OnDie, handler);
 
@@ -2209,7 +2363,7 @@ mod mlua_chain_walker_tests {
             .card_pool
             .get_mut(&host_iid)
             .unwrap()
-            .card
+            .card_mut()
             .handlers
             .insert(EventName::OnDie, handler);
 

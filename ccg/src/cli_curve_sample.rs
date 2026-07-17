@@ -95,7 +95,7 @@ pub struct CurveSampleArgs {
     pub out: String,
     /// AI for both seats. `uct` (default) gives high-signal play so
     /// the turn-played histograms reflect real card-driven timing.
-    /// `heuristic` is the legacy fast option.
+    /// `game` is the fast baseline (alias: `heuristic`).
     #[arg(long = "opponent-ai", default_value = "uct")]
     pub opponent_ai: String,
     /// UCT iterations per pick when `--opponent-ai uct`.
@@ -123,14 +123,14 @@ pub fn run_curve_sample(
     let mut total_plays: u64 = 0;
 
     let ai_kind = match args.opponent_ai.to_ascii_lowercase().as_str() {
-        "heuristic" => tsot::sim::AiKind::Heuristic,
+        "game" | "heuristic" => tsot::sim::AiKind::Game,
         "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
             exploration_c: args.opponent_uct_c,
             ..Default::default()
         }),
         other => {
-            eprintln!("error: --opponent-ai must be 'heuristic' | 'uct', got {other:?}");
+            eprintln!("error: --opponent-ai must be 'game' | 'uct' ('heuristic' accepted as legacy alias), got {other:?}");
             std::process::exit(2);
         }
     };
@@ -199,7 +199,7 @@ pub fn run_curve_sample(
             let _ = tsot::sim::instrument::drain_failures();
             let game_t0 = std::time::Instant::now();
             let (stats, _) =
-                sim::run_game_with_ai(state, &mut game_rng, &mut log, &reg, &ais);
+                sim::run_game_with_ai(state, &mut game_rng, &mut log, &reg, &ais, spec.seed);
             let game_elapsed = game_t0.elapsed();
             // Fold every failure message this game produced into the
             // game's engine log. The failed-game classifier picks

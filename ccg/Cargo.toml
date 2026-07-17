@@ -29,6 +29,14 @@ path = "src/main.rs"
 name = "tsot_wasm"
 path = "src/bin/tsot_wasm.rs"
 
+[features]
+# Runtime enforcement of the GameState JOURNALING CONTRACT: every
+# MCTS/UCT rollout self-verifies that its journal rollback restored the
+# ENTIRE state (minus the deliberately-swapped replay_journal). Off by
+# default — it fingerprints the whole state per rollout, so it's for the
+# weekly soak (`cargo test --features journal-audit`), not PR CI.
+journal-audit = []
+
 [dependencies]
 clap = { version = "=4.5.20", features = ["derive"] }
 include_dir = "=0.7.4"
@@ -39,6 +47,12 @@ rayon = "=1.10.0"
 sacred-error = { path = "../crates/sacred-error" }
 serde = { version = "=1.0.219", features = ["derive"] }
 serde_json = "=1.0.140"
+
+# Per-thread CPU time via clock_gettime(CLOCK_THREAD_CPUTIME_ID) —
+# used by the heartbeat to distinguish real work from rayon-queuing.
+# Not needed on wasm (single-threaded, no CPU/wall gap).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libc = "=0.2.155"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "=0.2.15", features = ["js"] }

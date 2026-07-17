@@ -22,10 +22,12 @@ use std::cell::RefCell;
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
-use crate::card::{Card, CardRegistry};
+use crate::card::CardRegistry;
+use crate::game::DeckUnit;
 
-use crate::sim::fitness::fitness;
-use crate::sim::genome::to_deck;
+use crate::sim::fitness::{fitness, fitness_with_trace};
+use crate::sim::game_trace::TraceSink;
+use crate::sim::genome::to_units;
 
 thread_local! {
     static WORKER_CTX: RefCell<Option<WorkerCtx>> = const { RefCell::new(None) };
@@ -33,7 +35,7 @@ thread_local! {
 
 struct WorkerCtx {
     registry: std::sync::Arc<CardRegistry>,
-    gauntlet: Vec<Vec<Card>>,
+    gauntlet: Vec<Vec<DeckUnit>>,
     /// Identity of the gauntlet this WorkerCtx cached. If a later
     /// call uses a different gauntlet, we rebuild — supports running
     /// multiple evolve()s in the same process without poisoning.
@@ -50,6 +52,7 @@ pub fn parallel_evaluate_genomes(
     jobs: &[(Vec<String>, u64)],
     n_per_side: u32,
     opponent_ai: &super::AiKind,
+    trace: Option<&(dyn TraceSink + 'static)>,
 ) -> Vec<f64> {
     let eval = |(genome, fit_seed): &(Vec<String>, u64)| -> f64 {
         WORKER_CTX.with(|cell| {
@@ -62,10 +65,10 @@ pub fn parallel_evaluate_genomes(
                 let registry = std::sync::Arc::new(
                     CardRegistry::load_embedded().expect("worker: failed to load cards"),
                 );
-                let gauntlet: Vec<Vec<Card>> = gauntlet_ids
+                let gauntlet: Vec<Vec<DeckUnit>> = gauntlet_ids
                     .iter()
                     .map(|ids| {
-                        to_deck(registry.as_ref(), ids)
+                        to_units(registry.as_ref(), ids)
                             .expect("gauntlet contains unknown card id")
                     })
                     .collect();
@@ -76,8 +79,22 @@ pub fn parallel_evaluate_genomes(
                 });
             }
             let ctx = ctx_ref.as_ref().unwrap();
-            fitness(&ctx.registry, genome, &ctx.gauntlet, n_per_side, *fit_seed, opponent_ai)
+            if let Some(sink) = trace {
+                fitness_with_trace(
+                    &ctx.registry,
+                    genome,
+                    &ctx.gauntlet,
+                    gauntlet_ids,
+                    n_per_side,
+                    *fit_seed,
+                    opponent_ai,
+                    Some(sink),
+                )
                 .expect("worker fitness: genome contains unknown card id")
+            } else {
+                fitness(&ctx.registry, genome, &ctx.gauntlet, n_per_side, *fit_seed, opponent_ai)
+                    .expect("worker fitness: genome contains unknown card id")
+            }
         })
     };
 
@@ -93,10 +110,18 @@ pub fn parallel_evaluate_genomes(
 
 /// Extract `Vec<Vec<String>>` of card ids from a gauntlet of
 /// materialized decks — the cross-thread wire format. Cards' handlers
-/// don't travel; only string ids do.
-pub fn gauntlet_to_ids(gauntlet: &[Vec<Card>]) -> Vec<Vec<String>> {
+/// don't travel; only string ids do. Cardless sleeves round-trip via
+/// the `__cardless__` sentinel (see `to_units`).
+pub fn gauntlet_to_ids(gauntlet: &[Vec<DeckUnit>]) -> Vec<Vec<String>> {
     gauntlet
         .iter()
-        .map(|deck| deck.iter().map(|c| c.id.clone()).collect())
+        .map(|deck| {
+            deck.iter()
+                .map(|u| match u {
+                    DeckUnit::Card(c) => c.id.clone(),
+                    DeckUnit::Cardless => crate::replay::CARDLESS_SLEEVE_ID.to_string(),
+                })
+                .collect()
+        })
         .collect()
 }

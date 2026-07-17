@@ -388,7 +388,7 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
                     let StackItem::PlayedCard { card, .. } = item;
                     state.card_pool.get(card)
                 })
-                .map(|inst| inst.card.cost.iter().map(|c| c.amount.max(0)).sum())
+                .map(|inst| inst.card().cost.iter().map(|c| c.amount.max(0)).sum())
                 .unwrap_or(0);
             if target_cost < 2 {
                 0.0
@@ -410,7 +410,7 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
             return ResponseAction::Pass;
         };
         let mut hand_need: usize = 0;
-        for c in &inst.card.cost {
+        for c in &inst.card().cost {
             if let crate::card::CostSource::Hand = c.source {
                 hand_need += c.amount.max(0) as usize;
             }
@@ -464,7 +464,7 @@ impl<R: Rng> ChoiceOracle for RandomOracle<R> {
         // P.12a: pick GY ids for the GRAVEYARD cost component, prioritizing
         // a color-anchor so the cast passes the new gate.
         let mut raw_gy_needed: usize = 0;
-        for c in &inst.card.cost {
+        for c in &inst.card().cost {
             if let crate::card::CostSource::Graveyard = c.source {
                 raw_gy_needed += c.amount.max(0) as usize;
             }
@@ -509,16 +509,16 @@ fn pitch_score(state: &GameState, candidate_iid: &InstanceId, host_iid: &Instanc
     let mut score = 0i32;
 
     if cand
-        .card
+        .card()
         .handlers
         .contains_key(&crate::card::EventName::OnAttachedAsCost)
     {
-        let host_is_creature = host.card.kind == crate::card::CardType::Creature;
+        let host_is_creature = host.card().kind == crate::card::CardType::Creature;
         let color_overlap = cand
-            .card
+            .card()
             .colors
             .iter()
-            .any(|cc| host.card.colors.iter().any(|hc| hc.eq_ignore_ascii_case(cc)));
+            .any(|cc| host.card().colors.iter().any(|hc| hc.eq_ignore_ascii_case(cc)));
         if host_is_creature && color_overlap {
             score += 100;
         } else if host_is_creature {
@@ -528,26 +528,26 @@ fn pitch_score(state: &GameState, candidate_iid: &InstanceId, host_iid: &Instanc
         }
     }
 
-    if matches!(cand.card.kind, crate::card::CardType::Artifact) {
+    if matches!(cand.card().kind, crate::card::CardType::Artifact) {
         score += 50;
     }
 
     if cand
-        .card
+        .card()
         .handlers
         .contains_key(&crate::card::EventName::OnPlay)
     {
         score -= 20;
     }
     if cand
-        .card
+        .card()
         .handlers
         .contains_key(&crate::card::EventName::OnEnterBoard)
     {
         score -= 10;
     }
     if cand
-        .card
+        .card()
         .handlers
         .contains_key(&crate::card::EventName::OnAttack)
     {
@@ -584,19 +584,19 @@ fn target_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) 
     }
     let (x, y) = state.effective_stats(candidate_iid);
     score += (x * 4.0 + y).round() as i32;
-    let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    let cost_sum: i32 = cand.card().cost.iter().map(|c| c.amount.max(0)).sum();
     score += cost_sum * 3;
     // Each handler is a payoff; flat +5 per kind present so a card with
     // multiple triggers ranks above a vanilla body of similar size.
-    score += (cand.card.handlers.len() as i32) * 5;
+    score += (cand.card().handlers.len() as i32) * 5;
     // Anthem / restriction / keyword-grant statics are board-wide impact.
-    if cand.card.static_def.is_some() {
+    if cand.card().static_def.is_some() {
         score += 15;
     }
     // Pitch-payoff (OnAttachedAsCost) cards — jewels, mantis-shrimp,
     // zebra — are recurring tools. Exiling them denies future leverage.
     if cand
-        .card
+        .card()
         .handlers
         .contains_key(&crate::card::EventName::OnAttachedAsCost)
     {
@@ -642,13 +642,13 @@ fn steal_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) -
             continue;
         };
         if att
-            .card
+            .card()
             .handlers
             .contains_key(&crate::card::EventName::OnAttachedAsCost)
         {
             score += 30;
         }
-        if att.card.static_def.is_some() {
+        if att.card().static_def.is_some() {
             score += 15;
         }
     }
@@ -666,7 +666,7 @@ fn donate_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) 
         return 0;
     };
     let mut score = if cand.controller == asker { 1000 } else { -100 };
-    if cand.card.kind == crate::card::CardType::Creature {
+    if cand.card().kind == crate::card::CardType::Creature {
         score += 50;
     }
     let (x, y) = state.effective_stats(candidate_iid);
@@ -685,16 +685,16 @@ fn attached_value_score(state: &GameState, candidate_iid: &InstanceId) -> i32 {
     };
     let mut score = 0i32;
     if cand
-        .card
+        .card()
         .handlers
         .contains_key(&crate::card::EventName::OnAttachedAsCost)
     {
         score += 100;
     }
-    if cand.card.static_def.is_some() {
+    if cand.card().static_def.is_some() {
         score += 50;
     }
-    let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    let cost_sum: i32 = cand.card().cost.iter().map(|c| c.amount.max(0)).sum();
     score += cost_sum * 3;
     score
 }
@@ -714,14 +714,14 @@ fn remove_threat_score(state: &GameState, candidate_iid: &InstanceId, asker: Pla
     let mut score = if cand.controller != asker { 1000 } else { -100 };
     let (x, y) = state.effective_stats(candidate_iid);
     score += (x * 4.0 + y).round() as i32;
-    let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    let cost_sum: i32 = cand.card().cost.iter().map(|c| c.amount.max(0)).sum();
     score += cost_sum * 3;
-    score += (cand.card.handlers.len() as i32) * 5;
-    if cand.card.static_def.is_some() {
+    score += (cand.card().handlers.len() as i32) * 5;
+    if cand.card().static_def.is_some() {
         score += 15;
     }
     if cand
-        .card
+        .card()
         .handlers
         .contains_key(&crate::card::EventName::OnAttachedAsCost)
     {
@@ -742,14 +742,14 @@ fn recur_score(state: &GameState, candidate_iid: &InstanceId) -> i32 {
         return 0;
     };
     let mut score = 0i32;
-    let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    let cost_sum: i32 = cand.card().cost.iter().map(|c| c.amount.max(0)).sum();
     score += cost_sum * 5;
-    score += (cand.card.handlers.len() as i32) * 10;
-    if cand.card.static_def.is_some() {
+    score += (cand.card().handlers.len() as i32) * 10;
+    if cand.card().static_def.is_some() {
         score += 30;
     }
     if cand
-        .card
+        .card()
         .handlers
         .contains_key(&crate::card::EventName::OnAttachedAsCost)
     {
@@ -771,14 +771,14 @@ fn low_value_own_score(state: &GameState, candidate_iid: &InstanceId, asker: Pla
     let mut score = if cand.controller == asker { 1000 } else { -100 };
     let (x, y) = state.effective_stats(candidate_iid);
     score -= (x * 4.0 + y).round() as i32;
-    let cost_sum: i32 = cand.card.cost.iter().map(|c| c.amount.max(0)).sum();
+    let cost_sum: i32 = cand.card().cost.iter().map(|c| c.amount.max(0)).sum();
     score -= cost_sum * 3;
-    score -= (cand.card.handlers.len() as i32) * 5;
-    if cand.card.static_def.is_some() {
+    score -= (cand.card().handlers.len() as i32) * 5;
+    if cand.card().static_def.is_some() {
         score -= 30;
     }
     if cand
-        .card
+        .card()
         .handlers
         .contains_key(&crate::card::EventName::OnAttachedAsCost)
     {
@@ -817,7 +817,7 @@ fn would_die_soon(state: &GameState, victim: PlayerId) -> bool {
                     let Some(inst) = state.card_pool.get(card) else {
                         return 0;
                     };
-                    if inst.card.kind == crate::card::CardType::Creature {
+                    if inst.card().kind == crate::card::CardType::Creature {
                         state.effective_stats(card).0.floor() as i32
                     } else {
                         0
@@ -1043,7 +1043,7 @@ mod tests {
     }
 
     fn give_static_def(s: &mut GameState, iid: &InstanceId) {
-        s.card_pool.get_mut(iid).unwrap().card.static_def = Some(StaticDef {
+        s.card_pool.get_mut(iid).unwrap().card_mut().static_def = Some(StaticDef {
             affects: StaticAffects::default(),
             condition: None,
             effects: vec![],
@@ -1138,7 +1138,7 @@ mod tests {
         let cheap = s.a.hand[0].clone();
         let expensive = s.a.hand[1].clone();
         // Mock cost: cheap has nothing, expensive has 5-graveyard component.
-        s.card_pool.get_mut(&expensive).unwrap().card.cost = vec![crate::card::CostComponent {
+        s.card_pool.get_mut(&expensive).unwrap().card_mut().cost = vec![crate::card::CostComponent {
             amount: 5,
             source: crate::card::CostSource::Graveyard,
             kind: None,

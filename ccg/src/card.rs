@@ -76,8 +76,12 @@ impl CardRegistry {
 // doesn't branch on color — it's identity/flavor data passed through to
 // handlers via `game.card(iid).colors`.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CardType {
+    /// Also the kind of the blank card backing a cardless sleeve (Z.8):
+    /// no identity, and uncastable (cast routing only accepts the
+    /// concrete castable kinds).
+    #[default]
     Unspecified,
     Creature,
     /// Non-permanent card that resolves to GRAVEYARD. The timing class
@@ -248,7 +252,7 @@ pub struct Stats {
 
 /// Predicate side of a static ability: which cards on the BOARD receive
 /// the effect. Phase 1 is declarative — engine evaluates against the
-/// candidate's Card / CardInstance fields directly, no Lua call needed.
+/// candidate's Card / Sleeve fields directly, no Lua call needed.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct StaticAffects {
     /// Candidate must have at least one of these subtypes (case-insensitive
@@ -390,7 +394,7 @@ pub enum StaticEffect {
 }
 
 /// Phase 1.5 dynamic stat-modifier value. Resolved to an `i32` against the
-/// source CardInstance's current state every time `effective_stats` runs,
+/// source Sleeve's current state every time `effective_stats` runs,
 /// so the value automatically tracks attached-set changes.
 ///
 /// Lua parser accepts either a bare integer (`x = 2` → `Fixed(2)`) or a
@@ -521,6 +525,18 @@ pub enum EventName {
     /// by the time the broadcast fires). Used by Avatar of Greed and
     /// any other "whenever a creature dies, ..." trigger.
     OnCreatureDies,
+    /// Fires on a creature the moment it becomes tapped by attacking
+    /// (declare_attacker). Handler receives `self` = the tapped creature.
+    /// Window Cleaner's "whenever this becomes tapped" trigger. Fires on
+    /// the attack tap synchronously, and on external taps (`game.tap`
+    /// inside a handler) via the deferred-event queue.
+    OnTapped,
+    /// Fires on a card when a delayed trigger it scheduled via
+    /// `game.schedule_next_turn` comes due — at the start of the
+    /// scheduling player's next turn, routed through the deferred-event
+    /// queue. Re-scheduling from inside the handler makes it recurring.
+    /// "At the beginning of your next turn, <do the scheduled thing>."
+    OnDelayedTrigger,
 }
 
 impl EventName {
@@ -537,11 +553,13 @@ impl EventName {
             EventName::OnDealtDamageToPlayer => "on_dealt_damage_to_player",
             EventName::OnTurnBegin => "on_turn_begin",
             EventName::OnCreatureDies => "on_creature_dies",
+            EventName::OnTapped => "on_tapped",
+            EventName::OnDelayedTrigger => "on_delayed_trigger",
         }
     }
 
     /// All known event names, for loader iteration.
-    pub const ALL: [EventName; 10] = [
+    pub const ALL: [EventName; 12] = [
         EventName::OnEnterBoard,
         EventName::OnDie,
         EventName::OnAttack,
@@ -552,10 +570,12 @@ impl EventName {
         EventName::OnDealtDamageToPlayer,
         EventName::OnTurnBegin,
         EventName::OnCreatureDies,
+        EventName::OnTapped,
+        EventName::OnDelayedTrigger,
     ];
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Card {
     pub id: String,
     pub name: String,
@@ -672,6 +692,15 @@ pub struct Card {
     /// `x_value = Some(0)` with `PlayError::XBelowMinimum`.
     #[serde(default)]
     pub allow_x_zero: bool,
+    /// RULES Z.7 (SAME-SLEEVE): this card fuses inside its host's sleeve
+    /// rather than sitting alongside it as a separate attached object.
+    /// A fused card cannot be peeled off, targeted, or moved independently
+    /// of the host, and it leaves play only when the host does — in
+    /// particular it is NOT swept to EXILE by P.8's attached-cascade
+    /// (P.29). Set by mutation cards (`same_sleeve = true` in Lua);
+    /// default false for ordinary attached payments.
+    #[serde(default)]
+    pub same_sleeve: bool,
     /// Activated abilities the controller may fire on their initiative.
     /// Resolves immediately (no stack, no response window per the design
     /// decision recorded in RULES A.5). Each entry has a cost, a text

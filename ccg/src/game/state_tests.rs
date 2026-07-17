@@ -114,7 +114,7 @@ fn clear_eot_modifiers_rollback_restores_original_state() {
 fn effective_stats_returns_zero_for_card_without_printed_stats() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
-    s.card_pool.get_mut(&iid).unwrap().card = card_no_stats("instant", CardType::Spell);
+    s.card_pool.get_mut(&iid).unwrap().content = Some(card_no_stats("instant", CardType::Spell));
     assert_eq!(s.effective_stats(&iid), (0.0, 0.0));
 }
 
@@ -283,8 +283,8 @@ fn legal_counter_targets_returns_chain_cards_in_order() {
 
 fn make_anthem_source(s: &mut GameState, iid: &InstanceId, subtype: &str, dx: f32, dy: f32) {
     let inst = s.card_pool.get_mut(iid).unwrap();
-    inst.card.subtypes.push(subtype.to_string());
-    inst.card.static_def = Some(crate::card::StaticDef {
+    inst.card_mut().subtypes.push(subtype.to_string());
+    inst.card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![subtype.to_ascii_lowercase()],
             colors: vec![],
@@ -309,8 +309,8 @@ fn anthem_applies_to_matching_subtype_on_board() {
     let target = s.a.hand[1].clone();
     let unrelated = s.a.hand[2].clone();
     // Make target a human, unrelated a goblin.
-    s.card_pool.get_mut(&target).unwrap().card.subtypes = vec!["human".into()];
-    s.card_pool.get_mut(&unrelated).unwrap().card.subtypes = vec!["goblin".into()];
+    s.card_pool.get_mut(&target).unwrap().card_mut().subtypes = vec!["human".into()];
+    s.card_pool.get_mut(&unrelated).unwrap().card_mut().subtypes = vec!["goblin".into()];
     // anthem source is a human anthem.
     make_anthem_source(&mut s, &anthem, "human", 1.0, 1.0);
     // Put all three on A's board.
@@ -331,7 +331,7 @@ fn anthem_removed_when_source_leaves_board() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let anthem = s.a.hand[0].clone();
     let target = s.a.hand[1].clone();
-    s.card_pool.get_mut(&target).unwrap().card.subtypes = vec!["human".into()];
+    s.card_pool.get_mut(&target).unwrap().card_mut().subtypes = vec!["human".into()];
     make_anthem_source(&mut s, &anthem, "human", 1.0, 1.0);
     s.a.hand.retain(|i| i != &anthem && i != &target);
     s.a.board.push(anthem.clone());
@@ -353,7 +353,7 @@ fn attached_host_scope_grants_keyword_to_host() {
     let host = s.a.hand[1].clone();
     let bystander = s.a.hand[2].clone();
     // Bird = attached-host flying-granter.
-    s.card_pool.get_mut(&bird).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&bird).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -384,7 +384,7 @@ fn attached_host_scope_does_not_grant_when_unattached() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let bird = s.a.hand[0].clone();
     let target = s.a.hand[1].clone();
-    s.card_pool.get_mut(&bird).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&bird).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -409,8 +409,8 @@ fn condition_gate_blocks_static_until_graveyard_threshold() {
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let source = s.a.hand[0].clone();
     let target = s.a.hand[1].clone();
-    s.card_pool.get_mut(&target).unwrap().card.kind = crate::card::CardType::Creature;
-    s.card_pool.get_mut(&source).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&target).unwrap().card_mut().kind = crate::card::CardType::Creature;
+    s.card_pool.get_mut(&source).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -456,7 +456,7 @@ fn condition_non_creatures_counts_only_non_creature_kinds() {
     // graveyard. A graveyard full of creatures should NOT trigger it.
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let wizard = s.a.hand[0].clone();
-    s.card_pool.get_mut(&wizard).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&wizard).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -486,7 +486,7 @@ fn condition_non_creatures_counts_only_non_creature_kinds() {
     // Flip 4 of them to Spell — non-creature count hits 4 → flying ON.
     let gy = s.a.graveyard.clone();
     for iid in gy.iter().take(4) {
-        s.card_pool.get_mut(iid).unwrap().card.kind = crate::card::CardType::Spell;
+        s.card_pool.get_mut(iid).unwrap().card_mut().kind = crate::card::CardType::Spell;
     }
     assert!(s.has_keyword(&wizard, "flying"));
 }
@@ -498,7 +498,7 @@ fn source_only_scope_targets_only_the_source() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let wizard = s.a.hand[0].clone();
     let other = s.a.hand[1].clone();
-    s.card_pool.get_mut(&wizard).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&wizard).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -525,9 +525,9 @@ fn restriction_cannot_attack_propagates_to_opponent_insects() {
     let plant = s.b.hand[0].clone();
     let opp_insect = s.a.hand[0].clone();
     let own_insect = s.b.hand[1].clone();
-    s.card_pool.get_mut(&opp_insect).unwrap().card.subtypes = vec!["insect".into()];
-    s.card_pool.get_mut(&own_insect).unwrap().card.subtypes = vec!["insect".into()];
-    s.card_pool.get_mut(&plant).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&opp_insect).unwrap().card_mut().subtypes = vec!["insect".into()];
+    s.card_pool.get_mut(&own_insect).unwrap().card_mut().subtypes = vec!["insect".into()];
+    s.card_pool.get_mut(&plant).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec!["insect".into()],
             colors: vec![],
@@ -566,9 +566,9 @@ fn restriction_cannot_attack_blocks_declare_attacker() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let plant = s.b.hand[0].clone();
     let attacker = s.a.hand[0].clone();
-    s.card_pool.get_mut(&attacker).unwrap().card.subtypes = vec!["insect".into()];
-    s.card_pool.get_mut(&attacker).unwrap().card.kind = CardType::Creature;
-    s.card_pool.get_mut(&plant).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&attacker).unwrap().card_mut().subtypes = vec!["insect".into()];
+    s.card_pool.get_mut(&attacker).unwrap().card_mut().kind = CardType::Creature;
+    s.card_pool.get_mut(&plant).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec!["insect".into()],
             colors: vec![],
@@ -604,10 +604,10 @@ fn affects_has_keyword_filters_by_intrinsic_or_static_grant() {
     let source = s.b.hand[0].clone();
     let flyer = s.a.hand[0].clone();
     let grounder = s.a.hand[1].clone();
-    s.card_pool.get_mut(&flyer).unwrap().card.abilities = vec!["flying.".into()];
-    s.card_pool.get_mut(&flyer).unwrap().card.kind = crate::card::CardType::Creature;
-    s.card_pool.get_mut(&grounder).unwrap().card.kind = crate::card::CardType::Creature;
-    s.card_pool.get_mut(&source).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&flyer).unwrap().card_mut().abilities = vec!["flying.".into()];
+    s.card_pool.get_mut(&flyer).unwrap().card_mut().kind = crate::card::CardType::Creature;
+    s.card_pool.get_mut(&grounder).unwrap().card_mut().kind = crate::card::CardType::Creature;
+    s.card_pool.get_mut(&source).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -639,7 +639,7 @@ fn two_anthems_stack() {
     let anthem_a = s.a.hand[0].clone();
     let anthem_b = s.a.hand[1].clone();
     let target = s.a.hand[2].clone();
-    s.card_pool.get_mut(&target).unwrap().card.subtypes = vec!["human".into()];
+    s.card_pool.get_mut(&target).unwrap().card_mut().subtypes = vec!["human".into()];
     make_anthem_source(&mut s, &anthem_a, "human", 1.0, 1.0);
     make_anthem_source(&mut s, &anthem_b, "human", 2.0, 0.0);
     s.a.hand.retain(|i| i != &anthem_a && i != &anthem_b && i != &target);
@@ -659,7 +659,7 @@ fn opponent_controlled_anthem_does_not_affect_owner_filtered() {
     // boosted, not A's.
     let b_anthem = s.b.hand[0].clone();
     let a_human = s.a.hand[0].clone();
-    s.card_pool.get_mut(&a_human).unwrap().card.subtypes = vec!["human".into()];
+    s.card_pool.get_mut(&a_human).unwrap().card_mut().subtypes = vec!["human".into()];
     make_anthem_source(&mut s, &b_anthem, "human", 1.0, 1.0);
     s.b.hand.retain(|i| i != &b_anthem);
     s.a.hand.retain(|i| i != &a_human);
@@ -674,7 +674,7 @@ fn opponent_controlled_anthem_does_not_affect_owner_filtered() {
 
 fn make_glow_granter(s: &mut GameState, iid: &InstanceId, granted: &[&str]) {
     let inst = s.card_pool.get_mut(iid).unwrap();
-    inst.card.static_def = Some(crate::card::StaticDef {
+    inst.card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -696,7 +696,7 @@ fn make_glow_granter(s: &mut GameState, iid: &InstanceId, granted: &[&str]) {
 fn effective_colors_returns_printed_when_no_grant() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let iid = s.a.hand[0].clone();
-    s.card_pool.get_mut(&iid).unwrap().card.colors = vec!["green".into()];
+    s.card_pool.get_mut(&iid).unwrap().card_mut().colors = vec!["green".into()];
     assert_eq!(s.effective_colors(&iid), vec!["green".to_string()]);
 }
 
@@ -707,7 +707,7 @@ fn effective_colors_includes_granted_from_attached_source() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let host = s.a.hand[0].clone();
     let mutation = s.a.hand[1].clone();
-    s.card_pool.get_mut(&host).unwrap().card.colors = vec!["red".into()];
+    s.card_pool.get_mut(&host).unwrap().card_mut().colors = vec!["red".into()];
     make_glow_granter(&mut s, &mutation, &["glow"]);
     s.a.hand.retain(|i| i != &host && i != &mutation);
     s.a.board.push(host.clone());
@@ -723,7 +723,7 @@ fn effective_colors_grants_multiple_colors_via_single_static() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let host = s.a.hand[0].clone();
     let mutation = s.a.hand[1].clone();
-    s.card_pool.get_mut(&host).unwrap().card.colors = vec!["red".into()];
+    s.card_pool.get_mut(&host).unwrap().card_mut().colors = vec!["red".into()];
     make_glow_granter(&mut s, &mutation, &["green", "glow"]);
     s.a.hand.retain(|i| i != &host && i != &mutation);
     s.a.board.push(host.clone());
@@ -743,7 +743,7 @@ fn effective_colors_deduplicates_grant_already_in_printed() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let host = s.a.hand[0].clone();
     let mutation = s.a.hand[1].clone();
-    s.card_pool.get_mut(&host).unwrap().card.colors = vec!["green".into()];
+    s.card_pool.get_mut(&host).unwrap().card_mut().colors = vec!["green".into()];
     make_glow_granter(&mut s, &mutation, &["green", "glow"]);
     s.a.hand.retain(|i| i != &host && i != &mutation);
     s.a.board.push(host.clone());
@@ -759,7 +759,7 @@ fn effective_colors_drops_grant_when_mutation_unattached() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let host = s.a.hand[0].clone();
     let mutation = s.a.hand[1].clone();
-    s.card_pool.get_mut(&host).unwrap().card.colors = vec!["red".into()];
+    s.card_pool.get_mut(&host).unwrap().card_mut().colors = vec!["red".into()];
     make_glow_granter(&mut s, &mutation, &["glow"]);
     // Host on board, mutation NOT attached — mutation just lives in hand or wherever.
     s.a.hand.retain(|i| i != &host);
@@ -822,15 +822,15 @@ fn playable_responses_filters_to_zero_cost_instants() {
     // Mutate a_hand[1] into a zero-cost instant.
     let inst = s.a.hand[1].clone();
     let card = s.card_pool.get_mut(&inst).unwrap();
-    card.card.kind = crate::card::CardType::Spell;
-    card.card.timing = Some(crate::card::Timing::Instant);
-    card.card.cost = vec![];
+    card.card_mut().kind = crate::card::CardType::Spell;
+    card.card_mut().timing = Some(crate::card::Timing::Instant);
+    card.card_mut().cost = vec![];
     // Mutate a_hand[2] into a sorcery — should NOT be returned.
     let sorc = s.a.hand[2].clone();
     let card2 = s.card_pool.get_mut(&sorc).unwrap();
-    card2.card.kind = crate::card::CardType::Spell;
-    card2.card.timing = Some(crate::card::Timing::Sorcery);
-    card2.card.cost = vec![];
+    card2.card_mut().kind = crate::card::CardType::Spell;
+    card2.card_mut().timing = Some(crate::card::Timing::Sorcery);
+    card2.card_mut().cost = vec![];
     let candidates = s.playable_responses(PlayerId::A);
     assert!(candidates.contains(&inst));
     assert!(!candidates.contains(&sorc));
@@ -844,9 +844,9 @@ fn deck_top_symbol_matches_attached_condition_grants_modifier() {
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let source = s.a.hand[0].clone();
     let attached = s.a.hand[1].clone();
-    s.card_pool.get_mut(&source).unwrap().card.kind = crate::card::CardType::Creature;
-    s.card_pool.get_mut(&source).unwrap().card.stats = Some(crate::card::Stats { x: 1.0, y: 1.0 });
-    s.card_pool.get_mut(&source).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&source).unwrap().card_mut().kind = crate::card::CardType::Creature;
+    s.card_pool.get_mut(&source).unwrap().card_mut().stats = Some(crate::card::Stats { x: 1.0, y: 1.0 });
+    s.card_pool.get_mut(&source).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -863,25 +863,25 @@ fn deck_top_symbol_matches_attached_condition_grants_modifier() {
         }],
     });
     // Attach a card with symbol "alpha".
-    s.card_pool.get_mut(&attached).unwrap().card.symbols = vec!["alpha".to_string()];
+    s.card_pool.get_mut(&attached).unwrap().card_mut().symbols = vec!["alpha".to_string()];
     s.a.hand.retain(|i| i != &source && i != &attached);
     s.a.board.push(source.clone());
     s.card_pool.get_mut(&source).unwrap().attached.push(attached);
 
     // Deck top has no matching symbol → no boost.
     let top0 = s.a.deck[0].clone();
-    s.card_pool.get_mut(&top0).unwrap().card.symbols = vec!["beta".to_string()];
+    s.card_pool.get_mut(&top0).unwrap().card_mut().symbols = vec!["beta".to_string()];
     assert_eq!(s.effective_stats(&source), (1.0, 1.0));
 
     // Set deck top to share "alpha" with attached → boost fires.
-    s.card_pool.get_mut(&top0).unwrap().card.symbols = vec!["alpha".to_string()];
+    s.card_pool.get_mut(&top0).unwrap().card_mut().symbols = vec!["alpha".to_string()];
     assert_eq!(s.effective_stats(&source), (4.0, 1.0));
 
     // V.8: insert a transparent-frame card at the top of the deck. The
     // effective top is still the alpha card below — boost still fires.
     let transparent = s.b.hand[0].clone();
-    s.card_pool.get_mut(&transparent).unwrap().card.frame = Some("transparent".to_string());
-    s.card_pool.get_mut(&transparent).unwrap().card.symbols = vec![];
+    s.card_pool.get_mut(&transparent).unwrap().card_mut().frame = Some("transparent".to_string());
+    s.card_pool.get_mut(&transparent).unwrap().card_mut().symbols = vec![];
     s.b.hand.retain(|i| i != &transparent);
     s.a.deck.insert(0, transparent);
     assert_eq!(s.effective_stats(&source), (4.0, 1.0));
@@ -889,7 +889,7 @@ fn deck_top_symbol_matches_attached_condition_grants_modifier() {
     // Swap the alpha card under the transparent for a non-matching one;
     // boost goes away despite the transparent still being on top.
     let underneath = s.a.deck[1].clone();
-    s.card_pool.get_mut(&underneath).unwrap().card.symbols = vec!["gamma".to_string()];
+    s.card_pool.get_mut(&underneath).unwrap().card_mut().symbols = vec!["gamma".to_string()];
     assert_eq!(s.effective_stats(&source), (1.0, 1.0));
 }
 
@@ -900,9 +900,9 @@ fn effective_top_of_deck_symbols_walks_through_transparent_per_v8() {
     let t0 = s.a.deck[0].clone();
     let t1 = s.a.deck[1].clone();
     let opaque = s.a.deck[2].clone();
-    s.card_pool.get_mut(&t0).unwrap().card.frame = Some("transparent".to_string());
-    s.card_pool.get_mut(&t1).unwrap().card.frame = Some("transparent".to_string());
-    s.card_pool.get_mut(&opaque).unwrap().card.symbols = vec!["alpha".to_string()];
+    s.card_pool.get_mut(&t0).unwrap().card_mut().frame = Some("transparent".to_string());
+    s.card_pool.get_mut(&t1).unwrap().card_mut().frame = Some("transparent".to_string());
+    s.card_pool.get_mut(&opaque).unwrap().card_mut().symbols = vec!["alpha".to_string()];
     assert_eq!(
         s.effective_top_of_deck_symbols(PlayerId::A),
         vec!["alpha".to_string()],
@@ -919,7 +919,7 @@ fn host_loses_colors_true_when_attached_mutation_declares_colorless() {
     let mutation = s.a.hand[0].clone();
     let host = s.a.hand[1].clone();
     let bystander = s.a.hand[2].clone();
-    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -948,8 +948,8 @@ fn effective_colors_returns_empty_when_host_loses_colors() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let mutation = s.a.hand[0].clone();
     let host = s.a.hand[1].clone();
-    s.card_pool.get_mut(&host).unwrap().card.colors = vec!["red".into()];
-    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&host).unwrap().card_mut().colors = vec!["red".into()];
+    s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -975,7 +975,7 @@ fn host_loses_abilities_true_when_attached_mutation_declares_suppression() {
     let mutation = s.a.hand[0].clone();
     let host = s.a.hand[1].clone();
     let bystander = s.a.hand[2].clone();
-    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -1007,7 +1007,7 @@ fn hosts_own_static_stops_applying_when_suppressed() {
     let mutation = s.a.hand[0].clone();
     let host = s.a.hand[1].clone();
     // Host self-static: +2/+2 via SourceOnly scope.
-    s.card_pool.get_mut(&host).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&host).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -1024,7 +1024,7 @@ fn hosts_own_static_stops_applying_when_suppressed() {
         }],
     });
     // Suppressor mutation: AttachedHost + suppresses_host_abilities.
-    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -1055,7 +1055,7 @@ fn modifier_value_fixed_carries_fractional_value() {
     let mut s = GameState::new(deck_of(5, "a"), deck_of(5, "b"));
     let mutation = s.a.hand[0].clone();
     let host = s.a.hand[1].clone();
-    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -1090,9 +1090,9 @@ fn board_count_by_face_modifier_counts_shiny_board_cards() {
     let shiny_b = s.b.hand[0].clone();
     // Tag three cards as shiny on `face`.
     for iid in [&shiny_a1, &shiny_a2, &shiny_b] {
-        s.card_pool.get_mut(iid).unwrap().card.face = vec!["shiny".into()];
+        s.card_pool.get_mut(iid).unwrap().card_mut().face = vec!["shiny".into()];
     }
-    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -1130,10 +1130,10 @@ fn sum_and_scaled_modifier_compose_offset_plus_per_face_contribution() {
     let shiny1 = s.a.hand[2].clone();
     let shiny2 = s.a.hand[3].clone();
     for iid in [&shiny1, &shiny2] {
-        s.card_pool.get_mut(iid).unwrap().card.face = vec!["shiny".into()];
+        s.card_pool.get_mut(iid).unwrap().card_mut().face = vec!["shiny".into()];
     }
     use crate::card::ModifierValue;
-    s.card_pool.get_mut(&mutation).unwrap().card.static_def = Some(crate::card::StaticDef {
+    s.card_pool.get_mut(&mutation).unwrap().card_mut().static_def = Some(crate::card::StaticDef {
         affects: crate::card::StaticAffects {
             subtypes: vec![],
             colors: vec![],
@@ -1221,7 +1221,7 @@ fn effective_combined_cost_applies_color_gated_reduction() {
         (&black_target, vec!["black".to_string()]),
         (&blue_target, vec!["blue".to_string()]),
     ] {
-        let c = &mut s.card_pool.get_mut(iid).unwrap().card;
+        let c = s.card_pool.get_mut(iid).unwrap().card_mut();
         c.colors = colors;
         c.kind = CardType::Creature;
         c.cost = vec![
@@ -1233,7 +1233,7 @@ fn effective_combined_cost_applies_color_gated_reduction() {
     // Install the Reincubator-style source on A's board.
     {
         let inst = s.card_pool.get_mut(&source_iid).unwrap();
-        inst.card.static_def = Some(crate::card::StaticDef {
+        inst.card_mut().static_def = Some(crate::card::StaticDef {
             affects: crate::card::StaticAffects {
                 subtypes: vec![],
                 colors: vec!["green".into(), "black".into()],

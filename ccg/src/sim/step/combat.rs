@@ -43,7 +43,7 @@ impl StepEngine {
         }
         let active = self.state.active_player;
         let attackers = match &self.ais[active.index()] {
-            AiKind::Heuristic | AiKind::Mcts(_) | AiKind::Uct(_) => {
+            AiKind::Game | AiKind::Fast | AiKind::Stress | AiKind::Mcts(_) | AiKind::Uct(_) => {
                 select_attackers(&self.state, active)
             }
             AiKind::Human(_) => match pending {
@@ -80,7 +80,7 @@ impl StepEngine {
                     self.state
                         .card_pool
                         .get(iid)
-                        .map(|i| i.card.name.clone())
+                        .map(|i| i.card().name.clone())
                         .unwrap_or_else(|| iid.to_string())
                 })
                 .collect();
@@ -106,7 +106,7 @@ impl StepEngine {
                         .state
                         .card_pool
                         .get(atk)
-                        .map(|i| i.card.name.clone())
+                        .map(|i| i.card().name.clone())
                         .unwrap_or_else(|| atk.clone());
                     self.emit_human_refusal(
                         active,
@@ -156,7 +156,7 @@ impl StepEngine {
         let active = self.state.active_player;
         let defender = active.opponent();
         let assignments = match &self.ais[defender.index()] {
-            AiKind::Heuristic | AiKind::Mcts(_) | AiKind::Uct(_) => {
+            AiKind::Game | AiKind::Fast | AiKind::Stress | AiKind::Mcts(_) | AiKind::Uct(_) => {
                 pick_blocks(&self.state, defender)
             }
             AiKind::Human(_) => match pending {
@@ -200,13 +200,13 @@ impl StepEngine {
                         .state
                         .card_pool
                         .get(blk)
-                        .map(|i| i.card.name.clone())
+                        .map(|i| i.card().name.clone())
                         .unwrap_or_else(|| blk.to_string());
                     let an = self
                         .state
                         .card_pool
                         .get(atk)
-                        .map(|i| i.card.name.clone())
+                        .map(|i| i.card().name.clone())
                         .unwrap_or_else(|| atk.to_string());
                     format!("{} → {}", bn, an)
                 })
@@ -230,13 +230,13 @@ impl StepEngine {
                     .state
                     .card_pool
                     .get(blk)
-                    .map(|i| i.card.name.clone())
+                    .map(|i| i.card().name.clone())
                     .unwrap_or_else(|| blk.clone());
                 let atk_name = self
                     .state
                     .card_pool
                     .get(atk)
-                    .map(|i| i.card.name.clone())
+                    .map(|i| i.card().name.clone())
                     .unwrap_or_else(|| atk.clone());
                 self.emit_human_refusal(
                     defender,
