@@ -986,11 +986,16 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         let g = leaf_hash01(seed, 0x61_2711);
         let girth = 0.75 + 1.6 * g * g; // ~0.75 .. 2.35, few fat
         let branch_girth = girth.sqrt(); // limbs thicken less than the bole
-        // Main trunk: vertical cone, axis +Y (identity rotation).
+        // Main trunk: vertical cone, axis +Y (identity rotation). The bole
+        // rises to the HIGHEST primary attachment (`base_y.1`), not just
+        // `trunk_h_ratio` — otherwise upper primaries start above where the
+        // trunk ends and float with a see-through gap at the junction. The
+        // bole always reaches the wood it carries.
+        let trunk_h = h * sp.trunk_h_ratio.max(sp.base_y.1);
         trunks.push(MeshInstance {
             pos: [t.x, 0.0, t.z],
             color: sp.trunk_color,
-            scale: [h * sp.trunk_r_ratio * girth, h * sp.trunk_h_ratio, h * sp.trunk_r_ratio * girth],
+            scale: [h * sp.trunk_r_ratio * girth, trunk_h, h * sp.trunk_r_ratio * girth],
             axis: UP,
         });
         let element_r = h * sp.leaf_element_ratio;
@@ -1022,10 +1027,17 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             // scaled to [radius, length, radius] and rotated +Y → axis.
             // A dead tip greys out — deadwood, not foliage.
             let (bx, by, bz) = (t.x + seg.base[0] * h, seg.base[1] * h, t.z + seg.base[2] * h);
+            // Seat the limb's open base INTO its parent: slide the base back
+            // along -axis and lengthen to match, so the hollow (uncapped)
+            // base ring is buried inside the parent's wood rather than
+            // gaping at the junction. The tip is unchanged (base − a + (len
+            // + a)·axis = base + len·axis), so foliage still sits at the tip.
+            let br = seg.base_radius * h * branch_girth;
+            let seat = br * 2.5;
             trunks.push(MeshInstance {
-                pos: [bx, by, bz],
+                pos: [bx - seg.axis[0] * seat, by - seg.axis[1] * seat, bz - seg.axis[2] * seat],
                 color: if seg.is_dead { DEAD_LIMB_COLOR } else { sp.branch_color },
-                scale: [seg.base_radius * h * branch_girth, seg.length * h, seg.base_radius * h * branch_girth],
+                scale: [br, seg.length * h + seat, br],
                 axis: seg.axis,
             });
             // Moss creeps on the lower, shaded limbs of a mossy tree — a
@@ -1268,6 +1280,33 @@ mod tests {
         // SOME apple trees bear, not all — an orchard is a mix.
         assert!(fruiting > 0, "no apple tree bore fruit");
         assert!(fruiting < n, "every apple tree bore fruit — expected a mix");
+    }
+
+    #[test]
+    fn the_bole_reaches_every_primary_so_no_branch_floats() {
+        // A primary that starts above where the trunk ends floats with a
+        // see-through gap at the junction. The bole must rise to the
+        // highest primary attachment for every species.
+        use crate::tree_mesh::{tree_branches, BIRCH, APPLE, DEAD, FUNGAL, MAPLE, OAK, PINE, TreeSpecies, WILLOW};
+        const SPECIES: [&TreeSpecies; 8] =
+            [&PINE, &OAK, &BIRCH, &WILLOW, &APPLE, &MAPLE, &FUNGAL, &DEAD];
+        let (px, pz, h) = (500.0_f32, 500.0_f32, 300.0_f32);
+        for sp in SPECIES {
+            let m = snapshot_to_mesh_instances(&tree_snapshot(Vec3::new(px, 0.0, pz), sp));
+            let trunk_top = m.trunks[0].pos[1] + m.trunks[0].scale[1];
+            let seed = tree_seed(px, pz);
+            for seg in tree_branches(seed, sp) {
+                // Primaries root on the trunk axis (x = z = 0 in unit space).
+                let on_axis = seg.base[0].abs() < 1e-6 && seg.base[2].abs() < 1e-6;
+                if on_axis {
+                    assert!(
+                        seg.base[1] * h <= trunk_top + 1.0,
+                        "a primary at y={} floats above the bole top {trunk_top}",
+                        seg.base[1] * h
+                    );
+                }
+            }
+        }
     }
 
     #[test]
