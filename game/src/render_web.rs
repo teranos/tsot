@@ -216,7 +216,7 @@ pub fn init(canvas_id: &str) -> bool {
     // asymmetry. Canopy = unit icosahedron, per-station instances
     // scale to element radius.
     let (trunk_verts, trunk_indices) = tree_mesh::trunk_mesh(12, 1.0, 0.6, 1.0);
-    let (canopy_verts, canopy_indices) = tree_mesh::canopy_element_mesh();
+    let (canopy_verts, canopy_indices) = tree_mesh::leaf_quad_mesh();
     let trunk_vertex_buf = gpu_web::GameBuffer::create(
         std::mem::size_of_val(&trunk_verts[..]) as u32,
         gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,

@@ -158,6 +158,31 @@ pub fn canopy_element_mesh() -> (Vec<MeshVertex>, Vec<u32>) {
     (verts, indices)
 }
 
+/// A double-sided unit **leaf card**: a flat quad in the local XZ plane
+/// (normal +Y), 1×1 centred on the origin, UV spanning [0,1]². A leaf is
+/// a flat blade, not a ball — clusters of oriented cards read as foliage
+/// that catches light per-face. Both windings are emitted so the card is
+/// visible from either side (a single-sided quad vanishes when it faces
+/// away under back-face culling). The instance's `axis` rotates +Y → the
+/// leaf's facing direction; instance scale sets width (x) × length (z).
+pub fn leaf_quad_mesh() -> (Vec<MeshVertex>, Vec<u32>) {
+    let n = [0.0, 1.0, 0.0];
+    let v = |x: f32, z: f32, u: f32, w: f32| MeshVertex {
+        pos: [x, 0.0, z],
+        normal: n,
+        uv: [u, w],
+    };
+    let verts = vec![
+        v(-0.5, -0.5, 0.0, 0.0),
+        v(0.5, -0.5, 1.0, 0.0),
+        v(0.5, 0.5, 1.0, 1.0),
+        v(-0.5, 0.5, 0.0, 1.0),
+    ];
+    // Front face, then the same quad reverse-wound — double-sided.
+    let indices = vec![0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2];
+    (verts, indices)
+}
+
 pub fn canopy_stations(count: u32, canopy_radius: f32) -> Vec<CanopyStation> {
     let n = count as usize;
     let mut stations = Vec::with_capacity(n);
@@ -237,6 +262,9 @@ pub struct TreeSpecies {
     pub leaves_per_tip: u32,
     pub cluster_radius_ratio: f32,
     pub leaf_element_ratio: f32,
+    /// Leaf-card length ÷ width. ~1.3 = broad blade (oak), higher = a
+    /// slimmer/needle-ish leaf (pine).
+    pub leaf_aspect: f32,
     pub leaf_green: [f32; 3],
     /// Ceiling of the per-leaf autumn-age ramp: 0 = evergreen (pine),
     /// higher = more/warmer turn (oak → red, birch → yellow).
@@ -262,6 +290,7 @@ pub static PINE: TreeSpecies = TreeSpecies {
     leaves_per_tip: 10,
     cluster_radius_ratio: 0.045,
     leaf_element_ratio: 0.02,
+    leaf_aspect: 4.0,
     leaf_green: [0.08, 0.42, 0.22],
     autumn: 0.0,
 };
@@ -285,6 +314,7 @@ pub static OAK: TreeSpecies = TreeSpecies {
     leaves_per_tip: 8,
     cluster_radius_ratio: 0.07,
     leaf_element_ratio: 0.028,
+    leaf_aspect: 1.3,
     leaf_green: [0.13, 0.70, 0.32],
     autumn: 0.85,
 };
@@ -308,6 +338,7 @@ pub static BIRCH: TreeSpecies = TreeSpecies {
     leaves_per_tip: 6,
     cluster_radius_ratio: 0.05,
     leaf_element_ratio: 0.024,
+    leaf_aspect: 1.8,
     leaf_green: [0.35, 0.72, 0.28],
     autumn: 0.45,
 };
@@ -637,6 +668,24 @@ mod tests {
                 "face {:?} has inward normal (dot with centroid = {dot})",
                 tri
             );
+        }
+    }
+
+    #[test]
+    fn leaf_quad_is_a_flat_double_sided_card() {
+        let (verts, indices) = leaf_quad_mesh();
+        assert_eq!(verts.len(), 4, "a quad has 4 corners");
+        assert_eq!(indices.len(), 12, "two triangles per face × two faces");
+        for v in &verts {
+            assert!(v.pos[1].abs() < 1e-6, "leaf card must be flat (y=0): {:?}", v.pos);
+            assert!(
+                (0.0..=1.0).contains(&v.uv[0]) && (0.0..=1.0).contains(&v.uv[1]),
+                "uv out of [0,1]: {:?}",
+                v.uv
+            );
+        }
+        for &i in &indices {
+            assert!((i as usize) < verts.len(), "index {i} out of range");
         }
     }
 

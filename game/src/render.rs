@@ -88,7 +88,7 @@ pub fn render_scene(
     // instances into one buffer, dispatch two indexed draw calls with
     // first_instance = trunk_count for the canopy pass.
     let (trunk_verts, trunk_indices) = tree_mesh::trunk_mesh(12, 1.0, 0.6, 1.0);
-    let (canopy_verts, canopy_indices) = tree_mesh::canopy_element_mesh();
+    let (canopy_verts, canopy_indices) = tree_mesh::leaf_quad_mesh();
     let trunk_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
         label: Some("seer.render.mesh.trunk.vertex"),
         size: std::mem::size_of_val(&trunk_verts[..]) as u64,

@@ -895,7 +895,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
     use crate::tree_mesh::{GOLDEN_ANGLE_RAD, species_for, tree_branches};
     const UP: [f32; 3] = [0.0, 1.0, 0.0];
     // `trunks` draws the shared unit cone (trunk + every branch segment);
-    // `canopy_elements` draws the shared icosahedron (leaf clusters).
+    // `canopy_elements` draws the shared leaf card (oriented per leaf).
     let mut trunks = Vec::with_capacity(snap.trees.len() * 48);
     let mut canopy_elements = Vec::with_capacity(snap.trees.len() * 256);
     for (t, h) in &snap.trees {
@@ -933,21 +933,26 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             let tip = seg.tip();
             let (wx, wy, wz) = (t.x + tip[0] * h, tip[1] * h, t.z + tip[2] * h);
             for k in 0..sp.leaves_per_tip {
+                // Fibonacci-sphere direction — also the leaf card's facing
+                // (`axis`), so cards fan outward and catch light per-face
+                // instead of every leaf pointing the same way.
                 let ky = 1.0 - 2.0 * (k as f32 + 0.5) / (sp.leaves_per_tip as f32);
                 let kr = (1.0 - ky * ky).max(0.0).sqrt();
                 let kt = (k as f32) * GOLDEN_ANGLE_RAD;
+                let dir = [kr * kt.cos(), ky, kr * kt.sin()];
                 let roll = leaf_hash01(seed, leaf_i);
                 leaf_i += 1;
                 let age = roll * roll * sp.autumn;
                 canopy_elements.push(MeshInstance {
                     pos: [
-                        wx + cluster_r * kr * kt.cos(),
-                        wy + cluster_r * ky,
-                        wz + cluster_r * kr * kt.sin(),
+                        wx + cluster_r * dir[0],
+                        wy + cluster_r * dir[1],
+                        wz + cluster_r * dir[2],
                     ],
                     color: autumn_ramp(sp.leaf_green, age),
-                    scale: [element_r, element_r, element_r],
-                    axis: UP,
+                    // Flat card: width (x) × length (z = width × aspect).
+                    scale: [element_r, element_r, element_r * sp.leaf_aspect],
+                    axis: dir,
                 });
             }
         }
