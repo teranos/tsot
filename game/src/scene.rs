@@ -980,11 +980,17 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         // will name their own. `seed` still drives per-leaf autumn tint.
         let sp: &crate::tree_mesh::TreeSpecies = sp;
         let seed = tree_seed(t.x, t.z);
+        // Per-tree girth: some trees are far stouter than others (old
+        // growth vs young), so a stand isn't a row of identical trunks.
+        // Squared so most trees are ordinary and a few are notably fat.
+        let g = leaf_hash01(seed, 0x61_2711);
+        let girth = 0.75 + 1.6 * g * g; // ~0.75 .. 2.35, few fat
+        let branch_girth = girth.sqrt(); // limbs thicken less than the bole
         // Main trunk: vertical cone, axis +Y (identity rotation).
         trunks.push(MeshInstance {
             pos: [t.x, 0.0, t.z],
             color: sp.trunk_color,
-            scale: [h * sp.trunk_r_ratio, h * sp.trunk_h_ratio, h * sp.trunk_r_ratio],
+            scale: [h * sp.trunk_r_ratio * girth, h * sp.trunk_h_ratio, h * sp.trunk_r_ratio * girth],
             axis: UP,
         });
         let element_r = h * sp.leaf_element_ratio;
@@ -992,6 +998,18 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         // A weathered grey-brown for dead twigs, so a bare limb reads as
         // deadwood among the living branches.
         const DEAD_LIMB_COLOR: [f32; 3] = [0.34, 0.30, 0.25];
+        // Pale raw wood at a break — a torn splinter where a limb snapped.
+        const SPLINTER_COLOR: [f32; 3] = [0.72, 0.62, 0.45];
+        // Dark mossy green that creeps up the shaded lower trunk.
+        const MOSS_COLOR: [f32; 3] = [0.20, 0.42, 0.18];
+        // A dark twiggy bird's nest wedged in a fork.
+        const NEST_COLOR: [f32; 3] = [0.26, 0.19, 0.11];
+        // Per-tree organic detail — rolled once so it's a trait of the
+        // tree, not a per-limb speckle. Moss on the damp/shaded ones;
+        // a nest only rarely; splinters only where deadwood already is.
+        let mossy = leaf_hash01(seed, 0x0055_A100) < 0.35;
+        let nesting = leaf_hash01(seed, 0x4E57_0000) < 0.09;
+        let mut nest_placed = false;
         // Fruit: SOME trees of a fruiting species bear (a per-tree roll,
         // so a stand is a mix of laden and bare trees). Witch's snot on
         // the fungal species bears on nearly every tree; apples less so.
@@ -1003,12 +1021,43 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             // The limb: the unit cone (base r=1, height 1 along +Y)
             // scaled to [radius, length, radius] and rotated +Y → axis.
             // A dead tip greys out — deadwood, not foliage.
+            let (bx, by, bz) = (t.x + seg.base[0] * h, seg.base[1] * h, t.z + seg.base[2] * h);
             trunks.push(MeshInstance {
-                pos: [t.x + seg.base[0] * h, seg.base[1] * h, t.z + seg.base[2] * h],
+                pos: [bx, by, bz],
                 color: if seg.is_dead { DEAD_LIMB_COLOR } else { sp.branch_color },
-                scale: [seg.base_radius * h, seg.length * h, seg.base_radius * h],
+                scale: [seg.base_radius * h * branch_girth, seg.length * h, seg.base_radius * h * branch_girth],
                 axis: seg.axis,
             });
+            // Moss creeps on the lower, shaded limbs of a mossy tree — a
+            // few dark-green tufts clinging where a limb meets the bole.
+            if mossy && seg.base[1] < 0.45 && leaf_hash01(seed, 0x0_5A00 ^ tip_i.wrapping_mul(2654435761)) < 0.35 {
+                let mr = element_r * 1.6;
+                let out = {
+                    let l = (bx - t.x).hypot(bz - t.z).max(1.0);
+                    [(bx - t.x) / l, 0.25, (bz - t.z) / l]
+                };
+                canopy_elements.push(MeshInstance {
+                    pos: [bx, by, bz],
+                    color: MOSS_COLOR,
+                    scale: [mr, mr, mr],
+                    axis: out,
+                });
+            }
+            // A bird's nest wedges into one fork (an interior limb's tip)
+            // in the upper-middle of a nesting tree — one per tree, rare.
+            if nesting && !nest_placed && !seg.is_tip {
+                let fork = seg.tip();
+                if fork[1] > 0.4 && fork[1] < 0.85 {
+                    let nr = element_r * 3.2;
+                    canopy_elements.push(MeshInstance {
+                        pos: [t.x + fork[0] * h, fork[1] * h, t.z + fork[2] * h],
+                        color: NEST_COLOR,
+                        scale: [nr, nr * 0.6, nr],
+                        axis: UP,
+                    });
+                    nest_placed = true;
+                }
+            }
             if !seg.is_tip {
                 continue;
             }
@@ -1030,6 +1079,19 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                         color: fruit,
                         scale: [gr, gr, gr],
                         axis: [0.0, -1.0, 0.0],
+                    });
+                } else if !sp.fruit_on_dead_limbs
+                    && leaf_hash01(seed, 0x5311_0000 ^ tip_i) < 0.5
+                {
+                    // Not a fungal snot-bearer: some broken tips show pale
+                    // raw wood — a splinter tear where the limb snapped, a
+                    // small bright card capping the grey stub.
+                    let sr = seg.base_radius * h * branch_girth * 1.4;
+                    canopy_elements.push(MeshInstance {
+                        pos: [wx, wy, wz],
+                        color: SPLINTER_COLOR,
+                        scale: [sr, sr, sr],
+                        axis: seg.axis,
                     });
                 }
                 tip_i += 1;
@@ -1206,6 +1268,32 @@ mod tests {
         // SOME apple trees bear, not all — an orchard is a mix.
         assert!(fruiting > 0, "no apple tree bore fruit");
         assert!(fruiting < n, "every apple tree bore fruit — expected a mix");
+    }
+
+    #[test]
+    fn trees_wear_organic_detail_girth_moss_nests_splinters() {
+        use crate::tree_mesh::OAK;
+        const MOSS: [f32; 3] = [0.20, 0.42, 0.18];
+        const NEST: [f32; 3] = [0.26, 0.19, 0.11];
+        const SPLINTER: [f32; 3] = [0.72, 0.62, 0.45];
+        let mut girths = Vec::new();
+        let (mut mossy, mut nests, mut splinters) = (0, 0, 0);
+        let n = 200;
+        for k in 0..n {
+            let pos = Vec3::new(k as f32 * 240.0, 0.0, 1500.0);
+            let m = snapshot_to_mesh_instances(&tree_snapshot(pos, &OAK));
+            // The main trunk is the first instance; its x-scale is girth.
+            girths.push(m.trunks[0].scale[0]);
+            let has = |c: [f32; 3]| m.canopy_elements.iter().any(|e| e.color == c);
+            if has(MOSS) { mossy += 1; }
+            if has(NEST) { nests += 1; }
+            if has(SPLINTER) { splinters += 1; }
+        }
+        let (lo, hi) = girths.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+        assert!(hi / lo > 1.8, "some trunks should be much fatter: {lo}..{hi}");
+        assert!(mossy > 0 && mossy < n, "moss on SOME trees, not all: {mossy}/{n}");
+        assert!(nests > 0 && nests < n / 3, "nests should be rare: {nests}/{n}");
+        assert!(splinters > 0, "some broken tips should show a splinter: {splinters}");
     }
 
     #[test]
