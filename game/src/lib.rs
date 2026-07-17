@@ -192,8 +192,13 @@ fn seer_tour_from(bt: &crate::buildings::BuildingTemplates) -> SeerTour {
     .and_then(|c| cdda::building_anchor_in_chunk(c.x, c.z, cs));
     let camp = scan_chunk(|c| campsite::campsite_in_chunk(c).is_some())
         .and_then(campsite::campsite_in_chunk);
-    // The orchard is the only template that carries authored trees.
-    let orchard_idx = bt.templates.iter().position(|t| !t.trees.is_empty());
+    // CDDA buildings carry their own authored yard trees now, so "has
+    // trees" isn't unique — but the orchard is the only *tree field*:
+    // trees and NO building props.
+    let orchard_idx = bt
+        .templates
+        .iter()
+        .position(|t| t.props.is_empty() && !t.trees.is_empty());
     let orchard = orchard_idx.and_then(|oi| {
         scan_chunk(|c| {
             cdda::building_anchor_in_chunk(c.x, c.z, cs).is_some()

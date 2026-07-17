@@ -227,7 +227,6 @@ pub fn stream_chunks(
             // lands in this chunk, with the species its map named. Same
             // per-chunk keep filter as the props, so a multi-tile tree
             // field streams slice by slice.
-            let mut n_authored = 0u32;
             for tp in &rotated.trees {
                 let base = anchor + tp.offset;
                 if world_to_chunk(base) != c {
@@ -236,17 +235,6 @@ pub fn stream_chunks(
                 let species = crate::tree_mesh::species_for_kind(tp.kind);
                 let height = trees::authored_height(base.x, base.z);
                 entities.push(spawn_tree(&mut commands, base, height, species));
-                n_authored += 1;
-            }
-            if !rotated.trees.is_empty() {
-                crate::obs::emit(&format!(
-                    "[chunk] template idx={idx} has {} trees; stamped {n_authored} in chunk ({},{}) anchor ({:.0},{:.0})",
-                    rotated.trees.len(),
-                    c.x,
-                    c.z,
-                    anchor.x,
-                    anchor.z,
-                ));
             }
         }
         loaded.0.insert(c, entities);
