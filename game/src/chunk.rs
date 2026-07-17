@@ -152,12 +152,15 @@ fn spawn_tree(
     base: Vec3,
     height: f32,
     species: &'static crate::tree_mesh::TreeSpecies,
+    stump: bool,
 ) -> Entity {
+    // A stump's collider is knee-high, not a full trunk column.
+    let col_y = if stump { 30.0 } else { 200.0 };
     commands
         .spawn((
-            TreeTrunk { height, species },
+            TreeTrunk { height, species, stump },
             Position(Vec3::new(base.x, 0.0, base.z)),
-            AabbCollider::cuboid(Vec3::new(24.0, 200.0, 24.0)),
+            AabbCollider::cuboid(Vec3::new(24.0, col_y, 24.0)),
         ))
         .id()
 }
@@ -201,7 +204,8 @@ pub fn stream_chunks(
         let mut entities = Vec::new();
         for (base, height) in trees_in_chunk(c, &buildings) {
             let species = crate::tree_mesh::species_for_pos(base.x, base.z);
-            entities.push(spawn_tree(&mut commands, base, height, species));
+            let stump = trees::is_stump_at(base.x, base.z);
+            entities.push(spawn_tree(&mut commands, base, height, species, stump));
         }
         if let Some(anchor) = campsite::campsite_in_chunk(c) {
             entities.extend(stamp_template(
@@ -246,8 +250,9 @@ pub fn stream_chunks(
                     continue;
                 }
                 let species = crate::tree_mesh::species_for_kind(tp.kind);
+                let stump = matches!(tp.kind, crate::template::TreeKind::Stump);
                 let height = trees::authored_height(base.x, base.z, species);
-                entities.push(spawn_tree(&mut commands, base, height, species));
+                entities.push(spawn_tree(&mut commands, base, height, species, stump));
             }
         }
         loaded.0.insert(c, entities);

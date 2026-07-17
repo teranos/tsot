@@ -74,6 +74,10 @@ pub enum TreeKind {
     Fungal,
     /// A dead snag — bare branches, no foliage.
     Dead,
+    /// A cut stump — the short remainder of a felled tree (CDDA `t_stump`,
+    /// `t_tree_*_stump`). The original species is usually lost, so the
+    /// consumer renders it as a generic cut bole.
+    Stump,
     /// Any tree we don't map to a specific species yet.
     Generic,
 }
@@ -91,6 +95,7 @@ pub(crate) fn tree_kind_tag(k: TreeKind) -> u8 {
         TreeKind::Maple => 6,
         TreeKind::Fungal => 7,
         TreeKind::Dead => 8,
+        TreeKind::Stump => 9,
     }
 }
 

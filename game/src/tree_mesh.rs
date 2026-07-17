@@ -551,6 +551,10 @@ pub fn species_for_kind(kind: cdda::TreeKind) -> &'static TreeSpecies {
         cdda::TreeKind::Maple => &MAPLE,
         cdda::TreeKind::Fungal => &FUNGAL,
         cdda::TreeKind::Dead => &DEAD,
+        // A CDDA stump's original species is lost — render a cut oak bole.
+        // The `stump` flag (set at spawn) is what makes it a stump; the
+        // species only supplies the bark.
+        cdda::TreeKind::Stump => &OAK,
         cdda::TreeKind::Generic => &OAK,
     }
 }

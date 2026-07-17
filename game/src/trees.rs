@@ -43,6 +43,10 @@ const TREE_MAX_H: f32 = 760.0;
 pub struct TreeTrunk {
     pub height: f32,
     pub species: &'static crate::tree_mesh::TreeSpecies,
+    /// A cut stump — the short remainder of a felled tree of THIS species
+    /// (an oak stump keeps oak bark). Rendered as a stout bole with a pale
+    /// cut face, no crown. `false` for a whole living tree.
+    pub stump: bool,
 }
 
 fn hash01(ix: i32, iz: i32, salt: u32) -> f32 {
@@ -60,6 +64,15 @@ pub fn authored_height(x: f32, z: f32, species: &crate::tree_mesh::TreeSpecies) 
     let ix = (x / CELL).round() as i32;
     let iz = (z / CELL).round() as i32;
     (260.0 + hash01(ix, iz, TREE_HEIGHT_SALT) * 40.0) * species.authored_scale
+}
+
+/// A small fraction of procedural forest trees are old cut stumps —
+/// deterministic per tile so peers agree. The species is still chosen by
+/// `species_for_pos`; this only decides the tree was felled.
+pub fn is_stump_at(x: f32, z: f32) -> bool {
+    let ix = (x / CELL).round() as i32;
+    let iz = (z / CELL).round() as i32;
+    hash01(ix, iz, 0x0057_0F09) < 0.06
 }
 
 /// Smooth value noise in [0,1] at world (x,z) — bilinear-interpolated

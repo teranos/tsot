@@ -84,11 +84,16 @@ pub(crate) fn cell_to_prop(
 /// Map a cell's char to a tree species via the resolved terrain map.
 /// CDDA authors trees as `t_tree_*` terrain (`t_tree_apple`, `_pine`,
 /// `_birch`, `_willow`, `_maple`, …); we fold its many species onto the
-/// handful we render. Non-tree terrain, and dead/young/stump variants we
-/// don't yet have geometry for, → None.
+/// handful we render. Stumps map to `Stump`; non-tree terrain and the
+/// `young` sapling variants we've no geometry for yet → None.
 pub(crate) fn cell_to_tree(ch: char, terrain: &HashMap<char, String>) -> Option<TreeKind> {
     let t = terrain.get(&ch)?;
-    if !t.contains("tree") || t.contains("stump") || t.contains("young") {
+    // A cut stump is its own thing — matched first because `t_stump`
+    // needn't contain "tree".
+    if t.contains("stump") {
+        return Some(TreeKind::Stump);
+    }
+    if !t.contains("tree") || t.contains("young") {
         return None;
     }
     // A dead snag is dead whatever it was; fungal growth is its own thing.

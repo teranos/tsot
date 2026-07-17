@@ -519,7 +519,7 @@ pub struct RemotePeerDot {
 pub type StructureSnap = (Vec3, PropKind, Option<[f32; 3]>, Option<Vec3>);
 
 pub struct SceneSnapshot {
-    pub trees: Vec<(Vec3, f32, &'static crate::tree_mesh::TreeSpecies)>,
+    pub trees: Vec<(Vec3, f32, &'static crate::tree_mesh::TreeSpecies, bool)>,
     pub obstacles: Vec<Vec3>,
     pub fires: Vec<(Vec3, f32)>,
     pub npcs: Vec<Vec3>,
@@ -534,9 +534,9 @@ pub struct SceneSnapshot {
 pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
     let world = app.world_mut();
     let mut tree_q = world.query::<(&Position, &trees::TreeTrunk)>();
-    let trees: Vec<(Vec3, f32, &'static crate::tree_mesh::TreeSpecies)> = tree_q
+    let trees: Vec<(Vec3, f32, &'static crate::tree_mesh::TreeSpecies, bool)> = tree_q
         .iter(world)
-        .map(|(p, t)| (p.0, t.height, t.species))
+        .map(|(p, t)| (p.0, t.height, t.species, t.stump))
         .collect();
     let mut obs_q = world.query_filtered::<&Position, (
         bevy_ecs::prelude::With<AabbCollider>,
@@ -973,7 +973,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
     // `canopy_elements` draws the shared leaf card (oriented per leaf).
     let mut trunks = Vec::with_capacity(snap.trees.len() * 48);
     let mut canopy_elements = Vec::with_capacity(snap.trees.len() * 256);
-    for (t, h, sp) in &snap.trees {
+    for (t, h, sp, stump) in &snap.trees {
         let h = *h;
         // Species is carried on the tree (data, not a render-time hash) —
         // procedural trees filled it from the tile, authored CDDA trees
@@ -986,6 +986,27 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         let g = leaf_hash01(seed, 0x61_2711);
         let girth = 0.75 + 1.6 * g * g; // ~0.75 .. 2.35, few fat
         let branch_girth = girth.sqrt(); // limbs thicken less than the bole
+        // A stump is the short remainder of a felled tree of THIS species:
+        // a stout low bole in the species' bark, capped by a pale cut face
+        // (the mesh bark furrows read as rings on the flat top). No crown,
+        // no branches — then we're done with this tree.
+        if *stump {
+            let sh = h * 0.11; // knee-high remainder
+            let sr = h * sp.trunk_r_ratio * girth * 1.4; // stout
+            trunks.push(MeshInstance {
+                pos: [t.x, 0.0, t.z],
+                color: sp.trunk_color,
+                scale: [sr, sh, sr],
+                axis: UP,
+            });
+            trunks.push(MeshInstance {
+                pos: [t.x, sh, t.z],
+                color: [0.66, 0.52, 0.34], // pale raw cut wood
+                scale: [sr * 0.62, sh * 0.06, sr * 0.62],
+                axis: UP,
+            });
+            continue;
+        }
         // Main trunk: vertical cone, axis +Y (identity rotation). The bole
         // rises to the HIGHEST primary attachment (`base_y.1`), not just
         // `trunk_h_ratio` — otherwise upper primaries start above where the
@@ -1240,8 +1261,16 @@ mod tests {
     use super::*;
 
     fn tree_snapshot(pos: Vec3, sp: &'static crate::tree_mesh::TreeSpecies) -> SceneSnapshot {
+        tree_snapshot_ex(pos, sp, false)
+    }
+
+    fn tree_snapshot_ex(
+        pos: Vec3,
+        sp: &'static crate::tree_mesh::TreeSpecies,
+        stump: bool,
+    ) -> SceneSnapshot {
         SceneSnapshot {
-            trees: vec![(pos, 300.0, sp)],
+            trees: vec![(pos, 300.0, sp, stump)],
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
@@ -1280,6 +1309,28 @@ mod tests {
         // SOME apple trees bear, not all — an orchard is a mix.
         assert!(fruiting > 0, "no apple tree bore fruit");
         assert!(fruiting < n, "every apple tree bore fruit — expected a mix");
+    }
+
+    #[test]
+    fn a_stump_is_a_cut_bole_of_its_species_with_no_crown() {
+        use crate::tree_mesh::OAK;
+        let pos = Vec3::new(500.0, 0.0, 500.0);
+        let stump = snapshot_to_mesh_instances(&tree_snapshot_ex(pos, &OAK, true));
+        let tree = snapshot_to_mesh_instances(&tree_snapshot(pos, &OAK));
+        // A stump has NO crown — no leaf-card elements at all.
+        assert!(stump.canopy_elements.is_empty(), "a stump has no foliage");
+        // It keeps its species' bark (the bole's colour is OAK's trunk).
+        assert_eq!(stump.trunks[0].color, OAK.trunk_color, "stump keeps species bark");
+        // It's a short remainder, far shorter than the living tree's bole.
+        assert!(
+            stump.trunks[0].scale[1] < tree.trunks[0].scale[1] * 0.4,
+            "a stump is a short remainder of the bole"
+        );
+        // And it shows a pale cut face on top.
+        assert!(
+            stump.trunks.iter().any(|i| i.color == [0.66, 0.52, 0.34]),
+            "a stump shows a pale cut face"
+        );
     }
 
     #[test]
