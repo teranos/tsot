@@ -1216,16 +1216,35 @@ impl GameState {
     }
 
     /// Z.8: set the `sleeveless` flag on a card, journaling prior+new so the
-    /// entry rolls back and forward-replays.
+    /// entry rolls back and forward-replays. Enforces the fourth-quadrant
+    /// invariant: a unit with no card AND no sleeve is the null object and
+    /// must never exist, so making a cardless sleeve sleeveless is refused
+    /// with a sacred error rather than constructing it.
     pub fn set_sleeveless(&mut self, iid: &InstanceId, sleeveless: bool) {
-        let Some(inst) = self.card_pool.get_mut(iid) else {
+        let Some(inst) = self.card_pool.get(iid) else {
             return;
         };
         let was = inst.sleeveless;
         if was == sleeveless {
             return;
         }
-        inst.sleeveless = sleeveless;
+        if sleeveless && inst.content.is_none() {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "engine",
+                "null sleeve-unit",
+                format!(
+                    "Z.8: refusing to make cardless sleeve {iid} sleeveless — a \
+                     unit with neither a card nor a sleeve is the null object \
+                     and must not exist"
+                ),
+            );
+            return;
+        }
+        self.card_pool
+            .get_mut(iid)
+            .expect("present — checked above")
+            .sleeveless = sleeveless;
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetSleeveless {
                 iid: iid.clone(),

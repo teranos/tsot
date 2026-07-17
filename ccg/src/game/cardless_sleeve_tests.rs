@@ -422,3 +422,29 @@ fn z8_shed_own_sleeve_round_trips_through_journal() {
     journal.rollback(&mut s);
     assert_eq!(before, format!("{s:?}"), "shed rolls back: flag, mint, and attach");
 }
+
+#[test]
+fn z8_a_cardless_sleeve_cannot_become_sleeveless_no_null_unit() {
+    // The fourth quadrant — content:None AND sleeveless:true — is the null
+    // object: neither a card nor a sleeve. It must be unrepresentable.
+    // Making a cardless sleeve sleeveless is refused with a sacred error,
+    // and the unit stays a plain cardless sleeve.
+    crate::error::reset();
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    make_cardless(&mut s, &iid);
+    assert!(s.is_cardless(&iid), "it is a cardless sleeve");
+
+    s.set_sleeveless(&iid, true);
+
+    let inst = s.card_pool.get(&iid).unwrap();
+    assert!(
+        !inst.sleeveless,
+        "a cardless sleeve was refused sleeveless — the null unit was not constructed"
+    );
+    assert!(inst.content.is_none(), "it is still a plain cardless sleeve");
+    assert!(
+        !crate::error::drain().is_empty(),
+        "a sacred error surfaced the refusal"
+    );
+}
