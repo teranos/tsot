@@ -4,11 +4,8 @@
 //! cards, fruit, moss, nests, and splinters. Deterministic per tree so
 //! every peer draws the same skeleton and autumn tint.
 
-use std::rc::Rc;
-
 use crate::scene::{MeshInstance, SceneSnapshot};
-use crate::tree_mesh::MeshVertex;
-use crate::tree_surface::tree_surface_cached;
+use crate::tree_mesh::TreeSpecies;
 
 /// Deterministic per-tree seed from world position — same tile → same
 /// seed on every peer, so the branch skeleton is identical everywhere.
@@ -24,17 +21,16 @@ fn tree_seed(x: f32, z: f32) -> u32 {
 /// The tree-emit outputs feeding the mesh pipeline.
 ///
 /// - `trunks` + `canopy_elements` — the instanced-cone path.
-/// - `wood_verts` + `wood_indices` — the continuous-wood path
-///   (CONTINUOUS_WOOD.md): every tree's woody skeleton merged into ONE
-///   world-space vertex+index buffer, drawn once as a single identity
-///   `MeshInstance`. `Rc`-shared with a per-snapshot memoizer so
-///   frame-over-frame with an unchanged tree list is a pointer
-///   bump, not a re-merge. Empty on the trunks-only path.
+/// - `wood_by_species` — the continuous-wood path (CONTINUOUS_WOOD.md).
+///   Each entry is one species and the per-tree `MeshInstance`s for it.
+///   The renderer draws each entry with that species' canonical wood
+///   mesh (`tree_surface::species_wood_mesh`) as the vertex+index
+///   buffer, and this list as the instance buffer — so wood cost across
+///   the world is one draw call per species, N instances each.
 pub struct MeshTreeInstances {
     pub trunks: Vec<MeshInstance>,
     pub canopy_elements: Vec<MeshInstance>,
-    pub wood_verts: Rc<Vec<MeshVertex>>,
-    pub wood_indices: Rc<Vec<u32>>,
+    pub wood_by_species: Vec<(&'static TreeSpecies, Vec<MeshInstance>)>,
 }
 
 /// Build the mesh-pipeline instance lists from the scene snapshot.
@@ -318,48 +314,47 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
     MeshTreeInstances {
         trunks,
         canopy_elements,
-        wood_verts: Rc::new(Vec::new()),
-        wood_indices: Rc::new(Vec::new()),
+        wood_by_species: Vec::new(),
     }
 }
 
-/// Same as `snapshot_to_mesh_instances`, plus the continuous woody
-/// surface for every tree merged into one world-space vertex+index
-/// buffer.
+/// Same as `snapshot_to_mesh_instances`, plus per-species wood instance
+/// lists. Every tree of a species becomes one `MeshInstance` pointing
+/// at the species' canonical wood mesh (looked up at draw time via
+/// `tree_surface::species_wood_mesh`). No per-tree mesh generation,
+/// no cache, no merge — wood cost across the world is O(species).
 ///
-/// Per tree: `tree_surface_cached(seed, sp)` returns a unit-space
-/// mesh `Rc`; we scale by `height` (uniform, so normals are unchanged)
-/// and offset by the tree's world position. Indices are rebased so
-/// every tree's triangles reference into the merged vertex list.
-///
-/// The merge is per-frame — no cache on the merged buffer, only on the
-/// per-tree unit meshes. A frame-level cache retained the last merged
-/// Vec (100s of MB at scale) and blew both the browser tab and seer's
-/// heap-delta threshold.
+/// Instance transform: `i_pos = (t.x, t.y, t.z)`, `i_scale = (h, h, h)`
+/// uniform, `i_axis = [0, 1, 0, 0]` (identity rot, no wind on wood —
+/// per-vertex sway needs a separate channel). Per-tree colour is the
+/// species trunk_color; per-tree variation (girth, moss, deadwood,
+/// autumn) still lives on the trunk-cone/canopy path.
 pub fn snapshot_to_mesh_instances_with_wood(snap: &SceneSnapshot) -> MeshTreeInstances {
     let mut out = snapshot_to_mesh_instances(snap);
-    let mut wood_verts: Vec<MeshVertex> = Vec::new();
-    let mut wood_indices: Vec<u32> = Vec::new();
+    let mut buckets: Vec<(&'static TreeSpecies, Vec<MeshInstance>)> = Vec::new();
     for (t, h, sp, stump) in &snap.trees {
         if *stump {
             continue;
         }
-        let mesh = tree_surface_cached(tree_seed(t.x, t.z), sp);
-        let (verts, indices) = (&mesh.0, &mesh.1);
-        let base = wood_verts.len() as u32;
-        for v in verts {
-            wood_verts.push(MeshVertex {
-                pos: [v.pos[0] * *h + t.x, v.pos[1] * *h + t.y, v.pos[2] * *h + t.z],
-                normal: v.normal,
-                uv: v.uv,
-            });
-        }
-        for &i in indices {
-            wood_indices.push(base + i);
+        let inst = MeshInstance {
+            pos: [t.x, t.y, t.z],
+            color: sp.trunk_color,
+            scale: [*h, *h, *h],
+            axis: [0.0, 1.0, 0.0, 0.0],
+        };
+        // Ptr-equality dedup so the render layer draws one batch per
+        // species. Species count is small (< 10), linear scan wins.
+        let key = *sp as *const TreeSpecies;
+        if let Some(entry) = buckets
+            .iter_mut()
+            .find(|(s, _)| std::ptr::eq(*s, key))
+        {
+            entry.1.push(inst);
+        } else {
+            buckets.push((*sp, vec![inst]));
         }
     }
-    out.wood_verts = Rc::new(wood_verts);
-    out.wood_indices = Rc::new(wood_indices);
+    out.wood_by_species = buckets;
     out
 }
 

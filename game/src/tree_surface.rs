@@ -17,73 +17,48 @@
 //! most once regardless of how many tets touch it.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
 use crate::isosurface::{Grid, marching_tetrahedra, sd_round_cone, smin};
 use crate::tree_mesh::{BranchSegment, MeshVertex, TreeSpecies, tree_branches};
 
-/// Cached (verts, indices) for one tree. `Rc` so hits share the
-/// allocation — no copy per frame. Native seer is single-threaded and
-/// wasm has no threads, so a `thread_local!` `Rc` is safe.
+/// One canonical wood mesh per species — `Rc`-shared, generated on first
+/// call, kept forever. Every tree of that species instances THIS mesh
+/// (scaled + positioned per instance), so wood cost across the world is
+/// O(species) — a fixed small number — instead of O(unique trees).
 pub type WoodMesh = Rc<(Vec<MeshVertex>, Vec<u32>)>;
 
-/// Byte cap for the per-tree mesh cache. Sized for the working set of
-/// a full seer tour (~200+ unique trees): too small and wasmtime
-/// thrashes on re-generation and misses the CI timeout; too big and
-/// the browser tab OOMs. 64 MiB fits both budgets. Δheap on seer is
-/// bounded by this + one merged buffer.
-const WOOD_CACHE_BYTES_CAP: usize = 64 * 1024 * 1024;
+/// Canonical seed used for the per-species wood generation. Every tree
+/// of the species shares this skeleton; per-tree variation (girth,
+/// moss, deadwood, autumn tint) rides on the instance, not the mesh.
+const CANONICAL_SEED: u32 = 0;
 
 thread_local! {
-    /// key = (seed, species_ptr_as_addr). Species is `&'static`, so ptr
-    /// equality is species equality.
-    static WOOD_CACHE: RefCell<HashMap<(u32, usize), WoodMesh>> =
+    /// key = species-ptr-as-usize. Species is `&'static`, so ptr equality
+    /// is species equality. At most one entry per species (~8) —
+    /// bounded, no eviction, no cap.
+    static SPECIES_WOOD: RefCell<HashMap<usize, WoodMesh>> =
         RefCell::new(HashMap::new());
-    /// Insertion order for FIFO eviction (O(1) pop_front). Same key.
-    static WOOD_ORDER: RefCell<VecDeque<(u32, usize)>> =
-        const { RefCell::new(VecDeque::new()) };
-    /// Running total of cached mesh bytes (verts + indices, capacity-based).
-    static WOOD_CACHE_BYTES: RefCell<usize> = const { RefCell::new(0) };
 }
 
-fn mesh_bytes(m: &WoodMesh) -> usize {
-    m.0.capacity() * std::mem::size_of::<MeshVertex>()
-        + m.1.capacity() * std::mem::size_of::<u32>()
-}
-
-/// Cached variant of `tree_surface` — same (verts, indices) as calling
-/// `tree_surface(seed, sp)` directly. Subsequent calls with the same
-/// `(seed, species)` return the memoized `Rc`.
+/// The canonical wood mesh for `sp`. Generated on first call from
+/// `tree_surface(CANONICAL_SEED, sp)`, cached forever thread-locally.
+/// Every tree of the species instances this mesh — that's what makes
+/// the browser path viable at all.
 ///
-/// Eviction is FIFO under a **byte cap** (`WOOD_CACHE_BYTES_CAP`) —
-/// counting by trees was a design mistake: at ~1 MB per big oak, 512
-/// entries is half a gig of retained memory. On the browser that
-/// crashes the tab.
-pub fn tree_surface_cached(seed: u32, sp: &'static TreeSpecies) -> WoodMesh {
-    let key = (seed, sp as *const TreeSpecies as usize);
-    if let Some(hit) = WOOD_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+/// Bounded budget: 8 species × ~1 MB each ≈ 8 MB retained, ever. No
+/// per-tree cache, no eviction, no memoizer.
+pub fn species_wood_mesh(sp: &'static TreeSpecies) -> WoodMesh {
+    let key = sp as *const TreeSpecies as usize;
+    if let Some(hit) = SPECIES_WOOD.with(|c| c.borrow().get(&key).cloned()) {
         return hit;
     }
-    let (verts, indices) = tree_surface(seed, sp);
+    let (verts, indices) = tree_surface(CANONICAL_SEED, sp);
     let mesh: WoodMesh = Rc::new((verts, indices));
-    let bytes = mesh_bytes(&mesh);
-    WOOD_CACHE.with(|c| {
+    SPECIES_WOOD.with(|c| {
         c.borrow_mut().insert(key, mesh.clone());
     });
-    WOOD_ORDER.with(|o| o.borrow_mut().push_back(key));
-    WOOD_CACHE_BYTES.with(|b| *b.borrow_mut() += bytes);
-    while WOOD_CACHE_BYTES.with(|b| *b.borrow()) > WOOD_CACHE_BYTES_CAP
-        && let Some(old) = WOOD_ORDER.with(|o| o.borrow_mut().pop_front())
-    {
-        if let Some(evicted) = WOOD_CACHE.with(|c| c.borrow_mut().remove(&old)) {
-            let e = mesh_bytes(&evicted);
-            WOOD_CACHE_BYTES.with(|b| {
-                let mut cur = b.borrow_mut();
-                *cur = cur.saturating_sub(e);
-            });
-        }
-    }
     mesh
 }
 
@@ -275,27 +250,24 @@ mod tests {
     use crate::tree_mesh::{OAK, PINE};
 
     #[test]
-    fn cache_returns_the_same_allocation_on_a_hit() {
-        // Rc::ptr_eq is byte-address equality — proves the second call
-        // handed back the memoized Rc rather than regenerating.
-        let a = tree_surface_cached(1234, &OAK);
-        let b = tree_surface_cached(1234, &OAK);
-        assert!(Rc::ptr_eq(&a, &b), "cache miss on identical (seed, sp)");
-        // Different seed → different Rc.
-        let c = tree_surface_cached(9999, &OAK);
+    fn species_wood_mesh_is_one_shared_rc_per_species() {
+        // Every call for the same species must hand back the same `Rc`
+        // — that's what makes the design bounded (8 species → 8 meshes,
+        // ever). Different species → distinct meshes.
+        let a = species_wood_mesh(&OAK);
+        let b = species_wood_mesh(&OAK);
+        assert!(Rc::ptr_eq(&a, &b), "second call regenerated");
+        let c = species_wood_mesh(&PINE);
         assert!(!Rc::ptr_eq(&a, &c));
-        // Different species with same seed → different Rc (ptr keys differ).
-        let d = tree_surface_cached(1234, &PINE);
-        assert!(!Rc::ptr_eq(&a, &d));
     }
 
     #[test]
-    fn cache_matches_the_uncached_output_byte_for_byte() {
-        // The cache MUST return exactly what the uncached fn would.
-        // Any drift here — a stale entry, a modified vec — would ship
-        // wrong geometry silently.
-        let cached = tree_surface_cached(77, &OAK);
-        let (fresh_v, fresh_i) = tree_surface(77, &OAK);
+    fn species_wood_mesh_matches_tree_surface_output_byte_for_byte() {
+        // The species cache MUST return exactly what `tree_surface`
+        // would with the canonical seed. Any drift here ships wrong
+        // geometry silently.
+        let cached = species_wood_mesh(&OAK);
+        let (fresh_v, fresh_i) = tree_surface(CANONICAL_SEED, &OAK);
         assert_eq!(cached.0.len(), fresh_v.len());
         assert_eq!(cached.1, fresh_i);
         for (a, b) in cached.0.iter().zip(fresh_v.iter()) {
