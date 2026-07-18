@@ -1,16 +1,10 @@
 name: seer
 
-# Two jobs. game-native runs the game as a native binary (fast dev
-# cycle, Rust backtraces). seer-host builds game.wasm and runs it
-# under wasmtime, recording every boundary crossing. Both upload
-# stdout as artifacts.
-
-# seer runs regardless — every push to any branch, plus nightly even
-# when nothing is pushed. No paths gate: perf is measured continuously,
-# not only when game/ changes, so a regression anywhere is caught.
 on:
   push:
     branches: ['**']
+    paths-ignore:
+      - 'ccg/**'
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
@@ -99,11 +93,7 @@ jobs:
           done
 
       - name: Upload native log to seer
-        # Publishes the game-native run's log — including its
-        # [perf.frame] lines — to the seer site so real live
-        # performance is visible on seer.sbvh.nl next to the wasm
-        # summary. Previously log lived only in CI upload-artifact,
-        # so the measurement Brandon cares about was invisible.
+        # [perf.frame] lines land next to the wasm summary on seer.sbvh.nl.
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
         run: |
           if [ ! -f game/out/game-native.log ]; then exit 0; fi
@@ -271,9 +261,7 @@ jobs:
         run: |
           # Per-commit wasm for the viewer's LiveRun panel. Same binary
           # seer-host just ran under wasmtime; LiveRun re-instantiates
-          # it in the browser with the same env.* imports. Was in
-          # seer-browser.yml — moved here so viewer changes don't
-          # trigger a game.wasm rebuild.
+          # it in the browser with the same env.* imports.
           aws s3 cp \
             game/target/wasm32-unknown-unknown/release/game.wasm \
             "s3://seer-sbvh-static/perf/${{ github.sha }}/game.wasm" \
@@ -336,8 +324,7 @@ jobs:
         if: always()
         run: |
           # Check verdict AFTER upload — a failing report is still a
-          # useful report and needs to be visible. This step is what
-          # actually turns the job red on threshold violation.
+          # useful report and needs to be visible.
           if [ -f out/verdict.json ]; then
             PASSED=$(python3 -c 'import json,sys;print(json.load(open("out/verdict.json"))["passed"])')
             echo "verdict.passed = $PASSED"
