@@ -795,7 +795,7 @@ fn render_single(
     let (dev, queue) = init_wgpu()?;
     let instances = scene::snapshot_to_instances(snap);
     let glass = scene::snapshot_to_glass_instances(snap);
-    let mesh_trees = tree_emit::snapshot_to_mesh_instances(snap);
+    let mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
     let camera = scene::SceneCamera::follow(
         [snap.player.x, snap.player.y, snap.player.z],
         room::FLOOR_HALF,
@@ -816,7 +816,7 @@ fn render_snapshots(
         let out_path = format!("{dir}/frame-{i}.png");
         let instances = scene::snapshot_to_instances(snap);
         let glass = scene::snapshot_to_glass_instances(snap);
-        let mesh_trees = tree_emit::snapshot_to_mesh_instances(snap);
+        let mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
         let camera = scene::SceneCamera::follow(
             [snap.player.x, snap.player.y, snap.player.z],
             room::FLOOR_HALF,

@@ -92,26 +92,35 @@ pub fn render_scene(
         queue.write_buffer(glass_buf.wgpu(), 0, as_bytes(glass_instances));
     }
 
-    // Mesh geometry + packed instance buffer. Same design as the wasm
-    // path in render_web.rs: bake once, pack trunk instances then canopy
-    // instances into one buffer, dispatch two indexed draw calls with
-    // first_instance = trunk_count for the canopy pass.
-    let (trunk_verts, trunk_indices) = tree_mesh::trunk_mesh(12, 1.0, 0.6, 1.0);
+    // Mesh geometry + packed instance buffer. The **continuous wood** —
+    // every tree's woody skeleton, merged into one world-space vertex+
+    // index buffer (see CONTINUOUS_WOOD.md) — replaces the trunk-cone
+    // draw on native. Drawn as ONE identity `MeshInstance` (i_pos=0,
+    // i_scale=1, i_axis=[0,1,0,0], i_axis.w=0 so no wind). Canopy
+    // elements keep instancing. Packed buffer: [wood(1)] + [canopy(N)];
+    // canopy dispatch uses `first_instance = wood_count`.
+    let wood_verts = &mesh_trees.wood_verts;
+    let wood_indices = &mesh_trees.wood_indices;
     let (canopy_verts, canopy_indices) = tree_mesh::leaf_quad_mesh();
-    let trunk_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("seer.render.mesh.trunk.vertex"),
-        size: std::mem::size_of_val(&trunk_verts[..]) as u64,
+    let wood_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.wood.vertex"),
+        size: (std::mem::size_of_val(&wood_verts[..]) as u64)
+            .max(std::mem::size_of::<MeshVertex>() as u64),
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    queue.write_buffer(trunk_vertex_buf.wgpu(), 0, as_bytes(&trunk_verts));
-    let trunk_index_buf = dev.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("seer.render.mesh.trunk.index"),
-        size: std::mem::size_of_val(&trunk_indices[..]) as u64,
+    if !wood_verts.is_empty() {
+        queue.write_buffer(wood_vertex_buf.wgpu(), 0, as_bytes(wood_verts));
+    }
+    let wood_index_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.wood.index"),
+        size: (std::mem::size_of_val(&wood_indices[..]) as u64).max(4),
         usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    queue.write_buffer(trunk_index_buf.wgpu(), 0, as_bytes(&trunk_indices));
+    if !wood_indices.is_empty() {
+        queue.write_buffer(wood_index_buf.wgpu(), 0, as_bytes(wood_indices));
+    }
     let canopy_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
         label: Some("seer.render.mesh.canopy.vertex"),
         size: std::mem::size_of_val(&canopy_verts[..]) as u64,
@@ -127,8 +136,18 @@ pub fn render_scene(
     });
     queue.write_buffer(canopy_index_buf.wgpu(), 0, as_bytes(&canopy_indices));
 
-    let total_mesh_instances =
-        mesh_trees.trunks.len() + mesh_trees.canopy_elements.len();
+    let wood_count: usize = if wood_indices.is_empty() { 0 } else { 1 };
+    // Species tint is lost on the merged wood — one identity instance
+    // covers every tree with a single trunk colour. A per-tree colour
+    // channel comes downstream (per-vertex colour on MeshVertex, or one
+    // identity instance per tree with its own draw range).
+    let wood_identity = MeshInstance {
+        pos: [0.0, 0.0, 0.0],
+        color: [0.30, 0.20, 0.11], // neutral oak brown
+        scale: [1.0, 1.0, 1.0],
+        axis: [0.0, 1.0, 0.0, 0.0], // +Y → identity rot; w=0 → no wind
+    };
+    let total_mesh_instances = wood_count + mesh_trees.canopy_elements.len();
     let mesh_instance_buf = dev.create_buffer(&wgpu::BufferDescriptor {
         label: Some("seer.render.mesh.instance"),
         size: (total_mesh_instances.max(1) * std::mem::size_of::<MeshInstance>()) as u64,
@@ -137,7 +156,9 @@ pub fn render_scene(
     });
     if total_mesh_instances > 0 {
         let mut packed: Vec<MeshInstance> = Vec::with_capacity(total_mesh_instances);
-        packed.extend_from_slice(&mesh_trees.trunks);
+        if wood_count == 1 {
+            packed.push(wood_identity);
+        }
         packed.extend_from_slice(&mesh_trees.canopy_elements);
         queue.write_buffer(mesh_instance_buf.wgpu(), 0, as_bytes(&packed));
     }
@@ -494,22 +515,24 @@ pub fn render_scene(
         pass.set_pipeline(&mesh_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.set_vertex_buffer(1, mesh_instance_buf.wgpu().slice(..));
-        if !mesh_trees.trunks.is_empty() {
-            pass.set_vertex_buffer(0, trunk_vertex_buf.wgpu().slice(..));
-            pass.set_index_buffer(trunk_index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
-            let trunk_count = mesh_trees.trunks.len() as u32;
-            pass.draw_indexed(0..trunk_indices.len() as u32, 0, 0..trunk_count);
+        if wood_count > 0 {
+            // Wood: one identity instance drawing every tree's merged
+            // world-space skeleton. Bark fragment paints procedural
+            // furrows from the cylindrical UV baked in `tree_surface`.
+            pass.set_vertex_buffer(0, wood_vertex_buf.wgpu().slice(..));
+            pass.set_index_buffer(wood_index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..wood_indices.len() as u32, 0, 0..1);
         }
         if !mesh_trees.canopy_elements.is_empty() {
             pass.set_pipeline(&leaf_pipeline);
             pass.set_vertex_buffer(0, canopy_vertex_buf.wgpu().slice(..));
             pass.set_index_buffer(canopy_index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
-            let trunk_count = mesh_trees.trunks.len() as u32;
+            let first = wood_count as u32;
             let canopy_count = mesh_trees.canopy_elements.len() as u32;
             pass.draw_indexed(
                 0..canopy_indices.len() as u32,
                 0,
-                trunk_count..trunk_count + canopy_count,
+                first..first + canopy_count,
             );
         }
     }
@@ -591,10 +614,11 @@ pub fn render_scene(
     writer.write_image_data(&pixels).context("png write")?;
 
     obs::emit(&format!(
-        "[render] wrote {out_path} ({} cube instances, {} vertices, {} mesh trunks, {} mesh canopy elements)",
+        "[render] wrote {out_path} ({} cube instances, {} vertices, {} wood verts, {} wood indices, {} canopy elements)",
         instances.len(),
         vertices.len(),
-        mesh_trees.trunks.len(),
+        mesh_trees.wood_verts.len(),
+        mesh_trees.wood_indices.len(),
         mesh_trees.canopy_elements.len(),
     ));
     Ok(())

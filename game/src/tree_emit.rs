@@ -5,6 +5,8 @@
 //! every peer draws the same skeleton and autumn tint.
 
 use crate::scene::{MeshInstance, SceneSnapshot};
+use crate::tree_mesh::MeshVertex;
+use crate::tree_surface::tree_surface;
 
 /// Deterministic per-tree seed from world position — same tile → same
 /// seed on every peer, so the branch skeleton is identical everywhere.
@@ -17,13 +19,24 @@ fn tree_seed(x: f32, z: f32) -> u32 {
     h
 }
 
-/// Two flat instance lists — trunks and canopy elements — that both
-/// feed the SAME mesh pipeline. Every trunk instance draws the shared
-/// tapered-cone geometry; every canopy element draws the shared unit
-/// icosahedron at a phyllotactically-placed world offset from its tree.
+/// The tree-emit outputs feeding the mesh pipeline.
+///
+/// - `trunks` + `canopy_elements` — the instanced-cone path: every trunk
+///   instance draws the shared tapered-cone geometry, every canopy element
+///   draws the shared unit icosahedron.
+/// - `wood_verts` + `wood_indices` — the continuous-wood path
+///   (CONTINUOUS_WOOD.md): every tree's woody skeleton merged into ONE
+///   world-space vertex+index buffer, drawn once as a single identity
+///   `MeshInstance`. Filled by `snapshot_to_mesh_instances_with_wood`;
+///   empty from `snapshot_to_mesh_instances` (the legacy browser path).
+///
+/// Native `render.rs` draws wood + canopy; the browser path still draws
+/// trunks + canopy until step 4 flips it.
 pub struct MeshTreeInstances {
     pub trunks: Vec<MeshInstance>,
     pub canopy_elements: Vec<MeshInstance>,
+    pub wood_verts: Vec<MeshVertex>,
+    pub wood_indices: Vec<u32>,
 }
 
 /// Build the mesh-pipeline instance lists from the scene snapshot.
@@ -304,7 +317,48 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             tip_i += 1;
         }
     }
-    MeshTreeInstances { trunks, canopy_elements }
+    MeshTreeInstances {
+        trunks,
+        canopy_elements,
+        wood_verts: Vec::new(),
+        wood_indices: Vec::new(),
+    }
+}
+
+/// Same as `snapshot_to_mesh_instances`, plus the continuous woody
+/// surface for every tree merged into one world-space vertex+index
+/// buffer. Used by the native path (`render.rs`) — the browser path
+/// still calls the trunks-only version until step 4.
+///
+/// Per tree: `tree_surface(seed, sp)` produces a unit-space mesh; we
+/// scale by `height` (uniform, so normals are unchanged) and offset by
+/// the tree's world position. Indices are rebased so every tree's
+/// triangles reference into the merged vertex list.
+pub fn snapshot_to_mesh_instances_with_wood(snap: &SceneSnapshot) -> MeshTreeInstances {
+    let mut out = snapshot_to_mesh_instances(snap);
+    let mut wood_verts: Vec<MeshVertex> = Vec::new();
+    let mut wood_indices: Vec<u32> = Vec::new();
+    for (t, h, sp, stump) in &snap.trees {
+        if *stump {
+            continue; // Stumps stay on the cone path — a stump ISN'T a full
+            // tree skeleton, and `tree_surface` would still emit a bole.
+        }
+        let (verts, indices) = tree_surface(tree_seed(t.x, t.z), sp);
+        let base = wood_verts.len() as u32;
+        for v in &verts {
+            wood_verts.push(MeshVertex {
+                pos: [v.pos[0] * *h + t.x, v.pos[1] * *h + t.y, v.pos[2] * *h + t.z],
+                normal: v.normal,
+                uv: v.uv,
+            });
+        }
+        for &i in &indices {
+            wood_indices.push(base + i);
+        }
+    }
+    out.wood_verts = wood_verts;
+    out.wood_indices = wood_indices;
+    out
 }
 
 #[cfg(test)]
