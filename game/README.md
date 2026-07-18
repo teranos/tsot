@@ -1,6 +1,4 @@
 
-See @VISION.md for how world transformations are routed by identity.
-
 See [Architecture.md](./Architecture.md) for the artifact axioms.
 
 What i want:
