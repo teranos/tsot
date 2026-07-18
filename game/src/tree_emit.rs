@@ -336,11 +336,17 @@ pub fn snapshot_to_mesh_instances_with_wood(snap: &SceneSnapshot) -> MeshTreeIns
         if *stump {
             continue;
         }
+        // axis.w = per-instance sway weight. The mesh shader multiplies
+        // it by v.pos.y, so unit-space wood verts (bole reaches y≈0.85)
+        // pivot at the base and sway at the crown; roots at negative y
+        // sway backward but sit below ground under the isometric camera.
+        // A single per-tree sway ("stiff column") — per-limb flutter
+        // would need a per-vertex sway weight baked into MeshVertex.
         let inst = MeshInstance {
             pos: [t.x, t.y, t.z],
             color: sp.trunk_color,
             scale: [*h, *h, *h],
-            axis: [0.0, 1.0, 0.0, 0.0],
+            axis: [0.0, 1.0, 0.0, 0.2],
         };
         // Ptr-equality dedup so the render layer draws one batch per
         // species. Species count is small (< 10), linear scan wins.
