@@ -19,3 +19,8 @@ as spoken, not paraphrased or inferred.
 
 > any single player could end it, given a player manages to either
 > create or get access to it somehow
+
+> The button is an idea I conjured up because I need a reliable way to
+> end the universe for development purposes
+
+> Because the button is an item that can be created by some means
