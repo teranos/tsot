@@ -77,8 +77,10 @@ pub fn tree_surface_cached(seed: u32, sp: &'static TreeSpecies) -> WoodMesh {
         && let Some(old) = WOOD_ORDER.with(|o| o.borrow_mut().pop_front())
     {
         if let Some(evicted) = WOOD_CACHE.with(|c| c.borrow_mut().remove(&old)) {
+            let e = mesh_bytes(&evicted);
             WOOD_CACHE_BYTES.with(|b| {
-                *b.borrow_mut() = b.borrow().saturating_sub(mesh_bytes(&evicted));
+                let mut cur = b.borrow_mut();
+                *cur = cur.saturating_sub(e);
             });
         }
     }
