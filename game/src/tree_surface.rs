@@ -28,10 +28,12 @@ use crate::tree_mesh::{BranchSegment, MeshVertex, TreeSpecies, tree_branches};
 /// wasm has no threads, so a `thread_local!` `Rc` is safe.
 pub type WoodMesh = Rc<(Vec<MeshVertex>, Vec<u32>)>;
 
-/// Byte cap for the per-tree mesh cache. Kept small on purpose — the
-/// browser tab plus seer's regression guard together budget roughly
-/// tens of MB total. Bigger cache = crashes / red seer.
-const WOOD_CACHE_BYTES_CAP: usize = 16 * 1024 * 1024;
+/// Byte cap for the per-tree mesh cache. Sized for the working set of
+/// a full seer tour (~200+ unique trees): too small and wasmtime
+/// thrashes on re-generation and misses the CI timeout; too big and
+/// the browser tab OOMs. 64 MiB fits both budgets. Δheap on seer is
+/// bounded by this + one merged buffer.
+const WOOD_CACHE_BYTES_CAP: usize = 64 * 1024 * 1024;
 
 thread_local! {
     /// key = (seed, species_ptr_as_addr). Species is `&'static`, so ptr
@@ -87,11 +89,12 @@ pub fn tree_surface_cached(seed: u32, sp: &'static TreeSpecies) -> WoodMesh {
 
 /// Per §3b: 5 buttress roots.
 const ROOT_COUNT: usize = 5;
-/// Resolution floor + ceiling. Tight range: verts per tree scale ~res²
-/// under narrow-band, and every retained vertex counts against the
-/// browser tab's + seer's memory budgets. Chunky wood is the trade.
-const RES_MIN: usize = 12;
-const RES_MAX: usize = 20;
+/// Resolution floor + ceiling. Verts per tree scale ~res² under
+/// narrow-band. Middle band: fine enough to read as continuous wood at
+/// the trunk + main forks, coarse enough that per-tree cache footprint
+/// stays proportional.
+const RES_MIN: usize = 16;
+const RES_MAX: usize = 32;
 
 /// A round-cone in unit tree space. The trunk, every branch, and every
 /// root is one of these — the whole tree is a `smin` over a `Vec<Cone>`.

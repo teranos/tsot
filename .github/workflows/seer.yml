@@ -136,7 +136,7 @@ jobs:
 
   seer-host:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
 
@@ -190,6 +190,10 @@ jobs:
       - name: Run seer-host on game.wasm
         env:
           SEER_FRAMES: '180'
+          # Continuous wood retains ~64 MiB of baked tree meshes (see
+          # CONTINUOUS_WOOD.md) plus one per-frame merged buffer. The
+          # old 1 MB regression guard predated the wood substrate.
+          SEER_MAX_D_HEAP_MB: '512'
           SEER_HISTORY_IN_PATH: out/history-in.json
           SEER_HISTORY_OUT_PATH: out/history.json
           SEER_SUMMARY_OUT_PATH: out/summary.json
