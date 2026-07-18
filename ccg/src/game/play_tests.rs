@@ -4315,3 +4315,83 @@ fn validate_play_mirrors_play_card_without_mutating() {
     assert!(v_good.is_ok(), "expected valid cast to pass: {v_good:?}");
     assert!(v_bad.is_err(), "expected wrong-count cast to fail");
 }
+
+/// Tap Dance (the real card, on_play handler and all): casting it pays the
+/// `tap 2` cost by tapping the two chosen permanents (non-consumptive —
+/// they stay on the BOARD), and its A.13 effect untaps one target then
+/// taps another. Targets are pinned via a ScriptedOracle so the outcome
+/// is deterministic. Exercises the cost path AND the effect end-to-end.
+#[test]
+fn tap_dance_pays_tap_cost_and_untaps_then_taps_targets() {
+    use crate::card::CardRegistry;
+    use crate::choice::{ScriptedAnswer, ScriptedOracle};
+    use crate::game::EventContext;
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let tap_dance = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "tap-dance")
+        .expect("tap-dance loads from the corpus")
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let cast = s.a.hand[0].clone();
+    s.card_pool.get_mut(&cast).unwrap().content = Some(tap_dance);
+
+    // Two on-color (blue) untapped permanents on A's BOARD: the tap fuel +
+    // the P.42a color anchor (Tap Dance is purple/blue/cyan/green).
+    let fuel1 = s.a.hand[1].clone();
+    let fuel2 = s.a.hand[2].clone();
+    set_identity(&mut s, &fuel1, &["blue"], "");
+    set_identity(&mut s, &fuel2, &["blue"], "");
+    // Untap target: a TAPPED permanent (untapping is observable).
+    let untap_target = s.a.hand[3].clone();
+    // Tap target: an UNTAPPED permanent on B's BOARD (tapping is observable).
+    let tap_target = s.b.hand[0].clone();
+    for iid in [&fuel1, &fuel2, &untap_target] {
+        s.a.hand.retain(|x| x != iid);
+        s.a.board.push(iid.clone());
+    }
+    s.b.hand.retain(|x| x != &tap_target);
+    s.b.board.push(tap_target.clone());
+    s.card_pool.get_mut(&fuel1).unwrap().tapped = false;
+    s.card_pool.get_mut(&fuel2).unwrap().tapped = false;
+    s.card_pool.get_mut(&untap_target).unwrap().tapped = true; // → untapped by effect
+    s.card_pool.get_mut(&tap_target).unwrap().tapped = false; // → tapped by effect
+
+    // on_play calls choose_card twice: untap target first, then tap target.
+    let mut oracle = ScriptedOracle::new(vec![
+        ScriptedAnswer::Card(Some(untap_target.clone())),
+        ScriptedAnswer::Card(Some(tap_target.clone())),
+    ]);
+
+    s.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            tap_payment_ids: vec![fuel1.clone(), fuel2.clone()],
+            ..PlayChoices::default()
+        },
+        Some(&mut EventContext::new(registry.lua(), &mut oracle)),
+    )
+    .unwrap();
+
+    // Cost paid: both fuel permanents tapped, still on the BOARD (P.42
+    // non-consumptive).
+    assert!(s.card_pool.get(&fuel1).unwrap().tapped, "fuel1 tapped by cost");
+    assert!(s.card_pool.get(&fuel2).unwrap().tapped, "fuel2 tapped by cost");
+    assert!(
+        s.a.board.contains(&fuel1) && s.a.board.contains(&fuel2),
+        "tapped fuel stays on the board",
+    );
+    // Effect: untap target untapped, tap target tapped.
+    assert!(
+        !s.card_pool.get(&untap_target).unwrap().tapped,
+        "untap target should be untapped by the effect",
+    );
+    assert!(
+        s.card_pool.get(&tap_target).unwrap().tapped,
+        "tap target should be tapped by the effect",
+    );
+}
