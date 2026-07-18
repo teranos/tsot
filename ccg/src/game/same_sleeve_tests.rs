@@ -302,3 +302,58 @@ fn z7_add_same_sleeve_enforces_the_cap_at_the_deep_door() {
     );
     assert!(!crate::error::drain().is_empty(), "a sacred error surfaced the refusal");
 }
+
+#[test]
+fn z7_mutation_cast_sheds_its_vacated_sleeve_as_an_attached_cardless() {
+    // Sleeve-as-atom conservation: a mutation sits in HAND inside its own
+    // sleeve. Casting it (P.26) slides the mutation *card* into the host's
+    // sleeve (Z.7 fusion) and leaves the mutation's own sleeve EMPTY. That
+    // vacated sleeve is not destroyed — it becomes an attached cardless
+    // sleeve (Z.6/Z.8) on the mutated creature. The card fuses; the sleeve
+    // attaches; nothing is manufactured or evaporated.
+    use crate::card::CardType;
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let host = s.a.hand[0].clone();
+    let mutation = s.a.hand[1].clone();
+
+    s.card_pool.get_mut(&host).unwrap().card_mut().kind = CardType::Creature;
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+
+    {
+        let inst = s.card_pool.get_mut(&mutation).unwrap();
+        inst.card_mut().kind = CardType::Mutation;
+        inst.card_mut().cost = vec![];
+    }
+    let res = s.play_card(
+        PlayerId::A,
+        &mutation,
+        PlayChoices { mutation_target: Some(host.clone()), ..PlayChoices::default() },
+        None,
+    );
+    assert!(res.is_ok(), "mutation cast resolves: {res:?}");
+
+    let h = s.card_pool.get(&host).unwrap();
+
+    // The mutation card is fused into the host's sleeve (Z.7) — unchanged.
+    assert!(
+        h.same_sleeve.contains(&mutation),
+        "Z.7: the mutation card fuses into the host's sleeve"
+    );
+
+    // The vacated sleeve becomes exactly one attached cardless sleeve (Z.6).
+    assert_eq!(h.attached.len(), 1, "one shed sleeve attaches to the host");
+    let shed = h.attached[0].clone();
+    assert_ne!(shed, mutation, "the shed sleeve is a distinct object from the fused card");
+    assert!(
+        s.is_cardless(&shed),
+        "Z.8: the shed sleeve is cardless (the mutation card left it)"
+    );
+
+    // The shed sleeve is a real Z.6 attached object, so AttachedCount reads 1
+    // (user's ruling: count it — a mutation deposits one attach-fuel sleeve).
+    assert_eq!(
+        s.card_pool.get(&host).unwrap().attached.len(),
+        1,
+        "AttachedCount: the shed sleeve counts (+1 per mutation)"
+    );
+}

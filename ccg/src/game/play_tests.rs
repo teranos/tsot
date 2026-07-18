@@ -3236,31 +3236,48 @@ fn lua_damage_to_player_mills_n_from_their_deck_to_exile() {
 }
 
 #[test]
-fn do_damage_invokes_b8_cleanup_wiring() {
-    // Integration test for the wiring: calling do_damage on a
-    // creature that should die from B.8 must leave it in graveyard.
-    // The unit test above
-    // (b8_lua_damage_accumulation_kills_creature_via_cleanup_b8_damage_deaths)
-    // exercises the cleanup function in isolation; this one
-    // exercises the entry point (the function that handlers actually
-    // invoke via game.damage), proving the sweep happens
-    // automatically. If someone deletes the cleanup call from
-    // do_damage (removing the wiring while leaving the sweep
-    // function intact), the unit test still passes but this one
-    // fails.
+fn game_damage_kills_a_lethal_creature_through_the_deferred_settle() {
+    // game.damage applies damage inside a live handler's borrow; the B.8
+    // death is NOT swept synchronously inside do_damage (that would bypass
+    // the OnWouldDie replacement window). It is deferred to
+    // drain_deferred_events — after the handler unwinds, with a Lua context
+    // — and resolved through resolve_board_deaths. Fire a real burn handler
+    // and prove the lethal victim still ends in the graveyard.
+    let lua = mlua::Lua::new();
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+
     let victim = s.b.hand[0].clone();
     let _ = s.move_card(&victim, PlayerId::B, Zone::Hand, Zone::Board);
-    {
-        let inst = s.card_pool.get_mut(&victim).unwrap();
-        inst.card_mut().stats = Some(crate::card::Stats { x: 2.0, y: 2.0 });
-    }
-    let res = crate::game::lua_api::do_damage(&mut s, &victim, 2.0);
-    assert!(res.is_ok());
+    s.card_pool.get_mut(&victim).unwrap().card_mut().stats =
+        Some(crate::card::Stats { x: 2.0, y: 2.0 });
+
+    // A source whose on_play burns the victim for lethal via game.damage.
+    let src = s.a.hand[0].clone();
+    let _ = s.move_card(&src, PlayerId::A, Zone::Hand, Zone::Board);
+    let burn: mlua::Function = lua
+        .load(format!("return function(game, self) game.damage('{victim}', 2) end"))
+        .eval()
+        .unwrap();
+    s.card_pool
+        .get_mut(&src)
+        .unwrap()
+        .card_mut()
+        .handlers
+        .insert(crate::card::EventName::OnPlay, burn);
+
+    let mut oracle = crate::choice::NoopOracle;
+    crate::game::lua_api::fire_self_only(
+        &lua,
+        &mut s,
+        &mut oracle,
+        crate::card::EventName::OnPlay,
+        &src,
+    )
+    .expect("burn resolves");
+
     assert!(
         !s.b.board.contains(&victim),
-        "do_damage must invoke cleanup_b8_damage_deaths; \
-         victim with damage=Y still on board"
+        "lethal game.damage removes the victim from the board via the deferred B.8 settle"
     );
     assert!(
         s.b.graveyard.contains(&victim),

@@ -1,9 +1,10 @@
 # Cardless Sleeve & Sleeve-as-Atom — plan of record
 
-> The sleeve is the atomic unit in every zone; a card is optional content
-> inside it. 0 cards = cardless sleeve (Z.8), 1 = a normal card, 2+ = a
-> same-sleeve fusion (Z.7). Rules are canonical in RULES.md (Z.8, S.4);
-> this doc is the roadmap, not the spec.
+> The sleeve-unit is the atom in every zone; a card and a sleeve are each
+> optional occupants of it. 0 cards = cardless sleeve (Z.8), 1 = a normal
+> card, 2+ = a same-sleeve fusion (Z.7); a card with its sleeve removed =
+> a sleeveless card (Z.8, the mirror of the cardless sleeve). Rules are
+> canonical in RULES.md (Z.8, S.4); this doc is the roadmap, not the spec.
 
 ## Status
 
@@ -81,6 +82,74 @@
   via `confirm_for` — the slice-11 queue de-risked it but wasn't required.
   Tests in `game/shatter_tests.rs` (opponent pays, opponent declines →
   counter, X≤0 whiff).
+- **Slice 12 — sleeve conservation: card ↔ sleeve fully decoupled.**
+  - **12.1 Mutation cast sheds its vacated sleeve — DONE.** A mutation sits
+    in HAND inside its own sleeve; casting it (P.26) slides the card into
+    the host's sleeve (Z.7 fusion) and leaves its own sleeve empty. That
+    sleeve is not destroyed — it is minted as a cardless sleeve and
+    `add_attached` to the host (Z.6), counted by `AttachedCount` (the card
+    doesn't count, only the shed sleeve does). New `JournalEntry::
+    MintCardlessSleeve` (forward inserts / inverse removes) so rollback and
+    replay drop the shed sleeve. Test in `game/same_sleeve_tests.rs`
+    (`z7_mutation_cast_sheds_its_vacated_sleeve_as_an_attached_cardless`).
+  - **12.2 Sleeveless state + self-shed — DONE.** `Sleeve.sleeveless: bool`
+    (`#[serde(default)]`, backward-compatible) — the mirror of a cardless
+    sleeve: a card with no sleeve around it. `shed_own_sleeve(iid)` pops a
+    card out of its own sleeve (card stays put, becomes sleeveless) and
+    attaches the vacated sleeve to itself as a cardless sleeve — the
+    mutation-shed shape, self-targeted. No-op if already sleeveless or if
+    the unit is itself cardless. Journaled via `SetSleeveless` + the
+    slice-12.1 mint/attach entries. Tests in `game/cardless_sleeve_tests.rs`
+    (`z8_a_card_sheds_its_own_sleeve_and_becomes_sleeveless`,
+    `z8_shed_own_sleeve_round_trips_through_journal`).
+  - **12.3 Death-replacement hook — DONE.** `EventName::OnWouldDie` fires
+    self-only on a dying creature BEFORE any Board→GY move (the window
+    `OnDie` never gave — it fires *after*). The handler signals via two
+    primitives: `game.prevent_death(self)` → survives on the BOARD, engine
+    clears its accumulated damage; `game.redirect_death(self, zone)` → moves
+    Board→zone quietly instead of GRAVEYARD (no on_die, no OnCreatureDies
+    broadcast, no P.8 cascade). No call → normal death. A single chokepoint,
+    `GameState::resolve_board_deaths(to_kill, ctx) -> Vec<InstanceId>`, now
+    owns the death sequence; the combat death loop and `cleanup_zero_y_
+    deaths` both route through it (behaviour-preserving — with no replacement
+    it's the same GY-move + on_die + broadcast + cascade as before). Also
+    exposed the 12.2 primitive to Lua: `game.shed_own_sleeve`,
+    `game.is_sleeveless`. Tests in `game/death_replacement_tests.rs` (shed &
+    survive, sleeveless → exile, ordinary-creature baseline, a real
+    `confirm_blocks` combat, and a direct `game.damage` burn — all of which
+    the elephant survives).
+  - **12.3b Direct-damage path reaches the hook — DONE.** `game.damage`
+    (`do_damage`) runs inside a live handler's borrow, so it can't fire
+    `OnWouldDie` synchronously (re-entrant Lua = RefCell double-borrow). The
+    B.8 death sweep is no longer done eagerly in `do_damage`; it is deferred
+    to `drain_deferred_events`, which — after the dealing handler unwinds,
+    with a Lua ctx — routes lethal creatures through `resolve_board_deaths`.
+    So a burn death now reaches the same replacement window as a combat
+    death (and, incidentally, now fires `on_die` on burn kills — closing the
+    old combat.rs TODO). Re-entrancy guard: `GameState::settling_deaths`
+    (transient) makes the nested drains that death-handlers trigger skip the
+    scan, so a creature isn't re-killed mid-resolution; chained deaths (a
+    death trigger that burns another creature) are caught by the settle
+    loop's next pass. Test: `elephant_survives_a_direct_damage_death`.
+  - **12.3c Chained combat deaths settle in-combat — DONE.** `confirm_blocks`
+    resolves its combat deaths once, under the `settling_deaths` guard, so a
+    combat death whose `on_die` burns a bystander used to leave that second
+    death standing until the next drain. `drain_deferred_events` now returns
+    the deaths it settled, and `confirm_blocks` runs one guard-released drain
+    after its combat-death resolution — the chained death resolves within the
+    same combat and is folded into `outcome.deaths` (which sim death-stats
+    read). Behaviour-preserving otherwise: with no chained burn the extra
+    drain finds an empty queue and no lethal creatures. Test:
+    `combat_death_whose_on_die_burns_a_bystander_settles_it_in_combat`.
+  - **12.4 White Elephant — DONE.** `cards/white-elephant.lua` — white 4/4
+    elephant, `2 hand + 2 attach`, the first consumer of 12.3. `on_would_die`
+    sheds its sleeve and prevents the first lethal death (survives,
+    sleeveless), then redirects to EXILE once sleeveless.
+  - **Watch-out — re-sleeve re-arms the ward.** A sleeveless card's shed
+    sleeve is attached *to* it, not *around* it, so it stays sleeveless (no
+    loop). But the deferred worn/fillable-sleeves branch (putting cards into
+    sleeves) would let something re-sleeve it and re-arm any "shed to
+    survive" ward. Cross-branch edge to keep on the list.
 
 ## Watch-outs
 

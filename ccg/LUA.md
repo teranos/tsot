@@ -6,10 +6,12 @@ How card abilities are authored, executed, and triggered.
 
 ## Shipped
 
-**Events** (`card::EventName`, 10 variants today):
-`on_enter_board`, `on_die`, `on_attack`, `on_block`, `on_blocked_by`,
-`on_play`, `on_attached_as_cost`, `on_dealt_damage_to_player`,
-`on_turn_begin`, `on_creature_dies`.
+**Events** (`card::EventName`):
+`on_enter_board`, `on_die`, `on_would_die`, `on_attack`, `on_block`,
+`on_blocked_by`, `on_play`, `on_attached_as_cost`,
+`on_dealt_damage_to_player`, `on_turn_begin`, `on_creature_dies`.
+
+`on_would_die` opens the death-replacement window (RULES.md P.40).
 
 **Handler signature** — `function(game, self, partner?)`. `self` carries
 `{ instance_id, owner, controller, attached }`. `partner` is present
@@ -36,9 +38,12 @@ carries the affects-predicate + the effect list. 46 cards use it.
 `deck_top`, `deck_bottom`, `print`, plus attach helpers
 (`attach`, `attach_from_deck`, `attached_of`, `host_of`), counter helpers
 (`counter`, `counter_top`, `chain`, `legal_counter_targets`,
-`set_intent`), and timing helpers (`schedule_return_at_next_main`,
+`set_intent`), timing helpers (`schedule_return_at_next_main`,
 `grant_extra_turn`, `creature_attacked_this_turn`, `set_summoning_sick`,
-`x_value`, `payment_ids`).
+`x_value`, `payment_ids`), and death-replacement primitives valid
+inside `on_would_die` (see RULES.md P.40):
+`prevent_death(self)`, `redirect_death(self, zone)`,
+`shed_own_sleeve(self)`.
 
 **Sandbox.** `Lua::new_with(MATH | STRING | TABLE | COROUTINE)`;
 `load`/`loadstring`/`loadfile`/`dofile` nil'd. Pinned by

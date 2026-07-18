@@ -8,7 +8,7 @@ mod payments;
 
 use super::context::EventContext;
 use super::lua_api;
-use super::state::{GameState, InstanceId, PlayerId, StackItem, Zone};
+use super::state::{DeathReplacement, GameState, InstanceId, PlayerId, StackItem, Zone};
 use crate::card::{CardType, CostSource, EventName};
 use crate::cast_routing::CastRouting;
 use crate::choice::ResponseAction;
@@ -1270,8 +1270,19 @@ impl GameState {
             // not attach as a strippable object. It therefore rides the
             // host's zone moves (P.29), is exempt from the P.8 cascade, and
             // does not count toward attached-count (C.16).
-            self.add_same_sleeve(target, instance);
-            self.set_face_down(instance, true);
+            if self.add_same_sleeve(target, instance) {
+                self.set_face_down(instance, true);
+                // Z.8 sleeve-as-atom conservation: the mutation card left
+                // its own sleeve to share the host's. That vacated sleeve is
+                // not destroyed — it attaches to the host as a cardless
+                // sleeve (Z.6), strippable and counted by AttachedCount. The
+                // id is derived from the mutation instance, which fuses
+                // exactly once (P.33: it can't be recast once it leaves HAND).
+                let shed = format!("{instance}:shed");
+                self.mint_cardless_sleeve(&shed, player);
+                self.add_attached(target, &shed);
+                self.set_face_down(&shed, true);
+            }
         } else if is_board_placed {
             self.add_to_zone(instance, player, Zone::Board);
             if card_kind.applies_summoning_sickness() {
@@ -1347,16 +1358,15 @@ impl GameState {
     ///
     /// Idempotent. Call after every damage application that targets a
     /// BOARD creature.
-    pub fn cleanup_b8_damage_deaths(&mut self) {
-        let on_board: Vec<InstanceId> = self
-            .a
-            .board
-            .iter()
-            .chain(self.b.board.iter())
-            .cloned()
-            .collect();
+    /// B.8: every on-board creature whose accumulated damage has reached its
+    /// effective toughness. Production path: `drain_deferred_events`
+    /// consumes this and applies the hook-aware death sequence
+    /// (12.3b OnWouldDie window). The historical eager sweep
+    /// `cleanup_b8_damage_deaths` still exists for unit-test convenience
+    /// (`#[cfg(test)]`) but no production code path calls it.
+    pub fn damage_lethal_creatures(&self) -> Vec<InstanceId> {
         let mut to_kill: Vec<InstanceId> = Vec::new();
-        for iid in &on_board {
+        for iid in self.a.board.iter().chain(self.b.board.iter()) {
             let is_creature = self
                 .card_pool
                 .get(iid)
@@ -1371,6 +1381,17 @@ impl GameState {
                 to_kill.push(iid.clone());
             }
         }
+        to_kill
+    }
+
+    /// Eager B.8 sweep: kill every damage-lethal creature and cascade
+    /// their attached lists to EXILE. Production-dead since 12.3b —
+    /// real death resolution goes through `drain_deferred_events` +
+    /// OnWouldDie. Kept for unit-test convenience where a test wants
+    /// to exercise the pure "damage → move" step in isolation.
+    #[cfg(test)]
+    pub fn cleanup_b8_damage_deaths(&mut self) {
+        let to_kill = self.damage_lethal_creatures();
         for iid in &to_kill {
             let owner = self
                 .card_pool
@@ -1416,62 +1437,128 @@ impl GameState {
                 to_kill.push(iid.clone());
             }
         }
-        let mut ctx = ctx;
-        for iid in &to_kill {
-            let owner = self
-                .card_pool
-                .get(iid)
-                .map(|i| i.owner)
-                .unwrap_or(self.active_player);
-            let _ = self.move_card_or_emit(
-                iid,
-                owner,
-                Zone::Board,
-                Zone::Graveyard,
-                "cleanup-zero-y-death",
-            );
-            if let Some(c) = ctx.as_mut() {
-                // cleanup_zero_y_deaths returns () — can't propagate
-                // Pending via `?`. Swallow with a log; the wider engine
-                // sees the death (graveyard move already committed) but
-                // not the handler's pending user-choice request.
-                // TODO(lua-yield): convert this fn to Result<(),
-                // ChoicePending> so death triggers from continuous
-                // checks can suspend like in-play triggers.
-                let _ = lua_api::fire_self_only(
-                    c.lua,
-                    self,
-                    c.oracle(),
-                    EventName::OnDie,
-                    iid,
-                );
-                // OnCreatureDies broadcast to BOARD watchers (excludes
-                // the dying card — already moved to GRAVEYARD above).
-                let watchers: Vec<InstanceId> = self
-                    .a
-                    .board
-                    .iter()
-                    .chain(self.b.board.iter())
-                    .cloned()
-                    .collect();
-                for watcher in &watchers {
-                    let _ = lua_api::fire_with_partner(
-                        c.lua,
-                        self,
-                        c.oracle(),
-                        EventName::OnCreatureDies,
-                        watcher,
-                        iid,
-                    );
-                }
-            }
-            // P.8: cascade attached → EXILE after on_die fires.
-            self.exile_remaining_attached(iid);
-        }
+        // 12.3: route zero-Y deaths through the replacement chokepoint too,
+        // so an OnWouldDie handler can shed-to-survive / redirect here as
+        // well. The continuous check still swallows a ChoicePending (as
+        // before) — the death is committed to state; a handler's pending
+        // user choice can't suspend a continuous cleanup yet.
+        // TODO(lua-yield): make this fn Result<(), ChoicePending> so death
+        // triggers from continuous checks can suspend like in-play triggers.
+        let _ = self.resolve_board_deaths(to_kill, ctx);
     }
 
+    /// 12.3 death-replacement chokepoint. For each creature the caller has
+    /// determined would die, fire `OnWouldDie` (self-only, if a ctx is
+    /// present) BEFORE any move, then act on whatever the handler chose:
+    ///   - `Prevent`  → clear accumulated damage (B.8) and leave it on the
+    ///     BOARD; it did not die.
+    ///   - `Redirect` → move BOARD→zone quietly — no on_die, no
+    ///     `OnCreatureDies` broadcast, no P.8 cascade.
+    ///   - none       → normal death: BOARD→GRAVEYARD, then on_die, the
+    ///     watcher broadcast, and the P.8 attached-cascade.
+    ///
+    /// Returns the iids that actually died (reached the GRAVEYARD) so combat
+    /// can record them. With `ctx = None` no handler runs and every creature
+    /// dies normally — matching the behaviour of any ctx-less death path.
+    pub fn resolve_board_deaths(
+        &mut self,
+        to_kill: Vec<InstanceId>,
+        ctx: Option<&mut EventContext>,
+    ) -> Result<Vec<InstanceId>, crate::choice::ChoicePending> {
+        // Self-guard `settling_deaths` across the whole resolution: the
+        // on_die / OnWouldDie fires below each drain, and that drain scans
+        // for damage deaths — without the guard it would re-enter and
+        // re-kill the very creature being resolved. Restored to the prior
+        // value so nested resolutions compose; genuinely new deaths surface
+        // at the caller's own settle loop (drain_deferred_events).
+        let prev = self.settling_deaths;
+        self.settling_deaths = true;
+        let result = self.resolve_board_deaths_inner(to_kill, ctx);
+        self.settling_deaths = prev;
+        result
+    }
 
+    fn resolve_board_deaths_inner(
+        &mut self,
+        to_kill: Vec<InstanceId>,
+        mut ctx: Option<&mut EventContext>,
+    ) -> Result<Vec<InstanceId>, crate::choice::ChoicePending> {
+        let mut died: Vec<InstanceId> = Vec::new();
+        for iid in to_kill {
+            let owner = self
+                .card_pool
+                .get(&iid)
+                .map(|i| i.owner)
+                .unwrap_or(self.active_player);
 
+            // Fire OnWouldDie BEFORE any move; the handler may record a
+            // replacement via game.prevent_death / game.redirect_death.
+            self.pending_death_replacement = None;
+            if let Some(c) = ctx.as_deref_mut() {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnWouldDie, &iid)?;
+            }
+
+            match self.pending_death_replacement.take() {
+                Some(DeathReplacement::Prevent) => {
+                    // Survive: reset the lethal damage so the next cleanup
+                    // does not immediately re-kill it. Stays on the board.
+                    self.set_damage(&iid, 0.0);
+                }
+                Some(DeathReplacement::Redirect(zone)) => {
+                    // Quiet relocation — no on_die, no broadcast, no cascade.
+                    let _ = self.move_card_or_emit(
+                        &iid,
+                        owner,
+                        Zone::Board,
+                        zone,
+                        "would-die-redirect",
+                    );
+                }
+                None => {
+                    // Normal death: BOARD → GRAVEYARD, then triggers + cascade.
+                    let _ = self.move_card_or_emit(
+                        &iid,
+                        owner,
+                        Zone::Board,
+                        Zone::Graveyard,
+                        "death",
+                    );
+                    died.push(iid.clone());
+                    if let Some(c) = ctx.as_deref_mut() {
+                        lua_api::fire_self_only(
+                            c.lua,
+                            self,
+                            c.oracle(),
+                            EventName::OnDie,
+                            &iid,
+                        )?;
+                        // OnCreatureDies broadcast to BOARD watchers (the
+                        // dead card already left BOARD, so it's excluded).
+                        let watchers: Vec<InstanceId> = self
+                            .a
+                            .board
+                            .iter()
+                            .chain(self.b.board.iter())
+                            .cloned()
+                            .collect();
+                        for watcher in &watchers {
+                            lua_api::fire_with_partner(
+                                c.lua,
+                                self,
+                                c.oracle(),
+                                EventName::OnCreatureDies,
+                                watcher,
+                                &iid,
+                            )?;
+                        }
+                    }
+                    // P.8: cascade attached → EXILE after on_die fires.
+                    self.exile_remaining_attached(&iid);
+                }
+            }
+        }
+        Ok(died)
+    }
 }
 
 #[cfg(test)]
