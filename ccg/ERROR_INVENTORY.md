@@ -5,6 +5,43 @@ inside ccg. The axiom (definition, visual contract, what it forbids,
 what it requires) lives in the root `ERROR.md`; this file tracks the
 per-site progress and the still-open ccg work.
 
+## Refresh 2026-07-18 — staleness audit
+
+The inventory below was last swept 2026-06-18. A month on, a freshness
+pass found:
+
+- **The cited `let _ =` count is stale.** The Engine-internals note
+  claims "138" (`grep -rE '^[[:space:]]*let _ =' src/`). The true
+  recursive count is now **265**. Growth is mostly test code + new
+  features (tap, P.41, palette, absent-control) and is not per-se a
+  violation, but the number in the doc is wrong — don't trust it.
+
+- **The CI gate under-scopes (`sacred-error-check.yml`).** Its pattern
+  is `ccg/src/**/*.rs`, but the GitHub runner's bash has `globstar`
+  **off**, so `**` collapses to `*` and the grep only descends **one
+  directory**. Measured: the CI invocation sees **170**, a truly
+  recursive grep sees **265**, and the baseline file
+  (`rust-let-underscore.count`) says **219**. Three disagreeing numbers.
+  The gate misses top-level `src/*.rs` and everything two-deep
+  (`src/game/play/`, `src/sim/step/`), so a new silent-drop added there
+  is invisible to CI. Fix: add `shopt -s globstar` (or `find`) to the
+  workflow, then re-baseline against the true count. Until then the
+  self-enforcement has a hole. **[ ] open.**
+
+- **`fitness.rs` failure-detail swallow — new open item, not previously
+  listed.** `fitness_breakdown` (`src/sim/fitness.rs:161`, `:223`,
+  `:263`) drains `crate::sim::instrument::drain_failures()` and keeps
+  only a *count* (`failed_games_total += 1`); the drained failure-detail
+  strings (which card / which `[play_card-ERR]` tripped) are discarded.
+  The EA can thus score a genome that won by exploiting a bug and the
+  *why* is gone. Axiom violation (silent drop of meaningful failure
+  detail). Fix: route the drained details through `crate::error::emit_*`
+  (or surface them in the breakdown) instead of dropping. **[ ] open.**
+
+The dated section below is otherwise preserved as-is; treat its
+"closed [x]" entries as accurate to 2026-06-18 and its counts as
+superseded by the numbers above.
+
 ## Unwired — current inventory (2026-06-18)
 
 Sacred-errors is the project's non-negotiable axiom (`CLAUDE.md`).
