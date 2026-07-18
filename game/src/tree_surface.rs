@@ -32,7 +32,10 @@ pub type WoodMesh = Rc<(Vec<MeshVertex>, Vec<u32>)>;
 /// Canonical seed used for the per-species wood generation. Every tree
 /// of the species shares this skeleton; per-tree variation (girth,
 /// moss, deadwood, autumn tint) rides on the instance, not the mesh.
-const CANONICAL_SEED: u32 = 0;
+///
+/// Public: `tree_emit` must place canopy leaves at the SAME skeleton's
+/// tips or leaves float in space where the wood doesn't branch.
+pub const CANONICAL_SEED: u32 = 0;
 
 thread_local! {
     /// key = species-ptr-as-usize. Species is `&'static`, so ptr equality

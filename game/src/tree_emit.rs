@@ -91,6 +91,12 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         // procedural trees filled it from the tile, authored CDDA trees
         // will name their own. `seed` still drives per-leaf autumn tint.
         let sp: &crate::tree_mesh::TreeSpecies = sp;
+        // `seed` drives per-tree hashing (girth, moss, nesting, fruit,
+        // autumn tint). The SKELETON itself uses `CANONICAL_SEED` below
+        // so canopy leaves + cone instances sit at the SAME tips as the
+        // canonical wood mesh (`tree_surface(CANONICAL_SEED, sp)`).
+        // Otherwise leaves float in space where the wood doesn't
+        // branch — the "tumor at branch tips" symptom.
         let seed = tree_seed(t.x, t.z);
         // Per-tree girth: some trees are far stouter than others (old
         // growth vs young), so a stand isn't a row of identical trunks.
@@ -143,6 +149,14 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         let mossy = leaf_hash01(seed, 0x0055_A100) < 0.35;
         let nesting = leaf_hash01(seed, 0x4E57_0000) < 0.09;
         let mut nest_placed = false;
+        // Deadwood decision, rolled per-tree here rather than baked into
+        // `tree_branches` — the branch skeleton is now canonical
+        // (CANONICAL_SEED, shared across all trees of the species) so
+        // if we relied on the skeleton's own `is_dead` flag, every oak
+        // in the world would have identical deadwood placement. We
+        // re-roll per (tree, tip_index) so a stand still shows variety.
+        let tree_dead = leaf_hash01(seed, 0xD3AD_0000) < sp.dead_limb_odds;
+        const DEAD_TIP_CHANCE: f32 = 0.18;
         // Fruit: SOME trees of a fruiting species bear (a per-tree roll,
         // so a stand is a mix of laden and bare trees). Witch's snot on
         // the fungal species bears on nearly every tree; apples less so.
@@ -150,10 +164,20 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             && leaf_hash01(seed, 0xF00D_0001) < if sp.fruit_on_dead_limbs { 0.95 } else { 0.6 };
         let mut leaf_i = 0u32;
         let mut tip_i = 0u32;
-        for (i, seg) in tree_branches(seed, sp).into_iter().enumerate() {
+        for (i, seg) in tree_branches(crate::tree_surface::CANONICAL_SEED, sp)
+            .into_iter()
+            .enumerate()
+        {
             // Segment 0 is the ROOT (the trunk) — it starts at the ground,
             // so it is NOT seated into a parent (there isn't one).
             let is_root = i == 0;
+            // Deadwood: re-rolled per (tree, limb index) so a stand of
+            // canonical-skeleton trees still varies. `is_dead` came
+            // from the canonical skeleton's own RNG and would be
+            // identical across every tree of the species.
+            let is_dead = seg.is_tip
+                && tree_dead
+                && leaf_hash01(seed, 0xD3AD_71D0 ^ (i as u32)) < DEAD_TIP_CHANCE;
             // The limb: the unit cone (base r=1, height 1 along +Y)
             // scaled to [radius, length, radius] and rotated +Y → axis.
             // A dead tip greys out — deadwood, not foliage. Girth scales
@@ -174,7 +198,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             let limb_axis = [seg.axis[0], seg.axis[1], seg.axis[2], sway];
             trunks.push(MeshInstance {
                 pos: [bx - seg.axis[0] * seat, by - seg.axis[1] * seat, bz - seg.axis[2] * seat],
-                color: if seg.is_dead { DEAD_LIMB_COLOR } else { sp.branch_color },
+                color: if is_dead { DEAD_LIMB_COLOR } else { sp.branch_color },
                 scale: [br, seg.length * h + seat, br],
                 axis: limb_axis,
             });
@@ -213,7 +237,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             }
             let tip = seg.tip();
             let (wx, wy, wz) = (t.x + tip[0] * h, tip[1] * h, t.z + tip[2] * h);
-            if seg.is_dead {
+            if is_dead {
                 // A dead twig grows no leaves. On the fungal species it's
                 // where witch's snot clings — a fat round glob AT the tip
                 // (not hanging), the sickly fruit-colour, on most dead tips
