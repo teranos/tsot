@@ -890,7 +890,7 @@ mod tests {
         // from the sphere centre. Guards against a mistranscribed index
         // table that would flip winding on any face.
         let (verts, indices) = canopy_element_mesh();
-        for tri in indices.chunks_exact(3) {
+        for tri in indices.as_chunks::<3>().0 {
             let a = verts[tri[0] as usize].pos;
             let b = verts[tri[1] as usize].pos;
             let c = verts[tri[2] as usize].pos;

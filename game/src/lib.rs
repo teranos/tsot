@@ -36,6 +36,7 @@ pub mod template;
 pub mod trail;
 pub mod tree_emit;
 pub mod tree_mesh;
+pub mod tree_surface;
 pub mod trees;
 pub mod watermark;
 
