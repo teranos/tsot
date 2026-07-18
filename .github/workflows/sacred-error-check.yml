@@ -56,32 +56,34 @@ jobs:
       # violations), commit the new counts; the job passes.
       - name: Count + compare silent-drop patterns
         run: |
-          # `**` in the patterns below must descend all directory levels.
-          # Without globstar, bash collapses `**` to a single `*` and the
-          # grep only sees files one directory deep — silently missing
-          # top-level src/*.rs and everything two-deep (src/game/play/,
-          # src/sim/step/, …). That undercounts the gate itself, so a new
-          # silent-drop added in those paths would pass unseen. nullglob
-          # keeps a non-matching glob from passing its literal to grep.
-          shopt -s globstar nullglob
+          # Scope each pattern with `grep -r <root> --include=<glob>`
+          # rather than a shell `**`/`{}` glob. Shell globs here were
+          # doubly broken: `**` needs `globstar` (off on the runner, so it
+          # collapsed to `*` and only saw one directory deep), and brace
+          # expansion (`{js,html}`) never applies to a glob stored in a
+          # variable — so the js patterns matched nothing and grep fell
+          # back to searching the whole tree. `-r` + `--include` recurses
+          # every depth and filters by extension with no shell-glob
+          # subtlety, correctly scoped to the named root.
           mkdir -p .github/sacred-error-baseline
 
-          # Patterns to track. Each is (label, glob, ripgrep-pattern).
-          # If you add one, also add a baseline file with the current
-          # count so the gate passes on the next PR.
+          # Each entry is (label, root-dir, space-separated include globs,
+          # regex). Adding one: append here + drop a baseline .count file.
           patterns=(
-            "rust-let-underscore|ccg/src/**/*.rs|^[[:space:]]*let _ ="
-            "rust-let-underscore-roam|roam/src/**/*.rs|^[[:space:]]*let _ ="
-            "js-empty-catch-paren|ccg/assets/**/*.{js,html}|catch[[:space:]]*\\([^)]*\\)[[:space:]]*\\{[[:space:]]*\\}"
-            "js-empty-catch-paren-roam|roam/assets/**/*.{js,html}|catch[[:space:]]*\\([^)]*\\)[[:space:]]*\\{[[:space:]]*\\}"
-            "elm-err-discard|ccg/assets/src/**/*.elm|Err _ ->"
+            "rust-let-underscore|ccg/src|*.rs|^[[:space:]]*let _ ="
+            "rust-let-underscore-roam|roam/src|*.rs|^[[:space:]]*let _ ="
+            "js-empty-catch-paren|ccg/assets|*.js *.html|catch[[:space:]]*\\([^)]*\\)[[:space:]]*\\{[[:space:]]*\\}"
+            "js-empty-catch-paren-roam|roam/assets|*.js *.html|catch[[:space:]]*\\([^)]*\\)[[:space:]]*\\{[[:space:]]*\\}"
+            "elm-err-discard|ccg/assets/src|*.elm|Err _ ->"
           )
 
           fail=0
           for entry in "${patterns[@]}"; do
-            IFS="|" read -r label glob pattern <<< "$entry"
+            IFS="|" read -r label root includes pattern <<< "$entry"
             baseline_file=".github/sacred-error-baseline/${label}.count"
-            count=$(grep -rE "$pattern" $glob 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+            inc_args=""
+            for g in $includes; do inc_args="$inc_args --include=$g"; done
+            count=$(grep -rE "$pattern" "$root" $inc_args 2>/dev/null | wc -l | tr -d ' ' || echo 0)
             baseline=0
             if [ -f "$baseline_file" ]; then
               baseline=$(cat "$baseline_file")
@@ -90,7 +92,7 @@ jobs:
             if [ "$count" -gt "$baseline" ]; then
               echo "::error::sacred-error axiom violation: ${label} grew from ${baseline} to ${count}"
               echo "::error::New matches:"
-              grep -rnE "$pattern" $glob | head -20
+              grep -rnE "$pattern" "$root" $inc_args | head -20
               fail=1
             fi
             if [ "$count" -lt "$baseline" ]; then

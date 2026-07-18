@@ -16,17 +16,20 @@ pass found:
   features (tap, P.41, palette, absent-control) and is not per-se a
   violation, but the number in the doc is wrong — don't trust it.
 
-- **The CI gate under-scoped (`sacred-error-check.yml`) — [x] FIXED
-  2026-07-18.** Its `**` patterns collapsed to `*` because the runner's
-  bash had `globstar` off, so the grep descended one directory only. It
-  saw 170 where truth was 265, and every pattern under-counted (most
-  starkly roam JS empty-catch: gate 2 vs true 19). Fix: `shopt -s
-  globstar nullglob` added to the workflow; all five baselines re-based
-  to true counts (rust 265, rust-roam 14, js 19, js-roam 19, elm 0). The
-  gate now sees every depth. **Caveat:** the newly-exposed sites (the
-  ~95 ccg + ~17 roam that were invisible) are baselined-but-untriaged —
-  they were "accepted" to make the gate honest+green now; individually
-  triaging them is the remaining sweep (below).
+- **The CI gate was doubly broken (`sacred-error-check.yml`) — [x] FIXED
+  2026-07-18.** Two bugs in how it globbed from shell variables:
+  (1) `**` collapsed to `*` (runner bash has `globstar` off) so the Rust
+  grep only descended one directory — it saw 170 where truth is 265;
+  (2) brace expansion (`{js,html}`) never applies to a glob stored in a
+  variable, so the JS patterns matched nothing and `grep -r` fell back
+  to scanning the whole tree. Fix: replaced the `**`/`{}` shell globs
+  with `grep -r <root> --include=<glob>`, which recurses every depth and
+  filters by extension with no shell-glob subtlety. Baselines set to the
+  correctly-scoped counts: **rust 265, rust-roam 14, js 14, js-roam 2,
+  elm 0** (the JS baselines 14/2 turn out to match the original
+  pre-bug values — those were right; only the Rust counts had genuinely
+  drifted). Verified: the workflow's exact mechanism now equals every
+  baseline.
 
 - **`fitness.rs` failure-detail swallow — [x] FIXED 2026-07-18.**
   `fitness_breakdown` drained `drain_failures()` and kept only the count
@@ -42,11 +45,28 @@ pass found:
   prior genome's stale sink on the reused worker; those were already
   attributed to that genome's breakdown).
 
-- **Remaining sweep [ ] open:** triage the newly-exposed `let _ =` and
-  empty-catch sites now that the gate can see them. Most are expected to
-  be legit (`writeln!`-to-String, idempotent `drain()` housekeeping) per
-  the 2026-06-18 methodology; the real ones get the `_or_emit` helpers.
-  As each is fixed, drop the corresponding baseline count.
+- **Newly-exposed ccg sites triaged 2026-07-18 — [x] no real swallows.**
+  With the gate honest, the ~95 previously-invisible ccg `let _ =` sites
+  (top-level `src/*.rs` + two-deep `src/game/play/`, `src/sim/step/`)
+  were categorized:
+  - `writeln!(buf, …)` to in-memory Strings, `crate::trace::drain()` /
+    `crate::error::drain()` / `instrument::drain_failures()` housekeeping,
+    `clear_session()` / `remove_file()` / `tsot_*_impl()` test cleanup —
+    the legitimate bulk (same classes as the 2026-06-18 sweep);
+  - `let _ = self.move_card_or_emit(…)` (7) — already routed; the
+    `let _` is on a Result that has *already* surfaced a typed Error;
+  - `let _ = cast_iid;` / `let _ = registry;` — unused-param/var
+    suppressions, not Results;
+  - `oracle.choose_*` / `engine.step(...)` under `#[cfg(test)]`
+    (`trace_tests.rs`, `choice.rs` test, `step/tests.rs`) — intentional
+    test-state discards.
+  No production Result carrying meaningful failure is dropped. The 14 ccg
+  JS empty-catches are all the documented `catch(_){}`-around-
+  `tsotPushError` defense-in-depth / parse-with-fallback pattern (2026-
+  06-18 audit), re-confirmed. **ccg is clean.**
+- **roam sweep [ ] open (roam's scope):** roam carries 14 `let _ =` and
+  2 JS empty-catches, now correctly visible to the gate but not triaged
+  here — TSOT and roam are independent subprojects.
 
 The dated section below is otherwise preserved as-is; treat its
 "closed [x]" entries as accurate to 2026-06-18 and its counts as
