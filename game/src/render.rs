@@ -99,8 +99,8 @@ pub fn render_scene(
     // i_scale=1, i_axis=[0,1,0,0], i_axis.w=0 so no wind). Canopy
     // elements keep instancing. Packed buffer: [wood(1)] + [canopy(N)];
     // canopy dispatch uses `first_instance = wood_count`.
-    let wood_verts = &mesh_trees.wood_verts;
-    let wood_indices = &mesh_trees.wood_indices;
+    let wood_verts: &Vec<MeshVertex> = &mesh_trees.wood_verts;
+    let wood_indices: &Vec<u32> = &mesh_trees.wood_indices;
     let (canopy_verts, canopy_indices) = tree_mesh::leaf_quad_mesh();
     let wood_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
         label: Some("seer.render.mesh.wood.vertex"),

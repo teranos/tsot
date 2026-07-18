@@ -28,30 +28,38 @@ use crate::tree_mesh::{BranchSegment, MeshVertex, TreeSpecies, tree_branches};
 /// wasm has no threads, so a `thread_local!` `Rc` is safe.
 pub type WoodMesh = Rc<(Vec<MeshVertex>, Vec<u32>)>;
 
-/// Cache cap in unique trees. Bounded memory as the player roams — the
-/// oldest tree drops when the cap is hit. FIFO (insertion order) rather
-/// than LRU: eviction is O(1) and hit-rate is unaffected on a stand of
-/// trees that all stay visible together.
-const WOOD_CACHE_CAP: usize = 512;
+/// Byte cap for the per-tree mesh cache. At ~1 MB/tree the tree-count
+/// cap the browser can afford is a couple dozen; measuring by bytes
+/// keeps a stand of small trees from getting evicted just because the
+/// count is high. 64 MiB is a compromise: fits several dozen big oaks,
+/// stays well under a browser tab's practical budget.
+const WOOD_CACHE_BYTES_CAP: usize = 64 * 1024 * 1024;
 
 thread_local! {
     /// key = (seed, species_ptr_as_addr). Species is `&'static`, so ptr
     /// equality is species equality.
     static WOOD_CACHE: RefCell<HashMap<(u32, usize), WoodMesh>> =
         RefCell::new(HashMap::new());
-    /// Insertion order, so the oldest key drops when the cap is hit.
+    /// Insertion order for FIFO eviction (O(1) pop_front). Same key.
     static WOOD_ORDER: RefCell<VecDeque<(u32, usize)>> =
         const { RefCell::new(VecDeque::new()) };
+    /// Running total of cached mesh bytes (verts + indices, capacity-based).
+    static WOOD_CACHE_BYTES: RefCell<usize> = const { RefCell::new(0) };
+}
+
+fn mesh_bytes(m: &WoodMesh) -> usize {
+    m.0.capacity() * std::mem::size_of::<MeshVertex>()
+        + m.1.capacity() * std::mem::size_of::<u32>()
 }
 
 /// Cached variant of `tree_surface` — same (verts, indices) as calling
-/// `tree_surface(seed, sp)` directly, but subsequent calls with the
-/// same `(seed, species)` return the memoized `Rc` without regenerating.
+/// `tree_surface(seed, sp)` directly. Subsequent calls with the same
+/// `(seed, species)` return the memoized `Rc`.
 ///
-/// MANDATORY on any per-frame path (`snapshot_to_mesh_instances_with_wood`
-/// runs every frame under seer and the browser) — the raw generator is
-/// ~0.3s/tree release; recomputing per frame would grind. See
-/// CONTINUOUS_WOOD.md.
+/// Eviction is FIFO under a **byte cap** (`WOOD_CACHE_BYTES_CAP`) —
+/// counting by trees was a design mistake: at ~1 MB per big oak, 512
+/// entries is half a gig of retained memory. On the browser that
+/// crashes the tab.
 pub fn tree_surface_cached(seed: u32, sp: &'static TreeSpecies) -> WoodMesh {
     let key = (seed, sp as *const TreeSpecies as usize);
     if let Some(hit) = WOOD_CACHE.with(|c| c.borrow().get(&key).cloned()) {
@@ -59,20 +67,21 @@ pub fn tree_surface_cached(seed: u32, sp: &'static TreeSpecies) -> WoodMesh {
     }
     let (verts, indices) = tree_surface(seed, sp);
     let mesh: WoodMesh = Rc::new((verts, indices));
+    let bytes = mesh_bytes(&mesh);
     WOOD_CACHE.with(|c| {
         c.borrow_mut().insert(key, mesh.clone());
     });
-    WOOD_ORDER.with(|o| {
-        let mut order = o.borrow_mut();
-        order.push_back(key);
-        while order.len() > WOOD_CACHE_CAP
-            && let Some(old) = order.pop_front()
-        {
-            WOOD_CACHE.with(|c| {
-                c.borrow_mut().remove(&old);
+    WOOD_ORDER.with(|o| o.borrow_mut().push_back(key));
+    WOOD_CACHE_BYTES.with(|b| *b.borrow_mut() += bytes);
+    while WOOD_CACHE_BYTES.with(|b| *b.borrow()) > WOOD_CACHE_BYTES_CAP
+        && let Some(old) = WOOD_ORDER.with(|o| o.borrow_mut().pop_front())
+    {
+        if let Some(evicted) = WOOD_CACHE.with(|c| c.borrow_mut().remove(&old)) {
+            WOOD_CACHE_BYTES.with(|b| {
+                *b.borrow_mut() = b.borrow().saturating_sub(mesh_bytes(&evicted));
             });
         }
-    });
+    }
     mesh
 }
 
