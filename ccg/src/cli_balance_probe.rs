@@ -108,6 +108,13 @@ pub struct BalanceProbeArgs {
     /// classical.
     #[arg(long = "opponent-uct-c", default_value_t = std::f64::consts::SQRT_2)]
     pub opponent_uct_c: f64,
+    /// Skip the absent-control cell. By default each probed group also
+    /// runs one control cell — the card banned from the pool, 0 copies,
+    /// same palette — so the summary can report each variant's Δ vs the
+    /// best deck of that identity WITHOUT the card. Costs one extra EA
+    /// run per group; pass this to omit it.
+    #[arg(long = "no-control", default_value_t = false)]
+    pub no_control: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -117,6 +124,11 @@ struct ProbeResult {
     card_id: String,
     /// For variants, the base card's id; None for base / non-variant.
     variant_of: Option<String>,
+    /// True for the synthetic absent-control cell (card banned from the
+    /// pool, 0 copies) — the "best deck of this identity WITHOUT the
+    /// card" baseline the variants' Δ is measured against.
+    #[serde(default)]
+    is_control: bool,
     seed: u64,
     pop_size: usize,
     generations_run: usize,
@@ -194,14 +206,18 @@ fn discover_base_ids_with_variants(registry: &CardRegistry) -> Vec<String> {
     bases.into_iter().collect()
 }
 
-fn probe_one_card(
-    registry: &std::sync::Arc<CardRegistry>,
-    pool: &[Card],
-    gauntlet: &[Vec<tsot::game::DeckUnit>],
-    args: &BalanceProbeArgs,
-    card: &Card,
-) -> ProbeResult {
-    let opponent_ai = match args.opponent_ai.to_ascii_lowercase().as_str() {
+/// Row label for the summary: the absent-control cell reads as a
+/// baseline rather than a card id.
+fn display_name(r: &ProbeResult) -> String {
+    if r.is_control {
+        "(control: 0 copies)".to_string()
+    } else {
+        r.card_id.clone()
+    }
+}
+
+fn parse_opponent_ai(args: &BalanceProbeArgs) -> tsot::sim::AiKind {
+    match args.opponent_ai.to_ascii_lowercase().as_str() {
         "game" | "heuristic" => tsot::sim::AiKind::Game,
         "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
@@ -212,46 +228,26 @@ fn probe_one_card(
             eprintln!("error: --opponent-ai must be 'game' | 'uct' ('heuristic' accepted as legacy alias), got {other:?}");
             std::process::exit(2);
         }
-    };
-    let cfg = EvolveConfig {
-        pop_size: args.pop,
-        generations: args.gens,
-        n_per_side: args.n,
-        base_seed: args.seed,
-        deck_len: 50,
-        per_card_cap: 3,
-        tournament_k: args.tournament_k,
-        mutation_rate: args.rate,
-        elite_count: args.elite,
-        stop_at_ceiling: None,
-        stop_at_plateau: None,
-        plateau_epsilon: 0.0,
-        pinned_card_id: Some(card.id.clone()),
-        pinned_count: args.pinned_count.min(3),
-        diversity_alpha: 0.0,
-        opponent_ai,
-        // Build each genome in the probed card's color/symbol identity
-        // (anchor + at most one splash color / three splash symbols, ≤4
-        // colors) instead of uniform-random over the whole pool.
-        palette_anchor: Some(tsot::sim::palette::PaletteAnchor::from_card(card)),
-    };
+    }
+}
 
-    // For pin to work, the pinned card MUST be available to genomes.
-    // Variants are excluded from `playable_pool` by design, so when we
-    // probe a variant we extend the pool with that one variant card.
-    let pool_with_pin: Vec<Card> = if card.is_variant {
-        let mut p = pool.to_vec();
-        p.push(card.clone());
-        p
-    } else {
-        pool.to_vec()
-    };
-
+/// Run one EA cell (`cfg` against `gauntlet` over `pool_for_cell`),
+/// logging per-generation under `label`, and extract a [`ProbeResult`].
+/// Shared by the pinned variant cells and the absent-control cell.
+fn run_probe_cell(
+    registry: &std::sync::Arc<CardRegistry>,
+    pool_for_cell: &[Card],
+    gauntlet: &[Vec<tsot::game::DeckUnit>],
+    args: &BalanceProbeArgs,
+    cfg: &EvolveConfig,
+    label: &str,
+    variant_of: Option<String>,
+    is_control: bool,
+) -> ProbeResult {
     let t_start = std::time::Instant::now();
     let mut t_prev = t_start;
     let total_gens = cfg.generations;
     let mut prev_best: Option<f64> = None;
-    let card_id_for_log = card.id.clone();
     let result = {
         let cb = &mut |gen: usize, p: &[(Vec<String>, f64)]| {
             let now = std::time::Instant::now();
@@ -265,11 +261,11 @@ fn probe_one_card(
             };
             prev_best = Some(best);
             println!(
-                "  [{card_id_for_log}] gen {gen:>2}/{total_gens} | best={best:.3} mean={mean:.3} | took {took:>5.1?} | total {total:>5.1?}{new_best}"
+                "  [{label}] gen {gen:>2}/{total_gens} | best={best:.3} mean={mean:.3} | took {took:>5.1?} | total {total:>5.1?}{new_best}"
             );
             t_prev = now;
         };
-        run_evolve(registry, &pool_with_pin, gauntlet, &cfg, cb, None)
+        run_evolve(registry, pool_for_cell, gauntlet, cfg, cb, None)
     };
 
     let final_best = &result.final_population[0];
@@ -296,13 +292,14 @@ fn probe_one_card(
     let gens_run = result.best_per_generation.len().saturating_sub(1);
 
     ProbeResult {
-        card_id: card.id.clone(),
-        variant_of: card.variant_of.clone(),
+        card_id: label.to_string(),
+        variant_of,
+        is_control,
         seed: args.seed,
         pop_size: args.pop,
         generations_run: gens_run,
         n_per_side: args.n,
-        pinned_count: args.pinned_count.min(3),
+        pinned_count: cfg.pinned_count,
         final_best_fitness,
         final_mean_fitness,
         final_best_genome: final_best.0.clone(),
@@ -311,6 +308,100 @@ fn probe_one_card(
         best_fitness_curve: best_curve,
         mean_fitness_curve: mean_curve,
     }
+}
+
+fn probe_one_card(
+    registry: &std::sync::Arc<CardRegistry>,
+    pool: &[Card],
+    gauntlet: &[Vec<tsot::game::DeckUnit>],
+    args: &BalanceProbeArgs,
+    card: &Card,
+) -> ProbeResult {
+    let cfg = EvolveConfig {
+        pop_size: args.pop,
+        generations: args.gens,
+        n_per_side: args.n,
+        base_seed: args.seed,
+        deck_len: 50,
+        per_card_cap: 3,
+        tournament_k: args.tournament_k,
+        mutation_rate: args.rate,
+        elite_count: args.elite,
+        stop_at_ceiling: None,
+        stop_at_plateau: None,
+        plateau_epsilon: 0.0,
+        pinned_card_id: Some(card.id.clone()),
+        pinned_count: args.pinned_count.min(3),
+        diversity_alpha: 0.0,
+        opponent_ai: parse_opponent_ai(args),
+        // Build each genome in the probed card's color/symbol identity
+        // (anchor + at most one splash color / three splash symbols, ≤4
+        // colors) instead of uniform-random over the whole pool.
+        palette_anchor: Some(tsot::sim::palette::PaletteAnchor::from_card(card)),
+    };
+
+    // For pin to work, the pinned card MUST be available to genomes.
+    // Variants are excluded from `playable_pool` by design, so when we
+    // probe a variant we extend the pool with that one variant card.
+    let pool_with_pin: Vec<Card> = if card.is_variant {
+        let mut p = pool.to_vec();
+        p.push(card.clone());
+        p
+    } else {
+        pool.to_vec()
+    };
+
+    run_probe_cell(
+        registry,
+        &pool_with_pin,
+        gauntlet,
+        args,
+        &cfg,
+        &card.id,
+        card.variant_of.clone(),
+        false,
+    )
+}
+
+/// The absent-control cell for a group: the base card banned from the
+/// pool (0 copies, no pin) but its palette kept as the anchor — the best
+/// deck of this identity WITHOUT the card. Run once per group; every
+/// variant's Δ is measured against it. Shared across variants because the
+/// banned deck is identical regardless of what cost the card would carry.
+fn probe_absent_control(
+    registry: &std::sync::Arc<CardRegistry>,
+    pool: &[Card],
+    gauntlet: &[Vec<tsot::game::DeckUnit>],
+    args: &BalanceProbeArgs,
+    base_card: &Card,
+) -> ProbeResult {
+    let cfg = EvolveConfig {
+        pop_size: args.pop,
+        generations: args.gens,
+        n_per_side: args.n,
+        base_seed: args.seed,
+        deck_len: 50,
+        per_card_cap: 3,
+        tournament_k: args.tournament_k,
+        mutation_rate: args.rate,
+        elite_count: args.elite,
+        stop_at_ceiling: None,
+        stop_at_plateau: None,
+        plateau_epsilon: 0.0,
+        pinned_card_id: None,
+        pinned_count: 0,
+        diversity_alpha: 0.0,
+        opponent_ai: parse_opponent_ai(args),
+        palette_anchor: Some(tsot::sim::palette::PaletteAnchor::from_card(base_card)),
+    };
+    // Ban the base card (and thus 0 copies) from the pool.
+    let pool_absent: Vec<Card> = pool
+        .iter()
+        .filter(|c| c.id != base_card.id)
+        .cloned()
+        .collect();
+    let label = format!("{}-absent", base_card.id);
+    run_probe_cell(registry, &pool_absent, gauntlet, args, &cfg, &label, None, true)
 }
 
 /// Render the probed card's full detail (cost, stats, abilities,
@@ -474,22 +565,39 @@ fn build_comparison_html(
                 }
 
                 @for (base_id, members) in groups {
+                    // Winner is decided among the real variants only; the
+                    // control is a baseline, not a contender.
+                    @let variant_count = members.iter().filter(|(_, r)| !r.is_control).count();
                     @let max_best = members.iter()
+                        .filter(|(_, r)| !r.is_control)
                         .map(|(_, r)| r.final_best_fitness)
                         .fold(f64::NEG_INFINITY, f64::max);
+                    @let control = members.iter().find(|(_, r)| r.is_control)
+                        .map(|(_, r)| (r.final_best_fitness, r.final_mean_fitness));
                     div.group-card {
-                        h2 { (base_id) " — " (members.len()) " version"
-                             (if members.len() == 1 { "" } else { "s" }) }
+                        h2 { (base_id) " — " (variant_count) " version"
+                             (if variant_count == 1 { "" } else { "s" })
+                             @if control.is_some() { " + control" } }
                         @for (card, r) in members {
-                            @let is_winner = (r.final_best_fitness - max_best).abs() < 1e-9
-                                && members.len() > 1;
+                            @let is_winner = !r.is_control
+                                && (r.final_best_fitness - max_best).abs() < 1e-9
+                                && variant_count > 1;
                             div class=(if is_winner { "variant-card winner" } else { "variant-card" }) {
-                                h3 { (r.card_id) }
+                                h3 { @if r.is_control { "control — best deck WITHOUT " (base_id) } @else { (r.card_id) } }
                                 (variant_hero(card))
                                 div.stats {
                                     div { "best fitness: " b { (format!("{:.3}", r.final_best_fitness)) } }
                                     div { "mean fitness: " b { (format!("{:.3}", r.final_mean_fitness)) } }
                                     div { "gens run: " b { (r.generations_run) } "/" (r.pop_size) }
+                                    @if !r.is_control {
+                                        @if let Some((cb, cm)) = control {
+                                            div { "Δ vs control: "
+                                                b { (format!("best {:+.3}", r.final_best_fitness - cb)) }
+                                                ", "
+                                                b { (format!("mean {:+.3}", r.final_mean_fitness - cm)) }
+                                            }
+                                        }
+                                    }
                                 }
                                 div {
                                     b { "Top final deck — co-occurring cards (count × card):" }
@@ -589,6 +697,27 @@ pub fn run_balance_probe(
         }
         println!("--- group: {base_id} ({} version(s)) ---", group_members.len());
         let mut group_results: Vec<(Card, ProbeResult)> = Vec::new();
+
+        // Absent control (once per group, first): best deck of this
+        // identity with the card banned. Every variant's Δ is vs this.
+        if !args.no_control {
+            if let Some(base_card) = registry.get(base_id) {
+                println!("--- probing {base_id} (absent control: 0 copies) ---");
+                let ctrl = probe_absent_control(registry, playable_pool, &gauntlet, args, base_card);
+                if args.json_prefix != "-" {
+                    let path = format!("{}-{}.json", args.json_prefix, ctrl.card_id);
+                    if let Err(e) = serde_json::to_string_pretty(&ctrl)
+                        .map_err(|e| e.to_string())
+                        .and_then(|s| std::fs::write(&path, s).map_err(|e| e.to_string()))
+                    {
+                        eprintln!("  ! failed to write {path}: {e}");
+                    }
+                }
+                group_results.push((base_card.clone(), ctrl));
+                println!();
+            }
+        }
+
         for card in &group_members {
             println!("--- probing {} ---", card.id);
             let result = probe_one_card(registry, playable_pool, &gauntlet, args, card);
@@ -610,18 +739,26 @@ pub fn run_balance_probe(
         groups.push((base_id.clone(), group_results));
     }
 
-    // Summary table, grouped by base id.
+    // Summary table, grouped by base id. When present, the absent-control
+    // cell prints first and every variant gets Δbest / Δmean vs it — the
+    // with-vs-without-the-card signal.
     println!("=== summary ===");
     for (base_id, members) in &groups {
         println!();
         println!("--- {base_id} ---");
+        let control = members.iter().find(|(_, r)| r.is_control).map(|(_, r)| r);
         let name_width = members
             .iter()
-            .map(|(_, r)| r.card_id.len())
+            .map(|(_, r)| display_name(r).len())
             .max()
             .unwrap_or(10)
-            .max(10);
-        for (_, r) in members {
+            .max(20);
+        // Control first, then the rest in their existing order.
+        let ordered = members
+            .iter()
+            .filter(|(_, r)| r.is_control)
+            .chain(members.iter().filter(|(_, r)| !r.is_control));
+        for (_, r) in ordered {
             let mut coocc: Vec<(&str, u32)> = r
                 .top_genome_card_counts
                 .iter()
@@ -630,11 +767,21 @@ pub fn run_balance_probe(
                 .collect();
             coocc.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
             let top: Vec<String> = coocc.iter().take(5).map(|(id, n)| format!("{n}×{id}")).collect();
+            // Δ column: blank for the control itself, else vs control.
+            let delta = match (r.is_control, control) {
+                (false, Some(c)) => format!(
+                    "Δbest {:+.3}  Δmean {:+.3}  ",
+                    r.final_best_fitness - c.final_best_fitness,
+                    r.final_mean_fitness - c.final_mean_fitness,
+                ),
+                _ => String::new(),
+            };
             println!(
-                "  {:<width$}  best={:.3}  mean={:.3}  | top: {}",
-                r.card_id,
+                "  {:<width$}  best={:.3}  mean={:.3}  {:<28}| top: {}",
+                display_name(r),
                 r.final_best_fitness,
                 r.final_mean_fitness,
+                delta,
                 top.join(", "),
                 width = name_width,
             );

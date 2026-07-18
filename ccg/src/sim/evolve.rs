@@ -608,6 +608,44 @@ mod tests {
     }
 
     #[test]
+    fn evolve_with_card_absent_from_pool_yields_zero_copies_in_palette() {
+        // The absent-control mechanism the balance-probe relies on: ban a
+        // card from the pool, no pin, but keep its palette as the anchor.
+        // Every genome must then contain 0 copies of the banned card and
+        // still respect the palette — i.e. "best deck of this identity
+        // WITHOUT the card."
+        use super::super::palette::{palette_ok, PaletteAnchor};
+        let reg = load_registry();
+        let full = playable_pool(&reg);
+        let banned = full
+            .iter()
+            .find(|c| c.colors.len() == 1)
+            .expect("pool has a mono-color card")
+            .clone();
+        let anchor = PaletteAnchor::from_card(&banned);
+        let pool: Vec<Card> = full.iter().filter(|c| c.id != banned.id).cloned().collect();
+        let gauntlet = build_gauntlet(&full, GAUNTLET_MASTER_SEED);
+        let cfg = EvolveConfig {
+            pinned_card_id: None,
+            pinned_count: 0,
+            palette_anchor: Some(anchor.clone()),
+            ..tiny_config()
+        };
+        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {}, None);
+        for (genome, _) in &result.final_population {
+            assert_eq!(
+                genome.iter().filter(|s| **s == banned.id).count(),
+                0,
+                "absent-control genome must contain 0 copies of the banned card"
+            );
+            assert!(
+                palette_ok(genome, &pool, &anchor),
+                "control deck must stay in the anchor's palette"
+            );
+        }
+    }
+
+    #[test]
     fn evolve_is_deterministic_per_seed_with_diversity_alpha() {
         let reg = load_registry();
         let pool = playable_pool(&reg);
