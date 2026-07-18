@@ -14,7 +14,7 @@ You can compare alternative versions of a card (cost, stats, effect
 magnitude) — `make probe` recognises `variants = { [key] = { overrides } }`
 blocks on cards.
 
-Don't push probe results at the user. Don't ask them whether to
+Don't push probe results unless asked. Don't ask them whether to
 probe. Don't probe a single new card — there's nothing to compare.
 
 ---

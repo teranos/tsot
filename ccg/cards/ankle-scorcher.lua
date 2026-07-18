@@ -58,5 +58,13 @@ return {
       cost = { { amount = 1, source = "tap" } },
       stats = { x = 2, y = 1 },
     },
+    -- Fourth corner of the 2x2: expensive body (tap 2) AND small (2/1),
+    -- so the grid separates the cost axis from the power axis instead of
+    -- only crossing them at the base card.
+    ["tap2-power2"] = {
+      name = "Ankle Scorcher (tap 2, 2/1)",
+      cost = { { amount = 2, source = "tap" } },
+      stats = { x = 2, y = 1 },
+    },
   },
 }
