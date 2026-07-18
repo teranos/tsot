@@ -3,6 +3,8 @@ The obelisk, the lake, hill, posters, wardrobe, jump, area to jump on, clickable
 
 the universe is cyclic. at the end of the universe everything gets a dithered datamoshed overlay effect — the loss of information — and only the information that crosses the seam carries into the big bang of the next universe. the next universe seam, if you will. this happens every hour. the minds of the players fuse when everything comes together, the universe starts again, and the collective mind chooses where the asteroid goes — the asteroid that contains the basic elements of new life, which was seeded by the players. they encounter it near an active volcano on a habitable planet, like earth but not really earth.
 
+See [The end of the universe](docs/the-end-of-the-universe.md).
+
 In that world you begin as a single cell. That single cell becomes multiple cells, you evolve by adding onto or shedding your dna, you keep doing this until there's a real 3D world to explore. after which you play the TSOT CCG in the world by bumping into players to start a UCT autobattle match. you can win a card. cards are a contested resource and they can carry over outside of the universe — because the player is authenticated with multiple things like ActivityPub or ATProto. the ATProto moderation server / labelling service idea is still very important to the project.
 
 roam should be deleted when game has everything roam has or if roam has nothing of vlue anymore in terms of ideas and more.
