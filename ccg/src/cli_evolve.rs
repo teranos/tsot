@@ -235,6 +235,9 @@ pub fn run_ea(
         pinned_count: 0,
         diversity_alpha: args.diversity_alpha,
         opponent_ai,
+        // `make evolve` stays uniform-random over the full pool; the
+        // palette constraint is probe-only.
+        palette_anchor: None,
     };
 
     println!();

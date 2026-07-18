@@ -17,6 +17,7 @@ use crate::card::{Card, CardRegistry};
 
 use super::genome::random_genome;
 use super::ops::{crossover_uniform, mutate, repair, tournament_select};
+use super::palette::{enforce_palette, PaletteAnchor};
 
 #[derive(Debug, Clone)]
 pub struct EvolveConfig {
@@ -86,6 +87,12 @@ pub struct EvolveConfig {
     /// Heuristic-by-default tooling. When `Mcts`, evolved decks have to
     /// beat strong play to score high; expect ~16× slower fitness eval.
     pub opponent_ai: super::AiKind,
+    /// `balance-probe` support: constrain every genome to a color/symbol
+    /// palette anchored on the probed card (see [`super::palette`]).
+    /// Applied at init and after each crossover+mutate, mirroring the pin.
+    /// `None` = uniform-random construction over the whole pool — the
+    /// regular `make evolve` behavior, byte-for-byte unchanged.
+    pub palette_anchor: Option<PaletteAnchor>,
 }
 
 impl Default for EvolveConfig {
@@ -107,6 +114,7 @@ impl Default for EvolveConfig {
             pinned_count: 0,
             diversity_alpha: 0.0,
             opponent_ai: super::AiKind::Game,
+            palette_anchor: None,
         }
     }
 }
@@ -229,10 +237,18 @@ pub fn evolve(
     // of the pinned id forced in (replacing random slots) before
     // fitness scoring.
     let pin_id: Option<&str> = cfg.pinned_card_id.as_deref();
+    let palette: Option<&PaletteAnchor> = cfg.palette_anchor.as_ref();
     let init_jobs: Vec<(Vec<String>, u64)> = (0..cfg.pop_size)
         .map(|_| {
             let mut genome = random_genome(pool, cfg.deck_len, cfg.per_card_cap, &mut rng)
                 .expect("init random_genome: pool too small for deck_len/cap");
+            // Palette repair before the pin: the pinned card is anchored
+            // to the palette (it *is* the anchor), so pinning never
+            // breaks the palette invariant, but palette refill must not
+            // clobber the pin — so palette first, pin last.
+            if let Some(anchor) = palette {
+                enforce_palette(&mut genome, pool, anchor, cfg.per_card_cap, &mut rng);
+            }
             enforce_pin(&mut genome, pin_id, cfg.pinned_count, &mut rng);
             let fit_seed: u64 = rng.gen();
             (genome, fit_seed)
@@ -297,10 +313,12 @@ pub fn evolve(
                 child = random_genome(pool, cfg.deck_len, cfg.per_card_cap, &mut rng)
                     .expect("repair fallback random_genome: pool too small");
             }
-            // Pin re-enforcement after mutate+repair. Mutation may have
-            // replaced pinned slots with random cards; repair doesn't
-            // know about the pin. This step restores the invariant
-            // every child satisfies before fitness scoring.
+            // Palette repair after mutate+repair (mutation draws from the
+            // full pool and can introduce off-palette cards), then pin
+            // re-enforcement. Same order as init: palette first, pin last.
+            if let Some(anchor) = palette {
+                enforce_palette(&mut child, pool, anchor, cfg.per_card_cap, &mut rng);
+            }
             enforce_pin(&mut child, pin_id, cfg.pinned_count, &mut rng);
             let fit_seed: u64 = rng.gen();
             child_jobs.push((child, fit_seed));
@@ -418,6 +436,7 @@ mod tests {
             pinned_count: 0,
             diversity_alpha: 0.0,
             opponent_ai: super::super::AiKind::Fast,
+            palette_anchor: None,
         }
     }
 
@@ -556,6 +575,34 @@ mod tests {
             assert!(
                 count >= 2,
                 "pin invariant broken: genome has {count} copies of {pin_id}, expected >= 2"
+            );
+        }
+    }
+
+    #[test]
+    fn evolve_with_palette_anchor_keeps_every_genome_in_palette() {
+        use super::super::palette::{palette_ok, PaletteAnchor};
+        let reg = load_registry();
+        let pool = playable_pool(&reg);
+        let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
+        // Anchor on a mono-color pool card so the splash budget bites.
+        let anchor_card = pool
+            .iter()
+            .find(|c| c.colors.len() == 1)
+            .expect("pool has a mono-color card")
+            .clone();
+        let anchor = PaletteAnchor::from_card(&anchor_card);
+        let cfg = EvolveConfig {
+            pinned_card_id: Some(anchor_card.id.clone()),
+            pinned_count: 2,
+            palette_anchor: Some(anchor.clone()),
+            ..tiny_config()
+        };
+        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {}, None);
+        for (genome, _) in &result.final_population {
+            assert!(
+                palette_ok(genome, &pool, &anchor),
+                "final-population genome escaped the palette: {genome:?}"
             );
         }
     }

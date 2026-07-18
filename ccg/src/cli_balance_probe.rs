@@ -230,6 +230,10 @@ fn probe_one_card(
         pinned_count: args.pinned_count.min(3),
         diversity_alpha: 0.0,
         opponent_ai,
+        // Build each genome in the probed card's color/symbol identity
+        // (anchor + at most one splash color / three splash symbols, ≤4
+        // colors) instead of uniform-random over the whole pool.
+        palette_anchor: Some(tsot::sim::palette::PaletteAnchor::from_card(card)),
     };
 
     // For pin to work, the pinned card MUST be available to genomes.

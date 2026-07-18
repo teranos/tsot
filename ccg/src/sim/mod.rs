@@ -23,6 +23,7 @@ pub mod human;
 pub mod instrument;
 pub mod mcts;
 pub mod ops;
+pub mod palette;
 pub mod parallel_eval;
 pub mod playable_pool;
 pub mod run;
