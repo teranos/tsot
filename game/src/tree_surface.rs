@@ -28,12 +28,10 @@ use crate::tree_mesh::{BranchSegment, MeshVertex, TreeSpecies, tree_branches};
 /// wasm has no threads, so a `thread_local!` `Rc` is safe.
 pub type WoodMesh = Rc<(Vec<MeshVertex>, Vec<u32>)>;
 
-/// Byte cap for the per-tree mesh cache. At ~1 MB/tree the tree-count
-/// cap the browser can afford is a couple dozen; measuring by bytes
-/// keeps a stand of small trees from getting evicted just because the
-/// count is high. 64 MiB is a compromise: fits several dozen big oaks,
-/// stays well under a browser tab's practical budget.
-const WOOD_CACHE_BYTES_CAP: usize = 64 * 1024 * 1024;
+/// Byte cap for the per-tree mesh cache. Kept small on purpose — the
+/// browser tab plus seer's regression guard together budget roughly
+/// tens of MB total. Bigger cache = crashes / red seer.
+const WOOD_CACHE_BYTES_CAP: usize = 16 * 1024 * 1024;
 
 thread_local! {
     /// key = (seed, species_ptr_as_addr). Species is `&'static`, so ptr
@@ -89,12 +87,11 @@ pub fn tree_surface_cached(seed: u32, sp: &'static TreeSpecies) -> WoodMesh {
 
 /// Per §3b: 5 buttress roots.
 const ROOT_COUNT: usize = 5;
-/// Resolution floor: the coarsest grid we ever mesh with. Below this the
-/// bole loses fidelity — even a small tree has ≥20 cells across.
-const RES_MIN: usize = 20;
-/// Resolution ceiling: even a giant tree caps here — 44³ narrow-banded
-/// keeps us near ~0.3s/tree in release.
-const RES_MAX: usize = 44;
+/// Resolution floor + ceiling. Tight range: verts per tree scale ~res²
+/// under narrow-band, and every retained vertex counts against the
+/// browser tab's + seer's memory budgets. Chunky wood is the trade.
+const RES_MIN: usize = 12;
+const RES_MAX: usize = 20;
 
 /// A round-cone in unit tree space. The trunk, every branch, and every
 /// root is one of these — the whole tree is a `smin` over a `Vec<Cone>`.

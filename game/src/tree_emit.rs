@@ -4,7 +4,6 @@
 //! cards, fruit, moss, nests, and splinters. Deterministic per tree so
 //! every peer draws the same skeleton and autumn tint.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::scene::{MeshInstance, SceneSnapshot};
@@ -324,44 +323,6 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
     }
 }
 
-// Per-snapshot memoizer of the merged wood buffer. Keyed by a
-// fingerprint of the current tree list; if unchanged, the previous
-// merged `Rc<Vec<..>>` is handed back without touching the heap.
-//
-// This is what makes the per-frame path affordable in the browser:
-// merging every tree into one buffer is O(all_trees × verts_per_tree)
-// (~hundreds of MB per frame at a mature stand). Doing it once per
-// tree-list change (chunk stream in/out) collapses that to zero on
-// stable frames.
-type MergedWood = Option<(u64, Rc<Vec<MeshVertex>>, Rc<Vec<u32>>)>;
-thread_local! {
-    static MERGED_WOOD: RefCell<MergedWood> = const { RefCell::new(None) };
-}
-
-/// Fingerprint the tree list — position + species pointer, folded via
-/// FNV-1a-64. Stumps are excluded because they don't contribute to the
-/// wood buffer. Order-sensitive: matches the merge order.
-fn fingerprint_trees(
-    trees: &[(bevy_math::Vec3, f32, &'static crate::tree_mesh::TreeSpecies, bool)],
-) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for (t, height, sp, stump) in trees {
-        if *stump {
-            continue;
-        }
-        for byte in t.x.to_bits().to_le_bytes().iter()
-            .chain(t.y.to_bits().to_le_bytes().iter())
-            .chain(t.z.to_bits().to_le_bytes().iter())
-            .chain(height.to_bits().to_le_bytes().iter())
-            .chain((*sp as *const _ as usize).to_le_bytes().iter())
-        {
-            h ^= *byte as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01B3);
-        }
-    }
-    h
-}
-
 /// Same as `snapshot_to_mesh_instances`, plus the continuous woody
 /// surface for every tree merged into one world-space vertex+index
 /// buffer.
@@ -371,44 +332,34 @@ fn fingerprint_trees(
 /// and offset by the tree's world position. Indices are rebased so
 /// every tree's triangles reference into the merged vertex list.
 ///
-/// The merged buffer is memoized by `fingerprint_trees` — on stable
-/// frames (no chunk streaming) the merge is a hashmap-free `Rc::clone`.
+/// The merge is per-frame — no cache on the merged buffer, only on the
+/// per-tree unit meshes. A frame-level cache retained the last merged
+/// Vec (100s of MB at scale) and blew both the browser tab and seer's
+/// heap-delta threshold.
 pub fn snapshot_to_mesh_instances_with_wood(snap: &SceneSnapshot) -> MeshTreeInstances {
     let mut out = snapshot_to_mesh_instances(snap);
-    let fingerprint = fingerprint_trees(&snap.trees);
-    let (wv, wi) = MERGED_WOOD.with(|c| {
-        if let Some((fp, v, i)) = c.borrow().as_ref()
-            && *fp == fingerprint
-        {
-            return (v.clone(), i.clone());
+    let mut wood_verts: Vec<MeshVertex> = Vec::new();
+    let mut wood_indices: Vec<u32> = Vec::new();
+    for (t, h, sp, stump) in &snap.trees {
+        if *stump {
+            continue;
         }
-        let mut wood_verts: Vec<MeshVertex> = Vec::new();
-        let mut wood_indices: Vec<u32> = Vec::new();
-        for (t, h, sp, stump) in &snap.trees {
-            if *stump {
-                continue;
-            }
-            let mesh = tree_surface_cached(tree_seed(t.x, t.z), sp);
-            let (verts, indices) = (&mesh.0, &mesh.1);
-            let base = wood_verts.len() as u32;
-            for v in verts {
-                wood_verts.push(MeshVertex {
-                    pos: [v.pos[0] * *h + t.x, v.pos[1] * *h + t.y, v.pos[2] * *h + t.z],
-                    normal: v.normal,
-                    uv: v.uv,
-                });
-            }
-            for &i in indices {
-                wood_indices.push(base + i);
-            }
+        let mesh = tree_surface_cached(tree_seed(t.x, t.z), sp);
+        let (verts, indices) = (&mesh.0, &mesh.1);
+        let base = wood_verts.len() as u32;
+        for v in verts {
+            wood_verts.push(MeshVertex {
+                pos: [v.pos[0] * *h + t.x, v.pos[1] * *h + t.y, v.pos[2] * *h + t.z],
+                normal: v.normal,
+                uv: v.uv,
+            });
         }
-        let v = Rc::new(wood_verts);
-        let i = Rc::new(wood_indices);
-        *c.borrow_mut() = Some((fingerprint, v.clone(), i.clone()));
-        (v, i)
-    });
-    out.wood_verts = wv;
-    out.wood_indices = wi;
+        for &i in indices {
+            wood_indices.push(base + i);
+        }
+    }
+    out.wood_verts = Rc::new(wood_verts);
+    out.wood_indices = Rc::new(wood_indices);
     out
 }
 
