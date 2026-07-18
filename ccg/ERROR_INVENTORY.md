@@ -64,9 +64,28 @@ pass found:
   JS empty-catches are all the documented `catch(_){}`-around-
   `tsotPushError` defense-in-depth / parse-with-fallback pattern (2026-
   06-18 audit), re-confirmed. **ccg is clean.**
-- **roam sweep [ ] open (roam's scope):** roam carries 14 `let _ =` and
-  2 JS empty-catches, now correctly visible to the gate but not triaged
-  here — TSOT and roam are independent subprojects.
+- **Extended scan 2026-07-18 — swallow shapes the gate does NOT track,
+  ccg [x] clean.** Went beyond the 5 gated patterns to the other shapes
+  ERROR.md forbids:
+  - arrow-form `.catch(() => {})` (the gate only matches the paren
+    form) — **0 in ccg** (2 in roam: one a comment, one justified inline);
+  - `unwrap_or_default()` (40 sites) — every one is on an `Option`
+    (absent optional field → default) or a best-effort diagnostic lock
+    (`instrument.rs` CURRENT_OP), **none on a meaningful `Result`**;
+  - silent `Err(_) =>` arms — the only non-test one
+    (`play.rs` drive loop, on `pass_priority()`) catches
+    `PriorityError::NoWindowOpen`, i.e. "the response window closed, stop
+    driving" — benign control flow, not a dropped failure;
+  - statement `.ok();` — all in `card/loader.rs` test helpers removing
+    temp files/dirs (ignore-if-absent cleanup).
+  No production swallow found in ccg by any shape. **The ccg swallow
+  audit is complete.** (Optional future hardening, not a violation: add
+  an arrow-`.catch` pattern to the gate so a future ccg one is caught —
+  deferred; there are none today.)
+- **roam sweep [ ] open (roam's scope):** roam carries 14 `let _ =`, 2
+  JS paren empty-catches, and the 2 arrow-catches above — now correctly
+  visible to the gate but not triaged here; TSOT and roam are
+  independent subprojects.
 
 The dated section below is otherwise preserved as-is; treat its
 "closed [x]" entries as accurate to 2026-06-18 and its counts as

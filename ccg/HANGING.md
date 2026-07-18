@@ -37,6 +37,14 @@ So the list below is unambiguously "what's left," here is what shipped:
 - Save-compat guard: picker skips hand-casting graveyard-only cards
   (P.41b, keeps picker/resolver agreement); `from_graveyard` given
   `#[serde(default)]` + a legacy-load regression test so old saves load.
+- **Error-swallow audit** — fixed the `fitness.rs` failure-detail swallow
+  (details ride out on `FitnessBreakdown.failure_details`, sweep surfaces
+  them); fixed the sacred-error CI gate (was doubly broken: `**` needed
+  globstar, `{}` never brace-expands from a variable → switched to
+  `grep -r --include`, re-based baselines to correct counts). Swept every
+  swallow shape (gated + ungated) across ccg — **no production swallow
+  remains; ccg swallow audit complete** (see ERROR_INVENTORY 2026-07-18).
+  roam's now-visible sites are roam's scope.
 - **Blocking taps the blocker (B.19) + vigilance→blocking (B.16)** —
   `declare_blocker` taps the blocker at declaration (unless vigilant) and
   fires `OnTapped`, mirroring the attack tap. TDD, committed.
@@ -77,14 +85,13 @@ So the list below is unambiguously "what's left," here is what shipped:
    differs. Offered, not run.
 
 ### Engineering hygiene (identified, not done)
-8. **`fitness.rs` failure-detail swallow.** ~`fitness.rs:223/263` drains
-   and discards the per-game failure-detail strings — an errors-are-
-   sacred violation (a genome can win by exploiting a bug and the score
-   won't say). Identified during the flaky-test hunt; not fixed.
 9. **Flaky test `diversity_alpha_widens_final_population_diversity`.**
    Root cause still unknown — the crystal-tap picker bug (since fixed)
-   was a red herring, present in passing runs too. Blocked partly by #8
-   (the real error is swallowed).
+   was a red herring, present in passing runs too. The diagnostic blocker
+   is now removed: #8 (the fitness swallow) is fixed and the
+   picker/resolver sweep surfaces failure detail, so the next recurrence
+   shows the *why* instead of a bare count. Root cause still to be caught
+   in the act.
 10. **DRY: `CostNeeds` 8-site duplication.** Same cost-aggregation shape
     repeated ~8 places; candidate for a shared helper. Not done.
 11. **DRY: `substitution_coverage`.** Flagged as a dedup opportunity.
