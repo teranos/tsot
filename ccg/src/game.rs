@@ -37,6 +37,9 @@ mod angry_glassblower_tests;
 mod shatter_tests;
 
 #[cfg(test)]
+mod death_replacement_tests;
+
+#[cfg(test)]
 mod delayed_trigger_tests;
 
 pub use combat::{CombatError, CombatOutcome};

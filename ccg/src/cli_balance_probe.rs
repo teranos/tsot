@@ -364,6 +364,7 @@ fn variant_hero(card: &Card) -> Markup {
                     CostSource::Sacrifice => "sacrifice",
                     CostSource::SelfExile => "self-exile",
                     CostSource::Attached => "attached",
+                    CostSource::Tap => "tap",
                 };
                 format!("{amt} {source}")
             })

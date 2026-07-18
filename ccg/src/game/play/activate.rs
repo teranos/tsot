@@ -134,7 +134,7 @@ impl GameState {
                     return Err(ActivateError::CannotPayComponents);
                 }
                 CostSource::Tap => {
-                    // RULES P.40 `tap` is a cast-only cost source; A.8 does
+                    // RULES P.42 `tap` is a cast-only cost source; A.8 does
                     // not support it in activation costs.
                     return Err(ActivateError::CannotPayComponents);
                 }

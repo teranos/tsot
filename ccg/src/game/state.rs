@@ -106,6 +106,13 @@ pub struct Sleeve {
     /// site consults `children()` (attached ∪ same_sleeve), not `attached`.
     #[serde(default)]
     pub same_sleeve: Vec<InstanceId>,
+    /// Z.8 SLEEVELESS: true iff this card has no sleeve around it — the
+    /// mirror of a cardless sleeve (`content: None`). A card becomes
+    /// sleeveless by shedding its own sleeve (`shed_own_sleeve`), which
+    /// pops the card out and attaches the emptied sleeve to it. Default
+    /// false: every card starts sleeved, so old save files load unchanged.
+    #[serde(default)]
+    pub sleeveless: bool,
     pub modifiers: Vec<Modifier>,  // C.12 continuous effects
     pub status_effects: Vec<StatusEffect>,
 }
@@ -144,6 +151,29 @@ impl Sleeve {
     /// Z.8: true iff this sleeve has no card inside.
     pub fn is_cardless(&self) -> bool {
         self.content.is_none()
+    }
+
+    /// Z.8: a fresh cardless sleeve — empty content, owned+controlled by
+    /// `owner`, every runtime flag cleared. Used when a mutation cast
+    /// vacates its own sleeve (P.26) and that empty sleeve attaches to the
+    /// host.
+    pub fn cardless(instance_id: InstanceId, owner: PlayerId) -> Self {
+        Sleeve {
+            instance_id,
+            content: None,
+            owner,
+            controller: owner,
+            tapped: false,
+            face_down: false,
+            damage: 0.0,
+            summoning_sick: false,
+            attacked_this_turn: false,
+            attached: Vec::new(),
+            same_sleeve: Vec::new(),
+            sleeveless: false,
+            modifiers: Vec::new(),
+            status_effects: Vec::new(),
+        }
     }
 
     /// Every card sharing this card's physical unit: strippable `attached`
@@ -450,6 +480,36 @@ pub struct GameState {
     /// is serialized but not journaled.
     #[serde(default)]
     pub delayed_triggers: Vec<DelayedTrigger>,
+    /// Transient death-replacement decision set by `game.prevent_death` /
+    /// `game.redirect_death` inside an `OnWouldDie` handler, consumed by
+    /// `resolve_board_deaths` within the same synchronous death resolution.
+    /// Never journaled or serialized — the resulting state changes (damage
+    /// clear, the redirect move) are what get journaled; this decision cell
+    /// is always cleared before and after each death is resolved.
+    #[serde(skip, default)]
+    pub pending_death_replacement: Option<DeathReplacement>,
+    /// Transient re-entrancy guard for the B.8 damage-death settle in
+    /// `drain_deferred_events`. Resolving a death fires on_die / OnWouldDie
+    /// through `fire_self_only`, which drains again — without this flag the
+    /// nested drain re-scans the creature still mid-resolution and recurses
+    /// forever. While set, a nested drain drains the event queue but skips
+    /// the damage-death scan; new deaths bubble to the outer settle loop.
+    #[serde(skip, default)]
+    pub settling_deaths: bool,
+}
+
+/// Z.8 death-replacement (12.3): the outcome an `OnWouldDie` handler chose
+/// for a creature about to die. `None` on the state = no replacement, the
+/// death proceeds to GRAVEYARD as usual.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeathReplacement {
+    /// `game.prevent_death` — the creature survives on the BOARD; the
+    /// engine clears its accumulated damage so B.8 doesn't re-kill it.
+    Prevent,
+    /// `game.redirect_death(zone)` — the creature leaves the BOARD to
+    /// `zone` (e.g. EXILE) instead of the GRAVEYARD, quietly: no on_die,
+    /// no watcher broadcast, no P.8 attached-cascade.
+    Redirect(Zone),
 }
 
 impl GameState {
@@ -493,6 +553,8 @@ impl GameState {
             pending_main_phase_returns: Vec::new(),
             pending_events: std::collections::VecDeque::new(),
             delayed_triggers: Vec::new(),
+            pending_death_replacement: None,
+            settling_deaths: false,
         }
     }
 
@@ -1162,6 +1224,85 @@ impl GameState {
         })
     }
 
+    /// Z.8: set the `sleeveless` flag on a card, journaling prior+new so the
+    /// entry rolls back and forward-replays. Enforces the fourth-quadrant
+    /// invariant: a unit with no card AND no sleeve is the null object and
+    /// must never exist, so making a cardless sleeve sleeveless is refused
+    /// with a sacred error rather than constructing it.
+    pub fn set_sleeveless(&mut self, iid: &InstanceId, sleeveless: bool) {
+        let Some(inst) = self.card_pool.get(iid) else {
+            return;
+        };
+        let was = inst.sleeveless;
+        if was == sleeveless {
+            return;
+        }
+        if sleeveless && inst.content.is_none() {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "engine",
+                "null sleeve-unit",
+                format!(
+                    "Z.8: refusing to make cardless sleeve {iid} sleeveless — a \
+                     unit with neither a card nor a sleeve is the null object \
+                     and must not exist"
+                ),
+            );
+            return;
+        }
+        self.card_pool
+            .get_mut(iid)
+            .expect("present — checked above")
+            .sleeveless = sleeveless;
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetSleeveless {
+                iid: iid.clone(),
+                was,
+                now: sleeveless,
+            });
+        }
+    }
+
+    /// Z.8: a card sheds its own sleeve. The card stays where it is —
+    /// content intact, same id — but becomes sleeveless, and its vacated
+    /// sleeve attaches to it as a cardless sleeve (Z.6), the same shed-and-
+    /// attach shape as a mutation cast (only self-targeted). No-op if the
+    /// card is already sleeveless (nothing left to shed) or is itself a
+    /// cardless sleeve (no card to pop out); returns whether it shed. This
+    /// is the primitive a "survive by shedding your sleeve" death
+    /// replacement drives.
+    pub fn shed_own_sleeve(&mut self, iid: &InstanceId) -> bool {
+        let owner = match self.card_pool.get(iid) {
+            Some(s) if !s.sleeveless && s.content.is_some() => s.owner,
+            _ => return false,
+        };
+        self.set_sleeveless(iid, true);
+        // Id derived from the shedding card; a card sheds at most once (the
+        // sleeveless guard above), so `{iid}:shed` is unique and distinct
+        // from a mutation's `{mutation}:shed`.
+        let shed = format!("{iid}:shed");
+        self.mint_cardless_sleeve(&shed, owner);
+        self.add_attached(iid, &shed);
+        self.set_face_down(&shed, true);
+        true
+    }
+
+    /// Z.8: mint a fresh cardless sleeve into the pool, owned+controlled by
+    /// `owner`, journaled so rollback removes it. Used when a mutation cast
+    /// (P.26) vacates its own sleeve — the empty sleeve is not destroyed, it
+    /// becomes an attached cardless sleeve on the host (the caller does the
+    /// `add_attached`).
+    pub fn mint_cardless_sleeve(&mut self, iid: &InstanceId, owner: PlayerId) {
+        self.card_pool
+            .insert(iid.clone(), Sleeve::cardless(iid.clone(), owner));
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::MintCardlessSleeve {
+                iid: iid.clone(),
+                owner,
+            });
+        }
+    }
+
     pub fn add_attached(&mut self, host: &InstanceId, attached: &InstanceId) {
         let Some(inst) = self.card_pool.get_mut(host) else {
             return;
@@ -1429,6 +1570,7 @@ impl GameState {
                 attacked_this_turn: false,
                 attached: Vec::new(),
                 same_sleeve: Vec::new(),
+                sleeveless: false,
                 modifiers: Vec::new(),
                 status_effects: Vec::new(),
             };

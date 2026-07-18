@@ -5,7 +5,7 @@
 //! (rollback) the mutation.
 
 use super::state::{
-    CombatState, GameState, InstanceId, Modifier, Phase, PlayerId, StatusEffect, Zone,
+    CombatState, GameState, InstanceId, Modifier, Phase, PlayerId, Sleeve, StatusEffect, Zone,
 };
 use crate::card::EventName;
 use serde::{Deserialize, Serialize};
@@ -104,6 +104,18 @@ pub enum JournalEntry {
     AddAttached {
         host: InstanceId,
         attached: InstanceId,
+    },
+    /// Z.8: minted a fresh cardless sleeve into the pool — a mutation cast
+    /// (P.26) vacating its own sleeve. Forward: insert. Inverse: remove.
+    MintCardlessSleeve {
+        iid: InstanceId,
+        owner: PlayerId,
+    },
+    /// Z.8: flipped a card's `sleeveless` flag (it shed its own sleeve).
+    SetSleeveless {
+        iid: InstanceId,
+        was: bool,
+        now: bool,
     },
     /// Z.7: fused a card into a host's `same_sleeve` list. Inverse: pop last.
     AddSameSleeve {
@@ -390,6 +402,14 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
                 }
             }
         }
+        JournalEntry::MintCardlessSleeve { iid, .. } => {
+            state.card_pool.remove(&iid);
+        }
+        JournalEntry::SetSleeveless { iid, was, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.sleeveless = was;
+            }
+        }
         JournalEntry::AddSameSleeve { host, sleeved } => {
             if let Some(inst) = state.card_pool.get_mut(&host) {
                 if let Some(last) = inst.same_sleeve.last() {
@@ -557,6 +577,16 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::AddAttached { host, attached } => {
             if let Some(inst) = state.card_pool.get_mut(&host) {
                 inst.attached.push(attached);
+            }
+        }
+        JournalEntry::MintCardlessSleeve { iid, owner } => {
+            state
+                .card_pool
+                .insert(iid.clone(), Sleeve::cardless(iid, owner));
+        }
+        JournalEntry::SetSleeveless { iid, now, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.sleeveless = now;
             }
         }
         JournalEntry::AddSameSleeve { host, sleeved } => {

@@ -55,12 +55,14 @@ return {
         local target = game.choose_card(pool, {prompt = "deal 2 + haste rider"})
         if not target then return end
         game.damage(target, 2)
+        -- C.15 continuous check: if damage dropped effective y ≤ 0,
+        -- the engine already moved target to GY. Don't manually move
+        -- again — that errors with "card not found in any zone".
+        -- Only grant haste when the target survived the damage.
         local after = game.card(target)
-        if after and after.y and 2 >= after.y then
-          game.move(target, "graveyard")
-          return
+        if after and after.y and after.y > 0 then
+          game.add_modifier(target, "gains_haste", 0, 0, "end_of_turn")
         end
-        game.add_modifier(target, "gains_haste", 0, 0, "end_of_turn")
       end,
     },
   },

@@ -1,17 +1,15 @@
 # tsot — The Symbols of Teranos
 
-A 1v1 collectible card game. Damage is mill. Costs are paid from your hand, deck, or graveyard.
+Monorepo: [game](game/) (the game) + [ccg](ccg/) (the autobattle engine — TSOT). See [`game/README.md`](game/README.md) for the game, [`ccg/LIMITATIONS.md`](ccg/LIMITATIONS.md) for engine status, [`ccg/EA.md`](ccg/EA.md) for the evolutionary deck-search loop and its make targets.
 
-Monorepo: [roam](roam/) (the game) + [ccg](ccg/) (the autobattle engine — TSOT). See [`roam/README.md`](roam/README.md) for the game, [`ccg/LIMITATIONS.md`](ccg/LIMITATIONS.md) for engine status, [`ccg/EA.md`](ccg/EA.md) for the evolutionary deck-search loop and its make targets.
-
-## Play roam
+## Play game
 
 ```sh
-cd roam
+cd game
 nix develop -c make wasm-serve
 ```
 
-Opens at http://localhost:8080. See [`roam/CLAUDE.md`](roam/CLAUDE.md) for the architecture and `roam/`'s own `make help`.
+Opens at http://localhost:8080. See [`game/CLAUDE.md`](game/CLAUDE.md) for the architecture and `game/`'s own `make help`.
 
 ## Engine development (tsot)
 

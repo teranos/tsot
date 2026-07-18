@@ -3236,31 +3236,48 @@ fn lua_damage_to_player_mills_n_from_their_deck_to_exile() {
 }
 
 #[test]
-fn do_damage_invokes_b8_cleanup_wiring() {
-    // Integration test for the wiring: calling do_damage on a
-    // creature that should die from B.8 must leave it in graveyard.
-    // The unit test above
-    // (b8_lua_damage_accumulation_kills_creature_via_cleanup_b8_damage_deaths)
-    // exercises the cleanup function in isolation; this one
-    // exercises the entry point (the function that handlers actually
-    // invoke via game.damage), proving the sweep happens
-    // automatically. If someone deletes the cleanup call from
-    // do_damage (removing the wiring while leaving the sweep
-    // function intact), the unit test still passes but this one
-    // fails.
+fn game_damage_kills_a_lethal_creature_through_the_deferred_settle() {
+    // game.damage applies damage inside a live handler's borrow; the B.8
+    // death is NOT swept synchronously inside do_damage (that would bypass
+    // the OnWouldDie replacement window). It is deferred to
+    // drain_deferred_events — after the handler unwinds, with a Lua context
+    // — and resolved through resolve_board_deaths. Fire a real burn handler
+    // and prove the lethal victim still ends in the graveyard.
+    let lua = mlua::Lua::new();
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+
     let victim = s.b.hand[0].clone();
     let _ = s.move_card(&victim, PlayerId::B, Zone::Hand, Zone::Board);
-    {
-        let inst = s.card_pool.get_mut(&victim).unwrap();
-        inst.card_mut().stats = Some(crate::card::Stats { x: 2.0, y: 2.0 });
-    }
-    let res = crate::game::lua_api::do_damage(&mut s, &victim, 2.0);
-    assert!(res.is_ok());
+    s.card_pool.get_mut(&victim).unwrap().card_mut().stats =
+        Some(crate::card::Stats { x: 2.0, y: 2.0 });
+
+    // A source whose on_play burns the victim for lethal via game.damage.
+    let src = s.a.hand[0].clone();
+    let _ = s.move_card(&src, PlayerId::A, Zone::Hand, Zone::Board);
+    let burn: mlua::Function = lua
+        .load(format!("return function(game, self) game.damage('{victim}', 2) end"))
+        .eval()
+        .unwrap();
+    s.card_pool
+        .get_mut(&src)
+        .unwrap()
+        .card_mut()
+        .handlers
+        .insert(crate::card::EventName::OnPlay, burn);
+
+    let mut oracle = crate::choice::NoopOracle;
+    crate::game::lua_api::fire_self_only(
+        &lua,
+        &mut s,
+        &mut oracle,
+        crate::card::EventName::OnPlay,
+        &src,
+    )
+    .expect("burn resolves");
+
     assert!(
         !s.b.board.contains(&victim),
-        "do_damage must invoke cleanup_b8_damage_deaths; \
-         victim with damage=Y still on board"
+        "lethal game.damage removes the victim from the board via the deferred B.8 settle"
     );
     assert!(
         s.b.graveyard.contains(&victim),
@@ -4032,11 +4049,11 @@ fn every_offered_mutation_target_is_accepted_and_full_sleeve_is_refused() {
     assert_eq!(r, Err(PlayError::SleeveFull(full)));
 }
 
-// --- P.40 `tap` cost source ---
+// --- P.42 `tap` cost source ---
 
-/// P.40: casting a card with a `tap` cost taps N untapped permanents the
+/// P.42: casting a card with a `tap` cost taps N untapped permanents the
 /// player controls. Cast is green with `tap 2`; the board has a green
-/// permanent (the color anchor, P.40a) and a colorless filler. Both end
+/// permanent (the color anchor, P.42a) and a colorless filler. Both end
 /// tapped, and the cast resolves.
 #[test]
 fn tap_cost_taps_chosen_permanents() {
@@ -4079,7 +4096,7 @@ fn tap_cost_taps_chosen_permanents() {
     );
 }
 
-/// P.40a: a tap-only cost needs at least one on-color tap. A green cast
+/// P.42a: a tap-only cost needs at least one on-color tap. A green cast
 /// paid entirely with colorless taps is refused.
 #[test]
 fn tap_only_cost_requires_color_anchor() {
@@ -4114,7 +4131,7 @@ fn tap_only_cost_requires_color_anchor() {
     assert_eq!(result, Err(PlayError::NoTapPaymentForColor));
 }
 
-/// P.40a cross-source anchor: a `gy + tap` cost is anchored by the
+/// P.42a cross-source anchor: a `gy + tap` cost is anchored by the
 /// mandatory color-matching GY pitch (P.12a), so the taps need not be
 /// on-color. Green cast, colorless taps, one green GY pitch -> ok.
 #[test]
@@ -4165,7 +4182,7 @@ fn gy_anchor_satisfies_tap_color_requirement() {
     assert!(s.a.exile.contains(&gy_pitch), "GY pitch should exile");
 }
 
-/// P.40d: a summoning-sick creature is a legal `tap` payment — tapping a
+/// P.42d: a summoning-sick creature is a legal `tap` payment — tapping a
 /// permanent as a resource is exempt from B.3 (unlike A.6's `T:`).
 #[test]
 fn tap_cost_accepts_summoning_sick_permanent() {
@@ -4199,7 +4216,7 @@ fn tap_cost_accepts_summoning_sick_permanent() {
     assert!(s.card_pool.get(&sick).unwrap().tapped);
 }
 
-/// P.40: too few `tap` payments for the cost is refused (count mismatch).
+/// P.42: too few `tap` payments for the cost is refused (count mismatch).
 #[test]
 fn tap_cost_wrong_count_refused() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
@@ -4233,7 +4250,7 @@ fn tap_cost_wrong_count_refused() {
     );
 }
 
-/// P.40: an already-tapped permanent is not a legal `tap` payment.
+/// P.42: an already-tapped permanent is not a legal `tap` payment.
 #[test]
 fn tap_cost_rejects_already_tapped_permanent() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
