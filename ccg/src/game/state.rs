@@ -291,6 +291,14 @@ pub enum StackItem {
         /// announce time, but HAND payments + destination move + handler
         /// fires happen at resolution. The choices have to ride along.
         choices: super::PlayChoices,
+        /// RULES P.41a/d: true when this cast was announced from the
+        /// GRAVEYARD. On resolution (or counter) any destination that
+        /// would be GRAVEYARD becomes EXILE instead (P.41d) so a
+        /// graveyard cast can't recycle. Board destinations are unchanged.
+        /// `#[serde(default)]`: pre-P.41 saves have no such field — those
+        /// casts predate graveyard casting, so `false` is correct.
+        #[serde(default)]
+        from_graveyard: bool,
     },
 }
 
@@ -935,9 +943,11 @@ impl GameState {
         self.set_priority(Some(p));
         // RULES P.33: a countered cast moves to GRAVEYARD (the cast
         // card already left HAND at announce-time; we need to put it
-        // somewhere, and the resolution didn't fire).
-        let StackItem::PlayedCard { card, controller, .. } = &removed;
-        self.add_to_zone(card, *controller, Zone::Graveyard);
+        // somewhere, and the resolution didn't fire). P.41d: a countered
+        // GRAVEYARD cast is exiled instead, not returned to GRAVEYARD.
+        let StackItem::PlayedCard { card, controller, from_graveyard, .. } = &removed;
+        let dest = if *from_graveyard { Zone::Exile } else { Zone::Graveyard };
+        self.add_to_zone(card, *controller, dest);
         Some(removed)
     }
 
@@ -956,9 +966,11 @@ impl GameState {
         p.consecutive_passes = 0;
         p.next_to_act = self.active_player;
         self.set_priority(Some(p));
-        // RULES P.33: countered cast moves to GRAVEYARD.
-        let StackItem::PlayedCard { card, controller, .. } = &removed;
-        self.add_to_zone(card, *controller, Zone::Graveyard);
+        // RULES P.33: countered cast moves to GRAVEYARD. P.41d: a
+        // countered GRAVEYARD cast is exiled instead.
+        let StackItem::PlayedCard { card, controller, from_graveyard, .. } = &removed;
+        let dest = if *from_graveyard { Zone::Exile } else { Zone::Graveyard };
+        self.add_to_zone(card, *controller, dest);
         Some(removed)
     }
 

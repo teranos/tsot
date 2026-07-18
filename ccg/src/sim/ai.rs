@@ -36,6 +36,14 @@ pub fn enumerate_playable_in_hand(
             let Some(inst) = state.card_pool.get(*iid) else {
                 return false;
             };
+            // P.41b: a card whose declared cast_zones omit HAND is inert
+            // in hand. Never offer it as a hand cast — play_card would
+            // refuse with NotCastableFromZone, a picker/resolver
+            // disagreement. (Casting it from the graveyard is a separate,
+            // not-yet-enumerated path.)
+            if !inst.card().casts_from_hand() {
+                return false;
+            }
             let is_creature = inst.card().kind == CardType::Creature;
             match kind_filter {
                 PickKindFilter::Any => {}
@@ -1076,6 +1084,7 @@ mod tests {
             target: None,
             is_variant: false,
             variant_of: None,
+            cast_zones: vec![],
         }
     }
 

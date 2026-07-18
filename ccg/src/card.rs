@@ -753,6 +753,37 @@ pub struct Card {
     /// variants without forcing the user to list them.
     #[serde(default)]
     pub variant_of: Option<String>,
+    /// RULES P.41: zones this card may be cast from, beyond the automatic
+    /// ones (Symbol DECK-top per P.38 is handled separately). Authors
+    /// declare `cast_zones = {"graveyard"}` (graveyard-only, P.41b) or
+    /// `{"hand", "graveyard"}` (both). Absent/empty = HAND-only, the
+    /// default. A `Graveyard` entry enables P.41a casting and the P.41d
+    /// exile-on-resolution rewrite for spells.
+    #[serde(default)]
+    pub cast_zones: Vec<CastZone>,
+}
+
+/// RULES P.41 cast-zone declaration. Only the zones a card may be cast
+/// *from* as an alternate source; the automatic HAND default and Symbol
+/// DECK-top (P.38) are not represented here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CastZone {
+    Hand,
+    Graveyard,
+}
+
+impl Card {
+    /// P.41b: a card is castable from HAND unless it declares cast zones
+    /// that omit HAND (an empty/absent list is the HAND-only default).
+    pub fn casts_from_hand(&self) -> bool {
+        self.cast_zones.is_empty() || self.cast_zones.contains(&CastZone::Hand)
+    }
+    /// P.41a: a card is castable from its controller's GRAVEYARD only if
+    /// it declares `Graveyard` as a cast zone.
+    pub fn casts_from_graveyard(&self) -> bool {
+        self.cast_zones.contains(&CastZone::Graveyard)
+    }
 }
 
 /// One activated ability declared on a card. Cost has two parts:

@@ -1154,6 +1154,12 @@ fn play_error_user_message(
             format!("Can't cast {card_name}: not in hand"),
             "The selected card is not in your hand — UI may be stale.".into(),
         ),
+        E::NotCastableFromZone => (
+            format!("Can't cast {card_name}: not castable from its current zone"),
+            "This card can only be cast from the graveyard (P.41b); it is \
+             inert in hand until it reaches the graveyard."
+                .into(),
+        ),
         E::UnsupportedType(t) => (
             format!("Can't cast {card_name}: {t:?} not supported"),
             format!("Card type {t:?} is not yet supported by the engine."),

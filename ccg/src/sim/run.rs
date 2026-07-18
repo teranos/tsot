@@ -2571,6 +2571,7 @@ mod tests {
                 target: None,
                 is_variant: false,
                 variant_of: None,
+                cast_zones: vec![],
             }
         };
         let deck_a: Vec<crate::card::Card> = (0..60).map(|i| card_fn(&format!("a-{i}"))).collect();
@@ -2728,6 +2729,7 @@ mod tests {
                 target: None,
                 is_variant: false,
                 variant_of: None,
+                cast_zones: vec![],
             }
         };
         let deck_a: Vec<_> = (0..60).map(|i| card_fn(&format!("a-{i}"))).collect();

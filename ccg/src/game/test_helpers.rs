@@ -34,6 +34,7 @@ pub(crate) fn card_with_stats(id: &str, x: f32, y: f32) -> Card {
         same_sleeve: false,
         is_variant: false,
         variant_of: None,
+        cast_zones: vec![],
     }
 }
 
@@ -71,6 +72,7 @@ pub(crate) fn card_no_stats(id: &str, kind: CardType) -> Card {
         same_sleeve: false,
         is_variant: false,
         variant_of: None,
+        cast_zones: vec![],
     }
 }
 

@@ -28,31 +28,43 @@ So the list below is unambiguously "what's left," here is what shipped:
   palette (`sim::palette`, probe-only). Committed.
 - Probe absent-control cell + Δ-vs-control reporting. Committed.
 - CLAUDE.md probe rule fixed ("unless asked").
+- **P.13 / bitter-dawn** resolved: `hand` cost is now legal on any card
+  type; on a spell the payment discards to the graveyard (the engine
+  already did this). Rule amended, card unchanged. RULES.md P.13 + P.42c.
+- **Spirit Wanderer** — black/purple spirit, `1 gy + 3 tap`,
+  graveyard-only cast, haste, 3/1. Built + tested (casts from graveyard
+  paying gy+tap, refused from hand). Now in the live corpus.
+- Save-compat guard: picker skips hand-casting graveyard-only cards
+  (P.41b, keeps picker/resolver agreement); `from_graveyard` given
+  `#[serde(default)]` + a legacy-load regression test so old saves load.
+- Cast-from-graveyard (P.41 a–d) **engine** — `cast_zones` card schema,
+  P.41a cast from GY, P.41b graveyard-only refused from hand
+  (`NotCastableFromZone`), P.41c no self-payment, P.41d spell exiles on
+  resolution / counter (board destinations unchanged). TDD, committed.
 
 ---
 
 ## Hanging
 
 ### Rules ratified, engine not built
-1. **Cast-from-graveyard (P.41) engine.** RULES.md P.41 a–d is written
-   (incl. P.41d: a spell cast from the graveyard is exiled unless it
-   would go to the board). No engine support — confirmed: only an
-   unrelated `activate_ability`-from-graveyard test exists, no
-   cast-a-spell-from-GY cost/play path. **Blocks Spirit Wanderer (#3).**
 2. **Blocking taps the blocker (B.19) + vigilance→blocking (B.16).**
    RULES.md written. Not implemented: `declare_blocker` does not tap the
    blocker, and vigilance is not consulted on block. (The existing
    `CombatError::BlockerTapped` is the *separate* "a tapped creature
    can't block" rule, not B.19.)
 
-### Cards requested, not built
-3. **Spirit Wanderer** — black/purple creature, subtype spirit-wanderer,
-   cost `1 gy + 3 tap`, "may only be cast from the graveyard," haste,
-   3/1. Needs the P.41 engine (#1) first. Not started.
+### Sim-AI / picker coverage
+13. **Sim-AI does not offer graveyard casts.** The P.41 engine accepts a
+    cast from the graveyard when the resolver is driven with it, but the
+    sim-AI picker (`sim/run.rs` choice builder + `sim/ai.rs`
+    affordability) only enumerates HAND casts, so `make evolve` / probe
+    never *try* casting from the graveyard. No picker/resolver
+    disagreement (the picker just doesn't offer it), but graveyard-cast
+    cards are under-explored until the builder learns the zone. Same
+    shape as the tap-cost sim-AI work already done.
 
 ### Rules reconciliations flagged, then deferred ("ignore for now")
    These were set aside, NOT cancelled — kept per the operating rule.
-4. **P.13 / bitter-dawn reconciliation.** Open.
 5. **Whether to add "never tap" to Z.8c's exclusion list.** Open.
 
 ### Probe / balance
@@ -85,6 +97,15 @@ So the list below is unambiguously "what's left," here is what shipped:
     `validate_play` exists as a pure dry-run validator, the validation
     half can be lifted out of the resolver. Not done. (Other large files
     were flagged in the same survey — revisit after this one.)
+
+---
+
+## Dropped (WONTDO)
+
+Explicitly closed by the user — recorded so they don't resurface.
+
+- **Quorum** (2026-07-18) — the earlier card design that was rejected and
+  respecified as Ankle Scorcher. Not a separate card; WONTDO.
 
 ---
 

@@ -114,6 +114,7 @@ fn shatter_opponent_declines_and_the_target_spell_is_countered() {
         card: a_creature.clone(),
         controller: PlayerId::A,
         choices: PlayChoices::default(),
+        from_graveyard: false,
     };
     s.open_response_window(a_cast).unwrap();
 

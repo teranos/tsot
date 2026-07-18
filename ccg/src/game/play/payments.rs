@@ -368,6 +368,10 @@ impl GameState {
         let mut picked: Vec<InstanceId> = Vec::with_capacity(n);
         if !cast_colors.is_empty() {
             for iid in gy {
+                // P.41c: a graveyard cast can't pay with itself.
+                if iid == cast_iid {
+                    continue;
+                }
                 let pay_colors: BTreeSet<String> = self
                     .card_pool
                     .get(iid)
@@ -388,6 +392,10 @@ impl GameState {
         for iid in gy {
             if picked.len() >= n {
                 break;
+            }
+            // P.41c: never pay a graveyard cast with itself.
+            if iid == cast_iid {
+                continue;
             }
             if !picked.contains(iid) {
                 picked.push(iid.clone());

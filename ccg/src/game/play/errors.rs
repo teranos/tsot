@@ -148,6 +148,12 @@ pub enum PlayError {
     ChoicePending(crate::choice::ChoicePending),
     GameOver,
     NotInHand,
+    /// RULES P.41b: the card is not castable from the zone it currently
+    /// occupies. Today the only case: a graveyard-only card (its declared
+    /// `cast_zones` omit HAND) sitting in HAND — inert there until it
+    /// reaches the GRAVEYARD. Refused before any cost is paid; the card
+    /// stays where it is.
+    NotCastableFromZone,
     /// Card type not currently routable by `play_card`. Today: Creature,
     /// Spell, Artifact. Environment still unsupported.
     UnsupportedType(CardType),

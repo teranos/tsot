@@ -165,14 +165,28 @@ impl GameState {
         let inst_ref = self.card_pool.get(instance).ok_or(PlayError::NotInHand)?;
         let card_kind = inst_ref.card().kind;
         let card_cost = inst_ref.card().cost.clone();
-        let from_hand = self.player(player).hand.contains(instance);
+        // RULES P.41 cast-zone routing.
+        let casts_from_hand = inst_ref.card().casts_from_hand();
+        let casts_from_gy = inst_ref.card().casts_from_graveyard();
+        let in_hand = self.player(player).hand.contains(instance);
+        let in_graveyard = self.player(player).graveyard.contains(instance);
         let from_top_of_deck = matches!(card_kind, CardType::Symbol)
             && self.player(player).deck.first() == Some(instance);
-        if !from_hand && !from_top_of_deck {
+        // P.41b: a card in HAND is castable only if HAND is an allowed
+        // cast zone; a graveyard-only card is inert there.
+        let from_hand = in_hand && casts_from_hand;
+        // P.41a: cast from the controller's GRAVEYARD when declared.
+        let from_graveyard = in_graveyard && casts_from_gy;
+        if !from_hand && !from_top_of_deck && !from_graveyard {
+            if in_hand && !casts_from_hand {
+                return Err(PlayError::NotCastableFromZone);
+            }
             return Err(PlayError::NotInHand);
         }
         let cast_source_zone = if from_hand {
             Zone::Hand
+        } else if from_graveyard {
+            Zone::Graveyard
         } else {
             Zone::Deck
         };
@@ -648,7 +662,16 @@ impl GameState {
             });
         }
 
-        let gy_have = self.player(player).graveyard.len();
+        // P.41c: the cast card left the GRAVEYARD at announcement, so it
+        // is not available to pay its own GRAVEYARD-source cost. Exclude
+        // it from the available count (a no-op for hand casts, where the
+        // card isn't in the graveyard).
+        let gy_have = self
+            .player(player)
+            .graveyard
+            .iter()
+            .filter(|g| *g != instance)
+            .count();
         if gy_have < graveyard_needed {
             return Err(PlayError::InsufficientGraveyardForCost {
                 needed: graveyard_needed,
@@ -670,6 +693,10 @@ impl GameState {
             for gid in &choices.graveyard_payment_ids {
                 if !gy_seen.insert(gid) {
                     return Err(PlayError::DuplicateGraveyardPayment(gid.clone()));
+                }
+                // P.41c: a graveyard cast can't pay with itself.
+                if gid == instance {
+                    return Err(PlayError::GraveyardPaymentInvalid(gid.clone()));
                 }
                 if !self.player(player).graveyard.contains(gid) {
                     return Err(PlayError::GraveyardPaymentInvalid(gid.clone()));
@@ -1000,6 +1027,7 @@ impl GameState {
             card: instance.clone(),
             controller: player,
             choices,
+            from_graveyard,
         };
 
         // If a response window is already open, this is a cast-in-response:
@@ -1187,11 +1215,13 @@ impl GameState {
                             card,
                             controller,
                             choices,
+                            from_graveyard,
                         } => {
                             self.resolve_played_card(
                                 &card,
                                 controller,
                                 choices,
+                                from_graveyard,
                                 ctx.as_deref_mut(),
                             )?;
                         }
@@ -1214,6 +1244,7 @@ impl GameState {
         instance: &InstanceId,
         player: PlayerId,
         choices: PlayChoices,
+        from_graveyard: bool,
         ctx: Option<&mut EventContext>,
     ) -> Result<(), PlayError> {
         let card_kind = self
@@ -1229,8 +1260,14 @@ impl GameState {
         let prior_x = self.current_activation_x;
         self.current_activation_x = choices.x_value;
         let mut ctx = ctx;
-        let result =
-            self.resolve_played_card_inner(instance, player, choices, ctx.as_deref_mut(), card_kind);
+        let result = self.resolve_played_card_inner(
+            instance,
+            player,
+            choices,
+            from_graveyard,
+            ctx.as_deref_mut(),
+            card_kind,
+        );
         self.current_activation_x = prior_x;
         // C.15: after all cast-time handlers have run, scan for any
         // creature whose effective Y has dropped to ≤ 0 (via detach,
@@ -1249,6 +1286,7 @@ impl GameState {
         instance: &InstanceId,
         player: PlayerId,
         choices: PlayChoices,
+        from_graveyard: bool,
         ctx: Option<&mut EventContext>,
         card_kind: CardType,
     ) -> Result<(), PlayError> {
@@ -1388,8 +1426,11 @@ impl GameState {
         } else {
             // P.1 default destination: GRAVEYARD (spell convention,
             // typeless P.1, etc.). SelfExile rerouting is handled by
-            // the early shortcut above and never reaches here.
-            self.add_to_zone(instance, player, Zone::Graveyard);
+            // the early shortcut above and never reaches here. P.41d: a
+            // spell cast from the GRAVEYARD is exiled instead of
+            // returning there, so it can't be recast.
+            let dest = if from_graveyard { Zone::Exile } else { Zone::Graveyard };
+            self.add_to_zone(instance, player, dest);
         }
 
         // OnAttachedAsCost: BOARD-placed casts only. Fires per HAND

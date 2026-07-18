@@ -129,6 +129,7 @@ fn dummy_played(s: &GameState) -> StackItem {
         card: s.a.hand[0].clone(),
         controller: PlayerId::A,
         choices: PlayChoices::default(),
+        from_graveyard: false,
     }
 }
 
@@ -137,6 +138,7 @@ fn dummy_played_for(card: InstanceId, controller: PlayerId) -> StackItem {
         card,
         controller,
         choices: PlayChoices::default(),
+        from_graveyard: false,
     }
 }
 
@@ -1258,4 +1260,31 @@ fn effective_combined_cost_applies_color_gated_reduction() {
     assert_eq!(s.effective_combined_cost(&black_target), 2);
     // Blue does not qualify → printed 4, effective 4 (no reduction matches).
     assert_eq!(s.effective_combined_cost(&blue_target), 4);
+}
+
+/// Regression guard (P.41 `from_graveyard`): adding a field to a
+/// persisted type must not break loading saves written before the field
+/// existed. A pre-P.41 `PlayedCard` JSON has no `from_graveyard`; it must
+/// still deserialize (to `false`). If a new `StackItem` field is added
+/// WITHOUT `#[serde(default)]`, this test fails at build time instead of
+/// panicking on a real user save at load. Same template applies to any
+/// new field on a serialized game type.
+#[test]
+fn played_card_loads_when_from_graveyard_absent_legacy_save_compat() {
+    let item = StackItem::PlayedCard {
+        card: "iid-1".to_string(),
+        controller: PlayerId::A,
+        choices: PlayChoices::default(),
+        from_graveyard: true,
+    };
+    let mut v = serde_json::to_value(&item).unwrap();
+    v.get_mut("PlayedCard")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("from_graveyard");
+    let back: StackItem =
+        serde_json::from_value(v).expect("StackItem must load with from_graveyard absent");
+    let StackItem::PlayedCard { from_graveyard, .. } = back;
+    assert!(!from_graveyard, "absent field defaults to false");
 }

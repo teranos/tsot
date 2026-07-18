@@ -625,6 +625,17 @@ fn parse_one_activated_entry(
     })
 }
 
+fn parse_cast_zone(s: &str) -> mlua::Result<crate::card::CastZone> {
+    use crate::card::CastZone;
+    match s.to_ascii_lowercase().as_str() {
+        "hand" => Ok(CastZone::Hand),
+        "graveyard" => Ok(CastZone::Graveyard),
+        other => Err(mlua::Error::runtime(format!(
+            "unknown cast_zones entry {other:?} (expected \"hand\" or \"graveyard\")"
+        ))),
+    }
+}
+
 fn parse_activation_zone(s: &str, field_label: &str) -> mlua::Result<crate::card::ActivationZone> {
     use crate::card::ActivationZone;
     match s.to_ascii_lowercase().as_str() {
@@ -930,6 +941,25 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
             }
         },
     };
+    // RULES P.41: alternate cast zones. Absent = HAND-only (default).
+    // Lua accepts a single string (`cast_zones = "graveyard"`) or a list
+    // (`cast_zones = {"hand", "graveyard"}`).
+    let cast_zones = match table.get::<Value>("cast_zones")? {
+        Value::Nil => Vec::new(),
+        Value::String(s) => vec![parse_cast_zone(s.to_str()?.as_ref())?],
+        Value::Table(tt) => {
+            let mut out = Vec::new();
+            for entry in tt.sequence_values::<String>() {
+                out.push(parse_cast_zone(&entry?)?);
+            }
+            out
+        }
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "field `cast_zones` must be a string or list of strings, got {other:?}"
+            )))
+        }
+    };
     Ok(Card {
         id,
         name,
@@ -958,6 +988,7 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
         target,
         is_variant: false,
         variant_of: None,
+        cast_zones,
     })
 }
 

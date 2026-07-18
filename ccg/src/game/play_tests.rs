@@ -1898,6 +1898,7 @@ fn counterspell_resolves_and_removes_underlying_cast() {
             gy_hand_payment_ids: vec![],
             attached_payment_ids: vec![],
             graveyard_payment_ids: vec![], tap_payment_ids: vec![] },
+        from_graveyard: false,
     };
     s.open_response_window(a_cast).unwrap();
     s.pass_priority().unwrap(); // A → B
@@ -1951,6 +1952,7 @@ fn play_card_during_open_window_pushes_to_chain_instead_of_opening_new() {
         card: s.a.hand[0].clone(),
         controller: PlayerId::A,
         choices: PlayChoices::default(),
+        from_graveyard: false,
     };
     s.open_response_window(a_placeholder.clone()).unwrap();
     s.pass_priority().unwrap(); // A passes → B has priority
@@ -2012,6 +2014,7 @@ fn lua_chain_and_counter_target_apis_remove_specific_item() {
         card: a_creature.clone(),
         controller: PlayerId::A,
         choices: PlayChoices::default(),
+        from_graveyard: false,
     };
     s.open_response_window(a_cast).unwrap();
     s.pass_priority().unwrap(); // A → B
@@ -4448,4 +4451,218 @@ fn ankle_scorcher_discards_on_untap_at_u2() {
     );
     assert!(!s.b.hand.contains(&discard_target), "discarded card left hand");
     assert_eq!(s.b.graveyard.len(), b_gy_before + 1);
+}
+
+// ---- RULES P.41: cast from graveyard ----
+
+/// Empty PlayChoices for a free / auto-paid cast.
+fn p41_choices() -> PlayChoices {
+    PlayChoices {
+        hand_payment_ids: vec![],
+        x_value: None,
+        jewel_tap: None,
+        sacrifice_ids: vec![],
+        mutation_target: None,
+        gy_hand_payment_ids: vec![],
+        attached_payment_ids: vec![],
+        graveyard_payment_ids: vec![],
+        tap_payment_ids: vec![],
+    }
+}
+
+/// Turn a hand card into a free spell with the given cast zones, in place.
+fn make_spell_with_cast_zones(
+    s: &mut GameState,
+    iid: &InstanceId,
+    zones: Vec<crate::card::CastZone>,
+) {
+    let c = s.card_pool.get_mut(iid).unwrap().card_mut();
+    c.kind = CardType::Spell;
+    c.timing = Some(crate::card::Timing::Instant);
+    c.colors = vec!["blue".to_string()];
+    c.cost = vec![];
+    c.cast_zones = zones;
+}
+
+#[test]
+fn p41b_graveyard_only_card_refused_from_hand() {
+    use crate::card::CastZone;
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    make_spell_with_cast_zones(&mut s, &iid, vec![CastZone::Graveyard]);
+    // Graveyard-only card sitting in HAND: inert (P.41b).
+    let err = s
+        .play_card(PlayerId::A, &iid, p41_choices(), None)
+        .unwrap_err();
+    assert!(
+        matches!(err, PlayError::NotCastableFromZone),
+        "P.41b: graveyard-only card in hand must be refused, got {err:?}"
+    );
+    assert!(s.a.hand.contains(&iid), "refused cast leaves the card in hand");
+}
+
+#[test]
+fn p41a_and_p41d_graveyard_spell_casts_and_exiles() {
+    use crate::card::CastZone;
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    make_spell_with_cast_zones(&mut s, &iid, vec![CastZone::Graveyard]);
+    s.move_card(&iid, PlayerId::A, Zone::Hand, Zone::Graveyard)
+        .unwrap();
+    // P.41a: castable from the graveyard.
+    s.play_card(PlayerId::A, &iid, p41_choices(), None).unwrap();
+    // P.41d: a spell cast from the graveyard is exiled, not recycled.
+    assert!(s.a.exile.contains(&iid), "P.41d: GY spell resolves to EXILE");
+    assert!(
+        !s.a.graveyard.contains(&iid),
+        "P.41d: GY spell does NOT return to the graveyard"
+    );
+}
+
+#[test]
+fn p41c_graveyard_cast_cannot_pay_with_itself() {
+    use crate::card::{CastZone, CostComponent};
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    make_spell_with_cast_zones(&mut s, &iid, vec![CastZone::Graveyard]);
+    // Cost: one GRAVEYARD-source component.
+    set_cost(
+        &mut s,
+        &iid,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Graveyard,
+            is_x: false,
+            kind: None,
+        }],
+    );
+    s.move_card(&iid, PlayerId::A, Zone::Hand, Zone::Graveyard)
+        .unwrap();
+    // Alone in the graveyard: P.41c forbids self-payment, so the only
+    // GY card (itself) can't cover the cost → refused.
+    let err = s
+        .play_card(PlayerId::A, &iid, p41_choices(), None)
+        .unwrap_err();
+    assert!(
+        matches!(err, PlayError::InsufficientGraveyardForCost { .. }),
+        "P.41c: a lone GY cast can't pay its own GY cost, got {err:?}"
+    );
+    assert!(
+        s.a.graveyard.contains(&iid),
+        "refused cast leaves the card in the graveyard"
+    );
+
+    // Add another graveyard card to pay with → the cast succeeds.
+    let payment = s.a.hand[0].clone();
+    s.move_card(&payment, PlayerId::A, Zone::Hand, Zone::Graveyard)
+        .unwrap();
+    s.play_card(PlayerId::A, &iid, p41_choices(), None).unwrap();
+    assert!(s.a.exile.contains(&iid), "cast card exiled (P.41d)");
+    assert!(
+        !s.a.graveyard.contains(&iid),
+        "cast card left the graveyard"
+    );
+}
+
+#[test]
+fn p41d_creature_cast_from_graveyard_goes_to_board_not_exile() {
+    use crate::card::CastZone;
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let iid = s.a.hand[0].clone();
+    {
+        // Free creature that casts from the graveyard.
+        let c = s.card_pool.get_mut(&iid).unwrap().card_mut();
+        c.kind = CardType::Creature;
+        c.timing = None;
+        c.cost = vec![];
+        c.cast_zones = vec![CastZone::Graveyard];
+    }
+    s.move_card(&iid, PlayerId::A, Zone::Hand, Zone::Graveyard)
+        .unwrap();
+    s.play_card(PlayerId::A, &iid, p41_choices(), None).unwrap();
+    // P.41d: BOARD destinations are unchanged — the creature enters the
+    // board, it is NOT exiled.
+    assert!(s.a.board.contains(&iid), "P.41d: GY creature enters the BOARD");
+    assert!(!s.a.exile.contains(&iid), "GY creature is not exiled");
+}
+
+// ---- Spirit Wanderer: graveyard-only recursion (P.41 + tap) ----
+
+fn load_spirit_wanderer_into(s: &mut GameState, slot: &InstanceId) {
+    use crate::card::CardRegistry;
+    use std::path::Path;
+    let registry = CardRegistry::load(Path::new("cards")).expect("load cards/");
+    let sw = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "spirit-wanderer")
+        .expect("spirit-wanderer card exists")
+        .clone();
+    *s.card_pool.get_mut(slot).unwrap().card_mut() = sw;
+}
+
+#[test]
+fn spirit_wanderer_refused_from_hand_p41b() {
+    let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+    let iid = s.a.hand[0].clone();
+    load_spirit_wanderer_into(&mut s, &iid);
+    // Real card, graveyard-only: inert in hand.
+    let err = s
+        .play_card(PlayerId::A, &iid, p41_choices(), None)
+        .unwrap_err();
+    assert!(
+        matches!(err, PlayError::NotCastableFromZone),
+        "Spirit Wanderer can't be cast from hand (P.41b), got {err:?}"
+    );
+}
+
+#[test]
+fn spirit_wanderer_casts_from_graveyard_paying_gy_and_tap() {
+    let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
+    // Spirit Wanderer sits in the graveyard.
+    let sw = s.a.hand[0].clone();
+    load_spirit_wanderer_into(&mut s, &sw);
+    s.move_card(&sw, PlayerId::A, Zone::Hand, Zone::Graveyard)
+        .unwrap();
+    // A black graveyard card pays the `1 gy` and supplies the P.42a
+    // color anchor (shares black with Spirit Wanderer).
+    let gy_pay = s.a.hand[0].clone();
+    set_identity(&mut s, &gy_pay, &["black"], "");
+    s.move_card(&gy_pay, PlayerId::A, Zone::Hand, Zone::Graveyard)
+        .unwrap();
+    // Three untapped board permanents to pay the `3 tap`.
+    let mut taps = Vec::new();
+    for _ in 0..3 {
+        let t = s.a.hand[0].clone();
+        s.move_card(&t, PlayerId::A, Zone::Hand, Zone::Board).unwrap();
+        taps.push(t);
+    }
+
+    s.play_card(
+        PlayerId::A,
+        &sw,
+        PlayChoices {
+            tap_payment_ids: taps.clone(),
+            ..p41_choices()
+        },
+        None,
+    )
+    .unwrap();
+
+    // P.41a/d: a creature cast from the graveyard enters the BOARD.
+    assert!(s.a.board.contains(&sw), "Spirit Wanderer entered the board");
+    assert!(!s.a.graveyard.contains(&sw), "left the graveyard");
+    assert!(!s.a.hand.contains(&sw), "not in hand");
+    // The `3 tap` permanents are now tapped.
+    for t in &taps {
+        assert!(
+            s.card_pool.get(t).unwrap().tapped,
+            "tap-payment permanent {t} is tapped"
+        );
+    }
+    // The `1 gy` pitch (the black card) was consumed, not the wanderer.
+    assert!(
+        !s.a.graveyard.contains(&gy_pay),
+        "the graveyard pitch was spent"
+    );
 }
