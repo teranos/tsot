@@ -56,6 +56,14 @@ jobs:
       # violations), commit the new counts; the job passes.
       - name: Count + compare silent-drop patterns
         run: |
+          # `**` in the patterns below must descend all directory levels.
+          # Without globstar, bash collapses `**` to a single `*` and the
+          # grep only sees files one directory deep — silently missing
+          # top-level src/*.rs and everything two-deep (src/game/play/,
+          # src/sim/step/, …). That undercounts the gate itself, so a new
+          # silent-drop added in those paths would pass unseen. nullglob
+          # keeps a non-matching glob from passing its literal to grep.
+          shopt -s globstar nullglob
           mkdir -p .github/sacred-error-baseline
 
           # Patterns to track. Each is (label, glob, ripgrep-pattern).

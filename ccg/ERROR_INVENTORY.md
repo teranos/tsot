@@ -16,27 +16,37 @@ pass found:
   features (tap, P.41, palette, absent-control) and is not per-se a
   violation, but the number in the doc is wrong — don't trust it.
 
-- **The CI gate under-scopes (`sacred-error-check.yml`).** Its pattern
-  is `ccg/src/**/*.rs`, but the GitHub runner's bash has `globstar`
-  **off**, so `**` collapses to `*` and the grep only descends **one
-  directory**. Measured: the CI invocation sees **170**, a truly
-  recursive grep sees **265**, and the baseline file
-  (`rust-let-underscore.count`) says **219**. Three disagreeing numbers.
-  The gate misses top-level `src/*.rs` and everything two-deep
-  (`src/game/play/`, `src/sim/step/`), so a new silent-drop added there
-  is invisible to CI. Fix: add `shopt -s globstar` (or `find`) to the
-  workflow, then re-baseline against the true count. Until then the
-  self-enforcement has a hole. **[ ] open.**
+- **The CI gate under-scoped (`sacred-error-check.yml`) — [x] FIXED
+  2026-07-18.** Its `**` patterns collapsed to `*` because the runner's
+  bash had `globstar` off, so the grep descended one directory only. It
+  saw 170 where truth was 265, and every pattern under-counted (most
+  starkly roam JS empty-catch: gate 2 vs true 19). Fix: `shopt -s
+  globstar nullglob` added to the workflow; all five baselines re-based
+  to true counts (rust 265, rust-roam 14, js 19, js-roam 19, elm 0). The
+  gate now sees every depth. **Caveat:** the newly-exposed sites (the
+  ~95 ccg + ~17 roam that were invisible) are baselined-but-untriaged —
+  they were "accepted" to make the gate honest+green now; individually
+  triaging them is the remaining sweep (below).
 
-- **`fitness.rs` failure-detail swallow — new open item, not previously
-  listed.** `fitness_breakdown` (`src/sim/fitness.rs:161`, `:223`,
-  `:263`) drains `crate::sim::instrument::drain_failures()` and keeps
-  only a *count* (`failed_games_total += 1`); the drained failure-detail
-  strings (which card / which `[play_card-ERR]` tripped) are discarded.
-  The EA can thus score a genome that won by exploiting a bug and the
-  *why* is gone. Axiom violation (silent drop of meaningful failure
-  detail). Fix: route the drained details through `crate::error::emit_*`
-  (or surface them in the breakdown) instead of dropping. **[ ] open.**
+- **`fitness.rs` failure-detail swallow — [x] FIXED 2026-07-18.**
+  `fitness_breakdown` drained `drain_failures()` and kept only the count
+  (`failed_games_total += 1`), discarding the detail strings. Now the
+  drained details ride out on `FitnessBreakdown.failure_details` (tagged
+  with game seed + seat), because the return value is the only channel
+  that crosses the rayon worker→main boundary — both the error bus and
+  the failure sink are thread-local and die unread on the worker
+  (emitting there would have just relocated the drop). The
+  picker/resolver sweep test now prints the details on failure, so a
+  disagreement is diagnosable from the assert message. The one remaining
+  `let _ = drain_failures()` at `fitness.rs` is legitimate (pre-clears a
+  prior genome's stale sink on the reused worker; those were already
+  attributed to that genome's breakdown).
+
+- **Remaining sweep [ ] open:** triage the newly-exposed `let _ =` and
+  empty-catch sites now that the gate can see them. Most are expected to
+  be legit (`writeln!`-to-String, idempotent `drain()` housekeeping) per
+  the 2026-06-18 methodology; the real ones get the `_or_emit` helpers.
+  As each is fixed, drop the corresponding baseline count.
 
 The dated section below is otherwise preserved as-is; treat its
 "closed [x]" entries as accurate to 2026-06-18 and its counts as

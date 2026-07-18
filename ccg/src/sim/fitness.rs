@@ -50,6 +50,15 @@ pub struct FitnessBreakdown {
     /// score wouldn't tell us. Drained from
     /// [`instrument::FAILURE_SINK`](crate::sim::instrument) per game.
     pub failed_games_total: u32,
+    /// The actual failure-detail strings drained from the sink, each
+    /// tagged with the game seed + seat that produced it. Previously these
+    /// were drained and discarded (only the count survived), so a failing
+    /// game's *why* was lost — an errors-are-sacred violation. They ride
+    /// out on the breakdown because the return value is the only channel
+    /// that crosses the rayon worker→main boundary: both the error bus
+    /// (`crate::error`) and the failure sink are thread-local and die
+    /// unread on the worker. Consumers surface these instead of guessing.
+    pub failure_details: Vec<String>,
 }
 
 /// Build the 7 variant-anchored gauntlet decks. Each variant gets one
@@ -164,12 +173,14 @@ pub fn fitness_breakdown_with_trace(
             total: 0.0,
             per_opponent: vec![0.0; gauntlet.len()],
             failed_games_total: 0,
+            failure_details: Vec::new(),
         });
     }
     let mut rng = StdRng::seed_from_u64(base_seed);
     let mut total_wins = 0u32;
     let mut total_games = 0u32;
     let mut failed_games_total = 0u32;
+    let mut failure_details: Vec<String> = Vec::new();
     let mut per_opponent = Vec::with_capacity(gauntlet.len());
     // Both seats play the SAME `ai`. Make evolve = strongest-vs-
     // strongest by default (UCT-vs-UCT) so the fitness signal
@@ -220,8 +231,14 @@ pub fn fitness_breakdown_with_trace(
             let mut log: Vec<String> = Vec::new();
             let (stats, _) =
                 run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_a, game_seed);
-            if !crate::sim::instrument::drain_failures().is_empty() {
+            let fails_a = crate::sim::instrument::drain_failures();
+            if !fails_a.is_empty() {
                 failed_games_total += 1;
+                failure_details.extend(
+                    fails_a
+                        .into_iter()
+                        .map(|f| format!("seat A seed={game_seed:#x}: {f}")),
+                );
             }
             if stats.winner == PlayerId::A {
                 opp_wins += 1;
@@ -260,8 +277,14 @@ pub fn fitness_breakdown_with_trace(
             let mut log = Vec::new();
             let (stats, _) =
                 run_game_with_ai(state, &mut game_rng, &mut log, registry, &ais_b, game_seed);
-            if !crate::sim::instrument::drain_failures().is_empty() {
+            let fails_b = crate::sim::instrument::drain_failures();
+            if !fails_b.is_empty() {
                 failed_games_total += 1;
+                failure_details.extend(
+                    fails_b
+                        .into_iter()
+                        .map(|f| format!("seat B seed={game_seed:#x}: {f}")),
+                );
             }
             if stats.winner == PlayerId::B {
                 opp_wins += 1;
@@ -276,6 +299,7 @@ pub fn fitness_breakdown_with_trace(
         total: total_wins as f64 / total_games as f64,
         per_opponent,
         failed_games_total,
+        failure_details,
     })
 }
 
@@ -395,6 +419,7 @@ mod tests {
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let mut total_failed = 0u32;
         let mut total_games = 0u32;
+        let mut details: Vec<String> = Vec::new();
         for v in VARIANTS {
             let vpool = variant_pool(&pool, v);
             for seed in 0..6u64 {
@@ -405,11 +430,18 @@ mod tests {
                     .expect("random genome scores");
                 total_failed += b.failed_games_total;
                 total_games += (gauntlet.len() as u32) * 2;
+                // Surface the WHY, not just the count — the failure detail
+                // strings name the card/choice the resolver rejected, so a
+                // disagreement is diagnosable from the assert message
+                // instead of re-running with eprintln (the mistake that
+                // cost the diversity-flake hunt days).
+                details.extend(b.failure_details.into_iter().map(|d| format!("[{}] {d}", crate::sim::variants::variant_label(v))));
             }
         }
         assert_eq!(
             total_failed, 0,
-            "picker/resolver disagreement: {total_failed} of {total_games} games tripped [play_card-ERR]"
+            "picker/resolver disagreement: {total_failed} of {total_games} games tripped [play_card-ERR]\n{}",
+            details.join("\n")
         );
     }
 
