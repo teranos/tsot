@@ -1,6 +1,4 @@
 
-See @docs/CANONICAL.md for the canonical-world axiom (how world transformations are routed by identity).
-
 See [Architecture.md](./Architecture.md) for the artifact axioms.
 
 What i want:
@@ -15,6 +13,7 @@ In scope (1-hour universe):
   - you start with nothing
   - you progress into the time or era the active canonical world is in and weave into its existing through an alligned strip in order to join the crowd
 - Strip:
+  - **PARKED: strips is no longer load bearing.** Strips being new player on-ramp or minigame is fine; beyond that, it's an interesting concept for a separate project that would be a p2p racing game. World progression instead: time progresses for everyone at the same speed. (Bullets below kept as the original vision, superseded.)
   - a level or segment if you will is a long piece of terrain, like a strip of level, like 9 times longer than it is wide
   - the 9x1 strips are procedurally generated.
   - in the beginning series of strip representing underwater cellular life
@@ -35,7 +34,7 @@ In scope (1-hour universe):
   - I would like to be able to have an inventory like roam does.
   - the way things are setup today means that Flowers are a contested resource.
   - bump into players or npc's and start card game autobattle.
-    - UCT — its the autbattler, that's what i want to see work in game (`ccg/src/sim/uct.rs`).
+    - UCT: its the autbattler, that's what i want to see work in game (`ccg/src/sim/uct.rs`).
   - win cards, edit deck, see how well deck is performing.
 - Time:
   - Clock/Watch/Time in-game.
@@ -44,7 +43,7 @@ In scope (1-hour universe):
 - Movement:
   - On mobile, i would like to be able to move around in game.
   - descend a cliff and climb cliffs.
-  - terrain — hills, cliffs, lakes, seas.
+  - terrain: hills, cliffs, lakes, seas.
   - directional position (so flashlight makes sense).
 - Combat:
   - I want a gun.
@@ -98,7 +97,7 @@ Deferred:
 -
 - Cross-device authority is UCAN, via `rs-ucan`. Capability delegation, not key transfer. Pairing pattern follows Fission ODD (PIN-confirmed handshake; the new device gets its own keypair + a delegated capability).
 - Hardware-backed keys (WebAuthn / secure enclave) are deferred (M3 on the menu). Desirable for theft resistance; loses portability on browsers without WebAuthn.
-- ATProto is the social / moderation layer, not the identifier (M2 on the menu). It binds an ATProto handle to a roam `did:key`. The moderation vision below is independent of the identifier choice — it layers on top.
+- ATProto is the social / moderation layer, not the identifier (M2 on the menu). It binds an ATProto handle to a roam `did:key`. The moderation vision below is independent of the identifier choice; it layers on top.
   - for moderation, we allow for split realities to exist through different labelling,
   - meta-game: you may spend an hour in the labelling-service moderation soc and get rewarded for the audited work that occurred during this period.
   - Auditors audit labelling work.
