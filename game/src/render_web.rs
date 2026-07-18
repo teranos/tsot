@@ -53,18 +53,24 @@ struct RenderWebState {
     ui_pipeline: gpu_web::GameUiPipeline,
     ui_instance_buf: Option<gpu_web::GameBuffer>,
     ui_instance_capacity: usize,
-    // Mesh pipeline — indexed draw of shared tree meshes (trunk cone +
-    // canopy icosahedron) instanced per tree / per canopy station.
-    // Vertex + index buffers uploaded ONCE at init (both meshes are
-    // deterministic pure functions of no inputs). The instance buffer
-    // grows with the tree count and holds trunks first, canopy elements
-    // second — one buffer, two draw calls dispatched with a first_instance
-    // offset for the canopy pass.
+    // Mesh pipeline — indexed draw of the continuous woody surface
+    // (CONTINUOUS_WOOD.md) plus the instanced canopy elements.
+    //
+    // Wood: every tree's woody skeleton merged into ONE world-space
+    // vertex+index buffer, drawn as a single identity `MeshInstance`.
+    // The buffers grow with the world (unlike the old baked-once cone),
+    // so both are `Option<>` with capacity tracking.
+    //
+    // Canopy: unit leaf card baked once at init, instanced per station.
+    //
+    // Instance packing: [wood_identity(1 if wood non-empty)] + [canopy];
+    // canopy dispatch uses `first_instance = wood_count`.
     mesh_pipeline: gpu_web::GameRenderPipeline,
     leaf_pipeline: gpu_web::GameRenderPipeline,
-    trunk_vertex_buf: gpu_web::GameBuffer,
-    trunk_index_buf: gpu_web::GameBuffer,
-    trunk_index_count: u32,
+    wood_vertex_buf: Option<gpu_web::GameBuffer>,
+    wood_vertex_capacity: usize,
+    wood_index_buf: Option<gpu_web::GameBuffer>,
+    wood_index_capacity: usize,
     canopy_vertex_buf: gpu_web::GameBuffer,
     canopy_index_buf: gpu_web::GameBuffer,
     canopy_index_count: u32,
@@ -237,24 +243,10 @@ pub fn init(canvas_id: &str) -> bool {
         return false;
     };
 
-    // Bake the two shared tree geometries. Trunk = tapered cone at
-    // (base=1, top=0.6, height=1) — per-tree instances uniform-scale
-    // this to their (height × ratio) dims, and the shader's
-    // inverse-transpose normal correction absorbs any residual scale
-    // asymmetry. Canopy = unit icosahedron, per-station instances
-    // scale to element radius.
-    let (trunk_verts, trunk_indices) = tree_mesh::trunk_mesh(12, 1.0, 0.6, 1.0);
+    // Bake the canopy card (constant, no inputs). Wood buffers are
+    // created lazily on the first frame — their size grows with the
+    // world, unlike the old baked-once trunk cone.
     let (canopy_verts, canopy_indices) = tree_mesh::leaf_quad_mesh();
-    let trunk_vertex_buf = gpu_web::GameBuffer::create(
-        std::mem::size_of_val(&trunk_verts[..]) as u32,
-        gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
-        "render_web.mesh.trunk.vertex",
-    );
-    let trunk_index_buf = gpu_web::GameBuffer::create(
-        std::mem::size_of_val(&trunk_indices[..]) as u32,
-        gpu_web::usage::INDEX | gpu_web::usage::COPY_DST,
-        "render_web.mesh.trunk.index",
-    );
     let canopy_vertex_buf = gpu_web::GameBuffer::create(
         std::mem::size_of_val(&canopy_verts[..]) as u32,
         gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
@@ -265,21 +257,14 @@ pub fn init(canvas_id: &str) -> bool {
         gpu_web::usage::INDEX | gpu_web::usage::COPY_DST,
         "render_web.mesh.canopy.index",
     );
-    let (
-        Some(trunk_vertex_buf),
-        Some(trunk_index_buf),
-        Some(canopy_vertex_buf),
-        Some(canopy_index_buf),
-    ) = (trunk_vertex_buf, trunk_index_buf, canopy_vertex_buf, canopy_index_buf)
+    let (Some(canopy_vertex_buf), Some(canopy_index_buf)) =
+        (canopy_vertex_buf, canopy_index_buf)
     else {
-        obs::emit("[render_web] init: mesh geometry buffer null");
+        obs::emit("[render_web] init: canopy buffer null");
         return false;
     };
-    trunk_vertex_buf.write(as_bytes(&trunk_verts));
-    trunk_index_buf.write(as_bytes(&trunk_indices));
     canopy_vertex_buf.write(as_bytes(&canopy_verts));
     canopy_index_buf.write(as_bytes(&canopy_indices));
-    let trunk_index_count = trunk_indices.len() as u32;
     let canopy_index_count = canopy_indices.len() as u32;
 
     STATE.with(|c| {
@@ -303,9 +288,10 @@ pub fn init(canvas_id: &str) -> bool {
             ui_instance_capacity: 0,
             mesh_pipeline,
             leaf_pipeline,
-            trunk_vertex_buf,
-            trunk_index_buf,
-            trunk_index_count,
+            wood_vertex_buf: None,
+            wood_vertex_capacity: 0,
+            wood_index_buf: None,
+            wood_index_capacity: 0,
             canopy_vertex_buf,
             canopy_index_buf,
             canopy_index_count,
@@ -442,12 +428,19 @@ pub fn frame_ghost(instances: &[SceneInstance]) -> u32 {
     })
 }
 
-/// Mesh pass — one instance buffer packs trunks first, then canopy
-/// elements; two `render_mesh` calls dispatch with the right index
-/// buffer + first_instance offset so both shapes share the pipeline
-/// and the upload. A no-op success when there are no trees in view.
-pub fn frame_mesh(trunks: &[MeshInstance], canopy: &[MeshInstance]) -> u32 {
-    let total = trunks.len() + canopy.len();
+/// Mesh pass — draws the merged continuous wood as one identity
+/// `MeshInstance`, then the canopy elements instanced per station. One
+/// instance buffer packs [wood_identity(1)] + [canopy]; `render_mesh`
+/// dispatches each with the right vertex/index + first_instance. Wood
+/// vertex + index buffers grow as the world's tree count grows. A no-op
+/// success when there's neither wood nor canopy in view.
+pub fn frame_mesh(
+    wood_verts: &[MeshVertex],
+    wood_indices: &[u32],
+    canopy: &[MeshInstance],
+) -> u32 {
+    let wood_count: usize = if wood_indices.is_empty() { 0 } else { 1 };
+    let total = wood_count + canopy.len();
     if total == 0 {
         return 0;
     }
@@ -456,6 +449,7 @@ pub fn frame_mesh(trunks: &[MeshInstance], canopy: &[MeshInstance]) -> u32 {
         let Some(state) = opt.as_mut() else {
             return 2;
         };
+        // Grow the mesh instance buffer if needed.
         if state.mesh_instance_buf.is_none() || total > state.mesh_instance_capacity {
             let new_cap = total.max(64);
             let new_size = (new_cap * std::mem::size_of::<MeshInstance>()) as u32;
@@ -469,22 +463,60 @@ pub fn frame_mesh(trunks: &[MeshInstance], canopy: &[MeshInstance]) -> u32 {
         let Some(mesh_buf) = state.mesh_instance_buf.as_ref() else {
             return 3;
         };
-        // One buffer, two contiguous slices — write in one go.
+        // Species tint is lost on the merged wood — one identity instance
+        // covers every tree with a single trunk colour. Same limitation
+        // as native, called out in CONTINUOUS_WOOD.md.
+        let wood_identity = MeshInstance {
+            pos: [0.0, 0.0, 0.0],
+            color: [0.30, 0.20, 0.11],
+            scale: [1.0, 1.0, 1.0],
+            axis: [0.0, 1.0, 0.0, 0.0],
+        };
         let mut packed: Vec<MeshInstance> = Vec::with_capacity(total);
-        packed.extend_from_slice(trunks);
+        if wood_count == 1 {
+            packed.push(wood_identity);
+        }
         packed.extend_from_slice(canopy);
         mesh_buf.write(as_bytes(&packed));
 
-        if !trunks.is_empty() {
+        // Wood pass — grow vertex + index buffers, upload, draw.
+        if wood_count == 1 {
+            let vsize = std::mem::size_of_val(wood_verts);
+            if state.wood_vertex_buf.is_none() || vsize > state.wood_vertex_capacity {
+                let new_cap = vsize.max(std::mem::size_of::<MeshVertex>() * 1024);
+                state.wood_vertex_buf = gpu_web::GameBuffer::create(
+                    new_cap as u32,
+                    gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+                    "render_web.mesh.wood.vertex",
+                );
+                state.wood_vertex_capacity = new_cap;
+            }
+            let isize_bytes = std::mem::size_of_val(wood_indices);
+            if state.wood_index_buf.is_none() || isize_bytes > state.wood_index_capacity {
+                let new_cap = isize_bytes.max(4 * 1024);
+                state.wood_index_buf = gpu_web::GameBuffer::create(
+                    new_cap as u32,
+                    gpu_web::usage::INDEX | gpu_web::usage::COPY_DST,
+                    "render_web.mesh.wood.index",
+                );
+                state.wood_index_capacity = new_cap;
+            }
+            let (Some(wv), Some(wi)) =
+                (state.wood_vertex_buf.as_ref(), state.wood_index_buf.as_ref())
+            else {
+                return 4;
+            };
+            wv.write(as_bytes(wood_verts));
+            wi.write(as_bytes(wood_indices));
             let r = gpu_web::render_mesh(
                 &state.target,
                 &state.mesh_pipeline,
                 &state.bind_group,
-                &state.trunk_vertex_buf,
-                &state.trunk_index_buf,
+                wv,
+                wi,
                 mesh_buf,
-                state.trunk_index_count,
-                trunks.len() as u32,
+                wood_indices.len() as u32,
+                1,
                 0,
             );
             if r != 0 {
@@ -501,7 +533,7 @@ pub fn frame_mesh(trunks: &[MeshInstance], canopy: &[MeshInstance]) -> u32 {
                 mesh_buf,
                 state.canopy_index_count,
                 canopy.len() as u32,
-                trunks.len() as u32,
+                wood_count as u32,
             );
             if r != 0 {
                 return r;
@@ -553,7 +585,7 @@ pub fn frame_ui(instances: &[dpad::DpadInstance]) -> u32 {
 pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     let snap = scene::snapshot_scene(app);
     let instances = scene::snapshot_to_instances(&snap);
-    let mesh_trees = crate::tree_emit::snapshot_to_mesh_instances(&snap);
+    let mesh_trees = crate::tree_emit::snapshot_to_mesh_instances_with_wood(&snap);
     let glass = scene::snapshot_to_glass_instances(&snap);
     let ghost = scene::snapshot_to_ghost_instances(&snap);
     let camera = SceneCamera::follow(
@@ -577,7 +609,11 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     // depth) and before glass/ghost. Its LoadOp::Load reads the depth
     // buffer already populated by cubes, so tree trunks and canopy
     // elements are correctly occluded by buildings in front of them.
-    let mesh_result = frame_mesh(&mesh_trees.trunks, &mesh_trees.canopy_elements);
+    let mesh_result = frame_mesh(
+        &mesh_trees.wood_verts,
+        &mesh_trees.wood_indices,
+        &mesh_trees.canopy_elements,
+    );
     if mesh_result != 0 {
         return mesh_result;
     }
