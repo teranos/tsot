@@ -36,7 +36,7 @@ In scope (1-hour universe):
   - I would like to be able to have an inventory like roam does.
   - the way things are setup today means that Flowers are a contested resource.
   - bump into players or npc's and start card game autobattle.
-    - UCT — its the autbattler, that's what i want to see work in game (`ccg/src/sim/uct.rs`).
+    - UCT: its the autbattler, that's what i want to see work in game (`ccg/src/sim/uct.rs`).
   - win cards, edit deck, see how well deck is performing.
 - Time:
   - Clock/Watch/Time in-game.
@@ -45,7 +45,7 @@ In scope (1-hour universe):
 - Movement:
   - On mobile, i would like to be able to move around in game.
   - descend a cliff and climb cliffs.
-  - terrain — hills, cliffs, lakes, seas.
+  - terrain: hills, cliffs, lakes, seas.
   - directional position (so flashlight makes sense).
 - Combat:
   - I want a gun.
@@ -99,7 +99,7 @@ Deferred:
 -
 - Cross-device authority is UCAN, via `rs-ucan`. Capability delegation, not key transfer. Pairing pattern follows Fission ODD (PIN-confirmed handshake; the new device gets its own keypair + a delegated capability).
 - Hardware-backed keys (WebAuthn / secure enclave) are deferred (M3 on the menu). Desirable for theft resistance; loses portability on browsers without WebAuthn.
-- ATProto is the social / moderation layer, not the identifier (M2 on the menu). It binds an ATProto handle to a roam `did:key`. The moderation vision below is independent of the identifier choice — it layers on top.
+- ATProto is the social / moderation layer, not the identifier (M2 on the menu). It binds an ATProto handle to a roam `did:key`. The moderation vision below is independent of the identifier choice; it layers on top.
   - for moderation, we allow for split realities to exist through different labelling,
   - meta-game: you may spend an hour in the labelling-service moderation soc and get rewarded for the audited work that occurred during this period.
   - Auditors audit labelling work.

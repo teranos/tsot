@@ -5,9 +5,9 @@
 **World transformations are social consensus, not raw state writes.**
 Two reality classes exist:
 
-- **Canonical** — the shared Teranos. Changes here propagate to every
+- **Canonical**: the shared Teranos. Changes here propagate to every
   peer and persist as the world's history.
-- **Non-canonical** — a personal sandbox. Changes are local to the
+- **Non-canonical**: a personal sandbox. Changes are local to the
   player; no other peer sees them. The world the player inhabits is
   rendered from canonical + their personal overlay.
 
@@ -19,7 +19,7 @@ canonical. Unidentified or unverified players default to non-canonical.
 
 Because non-canonical changes never propagate, griefers and spammers
 who haven't established identity are silently sandboxed. They can build
-whatever they want — none of it touches the canonical world or any
+whatever they want; none of it touches the canonical world or any
 other player. They may not even realize they've been demoted. No bans,
 no moderation queue, no enforcement loop required at this layer.
 
@@ -27,7 +27,7 @@ no moderation queue, no enforcement loop required at this layer.
 
 Promotion to canonical **resets** the player's personal world. The
 non-canonical work disappears; the player enters Teranos at the
-canonical state. This is the entry fee — and the narrative threshold
+canonical state. This is the entry fee, and the narrative threshold
 of *deciding to play for real*.
 
 Once canonical, players don't go back. The reset is one-way; the
@@ -50,7 +50,7 @@ join the p2p game.
 ## Inventories are canonical world entities
 
 When a canonical player picks up a card (or any object) from a tile,
-the card *moves* into their inventory — same entity identity, new
+the card *moves* into their inventory, same entity identity, new
 `Location`. The move is a canonical world transformation visible to
 every observer in render range; nothing is destroyed and respawned.
 Observers see the card animate from the ground tile into the
@@ -59,8 +59,8 @@ picker's marker.
 This falls out of the object-identity axiom (every
 thing in the universe is one persistent object that keeps identity
 through every transformation) the moment you accept the principle.
-The alternative — private per-player inventories that the canonical
-world doesn't track — would let the card "enter the void" on pickup
+The alternative, private per-player inventories that the canonical
+world doesn't track, would let the card "enter the void" on pickup
 from every other player's perspective, contradicting the axiom and
 making trades, robbery, vendor stocks, and drop-on-death impossible
 to model without inventing a new wire protocol for each.
@@ -73,7 +73,7 @@ inventory resets along with everything else in the personal overlay.
 ## Open
 
 - **Personal overlay storage.** Non-canonical changes have to live
-  somewhere — local IndexedDB, federated personal store, or both. Out
+  somewhere: local IndexedDB, federated personal store, or both. Out
   of scope until the identity layer exists.
 - **Split realities by label-set.** Beyond the binary canonical /
   non-canonical, ATProto-style labelling could permit multiple coexisting
