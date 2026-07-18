@@ -16,3 +16,6 @@ as spoken, not paraphrased or inferred.
 > The color? Red of course
 
 > Big red button like in the london tube escalators
+
+> any single player could end it, given a player manages to either
+> create or get access to it somehow
