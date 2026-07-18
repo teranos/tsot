@@ -1,5 +1,5 @@
 
-See @docs/canonical-world.md for the canonical-world mechanics (how world transformations are routed by identity).
+See @VISION.md for how world transformations are routed by identity.
 
 See [Architecture.md](./Architecture.md) for the artifact axioms.
 
