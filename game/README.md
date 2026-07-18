@@ -15,6 +15,7 @@ In scope (1-hour universe):
   - you start with nothing
   - you progress into the time or era the active canonical world is in and weave into its existing through an alligned strip in order to join the crowd
 - Strip:
+  - **PARKED — no longer load-bearing.** World progression is now a single shared clock: time advances at the same speed for everyone, so era is a pure function of wall-time (`era(now)`) — the temporal twin of the positional world hash (`tree_at_cell`), computed identically by every peer, no authority needed. The evolutionary spine (cellular → beach → bronze → space → heat-death) and the shared big-crunch/seam moment survive under that clock. The *solo onboarding strip* survives as the non-canonical tutorial corridor (see CANONICAL.md). What's parked is strips as the **world model** — the 9×1 corridor, progression-by-forward-motion, and fork-to-split — because it fights the open, omnidirectional streaming world that's actually built. It's a lovely core for a **separate p2p racing game**, not for this. Bullets below are kept as the original vision, superseded by the clock.
   - a level or segment if you will is a long piece of terrain, like a strip of level, like 9 times longer than it is wide
   - the 9x1 strips are procedurally generated.
   - in the beginning series of strip representing underwater cellular life
