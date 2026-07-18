@@ -9,7 +9,15 @@ How card abilities are authored, executed, and triggered.
 **Events** (`card::EventName`):
 `on_enter_board`, `on_die`, `on_would_die`, `on_attack`, `on_block`,
 `on_blocked_by`, `on_play`, `on_attached_as_cost`,
-`on_dealt_damage_to_player`, `on_turn_begin`, `on_creature_dies`.
+`on_dealt_damage_to_player`, `on_turn_begin`, `on_creature_dies`,
+`on_tapped`, `on_untapped`, `on_delayed_trigger`.
+
+`on_tapped` / `on_untapped` are mirrors: they fire on a card the moment
+it becomes tapped / untapped (a state transition). Both fire on the
+synchronous path (attack tap, U.2 untap step) and on external
+`game.tap` / `game.untap` from inside another handler, via the
+deferred-event queue. Ankle Scorcher's "whenever this becomes untapped,
+discard a card" is `on_untapped`.
 
 `on_would_die` opens the death-replacement window (RULES.md P.40).
 

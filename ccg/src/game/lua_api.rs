@@ -389,6 +389,19 @@ fn do_set_tapped(s: &mut GameState, iid: &str, tapped: bool) -> Result<()> {
         s.pending_events
             .push_back((EventName::OnTapped, iid.to_string()));
     }
+    // Mirror for OnUntapped: a genuine tapped→untapped transition driven
+    // from inside a handler (game.untap — e.g. Tap Dance) becomes a
+    // deferred OnUntapped, drained once the caller's Lua borrow unwinds.
+    // The U.2 untap step fires OnUntapped on its own path (turn.rs).
+    if !tapped
+        && was_tapped
+        && s.card_pool
+            .get(iid)
+            .is_some_and(|i| i.card().handlers.contains_key(&EventName::OnUntapped))
+    {
+        s.pending_events
+            .push_back((EventName::OnUntapped, iid.to_string()));
+    }
     Ok(())
 }
 

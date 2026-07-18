@@ -30,7 +30,7 @@ impl GameState {
     /// phase-entry events that need to fire Lua handlers
     /// (`OnTurnBegin` at Untap entry currently); pass `None` from sites
     /// that don't have a Lua VM in scope.
-    pub fn next_phase(&mut self, ctx: Option<&mut EventContext>) -> Result<(), TurnError> {
+    pub fn next_phase(&mut self, mut ctx: Option<&mut EventContext>) -> Result<(), TurnError> {
         if self.winner.is_some() {
             return Ok(());
         }
@@ -127,7 +127,7 @@ impl GameState {
         // Broadcasts to every BOARD card of the active player plus
         // every card attached to one of those cards.
         if matches!(next, Phase::Untap) {
-            if let Some(c) = ctx {
+            if let Some(c) = ctx.as_deref_mut() {
                 let board: Vec<InstanceId> = self.player(self.active_player).board.clone();
                 for iid in &board {
                     // Z.7: fused same-sleeve mutations get their phase-entry
@@ -183,6 +183,16 @@ impl GameState {
             }
         }
         self.enter_phase_action();
+        // U.2 OnUntapped: do_untap_step (run inside enter_phase_action, which
+        // has no ctx) queued OnUntapped for each card it untapped. Drain now,
+        // after the untap actually happened, so "whenever this becomes
+        // untapped" fires at the start of the turn. Ordered AFTER OnTurnBegin.
+        if matches!(next, Phase::Untap) {
+            if let Some(c) = ctx {
+                lua_api::drain_deferred_events(c.lua, self, c.oracle())
+                    .map_err(TurnError::ChoicePending)?;
+            }
+        }
         Ok(())
     }
 
@@ -227,7 +237,25 @@ impl GameState {
                 }
                 self.set_status_effects(&iid, new_effects);
             } else {
+                let was_tapped = self
+                    .card_pool
+                    .get(&iid)
+                    .map(|i| i.tapped)
+                    .unwrap_or(false);
                 self.set_tapped(&iid, false);
+                // U.2 OnUntapped: queue a deferred trigger for any card that
+                // actually transitioned tapped→untapped and carries the
+                // handler. Drained in next_phase after this step (which has
+                // the ctx/oracle do_untap_step lacks).
+                if was_tapped
+                    && self
+                        .card_pool
+                        .get(&iid)
+                        .is_some_and(|i| i.card().handlers.contains_key(&EventName::OnUntapped))
+                {
+                    self.pending_events
+                        .push_back((EventName::OnUntapped, iid.clone()));
+                }
             }
             // B.3 sickness clears at the start of controller's turn.
             self.set_summoning_sick(&iid, false);

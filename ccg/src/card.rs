@@ -544,6 +544,13 @@ pub enum EventName {
     /// the attack tap synchronously, and on external taps (`game.tap`
     /// inside a handler) via the deferred-event queue.
     OnTapped,
+    /// Fires on a card the moment it becomes untapped (a tapped→untapped
+    /// transition). Handler receives `self` = the untapped card. The
+    /// mirror of `OnTapped`: fires at the U.2 untap step (start of the
+    /// controller's turn) and on external untaps (`game.untap` inside a
+    /// handler, e.g. Tap Dance) via the deferred-event queue. Ankle
+    /// Scorcher's "whenever this becomes untapped, discard a card."
+    OnUntapped,
     /// Fires on a card when a delayed trigger it scheduled via
     /// `game.schedule_next_turn` comes due — at the start of the
     /// scheduling player's next turn, routed through the deferred-event
@@ -568,12 +575,13 @@ impl EventName {
             EventName::OnTurnBegin => "on_turn_begin",
             EventName::OnCreatureDies => "on_creature_dies",
             EventName::OnTapped => "on_tapped",
+            EventName::OnUntapped => "on_untapped",
             EventName::OnDelayedTrigger => "on_delayed_trigger",
         }
     }
 
     /// All known event names, for loader iteration.
-    pub const ALL: [EventName; 13] = [
+    pub const ALL: [EventName; 14] = [
         EventName::OnEnterBoard,
         EventName::OnDie,
         EventName::OnWouldDie,
@@ -586,6 +594,7 @@ impl EventName {
         EventName::OnTurnBegin,
         EventName::OnCreatureDies,
         EventName::OnTapped,
+        EventName::OnUntapped,
         EventName::OnDelayedTrigger,
     ];
 }

@@ -4395,3 +4395,57 @@ fn tap_dance_pays_tap_cost_and_untaps_then_taps_targets() {
         "tap target should be tapped by the effect",
     );
 }
+
+/// Ankle Scorcher (real card): OnUntapped fires at the U.2 untap step —
+/// when the hound untaps at the start of its controller's turn, its
+/// trigger forces a chosen (mandatory) discard. Exercises the new
+/// OnUntapped event on the primary untap path.
+#[test]
+fn ankle_scorcher_discards_on_untap_at_u2() {
+    use crate::card::CardRegistry;
+    use crate::choice::{ScriptedAnswer, ScriptedOracle};
+    use crate::game::{EventContext, Phase};
+
+    let registry = CardRegistry::load(std::path::Path::new("cards")).unwrap();
+    let scorcher = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "ankle-scorcher")
+        .expect("ankle-scorcher loads from the corpus")
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    // Ankle Scorcher on B's board, tapped. B untaps on B's turn.
+    let hound = s.b.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&hound).unwrap();
+        inst.card_mut().handlers = scorcher.handlers.clone();
+        inst.card_mut().id = scorcher.id.clone();
+    }
+    s.b.hand.retain(|x| x != &hound);
+    s.b.board.push(hound.clone());
+    s.card_pool.get_mut(&hound).unwrap().tapped = true;
+
+    // A card in B's hand to be discarded (chosen via the scripted oracle).
+    let discard_target = s.b.hand[0].clone();
+    let b_gy_before = s.b.graveyard.len();
+
+    // Position at A's End; next_phase enters B's Untap (swaps active),
+    // runs do_untap_step, and drains the OnUntapped it queued.
+    s.set_phase(Phase::End);
+    let mut oracle = ScriptedOracle::new(vec![ScriptedAnswer::Card(Some(discard_target.clone()))]);
+    s.next_phase(Some(&mut EventContext::new(registry.lua(), &mut oracle)))
+        .unwrap();
+
+    assert_eq!(s.phase, Phase::Untap, "entered B's untap step");
+    assert!(
+        !s.card_pool.get(&hound).unwrap().tapped,
+        "hound untapped at U.2",
+    );
+    assert!(
+        s.b.graveyard.contains(&discard_target),
+        "OnUntapped forced a discard of the chosen card",
+    );
+    assert!(!s.b.hand.contains(&discard_target), "discarded card left hand");
+    assert_eq!(s.b.graveyard.len(), b_gy_before + 1);
+}
