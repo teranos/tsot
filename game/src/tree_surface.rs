@@ -67,21 +67,26 @@ pub fn species_wood_mesh(sp: &'static TreeSpecies) -> WoodMesh {
 
 /// Per §3b: 5 buttress roots.
 const ROOT_COUNT: usize = 5;
-/// Resolution floor + ceiling. Verts per tree scale ~res² under
-/// narrow-band. Middle band: fine enough to read as continuous wood at
-/// the trunk + main forks, coarse enough that per-tree cache footprint
-/// stays proportional.
-const RES_MIN: usize = 16;
-const RES_MAX: usize = 32;
+/// Resolution floor + ceiling. Canonical-per-species means we bake 8
+/// meshes total over the process lifetime — the per-frame cost is
+/// zero, so we can afford much higher fidelity than the earlier
+/// per-tree design allowed. High enough that thin twigs stay distinct
+/// through fork blends.
+const RES_MIN: usize = 40;
+const RES_MAX: usize = 96;
 
 /// A round-cone in unit tree space. The trunk, every branch, and every
 /// root is one of these — the whole tree is a `smin` over a `Vec<Cone>`.
+/// `is_tip` marks a segment that terminates at a point: `rb = 0` on the
+/// SDF, and we skip the radius-floor on that end so the mesh actually
+/// tapers to a point instead of a hemisphere.
 #[derive(Clone, Copy)]
 struct Cone {
     a: [f32; 3],
     b: [f32; 3],
     ra: f32,
     rb: f32,
+    is_tip: bool,
 }
 
 /// The one continuous woody surface for the tree. `seed` selects the
@@ -104,23 +109,29 @@ pub fn tree_surface(seed: u32, sp: &TreeSpecies) -> (Vec<MeshVertex>, Vec<u32>) 
     let res = ((span / (sp.trunk_radius * 0.9)).ceil() as usize).clamp(RES_MIN, RES_MAX);
     let step = [span / res as f32; 3];
     let voxel = step[0];
-    // Radius floor + blend: below one voxel, marching tets can't resolve
-    // a limb (it slips between grid lines). Floor every limb radius to a
-    // hair over one voxel so the finest twigs stay continuous — chunky
-    // is the trade for "not vanishing".
-    let rfloor = voxel * 1.1;
+    // Radius floor: a limb thinner than one voxel slips between grid
+    // lines and vanishes. Floor to half a voxel — tight enough that
+    // twigs stay near their intended thickness, wide enough that
+    // marching-tet still catches them.
+    let rfloor = voxel * 0.5;
     // Smin blend radius: the fillet where two touching limbs melt into
-    // one surface. Just wider than a voxel so a fork always spans one
-    // cell of blending.
-    let blend = voxel * 1.2;
+    // one surface. Tight — a wider blend fuses distinct limbs at the
+    // crown into one bulbous blob (the "mushroom cap" symptom).
+    let blend = voxel * 0.5;
 
     let cones_field: Vec<Cone> = cones
         .iter()
         .map(|c| Cone {
             a: c.a,
             b: c.b,
+            // Floor the base radius so a limb doesn't slip between grid
+            // lines and vanish. Do NOT floor the tip radius on `is_tip`
+            // cones — that's exactly what would replace the pointy end
+            // with a hemisphere. Interior cones keep the floor on both
+            // ends because both meet other limbs.
             ra: c.ra.max(rfloor),
-            rb: c.rb.max(rfloor),
+            rb: if c.is_tip { c.rb } else { c.rb.max(rfloor) },
+            is_tip: c.is_tip,
         })
         .collect();
 
@@ -154,14 +165,24 @@ pub fn tree_surface(seed: u32, sp: &TreeSpecies) -> (Vec<MeshVertex>, Vec<u32>) 
 
 fn collect_cones(seed: u32, sp: &TreeSpecies, segs: &[BranchSegment]) -> Vec<Cone> {
     let mut cones = Vec::with_capacity(segs.len() + ROOT_COUNT);
-    // Every skeleton limb is one round-cone, tapering from base_radius
-    // at the base to base_radius·radius_shrink at the tip. That preserves
-    // the "no child fatter than its parent" invariant baked into
-    // `tree_branches`.
+    // Every skeleton limb is one round-cone. Interior limbs taper from
+    // base_radius to base_radius·radius_shrink (matches the next child
+    // limb's base — no fattening across the fork). Tip limbs taper to
+    // ZERO — a real point at the outer end, not a hemisphere.
     for s in segs {
         let tip = s.tip();
-        let rb = s.base_radius * sp.radius_shrink;
-        cones.push(Cone { a: s.base, b: tip, ra: s.base_radius, rb });
+        let rb = if s.is_tip {
+            0.0
+        } else {
+            s.base_radius * sp.radius_shrink
+        };
+        cones.push(Cone {
+            a: s.base,
+            b: tip,
+            ra: s.base_radius,
+            rb,
+            is_tip: s.is_tip,
+        });
     }
     // Five buttress roots, angled outward from the top of the ankle
     // (y = trunk_radius·1.5, so the flare rises INTO the bole rather
@@ -178,7 +199,10 @@ fn collect_cones(seed: u32, sp: &TreeSpecies, segs: &[BranchSegment]) -> Vec<Con
         let theta = seed_phase + (i as f32 / ROOT_COUNT as f32) * std::f32::consts::TAU;
         let a = [0.0, ankle_y, 0.0];
         let b = [theta.cos() * reach, -depth, theta.sin() * reach];
-        cones.push(Cone { a, b, ra, rb });
+        // Root tips still round — they sit underground, no benefit to
+        // a sharp point, and the rounded ends make the buttress flare
+        // seat softly into the ground rather than stabbing through it.
+        cones.push(Cone { a, b, ra, rb, is_tip: false });
     }
     cones
 }
