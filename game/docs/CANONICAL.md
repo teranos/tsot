@@ -80,4 +80,4 @@ inventory resets along with everything else in the personal overlay.
   canonical-class realities (different worlds per label-set). This
   document doesn't yet specify how, just notes the door. i think split
   realities actually becomes way easier with the strips. **(Strips
-  parked — see game/README.md.)**
+  parked, see game/README.md.)**

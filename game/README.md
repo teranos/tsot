@@ -15,7 +15,7 @@ In scope (1-hour universe):
   - you start with nothing
   - you progress into the time or era the active canonical world is in and weave into its existing through an alligned strip in order to join the crowd
 - Strip:
-  - **PARKED — strips is no longer load bearing.** Strips being new player on-ramp or minigame is fine; beyond that, it's an interesting concept for a separate project that would be a p2p racing game. World progression instead: time progresses for everyone at the same speed. (Bullets below kept as the original vision, superseded.)
+  - **PARKED: strips is no longer load bearing.** Strips being new player on-ramp or minigame is fine; beyond that, it's an interesting concept for a separate project that would be a p2p racing game. World progression instead: time progresses for everyone at the same speed. (Bullets below kept as the original vision, superseded.)
   - a level or segment if you will is a long piece of terrain, like a strip of level, like 9 times longer than it is wide
   - the 9x1 strips are procedurally generated.
   - in the beginning series of strip representing underwater cellular life

@@ -1,6 +1,6 @@
 # The end of the universe
 
-Verbatim design intent, captured from discussion on 2026-07-18 — kept
+Verbatim design intent, captured from discussion on 2026-07-18, kept
 as spoken, not paraphrased or inferred.
 
 > I still need to have a button that ends the universe though
