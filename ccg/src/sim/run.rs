@@ -874,6 +874,22 @@ pub(crate) fn build_pattern_b_choices(
         }
     }
 
+    // P.42 tap payments (any kind), non-X. Fill via the shared
+    // `resolve_tap_payment` (anchor-first) — the same eligibility +
+    // P.42a anchor logic `play_card` validates, so the picker's tap
+    // bundle is never one the resolver rejects. is_x tap is not yet
+    // built (the X-branch caps it at 0); affordability already refuses
+    // tap-cost casts the tap bundle can't anchor.
+    let tap_needed: usize = cost
+        .iter()
+        .filter(|c| matches!(c.source, CostSource::Tap) && !c.is_x)
+        .map(|c| c.amount.max(0) as usize)
+        .sum::<usize>()
+        .saturating_sub(state.cost_reduction(picked, CostSource::Tap).max(0) as usize);
+    if tap_needed > 0 {
+        choices.tap_payment_ids = state.resolve_tap_payment(active, picked, tap_needed);
+    }
+
     // Sacrifice slots (any kind): pick lowest-value first.
     // is_x components scale with the chosen X value (set just above
     // in the X-branch); non-X components use c.amount. Without
@@ -2595,6 +2611,73 @@ mod tests {
         assert!(
             accepted,
             "build_pattern_b_choices must accept hydra-shape X-hand with a Symbol on board (P.24e)",
+        );
+    }
+
+    // P.42 end-to-end: the sim AI affords a `tap`-cost cast, the builder
+    // fills the tap payments, and the resolver accepts exactly what the
+    // picker built — no picker/resolver disagreement. Closes the loop for
+    // the tap cost source (Tap Dance / Quorum shape).
+    #[test]
+    fn sim_affords_builds_and_agrees_on_tap_cost_cast() {
+        use crate::card::{CostComponent, CostSource, Timing};
+        use crate::choice::RandomOracle;
+        use crate::game::test_helpers::deck_of;
+        use rand::SeedableRng;
+
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        let active = PlayerId::A;
+        // hand[0] → green instant with a `tap 2` cost.
+        let cast = s.player(active).hand[0].clone();
+        {
+            let inst = s.card_pool.get_mut(&cast).unwrap();
+            inst.card_mut().colors = vec!["green".to_string()];
+            inst.card_mut().kind = CardType::Spell;
+            inst.card_mut().timing = Some(Timing::Instant);
+            inst.card_mut().cost = vec![CostComponent {
+                amount: 2,
+                source: CostSource::Tap,
+                is_x: false,
+                kind: None,
+            }];
+        }
+        // Two on-color untapped permanents on A's BOARD: the tap fuel + the
+        // P.42a color anchor.
+        let p1 = s.player(active).hand[1].clone();
+        let p2 = s.player(active).hand[2].clone();
+        for p in [&p1, &p2] {
+            let inst = s.card_pool.get_mut(p).unwrap();
+            inst.card_mut().colors = vec!["green".to_string()];
+            inst.tapped = false;
+        }
+        s.player_mut(active).hand.retain(|x| x != &p1 && x != &p2);
+        s.player_mut(active).board.push(p1.clone());
+        s.player_mut(active).board.push(p2.clone());
+
+        // Affordability: the AI now recognizes a tap cost as payable.
+        assert!(
+            crate::sim::ai::can_pay_instant_cost(&s, active, &cast),
+            "sim AI should afford tap-2 with 2 on-color untapped permanents",
+        );
+
+        // Builder fills the tap payments.
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0xC0DE);
+        let mut oracle = RandomOracle::new(&mut rng);
+        let choices = match build_pattern_b_choices(&mut s, active, &cast, &mut oracle) {
+            BuildChoiceResult::Choices(c) => c,
+            _ => panic!("build_pattern_b_choices did not accept the tap-cost cast"),
+        };
+        assert_eq!(
+            choices.tap_payment_ids.len(),
+            2,
+            "builder should fill exactly 2 tap payments",
+        );
+
+        // The resolver accepts exactly what the picker built — the whole point.
+        assert!(
+            s.validate_play(active, &cast, &choices).is_ok(),
+            "validate_play must accept the picker's tap choices: {:?}",
+            s.validate_play(active, &cast, &choices),
         );
     }
 

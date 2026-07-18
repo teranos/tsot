@@ -265,6 +265,7 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     let mut mill_need = 0usize;
     let mut gy_need = 0usize;
     let mut attached_need = 0usize;
+    let mut tap_need = 0usize;
     let mut sac_slots: Vec<Option<CardType>> = Vec::new();
     // Variable-X handling: an is_x component contributes X * (component
     // amount, typically 1) to its source's need. The AI doesn't pick X
@@ -292,11 +293,11 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
             // No need to count or cap; resolution routes the cast to
             // EXILE instead of its kind's default destination.
             CostSource::SelfExile => {}
-            // P.42: the sim builder does not yet fill `tap_payment_ids`
-            // (tap affordability is a follow-up), so treat any `tap`-cost
-            // card as unplayable rather than let the AI attempt a cast it
-            // can't pay. Conservative; humans can still cast it.
-            CostSource::Tap => return false,
+            // P.42: count tap needs; affordability (enough untapped
+            // permanents + a P.42a color anchor) is checked after the
+            // reductions below, against the same shared eligibility set the
+            // builder and resolver use.
+            CostSource::Tap => tap_need += amount,
         }
     }
     let hand_red = state.cost_reduction(iid, CostSource::Hand).max(0) as usize;
@@ -307,6 +308,56 @@ pub fn can_pay_instant_cost(state: &GameState, player: PlayerId, iid: &InstanceI
     mill_need = mill_need.saturating_sub(mill_red);
     gy_need = gy_need.saturating_sub(gy_red);
     attached_need = attached_need.saturating_sub(att_red);
+    let tap_red = state.cost_reduction(iid, CostSource::Tap).max(0) as usize;
+    tap_need = tap_need.saturating_sub(tap_red);
+    // P.42 tap affordability. `tap` isn't substitutable (P.24 covers only
+    // HAND/GRAVEYARD), so gate it before the jewel logic: need enough
+    // untapped permanents to tap, plus a satisfiable P.42a color anchor.
+    // Matches what `resolve_tap_payment` builds and `play_card` validates,
+    // so the picker can't offer a tap cast the resolver refuses.
+    if tap_need > 0 {
+        let tappable = state.eligible_tap_payments(player);
+        if tappable.len() < tap_need {
+            return false;
+        }
+        let cast_colors: std::collections::BTreeSet<String> = inst
+            .card()
+            .colors
+            .iter()
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        // A colorless cast can never anchor (P.42a) → unpayable with tap.
+        if cast_colors.is_empty() {
+            return false;
+        }
+        let oncolor = |cand: &InstanceId| -> bool {
+            state
+                .card_pool
+                .get(cand)
+                .map(|i| {
+                    i.card()
+                        .colors
+                        .iter()
+                        .any(|c| cast_colors.contains(&c.to_ascii_lowercase()))
+                })
+                .unwrap_or(false)
+        };
+        // Anchor may come from any payment source (P.42a cross-source): a
+        // GRAVEYARD component auto-anchors via P.12a; a HAND component can
+        // anchor with an on-color card; otherwise an on-color tap is
+        // required (the tap-only case).
+        let anchor_ok = gy_need > 0
+            || tappable.iter().any(|t| oncolor(t))
+            || (hand_need > 0
+                && state
+                    .player(player)
+                    .hand
+                    .iter()
+                    .any(|h| h != iid && oncolor(h)));
+        if !anchor_ok {
+            return false;
+        }
+    }
     // RULES P.24a (rewritten) + P.24c: an untapped same-color jewel
     // on BOARD substitutes for UP TO TWO cost components from HAND
     // and/or GRAVEYARD in any combination. Mirror the engine's

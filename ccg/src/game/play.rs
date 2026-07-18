@@ -768,22 +768,20 @@ impl GameState {
                 got: choices.tap_payment_ids.len(),
             });
         }
+        // Shared predicate: the exact set the picker selects from
+        // (`resolve_tap_payment`) and the affordability check counts
+        // (`can_pay_instant_cost`). Per-id: must be in that set (untapped,
+        // controlled, on BOARD — P.42d skips the summoning-sickness gate),
+        // and distinct.
+        let eligible_tap = self.eligible_tap_payments(player);
         let mut tap_seen: BTreeSet<&InstanceId> = BTreeSet::new();
         for tid in &choices.tap_payment_ids {
             if !tap_seen.insert(tid) {
                 return Err(PlayError::DuplicateTapPayment(tid.clone()));
             }
-            if !self.player(player).board.contains(tid) {
+            if !eligible_tap.contains(tid) {
                 return Err(PlayError::InvalidTapPayment(tid.clone()));
             }
-            let Some(tap_inst) = self.card_pool.get(tid) else {
-                return Err(PlayError::InvalidTapPayment(tid.clone()));
-            };
-            if tap_inst.controller != player || tap_inst.tapped {
-                return Err(PlayError::InvalidTapPayment(tid.clone()));
-            }
-            // P.42d: no summoning-sickness check — a creature tapped as a
-            // resource is exempt (distinct from A.6's `T:` self-activation).
         }
         // P.42a: color anchor. When the cast has a `tap` component, at
         // least one payment (tap, HAND, or GRAVEYARD) must share a printed

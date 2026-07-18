@@ -525,4 +525,83 @@ impl GameState {
         }
         Ok(chosen)
     }
+
+    /// P.42: the untapped permanents `player` controls on the BOARD — the
+    /// pool tappable to pay a `tap` cost component. No summoning-sickness
+    /// filter (P.42d exempts tap-as-resource from B.3); no color filter
+    /// (color is the P.42a anchor, checked across the whole payment bundle).
+    ///
+    /// SINGLE SOURCE OF TRUTH for "which permanents can pay a tap cost":
+    /// `play_card`'s per-id validation, `resolve_tap_payment` (the picker's
+    /// selection), and `sim::ai::can_pay_instant_cost` (affordability) all
+    /// call this, so the picker can never offer a tap the resolver refuses.
+    pub fn eligible_tap_payments(&self, player: PlayerId) -> Vec<InstanceId> {
+        self.player(player)
+            .board
+            .iter()
+            .filter(|iid| {
+                self.card_pool
+                    .get(*iid)
+                    .map(|i| !i.tapped && i.controller == player)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// P.42 + P.42a: pick `n` untapped permanents to pay a `tap` cost,
+    /// anchor-first. When the cast has printed colors, put one color-sharing
+    /// permanent first so the P.42a color anchor is satisfied from the tap
+    /// bundle itself (the tap-only case). Remaining slots fill from the rest
+    /// of `eligible_tap_payments`. Mirror of `resolve_graveyard_payment`'s
+    /// anchor-first shape; used by the sim builder so its choice matches what
+    /// `play_card` validates.
+    pub fn resolve_tap_payment(
+        &self,
+        player: PlayerId,
+        cast_iid: &InstanceId,
+        n: usize,
+    ) -> Vec<InstanceId> {
+        if n == 0 {
+            return Vec::new();
+        }
+        let cast_colors: BTreeSet<String> = self
+            .card_pool
+            .get(cast_iid)
+            .map(|i| {
+                i.card()
+                    .colors
+                    .iter()
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let pool = self.eligible_tap_payments(player);
+        let shares = |iid: &InstanceId| -> bool {
+            self.card_pool
+                .get(iid)
+                .map(|i| {
+                    i.card()
+                        .colors
+                        .iter()
+                        .any(|c| cast_colors.contains(&c.to_ascii_lowercase()))
+                })
+                .unwrap_or(false)
+        };
+        let mut picked: Vec<InstanceId> = Vec::with_capacity(n);
+        if !cast_colors.is_empty() {
+            if let Some(anchor) = pool.iter().find(|iid| shares(iid)) {
+                picked.push(anchor.clone());
+            }
+        }
+        for iid in &pool {
+            if picked.len() >= n {
+                break;
+            }
+            if !picked.contains(iid) {
+                picked.push(iid.clone());
+            }
+        }
+        picked
+    }
 }
