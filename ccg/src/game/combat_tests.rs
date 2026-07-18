@@ -1259,3 +1259,51 @@ fn on_tapped_fires_when_a_creature_attacks() {
     assert_eq!(fired, 1, "on_tapped fired once when the creature attacked");
     assert_eq!(who, atk, "on_tapped fired on the tapped attacker");
 }
+
+// ---- RULES B.19 / B.16: blocking taps the blocker ----
+
+fn setup_attack(s: &mut GameState) -> (InstanceId, InstanceId) {
+    let atk = s.a.hand[0].clone();
+    let blk = s.b.hand[0].clone();
+    put_on_board(s, PlayerId::A, &atk);
+    put_on_board(s, PlayerId::B, &blk);
+    add_ability(s, &atk, "haste");
+    enter_combat(s);
+    s.declare_attacker(&atk, None).unwrap();
+    s.confirm_attacks().unwrap();
+    (atk, blk)
+}
+
+#[test]
+fn b19_declaring_a_blocker_taps_it() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let (atk, blk) = setup_attack(&mut s);
+    assert!(
+        !s.card_pool.get(&blk).unwrap().tapped,
+        "blocker starts untapped"
+    );
+    s.declare_blocker(&blk, &atk, None).unwrap();
+    assert!(
+        s.card_pool.get(&blk).unwrap().tapped,
+        "B.19: declaring a blocker taps it"
+    );
+}
+
+#[test]
+fn b16_vigilant_blocker_does_not_tap_when_blocking() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    let atk = s.a.hand[0].clone();
+    let blk = s.b.hand[0].clone();
+    put_on_board(&mut s, PlayerId::A, &atk);
+    put_on_board(&mut s, PlayerId::B, &blk);
+    add_ability(&mut s, &atk, "haste");
+    add_ability(&mut s, &blk, "vigilance");
+    enter_combat(&mut s);
+    s.declare_attacker(&atk, None).unwrap();
+    s.confirm_attacks().unwrap();
+    s.declare_blocker(&blk, &atk, None).unwrap();
+    assert!(
+        !s.card_pool.get(&blk).unwrap().tapped,
+        "B.16: a vigilant creature does not tap when it blocks"
+    );
+}

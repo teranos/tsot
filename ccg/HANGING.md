@@ -37,6 +37,9 @@ So the list below is unambiguously "what's left," here is what shipped:
 - Save-compat guard: picker skips hand-casting graveyard-only cards
   (P.41b, keeps picker/resolver agreement); `from_graveyard` given
   `#[serde(default)]` + a legacy-load regression test so old saves load.
+- **Blocking taps the blocker (B.19) + vigilance→blocking (B.16)** —
+  `declare_blocker` taps the blocker at declaration (unless vigilant) and
+  fires `OnTapped`, mirroring the attack tap. TDD, committed.
 - Cast-from-graveyard (P.41 a–d) **engine** — `cast_zones` card schema,
   P.41a cast from GY, P.41b graveyard-only refused from hand
   (`NotCastableFromZone`), P.41c no self-payment, P.41d spell exiles on
@@ -45,13 +48,6 @@ So the list below is unambiguously "what's left," here is what shipped:
 ---
 
 ## Hanging
-
-### Rules ratified, engine not built
-2. **Blocking taps the blocker (B.19) + vigilance→blocking (B.16).**
-   RULES.md written. Not implemented: `declare_blocker` does not tap the
-   blocker, and vigilance is not consulted on block. (The existing
-   `CombatError::BlockerTapped` is the *separate* "a tapped creature
-   can't block" rule, not B.19.)
 
 ### Sim-AI / picker coverage
 13. **Sim-AI does not offer graveyard casts.** The P.41 engine accepts a

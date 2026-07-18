@@ -338,6 +338,16 @@ impl GameState {
         };
         self.set_combat(Some(new_combat));
 
+        // B.19: declaring a creature as a blocker taps it, exactly as
+        // attacking taps an attacker (B.4). B.16: vigilance exempts it.
+        // The tap is part of the declaration atom (before the block
+        // triggers fire), and persists regardless of how combat resolves
+        // — the creature untaps normally at U.2.
+        let vigilant = self.has_keyword(blocker, "vigilance");
+        if !vigilant {
+            self.set_tapped(blocker, true); // B.19
+        }
+
         // LUA Phase 1: fire `on_blocked_by` on the attacker, then `on_block` on the blocker.
         // Per-blocker semantics for both. Order: attacker-side first, then blocker-side.
         // Errors log and continue per LUA.md Q #3.
@@ -363,6 +373,15 @@ impl GameState {
                 attacker,
             )
             .map_err(CombatError::ChoicePending)?;
+        }
+        // OnTapped: blocking just tapped the blocker (unless vigilant),
+        // mirroring the attack tap — "whenever this becomes tapped" fires
+        // on block as it does on attack (B.19).
+        if !vigilant {
+            if let Some(c) = ctx.as_mut() {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnTapped, blocker)
+                    .map_err(CombatError::ChoicePending)?;
+            }
         }
         // RULES R.1 lists only two window-openers: card-played and
         // attack-declared. Block declarations are atomic — no window opens
