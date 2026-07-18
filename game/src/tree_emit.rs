@@ -6,7 +6,7 @@
 
 use crate::scene::{MeshInstance, SceneSnapshot};
 use crate::tree_mesh::MeshVertex;
-use crate::tree_surface::tree_surface;
+use crate::tree_surface::tree_surface_cached;
 
 /// Deterministic per-tree seed from world position — same tile → same
 /// seed on every peer, so the branch skeleton is identical everywhere.
@@ -343,16 +343,17 @@ pub fn snapshot_to_mesh_instances_with_wood(snap: &SceneSnapshot) -> MeshTreeIns
             continue; // Stumps stay on the cone path — a stump ISN'T a full
             // tree skeleton, and `tree_surface` would still emit a bole.
         }
-        let (verts, indices) = tree_surface(tree_seed(t.x, t.z), sp);
+        let mesh = tree_surface_cached(tree_seed(t.x, t.z), sp);
+        let (verts, indices) = (&mesh.0, &mesh.1);
         let base = wood_verts.len() as u32;
-        for v in &verts {
+        for v in verts {
             wood_verts.push(MeshVertex {
                 pos: [v.pos[0] * *h + t.x, v.pos[1] * *h + t.y, v.pos[2] * *h + t.z],
                 normal: v.normal,
                 uv: v.uv,
             });
         }
-        for &i in &indices {
+        for &i in indices {
             wood_indices.push(base + i);
         }
     }

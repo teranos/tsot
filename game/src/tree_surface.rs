@@ -16,10 +16,65 @@
 //! cached by `marching_tetrahedra` so each grid vertex is evaluated at
 //! most once regardless of how many tets touch it.
 
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::rc::Rc;
 
 use crate::isosurface::{Grid, marching_tetrahedra, sd_round_cone, smin};
 use crate::tree_mesh::{BranchSegment, MeshVertex, TreeSpecies, tree_branches};
+
+/// Cached (verts, indices) for one tree. `Rc` so hits share the
+/// allocation — no copy per frame. Native seer is single-threaded and
+/// wasm has no threads, so a `thread_local!` `Rc` is safe.
+pub type WoodMesh = Rc<(Vec<MeshVertex>, Vec<u32>)>;
+
+/// Cache cap in unique trees. Bounded memory as the player roams — the
+/// oldest tree drops when the cap is hit. FIFO (insertion order) rather
+/// than LRU: eviction is O(1) and hit-rate is unaffected on a stand of
+/// trees that all stay visible together.
+const WOOD_CACHE_CAP: usize = 512;
+
+thread_local! {
+    /// key = (seed, species_ptr_as_addr). Species is `&'static`, so ptr
+    /// equality is species equality.
+    static WOOD_CACHE: RefCell<HashMap<(u32, usize), WoodMesh>> =
+        RefCell::new(HashMap::new());
+    /// Insertion order, so the oldest key drops when the cap is hit.
+    static WOOD_ORDER: RefCell<VecDeque<(u32, usize)>> =
+        const { RefCell::new(VecDeque::new()) };
+}
+
+/// Cached variant of `tree_surface` — same (verts, indices) as calling
+/// `tree_surface(seed, sp)` directly, but subsequent calls with the
+/// same `(seed, species)` return the memoized `Rc` without regenerating.
+///
+/// MANDATORY on any per-frame path (`snapshot_to_mesh_instances_with_wood`
+/// runs every frame under seer and the browser) — the raw generator is
+/// ~0.3s/tree release; recomputing per frame would grind. See
+/// CONTINUOUS_WOOD.md.
+pub fn tree_surface_cached(seed: u32, sp: &'static TreeSpecies) -> WoodMesh {
+    let key = (seed, sp as *const TreeSpecies as usize);
+    if let Some(hit) = WOOD_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let (verts, indices) = tree_surface(seed, sp);
+    let mesh: WoodMesh = Rc::new((verts, indices));
+    WOOD_CACHE.with(|c| {
+        c.borrow_mut().insert(key, mesh.clone());
+    });
+    WOOD_ORDER.with(|o| {
+        let mut order = o.borrow_mut();
+        order.push_back(key);
+        while order.len() > WOOD_CACHE_CAP
+            && let Some(old) = order.pop_front()
+        {
+            WOOD_CACHE.with(|c| {
+                c.borrow_mut().remove(&old);
+            });
+        }
+    });
+    mesh
+}
 
 /// Per §3b: 5 buttress roots.
 const ROOT_COUNT: usize = 5;
@@ -206,7 +261,38 @@ fn cell_ix(p: f32, grid_min: f32, step: f32, res: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree_mesh::OAK;
+    use crate::tree_mesh::{OAK, PINE};
+
+    #[test]
+    fn cache_returns_the_same_allocation_on_a_hit() {
+        // Rc::ptr_eq is byte-address equality — proves the second call
+        // handed back the memoized Rc rather than regenerating.
+        let a = tree_surface_cached(1234, &OAK);
+        let b = tree_surface_cached(1234, &OAK);
+        assert!(Rc::ptr_eq(&a, &b), "cache miss on identical (seed, sp)");
+        // Different seed → different Rc.
+        let c = tree_surface_cached(9999, &OAK);
+        assert!(!Rc::ptr_eq(&a, &c));
+        // Different species with same seed → different Rc (ptr keys differ).
+        let d = tree_surface_cached(1234, &PINE);
+        assert!(!Rc::ptr_eq(&a, &d));
+    }
+
+    #[test]
+    fn cache_matches_the_uncached_output_byte_for_byte() {
+        // The cache MUST return exactly what the uncached fn would.
+        // Any drift here — a stale entry, a modified vec — would ship
+        // wrong geometry silently.
+        let cached = tree_surface_cached(77, &OAK);
+        let (fresh_v, fresh_i) = tree_surface(77, &OAK);
+        assert_eq!(cached.0.len(), fresh_v.len());
+        assert_eq!(cached.1, fresh_i);
+        for (a, b) in cached.0.iter().zip(fresh_v.iter()) {
+            assert_eq!(a.pos, b.pos);
+            assert_eq!(a.normal, b.normal);
+            assert_eq!(a.uv, b.uv);
+        }
+    }
 
     fn depth(sp: &TreeSpecies) -> f32 {
         sp.trunk_radius * 3.5
