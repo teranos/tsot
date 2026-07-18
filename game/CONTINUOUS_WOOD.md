@@ -28,60 +28,55 @@ Skin the woody skeleton as ONE **isosurface**:
 `isosurface.rs` — primitives: `sd_capsule`, `sd_round_cone`, `smin`,
 `Grid`, `marching_tetrahedra`, `emit_tri`, `process_cell`.
 `tree_surface.rs` — `tree_surface(seed, sp) -> (Vec<MeshVertex>, Vec<u32>)`
-composing them into one tree.
+composes them into one tree.
+
+## Canonical mesh per species
+
+The shippable shape: **one wood mesh per species, generated on first
+sight, instanced per tree.** Every oak in the world uses the same
+underlying vertex+index buffer; per-tree variation (position, height,
+species tint) rides on the `MeshInstance`.
+
+- `tree_surface::species_wood_mesh(sp)` — thread-local cache, at most
+  one entry per species (~8), no eviction. Called at most 8 times over
+  the process lifetime.
+- `MeshTreeInstances.wood_by_species: Vec<(&'static TreeSpecies, Vec<MeshInstance>)>`.
+- Renderer draws one indexed instanced call per species. `MeshInstance`
+  carries `pos` (tree world position), `scale` (uniform height), `color`
+  (species trunk_color), `axis = [0,1,0,0]` (identity rot, no wind).
+
+The prior designs that DID NOT work:
+- Per-tree mesh cache (unbounded generation as player roams).
+- Byte-capped FIFO cache (thrashed; wasmtime hit 15/25-min timeout).
+- Per-frame merge memoizer (retained the last merged buffer, ~350 MB
+  Δheap on seer).
+
+All of them scaled with unique-trees-visited. Canonical scales with
+species count — a fixed small constant. Wasm heap flat at 1.55 MB
+steady, generation cost paid once at first sight.
+
+Sacrifice: every oak has the same trunk-and-branch silhouette. Girth,
+moss, deadwood, autumn tint still per-instance on the cone/canopy path.
 
 ## Still undone
 
-### Render integration
-
-Draw the continuous wood mesh instead of the instanced cones.
-
-- `MeshTreeInstances` carries `wood_verts: Vec<MeshVertex>` +
-  `wood_indices: Vec<u32>` (WORLD space) alongside the leaf
-  `canopy_elements: Vec<MeshInstance>` (unchanged).
-- Draw the wood **once** with a single identity `MeshInstance`
-  (`i_pos=0, i_scale=1, i_axis=[0,1,0,0]`) — the existing mesh pipeline
-  + bark fragment work as-is (the wood carries UVs + normals). Touch
-  `render.rs` (native), `render_web.rs` + `web/src/main.ts` (web): one
-  extra indexed draw. Leaves keep instancing.
-
-### Caching — MANDATORY before the browser sees it
-
-Push auto-deploys game.sbvh.nl; ~0.3s/tree per frame would grind it.
-
-- The unit-space surface is a pure fn of `(seed, species)` → cache it
-  (`thread_local HashMap<(u32 seed, species_id), Rc<(verts,indices)>>`,
-  size-capped or chunk-tied eviction so it doesn't leak as the player
-  roams).
-- Per frame: get-or-generate the local mesh, transform to world (×
-  height + tree_pos; normals unchanged under uniform scale), append to
-  the merged wood buffer. Only the cheap transform runs per frame; the
-  isosurface runs once per unique tree.
-
-### Known open problems
-
-- **Wind on wood is lost** until a per-vertex sway weight (+ pivot) is
-  baked into the wood vertex and the wood vs bends by it — the merged
-  world mesh has no per-limb instance data. Leaves still sway. That
-  same per-vertex channel is also what CURSOR interaction on thin
-  branches needs.
+- **Wind on wood** — the canonical mesh instance uses `axis.w = 0` so
+  the wood doesn't sway. Adding sway needs a per-vertex sway weight
+  baked into `MeshVertex` (thicker limbs → lower weight, thin twigs →
+  high weight) and a shader that pivots each limb at its base. The
+  same per-vertex channel is what cursor interaction on thin branches
+  will need.
 - **Fine twigs** are floored to ~voxel radius (chunky). Trunk + major
   forks + roots are the payoff; twigs are leaf-covered.
-- **First-appearance hitch**: even cached, a newly-visible tree costs
-  ~0.3s to generate — may need async/background generation or lower res.
 
 ## Wanted, downstream
 
 - **Cursor interaction** — leaves/thin branches react to the mouse
-  moving past. Leaves: same shape as wind — push away from the cursor's
-  world position, scaled by sway weight; the cursor rides the camera
-  uniform like wind. Thin branches: easy if instanced, medium on the
-  continuous wood (needs the per-vertex sway channel). BROWSER ONLY —
-  seer can't verify it (no cursor).
+  moving past. Needs the per-vertex sway channel (see above).
 - **Growth & decay as a life-stage axis**: `LifeStage` enum on
   `TreeTrunk` (Sapling·Mature·Snag·Stump·Fallen); retire the DEAD
-  species → a `Snag` stage of any species (a dead oak keeps oak bark —
-  same category-fix as stump); saplings (CDDA `t_tree_young` is
+  species → a `Snag` stage of any species (a dead oak keeps oak bark
+  — same category-fix as stump); saplings (CDDA `t_tree_young` is
   dropped today); a decomposition scalar snag→punky→fallen log + root
   mound.
 - **Interaction/simulation** (trees & fires are static render+collider):
