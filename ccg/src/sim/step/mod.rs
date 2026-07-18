@@ -289,6 +289,7 @@ fn fresh_game_stats() -> GameStats {
     GameStats {
         turns: 0,
         winner: PlayerId::A,
+        game_seed: 0,
         variant_a: DeckVariant::Ra,
         variant_b: DeckVariant::Rb,
         token_a: String::new(),
@@ -603,7 +604,7 @@ impl StepEngine {
                 let hand_ids = |iids: &[crate::game::InstanceId]| -> Vec<String> {
                     iids.iter()
                         .filter_map(|i| {
-                            self.state.card_pool.get(i).map(|c| c.card.id.clone())
+                            self.state.card_pool.get(i).map(|c| c.card().id.clone())
                         })
                         .collect()
                 };

@@ -88,8 +88,15 @@ pub fn mutate(
     let mut out = genome.to_vec();
     for slot in out.iter_mut() {
         if rng.gen_bool(rate) {
-            let new = pool.choose(rng).unwrap();
-            *slot = new.id.clone();
+            // Draft space is the pool ids plus the cardless-sleeve
+            // sentinel, so mutation can introduce or remove empty
+            // sleeves as freely as any other gene.
+            let k = rng.gen_range(0..=pool.len());
+            *slot = if k == pool.len() {
+                crate::replay::CARDLESS_SLEEVE_ID.to_string()
+            } else {
+                pool[k].id.clone()
+            };
         }
     }
     out
@@ -106,8 +113,11 @@ pub fn repair(
     cap: u32,
     rng: &mut StdRng,
 ) -> bool {
-    let pool_unique: std::collections::BTreeSet<&str> =
+    let mut pool_unique: std::collections::BTreeSet<&str> =
         pool.iter().map(|c| c.id.as_str()).collect();
+    // The cardless sentinel is a valid, cap-limited gene — don't treat
+    // an evolved empty sleeve as an unknown id to be stripped.
+    pool_unique.insert(crate::replay::CARDLESS_SLEEVE_ID);
     if pool_unique.len() * (cap as usize) < genome.len() {
         return false;
     }
@@ -330,5 +340,39 @@ mod tests {
         assert!(repair(&mut g1, &p, 3, &mut rng1));
         assert!(repair(&mut g2, &p, 3, &mut rng2));
         assert_eq!(g1, g2);
+    }
+
+    #[test]
+    fn repair_preserves_cardless_sentinels() {
+        use crate::replay::CARDLESS_SLEEVE_ID;
+        let p = pool();
+        // Two cardless sleeves (under cap) must survive repair — an empty
+        // sleeve is a valid gene, not an unknown id to be stripped.
+        let mut g = vec![
+            p[0].id.clone(),
+            CARDLESS_SLEEVE_ID.to_string(),
+            CARDLESS_SLEEVE_ID.to_string(),
+        ];
+        let mut rng = StdRng::seed_from_u64(1);
+        assert!(repair(&mut g, &p, 3, &mut rng));
+        let cardless = g.iter().filter(|id| id.as_str() == CARDLESS_SLEEVE_ID).count();
+        assert_eq!(cardless, 2, "both cardless sentinels kept (under cap)");
+    }
+
+    #[test]
+    fn mutate_can_introduce_cardless_sleeves() {
+        use crate::replay::CARDLESS_SLEEVE_ID;
+        let p = pool();
+        // The sentinel is in the draft space, so full-rate mutation of a
+        // long genome introduces it. Scan several fixed seeds so the test
+        // is deterministic regardless of the large pool's per-slot odds.
+        let genome = dummy_genome(300, |_| p[0].id.clone());
+        let found = (0..50u64).any(|seed| {
+            let mut rng = StdRng::seed_from_u64(seed);
+            mutate(&genome, &p, 1.0, &mut rng)
+                .iter()
+                .any(|id| id.as_str() == CARDLESS_SLEEVE_ID)
+        });
+        assert!(found, "mutation can introduce cardless sleeves");
     }
 }

@@ -93,7 +93,7 @@ pub struct BalanceProbeArgs {
     pub json_prefix: String,
     /// Opponent AI for fitness evaluation. Default `uct` (UCB1
     /// tree-search MCTS — stronger play, the variant deltas mean
-    /// more). `heuristic` is the legacy fast option. Candidate side
+    /// more). `game` is the fast baseline (alias: `heuristic`). Candidate side
     /// stays Heuristic regardless. Mirrors `tsot evolve`'s flag.
     #[arg(long = "opponent-ai", default_value = "uct")]
     pub opponent_ai: String,
@@ -131,7 +131,7 @@ struct ProbeResult {
     mean_fitness_curve: Vec<f64>,
 }
 
-fn load_baselines(registry: &CardRegistry, dir: &str) -> (Vec<Vec<Card>>, Vec<String>) {
+fn load_baselines(registry: &CardRegistry, dir: &str) -> (Vec<Vec<tsot::game::DeckUnit>>, Vec<String>) {
     let mut paths: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(rd) => rd
             .flatten()
@@ -144,14 +144,14 @@ fn load_baselines(registry: &CardRegistry, dir: &str) -> (Vec<Vec<Card>>, Vec<St
         }
     };
     paths.sort();
-    let mut decks: Vec<Vec<Card>> = Vec::new();
+    let mut decks: Vec<Vec<tsot::game::DeckUnit>> = Vec::new();
     let mut labels: Vec<String> = Vec::new();
     for p in &paths {
         match EvolvedDeck::load(p) {
-            Ok(saved) => match saved.to_cards(registry) {
-                Ok(cards) => {
+            Ok(saved) => match saved.to_units(registry) {
+                Ok(units) => {
                     labels.push(saved.label.clone());
-                    decks.push(cards);
+                    decks.push(units);
                 }
                 Err(e) => eprintln!("  ! baseline {} unloadable: {e}", p.display()),
             },
@@ -197,19 +197,19 @@ fn discover_base_ids_with_variants(registry: &CardRegistry) -> Vec<String> {
 fn probe_one_card(
     registry: &std::sync::Arc<CardRegistry>,
     pool: &[Card],
-    gauntlet: &[Vec<Card>],
+    gauntlet: &[Vec<tsot::game::DeckUnit>],
     args: &BalanceProbeArgs,
     card: &Card,
 ) -> ProbeResult {
     let opponent_ai = match args.opponent_ai.to_ascii_lowercase().as_str() {
-        "heuristic" => tsot::sim::AiKind::Heuristic,
+        "game" | "heuristic" => tsot::sim::AiKind::Game,
         "uct" => tsot::sim::AiKind::Uct(tsot::sim::uct::UctConfig {
             iterations: args.opponent_uct_iterations,
             exploration_c: args.opponent_uct_c,
             ..Default::default()
         }),
         other => {
-            eprintln!("error: --opponent-ai must be 'heuristic' | 'uct', got {other:?}");
+            eprintln!("error: --opponent-ai must be 'game' | 'uct' ('heuristic' accepted as legacy alias), got {other:?}");
             std::process::exit(2);
         }
     };
@@ -265,7 +265,7 @@ fn probe_one_card(
             );
             t_prev = now;
         };
-        run_evolve(registry, &pool_with_pin, gauntlet, &cfg, cb)
+        run_evolve(registry, &pool_with_pin, gauntlet, &cfg, cb, None)
     };
 
     let final_best = &result.final_population[0];

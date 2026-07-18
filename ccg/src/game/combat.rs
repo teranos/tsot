@@ -178,14 +178,24 @@ impl GameState {
         // expect to receive `self = the mutation` when the host attacks.
         // Snapshot attached before firing so a handler that detaches /
         // moves doesn't desync the iteration.
+        // Z.7: fused same-sleeve mutations (klotho / TNF / VEGF) declare
+        // OnAttack and receive `self = the mutation`, so iterate the whole
+        // unit (attached ∪ same_sleeve), not just attached.
         let attached: Vec<InstanceId> = self
             .card_pool
             .get(attacker)
-            .map(|i| i.attached.clone())
+            .map(|i| i.children().cloned().collect())
             .unwrap_or_default();
         if let Some(c) = ctx.as_deref_mut() {
             lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnAttack, attacker)
                 .map_err(CombatError::ChoicePending)?;
+            // OnTapped: attacking just tapped the attacker (unless vigilant).
+            // Window Cleaner's "whenever this becomes tapped" trigger. Only
+            // the attack tap fires OnTapped today (see EventName::OnTapped).
+            if !vigilant {
+                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnTapped, attacker)
+                    .map_err(CombatError::ChoicePending)?;
+            }
         }
         for aid in &attached {
             if let Some(c) = ctx.as_deref_mut() {
@@ -268,7 +278,7 @@ impl GameState {
                 .card_pool
                 .get(attacker)
                 .map(|i| {
-                    i.card
+                    i.card()
                         .subtypes
                         .iter()
                         .map(|s| s.to_ascii_lowercase())
@@ -276,7 +286,7 @@ impl GameState {
                 })
                 .unwrap_or_default();
             blocker_inst
-                .card
+                .card()
                 .can_block_subtypes
                 .iter()
                 .any(|s| attacker_subs.iter().any(|a| a == s))
@@ -296,12 +306,12 @@ impl GameState {
         // `cannot_block_subtypes` intersects with attacker's subtypes.
         // Rats vs cats: rat's `cannot_block_subtypes = ["cat"]` blocks
         // (sic) the block. Case-insensitive.
-        let blocker_cant: &[String] = &blocker_inst.card.cannot_block_subtypes;
+        let blocker_cant: &[String] = &blocker_inst.card().cannot_block_subtypes;
         if !blocker_cant.is_empty() {
             let attacker_subs: Vec<String> = self
                 .card_pool
                 .get(attacker)
-                .map(|i| i.card.subtypes.iter().map(|s| s.to_ascii_lowercase()).collect())
+                .map(|i| i.card().subtypes.iter().map(|s| s.to_ascii_lowercase()).collect())
                 .unwrap_or_default();
             if blocker_cant
                 .iter()
@@ -465,10 +475,12 @@ impl GameState {
         for attacker in &damaged_attackers {
             // Snapshot the attached list before firing so handlers that
             // mutate state (detach, move) don't desync the iteration.
+            // Z.7: same-sleeve mutations declaring OnDealtDamageToPlayer
+            // (cinder-wurm et al.) fire too — iterate the whole unit.
             let attached: Vec<InstanceId> = self
                 .card_pool
                 .get(attacker)
-                .map(|i| i.attached.clone())
+                .map(|i| i.children().cloned().collect())
                 .unwrap_or_default();
             if let Some(c) = ctx.as_deref_mut() {
                 lua_api::fire_self_only(
@@ -515,55 +527,24 @@ impl GameState {
                 to_kill.push(iid.clone());
             }
         }
-        for iid in &to_kill {
-            let owner = self
-                .card_pool
-                .get(iid)
-                .map(|i| i.owner)
-                .unwrap_or(self.active_player);
-            // Sacred-error sweep: board → graveyard on combat death.
-            let _ = self.move_card_or_emit(
-                iid,
-                owner,
-                Zone::Board,
-                Zone::Graveyard,
-                "combat-death",
-            );
-            outcome.deaths.push(iid.clone());
-            // LUA Phase 1: fire on_die after the Board → Graveyard move so the
-            // handler observes the post-death zone state. Handlers may return
-            // attached cards via game.move; P.8 (auto-exile of leftover
-            // attached) is still TODO and will run after handlers when wired.
-            if let Some(c) = ctx.as_mut() {
-                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, iid)
-                    .map_err(CombatError::ChoicePending)?;
-                // Broadcast OnCreatureDies to every BOARD watcher (both
-                // sides). The dying card already left BOARD above, so
-                // it's naturally excluded from the snapshot.
-                let watchers: Vec<InstanceId> = self
-                    .a
-                    .board
-                    .iter()
-                    .chain(self.b.board.iter())
-                    .cloned()
-                    .collect();
-                for watcher in &watchers {
-                    lua_api::fire_with_partner(
-                        c.lua,
-                        self,
-                        c.oracle(),
-                        EventName::OnCreatureDies,
-                        watcher,
-                        iid,
-                    )
-                    .map_err(CombatError::ChoicePending)?;
-                }
-            }
-            // P.8: cascade any cards still attached to the dead host
-            // into EXILE. Runs AFTER on_die so handlers like
-            // trustworthy-lender that want to return attached cards to
-            // hand still get the first read.
-            self.exile_remaining_attached(iid);
+        // 12.3: route combat deaths through the death-replacement
+        // chokepoint. OnWouldDie gets first refusal on each dying creature
+        // (shed-to-survive / redirect-to-exile); with no replacement this is
+        // the same Board→GRAVEYARD + on_die + OnCreatureDies broadcast + P.8
+        // attached-cascade as before.
+        let died = self
+            .resolve_board_deaths(to_kill, ctx.as_deref_mut())
+            .map_err(CombatError::ChoicePending)?;
+        outcome.deaths.extend(died);
+        // 12.3b: a combat death's on_die may burn a bystander via
+        // game.damage, which defers that death. resolve_board_deaths ran
+        // under the settling_deaths guard, so its own drains skipped the
+        // damage-settle — run one more drain now (guard released) to resolve
+        // the chained death within this combat, folding it into the report.
+        if let Some(c) = ctx {
+            let chained = lua_api::drain_deferred_events(c.lua, self, c.oracle())
+                .map_err(CombatError::ChoicePending)?;
+            outcome.deaths.extend(chained);
         }
         Ok(outcome)
     }

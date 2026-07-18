@@ -913,6 +913,11 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
     let allow_x_zero = table
         .get::<Option<bool>>("allow_x_zero")?
         .unwrap_or(false);
+    // RULES Z.7: mutation cards declare `same_sleeve = true` to fuse
+    // inside the host's sleeve rather than attach as a separate object.
+    let same_sleeve = table
+        .get::<Option<bool>>("same_sleeve")?
+        .unwrap_or(false);
     let target = match table.get::<Option<String>>("target")? {
         None => None,
         Some(s) => match s.to_ascii_lowercase().as_str() {
@@ -947,6 +952,7 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
         handlers,
         gy_hand_substitute,
         allow_x_zero,
+        same_sleeve,
         activated,
         target,
         is_variant: false,

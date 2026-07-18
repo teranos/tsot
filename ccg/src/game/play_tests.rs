@@ -316,7 +316,7 @@ fn play_card_errors_on_unsupported_type() {
     // Creature / Spell / Artifact are all routable.
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
-    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Environment;
+    s.card_pool.get_mut(&iid).unwrap().card_mut().kind = CardType::Environment;
     assert_eq!(
         s.play_card(PlayerId::A, &iid, PlayChoices::default(), None),
         Err(PlayError::UnsupportedType(CardType::Environment))
@@ -327,7 +327,7 @@ fn play_card_errors_on_unsupported_type() {
 fn play_card_routes_artifact_to_board() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
-    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Artifact;
+    s.card_pool.get_mut(&iid).unwrap().card_mut().kind = CardType::Artifact;
     // No cost — empty payment is valid for an artifact with cost = {}.
     assert_eq!(
         s.play_card(PlayerId::A, &iid, PlayChoices::default(), None),
@@ -345,7 +345,7 @@ fn play_card_routes_artifact_to_board() {
 fn play_card_routes_symbol_to_board() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
-    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&iid).unwrap().card_mut().kind = CardType::Symbol;
     assert_eq!(
         s.play_card(PlayerId::A, &iid, PlayChoices::default(), None),
         Ok(())
@@ -358,7 +358,7 @@ fn play_card_routes_symbol_to_board() {
 fn play_card_symbol_etb_untapped() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
-    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&iid).unwrap().card_mut().kind = CardType::Symbol;
     s.play_card(PlayerId::A, &iid, PlayChoices::default(), None)
         .expect("symbol cast");
     let inst = s.card_pool.get(&iid).expect("instance");
@@ -373,8 +373,8 @@ fn play_card_symbol_cast_cap_blocks_second() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid_first = s.a.hand[0].clone();
     let iid_second = s.a.hand[1].clone();
-    s.card_pool.get_mut(&iid_first).unwrap().card.kind = CardType::Symbol;
-    s.card_pool.get_mut(&iid_second).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&iid_first).unwrap().card_mut().kind = CardType::Symbol;
+    s.card_pool.get_mut(&iid_second).unwrap().card_mut().kind = CardType::Symbol;
     assert_eq!(
         s.play_card(PlayerId::A, &iid_first, PlayChoices::default(), None),
         Ok(())
@@ -394,8 +394,8 @@ fn play_card_symbol_cap_resets_on_turn_begin() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let first = s.a.hand[0].clone();
     let second = s.a.hand[1].clone();
-    s.card_pool.get_mut(&first).unwrap().card.kind = CardType::Symbol;
-    s.card_pool.get_mut(&second).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&first).unwrap().card_mut().kind = CardType::Symbol;
+    s.card_pool.get_mut(&second).unwrap().card_mut().kind = CardType::Symbol;
     s.play_card(PlayerId::A, &first, PlayChoices::default(), None)
         .expect("first symbol cast");
     // Advance Untap → Draw → Main1 → Combat → Main2 → End → next Untap.
@@ -421,8 +421,8 @@ fn play_card_symbol_cap_per_player() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let a_sym = s.a.hand[0].clone();
     let b_sym = s.b.hand[0].clone();
-    s.card_pool.get_mut(&a_sym).unwrap().card.kind = CardType::Symbol;
-    s.card_pool.get_mut(&b_sym).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&a_sym).unwrap().card_mut().kind = CardType::Symbol;
+    s.card_pool.get_mut(&b_sym).unwrap().card_mut().kind = CardType::Symbol;
     s.play_card(PlayerId::A, &a_sym, PlayChoices::default(), None)
         .expect("A casts symbol");
     // Advance to B's turn (full A-turn cycle).
@@ -446,12 +446,12 @@ fn play_card_symbol_unique_blocks_duplicate_id_self() {
     let second = s.a.hand[1].clone();
     // Force the second copy to share the first's card-id so the
     // uniqueness check sees a duplicate.
-    s.card_pool.get_mut(&first).unwrap().card.kind = CardType::Symbol;
-    let first_id = s.card_pool.get(&first).unwrap().card.id.clone();
+    s.card_pool.get_mut(&first).unwrap().card_mut().kind = CardType::Symbol;
+    let first_id = s.card_pool.get(&first).unwrap().card().id.clone();
     {
         let inst = s.card_pool.get_mut(&second).unwrap();
-        inst.card.kind = CardType::Symbol;
-        inst.card.id = first_id;
+        inst.card_mut().kind = CardType::Symbol;
+        inst.card_mut().id = first_id;
     }
     s.play_card(PlayerId::A, &first, PlayChoices::default(), None)
         .expect("first symbol cast");
@@ -475,12 +475,12 @@ fn play_card_symbol_unique_blocks_duplicate_id_opponent() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let a_sym = s.a.hand[0].clone();
     let b_sym = s.b.hand[0].clone();
-    s.card_pool.get_mut(&a_sym).unwrap().card.kind = CardType::Symbol;
-    let shared_id = s.card_pool.get(&a_sym).unwrap().card.id.clone();
+    s.card_pool.get_mut(&a_sym).unwrap().card_mut().kind = CardType::Symbol;
+    let shared_id = s.card_pool.get(&a_sym).unwrap().card().id.clone();
     {
         let inst = s.card_pool.get_mut(&b_sym).unwrap();
-        inst.card.kind = CardType::Symbol;
-        inst.card.id = shared_id;
+        inst.card_mut().kind = CardType::Symbol;
+        inst.card_mut().id = shared_id;
     }
     s.play_card(PlayerId::A, &a_sym, PlayChoices::default(), None)
         .expect("A casts symbol");
@@ -503,12 +503,12 @@ fn play_card_symbol_unique_castable_after_leaves_board() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let a_sym = s.a.hand[0].clone();
     let b_sym = s.b.hand[0].clone();
-    s.card_pool.get_mut(&a_sym).unwrap().card.kind = CardType::Symbol;
-    let shared_id = s.card_pool.get(&a_sym).unwrap().card.id.clone();
+    s.card_pool.get_mut(&a_sym).unwrap().card_mut().kind = CardType::Symbol;
+    let shared_id = s.card_pool.get(&a_sym).unwrap().card().id.clone();
     {
         let inst = s.card_pool.get_mut(&b_sym).unwrap();
-        inst.card.kind = CardType::Symbol;
-        inst.card.id = shared_id;
+        inst.card_mut().kind = CardType::Symbol;
+        inst.card_mut().id = shared_id;
     }
     s.play_card(PlayerId::A, &a_sym, PlayChoices::default(), None)
         .expect("A casts symbol");
@@ -531,7 +531,7 @@ fn play_card_symbol_unique_castable_after_leaves_board() {
 fn play_card_symbol_castable_from_top_of_deck() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let top = s.a.deck[0].clone();
-    s.card_pool.get_mut(&top).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&top).unwrap().card_mut().kind = CardType::Symbol;
     assert_eq!(
         s.play_card(PlayerId::A, &top, PlayChoices::default(), None),
         Ok(())
@@ -546,7 +546,7 @@ fn play_card_symbol_castable_from_top_of_deck() {
 fn play_card_symbol_not_top_of_deck_refused() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let second = s.a.deck[1].clone();
-    s.card_pool.get_mut(&second).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&second).unwrap().card_mut().kind = CardType::Symbol;
     assert_eq!(
         s.play_card(PlayerId::A, &second, PlayChoices::default(), None),
         Err(PlayError::NotInHand)
@@ -575,12 +575,12 @@ fn play_card_symbol_top_of_deck_still_respects_uniqueness() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let from_hand = s.a.hand[0].clone();
     let from_deck = s.a.deck[0].clone();
-    s.card_pool.get_mut(&from_hand).unwrap().card.kind = CardType::Symbol;
-    let shared_id = s.card_pool.get(&from_hand).unwrap().card.id.clone();
+    s.card_pool.get_mut(&from_hand).unwrap().card_mut().kind = CardType::Symbol;
+    let shared_id = s.card_pool.get(&from_hand).unwrap().card().id.clone();
     {
         let inst = s.card_pool.get_mut(&from_deck).unwrap();
-        inst.card.kind = CardType::Symbol;
-        inst.card.id = shared_id;
+        inst.card_mut().kind = CardType::Symbol;
+        inst.card_mut().id = shared_id;
     }
     s.play_card(PlayerId::A, &from_hand, PlayChoices::default(), None)
         .expect("first symbol from hand");
@@ -600,7 +600,7 @@ fn play_card_symbol_top_of_deck_still_respects_uniqueness() {
 fn play_card_symbol_no_summoning_sickness() {
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
-    s.card_pool.get_mut(&iid).unwrap().card.kind = CardType::Symbol;
+    s.card_pool.get_mut(&iid).unwrap().card_mut().kind = CardType::Symbol;
     s.play_card(PlayerId::A, &iid, PlayChoices::default(), None)
         .expect("symbol cast");
     let inst = s.card_pool.get(&iid).expect("instance");
@@ -621,21 +621,21 @@ fn setup_jewel_tap_scenario() -> (GameState, InstanceId, InstanceId, InstanceId)
     // Build the jewel: artifact, subtype "jewel", red.
     {
         let j = s.card_pool.get_mut(&jewel).unwrap();
-        j.card.kind = CardType::Artifact;
-        j.card.subtypes = vec!["jewel".to_string()];
-        j.card.colors = vec!["red".to_string()];
+        j.card_mut().kind = CardType::Artifact;
+        j.card_mut().subtypes = vec!["jewel".to_string()];
+        j.card_mut().colors = vec!["red".to_string()];
     }
     // Move the jewel to BOARD (untapped) so it can be tapped as cost.
     let _ = s.move_card(&jewel, PlayerId::A, Zone::Hand, Zone::Board);
     // Build the cast card: creature, red, 1 hand cost.
     {
         let c = s.card_pool.get_mut(&cast).unwrap();
-        c.card.colors = vec!["red".to_string()];
+        c.card_mut().colors = vec!["red".to_string()];
     }
     // P.7a identity match: payment needs a shared color with cast.
     {
         let p = s.card_pool.get_mut(&payment).unwrap();
-        p.card.colors = vec!["red".to_string()];
+        p.card_mut().colors = vec!["red".to_string()];
     }
     set_cost(
         &mut s,
@@ -735,7 +735,7 @@ fn jewel_pays_two_graveyard_components() {
     let _ = s.move_card(&filler_a, PlayerId::A, Zone::Hand, Zone::Graveyard);
     let _ = s.move_card(&filler_b, PlayerId::A, Zone::Hand, Zone::Graveyard);
     for iid in [&filler_a, &filler_b] {
-        s.card_pool.get_mut(iid).unwrap().card.colors = vec!["red".to_string()];
+        s.card_pool.get_mut(iid).unwrap().card_mut().colors = vec!["red".to_string()];
     }
     set_cost(
         &mut s,
@@ -778,7 +778,7 @@ fn jewel_pays_one_hand_one_graveyard_mixed() {
     // check still passes.
     let filler = s.a.hand[3].clone();
     let _ = s.move_card(&filler, PlayerId::A, Zone::Hand, Zone::Graveyard);
-    s.card_pool.get_mut(&filler).unwrap().card.colors = vec!["red".to_string()];
+    s.card_pool.get_mut(&filler).unwrap().card_mut().colors = vec!["red".to_string()];
     set_cost(
         &mut s,
         &cast,
@@ -844,7 +844,7 @@ fn jewel_tap_rejected_when_jewel_tapped() {
 fn jewel_tap_rejected_on_color_mismatch() {
     let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
     // Recolor the cast card to blue — jewel is red, no overlap.
-    s.card_pool.get_mut(&cast).unwrap().card.colors = vec!["blue".to_string()];
+    s.card_pool.get_mut(&cast).unwrap().card_mut().colors = vec!["blue".to_string()];
     let result = s.play_card(
         PlayerId::A,
         &cast,
@@ -866,7 +866,7 @@ fn jewel_tap_rejected_on_color_mismatch() {
 fn jewel_tap_rejected_on_non_jewel_artifact() {
     let (mut s, jewel, cast, _payment) = setup_jewel_tap_scenario();
     // Strip the "jewel" subtype — still a red artifact on board, but not a jewel.
-    s.card_pool.get_mut(&jewel).unwrap().card.subtypes.clear();
+    s.card_pool.get_mut(&jewel).unwrap().card_mut().subtypes.clear();
     let result = s.play_card(
         PlayerId::A,
         &cast,
@@ -952,9 +952,9 @@ fn crystal_tap_matches_by_attached_card_color() {
     // Crystal: artifact, "crystal" subtype, all six colors.
     {
         let c = s.card_pool.get_mut(&crystal).unwrap();
-        c.card.kind = CardType::Artifact;
-        c.card.subtypes = vec!["crystal".into()];
-        c.card.colors = vec![
+        c.card_mut().kind = CardType::Artifact;
+        c.card_mut().subtypes = vec!["crystal".into()];
+        c.card_mut().colors = vec![
             "black".into(),
             "blue".into(),
             "green".into(),
@@ -965,12 +965,12 @@ fn crystal_tap_matches_by_attached_card_color() {
     }
     // Move crystal to BOARD and attach a red card to it.
     let _ = s.move_card(&crystal, PlayerId::A, Zone::Hand, Zone::Board);
-    s.card_pool.get_mut(&attached).unwrap().card.colors = vec!["red".into()];
+    s.card_pool.get_mut(&attached).unwrap().card_mut().colors = vec!["red".into()];
     let _ = s.move_card(&attached, PlayerId::A, Zone::Hand, Zone::Exile); // remove from hand
     s.a.exile.retain(|x| x != &attached);
     s.add_attached(&crystal, &attached);
     // Cast card: red, 1 hand cost.
-    s.card_pool.get_mut(&cast).unwrap().card.colors = vec!["red".into()];
+    s.card_pool.get_mut(&cast).unwrap().card_mut().colors = vec!["red".into()];
     set_cost(
         &mut s,
         &cast,
@@ -1007,17 +1007,17 @@ fn crystal_tap_rejected_when_no_attached_color_matches() {
     let cast = s.a.hand[2].clone();
     {
         let c = s.card_pool.get_mut(&crystal).unwrap();
-        c.card.kind = CardType::Artifact;
-        c.card.subtypes = vec!["crystal".into()];
-        c.card.colors = vec!["black".into(), "red".into(), "blue".into()];
+        c.card_mut().kind = CardType::Artifact;
+        c.card_mut().subtypes = vec!["crystal".into()];
+        c.card_mut().colors = vec!["black".into(), "red".into(), "blue".into()];
     }
     let _ = s.move_card(&crystal, PlayerId::A, Zone::Hand, Zone::Board);
     // Attached card is GREEN — does not match the BLUE cast card.
-    s.card_pool.get_mut(&attached).unwrap().card.colors = vec!["green".into()];
+    s.card_pool.get_mut(&attached).unwrap().card_mut().colors = vec!["green".into()];
     let _ = s.move_card(&attached, PlayerId::A, Zone::Hand, Zone::Exile);
     s.a.exile.retain(|x| x != &attached);
     s.add_attached(&crystal, &attached);
-    s.card_pool.get_mut(&cast).unwrap().card.colors = vec!["blue".into()];
+    s.card_pool.get_mut(&cast).unwrap().card_mut().colors = vec!["blue".into()];
     set_cost(
         &mut s,
         &cast,
@@ -1054,13 +1054,13 @@ fn setup_symbol_tap_scenario() -> (GameState, InstanceId, InstanceId) {
     let cast = s.a.hand[1].clone();
     {
         let sym = s.card_pool.get_mut(&symbol).unwrap();
-        sym.card.kind = CardType::Symbol;
-        sym.card.colors = vec!["red".to_string()];
+        sym.card_mut().kind = CardType::Symbol;
+        sym.card_mut().colors = vec!["red".to_string()];
     }
     let _ = s.move_card(&symbol, PlayerId::A, Zone::Hand, Zone::Board);
     {
         let c = s.card_pool.get_mut(&cast).unwrap();
-        c.card.colors = vec!["blue".to_string()];
+        c.card_mut().colors = vec!["blue".to_string()];
     }
     set_cost(
         &mut s,
@@ -1108,7 +1108,7 @@ fn symbol_tap_substitutes_for_one_graveyard_component() {
     // covers the lone GY component).
     let filler = s.a.hand[1].clone();
     let _ = s.move_card(&filler, PlayerId::A, Zone::Hand, Zone::Graveyard);
-    s.card_pool.get_mut(&filler).unwrap().card.colors = vec!["blue".into()];
+    s.card_pool.get_mut(&filler).unwrap().card_mut().colors = vec!["blue".into()];
     set_cost(
         &mut s,
         &cast,
@@ -1149,8 +1149,8 @@ fn symbol_tap_no_color_match_required() {
     let (mut s, symbol, cast) = setup_symbol_tap_scenario();
     // cast is blue, symbol is red (set up in helper). Confirm no
     // color overlap.
-    assert!(s.card_pool.get(&cast).unwrap().card.colors == vec!["blue".to_string()]);
-    assert!(s.card_pool.get(&symbol).unwrap().card.colors == vec!["red".to_string()]);
+    assert!(s.card_pool.get(&cast).unwrap().card().colors == vec!["blue".to_string()]);
+    assert!(s.card_pool.get(&symbol).unwrap().card().colors == vec!["red".to_string()]);
     let result = s.play_card(
         PlayerId::A,
         &cast,
@@ -1387,7 +1387,7 @@ fn jellyfish_on_enter_board_bounces_chosen_creature_via_scripted_oracle() {
     let target_iid = s.b.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&jelly_iid).unwrap();
-        inst.card = jelly.clone();
+        inst.content = Some(jelly.clone());
     }
     // Put an opposing creature on B's board to be the target.
     s.b.hand.retain(|x| x != &target_iid);
@@ -1463,8 +1463,8 @@ fn on_play_handler_fires_before_card_leaves_hand() {
     let creature = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&creature).unwrap();
-        inst.card.handlers = fixture.handlers.clone();
-        inst.card.id = fixture.id.clone();
+        inst.card_mut().handlers = fixture.handlers.clone();
+        inst.card_mut().id = fixture.id.clone();
     }
 
     registry
@@ -1509,11 +1509,11 @@ fn clear_red_tutors_red_symbol_when_no_jewel_in_deck() {
     let symbol_iid = s.a.deck[3].clone();
     {
         let inst = s.card_pool.get_mut(&clear_iid).unwrap();
-        inst.card = clear_red.clone();
+        inst.content = Some(clear_red.clone());
     }
     {
         let inst = s.card_pool.get_mut(&symbol_iid).unwrap();
-        inst.card = red_symbol.clone();
+        inst.content = Some(red_symbol.clone());
     }
     // Sanity: no `red-jewel` in deck — the tutor must fall back to
     // the Symbol path.
@@ -1522,7 +1522,7 @@ fn clear_red_tutors_red_symbol_when_no_jewel_in_deck() {
         .deck
         .iter()
         .filter_map(|iid| s.card_pool.get(iid))
-        .any(|i| i.card.id == "red-jewel"));
+        .any(|i| i.card().id == "red-jewel"));
 
     s.play_card(
         PlayerId::A,
@@ -1569,15 +1569,15 @@ fn clear_red_tutors_some_eligible_card_when_both_available() {
     let symbol_iid = s.a.deck[5].clone();
     {
         let inst = s.card_pool.get_mut(&clear_iid).unwrap();
-        inst.card = clear_red.clone();
+        inst.content = Some(clear_red.clone());
     }
     {
         let inst = s.card_pool.get_mut(&jewel_iid).unwrap();
-        inst.card = red_jewel.clone();
+        inst.content = Some(red_jewel.clone());
     }
     {
         let inst = s.card_pool.get_mut(&symbol_iid).unwrap();
-        inst.card = red_symbol.clone();
+        inst.content = Some(red_symbol.clone());
     }
     let hand_size_before = s.a.hand.len();
     s.play_card(
@@ -1618,11 +1618,11 @@ fn clear_red_does_not_tutor_off_color_symbol() {
     let symbol_iid = s.a.deck[3].clone();
     {
         let inst = s.card_pool.get_mut(&clear_iid).unwrap();
-        inst.card = clear_red.clone();
+        inst.content = Some(clear_red.clone());
     }
     {
         let inst = s.card_pool.get_mut(&symbol_iid).unwrap();
-        inst.card = blue_symbol.clone();
+        inst.content = Some(blue_symbol.clone());
     }
     s.play_card(
         PlayerId::A,
@@ -1653,7 +1653,7 @@ fn surge_instant_untaps_all_your_creatures_on_play() {
     let b_creat = s.b.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&surge_iid).unwrap();
-        inst.card = surge.clone();
+        inst.content = Some(surge.clone());
     }
     // Put two tapped A creatures on board, plus one tapped B creature.
     s.a.hand.retain(|x| x != &cred1 && x != &cred2);
@@ -1714,7 +1714,7 @@ fn draw_two_instant_plays_from_graveyard_cost_and_draws() {
     // Swap to draw-two's card data (instant type, graveyard cost, handler).
     {
         let inst = s.card_pool.get_mut(&instant_iid).unwrap();
-        inst.card = draw_two.clone();
+        inst.content = Some(draw_two.clone());
     }
     // Seed the graveyard so the cost can be paid.
     let gy_seeds: Vec<_> = s.a.deck.drain(0..3).collect();
@@ -1777,8 +1777,8 @@ fn goblin_scribe_draws_a_card_on_enter_board() {
     let creature = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&creature).unwrap();
-        inst.card.handlers = scribe.handlers.clone();
-        inst.card.id = scribe.id.clone();
+        inst.card_mut().handlers = scribe.handlers.clone();
+        inst.card_mut().id = scribe.id.clone();
     }
     let hand_before = s.a.hand.len();
     let deck_before = s.a.deck.len();
@@ -1824,8 +1824,8 @@ fn on_enter_board_handler_fires_after_card_on_board() {
     let creature = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&creature).unwrap();
-        inst.card.handlers = fixture.handlers.clone();
-        inst.card.id = fixture.id.clone();
+        inst.card_mut().handlers = fixture.handlers.clone();
+        inst.card_mut().id = fixture.id.clone();
     }
 
     registry
@@ -1876,7 +1876,7 @@ fn counterspell_resolves_and_removes_underlying_cast() {
     let a_creature = s.a.hand[0].clone();
     let a_hand_payment = s.a.hand[1].clone();
     let cs_iid = s.b.hand[0].clone();
-    s.card_pool.get_mut(&cs_iid).unwrap().card = counterspell;
+    s.card_pool.get_mut(&cs_iid).unwrap().content = Some(counterspell);
     // Counterspell (blue+purple) costs 1 graveyard. Per P.12a the GY
     // pitch must color-match — paint the seed blue.
     let gy_seed = s.b.hand[1].clone();
@@ -1941,9 +1941,9 @@ fn play_card_during_open_window_pushes_to_chain_instead_of_opening_new() {
     // The instant should land on top of the chain, not open a new window.
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let b_instant = s.b.hand[0].clone();
-    s.card_pool.get_mut(&b_instant).unwrap().card.kind = crate::card::CardType::Spell;
-    s.card_pool.get_mut(&b_instant).unwrap().card.timing = Some(crate::card::Timing::Instant);
-    s.card_pool.get_mut(&b_instant).unwrap().card.cost = vec![]; // free
+    s.card_pool.get_mut(&b_instant).unwrap().card_mut().kind = crate::card::CardType::Spell;
+    s.card_pool.get_mut(&b_instant).unwrap().card_mut().timing = Some(crate::card::Timing::Instant);
+    s.card_pool.get_mut(&b_instant).unwrap().card_mut().cost = vec![]; // free
 
     // Manually open a window with a placeholder A cast — bypasses play_card
     // so we control the chain shape exactly.
@@ -2005,7 +2005,7 @@ fn lua_chain_and_counter_target_apis_remove_specific_item() {
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let a_creature = s.a.hand[0].clone();
     let cs_iid = s.b.hand[0].clone();
-    s.card_pool.get_mut(&cs_iid).unwrap().card = card;
+    s.card_pool.get_mut(&cs_iid).unwrap().content = Some(card);
 
     // A's cast on the chain.
     let a_cast = crate::game::StackItem::PlayedCard {
@@ -2139,11 +2139,11 @@ fn hand_payment_matches_when_any_of_multiple_symbols_overlap() {
     let creature = s.a.hand[0].clone();
     let pay = s.a.hand[1].clone();
     set_cost(&mut s, &creature, one_hand_cost());
-    s.card_pool.get_mut(&creature).unwrap().card.colors = vec!["green".into()];
-    s.card_pool.get_mut(&creature).unwrap().card.symbols =
+    s.card_pool.get_mut(&creature).unwrap().card_mut().colors = vec!["green".into()];
+    s.card_pool.get_mut(&creature).unwrap().card_mut().symbols =
         vec!["⊨".into(), "⨳".into()];
-    s.card_pool.get_mut(&pay).unwrap().card.colors = vec!["red".into()];
-    s.card_pool.get_mut(&pay).unwrap().card.symbols = vec!["⨳".into()];
+    s.card_pool.get_mut(&pay).unwrap().card_mut().colors = vec!["red".into()];
+    s.card_pool.get_mut(&pay).unwrap().card_mut().symbols = vec!["⨳".into()];
     let result = s.play_card(
         PlayerId::A,
         &creature,
@@ -2172,11 +2172,11 @@ fn hand_payment_rejected_when_multi_symbol_sets_disjoint() {
     let creature = s.a.hand[0].clone();
     let pay = s.a.hand[1].clone();
     set_cost(&mut s, &creature, one_hand_cost());
-    s.card_pool.get_mut(&creature).unwrap().card.colors = vec!["green".into()];
-    s.card_pool.get_mut(&creature).unwrap().card.symbols =
+    s.card_pool.get_mut(&creature).unwrap().card_mut().colors = vec!["green".into()];
+    s.card_pool.get_mut(&creature).unwrap().card_mut().symbols =
         vec!["⊨".into(), "⨳".into()];
-    s.card_pool.get_mut(&pay).unwrap().card.colors = vec!["red".into()];
-    s.card_pool.get_mut(&pay).unwrap().card.symbols = vec!["꩜".into()];
+    s.card_pool.get_mut(&pay).unwrap().card_mut().colors = vec!["red".into()];
+    s.card_pool.get_mut(&pay).unwrap().card_mut().symbols = vec!["꩜".into()];
     let result = s.play_card(
         PlayerId::A,
         &creature,
@@ -2297,7 +2297,7 @@ fn activate_red_jewel_taps_and_draws_then_discards() {
     let iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&iid).unwrap();
-        inst.card = jewel;
+        inst.content = Some(jewel);
     }
     s.a.hand.retain(|x| x != &iid);
     s.a.board.push(iid.clone());
@@ -2345,7 +2345,7 @@ fn activate_creature_with_summoning_sickness_is_rejected() {
     let iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&iid).unwrap();
-        inst.card = vh;
+        inst.content = Some(vh);
         inst.summoning_sick = true; // freshly played, no haste
     }
     s.a.hand.retain(|x| x != &iid);
@@ -2371,7 +2371,7 @@ fn activate_returns_no_such_ability_for_out_of_range_idx() {
 
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let iid = s.a.hand[0].clone();
-    s.card_pool.get_mut(&iid).unwrap().card = jewel;
+    s.card_pool.get_mut(&iid).unwrap().content = Some(jewel);
     s.a.hand.retain(|x| x != &iid);
     s.a.board.push(iid.clone());
 
@@ -2400,7 +2400,7 @@ fn vigilant_human_t_ability_no_ops_if_did_not_attack() {
     let iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&iid).unwrap();
-        inst.card = vh;
+        inst.content = Some(vh);
         inst.summoning_sick = false;
     }
     s.a.hand.retain(|x| x != &iid);
@@ -2440,7 +2440,7 @@ fn vigilant_human_t_ability_draws_after_attacking() {
     let iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&iid).unwrap();
-        inst.card = vh;
+        inst.content = Some(vh);
         inst.summoning_sick = false;
         inst.attacked_this_turn = true; // simulate post-combat
     }
@@ -2477,7 +2477,7 @@ fn blue_monkey_2_hand_activation_discards_two_and_draws_one() {
     let iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&iid).unwrap();
-        inst.card = monkey;
+        inst.content = Some(monkey);
         inst.summoning_sick = false;
     }
     s.a.hand.retain(|x| x != &iid);
@@ -2523,7 +2523,7 @@ fn monkey_cannot_activate_with_insufficient_hand() {
     let iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&iid).unwrap();
-        inst.card = monkey;
+        inst.content = Some(monkey);
         inst.summoning_sick = false;
     }
     s.a.hand.retain(|x| x != &iid);
@@ -2557,14 +2557,14 @@ fn white_monkey_grants_plus_2_and_vigilance_eot() {
     let buddy_iid = s.a.hand[1].clone();
     {
         let m = s.card_pool.get_mut(&monkey_iid).unwrap();
-        m.card = monkey;
+        m.content = Some(monkey);
         m.summoning_sick = false;
     }
     {
         // Give buddy a baseline 1/1 stat line.
         let b = s.card_pool.get_mut(&buddy_iid).unwrap();
-        b.card.stats = Some(crate::card::Stats { x: 1.0, y: 1.0 });
-        b.card.kind = crate::card::CardType::Creature;
+        b.card_mut().stats = Some(crate::card::Stats { x: 1.0, y: 1.0 });
+        b.card_mut().kind = crate::card::CardType::Creature;
         b.summoning_sick = false;
     }
     s.a.hand.retain(|x| x != &monkey_iid && x != &buddy_iid);
@@ -2619,7 +2619,7 @@ fn validate_hook_refuses_and_charges_no_cost_when_no_target() {
     let iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&iid).unwrap();
-        inst.card = pink;
+        inst.content = Some(pink);
         inst.summoning_sick = false;
     }
     s.a.hand.retain(|x| x != &iid);
@@ -2674,14 +2674,14 @@ fn validate_hook_passes_and_charges_when_target_exists() {
     let target = s.b.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&iid).unwrap();
-        inst.card = pink;
+        inst.content = Some(pink);
         inst.summoning_sick = false;
     }
     {
         // Put an opposing creature on B's board so validate passes.
         let t = s.card_pool.get_mut(&target).unwrap();
-        t.card.kind = crate::card::CardType::Creature;
-        t.card.stats = Some(crate::card::Stats { x: 1.0, y: 1.0 });
+        t.card_mut().kind = crate::card::CardType::Creature;
+        t.card_mut().stats = Some(crate::card::Stats { x: 1.0, y: 1.0 });
     }
     s.a.hand.retain(|x| x != &iid);
     s.a.board.push(iid.clone());
@@ -2723,7 +2723,7 @@ fn dark_salamander_x_cost_activation_mills_2y() {
     let sala_iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&sala_iid).unwrap();
-        inst.card = sala;
+        inst.content = Some(sala);
         inst.summoning_sick = false;
     }
     s.a.hand.retain(|x| x != &sala_iid);
@@ -2773,13 +2773,13 @@ fn red_jewel_grants_t_draw_discard_to_attached_host() {
     {
         // Host is a generic 2/2 creature.
         let host_inst = s.card_pool.get_mut(&host_iid).unwrap();
-        host_inst.card.kind = crate::card::CardType::Creature;
-        host_inst.card.stats = Some(crate::card::Stats { x: 2.0, y: 2.0 });
+        host_inst.card_mut().kind = crate::card::CardType::Creature;
+        host_inst.card_mut().stats = Some(crate::card::Stats { x: 2.0, y: 2.0 });
         host_inst.summoning_sick = false;
     }
     {
         let jewel_inst = s.card_pool.get_mut(&jewel_iid).unwrap();
-        jewel_inst.card = jewel;
+        jewel_inst.content = Some(jewel);
     }
     // Place host on board, attach jewel under it (simulating the
     // post-on_attached_as_cost state without running play_card).
@@ -2850,7 +2850,7 @@ fn clear_view_fills_one_hand_slot_of_a_two_hand_cast() {
         }],
     );
     set_identity(&mut s, &blue_pay, &["blue"], "");
-    s.card_pool.get_mut(&cv).unwrap().card = clear_view;
+    s.card_pool.get_mut(&cv).unwrap().content = Some(clear_view);
     // Put Clear View in graveyard.
     s.a.hand.retain(|x| x != &cv);
     s.a.graveyard.push(cv.clone());
@@ -2910,7 +2910,7 @@ fn clear_view_cannot_pay_alone_for_one_hand_colored_cast() {
             kind: None,
         }],
     );
-    s.card_pool.get_mut(&cv).unwrap().card = clear_view;
+    s.card_pool.get_mut(&cv).unwrap().content = Some(clear_view);
     s.a.hand.retain(|x| x != &cv);
     s.a.graveyard.push(cv.clone());
 
@@ -2956,9 +2956,9 @@ fn attached_cost_on_spell_exiles_payment() {
     let (mut s, cast, host, attached) = setup_attached_scenario();
     // Turn the cast into a spell (non-BOARD destination → P.31 exile branch).
     let entry = s.card_pool.get_mut(&cast).unwrap();
-    entry.card.kind = CardType::Spell;
-    entry.card.timing = Some(crate::card::Timing::Instant);
-    entry.card.stats = None;
+    entry.card_mut().kind = CardType::Spell;
+    entry.card_mut().timing = Some(crate::card::Timing::Instant);
+    entry.card_mut().stats = None;
     set_cost(
         &mut s,
         &cast,
@@ -3114,9 +3114,9 @@ fn zero_y_creature_dies_per_c15_after_attached_detached_as_cost() {
     // Make host_cast a Hollow-style 0/0 +attached/+attached creature.
     {
         let inst = s.card_pool.get_mut(&host_cast).unwrap();
-        inst.card.kind = CardType::Creature;
-        inst.card.stats = Some(crate::card::Stats { x: 0.0, y: 0.0 });
-        inst.card.static_def = Some(StaticDef {
+        inst.card_mut().kind = CardType::Creature;
+        inst.card_mut().stats = Some(crate::card::Stats { x: 0.0, y: 0.0 });
+        inst.card_mut().static_def = Some(StaticDef {
             affects: StaticAffects {
                 subtypes: vec![],
                 colors: vec![],
@@ -3141,9 +3141,9 @@ fn zero_y_creature_dies_per_c15_after_attached_detached_as_cost() {
     // Set up the spell: 1 attached cost. Spell type so attached → EXILE.
     {
         let inst = s.card_pool.get_mut(&spell).unwrap();
-        inst.card.kind = CardType::Spell;
-        inst.card.timing = Some(crate::card::Timing::Instant);
-        inst.card.stats = None;
+        inst.card_mut().kind = CardType::Spell;
+        inst.card_mut().timing = Some(crate::card::Timing::Instant);
+        inst.card_mut().stats = None;
     }
     set_cost(
         &mut s,
@@ -3190,7 +3190,7 @@ fn b8_lua_damage_accumulation_kills_creature_via_cleanup_b8_damage_deaths() {
     let _ = s.move_card(&victim, PlayerId::B, Zone::Hand, Zone::Board);
     {
         let inst = s.card_pool.get_mut(&victim).unwrap();
-        inst.card.stats = Some(crate::card::Stats { x: 2.0, y: 2.0 });
+        inst.card_mut().stats = Some(crate::card::Stats { x: 2.0, y: 2.0 });
     }
     // Apply 2 damage directly (skip the Lua layer).
     s.set_damage(&victim, 2.0);
@@ -3236,31 +3236,48 @@ fn lua_damage_to_player_mills_n_from_their_deck_to_exile() {
 }
 
 #[test]
-fn do_damage_invokes_b8_cleanup_wiring() {
-    // Integration test for the wiring: calling do_damage on a
-    // creature that should die from B.8 must leave it in graveyard.
-    // The unit test above
-    // (b8_lua_damage_accumulation_kills_creature_via_cleanup_b8_damage_deaths)
-    // exercises the cleanup function in isolation; this one
-    // exercises the entry point (the function that handlers actually
-    // invoke via game.damage), proving the sweep happens
-    // automatically. If someone deletes the cleanup call from
-    // do_damage (removing the wiring while leaving the sweep
-    // function intact), the unit test still passes but this one
-    // fails.
+fn game_damage_kills_a_lethal_creature_through_the_deferred_settle() {
+    // game.damage applies damage inside a live handler's borrow; the B.8
+    // death is NOT swept synchronously inside do_damage (that would bypass
+    // the OnWouldDie replacement window). It is deferred to
+    // drain_deferred_events — after the handler unwinds, with a Lua context
+    // — and resolved through resolve_board_deaths. Fire a real burn handler
+    // and prove the lethal victim still ends in the graveyard.
+    let lua = mlua::Lua::new();
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+
     let victim = s.b.hand[0].clone();
     let _ = s.move_card(&victim, PlayerId::B, Zone::Hand, Zone::Board);
-    {
-        let inst = s.card_pool.get_mut(&victim).unwrap();
-        inst.card.stats = Some(crate::card::Stats { x: 2.0, y: 2.0 });
-    }
-    let res = crate::game::lua_api::do_damage(&mut s, &victim, 2.0);
-    assert!(res.is_ok());
+    s.card_pool.get_mut(&victim).unwrap().card_mut().stats =
+        Some(crate::card::Stats { x: 2.0, y: 2.0 });
+
+    // A source whose on_play burns the victim for lethal via game.damage.
+    let src = s.a.hand[0].clone();
+    let _ = s.move_card(&src, PlayerId::A, Zone::Hand, Zone::Board);
+    let burn: mlua::Function = lua
+        .load(format!("return function(game, self) game.damage('{victim}', 2) end"))
+        .eval()
+        .unwrap();
+    s.card_pool
+        .get_mut(&src)
+        .unwrap()
+        .card_mut()
+        .handlers
+        .insert(crate::card::EventName::OnPlay, burn);
+
+    let mut oracle = crate::choice::NoopOracle;
+    crate::game::lua_api::fire_self_only(
+        &lua,
+        &mut s,
+        &mut oracle,
+        crate::card::EventName::OnPlay,
+        &src,
+    )
+    .expect("burn resolves");
+
     assert!(
         !s.b.board.contains(&victim),
-        "do_damage must invoke cleanup_b8_damage_deaths; \
-         victim with damage=Y still on board"
+        "lethal game.damage removes the victim from the board via the deferred B.8 settle"
     );
     assert!(
         s.b.graveyard.contains(&victim),
@@ -3277,7 +3294,7 @@ fn b8_partial_damage_below_y_keeps_creature_alive() {
     let _ = s.move_card(&survivor, PlayerId::B, Zone::Hand, Zone::Board);
     {
         let inst = s.card_pool.get_mut(&survivor).unwrap();
-        inst.card.stats = Some(crate::card::Stats { x: 2.0, y: 3.0 });
+        inst.card_mut().stats = Some(crate::card::Stats { x: 2.0, y: 3.0 });
     }
     s.set_damage(&survivor, 1.0);
     s.cleanup_b8_damage_deaths();
@@ -3298,7 +3315,7 @@ fn c15_neg_3_3_on_a_3_3_kills_via_effective_y_drop() {
     let _ = s.move_card(&victim, PlayerId::B, Zone::Hand, Zone::Board);
     {
         let inst = s.card_pool.get_mut(&victim).unwrap();
-        inst.card.stats = Some(crate::card::Stats { x: 3.0, y: 3.0 });
+        inst.card_mut().stats = Some(crate::card::Stats { x: 3.0, y: 3.0 });
     }
     // Apply -3/-3 EOT directly via the engine (skip the spell layer).
     s.add_modifier(
@@ -3339,7 +3356,7 @@ fn live_bring_down_casts_with_attached_payment_and_exiles_it() {
     // Wire the real card definition into the cast instance.
     {
         let inst = s.card_pool.get_mut(&cast).unwrap();
-        inst.card = bring_down;
+        inst.content = Some(bring_down);
     }
     // Ensure pay_hand identity-matches bring-down (purple).
     set_identity(&mut s, &pay_hand, &["purple"], "");
@@ -3379,7 +3396,11 @@ fn live_bring_down_casts_with_attached_payment_and_exiles_it() {
 }
 
 #[test]
-fn transparent_rejected_as_hand_payment_for_board_placed_cast() {
+fn transparent_hand_payment_attaches_to_a_board_placed_cast_c14_lifted() {
+    // C.14's former frame-based restriction is lifted: a transparent
+    // card may pay a HAND cost for a BOARD-placed cast and attach (P.6)
+    // to the non-transparent host. Previously this was refused with
+    // HandPaymentTransparentForBoardPlaced.
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
     let cast = s.a.hand[0].clone();
     let pay = s.a.hand[1].clone();
@@ -3394,8 +3415,9 @@ fn transparent_rejected_as_hand_payment_for_board_placed_cast() {
             kind: None,
         }],
     );
-    // Payment: transparent. Per C.14, illegal for board-placed cast.
+    // Payment: transparent onto a non-transparent host — now legal.
     set_identity(&mut s, &pay, &["transparent"], "");
+    assert!(!s.is_transparent(&cast), "the cast is a non-transparent host");
     let result = s.play_card(
         PlayerId::A,
         &cast,
@@ -3405,7 +3427,11 @@ fn transparent_rejected_as_hand_payment_for_board_placed_cast() {
         },
         None,
     );
-    assert_eq!(result, Err(PlayError::HandPaymentTransparentForBoardPlaced(pay)));
+    assert_eq!(result, Ok(()));
+    assert!(
+        s.card_pool.get(&cast).unwrap().attached.contains(&pay),
+        "the transparent payment attached to the non-transparent host (C.14 lifted)",
+    );
 }
 
 #[test]
@@ -3415,9 +3441,9 @@ fn transparent_allowed_as_hand_payment_for_spell_cast() {
     let pay = s.a.hand[1].clone();
     // Cast: a transparent spell (so P.7a identity matches transparent).
     let entry = s.card_pool.get_mut(&cast).unwrap();
-    entry.card.kind = CardType::Spell;
-    entry.card.timing = Some(crate::card::Timing::Instant);
-    entry.card.stats = None;
+    entry.card_mut().kind = CardType::Spell;
+    entry.card_mut().timing = Some(crate::card::Timing::Instant);
+    entry.card_mut().stats = None;
     set_identity(&mut s, &cast, &["transparent"], "");
     set_identity(&mut s, &pay, &["transparent"], "");
     set_cost(
@@ -3472,7 +3498,7 @@ fn primal_toad_scales_by_board_count_and_hand_count_per_c16() {
     let toad_iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&toad_iid).unwrap();
-        inst.card = toad;
+        inst.content = Some(toad);
     }
     // Move toad to A's BOARD plus two more cards to A's board and one to B's.
     let a_extra1 = s.a.hand[1].clone();
@@ -3517,7 +3543,7 @@ fn counterspell_cast_validate_refuses_when_chain_is_empty() {
     let cs_iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&cs_iid).unwrap();
-        inst.card = cs;
+        inst.content = Some(cs);
     }
     use rand::SeedableRng;
     let rng = rand::rngs::StdRng::seed_from_u64(0);
@@ -3695,7 +3721,7 @@ fn self_exile_spell_routes_to_exile_on_play() {
     let iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&iid).unwrap();
-        inst.card = fixture;
+        inst.content = Some(fixture);
     }
 
     registry
@@ -3740,7 +3766,7 @@ fn activation_with_gy_cost_is_not_subject_to_p12a() {
     let sig_iid = s.a.hand[0].clone();
     {
         let inst = s.card_pool.get_mut(&sig_iid).unwrap();
-        inst.card = sig.clone();
+        inst.content = Some(sig.clone());
         inst.summoning_sick = false;
     }
     s.a.hand.retain(|x| x != &sig_iid);
@@ -3820,4 +3846,205 @@ fn mixed_hand_and_gy_with_color_anchor_bypasses_p7a_on_hand() {
     // BOARD-placed creature by default in deck_of).
     assert!(s.a.exile.contains(&gy_seed));
     assert!(s.card_pool.get(&cast).unwrap().attached.contains(&hand_pay));
+}
+
+// ---- Payment-eligibility guarantee (picker/validator drift-proofing) ----
+//
+// The picker and resolver build every payment exclusively from the
+// `eligible_*` helpers, and those helpers filter on the very same per-item
+// predicates `play_card` validates with (`hand_/attached_/mutation_..._
+// item_error`). These tests encode the guarantee end-to-end: every id a
+// helper offers is one `play_card` accepts per-item. If a future edit
+// reintroduces a per-item check in `play_card` that a helper doesn't mirror
+// (the C.14 class of bug), an offered-but-refused id trips the assertion.
+
+fn is_per_item_hand_error(r: &Result<(), PlayError>) -> bool {
+    matches!(
+        r,
+        Err(PlayError::HandPaymentInvalid(_))
+            | Err(PlayError::HandPaymentForbidden(_))
+            | Err(PlayError::HandPaymentIdentityMismatch(_))
+    )
+}
+
+#[test]
+fn every_offered_hand_payment_is_accepted_by_play_card() {
+    // Sweep casts × hand payments across a spread of identities (empty
+    // wildcard, single/dual colors, symbol, transparent frame). For every
+    // hand id the shared helper offers, driving real play_card with it as
+    // the sole payment must not yield a per-item HAND refusal.
+    let idents: [&[&str]; 5] =
+        [&[], &["red"], &["blue"], &["red", "blue"], &["transparent"]];
+    let syms = ["", "X"];
+    for (ci, cast_colors) in idents.iter().enumerate() {
+        for (si, cast_sym) in syms.iter().enumerate() {
+            let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+            let cast = s.a.hand[0].clone();
+            set_identity(&mut s, &cast, cast_colors, cast_sym);
+            set_cost(
+                &mut s,
+                &cast,
+                vec![CostComponent {
+                    amount: 1,
+                    source: CostSource::Hand,
+                    is_x: false,
+                    kind: None,
+                }],
+            );
+            // Spread varied identities across the rest of the hand.
+            let hand = s.a.hand.clone();
+            for (k, h) in hand.iter().enumerate().skip(1) {
+                let hc = idents[(k + ci) % idents.len()];
+                let hs = syms[(k + si) % syms.len()];
+                set_identity(&mut s, h, hc, hs);
+            }
+            let eligible = s.eligible_hand_payments(PlayerId::A, &cast);
+            for hid in &eligible {
+                let mut clone = s.clone();
+                let r = clone.play_card(
+                    PlayerId::A,
+                    &cast,
+                    PlayChoices {
+                        hand_payment_ids: vec![hid.clone()],
+                        ..PlayChoices::default()
+                    },
+                    None,
+                );
+                assert!(
+                    !is_per_item_hand_error(&r),
+                    "eligible_hand_payments offered {hid} for cast \
+                     {cast_colors:?}/{cast_sym:?} but play_card refused it \
+                     per-item: {r:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn every_offered_attached_payment_is_accepted_and_enemy_fuel_is_refused() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    // A controls a host on the board carrying an attached payment (fuel).
+    let host = s.a.hand[0].clone();
+    let fuel = s.a.hand[1].clone();
+    let cast = s.a.hand[2].clone();
+    let _ = s.move_card(&host, PlayerId::A, Zone::Hand, Zone::Board);
+    let _ = s.move_card(&fuel, PlayerId::A, Zone::Hand, Zone::Exile); // off hand
+    s.add_attached(&host, &fuel);
+    // B controls its own host + attached card — not payable by A (P.31).
+    let enemy_host = s.b.hand[0].clone();
+    let enemy_fuel = s.b.hand[1].clone();
+    let _ = s.move_card(&enemy_host, PlayerId::B, Zone::Hand, Zone::Board);
+    let _ = s.move_card(&enemy_fuel, PlayerId::B, Zone::Hand, Zone::Exile);
+    s.add_attached(&enemy_host, &enemy_fuel);
+    // Cast needs one ATTACHED payment.
+    set_cost(
+        &mut s,
+        &cast,
+        vec![CostComponent {
+            amount: 1,
+            source: CostSource::Attached,
+            is_x: false,
+            kind: None,
+        }],
+    );
+
+    let eligible = s.eligible_attached_payments(PlayerId::A, &cast);
+    assert!(eligible.contains(&fuel), "A's own attached card must be offered");
+    assert!(
+        !eligible.contains(&enemy_fuel),
+        "enemy-controlled attached card must not be offered"
+    );
+    for aid in &eligible {
+        let mut clone = s.clone();
+        let r = clone.play_card(
+            PlayerId::A,
+            &cast,
+            PlayChoices {
+                attached_payment_ids: vec![aid.clone()],
+                ..PlayChoices::default()
+            },
+            None,
+        );
+        assert!(
+            !matches!(r, Err(PlayError::AttachedPaymentInvalid(_))),
+            "offered attached {aid} refused per-item by play_card: {r:?}"
+        );
+    }
+    // The withheld enemy fuel is indeed what play_card refuses.
+    let mut clone = s.clone();
+    let r = clone.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            attached_payment_ids: vec![enemy_fuel.clone()],
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(r, Err(PlayError::AttachedPaymentInvalid(enemy_fuel)));
+}
+
+#[test]
+fn every_offered_mutation_target_is_accepted_and_full_sleeve_is_refused() {
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+    // Snapshot iids up front — moving cards out of a zone shifts indices.
+    // Board creatures come from the 5-card opening hand; the 3 fused
+    // children come off the deck (the hand is too small for all six).
+    let h = s.a.hand.clone();
+    let d = s.a.deck.clone();
+    // A valid creature target on A's board.
+    let target = h[0].clone();
+    let _ = s.move_card(&target, PlayerId::A, Zone::Hand, Zone::Board);
+    // A full sleeve: host + 3 fused same-sleeve cards (Z.7) — no room for
+    // a 4th, so it must be excluded and refused with SleeveFull.
+    let full = h[1].clone();
+    let _ = s.move_card(&full, PlayerId::A, Zone::Hand, Zone::Board);
+    for child in d.iter().take(3) {
+        let _ = s.move_card(child, PlayerId::A, Zone::Deck, Zone::Exile);
+        s.add_same_sleeve(&full, child);
+    }
+    // The cast is a free Mutation.
+    let cast = h[2].clone();
+    {
+        let entry = s.card_pool.get_mut(&cast).unwrap();
+        entry.card_mut().kind = CardType::Mutation;
+        entry.card_mut().stats = None;
+    }
+    set_cost(&mut s, &cast, vec![]);
+
+    let eligible = s.eligible_mutation_targets(&cast);
+    assert!(eligible.contains(&target), "an empty-sleeve creature must be offered");
+    assert!(!eligible.contains(&full), "a full sleeve (Z.7) must not be offered");
+    for t in &eligible {
+        let mut clone = s.clone();
+        let r = clone.play_card(
+            PlayerId::A,
+            &cast,
+            PlayChoices {
+                mutation_target: Some(t.clone()),
+                ..PlayChoices::default()
+            },
+            None,
+        );
+        assert!(
+            !matches!(
+                r,
+                Err(PlayError::MutationTargetInvalid(_)) | Err(PlayError::SleeveFull(_))
+            ),
+            "offered mutation target {t} refused per-item by play_card: {r:?}"
+        );
+    }
+    // The withheld full sleeve is indeed what play_card refuses.
+    let mut clone = s.clone();
+    let r = clone.play_card(
+        PlayerId::A,
+        &cast,
+        PlayChoices {
+            mutation_target: Some(full.clone()),
+            ..PlayChoices::default()
+        },
+        None,
+    );
+    assert_eq!(r, Err(PlayError::SleeveFull(full)));
 }

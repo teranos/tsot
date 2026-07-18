@@ -20,8 +20,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::card::{Card, CardRegistry};
+use crate::game::DeckUnit;
 
-use super::genome::{to_deck, GenomeError};
+use super::genome::{to_deck, to_units, GenomeError};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EvolvedDeck {
@@ -94,8 +95,19 @@ impl EvolvedDeck {
     /// Materialize the saved card_ids into a `Vec<Card>` ready to be
     /// appended to a gauntlet. Errors if any card id is no longer in
     /// the registry (cards can be renamed or removed between EA runs).
+    /// **Legacy — pre-cardless.** Fails on genomes containing the
+    /// `__cardless__` sentinel; new call sites should use
+    /// [`to_units`](Self::to_units).
     pub fn to_cards(&self, registry: &CardRegistry) -> Result<Vec<Card>, GenomeError> {
         to_deck(registry, &self.card_ids)
+    }
+
+    /// Cardless-safe alternative to [`to_cards`](Self::to_cards).
+    /// The `__cardless__` sentinel materializes as
+    /// [`DeckUnit::Cardless`]; every other id resolves to
+    /// [`DeckUnit::Card`]. Errors only on unknown non-sentinel ids.
+    pub fn to_units(&self, registry: &CardRegistry) -> Result<Vec<DeckUnit>, GenomeError> {
+        to_units(registry, &self.card_ids)
     }
 }
 

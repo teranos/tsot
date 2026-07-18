@@ -118,6 +118,88 @@ thread_local! {
     /// the engine's pick-dispatch.
     static UCT_PLAN: RefCell<Vec<InstanceId>> = const { RefCell::new(Vec::new()) };
     static UCT_PLAN_IDX: RefCell<usize> = const { RefCell::new(0) };
+
+    /// Persistent UCT trees per player, plus per-player observation
+    /// buffers. `PersistentState::tree[p]` is the current tree for
+    /// player `p`, whose root corresponds to the last state where
+    /// `pick_play_uct(player=p)` was called. `obs_since_pick[p]` is
+    /// the sequence of pick decisions (both players') observed since
+    /// the last time `pick_play_uct(player=p)` returned — used to
+    /// walk the tree down to the current state on the next call.
+    ///
+    /// Tree reuse is a strict win when it works (fewer iterations
+    /// needed to reach the same decision quality), and a fresh
+    /// rebuild is the fail-safe when it doesn't (any observation
+    /// that doesn't match the tree's expanded children → drop and
+    /// rebuild). No worse than the pre-reuse baseline in the failure
+    /// case.
+    static PERSISTENT: RefCell<PersistentState> =
+        const { RefCell::new(PersistentState::empty()) };
+}
+
+/// Per-player UCT state that survives across `pick_play_uct` calls
+/// within a single game. Reset by [`reset_persistent_trees`] at
+/// game start (called from `run_game_continue`) so cross-game state
+/// doesn't bleed between fitness eval iterations sharing a worker
+/// thread.
+struct PersistentState {
+    /// Index by `PlayerId::index()`. Each tree's root corresponds to
+    /// the game state at the last `pick_play_uct(player=p)` return
+    /// point.
+    tree: [Option<Box<Node>>; 2],
+    /// Pick observations since each player's tree root. When it's
+    /// player `p`'s turn to UCT-pick, `obs_since_pick[p]` names the
+    /// picks that have happened since `tree[p]`'s root — walked down
+    /// to find the new root position.
+    obs_since_pick: [Vec<PickObservation>; 2],
+}
+
+/// One pick observation. `Some(iid)` = a real card was played;
+/// `None` = pass. Passes DROP THE TREE because the tree has no pass
+/// edge (its `Node.children` only maps `InstanceId → child`).
+/// See `walk_tree_to_current` — a None in the buffer surrenders
+/// reuse for that player until the next fresh build.
+#[derive(Clone)]
+enum PickObservation {
+    Action(InstanceId),
+    Pass,
+}
+
+impl PersistentState {
+    const fn empty() -> Self {
+        Self {
+            tree: [None, None],
+            obs_since_pick: [Vec::new(), Vec::new()],
+        }
+    }
+}
+
+/// Reset per-thread persistent UCT trees. Call at the top of each
+/// game so cross-game observations don't bleed together.
+pub fn reset_persistent_trees() {
+    PERSISTENT.with(|c| {
+        let mut s = c.borrow_mut();
+        s.tree = [None, None];
+        s.obs_since_pick = [Vec::new(), Vec::new()];
+    });
+}
+
+/// Record a real game's pick decision, seen by `run_game_continue`
+/// after every `pick_play` outcome. `active` = player who picked;
+/// `chosen` = `Some(iid)` for a real play, `None` for a pass.
+/// Appended to BOTH players' observation buffers because either
+/// player's next UCT call needs to walk down through it.
+pub fn record_observed_pick(active: PlayerId, chosen: Option<&InstanceId>) {
+    let obs = match chosen {
+        Some(iid) => PickObservation::Action(iid.clone()),
+        None => PickObservation::Pass,
+    };
+    let _ = active;
+    PERSISTENT.with(|c| {
+        let mut s = c.borrow_mut();
+        s.obs_since_pick[0].push(obs.clone());
+        s.obs_since_pick[1].push(obs);
+    });
 }
 
 /// Called by `run.rs`'s heuristic-pick dispatch to consume the next
@@ -148,7 +230,7 @@ fn clear_planned_actions() {
     UCT_PLAN_IDX.with(|i| *i.borrow_mut() = 0);
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UctConfig {
     /// Total UCT iterations per pick decision. Each iteration is one
     /// selection / expansion / simulation / backprop cycle. Cost
@@ -266,6 +348,18 @@ pub struct UctTrace {
     /// The root node's full subtree. `visits` at the root equals the
     /// number of iterations that completed a backprop pass.
     pub root: UctTraceNode,
+    /// Number of candidates UCT enumerated at the root (branching
+    /// factor). Includes both expanded children and untried actions.
+    /// 0 for the empty-candidate fast path, 1 for the single-candidate
+    /// fast path, otherwise the real candidate count. Surfaces in the
+    /// heartbeat's `top=[card:ms(tX,n=N)]` breakdown as the direct
+    /// "how wide was the search" signal.
+    pub candidates_count: u32,
+    /// Iterations actually completed before the search terminated
+    /// (either `cfg.iterations` fully or fewer if the wall cap
+    /// fired). Divide wall_us by this to get avg-per-iteration cost —
+    /// the answer to "where's the time going per iteration".
+    pub iters_completed: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -396,6 +490,8 @@ pub fn pick_play_uct(
                 note: "UCT: no candidates → pass".to_string(),
                 picked: None,
                 root: UctTraceNode::default(),
+                candidates_count: 0,
+                iters_completed: 0,
             },
         );
     }
@@ -416,6 +512,8 @@ pub fn pick_play_uct(
                 ),
                 picked: only,
                 root: UctTraceNode::default(),
+                candidates_count: 1,
+                iters_completed: 0,
             },
         );
     }
@@ -423,9 +521,28 @@ pub fn pick_play_uct(
         candidates.sort();
         candidates.truncate(cfg.max_candidates as usize);
     }
+    let candidates_count_at_root = candidates.len() as u32;
+    let mut iters_completed: u32 = 0;
 
     let root_player = player;
-    let mut root = Node::new(root_player, candidates.clone());
+    // Persistent tree reuse: take this player's tree + observations,
+    // walk down through the observations to find the new root position.
+    // On any mismatch (unknown action, pass, wrong player_to_act) drop
+    // the tree and rebuild fresh — the same behaviour as before, no
+    // worse than baseline.
+    let (existing_tree, obs) = PERSISTENT.with(|c| {
+        let mut s = c.borrow_mut();
+        let t = s.tree[root_player.index()].take();
+        let o = std::mem::take(&mut s.obs_since_pick[root_player.index()]);
+        (t, o)
+    });
+    let mut root = match existing_tree.and_then(|t| walk_tree_to_current(t, &obs, root_player)) {
+        Some(mut walked) => {
+            refresh_root_candidates(&mut walked, &candidates, root_player);
+            *walked
+        }
+        None => Node::new(root_player, candidates.clone()),
+    };
 
     // Per-pick wall-clock budget. HARD cap: a deadline is computed
     // once and passed into every rollout via
@@ -472,6 +589,11 @@ pub fn pick_play_uct(
         // rollout actually takes. Rollout internals stay suspended.
         let iter_t0 = crate::trace::is_enabled().then(std::time::Instant::now);
 
+        // JOURNALING CONTRACT audit (feature journal-audit): fingerprint
+        // before, compare after the rollback below — each UCT iteration
+        // self-verifies that its rollback fully round-trips.
+        #[cfg(feature = "journal-audit")]
+        let audit_pre = state.audit_fingerprint();
         // Open a per-iteration journal so the simulation's mutations
         // can be rolled back at the end.
         let outer_replay = state.replay_journal.take();
@@ -486,7 +608,7 @@ pub fn pick_play_uct(
         //    back to heuristic for the rest of the game.
         UCT_PLAN.with(|p| *p.borrow_mut() = path.clone());
         UCT_PLAN_IDX.with(|i| *i.borrow_mut() = 0);
-        let ais = [AiKind::Heuristic, AiKind::Heuristic];
+        let ais = [AiKind::Game, AiKind::Game];
         // S12: state-swap UCT rollout finish into a StepEngine. Same
         // pattern as the MCTS rollout — swap, run, swap back. The
         // per-iteration journal travels with the state.
@@ -560,6 +682,13 @@ pub fn pick_play_uct(
         let journal = state.replay_journal.take().unwrap_or_default();
         journal.rollback(state);
         state.replay_journal = outer_replay;
+        #[cfg(feature = "journal-audit")]
+        assert_eq!(
+            audit_pre,
+            state.audit_fingerprint(),
+            "JOURNALING CONTRACT: UCT iteration did not round-trip — a mutation escaped the journal",
+        );
+        iters_completed += 1;
     }
 
     // Pick the most-visited root child (UCT-robust choice).
@@ -586,8 +715,76 @@ pub fn pick_play_uct(
         note: String::new(),
         picked: picked.clone(),
         root: snapshot_subtree(&root, None),
+        candidates_count: candidates_count_at_root,
+        iters_completed,
     };
+    // Persist the search root back for next same-player call. Tree
+    // reuse consumes obs[player] each entry, walks down, and picks
+    // up here. `run_game_continue`'s `record_observed_pick` will
+    // append this pick's action to both players' obs buffers.
+    PERSISTENT.with(|c| {
+        c.borrow_mut().tree[root_player.index()] = Some(Box::new(root));
+    });
     (picked, trace)
+}
+
+/// Walk `tree` (root at the state where our last `pick_play_uct`
+/// call ended) down through `obs` (pick observations recorded since
+/// then) to find the tree node corresponding to the CURRENT game
+/// state. Returns `None` if any observation isn't representable in
+/// the tree (unknown action, pass, wrong player_to_act) — caller
+/// then rebuilds fresh.
+fn walk_tree_to_current(
+    mut tree: Box<Node>,
+    obs: &[PickObservation],
+    caller_player: PlayerId,
+) -> Option<Box<Node>> {
+    for observation in obs {
+        match observation {
+            PickObservation::Pass => {
+                // No pass edge in the tree — drop.
+                return None;
+            }
+            PickObservation::Action(iid) => {
+                // Descend into the child matching this observed action.
+                // If the tree never expanded this action, drop.
+                let child = tree.children.remove(iid)?;
+                tree = child;
+            }
+        }
+    }
+    // Sanity: after walking, the node's player_to_act should equal
+    // the caller's player (whose turn it is to pick right now).
+    // A mismatch means either the tree's turn-tracking drifted from
+    // reality or the obs sequence didn't include a pick that should
+    // have been there. Fail-safe: drop.
+    if tree.player_to_act != caller_player {
+        return None;
+    }
+    Some(tree)
+}
+
+/// Reconcile a reused subtree with the current game state's real
+/// candidates. Drop children whose action is no longer legal, and
+/// reset `untried` to any candidates that aren't already a child.
+/// Preserves the accumulated visits/wins on legal children — which
+/// is the whole point of tree reuse.
+fn refresh_root_candidates(
+    node: &mut Node,
+    current_candidates: &[InstanceId],
+    caller_player: PlayerId,
+) {
+    // player_to_act should already match (walk_tree_to_current
+    // enforces it), but set defensively.
+    node.player_to_act = caller_player;
+    let current_set: std::collections::BTreeSet<InstanceId> =
+        current_candidates.iter().cloned().collect();
+    node.children.retain(|iid, _| current_set.contains(iid));
+    node.untried = current_candidates
+        .iter()
+        .filter(|iid| !node.children.contains_key(*iid))
+        .cloned()
+        .collect();
 }
 
 /// O6: shared AiPick emission for `pick_play_uct`. Captures the
@@ -864,7 +1061,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0xC0DE);
         let mut log: Vec<String> = Vec::new();
         let ais = [AiKind::Uct(cfg.clone()), AiKind::Uct(cfg)];
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0xC0DE);
 
         assert!(state.winner.is_some(), "UCT game produced no winner");
         assert!(stats.turns > 0, "UCT game recorded zero turns");

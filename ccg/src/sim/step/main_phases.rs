@@ -178,7 +178,7 @@ impl StepEngine {
         // AI / human path.
         let mut uct_trace_log: Option<String> = None;
         let pick = match &self.ais[active.index()] {
-            AiKind::Heuristic => pick_heuristic_playable_in_hand(
+            AiKind::Game | AiKind::Fast | AiKind::Stress => pick_heuristic_playable_in_hand(
                 &self.state,
                 active,
                 &mut self.rng,
@@ -208,7 +208,7 @@ impl StepEngine {
                         self.state
                             .card_pool
                             .get(iid)
-                            .map(|i| i.card.name.clone())
+                            .map(|i| i.card().name.clone())
                             .unwrap_or_else(|| iid.to_string())
                     },
                     2,
@@ -266,7 +266,7 @@ impl StepEngine {
                     .state
                     .card_pool
                     .get(iid)
-                    .map(|i| i.card.name.clone())
+                    .map(|i| i.card().name.clone())
                     .unwrap_or_else(|| iid.to_string());
                 format!("turn {} ({}) Main1: play {}", self.state.turn, actor, name)
             }
@@ -304,13 +304,13 @@ impl StepEngine {
             .state
             .card_pool
             .get(&picked)
-            .map(|c| c.card.kind == CardType::Creature)
+            .map(|c| c.card().kind == CardType::Creature)
             .unwrap_or(false);
         let kind = self
             .state
             .card_pool
             .get(&picked)
-            .map(|c| c.card.kind)
+            .map(|c| c.card().kind)
             .unwrap_or(CardType::Unspecified);
 
         // Order matches run_game_continue: build_pattern_b_choices
@@ -359,7 +359,7 @@ impl StepEngine {
                 .state
                 .card_pool
                 .get(sac_iid)
-                .map(|c| c.card.id.clone())
+                .map(|c| c.card().id.clone())
             {
                 *self
                     .stats
@@ -420,6 +420,10 @@ impl StepEngine {
             if let Some(journal) = self.state.journal.take() {
                 journal.rollback(&mut self.state);
             }
+            // Stale deferred events queued behind the pending one would
+            // double-fire on the replay-from-scratch; they are transient,
+            // so clear them with the rollback.
+            self.state.pending_events.clear();
             bump_preview_rollback(&mut self.stats, active);
             self.set_cursor(EngineCursor::PatternBResolving {
                 picked: picked.clone(),
@@ -442,7 +446,7 @@ impl StepEngine {
                 .state
                 .card_pool
                 .get(&picked)
-                .map(|c| c.card.id.clone())
+                .map(|c| c.card().id.clone())
             {
                 match active {
                     PlayerId::A => {
@@ -491,13 +495,13 @@ impl StepEngine {
                 .state
                 .card_pool
                 .get(&picked)
-                .map(|c| c.card.id.clone())
+                .map(|c| c.card().id.clone())
                 .unwrap_or_else(|| picked.clone());
             if let Err(err) = &result {
                 let describe = |h: &crate::game::InstanceId| -> String {
                     let inst = self.state.card_pool.get(h);
                     let id = inst
-                        .map(|c| c.card.id.clone())
+                        .map(|c| c.card().id.clone())
                         .unwrap_or_else(|| h.clone());
                     let mut tags: Vec<&str> = Vec::new();
                     if self.state.has_restriction(
@@ -509,7 +513,7 @@ impl StepEngine {
                     if self.state.is_transparent(h) {
                         tags.push("transparent");
                     }
-                    if inst.map(|c| c.card.gy_hand_substitute).unwrap_or(false) {
+                    if inst.map(|c| c.card().gy_hand_substitute).unwrap_or(false) {
                         tags.push("gy_sub");
                     }
                     if tags.is_empty() {
@@ -542,7 +546,7 @@ impl StepEngine {
                     .state
                     .card_pool
                     .get(&picked)
-                    .map(|c| c.card.name.clone())
+                    .map(|c| c.card().name.clone())
                     .unwrap_or_else(|| card_id.clone());
                 let (title, why) = play_error_user_message(&card_name, err);
                 self.emit_human_refusal(active, "prompt", "play-card", title, why);
@@ -673,7 +677,7 @@ impl StepEngine {
                     .state
                     .card_pool
                     .get(&iid)
-                    .map(|i| i.card.name.clone())
+                    .map(|i| i.card().name.clone())
                     .unwrap_or_else(|| iid.to_string());
                 self.log.push(format!(
                     "turn {} ({}) Main2: play {}",
@@ -757,7 +761,7 @@ impl StepEngine {
             .state
             .card_pool
             .get(&picked)
-            .map(|c| c.card.kind == CardType::Creature)
+            .map(|c| c.card().kind == CardType::Creature)
             .unwrap_or(false);
 
         let build_result = build_pattern_b_choices(
@@ -773,7 +777,7 @@ impl StepEngine {
                     .state
                     .card_pool
                     .get(&picked)
-                    .map(|c| c.card.name.clone())
+                    .map(|c| c.card().name.clone())
                     .unwrap_or_else(|| picked.clone());
                 self.emit_human_refusal(
                     active,
@@ -805,7 +809,7 @@ impl StepEngine {
                 .state
                 .card_pool
                 .get(sac_iid)
-                .map(|c| c.card.id.clone())
+                .map(|c| c.card().id.clone())
             {
                 *self
                     .stats
@@ -865,6 +869,7 @@ impl StepEngine {
             if let Some(journal) = self.state.journal.take() {
                 journal.rollback(&mut self.state);
             }
+            self.state.pending_events.clear();
             bump_preview_rollback(&mut self.stats, active);
             let new_cursor = ctx.on_pending(picked.clone(), history.clone());
             self.set_cursor(new_cursor);
@@ -883,7 +888,7 @@ impl StepEngine {
                 .state
                 .card_pool
                 .get(&picked)
-                .map(|c| c.card.id.clone())
+                .map(|c| c.card().id.clone())
             {
                 match active {
                     PlayerId::A => {
@@ -931,7 +936,7 @@ impl StepEngine {
                     .state
                     .card_pool
                     .get(&picked)
-                    .map(|c| c.card.name.clone())
+                    .map(|c| c.card().name.clone())
                     .unwrap_or_else(|| picked.clone());
                 let (title, why) = play_error_user_message(&card_name, err);
                 self.emit_human_refusal(active, "prompt", "play-card", title, why);
@@ -982,7 +987,7 @@ impl StepEngine {
             .state
             .card_pool
             .get(&iid)
-            .map(|i| i.card.name.clone())
+            .map(|i| i.card().name.clone())
             .unwrap_or_else(|| iid.to_string());
 
         self.oracle.clear();
@@ -1011,6 +1016,7 @@ impl StepEngine {
             if let Some(journal) = self.state.journal.take() {
                 journal.rollback(&mut self.state);
             }
+            self.state.pending_events.clear();
             self.set_cursor(EngineCursor::ActivationResolving {
                 iid,
                 ability_index,

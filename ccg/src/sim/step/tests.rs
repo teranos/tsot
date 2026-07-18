@@ -25,7 +25,7 @@
 
         let engine = StepEngine::new(
             state,
-            [AiKind::Heuristic, AiKind::Heuristic],
+            [AiKind::Fast, AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -74,7 +74,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Heuristic, AiKind::Heuristic],
+            [AiKind::Fast, AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -135,7 +135,7 @@
         let state = GameState::new(deck_a, deck_b);
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Heuristic, AiKind::Heuristic],
+            [AiKind::Fast, AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -188,7 +188,7 @@
         let state = GameState::new(deck_a, deck_b);
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Heuristic, AiKind::Heuristic],
+            [AiKind::Fast, AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -257,7 +257,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            [AiKind::Human(Arc::new(iface)), AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -297,7 +297,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            [AiKind::Human(Arc::new(iface)), AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -366,7 +366,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            [AiKind::Human(Arc::new(iface)), AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -460,7 +460,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            [AiKind::Human(Arc::new(iface)), AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -557,7 +557,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            [AiKind::Human(Arc::new(iface)), AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -611,7 +611,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            [AiKind::Human(Arc::new(iface)), AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -710,7 +710,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Heuristic, AiKind::Human(Arc::new(iface))],
+            [AiKind::Fast, AiKind::Human(Arc::new(iface))],
             registry,
             0xCAFE,
         );
@@ -750,7 +750,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Heuristic, AiKind::Human(Arc::new(iface))],
+            [AiKind::Fast, AiKind::Human(Arc::new(iface))],
             registry,
             0xCAFE,
         );
@@ -802,7 +802,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            [AiKind::Human(Arc::new(iface)), AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -889,7 +889,7 @@
 
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Heuristic, AiKind::Heuristic],
+            [AiKind::Fast, AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -935,7 +935,7 @@
 
         let engine = StepEngine::new(
             state,
-            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            [AiKind::Human(Arc::new(iface)), AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -972,7 +972,7 @@
 
         let engine = StepEngine::new(
             state,
-            [AiKind::Heuristic, AiKind::Heuristic],
+            [AiKind::Fast, AiKind::Fast],
             registry,
             0xCAFE,
         );
@@ -1089,7 +1089,7 @@
             .card_pool
             .get_mut(&board_iid)
             .unwrap()
-            .card
+            .card_mut()
             .activated
             .push(ActivatedAbility {
                 cost_tap: false,
@@ -1109,7 +1109,7 @@
         let registry_arc = Arc::new(registry);
         let mut engine = StepEngine::new(
             state,
-            [AiKind::Human(Arc::new(iface)), AiKind::Heuristic],
+            [AiKind::Human(Arc::new(iface)), AiKind::Fast],
             registry_arc,
             0xCAFE,
         );

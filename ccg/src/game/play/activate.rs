@@ -56,7 +56,7 @@ impl GameState {
                 .ok_or(ActivateError::NoSuchAbility)?;
             (
                 inst.controller,
-                inst.card.kind == CardType::Creature,
+                inst.card().kind == CardType::Creature,
                 inst.tapped,
                 inst.summoning_sick,
                 ability.cost_tap,
@@ -64,7 +64,7 @@ impl GameState {
                 ability.effect.clone(),
                 ability.validate.clone(),
                 ability.target,
-                inst.card.allow_x_zero,
+                inst.card().allow_x_zero,
                 ability.from_zones.clone(),
             )
         };
@@ -174,7 +174,7 @@ impl GameState {
                 return Err(ActivateError::SacrificePaymentInvalid(sid.clone()));
             }
             if let Some(required_kind) = sac_kinds.get(i).copied().flatten() {
-                if sac_inst.card.kind != required_kind {
+                if sac_inst.card().kind != required_kind {
                     return Err(ActivateError::SacrificePaymentInvalid(sid.clone()));
                 }
             }
@@ -382,7 +382,7 @@ impl GameState {
             if inst.tapped {
                 return false;
             }
-            let is_creature = inst.card.kind == CardType::Creature;
+            let is_creature = inst.card().kind == CardType::Creature;
             if is_creature && inst.summoning_sick && !self.has_keyword(iid, "haste") {
                 return false;
             }
@@ -484,7 +484,7 @@ mod choice_pending_tests {
             .card_pool
             .get_mut(&card_iid)
             .unwrap()
-            .card
+            .card_mut()
             .activated
             .push(ActivatedAbility {
                 cost_tap: false,
@@ -548,7 +548,7 @@ mod choice_pending_tests {
             .unwrap();
         state.set_summoning_sick(&source_iid, false);
         state.set_summoning_sick(&victim_iid, false);
-        state.card_pool.get_mut(&victim_iid).unwrap().card.kind = CardType::Creature;
+        state.card_pool.get_mut(&victim_iid).unwrap().card_mut().kind = CardType::Creature;
 
         // Effect bumps a global so we can pin "effect ran" cleanly.
         let effect: mlua::Function = lua
@@ -563,7 +563,7 @@ mod choice_pending_tests {
             .card_pool
             .get_mut(&source_iid)
             .unwrap()
-            .card
+            .card_mut()
             .activated
             .push(ActivatedAbility {
                 cost_tap: false,
@@ -640,7 +640,7 @@ mod choice_pending_tests {
             .card_pool
             .get_mut(&source_iid)
             .unwrap()
-            .card
+            .card_mut()
             .activated
             .push(ActivatedAbility {
                 cost_tap: false,
@@ -708,7 +708,7 @@ mod choice_pending_tests {
             .card_pool
             .get_mut(&card_iid)
             .unwrap()
-            .card
+            .card_mut()
             .activated
             .push(ActivatedAbility {
                 cost_tap: false,
@@ -766,7 +766,7 @@ mod choice_pending_tests {
             .card_pool
             .get_mut(&attached_iid)
             .unwrap()
-            .card
+            .card_mut()
             .activated
             .push(ActivatedAbility {
                 cost_tap: false,

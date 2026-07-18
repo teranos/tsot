@@ -57,8 +57,11 @@ impl GameState {
                 // Extra-turn queue (azure-recursion etc.): if non-empty,
                 // the front entry becomes the next active player instead
                 // of the default opponent swap.
-                let next_active = if !self.extra_turns_pending.is_empty() {
-                    self.extra_turns_pending.remove(0)
+                let next_active = if let Some(&front) = self.extra_turns_pending.first() {
+                    // Journaled pop-front (JOURNALING CONTRACT).
+                    let rest = self.extra_turns_pending[1..].to_vec();
+                    self.set_extra_turns_pending(rest);
+                    front
                 } else {
                     self.active_player.opponent()
                 };
@@ -78,7 +81,10 @@ impl GameState {
             && !self.pending_main_phase_returns.is_empty()
         {
             use super::state::{PlayerId, Zone};
-            let queue = std::mem::take(&mut self.pending_main_phase_returns);
+            // Journaled drain (JOURNALING CONTRACT): read the queue, then
+            // clear it through the setter so a rollout rollback restores it.
+            let queue = self.pending_main_phase_returns.clone();
+            self.set_pending_main_phase_returns(Vec::new());
             for iid in queue {
                 let Some(inst) = self.card_pool.get(&iid) else { continue; };
                 let owner = inst.owner;
@@ -124,10 +130,12 @@ impl GameState {
             if let Some(c) = ctx {
                 let board: Vec<InstanceId> = self.player(self.active_player).board.clone();
                 for iid in &board {
+                    // Z.7: fused same-sleeve mutations get their phase-entry
+                    // handlers (on_upkeep / on_untap_step) fired too.
                     let attached: Vec<InstanceId> = self
                         .card_pool
                         .get(iid)
-                        .map(|i| i.attached.clone())
+                        .map(|i| i.children().cloned().collect())
                         .unwrap_or_default();
                     lua_api::fire_self_only(
                         c.lua,
@@ -148,6 +156,30 @@ impl GameState {
                         .map_err(TurnError::ChoicePending)?;
                     }
                 }
+                // Slice-11 follow-up: delayed triggers scheduled for this
+                // player (via game.schedule_next_turn) come due now. Move
+                // the due entries onto the deferred-event queue and drain,
+                // so OnDelayedTrigger fires through the same path as any
+                // other deferred event.
+                let active = self.active_player;
+                let mut still_pending = Vec::new();
+                let mut due = Vec::new();
+                // Read (clone) — don't `mem::take` — then commit the
+                // remaining set through the journaled setter (CONTRACT).
+                for t in self.delayed_triggers.clone() {
+                    if t.fire_for == active {
+                        due.push(t.iid);
+                    } else {
+                        still_pending.push(t);
+                    }
+                }
+                self.set_delayed_triggers(still_pending);
+                for iid in due {
+                    self.pending_events
+                        .push_back((EventName::OnDelayedTrigger, iid));
+                }
+                lua_api::drain_deferred_events(c.lua, self, c.oracle())
+                    .map_err(TurnError::ChoicePending)?;
             }
         }
         self.enter_phase_action();
@@ -206,19 +238,35 @@ impl GameState {
     /// L.1: if the DECK is empty, the active player loses immediately.
     fn do_draw_step(&mut self) {
         let pid = self.active_player;
-        if self.player(pid).deck.is_empty() {
+        if !self.draw_one(pid) {
             self.set_winner(Some(pid.opponent()), "deckout_draw");
-            return;
         }
-        let top = self.player(pid).deck[0].clone();
-        // Sacred-error sweep: draw step deck-top → hand.
-        let _ = self.move_card_or_emit(
-            &top,
-            pid,
-            Zone::Deck,
-            Zone::Hand,
-            "turn-draw-step",
-        );
+    }
+
+    /// Z.8b: draw one CARD. A cardless sleeve (Z.8) on top of the deck does
+    /// not satisfy the draw — it is collected into HAND for free and the
+    /// draw continues, cascading through consecutive empties, until the
+    /// first card-bearing sleeve is drawn into HAND. Returns `true` if a
+    /// card was drawn, `false` if the deck emptied first (the caller
+    /// resolves the deckout per L.1). All moves go through the journaled
+    /// `move_card_or_emit`, so this rolls back cleanly.
+    pub(crate) fn draw_one(&mut self, pid: super::state::PlayerId) -> bool {
+        loop {
+            let Some(top) = self.player(pid).deck.first().cloned() else {
+                return false; // deck empty — no card drawn
+            };
+            let cardless = self
+                .card_pool
+                .get(&top)
+                .map(|s| s.is_cardless())
+                .unwrap_or(false);
+            // Sacred-error sweep: deck-top → hand.
+            let _ = self.move_card_or_emit(&top, pid, Zone::Deck, Zone::Hand, "draw-z8b");
+            if !cardless {
+                return true; // drew a card-bearing sleeve
+            }
+            // Cardless sleeve collected for free; keep drawing.
+        }
     }
 
     /// U.10: at End phase, the active player discards down to a HAND size of 6.
@@ -226,13 +274,27 @@ impl GameState {
     fn do_end_step(&mut self) {
         const MAX_HAND: usize = 6;
         let pid = self.active_player;
-        let hand_len = self.player(pid).hand.len();
-        if hand_len <= MAX_HAND {
+        // Z.8f: cardless sleeves in HAND don't count toward the max hand
+        // size, and aren't discarded to satisfy it — only card-bearing
+        // sleeves do.
+        let real_in_hand = self
+            .player(pid)
+            .hand
+            .iter()
+            .filter(|iid| !self.is_cardless(iid))
+            .count();
+        if real_in_hand <= MAX_HAND {
             return;
         }
-        let to_discard = hand_len - MAX_HAND;
+        let to_discard = real_in_hand - MAX_HAND;
         for _ in 0..to_discard {
-            let Some(front) = self.player(pid).hand.first().cloned() else {
+            let Some(front) = self
+                .player(pid)
+                .hand
+                .iter()
+                .find(|iid| !self.is_cardless(iid))
+                .cloned()
+            else {
                 break;
             };
             // Sacred-error sweep: end-step discard hand-front → graveyard.
@@ -312,6 +374,59 @@ mod tests {
         assert_eq!(s.a.hand.len(), hand_before + 1);
         assert_eq!(s.a.deck.len(), deck_before - 1);
         assert_eq!(s.a.hand.last(), Some(&top));
+    }
+
+    #[test]
+    fn end_step_ignores_cardless_sleeves_for_max_hand_size() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        // A starts with 5 real cards; build hand to 8 real + 2 cardless.
+        for _ in 0..3 {
+            let top = s.a.deck[0].clone();
+            s.move_card(&top, PlayerId::A, Zone::Deck, Zone::Hand).unwrap();
+        }
+        for _ in 0..2 {
+            let top = s.a.deck[0].clone();
+            s.move_card(&top, PlayerId::A, Zone::Deck, Zone::Hand).unwrap();
+            s.card_pool.get_mut(&top).unwrap().content = None;
+        }
+        assert_eq!(s.a.hand.len(), 10);
+        assert_eq!(s.a.hand.iter().filter(|i| !s.is_cardless(i)).count(), 8);
+
+        s.do_end_step();
+
+        // Discarded down to 6 card-bearing sleeves; the 2 cardless stay.
+        assert_eq!(
+            s.a.hand.iter().filter(|i| !s.is_cardless(i)).count(),
+            6,
+            "discards down to 6 card-bearing sleeves"
+        );
+        assert_eq!(
+            s.a.hand.iter().filter(|i| s.is_cardless(i)).count(),
+            2,
+            "cardless sleeves are not discarded"
+        );
+    }
+
+    #[test]
+    fn end_step_no_discard_when_only_cardless_push_over_the_cap() {
+        let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+        // 6 real (5 dealt + 1 drawn) + 3 cardless = 9 sleeves, 6 real.
+        let top = s.a.deck[0].clone();
+        s.move_card(&top, PlayerId::A, Zone::Deck, Zone::Hand).unwrap();
+        for _ in 0..3 {
+            let t = s.a.deck[0].clone();
+            s.move_card(&t, PlayerId::A, Zone::Deck, Zone::Hand).unwrap();
+            s.card_pool.get_mut(&t).unwrap().content = None;
+        }
+        let hand_before = s.a.hand.clone();
+
+        s.do_end_step();
+
+        // 6 real <= 6 → no discard, even though 9 sleeves exceed the cap.
+        assert_eq!(
+            s.a.hand, hand_before,
+            "no discard when only cardless sleeves push over the cap"
+        );
     }
 
     #[test]
@@ -562,7 +677,7 @@ mod tests {
         s.card_pool
             .get_mut(&iid)
             .unwrap()
-            .card
+            .card_mut()
             .handlers
             .insert(EventName::OnTurnBegin, handler);
 

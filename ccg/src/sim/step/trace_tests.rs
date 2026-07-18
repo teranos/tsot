@@ -38,7 +38,7 @@ fn make_engine() -> StepEngine {
     let state = GameState::new(deck_a, deck_b);
     StepEngine::new(
         state,
-        [AiKind::Heuristic, AiKind::Heuristic],
+        [AiKind::Fast, AiKind::Fast],
         registry,
         0xCAFE,
     )

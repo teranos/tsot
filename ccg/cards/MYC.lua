@@ -3,8 +3,9 @@
 -- uncontrolled proliferation. Mechanical hook:
 --
 --   - Static: host gets +0/+X where X is the number of cards attached
---     to the host (every other mutation + every card MYC has pulled
---     in from the deck contributes).
+--     to the host. Per C.16, same-sleeve mutations (Z.7) do NOT count —
+--     only Z.6 attached cards do, i.e. the cards MYC pulls in from the
+--     deck each turn (plus any hand-pitched payment attachments).
 --   - At the beginning of MYC's controller's turn: the top two cards
 --     of the controller's DECK become attached to the host (mill into
 --     the attached zone, face-down per P.17). Compounds with the

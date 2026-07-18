@@ -54,11 +54,33 @@ pub enum Zone {
 
 pub type InstanceId = String;
 
-/// A specific copy of a card in the game.
+/// A deck-building unit: a sleeve holding a card, or a cardless sleeve
+/// (Z.8). `GameState::from_units` builds a game from these so a deck can
+/// contain empty sleeves alongside ordinary cards (S.4).
+// `Card` is a large struct; the codebase passes it by value everywhere
+// (e.g. `Vec<Card>`), so this transient builder enum does the same.
+#[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum DeckUnit {
+    Card(Card),
+    Cardless,
+}
+
+/// A sleeve — the atomic unit in every zone. It holds optional card
+/// content: `Some(card)` for an ordinary card, `None` for a cardless
+/// sleeve (Z.8). Read the content through `card()` (blank-card fallback)
+/// so the ~everywhere `sleeve.card().<field>` access stays ergonomic;
+/// check emptiness with `is_cardless()`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CardInstance {
+pub struct Sleeve {
     pub instance_id: InstanceId,
-    pub card: Card,
+    /// The card inside the sleeve, or `None` for a cardless sleeve (Z.8).
+    /// Prefer the `card()` / `card_mut()` accessors over touching this
+    /// directly. `alias = "card"` keeps pre-sleeve-model save files (which
+    /// serialized this as a non-optional `card` object) loadable — the old
+    /// object deserializes into `Some(card)`.
+    #[serde(default, alias = "card")]
+    pub content: Option<Card>,
     pub owner: PlayerId,           // T.2 — immutable
     pub controller: PlayerId,      // T.1 — defaults to owner; effects may change it
     pub tapped: bool,              // B.4
@@ -74,16 +96,103 @@ pub struct CardInstance {
     #[serde(default)]
     pub attacked_this_turn: bool,
     pub attached: Vec<InstanceId>, // Z.6
+    /// Z.7 SAME-SLEEVE: cards fused inside this card's sleeve (mutations
+    /// per P.26). Distinct from `attached`: fused cards are NOT strippable,
+    /// do NOT contribute to attached-count (C.16), and are exempt from
+    /// P.8's cascade (P.29). Because they are a child field on the host
+    /// instance, they ride the host's zone moves structurally — P.29's
+    /// "move with host, everywhere" needs no follow-logic. Their statics
+    /// and handlers still apply to the host, so every effect/static/event
+    /// site consults `children()` (attached ∪ same_sleeve), not `attached`.
+    #[serde(default)]
+    pub same_sleeve: Vec<InstanceId>,
+    /// Z.8 SLEEVELESS: true iff this card has no sleeve around it — the
+    /// mirror of a cardless sleeve (`content: None`). A card becomes
+    /// sleeveless by shedding its own sleeve (`shed_own_sleeve`), which
+    /// pops the card out and attaches the emptied sleeve to it. Default
+    /// false: every card starts sleeved, so old save files load unchanged.
+    #[serde(default)]
+    pub sleeveless: bool,
     pub modifiers: Vec<Modifier>,  // C.12 continuous effects
     pub status_effects: Vec<StatusEffect>,
 }
 
-impl CardInstance {
+thread_local! {
+    /// Per-thread blank card backing cardless sleeves (Z.8): no id, no
+    /// colors, no symbols, `CardType::Unspecified` (uncastable). `Card` is
+    /// `!Sync` — its `handlers` hold `!Send` mlua `Function`s — so a shared
+    /// `static` is impossible; a leaked per-thread instance yields the
+    /// `&'static Card` that `card()` hands back. One tiny leak per thread.
+    static BLANK_CARD: &'static Card = Box::leak(Box::new(Card::default()));
+}
+
+impl Sleeve {
+    /// The card inside this sleeve, or the blank card if it is a cardless
+    /// sleeve (Z.8). Use this for reads; the blank has no colors, no
+    /// symbols, and `Unspecified` kind, so identity-based logic treats a
+    /// cardless sleeve as an inert body automatically.
+    pub fn card(&self) -> &Card {
+        match &self.content {
+            Some(c) => c,
+            None => BLANK_CARD.with(|b| *b),
+        }
+    }
+
+    /// Mutable access to the contained card. Panics via `expect` only if
+    /// called on a cardless sleeve — writing a card field on an empty
+    /// sleeve is an invariant violation (there is no card to mutate), so
+    /// it must surface rather than silently fill the sleeve.
+    pub fn card_mut(&mut self) -> &mut Card {
+        self.content
+            .as_mut()
+            .expect("card_mut() on a cardless sleeve — no card content to mutate")
+    }
+
+    /// Z.8: true iff this sleeve has no card inside.
+    pub fn is_cardless(&self) -> bool {
+        self.content.is_none()
+    }
+
+    /// Z.8: a fresh cardless sleeve — empty content, owned+controlled by
+    /// `owner`, every runtime flag cleared. Used when a mutation cast
+    /// vacates its own sleeve (P.26) and that empty sleeve attaches to the
+    /// host.
+    pub fn cardless(instance_id: InstanceId, owner: PlayerId) -> Self {
+        Sleeve {
+            instance_id,
+            content: None,
+            owner,
+            controller: owner,
+            tapped: false,
+            face_down: false,
+            damage: 0.0,
+            summoning_sick: false,
+            attacked_this_turn: false,
+            attached: Vec::new(),
+            same_sleeve: Vec::new(),
+            sleeveless: false,
+            modifiers: Vec::new(),
+            status_effects: Vec::new(),
+        }
+    }
+
+    /// Every card sharing this card's physical unit: strippable `attached`
+    /// payments (Z.6) first, then fused `same_sleeve` cards (Z.7). Effect,
+    /// static, and event sites act on the whole unit and MUST iterate this,
+    /// so a fused mutation's statics/handlers still reach the host. Counting
+    /// (`AttachedCount`, C.16) and the P.8 cascade deliberately use
+    /// `attached` alone — a fused card is not attached.
+    pub fn children(&self) -> impl Iterator<Item = &InstanceId> {
+        self.attached.iter().chain(self.same_sleeve.iter())
+    }
+}
+
+impl Sleeve {
     /// True if the card has the given (lowercase) keyword as one of its
     /// printed abilities, e.g. "flying", "haste", "vigilance", "defender", "unblockable".
     /// Also true if the card has a matching Modifier (Modifier::GainsFlying for "flying").
     pub fn has_keyword(&self, keyword: &str) -> bool {
-        let printed = self.card.abilities.iter().any(|a| {
+        let printed = self.card().abilities.iter().any(|a| {
             let normalized = a.trim().trim_end_matches('.').to_lowercase();
             normalized == keyword
         });
@@ -146,7 +255,7 @@ pub enum StatusEffect {
 }
 
 /// Per-player state. Zones reference instances by ID; the canonical
-/// CardInstance lives in GameState.card_pool.
+/// Sleeve lives in GameState.card_pool.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlayerState {
     pub board: Vec<InstanceId>,
@@ -232,12 +341,53 @@ pub struct CastPayments {
     pub sacrifice: Vec<InstanceId>,
 }
 
+/// A delayed trigger: `OnDelayedTrigger` owed to `iid` at the start of
+/// `fire_for`'s next turn. Scheduled by `game.schedule_next_turn`,
+/// flushed by the turn loop at that player's Untap entry (through the
+/// deferred-event queue). One-shot — the handler may re-schedule for a
+/// recurring effect.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DelayedTrigger {
+    pub fire_for: PlayerId,
+    pub iid: InstanceId,
+}
+
 /// The full game state.
+///
+/// # JOURNALING CONTRACT (non-negotiable)
+///
+/// The engine's ONLY rollback mechanism is the journal: MCTS/UCT
+/// rollouts and the sim's preview-and-rollback run on the LIVE state and
+/// undo by replaying the journal in reverse. Therefore **every mutation
+/// of every non-transient field on this struct MUST be journaled** (push
+/// a [`JournalEntry`](super::JournalEntry) via [`Self::active_journal`]),
+/// or a rollback silently leaves the real game corrupted.
+///
+/// There is no "this field is just scheduling, it doesn't need
+/// journaling" exception. That reasoning shipped the delayed-trigger
+/// regression: a Premonition draft consumed by a rollout was never
+/// restored. The three scheduled-state registries below
+/// (`delayed_triggers`, `pending_main_phase_returns`,
+/// `extra_turns_pending`) are mutated only through their journaled
+/// setters for exactly this reason — do the same for any field you add.
+///
+/// Two fields are exempt because they are strictly TRANSIENT — provably
+/// empty/None at every point a journal is taken or a rollback runs:
+/// `pending_events` (drained to empty before returning to any top-level
+/// op) and `current_activation_x` / `current_cast_payments` (reset per
+/// call). If you add a field, it is journaled unless you can prove it is
+/// transient in this sense.
+///
+/// The invariant is enforced, not merely documented: the full-game
+/// rollback tests compare the ENTIRE state (not a hand-picked subset of
+/// fields), and — under the `journal-audit` feature run weekly in
+/// `ccg-stress` — every MCTS/UCT rollout self-verifies its round-trip.
+/// A non-journaled mutation fails those.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GameState {
     pub a: PlayerState,
     pub b: PlayerState,
-    pub card_pool: BTreeMap<InstanceId, CardInstance>,
+    pub card_pool: BTreeMap<InstanceId, Sleeve>,
     pub active_player: PlayerId,
     pub turn: u32,
     pub phase: Phase,
@@ -311,6 +461,55 @@ pub struct GameState {
     /// lives in to its owner's board, then the queue clears.
     #[serde(default)]
     pub pending_main_phase_returns: Vec<InstanceId>,
+    /// Slice 11: deferred-event queue. An event that cannot fire
+    /// synchronously — because doing so would re-enter a Lua borrow that
+    /// the triggering handler still holds (e.g. `OnTapped` from an
+    /// external `game.set_tapped` inside another handler) — is enqueued
+    /// here and drained by `fire_self_only` once that handler unwinds and
+    /// the borrow is released. Drained to empty before returning to any
+    /// top-level operation, so it is transient working state: not
+    /// journaled, not serialized, always empty at save/rollback points.
+    #[serde(skip, default)]
+    pub pending_events: std::collections::VecDeque<(EventName, InstanceId)>,
+    /// Slice-11 follow-up: delayed-trigger registry. Handlers schedule a
+    /// future `OnDelayedTrigger` via `game.schedule_next_turn`; the turn
+    /// loop fires the due entries at the scheduling player's next Untap
+    /// entry, through `pending_events`. Persists across turns (unlike the
+    /// transient `pending_events`); follows the codebase convention that
+    /// scheduled state (`pending_main_phase_returns`, `extra_turns_pending`)
+    /// is serialized but not journaled.
+    #[serde(default)]
+    pub delayed_triggers: Vec<DelayedTrigger>,
+    /// Transient death-replacement decision set by `game.prevent_death` /
+    /// `game.redirect_death` inside an `OnWouldDie` handler, consumed by
+    /// `resolve_board_deaths` within the same synchronous death resolution.
+    /// Never journaled or serialized — the resulting state changes (damage
+    /// clear, the redirect move) are what get journaled; this decision cell
+    /// is always cleared before and after each death is resolved.
+    #[serde(skip, default)]
+    pub pending_death_replacement: Option<DeathReplacement>,
+    /// Transient re-entrancy guard for the B.8 damage-death settle in
+    /// `drain_deferred_events`. Resolving a death fires on_die / OnWouldDie
+    /// through `fire_self_only`, which drains again — without this flag the
+    /// nested drain re-scans the creature still mid-resolution and recurses
+    /// forever. While set, a nested drain drains the event queue but skips
+    /// the damage-death scan; new deaths bubble to the outer settle loop.
+    #[serde(skip, default)]
+    pub settling_deaths: bool,
+}
+
+/// Z.8 death-replacement (12.3): the outcome an `OnWouldDie` handler chose
+/// for a creature about to die. `None` on the state = no replacement, the
+/// death proceeds to GRAVEYARD as usual.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeathReplacement {
+    /// `game.prevent_death` — the creature survives on the BOARD; the
+    /// engine clears its accumulated damage so B.8 doesn't re-kill it.
+    Prevent,
+    /// `game.redirect_death(zone)` — the creature leaves the BOARD to
+    /// `zone` (e.g. EXILE) instead of the GRAVEYARD, quietly: no on_die,
+    /// no watcher broadcast, no P.8 attached-cascade.
+    Redirect(Zone),
 }
 
 impl GameState {
@@ -319,6 +518,15 @@ impl GameState {
     /// Cards passed in are dealt in order: first 5 become HAND, rest become DECK.
     /// Real games will shuffle the deck before this call; this function does not.
     pub fn new(deck_a: Vec<Card>, deck_b: Vec<Card>) -> Self {
+        Self::from_units(
+            deck_a.into_iter().map(DeckUnit::Card).collect(),
+            deck_b.into_iter().map(DeckUnit::Card).collect(),
+        )
+    }
+
+    /// Like `new`, but each deck is a list of `DeckUnit`s so a deck can hold
+    /// cardless sleeves (Z.8 / S.4) alongside ordinary cards.
+    pub fn from_units(deck_a: Vec<DeckUnit>, deck_b: Vec<DeckUnit>) -> Self {
         let mut card_pool = BTreeMap::new();
         let a = Self::init_player(PlayerId::A, deck_a, &mut card_pool);
         let b = Self::init_player(PlayerId::B, deck_b, &mut card_pool);
@@ -343,6 +551,10 @@ impl GameState {
             current_cast_payments: None,
             extra_turns_pending: Vec::new(),
             pending_main_phase_returns: Vec::new(),
+            pending_events: std::collections::VecDeque::new(),
+            delayed_triggers: Vec::new(),
+            pending_death_replacement: None,
+            settling_deaths: false,
         }
     }
 
@@ -580,6 +792,61 @@ impl GameState {
         }
     }
 
+    // --- Scheduled-state registries (JOURNALING CONTRACT) ---
+    // These `Vec` fields persist across turns. Mutate them ONLY through
+    // these journaled setters — never `self.<field>.push()` /
+    // `mem::take` directly — or a preview/rollout rollback leaves the
+    // real state corrupted (the delayed-trigger regression).
+
+    /// Journaled replace of the delayed-trigger registry.
+    pub fn set_delayed_triggers(&mut self, now: Vec<DelayedTrigger>) {
+        let was = self.delayed_triggers.clone();
+        self.delayed_triggers = now.clone();
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetDelayedTriggers { was, now });
+        }
+    }
+
+    /// Journaled push onto the delayed-trigger registry.
+    pub fn schedule_delayed_trigger(&mut self, trigger: DelayedTrigger) {
+        let mut v = self.delayed_triggers.clone();
+        v.push(trigger);
+        self.set_delayed_triggers(v);
+    }
+
+    /// Journaled replace of the next-main-phase return queue.
+    pub fn set_pending_main_phase_returns(&mut self, now: Vec<InstanceId>) {
+        let was = self.pending_main_phase_returns.clone();
+        self.pending_main_phase_returns = now.clone();
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetPendingMainPhaseReturns { was, now });
+        }
+    }
+
+    /// JOURNALING-CONTRACT audit hook (feature `journal-audit`). A
+    /// whole-state fingerprint EXCLUDING `replay_journal` — which the
+    /// rollout envelope deliberately takes out and restores, so it isn't
+    /// part of the "does the rollback round-trip?" question. Formats
+    /// rather than clones (the outer journal can be huge). Compared
+    /// before vs. after a rollout's rollback; a mismatch means a mutation
+    /// escaped the journal.
+    #[cfg(feature = "journal-audit")]
+    pub fn audit_fingerprint(&mut self) -> String {
+        let saved = self.replay_journal.take();
+        let f = format!("{self:?}");
+        self.replay_journal = saved;
+        f
+    }
+
+    /// Journaled replace of the extra-turn queue.
+    pub fn set_extra_turns_pending(&mut self, now: Vec<PlayerId>) {
+        let was = self.extra_turns_pending.clone();
+        self.extra_turns_pending = now.clone();
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetExtraTurnsPending { was, now });
+        }
+    }
+
     /// R.1.a — open a response window with `item` already on the chain. Per
     /// R.7, the active player gets priority first. Errors if a window is
     /// already open (no nesting in Phase 1).
@@ -710,16 +977,16 @@ impl GameState {
                 let Some(inst) = self.card_pool.get(*iid) else {
                     return false;
                 };
-                if inst.card.kind != crate::card::CardType::Spell {
+                if inst.card().kind != crate::card::CardType::Spell {
                     return false;
                 }
-                if inst.card.timing != Some(crate::card::Timing::Instant) {
+                if inst.card().timing != Some(crate::card::Timing::Instant) {
                     return false;
                 }
                 let mut hand_need: usize = 0;
                 let mut mill_need: usize = 0;
                 let mut gy_need: usize = 0;
-                for c in &inst.card.cost {
+                for c in &inst.card().cost {
                     if c.is_x {
                         return false;
                     }
@@ -741,7 +1008,7 @@ impl GameState {
                 // → priority window spin.
                 if gy_need > 0 {
                     let cast_colors: std::collections::BTreeSet<String> = inst
-                        .card
+                        .card()
                         .colors
                         .iter()
                         .map(|c| c.to_ascii_lowercase())
@@ -751,7 +1018,7 @@ impl GameState {
                             self.card_pool
                                 .get(gid)
                                 .map(|i| {
-                                    i.card
+                                    i.card()
                                         .colors
                                         .iter()
                                         .any(|c| cast_colors.contains(&c.to_ascii_lowercase()))
@@ -768,7 +1035,7 @@ impl GameState {
                 // (target = "chain") is a candidate when the chain is empty;
                 // play_card refuses with CastValidateFailed and the
                 // priority window can't advance.
-                if let Some(target) = inst.card.target {
+                if let Some(target) = inst.card().target {
                     if !self.is_target_legal(target) {
                         return false;
                     }
@@ -919,11 +1186,15 @@ impl GameState {
         }
     }
 
-    /// Find the host iid that has `attached` in its attached vec.
-    /// Returns None if `attached` isn't attached to anything in the pool.
-    pub fn host_of(&self, attached: &InstanceId) -> Option<InstanceId> {
+    /// Find the host iid that carries `child` — as a Z.6 attached card OR a
+    /// Z.7 same-sleeve card. Returns None if `child` isn't a child of
+    /// anything in the pool. A fused mutation HAS a host, so this must
+    /// consult `children()`: every mutation handler that calls
+    /// `game.host_of(self)` (MYC, TNF, DNA-DIRECTED-DNA-POLYMERASE) relies
+    /// on it resolving once the mutation lives in `same_sleeve`.
+    pub fn host_of(&self, child: &InstanceId) -> Option<InstanceId> {
         for (host_iid, host) in &self.card_pool {
-            if host.attached.iter().any(|x| x == attached) {
+            if host.children().any(|x| x == child) {
                 return Some(host_iid.clone());
             }
         }
@@ -951,6 +1222,85 @@ impl GameState {
             ActivationZone::Deck => p.deck.contains(iid),
             ActivationZone::Attached => self.host_of(iid).is_some(),
         })
+    }
+
+    /// Z.8: set the `sleeveless` flag on a card, journaling prior+new so the
+    /// entry rolls back and forward-replays. Enforces the fourth-quadrant
+    /// invariant: a unit with no card AND no sleeve is the null object and
+    /// must never exist, so making a cardless sleeve sleeveless is refused
+    /// with a sacred error rather than constructing it.
+    pub fn set_sleeveless(&mut self, iid: &InstanceId, sleeveless: bool) {
+        let Some(inst) = self.card_pool.get(iid) else {
+            return;
+        };
+        let was = inst.sleeveless;
+        if was == sleeveless {
+            return;
+        }
+        if sleeveless && inst.content.is_none() {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "engine",
+                "null sleeve-unit",
+                format!(
+                    "Z.8: refusing to make cardless sleeve {iid} sleeveless — a \
+                     unit with neither a card nor a sleeve is the null object \
+                     and must not exist"
+                ),
+            );
+            return;
+        }
+        self.card_pool
+            .get_mut(iid)
+            .expect("present — checked above")
+            .sleeveless = sleeveless;
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetSleeveless {
+                iid: iid.clone(),
+                was,
+                now: sleeveless,
+            });
+        }
+    }
+
+    /// Z.8: a card sheds its own sleeve. The card stays where it is —
+    /// content intact, same id — but becomes sleeveless, and its vacated
+    /// sleeve attaches to it as a cardless sleeve (Z.6), the same shed-and-
+    /// attach shape as a mutation cast (only self-targeted). No-op if the
+    /// card is already sleeveless (nothing left to shed) or is itself a
+    /// cardless sleeve (no card to pop out); returns whether it shed. This
+    /// is the primitive a "survive by shedding your sleeve" death
+    /// replacement drives.
+    pub fn shed_own_sleeve(&mut self, iid: &InstanceId) -> bool {
+        let owner = match self.card_pool.get(iid) {
+            Some(s) if !s.sleeveless && s.content.is_some() => s.owner,
+            _ => return false,
+        };
+        self.set_sleeveless(iid, true);
+        // Id derived from the shedding card; a card sheds at most once (the
+        // sleeveless guard above), so `{iid}:shed` is unique and distinct
+        // from a mutation's `{mutation}:shed`.
+        let shed = format!("{iid}:shed");
+        self.mint_cardless_sleeve(&shed, owner);
+        self.add_attached(iid, &shed);
+        self.set_face_down(&shed, true);
+        true
+    }
+
+    /// Z.8: mint a fresh cardless sleeve into the pool, owned+controlled by
+    /// `owner`, journaled so rollback removes it. Used when a mutation cast
+    /// (P.26) vacates its own sleeve — the empty sleeve is not destroyed, it
+    /// becomes an attached cardless sleeve on the host (the caller does the
+    /// `add_attached`).
+    pub fn mint_cardless_sleeve(&mut self, iid: &InstanceId, owner: PlayerId) {
+        self.card_pool
+            .insert(iid.clone(), Sleeve::cardless(iid.clone(), owner));
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::MintCardlessSleeve {
+                iid: iid.clone(),
+                owner,
+            });
+        }
     }
 
     pub fn add_attached(&mut self, host: &InstanceId, attached: &InstanceId) {
@@ -1030,6 +1380,130 @@ impl GameState {
         true
     }
 
+    /// Z.7: fuse `sleeved` into `host`'s sleeve, journaling the addition.
+    /// Counterpart of `add_attached` for same-sleeve cards (mutations per
+    /// P.26). The fused card is not strippable and rides the host's zone
+    /// moves structurally (P.29).
+    /// Z.7: fuse `sleeved` into `host`'s sleeve, journaling the addition.
+    /// Returns whether it was added. This is the single enforcement point
+    /// for the sleeve cap — a sleeve holds at most 4 cards (a host plus 3
+    /// same-sleeve cards) — so no route (mutation cast, redirect, a future
+    /// "worn" mechanic) can over-fill a sleeve. A refused add emits a sacred
+    /// error and does nothing. Callers that can refuse earlier (mutation
+    /// casts check `SleeveFull` before payment) still should; this backstops
+    /// them.
+    pub fn add_same_sleeve(&mut self, host: &InstanceId, sleeved: &InstanceId) -> bool {
+        const MAX_SAME_SLEEVE: usize = 3;
+        let Some(inst) = self.card_pool.get(host) else {
+            return false;
+        };
+        if inst.same_sleeve.len() >= MAX_SAME_SLEEVE {
+            crate::error::emit(
+                crate::error::Severity::Error,
+                "engine",
+                "sleeve full",
+                format!(
+                    "Z.7: sleeve of {host} already holds {} same-sleeve cards; \
+                     refusing to fuse {sleeved} (a sleeve holds at most 4 cards)",
+                    inst.same_sleeve.len()
+                ),
+            );
+            return false;
+        }
+        self.card_pool
+            .get_mut(host)
+            .expect("host present — checked above")
+            .same_sleeve
+            .push(sleeved.clone());
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::AddSameSleeve {
+                host: host.clone(),
+                sleeved: sleeved.clone(),
+            });
+        }
+        true
+    }
+
+    /// Z.7: remove `sleeved` from `host`'s sleeve, journaling the removal at
+    /// its position. Returns true if it was actually fused to host.
+    pub fn remove_same_sleeve(&mut self, host: &InstanceId, sleeved: &InstanceId) -> bool {
+        let Some(inst) = self.card_pool.get_mut(host) else {
+            return false;
+        };
+        let Some(pos) = inst.same_sleeve.iter().position(|x| x == sleeved) else {
+            return false;
+        };
+        inst.same_sleeve.remove(pos);
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::RemoveSameSleeve {
+                host: host.clone(),
+                sleeved: sleeved.clone(),
+                at_pos: pos,
+            });
+        }
+        true
+    }
+
+    /// Z.8 / Window Cleaner: search `player`'s DECK for up to `n` cardless
+    /// sleeves and attach each to `host` (Z.6), face-down. Deck order, so
+    /// deterministic. All moves go through journaled helpers. Returns how
+    /// many were attached.
+    pub fn attach_cardless_from_deck(
+        &mut self,
+        host: &InstanceId,
+        player: PlayerId,
+        n: usize,
+    ) -> usize {
+        if !self.card_pool.contains_key(host) {
+            return 0;
+        }
+        let found: Vec<InstanceId> = self
+            .player(player)
+            .deck
+            .clone()
+            .into_iter()
+            .filter(|iid| self.is_cardless(iid))
+            .take(n)
+            .collect();
+        for iid in &found {
+            let _ = self.remove_from_zone(iid, player, Zone::Deck);
+            self.add_attached(host, iid);
+            self.set_face_down(iid, true);
+        }
+        found.len()
+    }
+
+    /// Attach up to `n` cardless sleeves taken out of `player`'s HAND
+    /// (hand order) to `host`, face-down. The hand-side twin of
+    /// [`attach_cardless_from_deck`] — Angry Glassblower's on-attack
+    /// pulls the empty sleeve it attaches out of hand, not the deck.
+    /// Returns how many were attached (fewer than `n` if the hand holds
+    /// fewer empties).
+    pub fn attach_cardless_from_hand(
+        &mut self,
+        host: &InstanceId,
+        player: PlayerId,
+        n: usize,
+    ) -> usize {
+        if !self.card_pool.contains_key(host) {
+            return 0;
+        }
+        let found: Vec<InstanceId> = self
+            .player(player)
+            .hand
+            .clone()
+            .into_iter()
+            .filter(|iid| self.is_cardless(iid))
+            .take(n)
+            .collect();
+        for iid in &found {
+            let _ = self.remove_from_zone(iid, player, Zone::Hand);
+            self.add_attached(host, iid);
+            self.set_face_down(iid, true);
+        }
+        found.len()
+    }
+
     /// Engine helper: credit a `game.*` action invocation to the affected player.
     pub fn bump_action(&mut self, action: &str, who: PlayerId) {
         let entry = self
@@ -1074,16 +1548,19 @@ impl GameState {
 
     fn init_player(
         pid: PlayerId,
-        cards: Vec<Card>,
-        pool: &mut BTreeMap<InstanceId, CardInstance>,
+        units: Vec<DeckUnit>,
+        pool: &mut BTreeMap<InstanceId, Sleeve>,
     ) -> PlayerState {
         let mut state = PlayerState::default();
-        let mut ids: Vec<InstanceId> = Vec::with_capacity(cards.len());
-        for (i, card) in cards.into_iter().enumerate() {
-            let iid = format!("{:?}:{:04}:{}", pid, i, card.id);
-            let inst = CardInstance {
+        let mut ids: Vec<InstanceId> = Vec::with_capacity(units.len());
+        for (i, unit) in units.into_iter().enumerate() {
+            let (iid, content) = match unit {
+                DeckUnit::Card(card) => (format!("{:?}:{:04}:{}", pid, i, card.id), Some(card)),
+                DeckUnit::Cardless => (format!("{:?}:{:04}:cardless", pid, i), None),
+            };
+            let inst = Sleeve {
                 instance_id: iid.clone(),
-                card,
+                content,
                 owner: pid,
                 controller: pid,
                 tapped: false,
@@ -1092,6 +1569,8 @@ impl GameState {
                 summoning_sick: false,
                 attacked_this_turn: false,
                 attached: Vec::new(),
+                same_sleeve: Vec::new(),
+                sleeveless: false,
                 modifiers: Vec::new(),
                 status_effects: Vec::new(),
             };
@@ -1141,7 +1620,7 @@ impl GameState {
         let Some(inst) = self.card_pool.get(iid) else {
             return (0.0, 0.0);
         };
-        let (mut x, mut y) = inst.card.stats.map(|s| (s.x, s.y)).unwrap_or((0.0, 0.0));
+        let (mut x, mut y) = inst.card().stats.map(|s| (s.x, s.y)).unwrap_or((0.0, 0.0));
         for m in &inst.modifiers {
             match m {
                 Modifier::StatBoost { x: dx, y: dy } => {
@@ -1196,7 +1675,7 @@ impl GameState {
     /// at this boundary.
     fn resolve_modifier_value(
         &self,
-        source: &CardInstance,
+        source: &Sleeve,
         mv: &crate::card::ModifierValue,
     ) -> f32 {
         match mv {
@@ -1211,7 +1690,7 @@ impl GameState {
                         self.card_pool
                             .get(*aid)
                             .map(|c| {
-                                c.card
+                                c.card()
                                     .colors
                                     .iter()
                                     .any(|col| col.eq_ignore_ascii_case(&needle))
@@ -1226,7 +1705,7 @@ impl GameState {
                 .filter(|aid| {
                     self.card_pool
                         .get(*aid)
-                        .map(|c| c.card.kind == *kind)
+                        .map(|c| c.card().kind == *kind)
                         .unwrap_or(false)
                 })
                 .count() as f32,
@@ -1246,7 +1725,7 @@ impl GameState {
                     .filter(|iid| {
                         self.card_pool
                             .get(*iid)
-                            .map(|i| i.card.face.iter().any(|f| f.to_ascii_lowercase() == needle))
+                            .map(|i| i.card().face.iter().any(|f| f.to_ascii_lowercase() == needle))
                             .unwrap_or(false)
                     })
                     .count() as f32
@@ -1271,11 +1750,11 @@ impl GameState {
                 let mut seen: Vec<crate::card::CardType> = Vec::new();
                 for iid in self.a.board.iter().chain(self.b.board.iter()) {
                     if let Some(inst) = self.card_pool.get(iid) {
-                        if inst.card.kind == crate::card::CardType::Unspecified {
+                        if inst.card().kind == crate::card::CardType::Unspecified {
                             continue;
                         }
-                        if !seen.contains(&inst.card.kind) {
-                            seen.push(inst.card.kind);
+                        if !seen.contains(&inst.card().kind) {
+                            seen.push(inst.card().kind);
                         }
                     }
                 }
@@ -1310,7 +1789,7 @@ impl GameState {
         target_iid: &InstanceId,
     ) -> Option<&crate::card::StaticDef> {
         let source = self.card_pool.get(source_iid)?;
-        let def = source.card.static_def.as_ref()?;
+        let def = source.card().static_def.as_ref()?;
         let target = self.card_pool.get(target_iid)?;
 
         // Phase 2 condition gate: short-circuit before any affects logic.
@@ -1324,13 +1803,15 @@ impl GameState {
         if affects.exclude_self && source_iid == target_iid {
             return None;
         }
-        // Scope check. AttachedHost requires that the source is in the
-        // target's `attached` list (i.e., target IS the host of source).
-        // SourceOnly requires target == source (the static targets itself).
+        // Scope check. AttachedHost requires that the source is a child of
+        // the target (i.e., target IS the host of source) — via either the
+        // `attached` list (Z.6) or the `same_sleeve` list (Z.7, mutations
+        // per P.28). SourceOnly requires target == source (the static
+        // targets itself).
         match affects.scope {
             crate::card::StaticScope::Board => {}
             crate::card::StaticScope::AttachedHost => {
-                if !target.attached.iter().any(|x| x == source_iid) {
+                if !target.children().any(|x| x == source_iid) {
                     return None;
                 }
             }
@@ -1350,7 +1831,7 @@ impl GameState {
         }
         if !affects.subtypes.is_empty() {
             let target_subs: Vec<String> = target
-                .card
+                .card()
                 .subtypes
                 .iter()
                 .map(|s| s.to_ascii_lowercase())
@@ -1361,7 +1842,7 @@ impl GameState {
         }
         if !affects.colors.is_empty() {
             let target_colors: Vec<String> = target
-                .card
+                .card()
                 .colors
                 .iter()
                 .map(|c| c.to_ascii_lowercase())
@@ -1371,7 +1852,7 @@ impl GameState {
             }
         }
         if let Some(k) = affects.kind {
-            if target.card.kind != k {
+            if target.card().kind != k {
                 return None;
             }
         }
@@ -1410,7 +1891,7 @@ impl GameState {
                     .graveyard
                     .iter()
                     .filter_map(|iid| self.card_pool.get(iid))
-                    .filter(|inst| inst.card.kind != crate::card::CardType::Creature)
+                    .filter(|inst| inst.card().kind != crate::card::CardType::Creature)
                     .count();
                 non_creatures >= *min
             }
@@ -1424,7 +1905,7 @@ impl GameState {
                 };
                 for att_iid in &source.attached {
                     if let Some(att) = self.card_pool.get(att_iid) {
-                        for sym in &att.card.symbols {
+                        for sym in &att.card().symbols {
                             if top_symbols.iter().any(|t| t == sym) {
                                 return true;
                             }
@@ -1444,9 +1925,12 @@ impl GameState {
     pub fn effective_top_of_deck_symbols(&self, player: PlayerId) -> Vec<String> {
         for iid in &self.player(player).deck {
             if let Some(inst) = self.card_pool.get(iid) {
-                let is_transparent = inst.card.frame.as_deref() == Some("transparent");
+                // Z.8f: a cardless sleeve is fully transparent for
+                // top-of-deck visibility — see past it to the card beneath.
+                let is_transparent =
+                    inst.is_cardless() || inst.card().frame.as_deref() == Some("transparent");
                 if !is_transparent {
-                    return inst.card.symbols.clone();
+                    return inst.card().symbols.clone();
                 }
             }
         }
@@ -1472,16 +1956,18 @@ impl GameState {
             .chain(self.b.board.iter())
             .flat_map(move |board_iid| {
                 let host = self.card_pool.get(board_iid);
-                let attached = host
-                    .map(|h| h.attached.iter())
+                // Z.7: fused same-sleeve sources (mutations) participate in
+                // static evaluation just like attached sources — union both.
+                let children = host
+                    .map(|h| h.children())
                     .into_iter()
                     .flatten();
-                std::iter::once(board_iid).chain(attached)
+                std::iter::once(board_iid).chain(children)
             })
             .filter(move |iid| {
                 self.card_pool
                     .get(*iid)
-                    .map(|i| i.card.static_def.is_some())
+                    .map(|i| i.card().static_def.is_some())
                     .unwrap_or(false)
             })
             // Subtractive: if this iid's own abilities are suppressed
@@ -1523,7 +2009,17 @@ impl GameState {
     pub fn is_transparent(&self, iid: &InstanceId) -> bool {
         self.card_pool
             .get(iid)
-            .map(|i| i.card.frame.as_deref() == Some("transparent"))
+            .map(|i| i.card().frame.as_deref() == Some("transparent"))
+            .unwrap_or(false)
+    }
+
+    /// Z.8: true iff `iid` is a cardless sleeve (no card content). Used by
+    /// cost-payment sites — a cardless sleeve is a generic payment body
+    /// that never satisfies a color/symbol identity requirement (Z.8c).
+    pub fn is_cardless(&self, iid: &InstanceId) -> bool {
+        self.card_pool
+            .get(iid)
+            .map(|i| i.is_cardless())
             .unwrap_or(false)
     }
 
@@ -1536,11 +2032,11 @@ impl GameState {
         let Some(target) = self.card_pool.get(target_iid) else {
             return false;
         };
-        for attached_iid in &target.attached {
+        for attached_iid in target.children() {
             let Some(attached) = self.card_pool.get(attached_iid) else {
                 continue;
             };
-            let Some(def) = attached.card.static_def.as_ref() else {
+            let Some(def) = attached.card().static_def.as_ref() else {
                 continue;
             };
             if !def
@@ -1565,11 +2061,11 @@ impl GameState {
         let Some(target) = self.card_pool.get(target_iid) else {
             return false;
         };
-        for attached_iid in &target.attached {
+        for attached_iid in target.children() {
             let Some(attached) = self.card_pool.get(attached_iid) else {
                 continue;
             };
-            let Some(def) = attached.card.static_def.as_ref() else {
+            let Some(def) = attached.card().static_def.as_ref() else {
                 continue;
             };
             if !def
@@ -1594,7 +2090,7 @@ impl GameState {
         }
         let mut out: Vec<String> = Vec::new();
         if let Some(inst) = self.card_pool.get(iid) {
-            for c in &inst.card.colors {
+            for c in &inst.card().colors {
                 let lc = c.to_ascii_lowercase();
                 if !out.iter().any(|x| x == &lc) {
                     out.push(lc);
@@ -1625,7 +2121,7 @@ impl GameState {
     pub fn effective_face(&self, iid: &InstanceId) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         if let Some(inst) = self.card_pool.get(iid) {
-            for f in &inst.card.face {
+            for f in &inst.card().face {
                 let lc = f.to_ascii_lowercase();
                 if !out.iter().any(|x| x == &lc) {
                     out.push(lc);
@@ -1647,9 +2143,9 @@ impl GameState {
         out
     }
 
-    /// Phase 2: full keyword check. Combines `CardInstance::has_keyword`
+    /// Phase 2: full keyword check. Combines `Sleeve::has_keyword`
     /// (printed + intrinsic modifiers) with `has_static_keyword` (on-board
-    /// static grants). Prefer this over the bare `CardInstance::has_keyword`
+    /// static grants). Prefer this over the bare `Sleeve::has_keyword`
     /// wherever a `GameState` is reachable.
     pub fn has_keyword(&self, iid: &InstanceId, keyword: &str) -> bool {
         if let Some(inst) = self.card_pool.get(iid) {
@@ -1693,7 +2189,7 @@ impl GameState {
         let printed = self
             .card_pool
             .get(iid)
-            .map(|i| i.card.activated.len())
+            .map(|i| i.card().activated.len())
             .unwrap_or(0);
         let granted = self
             .static_source_iids()
@@ -1716,9 +2212,9 @@ impl GameState {
     /// `static_source_iids()` order. Returns `None` past the total.
     pub fn activation_at(&self, iid: &InstanceId, idx: usize) -> Option<&crate::card::ActivatedAbility> {
         let inst = self.card_pool.get(iid)?;
-        let printed_count = inst.card.activated.len();
+        let printed_count = inst.card().activated.len();
         if idx < printed_count {
-            return inst.card.activated.get(idx);
+            return inst.card().activated.get(idx);
         }
         let mut remaining = idx - printed_count;
         for src in self.static_source_iids() {
@@ -1784,7 +2280,7 @@ impl GameState {
         ];
         for source in sources {
             let printed: i32 = inst
-                .card
+                .card()
                 .cost
                 .iter()
                 .filter(|c| c.source == source)

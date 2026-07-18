@@ -5,7 +5,7 @@
 //! (rollback) the mutation.
 
 use super::state::{
-    CombatState, GameState, InstanceId, Modifier, Phase, PlayerId, StatusEffect, Zone,
+    CombatState, GameState, InstanceId, Modifier, Phase, PlayerId, Sleeve, StatusEffect, Zone,
 };
 use crate::card::EventName;
 use serde::{Deserialize, Serialize};
@@ -105,6 +105,30 @@ pub enum JournalEntry {
         host: InstanceId,
         attached: InstanceId,
     },
+    /// Z.8: minted a fresh cardless sleeve into the pool — a mutation cast
+    /// (P.26) vacating its own sleeve. Forward: insert. Inverse: remove.
+    MintCardlessSleeve {
+        iid: InstanceId,
+        owner: PlayerId,
+    },
+    /// Z.8: flipped a card's `sleeveless` flag (it shed its own sleeve).
+    SetSleeveless {
+        iid: InstanceId,
+        was: bool,
+        now: bool,
+    },
+    /// Z.7: fused a card into a host's `same_sleeve` list. Inverse: pop last.
+    AddSameSleeve {
+        host: InstanceId,
+        sleeved: InstanceId,
+    },
+    /// Z.7: removed a fused card from a host's `same_sleeve` list.
+    /// Inverse: re-insert at `at_pos`.
+    RemoveSameSleeve {
+        host: InstanceId,
+        sleeved: InstanceId,
+        at_pos: usize,
+    },
     RemoveFromZone {
         iid: InstanceId,
         owner: PlayerId,
@@ -142,6 +166,23 @@ pub enum JournalEntry {
         /// Original positions and values, sorted by index ascending.
         /// Rollback reinserts at the stored positions.
         removed: Vec<(usize, Modifier)>,
+    },
+    // --- Scheduled-state registries ---
+    // These `Vec` fields persist ACROSS turns, so — like every other
+    // field — a mutation inside a preview/rollout MUST be journaled or
+    // rollback leaves the real state corrupted. Whole-field was/now, same
+    // shape as `SetCombatState`. See the JOURNALING CONTRACT on GameState.
+    SetDelayedTriggers {
+        was: Vec<super::DelayedTrigger>,
+        now: Vec<super::DelayedTrigger>,
+    },
+    SetPendingMainPhaseReturns {
+        was: Vec<InstanceId>,
+        now: Vec<InstanceId>,
+    },
+    SetExtraTurnsPending {
+        was: Vec<PlayerId>,
+        now: Vec<PlayerId>,
     },
 }
 
@@ -327,6 +368,15 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::SetCombatState { was, .. } => {
             state.combat = was;
         }
+        JournalEntry::SetDelayedTriggers { was, .. } => {
+            state.delayed_triggers = was;
+        }
+        JournalEntry::SetPendingMainPhaseReturns { was, .. } => {
+            state.pending_main_phase_returns = was;
+        }
+        JournalEntry::SetExtraTurnsPending { was, .. } => {
+            state.extra_turns_pending = was;
+        }
         JournalEntry::SetCreatureAttackedThisTurn { was, .. } => {
             state.creature_attacked_this_turn = was;
         }
@@ -350,6 +400,34 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
                     );
                     inst.attached.pop();
                 }
+            }
+        }
+        JournalEntry::MintCardlessSleeve { iid, .. } => {
+            state.card_pool.remove(&iid);
+        }
+        JournalEntry::SetSleeveless { iid, was, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.sleeveless = was;
+            }
+        }
+        JournalEntry::AddSameSleeve { host, sleeved } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                if let Some(last) = inst.same_sleeve.last() {
+                    debug_assert_eq!(
+                        *last, sleeved,
+                        "add-same-sleeve inverse: iid mismatch at tail"
+                    );
+                    inst.same_sleeve.pop();
+                }
+            }
+        }
+        JournalEntry::RemoveSameSleeve {
+            host,
+            sleeved,
+            at_pos,
+        } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                inst.same_sleeve.insert(at_pos, sleeved);
             }
         }
         JournalEntry::RemoveFromZone {
@@ -473,6 +551,15 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::SetCombatState { now, .. } => {
             state.combat = now;
         }
+        JournalEntry::SetDelayedTriggers { now, .. } => {
+            state.delayed_triggers = now;
+        }
+        JournalEntry::SetPendingMainPhaseReturns { now, .. } => {
+            state.pending_main_phase_returns = now;
+        }
+        JournalEntry::SetExtraTurnsPending { now, .. } => {
+            state.extra_turns_pending = now;
+        }
         JournalEntry::SetCreatureAttackedThisTurn { now, .. } => {
             state.creature_attacked_this_turn = now;
         }
@@ -490,6 +577,30 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::AddAttached { host, attached } => {
             if let Some(inst) = state.card_pool.get_mut(&host) {
                 inst.attached.push(attached);
+            }
+        }
+        JournalEntry::MintCardlessSleeve { iid, owner } => {
+            state
+                .card_pool
+                .insert(iid.clone(), Sleeve::cardless(iid, owner));
+        }
+        JournalEntry::SetSleeveless { iid, now, .. } => {
+            if let Some(inst) = state.card_pool.get_mut(&iid) {
+                inst.sleeveless = now;
+            }
+        }
+        JournalEntry::AddSameSleeve { host, sleeved } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                inst.same_sleeve.push(sleeved);
+            }
+        }
+        JournalEntry::RemoveSameSleeve {
+            host,
+            sleeved: _,
+            at_pos,
+        } => {
+            if let Some(inst) = state.card_pool.get_mut(&host) {
+                inst.same_sleeve.remove(at_pos);
             }
         }
         JournalEntry::RemoveFromZone {

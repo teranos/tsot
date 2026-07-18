@@ -71,7 +71,7 @@ pub fn reset_mcts_diagnostics() {
     MCTS_TOTAL_CANDIDATES.store(0, Ordering::SeqCst);
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MctsConfig {
     /// Rollouts per candidate. Default 5. At fitness σ ≈ 0.43 the
     /// per-candidate stddev is ~0.18 — enough to separate obvious
@@ -114,7 +114,7 @@ impl Default for MctsConfig {
 ///
 /// The rollout policy is the existing heuristic AI — no recursive
 /// MCTS. Each rollout opens a fresh journal, applies the candidate,
-/// runs `run_game_continue` to completion with `AiKind::Heuristic`,
+/// runs `run_game_continue` to completion with `AiKind::Game`,
 /// scores the result, then rolls the journal back. After all rollouts
 /// the state is byte-identical to the input.
 pub fn pick_play(
@@ -268,6 +268,12 @@ fn simulate_rollout(
     cfg: &MctsConfig,
 ) -> bool {
     let lua = registry.lua();
+    // JOURNALING CONTRACT audit (feature journal-audit): fingerprint the
+    // whole state now, compare after every rollback+restore below. The
+    // review's delayed-trigger bug was exactly a rollout that didn't
+    // round-trip.
+    #[cfg(feature = "journal-audit")]
+    let audit_pre = state.audit_fingerprint();
     // Save the caller's replay_journal aside (typical case: outer
     // game's whole-run capture). We install a fresh journal for the
     // rollout; mutations land in it; we roll it back at the end and
@@ -292,6 +298,12 @@ fn simulate_rollout(
             let rollout_journal = state.replay_journal.take().unwrap_or_default();
             rollout_journal.rollback(state);
             state.replay_journal = outer_replay;
+            #[cfg(feature = "journal-audit")]
+            assert_eq!(
+                audit_pre,
+                state.audit_fingerprint(),
+                "JOURNALING CONTRACT: MCTS rollout did not round-trip on early-out",
+            );
             return false;
         }
         BuildChoiceResult::Pending(p) => {
@@ -313,6 +325,12 @@ fn simulate_rollout(
             let rollout_journal = state.replay_journal.take().unwrap_or_default();
             rollout_journal.rollback(state);
             state.replay_journal = outer_replay;
+            #[cfg(feature = "journal-audit")]
+            assert_eq!(
+                audit_pre,
+                state.audit_fingerprint(),
+                "JOURNALING CONTRACT: MCTS rollout did not round-trip on early-out",
+            );
             return false;
         }
     };
@@ -336,7 +354,7 @@ fn simulate_rollout(
         let ais = if budget > 0 {
             [AiKind::Mcts(cfg.clone()), AiKind::Mcts(cfg.clone())]
         } else {
-            [AiKind::Heuristic, AiKind::Heuristic]
+            [AiKind::Game, AiKind::Game]
         };
         // S12: state-swap MCTS rollout finish into a StepEngine.
         // Swap state out of the caller's `&mut`, hand it to the
@@ -367,6 +385,12 @@ fn simulate_rollout(
     let rollout_journal = state.replay_journal.take().unwrap_or_default();
     rollout_journal.rollback(state);
     state.replay_journal = outer_replay;
+    #[cfg(feature = "journal-audit")]
+    assert_eq!(
+        audit_pre,
+        state.audit_fingerprint(),
+        "JOURNALING CONTRACT: MCTS rollout did not round-trip — a mutation escaped the journal",
+    );
 
     won
 }
@@ -419,6 +443,7 @@ mod tests {
             &mut log,
             &registry,
             &ais,
+            0xC0DE,
         );
         assert!(state.winner.is_some(), "MCTS game produced no winner");
         assert!(stats.turns > 0, "MCTS game recorded zero turns");

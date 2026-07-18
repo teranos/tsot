@@ -786,10 +786,10 @@ mod tests {
             prompts_seen
         });
 
-        let ais = [AiKind::Human(iface.clone()), AiKind::Heuristic];
+        let ais = [AiKind::Human(iface.clone()), AiKind::Fast];
         let mut rng = StdRng::seed_from_u64(0xCAFE);
         let mut log: Vec<String> = Vec::new();
-        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais);
+        let stats = run_game_continue(&mut state, &mut rng, &mut log, &registry, &ais, 0xCAFE);
 
         // Engine returned. Drop everything that holds prompt_tx (ais
         // owns an Arc<HumanInterface> which holds prompt_tx) so the

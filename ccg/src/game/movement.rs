@@ -136,6 +136,10 @@ impl GameState {
             .map(|i| i.attached.clone())
             .unwrap_or_default();
         for aid in &attached_snapshot {
+            // RULES Z.7 / P.29: same-sleeve cards are exempt from this
+            // cascade — but they never appear here, because they live in
+            // the host's `same_sleeve` list, not `attached`. The exclusion
+            // is structural: only strippable `attached` payments are swept.
             self.remove_attached(host, aid);
             self.set_face_down(aid, false);
             let owner = self

@@ -106,7 +106,7 @@ impl Default for EvolveConfig {
             pinned_card_id: None,
             pinned_count: 0,
             diversity_alpha: 0.0,
-            opponent_ai: super::AiKind::Heuristic,
+            opponent_ai: super::AiKind::Game,
         }
     }
 }
@@ -211,9 +211,10 @@ pub struct EvolveResult {
 pub fn evolve(
     registry: &CardRegistry,
     pool: &[Card],
-    gauntlet: &[Vec<Card>],
+    gauntlet: &[Vec<crate::game::DeckUnit>],
     cfg: &EvolveConfig,
     on_generation: &mut GenerationCallback<'_>,
+    trace: Option<&(dyn crate::sim::game_trace::TraceSink + 'static)>,
 ) -> EvolveResult {
     let mut rng = StdRng::seed_from_u64(cfg.base_seed);
 
@@ -245,6 +246,7 @@ pub fn evolve(
         &init_jobs,
         cfg.n_per_side,
         &cfg.opponent_ai,
+        trace,
     );
     let mut pop: Vec<(Vec<String>, f64)> = init_jobs
         .into_iter()
@@ -309,6 +311,7 @@ pub fn evolve(
             &child_jobs,
             cfg.n_per_side,
             &cfg.opponent_ai,
+            trace,
         );
         next.extend(
             child_jobs
@@ -414,7 +417,7 @@ mod tests {
             pinned_card_id: None,
             pinned_count: 0,
             diversity_alpha: 0.0,
-            opponent_ai: super::super::AiKind::Heuristic,
+            opponent_ai: super::super::AiKind::Fast,
         }
     }
 
@@ -424,7 +427,7 @@ mod tests {
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let cfg = tiny_config();
-        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {}, None);
         assert_eq!(result.final_population.len(), cfg.pop_size);
         // best_per_generation includes generation 0 (initial), so
         // length is generations + 1.
@@ -437,8 +440,8 @@ mod tests {
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let cfg = tiny_config();
-        let r_1 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
-        let r_2 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        let r_1 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {}, None);
+        let r_2 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {}, None);
         let f_1: Vec<f64> = r_1.final_population.iter().map(|(_, f)| *f).collect();
         let f_2: Vec<f64> = r_2.final_population.iter().map(|(_, f)| *f).collect();
         assert_eq!(f_1, f_2, "fitness sequences diverged across identical evolve runs");
@@ -546,7 +549,7 @@ mod tests {
             pinned_count: 2,
             ..tiny_config()
         };
-        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {}, None);
         // Every member of the final population must contain >= 2 copies.
         for (genome, _) in &result.final_population {
             let count = genome.iter().filter(|s| **s == pin_id).count();
@@ -566,8 +569,8 @@ mod tests {
             diversity_alpha: 0.2,
             ..tiny_config()
         };
-        let r_1 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
-        let r_2 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        let r_1 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {}, None);
+        let r_2 = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {}, None);
         let g_1: Vec<Vec<String>> = r_1
             .final_population
             .iter()
@@ -592,7 +595,7 @@ mod tests {
             diversity_alpha: 0.3,
             ..tiny_config()
         };
-        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {}, None);
         let best_fitness: Vec<f64> = result
             .best_per_generation
             .iter()
@@ -634,8 +637,8 @@ mod tests {
             diversity_alpha: 1.0,
             ..cfg_zero.clone()
         };
-        let r_zero = evolve(&reg, &pool, &gauntlet, &cfg_zero, &mut |_, _| {});
-        let r_diverse = evolve(&reg, &pool, &gauntlet, &cfg_diverse, &mut |_, _| {});
+        let r_zero = evolve(&reg, &pool, &gauntlet, &cfg_zero, &mut |_, _| {}, None);
+        let r_diverse = evolve(&reg, &pool, &gauntlet, &cfg_diverse, &mut |_, _| {}, None);
         let d_zero = super::super::diversity::mean_pairwise_distance(&r_zero.final_population);
         let d_diverse =
             super::super::diversity::mean_pairwise_distance(&r_diverse.final_population);
@@ -651,7 +654,7 @@ mod tests {
         let pool = playable_pool(&reg);
         let gauntlet = build_gauntlet(&pool, GAUNTLET_MASTER_SEED);
         let cfg = tiny_config();
-        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {});
+        let result = evolve(&reg, &pool, &gauntlet, &cfg, &mut |_, _| {}, None);
         let best_fitness: Vec<f64> = result
             .best_per_generation
             .iter()
