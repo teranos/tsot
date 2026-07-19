@@ -105,7 +105,7 @@ impl TuneParams {
             wind_leaf_mult: 1.0,
             leaf_density_mult: 1.7,
             leaf_size_mult: 0.6,
-            leaf_cluster_mult: 1.0,
+            leaf_cluster_mult: 1.6,
             autumn_mult: 1.0,
             deadwood_mult: 1.0,
         }
@@ -134,9 +134,13 @@ mod tests {
 
     #[test]
     fn defaults_are_const() {
+        // `defaults()` must be usable in a `const` context (the
+        // thread_local init on the TUNE below relies on it). Values
+        // themselves are tuned interactively and change over time — no
+        // point pinning specific numbers.
         const D: TuneParams = TuneParams::defaults();
-        assert_eq!(D.wood_voxel_ratio, 0.4);
-        assert_eq!(D.wind_wood_sway, 0.2);
+        // Silence dead-code on unused const in test builds.
+        let _ = D.wood_voxel_ratio;
     }
 
     #[test]
