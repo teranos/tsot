@@ -303,6 +303,14 @@ pub struct TreeSpecies {
     /// reads bigger than a yard sapling without becoming wild old-growth.
     /// Procedural forest trees ignore this (they size off `tree_at_cell`).
     pub authored_scale: f32,
+    /// Per-segment trunk bend, in radians. 0 = perfectly straight (pine,
+    /// birch — ramrod species). Higher = the trunk kinks over its
+    /// height, modelling apical-dominance loss / phototropism where a
+    /// side branch effectively takes over. Applied as `TRUNK_SEGMENTS`
+    /// stacked segments each tilted by this angle from the previous in
+    /// a single per-tree direction; the tune HUD's `trunk_curve_mult`
+    /// scales it at runtime.
+    pub trunk_curvature: f32,
 }
 
 /// Conifer: tall narrow column, many short near-horizontal whorls
@@ -329,6 +337,7 @@ pub static PINE: TreeSpecies = TreeSpecies {
     authored_scale: 1.0,
     fruit_on_dead_limbs: false,
     dead_limb_odds: 0.4,
+    trunk_curvature: 0.0,
 };
 
 /// Broadleaf spreader: thick trunk, few long forking limbs, deep
@@ -355,11 +364,13 @@ pub static OAK: TreeSpecies = TreeSpecies {
     authored_scale: 1.0,
     fruit_on_dead_limbs: false,
     dead_limb_odds: 0.45,
+    trunk_curvature: 0.08,
 };
 
 /// Slender upright: thin pale trunk, branches that point up, airy
 /// canopy, bright-yellow autumn.
 pub static BIRCH: TreeSpecies = TreeSpecies {
+    trunk_curvature: 0.03,
     primaries: (3, 5),
     base_y: (0.35, 0.75),
     primary_spread: (0.2, 0.5),
@@ -386,6 +397,7 @@ pub static BIRCH: TreeSpecies = TreeSpecies {
 /// Broad, low, drooping umbrella: many near-horizontal limbs, dense
 /// trailing foliage, soft green with a faint yellow turn — a willow.
 pub static WILLOW: TreeSpecies = TreeSpecies {
+    trunk_curvature: 0.15,
     primaries: (5, 7),
     base_y: (0.28, 0.50),
     primary_spread: (1.1, 1.4),
@@ -427,6 +439,7 @@ pub fn species_for(seed: u32) -> &'static TreeSpecies {
 /// Broadleaf like the oak but a fiery turn — yellow-green running to
 /// orange/red. A maple.
 pub static MAPLE: TreeSpecies = TreeSpecies {
+    trunk_curvature: 0.06,
     primaries: (3, 5),
     base_y: (0.30, 0.55),
     primary_spread: (0.5, 0.9),
@@ -452,6 +465,7 @@ pub static MAPLE: TreeSpecies = TreeSpecies {
 
 /// Alien fungal growth — greyish trunk, muted purple foliage, evergreen.
 pub static FUNGAL: TreeSpecies = TreeSpecies {
+    trunk_curvature: 0.12,
     primaries: (4, 6),
     base_y: (0.25, 0.55),
     primary_spread: (0.6, 1.0),
@@ -478,6 +492,7 @@ pub static FUNGAL: TreeSpecies = TreeSpecies {
 /// A dead snag — bare branch skeleton, no foliage (`leaves_per_tip = 0`),
 /// weathered grey-brown. A stark silhouette among the leafy trees.
 pub static DEAD: TreeSpecies = TreeSpecies {
+    trunk_curvature: 0.10,
     primaries: (3, 5),
     base_y: (0.30, 0.60),
     primary_spread: (0.6, 1.1),
@@ -504,6 +519,7 @@ pub static DEAD: TreeSpecies = TreeSpecies {
 /// Small round fruit tree — short trunk, dense rounded crown, broad
 /// leaves. The orchard species (CDDA `t_tree_apple` and friends).
 pub static APPLE: TreeSpecies = TreeSpecies {
+    trunk_curvature: 0.10,
     primaries: (4, 6),
     base_y: (0.22, 0.42),
     primary_spread: (0.7, 1.1),
@@ -562,9 +578,6 @@ pub fn species_for_pos(x: f32, z: f32) -> &'static TreeSpecies {
     species_for(h)
 }
 
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
 fn rangef(rng: &mut u32, (lo, hi): (f32, f32)) -> f32 {
     lo + randf(rng) * (hi - lo)
 }
@@ -675,6 +688,11 @@ fn grow_limb(
     }
 }
 
+/// Number of stacked segments in the curved trunk. Each bends slightly
+/// from the previous; 4 gives room for a real S-curve without being so
+/// coarse the "bends" read as elbows.
+pub const TRUNK_SEGMENTS: u32 = 4;
+
 pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
     // Spread the seed through the state and force it odd/non-zero so
     // even seed 0 gives a non-degenerate tree.
@@ -683,30 +701,70 @@ pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
     // Decide ONCE whether this whole tree carries deadwood — only some
     // trees of a species do, and a sapling species (odds 0) never does.
     let tree_dead = randf(&mut rng) < sp.dead_limb_odds;
-    // The ROOT limb IS the trunk: a vertical bole from the ground up to the
-    // highest primary attachment (`base_y.1`). It's the depth-0 limb of the
-    // very same recursion every branch comes from — there is no separate
-    // "trunk". Never a tip, never dead; its radius is the tree's thickest,
-    // and every child derives from it, so nothing can out-fatten it.
-    out.push(BranchSegment {
-        base: [0.0, 0.0, 0.0],
-        axis: [0.0, 1.0, 0.0],
-        length: sp.base_y.1,
-        base_radius: sp.trunk_radius,
-        is_tip: false,
-        is_dead: false,
-    });
+
+    // Trunk: N stacked segments, each rotated slightly from the previous
+    // in a single per-tree direction (chosen from the RNG). Species with
+    // `trunk_curvature == 0` collapse to a straight vertical bole. The
+    // runtime tune multiplier scales it further so the HUD's
+    // `trunk_curve_mult` acts on all species uniformly.
+    let curve_mult = crate::tune::get().trunk_curve_mult;
+    let curve = sp.trunk_curvature * curve_mult;
+    let bend_phi = randf(&mut rng) * std::f32::consts::TAU;
+    let bend_dir = [bend_phi.cos(), 0.0, bend_phi.sin()];
+    let seg_len = sp.base_y.1 / TRUNK_SEGMENTS as f32;
+    let mut trunk_axis = [0.0f32, 1.0, 0.0];
+    let mut trunk_base = [0.0f32, 0.0, 0.0];
+    // Cumulative along-trunk length at each segment's END, for primary
+    // attachment interpolation below.
+    let mut trunk_tops: Vec<([f32; 3], [f32; 3], f32)> = Vec::with_capacity(TRUNK_SEGMENTS as usize);
+    for _ in 0..TRUNK_SEGMENTS {
+        // Per-segment tilt: bend by `curve` radians toward `bend_dir`.
+        // The tilt-add + renormalize approximates a rotation of `axis`
+        // by `curve` around the horizontal perpendicular. Small angle
+        // (< 30°) is accurate enough that the mesh reads naturally.
+        let tilt = curve;
+        let mut new_axis = [
+            trunk_axis[0] + bend_dir[0] * tilt,
+            trunk_axis[1],
+            trunk_axis[2] + bend_dir[2] * tilt,
+        ];
+        let l = (new_axis[0] * new_axis[0]
+            + new_axis[1] * new_axis[1]
+            + new_axis[2] * new_axis[2])
+            .sqrt()
+            .max(1e-6);
+        new_axis = [new_axis[0] / l, new_axis[1] / l, new_axis[2] / l];
+        out.push(BranchSegment {
+            base: trunk_base,
+            axis: new_axis,
+            length: seg_len,
+            base_radius: sp.trunk_radius,
+            is_tip: false,
+            is_dead: false,
+        });
+        let end = [
+            trunk_base[0] + new_axis[0] * seg_len,
+            trunk_base[1] + new_axis[1] * seg_len,
+            trunk_base[2] + new_axis[2] * seg_len,
+        ];
+        trunk_tops.push((end, new_axis, seg_len));
+        trunk_base = end;
+        trunk_axis = new_axis;
+    }
+
+    // Primaries branch OFF the curved trunk at fractions between
+    // base_y.0/base_y.1 (lowest attachment) and 1.0 (top). The along-
+    // trunk coordinate walks the stacked segments to find the world
+    // position — otherwise the primaries would sit on a phantom
+    // straight y-axis and float off the curved bole.
+    let lo_frac = sp.base_y.0 / sp.base_y.1.max(1e-6);
     let span = (sp.primaries.1 - sp.primaries.0 + 1).max(1);
     let primaries = sp.primaries.0 + splitmix32(&mut rng) % span;
     let azim0 = randf(&mut rng) * std::f32::consts::TAU;
     for c in 0..primaries {
-        // Primaries branch OFF the root bole over a spread of heights,
-        // angled up-and-outward, so the crown fans instead of bursting from
-        // one point. Higher whorls are shorter (× (1 − 0.4·frac)). Each is
-        // `trunk_radius × radius_shrink` thick — thinner than the bole it
-        // grows from, by construction.
         let frac = c as f32 / primaries.max(1) as f32;
-        let base = [0.0, lerp(sp.base_y.0, sp.base_y.1, frac), 0.0];
+        let t = lo_frac + (1.0 - lo_frac) * frac;
+        let (base, _local_axis) = point_along_trunk(&trunk_tops, t, sp.base_y.1);
         let spread = rangef(&mut rng, sp.primary_spread);
         let phi = azim0 + (c as f32) * GOLDEN_ANGLE_RAD;
         let radial = [phi.cos(), 0.0, phi.sin()];
@@ -716,6 +774,37 @@ pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
         grow_limb(&mut out, base, dir, len, primary_radius, sp.max_depth, sp, tree_dead, &mut rng);
     }
     out
+}
+
+/// Sample a point along the curved trunk at along-trunk fraction t.
+/// `tops` is one entry per trunk segment: (end position, axis,
+/// segment length). `total_len` = sum of segment lengths ≈ base_y.1.
+fn point_along_trunk(
+    tops: &[([f32; 3], [f32; 3], f32)],
+    t: f32,
+    total_len: f32,
+) -> ([f32; 3], [f32; 3]) {
+    let target = t * total_len;
+    let mut acc = 0.0f32;
+    let mut base = [0.0f32, 0.0, 0.0];
+    for &(end, axis, len) in tops {
+        if acc + len >= target {
+            let f = ((target - acc) / len).clamp(0.0, 1.0);
+            return (
+                [
+                    base[0] + axis[0] * len * f,
+                    base[1] + axis[1] * len * f,
+                    base[2] + axis[2] * len * f,
+                ],
+                axis,
+            );
+        }
+        acc += len;
+        base = end;
+    }
+    // t past the top: last segment's tip.
+    let (end, axis, _) = *tops.last().expect("trunk has at least one segment");
+    (end, axis)
 }
 
 #[cfg(test)]
@@ -992,7 +1081,11 @@ mod tests {
             let root_r = segs[0].base_radius;
             assert_eq!(root_r, sp.trunk_radius, "segment 0 must be the trunk");
             assert!(!segs[0].is_tip, "the trunk is not a leaf tip");
-            for s in &segs[1..] {
+            // The first TRUNK_SEGMENTS segments are all trunk stacks —
+            // they share `trunk_radius` on purpose (the bole doesn't
+            // taper along its own height; radius shrinkage starts at
+            // the primaries). Only check downstream limbs.
+            for s in &segs[TRUNK_SEGMENTS as usize..] {
                 assert!(
                     s.base_radius < root_r,
                     "a limb (r={}) out-fattened the trunk (r={root_r})",

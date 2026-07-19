@@ -39,6 +39,12 @@ pub struct TuneParams {
     pub wood_res_min: u32,
     pub wood_res_max: u32,
 
+    // -------- Trunk shape --------
+    /// Scales `TreeSpecies.trunk_curvature` — the per-segment tilt of
+    /// each stacked trunk segment. 0 forces every tree ramrod-straight
+    /// regardless of species; >1 exaggerates the bend.
+    pub trunk_curve_mult: f32,
+
     // -------- Roots (buttress flare below the ankle) --------
     /// Root cone A end: `y = trunk_radius * this`.
     pub root_ankle_y: f32,
@@ -87,6 +93,7 @@ impl TuneParams {
             wood_aabb_pad: 2.0,
             wood_res_min: 40,
             wood_res_max: 192,
+            trunk_curve_mult: 1.0,
             root_ankle_y: 1.5,
             root_reach: 7.0,
             root_depth: 3.5,
