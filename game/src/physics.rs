@@ -51,6 +51,30 @@ pub fn advance_npc(mut q: Query<(&mut Position, &Velocity), With<NpcMarker>>) {
     }
 }
 
+/// Set an actor's `Position.y` to the ground height under it, so the
+/// SIMULATION carries real elevation (camera, proximity, persistence),
+/// not only the render-time drape.
+fn sit_on_terrain(p: &mut Position) {
+    p.0.y = crate::terrain::height(p.0.x, p.0.z);
+}
+
+/// Sit the player on the terrain, after movement + collision settle.
+/// Scoped to the player; static colliders (trees, walls, props) keep their
+/// authored `y` (walls carry roof height there), so slope-aware collision
+/// for those is a separate step.
+pub fn ground_follow_player(mut q: Query<&mut Position, With<PlayerMarker>>) {
+    for mut p in q.iter_mut() {
+        sit_on_terrain(&mut p);
+    }
+}
+
+/// Sit NPCs on the terrain. See `ground_follow_player`.
+pub fn ground_follow_npc(mut q: Query<&mut Position, With<NpcMarker>>) {
+    for mut p in q.iter_mut() {
+        sit_on_terrain(&mut p);
+    }
+}
+
 /// Distance at which player is considered bumping the NPC.
 /// (player radius) + (NPC visual half-width) ≈ 20 + 35.
 pub const BUMP_DISTANCE: f32 = 55.0;
@@ -236,6 +260,29 @@ pub fn resolve_collisions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ground_follow_puts_actors_on_the_terrain() {
+        use bevy_ecs::prelude::*;
+        let mut world = World::new();
+        let player = world
+            .spawn((PlayerMarker, Position(Vec3::new(500.0, 20.0, -1200.0))))
+            .id();
+        // On the school pad → the flat pad height.
+        let npc = world
+            .spawn((NpcMarker, Position(Vec3::new(10_800.0, 20.0, 44_400.0))))
+            .id();
+        let mut sched = Schedule::default();
+        sched.add_systems((ground_follow_player, ground_follow_npc));
+        sched.run(&mut world);
+
+        let p = world.get::<Position>(player).unwrap().0;
+        let ph = crate::terrain::height(500.0, -1200.0);
+        assert!((p.y - ph).abs() < 1e-3, "player off the terrain: {} vs {ph}", p.y);
+        let n = world.get::<Position>(npc).unwrap().0;
+        let nh = crate::terrain::height(10_800.0, 44_400.0);
+        assert!((n.y - nh).abs() < 1e-3, "npc off the pad height: {} vs {nh}", n.y);
+    }
 
     #[test]
     fn wander_direction_is_unit_scaled_by_speed() {
