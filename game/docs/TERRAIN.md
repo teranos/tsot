@@ -150,6 +150,46 @@ line topology) are the implementer's. Nothing else may regress.
   the added cost. Nothing else in the frame regresses.
 - **Done:** the merge-bar render exists and reads correctly.
 
+### Landed after Slice 5 (render-draping + amplitude)
+
+The whole scene now drapes onto the terrain at render: buildings sit on
+their (flat) pads, trees/player/props follow the surface, via one choke
+point — `scene::drape` / `drape_mesh` (a new entity type drapes for free
+if it lands in an instance stream). The flat backdrop floor was removed.
+Amplitude 140 → 300 (140 was too shallow to read in the render). This is
+render-time only; the sim is still flat (that's Slice 7).
+
+### Slice 6 — solid colored terrain surface (the ground itself)
+- **Test:** a per-chunk heightfield surface mesh — `MeshVertex` grid,
+  two triangles per cell — has vertices on `height(x, z)` and
+  unit-length normals derived from the heightfield gradient; the mesh is
+  coplanar with up-normals over the school footprint and varies outside;
+  emitted through the mesh pipeline (never cubes).
+- **Done:** on lavapipe the ground reads as a solid, Lambert-lit surface
+  — lit hills, shaded valleys, flat pads under buildings — not a
+  wireframe over black. ONE ground colour from geometry (not grass/rock
+  biome materials — those stay deferred). Answers "why no colour." The
+  dev-grid stays, draped just above it as the validation overlay.
+
+### Slice 7 — player & physics walk the terrain (height is real, not render-only)
+- **Test:** advancing the player across a slope sets its `Position.y` to
+  `height(x, z)` at the new XZ (deterministic); walking onto a stamp
+  footprint puts it at the pad height. Sim-driven — not the render-time
+  lift.
+- **Done:** the player (and NPCs) move along the surface in the
+  simulation; the render-time drape and follow-camera derive from the
+  real position, with NO double-lift for sim-driven entities.
+
+### Slice 8 — browser / wasm parity (make it real at game.sbvh.nl)
+- **Test:** `seer-imports-check` passes with every new wasm↔browser
+  crossing declared in `imports.allow` (the no-wasm-bindgen boundary);
+  `web_shim_*_layout_matches_this_const`-style tests hold the JS
+  descriptors to the Rust ABI.
+- **Done:** the browser render (`render_web` + `gpu_web` + JS shim) draws
+  the surface, draped grid and draped world like native. Merge bar is a
+  **browser** render — a headless-Chromium (Playwright) screenshot of the
+  web bundle, or game.sbvh.nl — showing non-flat terrain.
+
 ## Checklist
 
 - [x] Slice 1 — `height(x, z)` pure, deterministic, C0-continuous
@@ -171,25 +211,36 @@ line topology) are the implementer's. Nothing else may regress.
 - [x] Slice 5 — seer `[perf]` captures the added mesh cost
 - [x] Merge bar — the render visibly demonstrates flat stamp bases and
       relief only outside them; nothing else regresses
+- [x] Post-5 — whole scene render-draped via one choke point
+      (`scene::drape`); backdrop floor removed; amplitude 300
+- [ ] Slice 6 — solid heightfield surface mesh: verts on `height`,
+      gradient normals, coplanar over pads
+- [ ] Slice 6 — renders as solid Lambert-lit ground on lavapipe (lit
+      hills, shaded valleys, flat pads); one ground colour
+- [ ] Slice 7 — player `Position.y` follows `height(x, z)` in the SIM;
+      pad height on a footprint; no render double-lift
+- [ ] Slice 8 — `imports.allow` + boundary check green with the new
+      wasm crossings; JS shim layout tests hold
+- [ ] Slice 8 — browser render (headless Chromium / game.sbvh.nl) shows
+      non-flat terrain like native
 
 ### Known follow-ups (surfaced, not silent)
 
-- The **wasm/browser render** does not yet mirror the mesh grid — its
-  grid is absent until the web mesh path is wired (native-first per
-  RENDER.md). The cube grid was removed from the shared instance path.
-- **Props / trees / player** still sit at the old flat `y = 0`, not on
-  `height(x, z)` — so buildings float above their pad. That's the
-  Deferred "sample height to sit on the surface" item, next up.
-- The backdrop floor was dropped to `y = -300` so it sits beneath the
-  draped grid; the heightfield surface mesh replaces it later.
+- **Browser parity is Slice 8.** Until then the wasm/browser render
+  mirrors none of this (grid, surface, draping) — the cube grid was
+  removed from the shared instance path, so game.sbvh.nl has no terrain.
+- Draping is **render-time only** — the sim is still flat XZ. Slice 7
+  makes the player's height real; guard against double-lifting
+  sim-driven entities that then carry a real `y`.
 
 ## Deferred (not this branch)
 
-Recorded so the boundary is explicit; no slices here.
+Recorded so the boundary is explicit; no slices here. (The solid
+surface, the world-draping, and terrain movement graduated to Slices
+6/7 and the post-5 work; what stays deferred:)
 
-- Solid shaded terrain surface mesh (fills under the draped grid).
-- Slope/altitude materials (grass / rock / snow), textures, UVs.
+- Slope/altitude **materials** (grass / rock / snow), textures, UVs —
+  Slice 6 is one lit ground colour, not biome materials.
 - Water plane at sea level; oceans, lakes, rivers.
 - Dramatic landforms — mountains, cliffs, beaches, sand, clay.
-- Props / trees / player sampling `height` to sit on the surface.
 - Iso-voxel multi-z descent/ascent (`RENDER.md` frontier).
