@@ -31,7 +31,3 @@ diff is `game/`-only; no PR opened yet. CI was last green at `28e9459`
   `--virtual-time-budget`). game.sbvh.nl was user-verified instead.
 - **Collision is XZ-only** — deliberate: with real sim height, colliders
   at authored `y` never overlap a player on a hill.
-
-House rules (repo CLAUDE.md): failing test first, errors surfaced never
-swallowed, and the render PNG is the only accepted proof — accept the
-user's testimony about a render without re-litigating.
