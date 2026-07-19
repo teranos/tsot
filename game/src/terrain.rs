@@ -16,37 +16,66 @@
 /// footprint the field is flattened to the stamp's pad level, in its
 /// entirety (Slice 2).
 pub fn height(x: f32, z: f32) -> f32 {
+    let base = base_height(x, z);
     let s = stamps();
-    if s.num > 0 {
-        use crate::chunk::CHUNK_SIZE;
-        let qx = (x / CHUNK_SIZE).floor() as i32;
-        let qz = (z / CHUNK_SIZE).floor() as i32;
-        // Search every chunk whose stamp footprint could reach here. A
-        // multi-tile stamp (the school) spans several chunks, so `reach`
-        // is sized to the largest footprint — the pad is respected in its
-        // entirety, never clipped at a chunk edge.
-        for dx in -s.reach..=s.reach {
-            for dz in -s.reach..=s.reach {
-                let (cx, cz) = (qx + dx, qz + dz);
-                if let Some(anchor) = cdda::building_anchor_in_chunk(cx, cz, CHUNK_SIZE) {
-                    let idx = cdda::building_index(cx, cz, s.num);
-                    let ph = s.pad_half[idx];
-                    if (x - anchor.x).abs() <= ph && (z - anchor.z).abs() <= ph {
-                        // Flat pad: the whole footprint sits at the ground
-                        // level of the stamp's anchor. Elevation change
-                        // happens only OUTSIDE this (the Slice 3 skirt).
-                        //
-                        // NOTE: the flat area is the full authored footprint
-                        // INCLUDING the yard — `pad_half` folds the yard
-                        // clearance in. This is a for-now choice.
-                        return base_height(anchor.x, anchor.z);
-                    }
+    if s.num == 0 {
+        return base;
+    }
+    use crate::chunk::CHUNK_SIZE;
+    let qx = (x / CHUNK_SIZE).floor() as i32;
+    let qz = (z / CHUNK_SIZE).floor() as i32;
+    // Search every chunk whose stamp footprint (plus its skirt) could
+    // reach here. A multi-tile stamp (the school) spans several chunks,
+    // so `reach` is sized to the largest footprint — the pad is respected
+    // in its entirety, never clipped at a chunk edge.
+    //
+    // Inside a footprint → the flat pad. Just outside → a skirt that ramps
+    // the pad level to the surrounding relief, so the join is continuous.
+    // We track the nearest pad edge; the pad closest to the point governs
+    // its skirt.
+    let mut skirt: Option<(f32, f32)> = None; // (pad level, t: 0 at edge → 1 far)
+    for dx in -s.reach..=s.reach {
+        for dz in -s.reach..=s.reach {
+            let (cx, cz) = (qx + dx, qz + dz);
+            let Some(anchor) = cdda::building_anchor_in_chunk(cx, cz, CHUNK_SIZE) else {
+                continue;
+            };
+            let idx = cdda::building_index(cx, cz, s.num);
+            let ph = s.pad_half[idx];
+            // Chebyshev (square) distance from the anchor, matching the
+            // square footprint.
+            let cheb = (x - anchor.x).abs().max((z - anchor.z).abs());
+            if cheb <= ph {
+                // Flat pad, exact — the whole footprint sits at the ground
+                // level of the stamp's anchor.
+                //
+                // NOTE: the flat area is the full authored footprint
+                // INCLUDING the yard — `pad_half` folds the yard clearance
+                // in. This is a for-now choice.
+                return base_height(anchor.x, anchor.z);
+            }
+            let out = cheb - ph;
+            if out < SKIRT {
+                let t = out / SKIRT;
+                if skirt.map_or(true, |(_, pt)| t < pt) {
+                    skirt = Some((base_height(anchor.x, anchor.z), t));
                 }
             }
         }
     }
-    base_height(x, z)
+    match skirt {
+        // fade(0)=0 → pad level at the edge (continuous with the pad);
+        // fade(1)=1 → base relief at the skirt's outer rim (continuous
+        // with open terrain). Smoothstep keeps the ramp gentle.
+        Some((pad, t)) => pad + (base - pad) * fade(t),
+        None => base,
+    }
 }
+
+/// How far the skirt ramps a pad level out to the surrounding relief,
+/// in world units. Wide enough that even a full-relief drop stays a
+/// gentle slope, never a cliff.
+const SKIRT: f32 = 1500.0;
 
 /// Cached building-footprint data, loaded once. Flattening needs the
 /// per-template pad half-extent and how far a footprint can reach.
@@ -207,6 +236,78 @@ mod tests {
                 (height(anchor.x + dx * pad_half, anchor.z + dz * pad_half) - pad).abs() > 1.0
             });
         assert!(outside_varies, "no relief outside the pad");
+    }
+
+    /// Nearest school stamp: (anchor x, anchor z, pad half-extent).
+    fn nearest_school() -> (f32, f32, f32) {
+        use crate::chunk::CHUNK_SIZE;
+        let (bt, _f) = cdda::load_building_templates();
+        let num = bt.templates.len();
+        assert!(num > 0, "no building templates — cdda corpus missing?");
+        let school = bt
+            .half_extents
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(i, _)| i)
+            .unwrap();
+        let ph = cdda::BUILDING_FOOTPRINT_HALF.max(bt.half_extents[school]);
+        let a = (1..400i32)
+            .find_map(|r| {
+                let mut hit = None;
+                for x in -r..=r {
+                    for z in -r..=r {
+                        if x.abs() != r && z.abs() != r {
+                            continue;
+                        }
+                        if cdda::building_anchor_in_chunk(x, z, CHUNK_SIZE).is_some()
+                            && cdda::building_index(x, z, num) == school
+                        {
+                            hit = cdda::building_anchor_in_chunk(x, z, CHUNK_SIZE);
+                        }
+                    }
+                }
+                hit
+            })
+            .expect("no school stamp found");
+        (a.x, a.z, ph)
+    }
+
+    #[test]
+    fn stamp_pad_edge_transitions_continuously() {
+        const SLOPE_CAP: f32 = 0.5;
+        let (ax, az, ph) = nearest_school();
+
+        // Pad interior is STILL exactly flat (Slice 2 invariant holds).
+        let pad = height(ax, az);
+        for &(fx, fz) in &[(0.0, 0.0), (0.5, 0.5), (-0.5, 0.5), (0.9, -0.9)] {
+            let (x, z) = (ax + fx * ph, az + fz * ph);
+            assert!(
+                (height(x, z) - pad).abs() < 1e-3,
+                "pad interior not flat at ({x:.0},{z:.0})"
+            );
+        }
+
+        // Crossing the footprint edge is continuous — no hard step. Walk
+        // each face and step across the boundary; bounded slope, same cap
+        // as open terrain. (Slice 2's hard pad→relief step fails this.)
+        let d = 1.0;
+        let n = 40;
+        for k in 0..=n {
+            let s = -ph + 2.0 * ph * (k as f32 / n as f32);
+            for (ix, iz, ox, oz) in [
+                (ax + ph - d / 2.0, az + s, ax + ph + d / 2.0, az + s), // +x
+                (ax - ph + d / 2.0, az + s, ax - ph - d / 2.0, az + s), // -x
+                (ax + s, az + ph - d / 2.0, ax + s, az + ph + d / 2.0), // +z
+                (ax + s, az - ph + d / 2.0, ax + s, az - ph - d / 2.0), // -z
+            ] {
+                let slope = (height(ox, oz) - height(ix, iz)).abs() / d;
+                assert!(
+                    slope <= SLOPE_CAP,
+                    "hard step across pad edge: slope {slope} > {SLOPE_CAP} at s={s:.0}"
+                );
+            }
+        }
     }
 
     #[test]
