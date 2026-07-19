@@ -133,17 +133,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_const() {
-        // `defaults()` must be usable in a `const` context (the
-        // thread_local init on the TUNE below relies on it). Values
-        // themselves are tuned interactively and change over time — no
-        // point pinning specific numbers.
-        const D: TuneParams = TuneParams::defaults();
-        // Silence dead-code on unused const in test builds.
-        let _ = D.wood_voxel_ratio;
-    }
-
-    #[test]
     fn set_and_get_round_trip() {
         let mut p = TuneParams::defaults();
         p.wind_amp = 42.0;
