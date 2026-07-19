@@ -219,10 +219,14 @@ render-time only; the sim is still flat (that's Slice 7).
       mossy ground colour (shading gentle because the terrain is gentle)
 - [x] Slice 7 — player & NPC `Position.y` follow `height(x, z)` in the
       SIM; pad height on a footprint; camera reads it, no double-lift
-- [ ] Slice 8 — `imports.allow` + boundary check green with the new
-      wasm crossings; JS shim layout tests hold
-- [ ] Slice 8 — browser render (headless Chromium / game.sbvh.nl) shows
-      non-flat terrain like native
+- [x] Slice 8 — boundary check green: NO new `env.*` crossings (reused
+      the mesh crossing), `imports.allow` unchanged; `web_shim` ABI test
+      holds; wasm32 builds clippy-clean; deployed to game.sbvh.nl
+- [ ] Slice 8 — browser pixel: WebGPU confirmed working headless
+      (lavapipe) + the bundle loads to 100%, but the fully-rendered
+      headless frame wasn't captured (Chromium's async GPU-device init
+      stalls under `--virtual-time-budget`; real-time CDP flaky in the
+      sandbox). Merge bar is game.sbvh.nl — live now, pending your check.
 
 ### Known follow-ups (surfaced, not silent)
 
