@@ -21,9 +21,9 @@ use std::fmt;
 
 use bevy_math::Vec3;
 
-use crate::template::{Prop, PropKind, Template};
+use crate::template::{Prop, PropKind, Template, TreePlacement};
 
-use super::cells::{cell_to_prop, is_wall_line_char};
+use super::cells::{cell_to_prop, cell_to_tree, is_wall_line_char};
 use super::parse::{Entry, first_id, om_matches};
 
 /// World units per CDDA tile. Wall props are sized to this (see the
@@ -636,7 +636,27 @@ pub fn mapgen_to_template(
         i += 1;
     }
 
-    Ok(Template { props })
+    // Tree layer — `t_tree_*` cells become tree placements at the same
+    // tile-centred offsets the props use, so an authored orchard's rows
+    // land exactly where the map drew them.
+    let mut trees: Vec<TreePlacement> = Vec::new();
+    for (r_idx, row) in obj.rows.iter().enumerate() {
+        for (c_idx, ch) in row.chars().enumerate() {
+            if c_idx >= width {
+                break;
+            }
+            if let Some(kind) = cell_to_tree(ch, &terrain) {
+                let x = (c_idx as f32 - cx) * tile_size;
+                let z = (r_idx as f32 - cz) * tile_size;
+                trees.push(TreePlacement {
+                    offset: Vec3::new(x, 0.0, z),
+                    kind,
+                });
+            }
+        }
+    }
+
+    Ok(Template { props, trees })
 }
 
 /// Import a roof z-level by OCCUPANCY — every non-blank cell becomes a

@@ -245,6 +245,25 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         "game_input_state",
         |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<u32> { Ok(0) },
     )?;
+    // Wheel delta: mouse-wheel accumulator, resets on read. Under
+    // wasmtime there's no cursor, so always zero.
+    linker.func_wrap(
+        "env",
+        "game_wheel_delta",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<i32> { Ok(0) },
+    )?;
+    // Pointer NDC x/y: cursor position in normalised device coords.
+    // Off-screen (out-of-range) is the default when there's no pointer.
+    linker.func_wrap(
+        "env",
+        "game_pointer_ndc_x",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<f32> { Ok(-2.0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_pointer_ndc_y",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<f32> { Ok(-2.0) },
+    )?;
     linker.func_wrap(
         "env",
         "game_show_exclamation",
@@ -439,6 +458,29 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
          _target: u32, _pipeline: u32, _bind_group: u32,
          _vertex_buf: u32, _instance_buf: u32,
          _vertex_count: u32, _instance_count: u32|
+         -> Result<u32> { Ok(0) },
+    )?;
+
+    // Mesh pipeline — indexed-draw crossing added for the tree-on-mesh
+    // scope. Same no-GPU treatment as glass/ghost above: pipeline-create
+    // hands back a fake handle, the draw call is inert. Presence here is
+    // what keeps `linker_satisfies_every_allowed_import` green.
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_pipeline_create_mesh",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _pipeline_layout: u32, _shader: u32, _vertex_stride: u32,
+         _instance_stride: u32, _color_format: u32, _depth_format: u32,
+         _label_ptr: u32, _label_len: u32|
+         -> Result<u32> { Ok(1) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_gpu_render_mesh",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>,
+         _target: u32, _pipeline: u32, _bind_group: u32,
+         _vertex_buf: u32, _index_buf: u32, _instance_buf: u32,
+         _index_count: u32, _instance_count: u32, _first_instance: u32|
          -> Result<u32> { Ok(0) },
     )?;
 

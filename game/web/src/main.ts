@@ -167,7 +167,40 @@ if (gameCanvas) {
   })
   gameCanvas.addEventListener('mouseup', () => { mouseTouch = null })
   gameCanvas.addEventListener('mouseleave', () => { mouseTouch = null })
+
+  // Mouse-wheel + pointer position for tune-HUD sliders (and any
+  // future in-game knob / scroll). Deliberate additions to the env
+  // surface — game/web/CLAUDE.md exception, see imports.allow.
+  //
+  // Wheel: accumulate the browser's HORIZONTAL delta (deltaX) across
+  // a frame. Trackpad two-finger horizontal swipe reads as scroll-in-
+  // a-value-line. Right = positive = value increases. Vertical wheel
+  // (deltaY) is left free so it can drive future scroll lists / camera
+  // zoom without conflict. Rust reads + resets via game_wheel_delta.
+  //
+  // Pointer: independent of button state. Cleared to off-canvas
+  // sentinel (-2, -2) on pointerleave so Rust can distinguish
+  // "pointer over UI" from "pointer nowhere".
+  gameCanvas.addEventListener('wheel', ev => {
+    ev.preventDefault()
+    wheelAccum += Math.round(ev.deltaX)
+  }, { passive: false })
+  gameCanvas.addEventListener('pointermove', ev => {
+    const p = clientToNdc(ev.clientX, ev.clientY, gameCanvas)
+    pointerNdcX = p.x
+    pointerNdcY = p.y
+  })
+  gameCanvas.addEventListener('pointerleave', () => {
+    pointerNdcX = -2
+    pointerNdcY = -2
+  })
 }
+
+// Wheel + pointer state. Off-canvas sentinel is |v| > 1 which Rust's
+// `input::pointer_ndc()` maps to `None`.
+let wheelAccum = 0
+let pointerNdcX = -2
+let pointerNdcY = -2
 
 // IndexedDB identity storage. Rust owns the bytes; JS owns the store.
 // Pre-boot: try to load "self" so Rust's game_identity_load gets a
@@ -600,6 +633,13 @@ async function main() {
         }
       },
       game_input_state: (): number => inputBits,
+      game_wheel_delta: (): number => {
+        const d = wheelAccum | 0
+        wheelAccum = 0
+        return d
+      },
+      game_pointer_ndc_x: (): number => pointerNdcX,
+      game_pointer_ndc_y: (): number => pointerNdcY,
       game_touch_state: (outPtr: number, outMax: number): number => {
         if (!memory) return 0
         const total = activeTouches.length + (mouseTouch ? 1 : 0)
@@ -1086,6 +1126,106 @@ async function main() {
           return 0
         } catch (e) {
           console.error('[game.gpu_render_glass]', e)
+          return 1
+        }
+      },
+      // Mesh pipeline — indexed draw, depth-write ON. Vertex layout is
+      // (pos: f32x3, normal: f32x3, uv: f32x2) at slot 0 (stride 32);
+      // instance layout is (i_pos, i_color, i_scale), all float32x3 at
+      // slot 1 (stride 36). UV is reserved for damage textures / posters
+      // downstream; the current fragment shader ignores it, but the
+      // vertex format ships with the slot so a later texture-sampling
+      // pass doesn't require reshaping every mesh buffer in the world.
+      game_gpu_render_pipeline_create_mesh: (
+        pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
+        colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,
+      ): number => {
+        if (!device) return 0
+        const pl = pipelineLayouts.get(pipelineLayoutH)
+        const shader = shaders.get(shaderH)
+        if (!pl || !shader) return 0
+        const colorFmt = COLOR_FORMATS[colorFormat]
+        const depthFmt = DEPTH_FORMATS[depthFormat]
+        if (!colorFmt || !depthFmt) return 0
+        try {
+          const label = decodeString(labelPtr, labelLen)
+          const pipeline = device.createRenderPipeline({
+            label,
+            layout: pl,
+            vertex: {
+              module: shader,
+              entryPoint: 'vs',
+              buffers: [
+                { arrayStride: vertexStride, stepMode: 'vertex', attributes: [
+                  { shaderLocation: 0, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 1, offset: 12, format: 'float32x3' },
+                  { shaderLocation: 2, offset: 24, format: 'float32x2' },
+                ] },
+                { arrayStride: instanceStride, stepMode: 'instance', attributes: [
+                  { shaderLocation: 3, offset: 0, format: 'float32x3' },
+                  { shaderLocation: 4, offset: 12, format: 'float32x3' },
+                  { shaderLocation: 5, offset: 24, format: 'float32x3' },
+                  { shaderLocation: 6, offset: 36, format: 'float32x4' },
+                ] },
+              ],
+            },
+            primitive: { topology: 'triangle-list', frontFace: 'ccw', cullMode: 'back' },
+            depthStencil: { format: depthFmt, depthWriteEnabled: true, depthCompare: 'less' },
+            fragment: { module: shader, entryPoint: 'fs', targets: [{ format: colorFmt }] },
+          })
+          const h = nextHandle++
+          renderPipelines.set(h, pipeline)
+          return h
+        } catch (e) {
+          console.error('[game.gpu_render_pipeline_create_mesh]', e)
+          return 0
+        }
+      },
+      // Mesh render pass — LOAD colour + depth (the opaque cube pass
+      // already cleared + drew), setIndexBuffer + drawIndexed with
+      // first_instance so ONE instance buffer can pack multiple mesh
+      // types (trunks first, canopy elements second) and each dispatch
+      // pulls the right slice.
+      game_gpu_render_mesh: (
+        targetH: number, pipelineH: number, bindGroupH: number,
+        vertexBufH: number, indexBufH: number, instanceBufH: number,
+        indexCount: number, instanceCount: number, firstInstance: number,
+      ): number => {
+        if (!device) return 1
+        if (instanceCount === 0) return 0
+        const target = renderTargets.get(targetH)
+        const pipeline = renderPipelines.get(pipelineH)
+        const bindGroup = bindGroups.get(bindGroupH)
+        const vertexBuf = buffers.get(vertexBufH)
+        const indexBuf = buffers.get(indexBufH)
+        const instanceBuf = buffers.get(instanceBufH)
+        if (!target || !pipeline || !bindGroup || !vertexBuf || !indexBuf || !instanceBuf) return 1
+        try {
+          const colorView = target.context.getCurrentTexture().createView({ label: 'game.mesh.color' })
+          const encoder = device.createCommandEncoder({ label: 'game.mesh.encoder' })
+          const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+              view: colorView,
+              loadOp: 'load',
+              storeOp: 'store',
+            }],
+            depthStencilAttachment: {
+              view: target.depthView,
+              depthLoadOp: 'load',
+              depthStoreOp: 'store',
+            },
+          })
+          pass.setPipeline(pipeline)
+          pass.setBindGroup(0, bindGroup)
+          pass.setVertexBuffer(0, vertexBuf)
+          pass.setVertexBuffer(1, instanceBuf)
+          pass.setIndexBuffer(indexBuf, 'uint32')
+          pass.drawIndexed(indexCount, instanceCount, 0, 0, firstInstance)
+          pass.end()
+          device.queue.submit([encoder.finish()])
+          return 0
+        } catch (e) {
+          console.error('[game.gpu_render_mesh]', e)
           return 1
         }
       },

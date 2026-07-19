@@ -14,199 +14,6 @@ use crate::trail::TrailMarker;
 use crate::template::{PropKind, StructureProp};
 use crate::trees;
 
-/// UI overlay shader — draws screen-space quads. Vertices computed
-/// from vertex_index (6 per instance, two triangles). Instance data
-/// is the quad center + half-size in NDC + color + alpha. Shares
-/// the same bind group layout as the world pipeline for a
-/// no-branch pipeline-layout reuse; the camera uniform is
-/// declared here so the pipeline validates, but unused.
-pub const UI_SHADER_WGSL: &str = r#"
-struct Camera { view_proj: mat4x4<f32> };
-@group(0) @binding(0) var<uniform> _camera: Camera;
-
-struct UiInstance {
-    @location(0) center_ndc: vec2<f32>,
-    @location(1) half_size_ndc: vec2<f32>,
-    @location(2) color: vec3<f32>,
-    @location(3) alpha: f32,
-};
-
-struct VOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) color: vec4<f32>,
-};
-
-@vertex
-fn vs(@builtin(vertex_index) vi: u32, inst: UiInstance) -> VOut {
-    var corners = array<vec2<f32>, 6>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>( 1.0, -1.0),
-        vec2<f32>( 1.0,  1.0),
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>( 1.0,  1.0),
-        vec2<f32>(-1.0,  1.0),
-    );
-    let corner = corners[vi];
-    let ndc = inst.center_ndc + corner * inst.half_size_ndc;
-    var o: VOut;
-    o.clip = vec4<f32>(ndc, 0.0, 1.0);
-    o.color = vec4<f32>(inst.color, inst.alpha);
-    return o;
-}
-
-@fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
-    return in.color;
-}
-"#;
-
-/// Ghost pass shader — cut-away walls + roof render here at low alpha
-/// instead of vanishing, so the player still sees the outline of the
-/// building they're inside. Same vertex + instance layout as the world
-/// cube shader; distinct pipeline from glass so its alpha (and future
-/// per-instance tuning) evolves separately.
-pub const GHOST_SHADER_WGSL: &str = r#"
-struct Camera { view_proj: mat4x4<f32> };
-@group(0) @binding(0) var<uniform> camera: Camera;
-
-struct VIn {
-    @location(0) pos: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-};
-
-struct IIn {
-    @location(2) i_pos: vec3<f32>,
-    @location(3) i_color: vec3<f32>,
-    @location(4) i_scale: vec3<f32>,
-};
-
-struct VOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) normal: vec3<f32>,
-    @location(1) color: vec3<f32>,
-};
-
-@vertex
-fn vs(v: VIn, i: IIn) -> VOut {
-    let world = v.pos * i.i_scale + i.i_pos;
-    var o: VOut;
-    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    o.normal = normalize(v.normal);
-    o.color = i.i_color;
-    return o;
-}
-
-const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
-const AMBIENT: f32 = 0.25;
-/// Deliberately faint — the ghost is a hint of the wall's outline,
-/// not a wall you look through.
-const GHOST_ALPHA: f32 = 0.15;
-
-@fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
-    let l = normalize(LIGHT_DIR);
-    let ndotl = max(dot(normalize(in.normal), l), 0.0);
-    let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
-    return vec4<f32>(in.color * k, GHOST_ALPHA);
-}
-"#;
-
-/// Glass pass shader — identical geometry to the world cube shader, but
-/// the fragment emits a low constant alpha so windows read as real
-/// see-through glass. Drawn after the opaque world with alpha blending,
-/// depth-tested against the world (so glass behind a wall is occluded)
-/// but not depth-writing (so overlapping panes blend). Same vertex +
-/// instance layout as SHADER_WGSL, so it reuses the cube geometry and
-/// SceneInstance buffer.
-pub const GLASS_SHADER_WGSL: &str = r#"
-struct Camera { view_proj: mat4x4<f32> };
-@group(0) @binding(0) var<uniform> camera: Camera;
-
-struct VIn {
-    @location(0) pos: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-};
-
-struct IIn {
-    @location(2) i_pos: vec3<f32>,
-    @location(3) i_color: vec3<f32>,
-    @location(4) i_scale: vec3<f32>,
-};
-
-struct VOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) normal: vec3<f32>,
-    @location(1) color: vec3<f32>,
-};
-
-@vertex
-fn vs(v: VIn, i: IIn) -> VOut {
-    let world = v.pos * i.i_scale + i.i_pos;
-    var o: VOut;
-    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    o.normal = normalize(v.normal);
-    o.color = i.i_color;
-    return o;
-}
-
-const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
-const AMBIENT: f32 = 0.25;
-const GLASS_ALPHA: f32 = 0.34;
-
-@fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
-    let l = normalize(LIGHT_DIR);
-    let ndotl = max(dot(normalize(in.normal), l), 0.0);
-    let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
-    // Pre-multiply by alpha? No — the pipeline uses straight-alpha
-    // blending (src-alpha, one-minus-src-alpha), so emit straight RGBA.
-    return vec4<f32>(in.color * k, GLASS_ALPHA);
-}
-"#;
-
-pub const SHADER_WGSL: &str = r#"
-struct Camera { view_proj: mat4x4<f32> };
-@group(0) @binding(0) var<uniform> camera: Camera;
-
-struct VIn {
-    @location(0) pos: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-};
-
-struct IIn {
-    @location(2) i_pos: vec3<f32>,
-    @location(3) i_color: vec3<f32>,
-    @location(4) i_scale: vec3<f32>,
-};
-
-struct VOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) normal: vec3<f32>,
-    @location(1) color: vec3<f32>,
-};
-
-@vertex
-fn vs(v: VIn, i: IIn) -> VOut {
-    let world = v.pos * i.i_scale + i.i_pos;
-    var o: VOut;
-    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    o.normal = normalize(v.normal);
-    o.color = i.i_color;
-    return o;
-}
-
-const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
-const AMBIENT: f32 = 0.25;
-
-@fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
-    let l = normalize(LIGHT_DIR);
-    let ndotl = max(dot(normalize(in.normal), l), 0.0);
-    let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
-    return vec4<f32>(in.color * k, 1.0);
-}
-"#;
-
 /// Top-down-with-tilt camera. Frustum spans the world so
 /// [-FLOOR_HALF, +FLOOR_HALF] on XZ maps to the whole image.
 pub struct SceneCamera {
@@ -296,6 +103,57 @@ pub struct SceneInstance {
     pub scale: [f32; 3],
 }
 
+/// Instance for the MESH pipeline. Same as `SceneInstance` plus `axis`:
+/// `xyz` is the unit direction the shader rotates the geometry's local
+/// +Y onto (one baked cone → a limb pointing anywhere), and `w` is the
+/// per-instance WIND SWAY weight (0 = rigid trunk, →1 = a thin twig that
+/// flutters most). 52 bytes, `#[repr(C)]`: layout must match the mesh
+/// WGSL's IIn (loc 3/4/5/6 at offsets 0/12/24/36) and the vertex-buffer
+/// layouts on both render paths — all held to `INSTANCE_ATTRS`. A
+/// vertical trunk sets `axis = [0,1,0,0]` (identity rotation, no sway).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MeshInstance {
+    pub pos: [f32; 3],
+    pub color: [f32; 3],
+    pub scale: [f32; 3],
+    pub axis: [f32; 4],
+}
+
+/// One per-instance vertex attribute of `MeshInstance`.
+pub struct InstanceAttr {
+    /// `@location` in the WGSL and `shaderLocation` in the JS shim.
+    pub location: u32,
+    /// Byte offset into `MeshInstance`.
+    pub offset: u64,
+    /// WebGPU vertex-format name, exactly as the JS shim spells it.
+    pub format: &'static str,
+}
+
+/// THE single source of truth for the `MeshInstance` vertex layout. The
+/// same 48-byte record is described in four places — the `#[repr(C)]`
+/// struct above (the PRODUCER of the bytes), the WGSL `@location` list,
+/// the native `wgpu` attribute array (`render.rs` builds its array FROM
+/// this const), and the hand-written JS shim (`web/src/main.ts`). This
+/// const is what the other three must agree with; `render.rs` derives
+/// from it, and `web_shim_mesh_instance_layout_matches_this_const` holds
+/// the JS copy to it so the one hand-maintained descriptor can't drift
+/// silently (only a real browser exercises the JS path, so nothing else
+/// would catch it). No proto / codegen — the JS stays hand-inspectable,
+/// a test just checks it.
+pub const INSTANCE_ATTRS: &[InstanceAttr] = &[
+    InstanceAttr { location: 3, offset: 0, format: "float32x3" },
+    InstanceAttr { location: 4, offset: 12, format: "float32x3" },
+    InstanceAttr { location: 5, offset: 24, format: "float32x3" },
+    // axis is a vec4: xyz = orientation, w = wind sway weight.
+    InstanceAttr { location: 6, offset: 36, format: "float32x4" },
+];
+
+/// Stride of the per-instance buffer — the size of one `MeshInstance`.
+/// Passed to both render paths (`instanceStride` in JS), so it can't
+/// disagree; the offsets are what need guarding.
+pub const INSTANCE_STRIDE: u64 = std::mem::size_of::<MeshInstance>() as u64;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GpuVertex {
@@ -355,7 +213,7 @@ pub struct RemotePeerDot {
 pub type StructureSnap = (Vec3, PropKind, Option<[f32; 3]>, Option<Vec3>);
 
 pub struct SceneSnapshot {
-    pub trees: Vec<(Vec3, f32)>,
+    pub trees: Vec<(Vec3, f32, &'static crate::tree_mesh::TreeSpecies, bool)>,
     pub obstacles: Vec<Vec3>,
     pub fires: Vec<(Vec3, f32)>,
     pub npcs: Vec<Vec3>,
@@ -370,7 +228,10 @@ pub struct SceneSnapshot {
 pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
     let world = app.world_mut();
     let mut tree_q = world.query::<(&Position, &trees::TreeTrunk)>();
-    let trees: Vec<(Vec3, f32)> = tree_q.iter(world).map(|(p, t)| (p.0, t.height)).collect();
+    let trees: Vec<(Vec3, f32, &'static crate::tree_mesh::TreeSpecies, bool)> = tree_q
+        .iter(world)
+        .map(|(p, t)| (p.0, t.height, t.species, t.stump))
+        .collect();
     let mut obs_q = world.query_filtered::<&Position, (
         bevy_ecs::prelude::With<AabbCollider>,
         bevy_ecs::prelude::Without<PlayerMarker>,
@@ -560,22 +421,9 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             scale: [crate::trail::TRAIL_WIDTH, 1.0, trail_length],
         });
     }
-    for (t, h) in &snap.trees {
-        // A brown trunk under a green canopy, sized by the tree's own
-        // height (varied, all taller than the 220 buildings).
-        let trunk_h = h * 0.40;
-        let canopy_h = h * 0.66;
-        instances.push(SceneInstance {
-            pos: [t.x, trunk_h * 0.5, t.z],
-            color: [0.30, 0.20, 0.11],
-            scale: [h * 0.06, trunk_h, h * 0.06],
-        });
-        instances.push(SceneInstance {
-            pos: [t.x, trunk_h + canopy_h * 0.5 - h * 0.06, t.z],
-            color: [0.13, 0.77, 0.37],
-            scale: [h * 0.22, canopy_h, h * 0.22],
-        });
-    }
+    // Trees are no longer emitted here — they render through the mesh
+    // pipeline (tapered trunk mesh + compound-instanced icosahedron
+    // canopy). See `snapshot_to_mesh_instances` and `game/docs/RENDER.md`.
     for o in &snap.obstacles {
         instances.push(SceneInstance {
             pos: [o.x, 40.0, o.z],
@@ -806,6 +654,88 @@ pub fn snapshot_to_glass_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instance_attrs_match_the_repr_c_struct() {
+        // The source-of-truth const must agree with the actual repr(C)
+        // byte layout it claims to describe: four vec3s at 0/12/24/36 and
+        // a 48-byte stride. If MeshInstance changes, this fails first.
+        assert_eq!(INSTANCE_ATTRS.len(), 4);
+        // pos/color/scale are vec3 at 0/12/24; axis is a vec4 at 36.
+        let expected = [
+            (3u32, 0u64, "float32x3"),
+            (4, 12, "float32x3"),
+            (5, 24, "float32x3"),
+            (6, 36, "float32x4"),
+        ];
+        for (a, (loc, off, fmt)) in INSTANCE_ATTRS.iter().zip(expected) {
+            assert_eq!(a.location, loc);
+            assert_eq!(a.offset, off);
+            assert_eq!(a.format, fmt);
+        }
+        assert_eq!(INSTANCE_STRIDE, 52);
+        assert_eq!(INSTANCE_STRIDE, std::mem::size_of::<MeshInstance>() as u64);
+    }
+
+    #[test]
+    fn web_shim_mesh_instance_layout_matches_this_const() {
+        // The ONE hand-written copy of the instance layout is the JS shim.
+        // seer renders the native path, so native drift shows in a frame;
+        // nothing exercises the JS offsets but a real browser — so hold
+        // web/src/main.ts to INSTANCE_ATTRS here. Embedded at compile time
+        // so this runs in the fast game-tests gate, not just in a browser.
+        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/main.ts"));
+        // Scope to the mesh pipeline's INSTANCE attribute array (locations
+        // 3-6), not the vertex one (0-2) or any other pipeline's.
+        let fn_at = src
+            .find("game_gpu_render_pipeline_create_mesh")
+            .expect("mesh pipeline factory in main.ts");
+        let inst_at = fn_at
+            + src[fn_at..]
+                .find("stepMode: 'instance'")
+                .expect("instance buffer in the mesh pipeline");
+        let start = inst_at
+            + src[inst_at..].find("attributes: [").expect("attributes array");
+        let end = start + src[start..].find(']').expect("attributes array close");
+        let parsed = parse_js_attrs(&src[start..end]);
+        assert_eq!(
+            parsed.len(),
+            INSTANCE_ATTRS.len(),
+            "JS mesh-instance attribute count drifted from INSTANCE_ATTRS"
+        );
+        for (want, got) in INSTANCE_ATTRS.iter().zip(&parsed) {
+            assert_eq!(got.0, want.location, "JS shaderLocation drifted");
+            assert_eq!(got.1, want.offset, "JS offset drifted at location {}", want.location);
+            assert_eq!(got.2, want.format, "JS format drifted at location {}", want.location);
+        }
+    }
+
+    /// Parse `{ shaderLocation: N, offset: M, format: 'F' }` entries, in
+    /// order, from a JS attributes-array slice.
+    fn parse_js_attrs(block: &str) -> Vec<(u32, u64, String)> {
+        fn uint(s: &str) -> u64 {
+            s.trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .unwrap()
+        }
+        let mut out = Vec::new();
+        let mut rest = block;
+        while let Some(p) = rest.find("shaderLocation:") {
+            rest = &rest[p + "shaderLocation:".len()..];
+            let loc = uint(rest) as u32;
+            let o = rest.find("offset:").expect("offset in attr");
+            let off = uint(&rest[o + "offset:".len()..]);
+            let f = rest.find("format:").expect("format in attr");
+            let fs = &rest[f + "format:".len()..];
+            let q0 = fs.find('\'').unwrap() + 1;
+            let q1 = fs[q0..].find('\'').unwrap() + q0;
+            out.push((loc, off, fs[q0..q1].to_string()));
+        }
+        out
+    }
 
     #[test]
     fn floor_follows_the_player_so_there_is_no_world_edge() {

@@ -1,7 +1,7 @@
 # game/docs — render
 
 The current shape of the game's render pipeline, and the mesh-based
-successor that lands on the next branch.
+successor that lands next.
 
 ## Current pipeline — cube instancing
 
@@ -31,12 +31,48 @@ discontinuity. No amount of placement-rule refinement inside the
 cdda crate fixes this; the geometry is right, the rendering
 substrate is wrong for reading as continuous.
 
-This is the branch's **merge blocker**. The wall placement work in
-this branch is functionally correct (see the tests in
+This was the stamp-template merge blocker for the wall look. The
+placement work is functionally correct (see the tests in
 `crates/cdda/src/placement.rs`) but the render doesn't cross the
-"looks like walls" bar. Fix scoped to its own branch below.
+"looks like walls" bar. Fix scoped to its own scope below.
 
-## Next — mesh pipeline (own branch)
+## Current scope — mesh substrate, proven on the tree
+
+Prove the mesh substrate on the smallest thing: **the tree**. Walls
+stay on cubes for now; the doubled-corner problem is not solved
+here. The point is to land the mesh pipeline itself, with one
+shape (tree) exercising every part of it end-to-end.
+
+**Intended behaviour once this lands.**
+
+1. A second render pipeline exists alongside the cube-instance
+   pipeline. Both run each frame. The cube pipeline draws
+   everything it draws today except trees.
+2. Trees render through the mesh pipeline:
+   - Trunk = tapered geometry (truncated cone, ~12 sides), shared
+     mesh, instanced per tree with per-instance transform.
+   - Canopy = **phyllotactic** — elements placed at successive
+     golden-angle rotations (≈137.5°) around the growth axis,
+     radius scaling per step. Reads as a real crown, not a sphere
+     or a box.
+3. Placement stays deterministic per world cell (same inputs as
+   `trees::tree_at_cell`), so streaming and reproducibility are
+   unchanged.
+4. seer captures `[perf]` for both pipelines in the same frame —
+   first real numbers on mesh cost vs cube cost.
+5. Vertex format reserves UV slots from day one, even though the
+   first cut has no textures. Damage textures (cracks, scorches)
+   are a real downstream goal; skipping UVs now costs a second
+   swap later.
+
+**Out of scope here.** Walls, buildings, obstacles, trails, HUD,
+player, glass, ghost — all still on cubes. No destruction. No
+debris. No textures. No collider changes.
+
+**Merge criterion.** Trees look like trees. Nothing else regresses.
+seer's frame captures confirm both.
+
+## Later — walls on mesh
 
 Replace / augment the cube-instance renderer with a **mesh
 pipeline** so each building's wall system renders as one
@@ -67,8 +103,7 @@ turns 90° — no visible seam because there's no seam to render.
 6. Native `render.rs` mirror or accept native-differs-from-wasm.
 
 **Estimated scope.** 10–20 hours of infra work before the first
-correct-looking wall renders. Hence its own branch, not a squeeze
-into this one.
+correct-looking wall renders. Own scope, sequenced after the tree.
 
 **Deferred within this plan.**
 - Per-face texture UVs / material variation. First cut: uniform
@@ -80,6 +115,6 @@ into this one.
 - **Player visibility (LOS from player)** — camera-frame cut-away
   today; the CDDA-style "you can only see what your character can
   see" is a whole visibility system (shadow-casting from player
-  through the wall grid, fog-of-war state). Its own branch.
+  through the wall grid, fog-of-war state). Own scope.
 - **Multi-z-level render** — descend / ascend in an iso voxel
   world. Depends on cdda supporting multi-layer stamps.

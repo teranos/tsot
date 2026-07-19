@@ -58,6 +58,57 @@ impl PropKind {
     }
 }
 
+/// A tree species tag — the thin, framework-free vocabulary CDDA's
+/// `t_tree_*` terrain maps onto. The consumer crate (`game`) turns each
+/// into its richer `TreeSpecies` geometry/palette; this crate stays
+/// render-free, so it only names the kind. Fieldless + `Copy`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeKind {
+    Apple,
+    Pine,
+    Oak,
+    Birch,
+    Willow,
+    Maple,
+    /// Alien fungal growth (CDDA `t_tree_fungal`).
+    Fungal,
+    /// A dead snag — bare branches, no foliage.
+    Dead,
+    /// A cut stump — the short remainder of a felled tree (CDDA `t_stump`,
+    /// `t_tree_*_stump`). The original species is usually lost, so the
+    /// consumer renders it as a generic cut bole.
+    Stump,
+    /// Any tree we don't map to a specific species yet.
+    Generic,
+}
+
+/// Fixed u8 tag per `TreeKind` for `stable_digest` — pinned like
+/// `prop_kind_tag`, so reordering the enum never shifts a digest.
+pub(crate) fn tree_kind_tag(k: TreeKind) -> u8 {
+    match k {
+        TreeKind::Apple => 0,
+        TreeKind::Pine => 1,
+        TreeKind::Oak => 2,
+        TreeKind::Birch => 3,
+        TreeKind::Willow => 4,
+        TreeKind::Generic => 5,
+        TreeKind::Maple => 6,
+        TreeKind::Fungal => 7,
+        TreeKind::Dead => 8,
+        TreeKind::Stump => 9,
+    }
+}
+
+/// One authored tree, positioned relative to the template's anchor —
+/// the parallel to `Prop` for the tree layer. Trees are a distinct
+/// entity/render path from props, so they ride their own vector rather
+/// than a `PropKind` variant.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TreePlacement {
+    pub offset: Vec3,
+    pub kind: TreeKind,
+}
+
 /// One prop, positioned relative to the template's anchor.
 #[derive(Clone, Copy, Debug)]
 pub struct Prop {
@@ -95,6 +146,9 @@ impl Prop {
 #[derive(Clone, Debug, Default)]
 pub struct Template {
     pub props: Vec<Prop>,
+    /// Authored trees this template places (from `t_tree_*` terrain).
+    /// Empty for buildings; populated for a tree field like an orchard.
+    pub trees: Vec<TreePlacement>,
 }
 
 impl Template {
@@ -138,6 +192,14 @@ impl Template {
                     mix_bytes(&s.z.to_le_bytes(), &mut mix);
                 }
             }
+        }
+        // Tree layer — same explicit byte mixing so the determinism
+        // property covers authored trees too.
+        for t in &self.trees {
+            mix_bytes(&t.offset.x.to_le_bytes(), &mut mix);
+            mix_bytes(&t.offset.y.to_le_bytes(), &mut mix);
+            mix_bytes(&t.offset.z.to_le_bytes(), &mut mix);
+            mix(tree_kind_tag(t.kind));
         }
         h
     }
@@ -210,7 +272,26 @@ pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
             Prop { offset: Vec3::new(rx, p.offset.y, rz), kind, color: p.color, size }
         })
         .collect();
-    Template { props }
+    // Trees rotate with the template — their positions turn, but a tree's
+    // appearance is rotation-invariant so the kind is unchanged.
+    let trees = t
+        .trees
+        .iter()
+        .map(|tp| {
+            let (x, z) = (tp.offset.x, tp.offset.z);
+            let (rx, rz) = match q {
+                1 => (-z, x),
+                2 => (-x, -z),
+                3 => (z, -x),
+                _ => (x, z),
+            };
+            TreePlacement {
+                offset: Vec3::new(rx, tp.offset.y, rz),
+                kind: tp.kind,
+            }
+        })
+        .collect();
+    Template { props, trees }
 }
 
 #[cfg(test)]
@@ -224,6 +305,7 @@ mod tests {
                 Prop::at(Vec3::new(1.0, 2.0, 3.0), PropKind::Campfire),
                 Prop::at(Vec3::new(-5.0, 0.0, 10.0), PropKind::Campfire),
             ],
+            trees: vec![],
         };
         let anchor = Vec3::new(100.0, 0.0, -100.0);
         let out = resolve_placements(&t, anchor);
@@ -241,6 +323,7 @@ mod tests {
     fn rotate_turns_offsets_and_swaps_wall_orientation() {
         let t = Template {
             props: vec![Prop::at(Vec3::new(10.0, 5.0, 0.0), PropKind::WallNS)],
+            trees: vec![],
         };
         let r1 = rotate_template(&t, 1);
         assert_eq!(r1.props[0].offset, Vec3::new(0.0, 5.0, 10.0));
@@ -254,6 +337,7 @@ mod tests {
     fn resolution_is_deterministic() {
         let t = Template {
             props: vec![Prop::at(Vec3::new(7.0, 8.0, 9.0), PropKind::Campfire)],
+            trees: vec![],
         };
         let a = resolve_placements(&t, Vec3::splat(3.0));
         let b = resolve_placements(&t, Vec3::splat(3.0));

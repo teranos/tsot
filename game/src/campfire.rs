@@ -65,6 +65,7 @@ pub fn flicker_modulator(t: f32) -> f32 {
 pub fn campfire_template() -> Template {
     Template {
         props: vec![Prop::at(Vec3::ZERO, PropKind::Campfire)],
+        trees: vec![],
     }
 }
 

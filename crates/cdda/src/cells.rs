@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::template::PropKind;
+use crate::template::{PropKind, TreeKind};
 
 /// Glass windows — a light-blue thin panel sitting in the wall line.
 pub(crate) const WINDOW_COLOR: [f32; 3] = [0.50, 0.68, 0.82];
@@ -79,6 +79,48 @@ pub(crate) fn cell_to_prop(
         }
     }
     None
+}
+
+/// Map a cell's char to a tree species via the resolved terrain map.
+/// CDDA authors trees as `t_tree_*` terrain (`t_tree_apple`, `_pine`,
+/// `_birch`, `_willow`, `_maple`, …); we fold its many species onto the
+/// handful we render. Stumps map to `Stump`; non-tree terrain and the
+/// `young` sapling variants we've no geometry for yet → None.
+pub(crate) fn cell_to_tree(ch: char, terrain: &HashMap<char, String>) -> Option<TreeKind> {
+    let t = terrain.get(&ch)?;
+    // A cut stump is its own thing — matched first because `t_stump`
+    // needn't contain "tree".
+    if t.contains("stump") {
+        return Some(TreeKind::Stump);
+    }
+    if !t.contains("tree") || t.contains("young") {
+        return None;
+    }
+    // A dead snag is dead whatever it was; fungal growth is its own thing.
+    if t.contains("dead") {
+        return Some(TreeKind::Dead);
+    }
+    if t.contains("fungal") {
+        return Some(TreeKind::Fungal);
+    }
+    // Fruit/nut orchard trees → the round fruit-tree form.
+    let fruit = ["apple", "pear", "cherry", "peach", "plum", "apricot", "mulberry",
+                 "walnut", "pecan", "hazelnut", "hickory", "chestnut", "elderberry"];
+    Some(if fruit.iter().any(|f| t.contains(f)) {
+        TreeKind::Apple
+    } else if t.contains("pine") || t.contains("fir") || t.contains("conifer") || t.contains("spruce") {
+        TreeKind::Pine
+    } else if t.contains("birch") {
+        TreeKind::Birch
+    } else if t.contains("willow") {
+        TreeKind::Willow
+    } else if t.contains("maple") {
+        TreeKind::Maple
+    } else if t.contains("oak") || t.contains("elm") || t.contains("beech") {
+        TreeKind::Oak
+    } else {
+        TreeKind::Generic
+    })
 }
 
 /// Does a char's resolved terrain id form part of the wall LINE — the

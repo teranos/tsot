@@ -19,6 +19,7 @@ pub mod health;
 pub mod hud;
 pub mod identity;
 pub mod input;
+pub mod isosurface;
 pub mod jukebox;
 pub mod map;
 pub mod music;
@@ -30,9 +31,15 @@ pub mod remote_players;
 pub mod room;
 pub mod scene;
 pub mod sfx;
+pub mod shaders;
 pub mod template;
 pub mod trail;
+pub mod tree_emit;
+pub mod tree_mesh;
+pub mod tree_surface;
 pub mod trees;
+pub mod tune;
+pub mod tune_hud;
 pub mod watermark;
 
 pub mod gpu_web;
@@ -191,6 +198,20 @@ fn seer_tour_from(bt: &crate::buildings::BuildingTemplates) -> SeerTour {
     .and_then(|c| cdda::building_anchor_in_chunk(c.x, c.z, cs));
     let camp = scan_chunk(|c| campsite::campsite_in_chunk(c).is_some())
         .and_then(campsite::campsite_in_chunk);
+    // CDDA buildings carry their own authored yard trees now, so "has
+    // trees" isn't unique — but the orchard is the only *tree field*:
+    // trees and NO building props.
+    let orchard_idx = bt
+        .templates
+        .iter()
+        .position(|t| t.props.is_empty() && !t.trees.is_empty());
+    let orchard = orchard_idx.and_then(|oi| {
+        scan_chunk(|c| {
+            cdda::building_anchor_in_chunk(c.x, c.z, cs).is_some()
+                && cdda::building_index(c.x, c.z, num) == oi
+        })
+        .and_then(|c| cdda::building_anchor_in_chunk(c.x, c.z, cs))
+    });
     let forest = Vec3::new(7.5 * chunk::CHUNK_SIZE, 20.0, 7.5 * chunk::CHUNK_SIZE);
 
     let mut stops = Vec::new();
@@ -199,6 +220,9 @@ fn seer_tour_from(bt: &crate::buildings::BuildingTemplates) -> SeerTour {
     }
     if let Some(w) = house {
         stops.push(("house".to_string(), w));
+    }
+    if let Some(w) = orchard {
+        stops.push(("orchard".to_string(), w));
     }
     if let Some(w) = camp {
         stops.push(("campsite".to_string(), w));
@@ -548,6 +572,7 @@ fn _init() {
             bang::setup_bang.after(setup),
             campfire::setup_campfire.after(setup),
             dpad::setup_dpad.after(setup),
+            tune_hud::setup_tune_hud.after(setup),
             hud::setup_hud.after(setup),
             jukebox::setup_jukebox.after(setup),
             map::setup_pins.after(setup),
@@ -575,6 +600,7 @@ fn _init() {
             campfire::flicker_fire.after(physics::resolve_remote_player_collisions),
             campfire::campfire_crackle_system.after(campfire::flicker_fire),
             dpad::dpad_input_system.after(campfire::campfire_crackle_system),
+            tune_hud::tune_hud_system.after(dpad::dpad_input_system),
             hud::hud_input_system.after(dpad::dpad_input_system),
             jukebox::jukebox_proximity_system.after(physics::resolve_collisions),
             tick.after(campfire::flicker_fire),
@@ -598,7 +624,13 @@ fn _init() {
     {
         let multi_dir = std::env::var("SEER_MULTI_FRAME_DIR").ok();
         let checkpoints: Vec<u32> = if multi_dir.is_some() {
-            vec![frames / 4, frames / 2, 3 * frames / 4, frames]
+            // One frame per tour stop, at the END of its window — by then
+            // the player has walked the last stretch in and is at rest at
+            // the target, so each stop (school / house / orchard / …) is
+            // captured standing in it, not while still approaching. Scales
+            // to however many stops the tour found.
+            let n = tour_labels.len().max(1) as u32;
+            (1..=n).map(|i| (i * frames / n).max(1)).collect()
         } else {
             vec![frames]
         };
@@ -767,11 +799,12 @@ fn render_single(
     let (dev, queue) = init_wgpu()?;
     let instances = scene::snapshot_to_instances(snap);
     let glass = scene::snapshot_to_glass_instances(snap);
+    let mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
     let camera = scene::SceneCamera::follow(
         [snap.player.x, snap.player.y, snap.player.z],
         room::FLOOR_HALF,
     );
-    render::render_scene(&dev, &queue, &camera, &instances, &glass, out_path)?;
+    render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, 0.0, out_path)?;
     Ok(())
 }
 
@@ -787,11 +820,16 @@ fn render_snapshots(
         let out_path = format!("{dir}/frame-{i}.png");
         let instances = scene::snapshot_to_instances(snap);
         let glass = scene::snapshot_to_glass_instances(snap);
+        let mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
         let camera = scene::SceneCamera::follow(
             [snap.player.x, snap.player.y, snap.player.z],
             room::FLOOR_HALF,
         );
-        render::render_scene(&dev, &queue, &camera, &instances, &glass, &out_path)?;
+        // Each tour stop gets a distinct wind phase so the still frames
+        // aren't all the identical leaf offset (a single PNG can't show
+        // motion; the browser animates continuously off its frame count).
+        let time = i as f32 * 0.7;
+        render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, time, &out_path)?;
         out_paths.push(out_path);
     }
     Ok(out_paths)

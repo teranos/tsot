@@ -37,4 +37,6 @@ pub use chunks::{
     BUILDING_FOOTPRINT_HALF, building_anchor_in_chunk, building_index, building_rotation,
 };
 pub use placement::{CDDA_TILE, CddaError, ROOF_HEIGHT, mapgen_to_template, roof_to_props};
-pub use template::{Prop, PropKind, Template, resolve_placements, rotate_template};
+pub use template::{
+    Prop, PropKind, Template, TreeKind, TreePlacement, resolve_placements, rotate_template,
+};

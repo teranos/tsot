@@ -13,7 +13,9 @@ use bevy_math::Vec3;
 
 // Re-export the pure types so game code can `use crate::template::PropKind`
 // without knowing whether they live here or in the cdda seam crate.
-pub use cdda::template::{Prop, PropKind, Template, resolve_placements, rotate_template};
+pub use cdda::template::{
+    Prop, PropKind, Template, TreeKind, TreePlacement, resolve_placements, rotate_template,
+};
 
 use crate::campfire::{self, Campfire};
 use crate::physics::{AabbCollider, Position};

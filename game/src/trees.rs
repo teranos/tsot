@@ -35,14 +35,44 @@ const NOISE_CELL: f32 = 1600.0;
 const TREE_MIN_H: f32 = 320.0;
 const TREE_MAX_H: f32 = 760.0;
 
-/// A tree: its `height` drives the trunk + canopy render and collider.
+/// A tree: its `height` drives the trunk + canopy render and collider;
+/// `species` is carried DATA (not a render-time hash) so an authored
+/// CDDA tree can be the species its map names, not one guessed from
+/// position. Procedural trees fill it from `species_for_pos`.
 #[derive(Component)]
 pub struct TreeTrunk {
     pub height: f32,
+    pub species: &'static crate::tree_mesh::TreeSpecies,
+    /// A cut stump — the short remainder of a felled tree of THIS species
+    /// (an oak stump keeps oak bark). Rendered as a stout bole with a pale
+    /// cut face, no crown. `false` for a whole living tree.
+    pub stump: bool,
 }
 
 fn hash01(ix: i32, iz: i32, salt: u32) -> f32 {
     wang_hash(ix, iz, salt) as f32 / u32::MAX as f32
+}
+
+/// Height for an authored (CDDA) tree at a world position — short and
+/// NEARLY uniform (tended, planted trees, not wild old-growth), so an
+/// orchard's rows line up instead of a jumble of mismatched crowns. The
+/// species' `authored_scale` lifts it off the shared base (an apple
+/// reads a touch bigger than a plain sapling) without reintroducing the
+/// wild height jumble. Deterministic — peers agree via the pure tile
+/// hash.
+pub fn authored_height(x: f32, z: f32, species: &crate::tree_mesh::TreeSpecies) -> f32 {
+    let ix = (x / CELL).round() as i32;
+    let iz = (z / CELL).round() as i32;
+    (260.0 + hash01(ix, iz, TREE_HEIGHT_SALT) * 40.0) * species.authored_scale
+}
+
+/// A small fraction of procedural forest trees are old cut stumps —
+/// deterministic per tile so peers agree. The species is still chosen by
+/// `species_for_pos`; this only decides the tree was felled.
+pub fn is_stump_at(x: f32, z: f32) -> bool {
+    let ix = (x / CELL).round() as i32;
+    let iz = (z / CELL).round() as i32;
+    hash01(ix, iz, 0x0057_0F09) < 0.06
 }
 
 /// Smooth value noise in [0,1] at world (x,z) — bilinear-interpolated
@@ -96,6 +126,19 @@ mod tests {
     #[test]
     fn tree_at_cell_is_deterministic() {
         assert_eq!(tree_at_cell(17, -23), tree_at_cell(17, -23));
+    }
+
+    #[test]
+    fn authored_apple_stands_a_little_taller_than_a_plain_authored_tree() {
+        use crate::tree_mesh::{APPLE, OAK};
+        // Authored height is near-uniform, but species scale it: an
+        // orchard apple should read bigger than a yard oak/sapling at the
+        // SAME tile (so `authored_scale` actually reaches the height).
+        for &(x, z) in &[(0.0, 0.0), (240.0, -720.0), (-3600.0, 1200.0)] {
+            let apple = authored_height(x, z, &APPLE);
+            let oak = authored_height(x, z, &OAK);
+            assert!(apple > oak, "apple {apple} should top oak {oak} at ({x},{z})");
+        }
     }
 
     #[test]
