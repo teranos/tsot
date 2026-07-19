@@ -510,6 +510,54 @@ mod tests {
     }
 
     #[test]
+    fn a_snag_is_a_leafless_dead_tree_of_its_species() {
+        // A `Snag` is a dead tree still standing — the same species'
+        // wood mesh, but no canopy leaves, no fruit, no autumn — foliage
+        // has fallen. Species is unchanged; a dead oak keeps oak wood.
+        use crate::tree_mesh::OAK;
+        use crate::trees::LifeStage;
+        let pos = Vec3::new(500.0, 0.0, 500.0);
+        let snag = snapshot_to_mesh_instances_with_wood(
+            &tree_snapshot_stage(pos, &OAK, LifeStage::Snag),
+        );
+        // No foliage on a snag.
+        assert!(
+            snag.canopy_elements.iter().all(|e| {
+                // Splinters / nests / snot are canopy-list too; we're
+                // asserting no LEAVES. Leaves carry the species green
+                // (possibly autumn-shifted). A crude but correct signal:
+                // no element with the base leaf_green colour.
+                e.color != OAK.leaf_green
+            }),
+            "a snag should have no leaves",
+        );
+        // Wood mesh IS drawn — oak wood, one bucket.
+        assert!(
+            snag.wood_by_species.iter().any(|(s, _)| std::ptr::eq(*s, &OAK)),
+            "a snag still draws the species wood mesh",
+        );
+    }
+
+    fn tree_snapshot_stage(
+        pos: Vec3,
+        sp: &'static crate::tree_mesh::TreeSpecies,
+        stage: crate::trees::LifeStage,
+    ) -> SceneSnapshot {
+        SceneSnapshot {
+            trees: vec![(pos, 300.0, sp, stage)],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![],
+            jukeboxes: vec![],
+            player: Vec3::ZERO,
+        }
+    }
+
+    #[test]
     fn a_stump_is_a_cut_bole_of_its_species_with_no_crown() {
         use crate::tree_mesh::OAK;
         let pos = Vec3::new(500.0, 0.0, 500.0);
