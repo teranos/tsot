@@ -70,10 +70,11 @@ const ROOT_COUNT: usize = 5;
 /// Resolution floor + ceiling. Canonical-per-species means we bake 8
 /// meshes total over the process lifetime — the per-frame cost is
 /// zero, so we can afford much higher fidelity than the earlier
-/// per-tree design allowed. High enough that thin twigs stay distinct
-/// through fork blends.
+/// per-tree design allowed. Ceiling sized so a slender-trunk species
+/// (birch: trunk_radius=0.02) can get voxel < half a trunk radius,
+/// which is what stops marching-tet banding on thin cylinders.
 const RES_MIN: usize = 40;
-const RES_MAX: usize = 96;
+const RES_MAX: usize = 192;
 
 /// A round-cone in unit tree space. The trunk, every branch, and every
 /// root is one of these — the whole tree is a `smin` over a `Vec<Cone>`.
@@ -103,10 +104,12 @@ pub fn tree_surface(seed: u32, sp: &TreeSpecies) -> (Vec<MeshVertex>, Vec<u32>) 
 
     let (min, max) = aabb(&cones, sp.trunk_radius * 2.0);
     let span = (max[0] - min[0]).max(max[1] - min[1]).max(max[2] - min[2]);
-    // Resolution grows with the tree's own span vs its trunk thickness —
-    // a slender pine and a broad oak both get roughly the same "cells
-    // across the bole" of ~0.9 (RES lets slenderness fit fewer voxels).
-    let res = ((span / (sp.trunk_radius * 0.9)).ceil() as usize).clamp(RES_MIN, RES_MAX);
+    // Resolution driven by TRUNK THICKNESS: voxel must be smaller than
+    // half a trunk radius, else the marching-tet cross-section bands a
+    // thin cylinder into stacked rings (the "broken chunks" symptom on
+    // birch). res = span / (trunk_radius * 0.4) targets voxel ≈ 0.4×
+    // trunk radius. Clamped to keep bake time bounded.
+    let res = ((span / (sp.trunk_radius * 0.4)).ceil() as usize).clamp(RES_MIN, RES_MAX);
     let step = [span / res as f32; 3];
     let voxel = step[0];
     // Radius floor: a limb thinner than one voxel slips between grid
