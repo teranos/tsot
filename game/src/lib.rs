@@ -33,6 +33,7 @@ pub mod scene;
 pub mod sfx;
 pub mod shaders;
 pub mod template;
+pub mod terrain;
 pub mod trail;
 pub mod tree_emit;
 pub mod tree_mesh;
@@ -139,15 +140,17 @@ fn seer_tour_input(
         if entering_new_stop {
             p.0 = approach;
         }
-        let toward = target - p.0;
+        // Drive XZ only; ground_follow owns the actor's height.
+        let mut toward = target - p.0;
+        toward.y = 0.0;
         let dist_sq = toward.length_squared();
         if dist_sq > (physics::KEYBOARD_SPEED * physics::KEYBOARD_SPEED) {
-            let dir = toward.normalize();
-            v.0 = dir * physics::KEYBOARD_SPEED;
+            v.0 = toward.normalize() * physics::KEYBOARD_SPEED;
         } else {
-            // Within one step of the target — snap and stop, so the
+            // Within one step of the target — snap XZ and stop, so the
             // remaining budget at this stop is measured at rest.
-            p.0 = target;
+            p.0.x = target.x;
+            p.0.z = target.z;
             v.0 = Vec3::ZERO;
         }
     }
@@ -610,6 +613,15 @@ fn _init() {
             report_player_pos.after(tick),
         ),
     );
+    // Sit actors on the terrain after movement + collision settle — the
+    // sim's height becomes real (separate call: the tuple above is full).
+    app.add_systems(
+        Update,
+        (
+            physics::ground_follow_player.after(physics::resolve_collisions),
+            physics::ground_follow_npc.after(physics::advance_npc),
+        ),
+    );
     let frames = frame_budget();
     obs::emit(&format!(
         "[seer.boot] Bevy App built, entering update loop for {frames} frames"
@@ -797,14 +809,24 @@ fn render_single(
     out_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (dev, queue) = init_wgpu()?;
-    let instances = scene::snapshot_to_instances(snap);
-    let glass = scene::snapshot_to_glass_instances(snap);
-    let mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
+    let mut instances = scene::snapshot_to_instances(snap);
+    let mut glass = scene::snapshot_to_glass_instances(snap);
+    let mut mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
+    // One draping pass covers every entity stream (buildings, props,
+    // trees, player); the grid drapes at emit (its bars tilt per slope).
+    scene::drape(&mut instances);
+    scene::drape(&mut glass);
+    mesh_trees.drape();
+    let surface = scene::terrain_surface_mesh(snap.player.x, snap.player.z);
+    // player.y already carries the ground height (physics::ground_follow),
+    // so the camera reads it directly — no render-time lift, no double.
     let camera = scene::SceneCamera::follow(
         [snap.player.x, snap.player.y, snap.player.z],
         room::FLOOR_HALF,
     );
-    render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, 0.0, out_path)?;
+    render::render_scene(
+        &dev, &queue, &camera, &instances, &glass, &mesh_trees, &surface, 0.0, out_path,
+    )?;
     Ok(())
 }
 
@@ -818,9 +840,14 @@ fn render_snapshots(
     let mut out_paths = Vec::with_capacity(snapshots.len());
     for (i, snap) in snapshots.iter().enumerate() {
         let out_path = format!("{dir}/frame-{i}.png");
-        let instances = scene::snapshot_to_instances(snap);
-        let glass = scene::snapshot_to_glass_instances(snap);
-        let mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
+        let mut instances = scene::snapshot_to_instances(snap);
+        let mut glass = scene::snapshot_to_glass_instances(snap);
+        let mut mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
+        scene::drape(&mut instances);
+        scene::drape(&mut glass);
+        mesh_trees.drape();
+        let surface = scene::terrain_surface_mesh(snap.player.x, snap.player.z);
+        // player.y already carries the ground height (ground_follow).
         let camera = scene::SceneCamera::follow(
             [snap.player.x, snap.player.y, snap.player.z],
             room::FLOOR_HALF,
@@ -829,7 +856,9 @@ fn render_snapshots(
         // aren't all the identical leaf offset (a single PNG can't show
         // motion; the browser animates continuously off its frame count).
         let time = i as f32 * 0.7;
-        render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, time, &out_path)?;
+        render::render_scene(
+            &dev, &queue, &camera, &instances, &glass, &mesh_trees, &surface, time, &out_path,
+        )?;
         out_paths.push(out_path);
     }
     Ok(out_paths)

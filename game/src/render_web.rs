@@ -16,7 +16,8 @@ use crate::scene::{
     self, GpuVertex, MeshInstance, SceneCamera, SceneInstance, as_bytes, cube_geometry,
 };
 use crate::shaders::{
-    GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, LEAF_SHADER_WGSL, MESH_SHADER_WGSL, SHADER_WGSL,
+    GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, GROUND_SHADER_WGSL, LEAF_SHADER_WGSL, MESH_SHADER_WGSL,
+    SHADER_WGSL,
     UI_SHADER_WGSL,
 };
 use crate::tree_mesh::{self, MeshVertex};
@@ -67,12 +68,23 @@ struct RenderWebState {
     // per-frame tree count.
     mesh_pipeline: gpu_web::GameRenderPipeline,
     leaf_pipeline: gpu_web::GameRenderPipeline,
+    // Ground pipeline: the solid terrain surface + the world-anchored grid
+    // painted in its shader (no grid geometry any more).
+    ground_pipeline: gpu_web::GameRenderPipeline,
     wood_species: Vec<SpeciesGpuBufs>,
     canopy_vertex_buf: gpu_web::GameBuffer,
     canopy_index_buf: gpu_web::GameBuffer,
     canopy_index_count: u32,
     canopy_instance_buf: Option<gpu_web::GameBuffer>,
     canopy_instance_capacity: usize,
+    // The solid terrain surface — one mesh, player-centred; regenerated +
+    // re-uploaded only when the player crosses a cell (snap-key cache).
+    surface_vertex_buf: Option<gpu_web::GameBuffer>,
+    surface_index_buf: Option<gpu_web::GameBuffer>,
+    surface_instance_buf: Option<gpu_web::GameBuffer>,
+    surface_vertex_capacity: usize,
+    surface_index_count: u32,
+    surface_snap_key: Option<(i32, i32)>,
 }
 
 /// One species' GPU resources on the wasm path. The vertex + index
@@ -256,6 +268,27 @@ pub fn init(canvas_id: &str) -> bool {
         obs::emit("[render_web] init: leaf pipeline null");
         return false;
     };
+    // Ground pipeline: same layout, a shader that Lambert-shades the solid
+    // terrain surface and paints the faint WORLD-ANCHORED grid on it.
+    let ground_shader =
+        gpu_web::GameShaderModule::create(GROUND_SHADER_WGSL, "render_web.ground.shader");
+    let Some(ground_shader) = ground_shader else {
+        obs::emit("[render_web] init: ground shader null");
+        return false;
+    };
+    let ground_pipeline = gpu_web::GameRenderPipeline::create_mesh(
+        &pl_layout,
+        &ground_shader,
+        std::mem::size_of::<MeshVertex>() as u32,
+        std::mem::size_of::<MeshInstance>() as u32,
+        gpu_web::color_format::BGRA8UNORM,
+        gpu_web::depth_format::DEPTH32FLOAT,
+        "render_web.ground.pipeline",
+    );
+    let Some(ground_pipeline) = ground_pipeline else {
+        obs::emit("[render_web] init: ground pipeline null");
+        return false;
+    };
 
     // Canopy: baked once at init (unit leaf card). Wood buffers grow
     // lazily on the first non-empty snapshot.
@@ -301,12 +334,19 @@ pub fn init(canvas_id: &str) -> bool {
             ui_instance_capacity: 0,
             mesh_pipeline,
             leaf_pipeline,
+            ground_pipeline,
             wood_species: Vec::new(),
             canopy_vertex_buf,
             canopy_index_buf,
             canopy_index_count,
             canopy_instance_buf: None,
             canopy_instance_capacity: 0,
+            surface_vertex_buf: None,
+            surface_index_buf: None,
+            surface_instance_buf: None,
+            surface_vertex_capacity: 0,
+            surface_index_count: 0,
+            surface_snap_key: None,
         });
     });
     obs::emit(&format!(
@@ -607,6 +647,85 @@ pub fn frame_mesh(
     })
 }
 
+/// Solid terrain surface — one mesh, one identity instance, mesh pipeline.
+/// The patch is player-centred, so the vertex buffer is re-uploaded each
+/// frame; the index buffer + identity instance are constant, written once.
+/// See docs/TERRAIN.md, Slice 6/8.
+pub fn frame_surface(px: f32, pz: f32) -> u32 {
+    let key = scene::surface_snap(px, pz);
+    STATE.with(|c| {
+        let mut opt = c.borrow_mut();
+        let Some(state) = opt.as_mut() else {
+            return 2;
+        };
+        // Regenerate + re-upload only when the player crossed a cell.
+        if state.surface_snap_key != Some(key) {
+            let surface = scene::terrain_surface_mesh(px, pz);
+            if surface.indices.is_empty() {
+                return 0;
+            }
+            let vbytes = std::mem::size_of_val(&surface.verts[..]);
+            if state.surface_vertex_buf.is_none() || vbytes > state.surface_vertex_capacity {
+                state.surface_vertex_buf = gpu_web::GameBuffer::create(
+                    vbytes as u32,
+                    gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+                    "render_web.mesh.surface.vertex",
+                );
+                state.surface_vertex_capacity = vbytes;
+            }
+            // Index topology + identity instance never change — write once.
+            if state.surface_index_buf.is_none() {
+                let ibuf = gpu_web::GameBuffer::create(
+                    std::mem::size_of_val(&surface.indices[..]) as u32,
+                    gpu_web::usage::INDEX | gpu_web::usage::COPY_DST,
+                    "render_web.mesh.surface.index",
+                );
+                let Some(ibuf) = ibuf else { return 4 };
+                ibuf.write(as_bytes(&surface.indices));
+                state.surface_index_count = surface.indices.len() as u32;
+                state.surface_index_buf = Some(ibuf);
+
+                let inst = [MeshInstance {
+                    pos: [0.0, 0.0, 0.0],
+                    color: [0.20, 0.26, 0.15],
+                    scale: [1.0, 1.0, 1.0],
+                    axis: [0.0, 1.0, 0.0, 0.0],
+                }];
+                let instbuf = gpu_web::GameBuffer::create(
+                    std::mem::size_of_val(&inst) as u32,
+                    gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+                    "render_web.mesh.surface.instance",
+                );
+                let Some(instbuf) = instbuf else { return 5 };
+                instbuf.write(as_bytes(&inst));
+                state.surface_instance_buf = Some(instbuf);
+            }
+            if let Some(vbuf) = state.surface_vertex_buf.as_ref() {
+                vbuf.write(as_bytes(&surface.verts));
+            }
+            state.surface_snap_key = Some(key);
+        }
+        let (Some(vbuf), Some(ibuf), Some(instbuf)) = (
+            state.surface_vertex_buf.as_ref(),
+            state.surface_index_buf.as_ref(),
+            state.surface_instance_buf.as_ref(),
+        ) else {
+            return 0;
+        };
+        gpu_web::render_mesh(
+            &state.target,
+            &state.ground_pipeline,
+            &state.bind_group,
+            vbuf,
+            ibuf,
+            instbuf,
+            state.surface_index_count,
+            1,
+            0,
+        )
+    })
+}
+
 /// UI overlay pass — draws the D-pad + HUD quads on top of everything.
 /// Grows the UI instance buffer as the quad count changes (the HUD's
 /// settings panel adds quads when open), then runs the load-op pass.
@@ -648,10 +767,16 @@ pub fn frame_ui(instances: &[dpad::DpadInstance]) -> u32 {
 /// walls + roof at low alpha), then the D-pad + HUD overlay.
 pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     let snap = scene::snapshot_scene(app);
-    let instances = scene::snapshot_to_instances(&snap);
-    let mesh_trees = crate::tree_emit::snapshot_to_mesh_instances_with_wood(&snap);
-    let glass = scene::snapshot_to_glass_instances(&snap);
-    let ghost = scene::snapshot_to_ghost_instances(&snap);
+    let mut instances = scene::snapshot_to_instances(&snap);
+    let mut mesh_trees = crate::tree_emit::snapshot_to_mesh_instances_with_wood(&snap);
+    let mut glass = scene::snapshot_to_glass_instances(&snap);
+    let mut ghost = scene::snapshot_to_ghost_instances(&snap);
+    // Sit the browser world on the terrain — the same choke point as the
+    // native path (lib.rs).
+    scene::drape(&mut instances);
+    scene::drape(&mut glass);
+    scene::drape(&mut ghost);
+    mesh_trees.drape();
     let camera = SceneCamera::follow(
         [snap.player.x, snap.player.y, snap.player.z],
         crate::room::FLOOR_HALF,
@@ -673,6 +798,12 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     // depth) and before glass/ghost. Its LoadOp::Load reads the depth
     // buffer already populated by cubes, so tree trunks and canopy
     // elements are correctly occluded by buildings in front of them.
+    // Solid ground (with the world-anchored grid in its shader), then
+    // trees — all depth-tested over the cleared cube pass.
+    let surface_result = frame_surface(snap.player.x, snap.player.z);
+    if surface_result != 0 {
+        return surface_result;
+    }
     let mesh_result = frame_mesh(&mesh_trees.wood_by_species, &mesh_trees.canopy_elements);
     if mesh_result != 0 {
         return mesh_result;

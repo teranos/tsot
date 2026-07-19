@@ -51,6 +51,30 @@ pub fn advance_npc(mut q: Query<(&mut Position, &Velocity), With<NpcMarker>>) {
     }
 }
 
+/// Set an actor's `Position.y` to the ground height under it, so the
+/// SIMULATION carries real elevation (camera, proximity, persistence),
+/// not only the render-time drape.
+fn sit_on_terrain(p: &mut Position) {
+    p.0.y = crate::terrain::height(p.0.x, p.0.z);
+}
+
+/// Sit the player on the terrain, after movement + collision settle.
+/// Scoped to the player; static colliders (trees, walls, props) keep their
+/// authored `y` (walls carry roof height there), so slope-aware collision
+/// for those is a separate step.
+pub fn ground_follow_player(mut q: Query<&mut Position, With<PlayerMarker>>) {
+    for mut p in q.iter_mut() {
+        sit_on_terrain(&mut p);
+    }
+}
+
+/// Sit NPCs on the terrain. See `ground_follow_player`.
+pub fn ground_follow_npc(mut q: Query<&mut Position, With<NpcMarker>>) {
+    for mut p in q.iter_mut() {
+        sit_on_terrain(&mut p);
+    }
+}
+
 /// Distance at which player is considered bumping the NPC.
 /// (player radius) + (NPC visual half-width) ≈ 20 + 35.
 pub const BUMP_DISTANCE: f32 = 55.0;
@@ -212,21 +236,25 @@ pub fn resolve_collisions(
         let aabb_min = obs_pos.0 - collider.half_extents;
         let aabb_max = obs_pos.0 + collider.half_extents;
         let centre = p_pos.0;
-        let closest = Vec3::new(
-            centre.x.clamp(aabb_min.x, aabb_max.x),
-            centre.y.clamp(aabb_min.y, aabb_max.y),
-            centre.z.clamp(aabb_min.z, aabb_max.z),
-        );
-        let delta = centre - closest;
-        let dist_sq = delta.length_squared();
+        // XZ (ground-plane) collision. Every actor and collider sits on the
+        // terrain surface, so the vertical gap between them is just "how
+        // high the ground is under each" — it must NOT gate blocking, or a
+        // player standing on a hill walks through walls pinned at y=0.
+        // (Matches resolve_remote_player_collisions, already XZ-only.)
+        let closest_x = centre.x.clamp(aabb_min.x, aabb_max.x);
+        let closest_z = centre.z.clamp(aabb_min.z, aabb_max.z);
+        let (dx, dz) = (centre.x - closest_x, centre.z - closest_z);
+        let dist_sq = dx * dx + dz * dz;
         if dist_sq < PLAYER_RADIUS * PLAYER_RADIUS && dist_sq > 1.0e-6 {
             let dist = dist_sq.sqrt();
-            let normal = delta / dist;
+            let (nx, nz) = (dx / dist, dz / dist);
             let overlap = PLAYER_RADIUS - dist;
-            p_pos.0 += normal * overlap;
-            let v_along = p_vel.0.dot(normal);
+            p_pos.0.x += nx * overlap;
+            p_pos.0.z += nz * overlap;
+            let v_along = p_vel.0.x * nx + p_vel.0.z * nz;
             if v_along < 0.0 {
-                p_vel.0 -= normal * v_along;
+                p_vel.0.x -= nx * v_along;
+                p_vel.0.z -= nz * v_along;
             }
             crate::audio::play_thump();
         }
@@ -236,6 +264,58 @@ pub fn resolve_collisions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collision_blocks_in_xz_even_when_the_player_is_high_on_terrain() {
+        use bevy_ecs::prelude::*;
+        let mut world = World::new();
+        // Player just outside the obstacle's +X face in XZ, but far above
+        // it in Y (as ground_follow puts it on a hill). It must still be
+        // blocked — collision is on the ground plane, not in 3D.
+        let player = world
+            .spawn((
+                PlayerMarker,
+                Position(Vec3::new(45.0, 300.0, 0.0)),
+                Velocity(Vec3::ZERO),
+            ))
+            .id();
+        world.spawn((
+            Position(Vec3::new(0.0, 0.0, 0.0)),
+            AabbCollider::cuboid(Vec3::new(60.0, 40.0, 60.0)), // half (30, 20, 30)
+        ));
+        let mut sched = Schedule::default();
+        sched.add_systems(resolve_collisions);
+        sched.run(&mut world);
+
+        let p = world.get::<Position>(player).unwrap().0;
+        // Pushed out along +X to the face (30) + radius (20) = 50.
+        assert!(p.x >= 49.5, "player walked through the obstacle: x={}", p.x);
+        // Collision leaves Y alone — that's ground_follow's job.
+        assert!((p.y - 300.0).abs() < 1e-3, "collision moved Y: {}", p.y);
+    }
+
+    #[test]
+    fn ground_follow_puts_actors_on_the_terrain() {
+        use bevy_ecs::prelude::*;
+        let mut world = World::new();
+        let player = world
+            .spawn((PlayerMarker, Position(Vec3::new(500.0, 20.0, -1200.0))))
+            .id();
+        // On the school pad → the flat pad height.
+        let npc = world
+            .spawn((NpcMarker, Position(Vec3::new(10_800.0, 20.0, 44_400.0))))
+            .id();
+        let mut sched = Schedule::default();
+        sched.add_systems((ground_follow_player, ground_follow_npc));
+        sched.run(&mut world);
+
+        let p = world.get::<Position>(player).unwrap().0;
+        let ph = crate::terrain::height(500.0, -1200.0);
+        assert!((p.y - ph).abs() < 1e-3, "player off the terrain: {} vs {ph}", p.y);
+        let n = world.get::<Position>(npc).unwrap().0;
+        let nh = crate::terrain::height(10_800.0, 44_400.0);
+        assert!((n.y - nh).abs() < 1e-3, "npc off the pad height: {} vs {nh}", n.y);
+    }
 
     #[test]
     fn wander_direction_is_unit_scaled_by_speed() {
