@@ -65,9 +65,26 @@ pub fn species_wood_mesh(sp: &'static TreeSpecies) -> WoodMesh {
 
 /// Drop every cached species mesh. Called by the tune HUD after a
 /// wood-shape slider commit — the next `species_wood_mesh` call
-/// regenerates each species with the new params.
+/// regenerates each species with the new params. Bumps
+/// `MESH_GENERATION` so GPU-side buffer caches (render_web / render)
+/// can detect the change and re-upload; without this signal the
+/// browser draws stale geometry with new sliders.
 pub fn invalidate_species_cache() {
     SPECIES_WOOD.with(|c| c.borrow_mut().clear());
+    MESH_GENERATION.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
+thread_local! {
+    /// Monotonic counter incremented on every `invalidate_species_cache`.
+    /// GPU-side render caches remember the generation each species'
+    /// vertex+index buffer was uploaded at; on mismatch they re-upload.
+    static MESH_GENERATION: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Current species-mesh generation. GPU-side buffer caches read this
+/// and compare against the value at last upload.
+pub fn mesh_generation() -> u32 {
+    MESH_GENERATION.with(|c| c.get())
 }
 
 /// Per §3b: 5 buttress roots.

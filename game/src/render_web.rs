@@ -76,13 +76,17 @@ struct RenderWebState {
 }
 
 /// One species' GPU resources on the wasm path. The vertex + index
-/// buffers hold the canonical wood mesh (uploaded once, never touched
-/// again); the instance buffer grows with the per-frame tree count of
-/// that species.
+/// buffers hold the canonical wood mesh; `mesh_generation` tracks the
+/// `tree_surface::mesh_generation()` value at last upload so the
+/// system re-uploads on a tune-HUD invalidation. Instance buffer grows
+/// with the per-frame tree count for that species.
 struct SpeciesGpuBufs {
     key: usize,
+    mesh_generation: u32,
     vertex_buf: gpu_web::GameBuffer,
+    vertex_capacity: usize,
     index_buf: gpu_web::GameBuffer,
+    index_capacity: usize,
     index_count: u32,
     instance_buf: Option<gpu_web::GameBuffer>,
     instance_capacity: usize,
@@ -460,6 +464,7 @@ pub fn frame_mesh(
         // Wood: one draw per species. Upload the species' vertex+index
         // buffers on first sight (cached forever), grow its instance
         // buffer to fit this frame's tree count for that species.
+        let current_gen = crate::tree_surface::mesh_generation();
         for (sp, instances) in wood_by_species {
             if instances.is_empty() {
                 continue;
@@ -489,8 +494,11 @@ pub fn frame_mesh(
                     index_buf.write(as_bytes(&mesh.1));
                     state.wood_species.push(SpeciesGpuBufs {
                         key,
+                        mesh_generation: current_gen,
                         vertex_buf,
+                        vertex_capacity: vsize as usize,
                         index_buf,
+                        index_capacity: isize_bytes as usize,
                         index_count: mesh.1.len() as u32,
                         instance_buf: None,
                         instance_capacity: 0,
@@ -498,6 +506,39 @@ pub fn frame_mesh(
                     state.wood_species.len() - 1
                 }
             };
+            // Regenerate + re-upload when the mesh generation advanced
+            // (a tune-HUD wood-shape slider committed).
+            if state.wood_species[idx].mesh_generation != current_gen {
+                let mesh = crate::tree_surface::species_wood_mesh(sp);
+                let vsize = std::mem::size_of_val(&mesh.0[..]);
+                let isize_bytes = std::mem::size_of_val(&mesh.1[..]);
+                // If the new mesh is bigger than the existing buffer,
+                // reallocate; else reuse in place.
+                if vsize > state.wood_species[idx].vertex_capacity {
+                    let buf = gpu_web::GameBuffer::create(
+                        vsize as u32,
+                        gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+                        "render_web.mesh.wood.vertex",
+                    );
+                    let Some(buf) = buf else { return 6 };
+                    state.wood_species[idx].vertex_buf = buf;
+                    state.wood_species[idx].vertex_capacity = vsize;
+                }
+                if isize_bytes > state.wood_species[idx].index_capacity {
+                    let buf = gpu_web::GameBuffer::create(
+                        isize_bytes as u32,
+                        gpu_web::usage::INDEX | gpu_web::usage::COPY_DST,
+                        "render_web.mesh.wood.index",
+                    );
+                    let Some(buf) = buf else { return 7 };
+                    state.wood_species[idx].index_buf = buf;
+                    state.wood_species[idx].index_capacity = isize_bytes;
+                }
+                state.wood_species[idx].vertex_buf.write(as_bytes(&mesh.0));
+                state.wood_species[idx].index_buf.write(as_bytes(&mesh.1));
+                state.wood_species[idx].index_count = mesh.1.len() as u32;
+                state.wood_species[idx].mesh_generation = current_gen;
+            }
             let sb = &mut state.wood_species[idx];
             if sb.instance_buf.is_none() || instances.len() > sb.instance_capacity {
                 let new_cap = instances.len().max(32);
