@@ -87,6 +87,12 @@ struct RenderWebState {
     surface_instance_buf: Option<gpu_web::GameBuffer>,
     surface_vertex_capacity: usize,
     surface_index_count: u32,
+    // Snap-key caches: the grid + surface geometry only changes when the
+    // player crosses a cell, so regenerate + re-upload only then (the CPU
+    // cost was ~3.4 ms/frame — see examples/terrain_perf.rs).
+    grid_snap_key: Option<(i32, i32)>,
+    grid_len: u32,
+    surface_snap_key: Option<(i32, i32)>,
 }
 
 /// One species' GPU resources on the wasm path. The vertex + index
@@ -351,6 +357,9 @@ pub fn init(canvas_id: &str) -> bool {
             surface_instance_buf: None,
             surface_vertex_capacity: 0,
             surface_index_count: 0,
+            grid_snap_key: None,
+            grid_len: 0,
+            surface_snap_key: None,
         });
     });
     obs::emit(&format!(
@@ -655,59 +664,67 @@ pub fn frame_mesh(
 /// The patch is player-centred, so the vertex buffer is re-uploaded each
 /// frame; the index buffer + identity instance are constant, written once.
 /// See docs/TERRAIN.md, Slice 6/8.
-pub fn frame_surface(surface: &scene::TerrainSurface) -> u32 {
-    if surface.indices.is_empty() {
-        return 0;
-    }
+pub fn frame_surface(px: f32, pz: f32) -> u32 {
+    let key = scene::surface_snap(px, pz);
     STATE.with(|c| {
         let mut opt = c.borrow_mut();
         let Some(state) = opt.as_mut() else {
             return 2;
         };
-        let vbytes = std::mem::size_of_val(&surface.verts[..]);
-        if state.surface_vertex_buf.is_none() || vbytes > state.surface_vertex_capacity {
-            state.surface_vertex_buf = gpu_web::GameBuffer::create(
-                vbytes as u32,
-                gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
-                "render_web.mesh.surface.vertex",
-            );
-            state.surface_vertex_capacity = vbytes;
-        }
-        // Index topology + identity instance never change — write once.
-        if state.surface_index_buf.is_none() {
-            let ibuf = gpu_web::GameBuffer::create(
-                std::mem::size_of_val(&surface.indices[..]) as u32,
-                gpu_web::usage::INDEX | gpu_web::usage::COPY_DST,
-                "render_web.mesh.surface.index",
-            );
-            let Some(ibuf) = ibuf else { return 4 };
-            ibuf.write(as_bytes(&surface.indices));
-            state.surface_index_count = surface.indices.len() as u32;
-            state.surface_index_buf = Some(ibuf);
+        // Regenerate + re-upload only when the player crossed a cell.
+        if state.surface_snap_key != Some(key) {
+            let surface = scene::terrain_surface_mesh(px, pz);
+            if surface.indices.is_empty() {
+                return 0;
+            }
+            let vbytes = std::mem::size_of_val(&surface.verts[..]);
+            if state.surface_vertex_buf.is_none() || vbytes > state.surface_vertex_capacity {
+                state.surface_vertex_buf = gpu_web::GameBuffer::create(
+                    vbytes as u32,
+                    gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+                    "render_web.mesh.surface.vertex",
+                );
+                state.surface_vertex_capacity = vbytes;
+            }
+            // Index topology + identity instance never change — write once.
+            if state.surface_index_buf.is_none() {
+                let ibuf = gpu_web::GameBuffer::create(
+                    std::mem::size_of_val(&surface.indices[..]) as u32,
+                    gpu_web::usage::INDEX | gpu_web::usage::COPY_DST,
+                    "render_web.mesh.surface.index",
+                );
+                let Some(ibuf) = ibuf else { return 4 };
+                ibuf.write(as_bytes(&surface.indices));
+                state.surface_index_count = surface.indices.len() as u32;
+                state.surface_index_buf = Some(ibuf);
 
-            let inst = [MeshInstance {
-                pos: [0.0, 0.0, 0.0],
-                color: [0.20, 0.26, 0.15],
-                scale: [1.0, 1.0, 1.0],
-                axis: [0.0, 1.0, 0.0, 0.0],
-            }];
-            let instbuf = gpu_web::GameBuffer::create(
-                std::mem::size_of_val(&inst) as u32,
-                gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
-                "render_web.mesh.surface.instance",
-            );
-            let Some(instbuf) = instbuf else { return 5 };
-            instbuf.write(as_bytes(&inst));
-            state.surface_instance_buf = Some(instbuf);
+                let inst = [MeshInstance {
+                    pos: [0.0, 0.0, 0.0],
+                    color: [0.20, 0.26, 0.15],
+                    scale: [1.0, 1.0, 1.0],
+                    axis: [0.0, 1.0, 0.0, 0.0],
+                }];
+                let instbuf = gpu_web::GameBuffer::create(
+                    std::mem::size_of_val(&inst) as u32,
+                    gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+                    "render_web.mesh.surface.instance",
+                );
+                let Some(instbuf) = instbuf else { return 5 };
+                instbuf.write(as_bytes(&inst));
+                state.surface_instance_buf = Some(instbuf);
+            }
+            if let Some(vbuf) = state.surface_vertex_buf.as_ref() {
+                vbuf.write(as_bytes(&surface.verts));
+            }
+            state.surface_snap_key = Some(key);
         }
         let (Some(vbuf), Some(ibuf), Some(instbuf)) = (
             state.surface_vertex_buf.as_ref(),
             state.surface_index_buf.as_ref(),
             state.surface_instance_buf.as_ref(),
         ) else {
-            return 6;
+            return 0;
         };
-        vbuf.write(as_bytes(&surface.verts));
         gpu_web::render_mesh(
             &state.target,
             &state.mesh_pipeline,
@@ -723,28 +740,38 @@ pub fn frame_surface(surface: &scene::TerrainSurface) -> u32 {
 }
 
 /// Draped dev-grid — shared unit bar instanced per segment, mesh pipeline.
-pub fn frame_grid(grid: &[MeshInstance]) -> u32 {
-    if grid.is_empty() {
-        return 0;
-    }
+/// Cached on the snap key: `dev_grid_mesh` + the instance re-upload run
+/// only when the player crosses a cell.
+pub fn frame_grid(px: f32, pz: f32) -> u32 {
+    let key = scene::grid_snap(px, pz);
     STATE.with(|c| {
         let mut opt = c.borrow_mut();
         let Some(state) = opt.as_mut() else {
             return 2;
         };
-        if state.grid_instance_buf.is_none() || grid.len() > state.grid_instance_capacity {
-            let new_cap = grid.len().max(256);
-            state.grid_instance_buf = gpu_web::GameBuffer::create(
-                (new_cap * std::mem::size_of::<MeshInstance>()) as u32,
-                gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
-                "render_web.mesh.grid.instance",
-            );
-            state.grid_instance_capacity = new_cap;
+        if state.grid_snap_key != Some(key) {
+            let grid = scene::dev_grid_mesh(px, pz);
+            if state.grid_instance_buf.is_none() || grid.len() > state.grid_instance_capacity {
+                let new_cap = grid.len().max(256);
+                state.grid_instance_buf = gpu_web::GameBuffer::create(
+                    (new_cap * std::mem::size_of::<MeshInstance>()) as u32,
+                    gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
+                    "render_web.mesh.grid.instance",
+                );
+                state.grid_instance_capacity = new_cap;
+            }
+            if let Some(inst_buf) = state.grid_instance_buf.as_ref() {
+                inst_buf.write(as_bytes(&grid));
+            }
+            state.grid_len = grid.len() as u32;
+            state.grid_snap_key = Some(key);
+        }
+        if state.grid_len == 0 {
+            return 0;
         }
         let Some(inst_buf) = state.grid_instance_buf.as_ref() else {
             return 3;
         };
-        inst_buf.write(as_bytes(grid));
         gpu_web::render_mesh(
             &state.target,
             &state.mesh_pipeline,
@@ -753,7 +780,7 @@ pub fn frame_grid(grid: &[MeshInstance]) -> u32 {
             &state.grid_index_buf,
             inst_buf,
             state.grid_index_count,
-            grid.len() as u32,
+            state.grid_len,
             0,
         )
     })
@@ -811,8 +838,6 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     scene::drape(&mut glass);
     scene::drape(&mut ghost);
     mesh_trees.drape();
-    let grid = scene::dev_grid_mesh(snap.player.x, snap.player.z);
-    let surface = scene::terrain_surface_mesh(snap.player.x, snap.player.z);
     let camera = SceneCamera::follow(
         [snap.player.x, snap.player.y, snap.player.z],
         crate::room::FLOOR_HALF,
@@ -836,7 +861,7 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     // elements are correctly occluded by buildings in front of them.
     // Solid ground first, then trees, then the draped grid over it — all
     // mesh pipeline, depth-tested, matching the native order.
-    let surface_result = frame_surface(&surface);
+    let surface_result = frame_surface(snap.player.x, snap.player.z);
     if surface_result != 0 {
         return surface_result;
     }
@@ -844,7 +869,7 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     if mesh_result != 0 {
         return mesh_result;
     }
-    let grid_result = frame_grid(&grid);
+    let grid_result = frame_grid(snap.player.x, snap.player.z);
     if grid_result != 0 {
         return grid_result;
     }

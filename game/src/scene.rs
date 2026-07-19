@@ -462,6 +462,18 @@ pub fn terrain_surface_mesh(px: f32, pz: f32) -> TerrainSurface {
     TerrainSurface { verts, indices }
 }
 
+/// The snapped-origin key for `dev_grid_mesh`: the grid geometry is
+/// identical for any player position within the same cell, so a caller
+/// can cache the mesh and only regenerate when this key changes.
+pub fn grid_snap(px: f32, pz: f32) -> (i32, i32) {
+    ((px / DGRID_CELL).round() as i32, (pz / DGRID_CELL).round() as i32)
+}
+
+/// The snapped-patch key for `terrain_surface_mesh` (see `grid_snap`).
+pub fn surface_snap(px: f32, pz: f32) -> (i32, i32) {
+    ((px / SURF_CELL).round() as i32, (pz / SURF_CELL).round() as i32)
+}
+
 pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let mut instances: Vec<SceneInstance> = Vec::with_capacity(
         1 + snap.trees.len() + snap.obstacles.len() + snap.fires.len() + snap.trails.len() + 1,
@@ -796,6 +808,17 @@ mod tests {
             instances.iter().all(|i| (i.pos[1] - 0.1).abs() > 1e-6),
             "cube grid still emitted — found a SceneInstance at y=0.1"
         );
+    }
+
+    #[test]
+    fn snap_keys_are_stable_within_a_cell_and_shift_across_it() {
+        // Same cell → same key: the cached mesh is reused (no per-frame
+        // regeneration).
+        assert_eq!(grid_snap(1200.0, 1200.0), grid_snap(1200.0 + DGRID_CELL * 0.4, 1200.0));
+        assert_eq!(surface_snap(0.0, 0.0), surface_snap(SURF_CELL * 0.4, 0.0));
+        // Cross a cell → new key: regenerate.
+        assert_ne!(grid_snap(1200.0, 1200.0), grid_snap(1200.0 + DGRID_CELL, 1200.0));
+        assert_ne!(surface_snap(0.0, 0.0), surface_snap(0.0, SURF_CELL));
     }
 
     #[test]
