@@ -303,13 +303,12 @@ pub struct TreeSpecies {
     /// reads bigger than a yard sapling without becoming wild old-growth.
     /// Procedural forest trees ignore this (they size off `tree_at_cell`).
     pub authored_scale: f32,
-    /// Per-segment trunk bend, in radians. 0 = perfectly straight (pine,
-    /// birch — ramrod species). Higher = the trunk kinks over its
-    /// height, modelling apical-dominance loss / phototropism where a
-    /// side branch effectively takes over. Applied as `TRUNK_SEGMENTS`
-    /// stacked segments each tilted by this angle from the previous in
-    /// a single per-tree direction; the tune HUD's `trunk_curve_mult`
-    /// scales it at runtime.
+    /// Per-segment trunk bend in radians. 0 = ramrod straight (pine,
+    /// birch). Higher = the trunk kinks over its height, modelling
+    /// apical-dominance loss / phototropism where a side branch
+    /// effectively takes over. Applied as `TRUNK_SEGMENTS` stacked
+    /// segments each tilted by this angle from the previous in a
+    /// per-tree direction.
     pub trunk_curvature: f32,
 }
 
@@ -693,9 +692,9 @@ fn grow_limb(
 /// coarse the "bends" read as elbows.
 pub const TRUNK_SEGMENTS: u32 = 4;
 
-/// One trunk segment's book-keeping used to attach primaries: end
-/// position, this segment's axis, its length, its base radius, its top
-/// radius. Grouped once so `point_along_trunk` doesn't need a 5-tuple.
+/// One trunk segment's book-keeping for attaching primaries: end
+/// position, axis, length, base radius, top radius. Grouped so
+/// `point_along_trunk` doesn't juggle a 5-tuple.
 type TrunkTop = ([f32; 3], [f32; 3], f32, f32, f32);
 
 pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
@@ -1085,11 +1084,10 @@ mod tests {
 
     #[test]
     fn the_trunk_is_segment_zero_and_no_limb_out_fattens_it() {
-        // The trunk is the ROOT of the recursion (segment 0), the tree's
+        // The trunk is the root of the recursion (segment 0), the tree's
         // thickest wood; every other limb derives its radius from it via
-        // radius_shrink (< 1), so NO branch can ever be thicker than the
-        // trunk it grows from. This is guaranteed by construction, not by
-        // hand-tuned per-species radii that used to disagree.
+        // radius_shrink (< 1), so NO branch is ever thicker than the
+        // trunk it grows from — guaranteed by construction.
         for sp in SPECIES {
             let segs = tree_branches(7, sp);
             let root_r = segs[0].base_radius;

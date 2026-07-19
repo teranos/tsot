@@ -316,8 +316,7 @@ thread_local! {
     static INSTANCES: RefCell<Vec<DpadInstance>> = const { RefCell::new(Vec::new()) };
 }
 
-/// The rendering-side callback used by the main UI pass — every frame
-/// after `tune_hud_system` runs.
+/// Snapshot of the panel's UI quads for this frame.
 pub fn current_instances() -> Vec<DpadInstance> {
     INSTANCES.with(|c| c.borrow().clone())
 }

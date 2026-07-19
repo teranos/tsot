@@ -93,9 +93,8 @@ pub fn render_scene(
     }
 
     // Canopy geometry (unit leaf card, baked once). Wood is per-species:
-    // each species' canonical mesh (`tree_surface::species_wood_mesh`)
-    // gets one vertex+index buffer, drawn instanced per tree of that
-    // species. See TREES.md.
+    // each species' mesh (`tree_surface::species_wood_mesh`) gets one
+    // vertex+index buffer, drawn instanced per tree. See docs/TREES.md.
     let (canopy_verts, canopy_indices) = tree_mesh::leaf_quad_mesh();
     let canopy_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
         label: Some("seer.render.mesh.canopy.vertex"),
@@ -495,9 +494,9 @@ pub fn render_scene(
     }
     let has_mesh_work = !species_bufs.is_empty() || canopy_len > 0;
     if has_mesh_work {
-        // Mesh pass — one dispatch per species (each drawing that
-        // species' canonical wood mesh instanced across its trees),
-        // then one canopy dispatch. Same pipeline layout throughout.
+        // Mesh pass — one dispatch per species drawing that species'
+        // wood mesh instanced across its trees, then one canopy
+        // dispatch. Same pipeline layout throughout.
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("seer.render.mesh.pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {

@@ -33,9 +33,9 @@ fn tree_seed(x: f32, z: f32) -> u32 {
 /// The tree-emit outputs feeding the mesh pipeline.
 ///
 /// - `trunks` + `canopy_elements` — the instanced-cone path.
-/// - `wood_by_species` — the continuous-wood path (TREES.md).
+/// - `wood_by_species` — the continuous-wood path (docs/TREES.md).
 ///   Each entry is one species and the per-tree `MeshInstance`s for it.
-///   The renderer draws each entry with that species' canonical wood
+///   The renderer draws each entry with that species' wood
 ///   mesh (`tree_surface::species_wood_mesh`) as the vertex+index
 ///   buffer, and this list as the instance buffer — so wood cost across
 ///   the world is one draw call per species, N instances each.
@@ -105,11 +105,10 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         // will name their own. `seed` still drives per-leaf autumn tint.
         let sp: &crate::tree_mesh::TreeSpecies = sp;
         // `seed` drives per-tree hashing (girth, moss, nesting, fruit,
-        // autumn tint). The SKELETON itself uses `CANONICAL_SEED` below
-        // so canopy leaves + cone instances sit at the SAME tips as the
-        // canonical wood mesh (`tree_surface(CANONICAL_SEED, sp)`).
-        // Otherwise leaves float in space where the wood doesn't
-        // branch — the "tumor at branch tips" symptom.
+        // autumn tint). The SKELETON uses `SPECIES_SEED` below so
+        // canopy leaves + cone instances sit at the same tips as the
+        // species wood mesh — else leaves float where the wood
+        // doesn't branch.
         let seed = tree_seed(t.x, t.z);
         // Per-tree girth: some trees are far stouter than others (old
         // growth vs young), so a stand isn't a row of identical trunks.
@@ -162,12 +161,12 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         let mossy = leaf_hash01(seed, 0x0055_A100) < 0.35;
         let nesting = leaf_hash01(seed, 0x4E57_0000) < 0.09;
         let mut nest_placed = false;
-        // Deadwood decision, rolled per-tree here rather than baked into
-        // `tree_branches` — the branch skeleton is now canonical
-        // (CANONICAL_SEED, shared across all trees of the species) so
-        // if we relied on the skeleton's own `is_dead` flag, every oak
-        // in the world would have identical deadwood placement. We
-        // re-roll per (tree, tip_index) so a stand still shows variety.
+        // Deadwood decision, rolled per-tree here rather than baked
+        // into `tree_branches`. The branch skeleton is shared across
+        // every tree of a species (`SPECIES_SEED`), so relying on the
+        // skeleton's own `is_dead` flag would give every oak identical
+        // deadwood placement. Re-rolling per (tree, tip_index) puts
+        // variety back into a stand.
         let tree_dead =
             leaf_hash01(seed, 0xD3AD_0000) < sp.dead_limb_odds * tune.deadwood_mult;
         const DEAD_TIP_CHANCE: f32 = 0.18;
@@ -178,17 +177,17 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             && leaf_hash01(seed, 0xF00D_0001) < if sp.fruit_on_dead_limbs { 0.95 } else { 0.6 };
         let mut leaf_i = 0u32;
         let mut tip_i = 0u32;
-        for (i, seg) in tree_branches(crate::tree_surface::CANONICAL_SEED, sp)
+        for (i, seg) in tree_branches(crate::tree_surface::SPECIES_SEED, sp)
             .into_iter()
             .enumerate()
         {
             // Segment 0 is the ROOT (the trunk) — it starts at the ground,
             // so it is NOT seated into a parent (there isn't one).
             let is_root = i == 0;
-            // Deadwood: re-rolled per (tree, limb index) so a stand of
-            // canonical-skeleton trees still varies. `is_dead` came
-            // from the canonical skeleton's own RNG and would be
-            // identical across every tree of the species.
+            // Deadwood: rolled per (tree, limb index) so a stand of
+            // trees sharing one species skeleton still varies. The
+            // skeleton's own `is_dead` flag is identical across every
+            // tree of the species and can't carry that variety.
             let is_dead = seg.is_tip
                 && tree_dead
                 && leaf_hash01(seed, 0xD3AD_71D0 ^ (i as u32)) < DEAD_TIP_CHANCE;
@@ -397,7 +396,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
 
 /// Same as `snapshot_to_mesh_instances`, plus per-species wood instance
 /// lists. Every tree of a species becomes one `MeshInstance` pointing
-/// at the species' canonical wood mesh (looked up at draw time via
+/// at the species' species wood mesh (looked up at draw time via
 /// `tree_surface::species_wood_mesh`). No per-tree mesh generation,
 /// no cache, no merge — wood cost across the world is O(species).
 ///
@@ -565,16 +564,9 @@ mod tests {
                 .take(TRUNK_SEGMENTS as usize)
                 .map(|s| (s.base[1] + s.axis[1] * s.length) * h)
                 .fold(0.0_f32, f32::max);
-            // At least ONE segment beyond the trunk exists (primaries
-            // did emit) and every segment's base is bounded. The
-            // stricter "no primary above trunk top" check that used to
-            // live here can't distinguish primaries from their descendant
-            // sub-branches on a flat segment list — a sub-branch
-            // legitimately reaches higher than its primary's base. The
-            // invariant that primaries attach TO the trunk is enforced
-            // by construction (`point_along_trunk` returns a position on
-            // the curved trunk); the test just guards against nothing
-            // being emitted.
+            // At least one segment beyond the trunk exists — primaries
+            // emit. Attachment-to-the-trunk is enforced by
+            // construction inside `point_along_trunk`.
             assert!(
                 all_segs.len() > TRUNK_SEGMENTS as usize,
                 "no primaries emitted for species (trunk_top={trunk_top})",

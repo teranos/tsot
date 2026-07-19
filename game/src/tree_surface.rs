@@ -23,19 +23,18 @@ use std::rc::Rc;
 use crate::isosurface::{Grid, marching_tetrahedra, sd_round_cone, smin};
 use crate::tree_mesh::{BranchSegment, MeshVertex, TreeSpecies, tree_branches};
 
-/// One canonical wood mesh per species — `Rc`-shared, generated on first
-/// call, kept forever. Every tree of that species instances THIS mesh
-/// (scaled + positioned per instance), so wood cost across the world is
-/// O(species) — a fixed small number — instead of O(unique trees).
+/// One wood mesh per species — `Rc`-shared, generated on first call,
+/// kept for the process. Every tree of a species instances THIS mesh
+/// (scaled + positioned per instance), so wood cost across the world
+/// is O(species).
 pub type WoodMesh = Rc<(Vec<MeshVertex>, Vec<u32>)>;
 
-/// Canonical seed used for the per-species wood generation. Every tree
-/// of the species shares this skeleton; per-tree variation (girth,
-/// moss, deadwood, autumn tint) rides on the instance, not the mesh.
-///
-/// Public: `tree_emit` must place canopy leaves at the SAME skeleton's
-/// tips or leaves float in space where the wood doesn't branch.
-pub const CANONICAL_SEED: u32 = 0;
+/// The seed the species wood mesh is generated with. Every tree of a
+/// species shares this skeleton; per-tree variation (girth, moss,
+/// deadwood, autumn tint) rides on the instance, not the mesh.
+/// `tree_emit` must position canopy leaves at the SAME skeleton's tips
+/// or leaves float where the wood doesn't branch.
+pub const SPECIES_SEED: u32 = 0;
 
 thread_local! {
     /// key = species-ptr-as-usize. Species is `&'static`, so ptr equality
@@ -45,8 +44,8 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-/// The canonical wood mesh for `sp`. Generated on first call from
-/// `tree_surface(CANONICAL_SEED, sp)`, cached forever thread-locally
+/// The species wood mesh for `sp`. Generated on first call from
+/// `tree_surface(SPECIES_SEED, sp)`, cached forever thread-locally
 /// UNTIL `invalidate_species_cache()` fires (a tune slider commit).
 ///
 /// Bounded budget: 8 species × ~1 MB each ≈ 8 MB retained.
@@ -55,7 +54,7 @@ pub fn species_wood_mesh(sp: &'static TreeSpecies) -> WoodMesh {
     if let Some(hit) = SPECIES_WOOD.with(|c| c.borrow().get(&key).cloned()) {
         return hit;
     }
-    let (verts, indices) = tree_surface(CANONICAL_SEED, sp);
+    let (verts, indices) = tree_surface(SPECIES_SEED, sp);
     let mesh: WoodMesh = Rc::new((verts, indices));
     SPECIES_WOOD.with(|c| {
         c.borrow_mut().insert(key, mesh.clone());
@@ -63,12 +62,10 @@ pub fn species_wood_mesh(sp: &'static TreeSpecies) -> WoodMesh {
     mesh
 }
 
-/// Drop every cached species mesh. Called by the tune HUD after a
-/// wood-shape slider commit — the next `species_wood_mesh` call
-/// regenerates each species with the new params. Bumps
-/// `MESH_GENERATION` so GPU-side buffer caches (render_web / render)
-/// can detect the change and re-upload; without this signal the
-/// browser draws stale geometry with new sliders.
+/// Drop every cached species mesh; bumps `MESH_GENERATION` so GPU-side
+/// buffer caches see the invalidation and re-upload. Without the
+/// generation bump the browser draws stale geometry after a wood-shape
+/// param change.
 pub fn invalidate_species_cache() {
     SPECIES_WOOD.with(|c| c.borrow_mut().clear());
     MESH_GENERATION.with(|c| c.set(c.get().wrapping_add(1)));
@@ -307,10 +304,10 @@ mod tests {
     #[test]
     fn species_wood_mesh_matches_tree_surface_output_byte_for_byte() {
         // The species cache MUST return exactly what `tree_surface`
-        // would with the canonical seed. Any drift here ships wrong
-        // geometry silently.
+        // would with `SPECIES_SEED`. Any drift here ships wrong geometry
+        // silently.
         let cached = species_wood_mesh(&OAK);
-        let (fresh_v, fresh_i) = tree_surface(CANONICAL_SEED, &OAK);
+        let (fresh_v, fresh_i) = tree_surface(SPECIES_SEED, &OAK);
         assert_eq!(cached.0.len(), fresh_v.len());
         assert_eq!(cached.1, fresh_i);
         for (a, b) in cached.0.iter().zip(fresh_v.iter()) {

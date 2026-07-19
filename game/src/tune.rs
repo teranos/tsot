@@ -1,21 +1,13 @@
 //! game/src/tune — runtime-tunable knobs for the tree renderer.
 //!
-//! Every value that used to be a `const` scattered across tree_surface,
-//! tree_emit, and the wind shader lives here in one mutable struct.
-//! An in-game HUD panel (`tune_hud.rs`) writes to it; every subsystem
-//! reads via `tune::get()` each snapshot.
+//! One mutable struct held in a thread_local. Every subsystem reads it
+//! via `tune::get()` each snapshot. Setting any wood-shape field
+//! invalidates the per-species mesh cache
+//! (`tree_surface::invalidate_species_cache`); non-wood fields (wind,
+//! leaf) are read live each frame and need no invalidation.
 //!
-//! Setting any wood-shape field invalidates the per-species mesh cache
-//! (`tree_surface::invalidate_species_cache`) so the next frame
-//! regenerates. Non-wood fields (wind, leaf) are read live every frame
-//! and need no invalidation.
-//!
-//! No peer-sync: wood mesh is purely visual, so local tuning stays
-//! local. Two peers running different tunings just see slightly
-//! different oaks.
-//!
-//! Defaults match the pre-tune constants — turning tuning ON changes
-//! nothing until something writes a value.
+//! Purely visual: local tuning stays local. Two peers running
+//! different tunings see slightly different oaks.
 
 use std::cell::RefCell;
 
@@ -61,7 +53,7 @@ pub struct TuneParams {
     /// Wood sway weight — the whole wood bends by this × pos.y × amp.
     /// 0 = rigid; 0.2 default (a stiff column).
     pub wind_wood_sway: f32,
-    /// Global wind amplitude in world units (matches shader `WIND_AMP`).
+    /// Global wind amplitude in world units.
     pub wind_amp: f32,
     /// Wind temporal frequency multiplier. 1.0 = baseline.
     pub wind_speed: f32,
@@ -83,8 +75,8 @@ pub struct TuneParams {
 }
 
 impl TuneParams {
-    /// Compiled-in defaults — every value matches what the old `const`
-    /// said. Boot state: as if tuning didn't exist.
+    /// Compiled-in defaults — the boot values every subsystem sees
+    /// before any tuning input arrives.
     pub const fn defaults() -> Self {
         Self {
             wood_voxel_ratio: 0.25,

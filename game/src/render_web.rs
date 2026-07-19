@@ -53,15 +53,15 @@ struct RenderWebState {
     ui_pipeline: gpu_web::GameUiPipeline,
     ui_instance_buf: Option<gpu_web::GameBuffer>,
     ui_instance_capacity: usize,
-    // Mesh pipeline — the CONTINUOUS WOOD (TREES.md) drawn as
-    // one instanced draw per species (each using that species'
-    // canonical wood mesh from `tree_surface::species_wood_mesh`),
-    // plus the instanced canopy elements. Canonical-per-species means
-    // wood mesh generation happens at most 8 times over the whole
-    // session, not per tree — the design that makes wasm shippable.
+    // Mesh pipeline — the wood (docs/TREES.md) drawn as one instanced draw
+    // per species using that species' mesh from
+    // `tree_surface::species_wood_mesh`, plus the instanced canopy
+    // elements. Wood mesh generation runs at most 8 times over the
+    // process (one per species), not per tree — the design that makes
+    // wasm shippable.
     //
-    // Per-species buffers are created lazily on first sight of each
-    // species and kept for the process lifetime (`SpeciesGpuBufs` in
+    // Per-species buffers are created on first sight of each species
+    // and kept for the process lifetime (`SpeciesGpuBufs` in
     // `wood_species`). Vertex/index buffers hold the CPU mesh (never
     // re-uploaded); the instance buffer grows with the species'
     // per-frame tree count.
@@ -76,7 +76,7 @@ struct RenderWebState {
 }
 
 /// One species' GPU resources on the wasm path. The vertex + index
-/// buffers hold the canonical wood mesh; `mesh_generation` tracks the
+/// buffers hold the species wood mesh; `mesh_generation` tracks the
 /// `tree_surface::mesh_generation()` value at last upload so the
 /// system re-uploads on a tune-HUD invalidation. Instance buffer grows
 /// with the per-frame tree count for that species.
@@ -440,7 +440,7 @@ pub fn frame_ghost(instances: &[SceneInstance]) -> u32 {
 }
 
 /// Mesh pass — one instanced draw per species (each drawing that
-/// species' canonical wood mesh across its trees), then the canopy
+/// species' species wood mesh across its trees), then the canopy
 /// dispatch. Canonical-per-species geometry means the vertex + index
 /// buffers are uploaded ONCE per species (on first sight) and never
 /// touched again; only the small instance buffers change per frame.
