@@ -53,7 +53,7 @@ struct RenderWebState {
     ui_pipeline: gpu_web::GameUiPipeline,
     ui_instance_buf: Option<gpu_web::GameBuffer>,
     ui_instance_capacity: usize,
-    // Mesh pipeline — the CONTINUOUS WOOD (CONTINUOUS_WOOD.md) drawn as
+    // Mesh pipeline — the CONTINUOUS WOOD (TREES.md) drawn as
     // one instanced draw per species (each using that species'
     // canonical wood mesh from `tree_surface::species_wood_mesh`),
     // plus the instanced canopy elements. Canonical-per-species means
@@ -325,9 +325,10 @@ pub fn frame(camera: &SceneCamera, instances: &[SceneInstance], time: f32) -> u3
             return 2; // not initialized
         };
 
+        let tp = crate::tune::get();
         let gpu_camera = GpuCamera {
             view_proj: camera.view_proj(),
-            wind: [time, 0.0, 0.0, 0.0],
+            wind: [time, tp.wind_amp, tp.wind_speed, tp.wind_leaf_mult],
         };
         state.camera_buf.write(as_bytes(std::slice::from_ref(&gpu_camera)));
 

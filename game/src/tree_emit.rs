@@ -33,7 +33,7 @@ fn tree_seed(x: f32, z: f32) -> u32 {
 /// The tree-emit outputs feeding the mesh pipeline.
 ///
 /// - `trunks` + `canopy_elements` — the instanced-cone path.
-/// - `wood_by_species` — the continuous-wood path (CONTINUOUS_WOOD.md).
+/// - `wood_by_species` — the continuous-wood path (TREES.md).
 ///   Each entry is one species and the per-tree `MeshInstance`s for it.
 ///   The renderer draws each entry with that species' canonical wood
 ///   mesh (`tree_surface::species_wood_mesh`) as the vertex+index

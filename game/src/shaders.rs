@@ -214,14 +214,17 @@ fn basis_from_axis(axis: vec3<f32>) -> mat3x3<f32> {
 // tips and the leaves anchored to them move in lockstep (same phase from
 // the same world position, same amplitude) — no drifting-apart foliage.
 // `amp` is world units; callers scale it by the instance's sway weight.
-fn wind_offset(world: vec3<f32>, t: f32, amp: f32) -> vec3<f32> {
+// `speed` scales the sinusoid's temporal frequency; 1.0 = the original
+// pace. `amp` is world units; callers scale it by the instance's sway
+// weight.
+fn wind_offset(world: vec3<f32>, t: f32, amp: f32, speed: f32) -> vec3<f32> {
     let phase = world.x * 0.010 + world.z * 0.013;
-    return vec3<f32>(amp * sin(t * 1.7 + phase), 0.0, amp * 0.6 * sin(t * 1.3 + phase * 1.7));
+    let ts = t * speed;
+    return vec3<f32>(amp * sin(ts * 1.7 + phase), 0.0, amp * 0.6 * sin(ts * 1.3 + phase * 1.7));
 }
 
 const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
 const AMBIENT: f32 = 0.25;
-const WIND_AMP: f32 = 5.0;
 "#
     };
 }
@@ -242,7 +245,7 @@ fn vs(v: VIn, i: IIn) -> VOut {
     // Wind: sway by the instance's weight, times v.pos.y so the limb
     // pivots at its base (base held, tip swings). Trunk weight = 0 → no
     // motion; a thin twig ~1 → its tip flutters most.
-    world = world + wind_offset(world, camera.wind.x, WIND_AMP * i.i_axis.w * v.pos.y);
+    world = world + wind_offset(world, camera.wind.x, camera.wind.y * i.i_axis.w * v.pos.y, camera.wind.z);
     var o: VOut;
     o.clip = camera.view_proj * vec4<f32>(world, 1.0);
     // Inverse-transpose for the diagonal scale (divide by scale), then
@@ -289,7 +292,7 @@ fn vs(v: VIn, i: IIn) -> VOut {
     // weight (no v.pos.y taper) — and a leaf carries its twig's sway
     // weight, so leaf and branch tip share one `wind_offset` at the same
     // world point and move in lockstep, never drifting apart.
-    world = world + wind_offset(world, camera.wind.x, WIND_AMP * i.i_axis.w);
+    world = world + wind_offset(world, camera.wind.x, camera.wind.y * camera.wind.w * i.i_axis.w, camera.wind.z);
     var o: VOut;
     o.clip = camera.view_proj * vec4<f32>(world, 1.0);
     o.normal = normalize(rot * (v.normal / i.i_scale));

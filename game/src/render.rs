@@ -95,7 +95,7 @@ pub fn render_scene(
     // Canopy geometry (unit leaf card, baked once). Wood is per-species:
     // each species' canonical mesh (`tree_surface::species_wood_mesh`)
     // gets one vertex+index buffer, drawn instanced per tree of that
-    // species. See CONTINUOUS_WOOD.md.
+    // species. See TREES.md.
     let (canopy_verts, canopy_indices) = tree_mesh::leaf_quad_mesh();
     let canopy_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
         label: Some("seer.render.mesh.canopy.vertex"),
@@ -171,9 +171,10 @@ pub fn render_scene(
         );
     }
 
+    let tp = crate::tune::get();
     let camera_data = GpuCamera {
         view_proj: camera.view_proj(),
-        wind: [time, 0.0, 0.0, 0.0],
+        wind: [time, tp.wind_amp, tp.wind_speed, tp.wind_leaf_mult],
     };
     let camera_buf = dev.create_buffer(&wgpu::BufferDescriptor {
         label: Some("seer.render.camera"),
