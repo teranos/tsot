@@ -35,18 +35,42 @@ const NOISE_CELL: f32 = 1600.0;
 const TREE_MIN_H: f32 = 320.0;
 const TREE_MAX_H: f32 = 760.0;
 
+/// Where in its lifecycle a tree sits. Orthogonal to species — a dying
+/// oak stays an oak, a cut oak's stump wears oak bark. Transitions
+/// change what gets drawn (and how); they don't rewrite species.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LifeStage {
+    /// A young tree — reserved for the sapling implementation. Not
+    /// currently drawn.
+    Sapling,
+    /// The default. Wood + full canopy. Every tree today.
+    Mature,
+    /// Dead but still standing. Species wood mesh drawn with a greyer
+    /// tint; no leaves, no fruit; more limbs marked `is_dead`.
+    Snag,
+    /// The short remainder of a felled tree. Species bark kept. What
+    /// the old `stump: bool` used to mark.
+    Stump,
+    /// Horizontal, decomposing — reserved. Not currently drawn.
+    Fallen,
+}
+
+impl Default for LifeStage {
+    fn default() -> Self {
+        Self::Mature
+    }
+}
+
 /// A tree: its `height` drives the trunk + canopy render and collider;
 /// `species` is carried DATA (not a render-time hash) so an authored
 /// CDDA tree can be the species its map names, not one guessed from
-/// position. Procedural trees fill it from `species_for_pos`.
+/// position. Procedural trees fill it from `species_for_pos`. `stage`
+/// controls the life-cycle rendering — see `LifeStage`.
 #[derive(Component)]
 pub struct TreeTrunk {
     pub height: f32,
     pub species: &'static crate::tree_mesh::TreeSpecies,
-    /// A cut stump — the short remainder of a felled tree of THIS species
-    /// (an oak stump keeps oak bark). Rendered as a stout bole with a pale
-    /// cut face, no crown. `false` for a whole living tree.
-    pub stump: bool,
+    pub stage: LifeStage,
 }
 
 fn hash01(ix: i32, iz: i32, salt: u32) -> f32 {

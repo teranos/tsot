@@ -213,7 +213,12 @@ pub struct RemotePeerDot {
 pub type StructureSnap = (Vec3, PropKind, Option<[f32; 3]>, Option<Vec3>);
 
 pub struct SceneSnapshot {
-    pub trees: Vec<(Vec3, f32, &'static crate::tree_mesh::TreeSpecies, bool)>,
+    pub trees: Vec<(
+        Vec3,
+        f32,
+        &'static crate::tree_mesh::TreeSpecies,
+        crate::trees::LifeStage,
+    )>,
     pub obstacles: Vec<Vec3>,
     pub fires: Vec<(Vec3, f32)>,
     pub npcs: Vec<Vec3>,
@@ -228,9 +233,14 @@ pub struct SceneSnapshot {
 pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
     let world = app.world_mut();
     let mut tree_q = world.query::<(&Position, &trees::TreeTrunk)>();
-    let trees: Vec<(Vec3, f32, &'static crate::tree_mesh::TreeSpecies, bool)> = tree_q
+    let trees: Vec<(
+        Vec3,
+        f32,
+        &'static crate::tree_mesh::TreeSpecies,
+        crate::trees::LifeStage,
+    )> = tree_q
         .iter(world)
-        .map(|(p, t)| (p.0, t.height, t.species, t.stump))
+        .map(|(p, t)| (p.0, t.height, t.species, t.stage))
         .collect();
     let mut obs_q = world.query_filtered::<&Position, (
         bevy_ecs::prelude::With<AabbCollider>,

@@ -98,7 +98,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
     // `canopy_elements` draws the shared leaf card (oriented per leaf).
     let mut trunks = Vec::with_capacity(snap.trees.len() * 48);
     let mut canopy_elements = Vec::with_capacity(snap.trees.len() * 256);
-    for (t, h, sp, stump) in &snap.trees {
+    for (t, h, sp, stage) in &snap.trees {
         let h = *h;
         // Species is carried on the tree (data, not a render-time hash) —
         // procedural trees filled it from the tile, authored CDDA trees
@@ -110,6 +110,15 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         // species wood mesh — else leaves float where the wood
         // doesn't branch.
         let seed = tree_seed(t.x, t.z);
+        let is_snag = matches!(stage, crate::trees::LifeStage::Snag);
+        // Sapling + Fallen aren't drawn yet — skip. Snag renders like a
+        // Mature tree below but the per-leaf loop drops all canopy.
+        if matches!(
+            stage,
+            crate::trees::LifeStage::Sapling | crate::trees::LifeStage::Fallen
+        ) {
+            continue;
+        }
         // Per-tree girth: some trees are far stouter than others (old
         // growth vs young), so a stand isn't a row of identical trunks.
         // Squared so most trees are ordinary and a few are notably fat.
@@ -123,7 +132,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         // a stout low bole in the species' bark, capped by a pale cut face
         // (the mesh bark furrows read as rings on the flat top). No crown,
         // no branches — then we're done with this tree.
-        if *stump {
+        if matches!(stage, crate::trees::LifeStage::Stump) {
             let sh = h * 0.11; // knee-high remainder
             let sr = h * sp.trunk_radius * girth * 1.4; // stout
             trunks.push(MeshInstance {
@@ -167,13 +176,19 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         // skeleton's own `is_dead` flag would give every oak identical
         // deadwood placement. Re-rolling per (tree, tip_index) puts
         // variety back into a stand.
-        let tree_dead =
-            leaf_hash01(seed, 0xD3AD_0000) < sp.dead_limb_odds * tune.deadwood_mult;
+        // A snag is dead — every tree_dead-gated tip is treated as
+        // dead so limbs read grey. Living trees roll per species odds.
+        let tree_dead = is_snag
+            || leaf_hash01(seed, 0xD3AD_0000) < sp.dead_limb_odds * tune.deadwood_mult;
         const DEAD_TIP_CHANCE: f32 = 0.18;
         // Fruit: SOME trees of a fruiting species bear (a per-tree roll,
         // so a stand is a mix of laden and bare trees). Witch's snot on
         // the fungal species bears on nearly every tree; apples less so.
-        let bears_fruit = sp.fruit_color.is_some()
+        // A snag has no fruit — dead trees don't fruit (fungal snot is
+        // gated on `sp.fruit_on_dead_limbs` and applies on dead tips
+        // regardless, which reads as "fungus grew on the standing dead").
+        let bears_fruit = !is_snag
+            && sp.fruit_color.is_some()
             && leaf_hash01(seed, 0xF00D_0001) < if sp.fruit_on_dead_limbs { 0.95 } else { 0.6 };
         let mut leaf_i = 0u32;
         let mut tip_i = 0u32;
@@ -188,9 +203,12 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             // trees sharing one species skeleton still varies. The
             // skeleton's own `is_dead` flag is identical across every
             // tree of the species and can't carry that variety.
+            // On a snag every tip is dead. On a live tree_dead tree,
+            // each tip dies independently per DEAD_TIP_CHANCE.
             let is_dead = seg.is_tip
                 && tree_dead
-                && leaf_hash01(seed, 0xD3AD_71D0 ^ (i as u32)) < DEAD_TIP_CHANCE;
+                && (is_snag
+                    || leaf_hash01(seed, 0xD3AD_71D0 ^ (i as u32)) < DEAD_TIP_CHANCE);
             // The limb: the unit cone (base r=1, height 1 along +Y)
             // scaled to [radius, length, radius] and rotated +Y → axis.
             // A dead tip greys out — deadwood, not foliage. Girth scales
@@ -296,9 +314,14 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             let spin =
                 leaf_hash01(seed, 0xC0FE_0000 ^ tip_i.wrapping_mul(2_654_435_761))
                     * std::f32::consts::TAU;
-            let leaves_this_tip = ((sp.leaves_per_tip as f32) * tune.leaf_density_mult)
-                .round()
-                .clamp(0.0, 256.0) as u32;
+            // A snag has dropped its foliage — no leaves at any tip.
+            let leaves_this_tip = if is_snag {
+                0
+            } else {
+                ((sp.leaves_per_tip as f32) * tune.leaf_density_mult)
+                    .round()
+                    .clamp(0.0, 256.0) as u32
+            };
             // Tuft geometry, in world units. The tuft extends `tuft_len`
             // forward from the tip along `seg.axis`; leaves spread up to
             // `tuft_r` perpendicular to that axis.
@@ -408,10 +431,31 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
 pub fn snapshot_to_mesh_instances_with_wood(snap: &SceneSnapshot) -> MeshTreeInstances {
     let mut out = snapshot_to_mesh_instances(snap);
     let mut buckets: Vec<(&'static TreeSpecies, Vec<MeshInstance>)> = Vec::new();
-    for (t, h, sp, stump) in &snap.trees {
-        if *stump {
+    for (t, h, sp, stage) in &snap.trees {
+        // Only Mature and Snag emit the species wood mesh. Stump has
+        // its own short-bole cones from `snapshot_to_mesh_instances`;
+        // Sapling and Fallen aren't drawn yet.
+        if !matches!(
+            stage,
+            crate::trees::LifeStage::Mature | crate::trees::LifeStage::Snag
+        ) {
             continue;
         }
+        let is_snag = matches!(stage, crate::trees::LifeStage::Snag);
+        // A snag's wood tint blends toward the dead-limb grey so the
+        // whole standing wood reads greyer than a live tree of the
+        // same species.
+        let color = if is_snag {
+            const DEAD: [f32; 3] = [0.34, 0.30, 0.25];
+            let m = 0.65;
+            [
+                sp.trunk_color[0] * (1.0 - m) + DEAD[0] * m,
+                sp.trunk_color[1] * (1.0 - m) + DEAD[1] * m,
+                sp.trunk_color[2] * (1.0 - m) + DEAD[2] * m,
+            ]
+        } else {
+            sp.trunk_color
+        };
         // axis.w = per-instance sway weight. The mesh shader multiplies
         // it by v.pos.y, so unit-space wood verts (bole reaches y≈0.85)
         // pivot at the base and sway at the crown; roots at negative y
@@ -420,7 +464,7 @@ pub fn snapshot_to_mesh_instances_with_wood(snap: &SceneSnapshot) -> MeshTreeIns
         // would need a per-vertex sway weight baked into MeshVertex.
         let inst = MeshInstance {
             pos: [t.x, t.y, t.z],
-            color: sp.trunk_color,
+            color,
             scale: [*h, *h, *h],
             axis: [0.0, 1.0, 0.0, crate::tune::get().wind_wood_sway],
         };
@@ -446,26 +490,7 @@ mod tests {
     use bevy_math::Vec3;
 
     fn tree_snapshot(pos: Vec3, sp: &'static crate::tree_mesh::TreeSpecies) -> SceneSnapshot {
-        tree_snapshot_ex(pos, sp, false)
-    }
-
-    fn tree_snapshot_ex(
-        pos: Vec3,
-        sp: &'static crate::tree_mesh::TreeSpecies,
-        stump: bool,
-    ) -> SceneSnapshot {
-        SceneSnapshot {
-            trees: vec![(pos, 300.0, sp, stump)],
-            obstacles: vec![],
-            fires: vec![],
-            npcs: vec![],
-            pins: vec![],
-            trails: vec![],
-            remote_peers: vec![],
-            structures: vec![],
-            jukeboxes: vec![],
-            player: Vec3::ZERO,
-        }
+        tree_snapshot_stage(pos, sp, crate::trees::LifeStage::Mature)
     }
 
     #[test]
@@ -560,8 +585,10 @@ mod tests {
     #[test]
     fn a_stump_is_a_cut_bole_of_its_species_with_no_crown() {
         use crate::tree_mesh::OAK;
+        use crate::trees::LifeStage;
         let pos = Vec3::new(500.0, 0.0, 500.0);
-        let stump = snapshot_to_mesh_instances(&tree_snapshot_ex(pos, &OAK, true));
+        let stump =
+            snapshot_to_mesh_instances(&tree_snapshot_stage(pos, &OAK, LifeStage::Stump));
         let tree = snapshot_to_mesh_instances(&tree_snapshot(pos, &OAK));
         // A stump has NO crown — no leaf-card elements at all.
         assert!(stump.canopy_elements.is_empty(), "a stump has no foliage");
