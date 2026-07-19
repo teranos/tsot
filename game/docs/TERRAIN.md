@@ -1,7 +1,39 @@
 # game/docs — terrain
 
-Terrain height for the game, in the SimCity 4 idiom, validated by
-the draped dev-grid on the headless lavapipe render.
+Terrain height for the game, in the SimCity 4 idiom: a continuous
+heightfield with entirely-flat CDDA-stamp pads, a solid shaded ground
+surface carrying a faint world-anchored reference grid, and actors that
+walk the surface — on both the native (lavapipe) and browser render
+paths. **Shipped; live at game.sbvh.nl.**
+
+## Status — complete
+
+Every slice below landed and the merge bar is met on both paths. What
+shipped:
+
+- **Heightfield** — `terrain::height(x, z)`: pure, deterministic,
+  C0-continuous value-noise base relief (amplitudes 300 + 50), CDDA
+  stamp pads flattened in their entirety (full authored footprint incl.
+  yard), reconnected to relief by a skirt. One source of truth for mesh,
+  grid, props and player.
+- **Solid ground** — a Lambert-lit heightfield surface mesh (gradient
+  normals, one mossy ground colour), carrying a **faint world-anchored
+  reference grid painted in the ground shader** — zero geometry, fixed
+  to the world, always present. Replaced the player-centred draped-bar
+  grid (see *Superseded* below).
+- **Whole-scene drape** — buildings sit on their flat pads, trees /
+  player / props follow the surface, through one choke point
+  (`scene::drape` / `drape_mesh`).
+- **Real height in the sim** — `ground_follow` sets player & NPC
+  `Position.y` to `height(x, z)`; the camera reads it; no double-lift
+  for sim-driven entities. Collision resolves in XZ (ground plane) so a
+  player on a hill still blocks against colliders authored at `y`.
+- **Native + browser parity** — both render paths draw surface, grid and
+  draped world, with **no new `env.*` crossings** (the mesh crossing was
+  reused; `imports.allow` unchanged). Live at game.sbvh.nl.
+- **Perf** — per-frame terrain geometry ~0.12 ms/frame (grid is shader
+  math; the surface mesh is cached on a snap key, regenerated only on a
+  cell cross).
 
 ## The goal (the merge bar)
 
@@ -21,13 +53,19 @@ move — prove the heightfield substrate on the smallest thing (the
 draped grid) with the bar "flat pads under stamps, relief only
 outside."
 
-## Scope now — draped grid only
+## Scope at the start — draped grid only (historical)
 
-The single deliverable of this branch is the **heightfield + flat
-stamp pads + the draped dev-grid that proves them**, seen in the
-render. Nothing more.
+> This section is the *initial* scope the branch opened with. The branch
+> went further — a solid shaded surface, whole-scene draping, real
+> movement/physics on the terrain, and browser parity all landed (Slices
+> 6–8). Kept for the record; see *Status* above for what actually
+> shipped.
 
-**Non-goals (explicitly out, now):**
+The single deliverable of this branch **was** the heightfield + flat
+stamp pads + the draped dev-grid that proves them, seen in the render.
+
+**Non-goals at the start (some later graduated in; see Deferred for
+what genuinely stayed out):**
 
 - No oceans, lakes, rivers — no water of any kind.
 - No mountains, cliffs — relief stays gentle; no dramatic landforms.
@@ -222,11 +260,12 @@ render-time only; the sim is still flat (that's Slice 7).
 - [x] Slice 8 — boundary check green: NO new `env.*` crossings (reused
       the mesh crossing), `imports.allow` unchanged; `web_shim` ABI test
       holds; wasm32 builds clippy-clean; deployed to game.sbvh.nl
-- [ ] Slice 8 — browser pixel: WebGPU confirmed working headless
-      (lavapipe) + the bundle loads to 100%, but the fully-rendered
-      headless frame wasn't captured (Chromium's async GPU-device init
-      stalls under `--virtual-time-budget`; real-time CDP flaky in the
-      sandbox). Merge bar is game.sbvh.nl — live now, pending your check.
+- [x] Slice 8 — browser pixel: terrain confirmed non-flat at
+      game.sbvh.nl (user-verified live). The automated headless-Chromium
+      screenshot stayed flaky (Chromium's async GPU-device init stalls
+      under `--virtual-time-budget`; real-time CDP flaky in the sandbox),
+      so the merge bar was met on the deployed site rather than a
+      captured headless frame.
 
 ### Superseded: draped-bar grid → ground-shader grid
 
@@ -243,13 +282,15 @@ aligned), cheaper and no longer player-centred.
 
 ### Known follow-ups (surfaced, not silent)
 
-- **Browser parity is Slice 8.** Until then the wasm/browser render
-  mirrors none of this (grid, surface, draping) — the cube grid was
-  removed from the shared instance path, so game.sbvh.nl has no terrain.
-- Player/NPC height is now **real in the sim** (Slice 7). Static
-  colliders still sit at authored `y`, so `resolve_collisions` collides
-  on the **ground plane (XZ)** rather than in 3D — otherwise a player on
-  a hill walks through walls pinned at `y=0`.
+- **Browser parity landed (Slice 8).** The wasm/browser render draws
+  surface, shader-grid and draped world like native; live at
+  game.sbvh.nl. No new `env.*` crossings.
+- Player/NPC height is **real in the sim** (Slice 7). Static colliders
+  still sit at authored `y`, so `resolve_collisions` collides on the
+  **ground plane (XZ)** rather than in 3D — otherwise a player on a hill
+  walks through walls pinned at `y=0`. Proximity triggers (NPC bump,
+  jukebox range) are still 3D-distance; harmless while relief is gentle,
+  and can be XZ'd the same way if they ever misfire on a slope.
 
 ## Deferred (not this branch)
 
