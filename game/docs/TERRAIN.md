@@ -228,6 +228,19 @@ render-time only; the sim is still flat (that's Slice 7).
       stalls under `--virtual-time-budget`; real-time CDP flaky in the
       sandbox). Merge bar is game.sbvh.nl — live now, pending your check.
 
+### Superseded: draped-bar grid → ground-shader grid
+
+Slices 4/5 built the dev-grid as **draped bars** (~10,200 `MeshInstance`
+segments, player-centred, regenerated every frame — ~3.6 ms/frame). That
+was replaced by a **world-anchored grid painted in the ground shader**
+(`GROUND_SHADER_WGSL`): the faint reference grid is now fragment math on
+the terrain surface — fixed to the world (not centred on the player),
+always present, and **zero geometry** (per-frame terrain geometry dropped
+3.58 → 0.12 ms). `dev_grid_mesh` / `unit_bar_mesh` and the grid buffers
+are gone on both render paths. The surface mesh stays, cached on a snap
+key. Same validation role (shows relief, flat over pads, CDDA-cell
+aligned), cheaper and no longer player-centred.
+
 ### Known follow-ups (surfaced, not silent)
 
 - **Browser parity is Slice 8.** Until then the wasm/browser render

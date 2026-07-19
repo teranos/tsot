@@ -817,7 +817,6 @@ fn render_single(
     scene::drape(&mut instances);
     scene::drape(&mut glass);
     mesh_trees.drape();
-    let grid = scene::dev_grid_mesh(snap.player.x, snap.player.z);
     let surface = scene::terrain_surface_mesh(snap.player.x, snap.player.z);
     // player.y already carries the ground height (physics::ground_follow),
     // so the camera reads it directly — no render-time lift, no double.
@@ -826,7 +825,7 @@ fn render_single(
         room::FLOOR_HALF,
     );
     render::render_scene(
-        &dev, &queue, &camera, &instances, &glass, &mesh_trees, &grid, &surface, 0.0, out_path,
+        &dev, &queue, &camera, &instances, &glass, &mesh_trees, &surface, 0.0, out_path,
     )?;
     Ok(())
 }
@@ -847,7 +846,6 @@ fn render_snapshots(
         scene::drape(&mut instances);
         scene::drape(&mut glass);
         mesh_trees.drape();
-        let grid = scene::dev_grid_mesh(snap.player.x, snap.player.z);
         let surface = scene::terrain_surface_mesh(snap.player.x, snap.player.z);
         // player.y already carries the ground height (ground_follow).
         let camera = scene::SceneCamera::follow(
@@ -859,7 +857,7 @@ fn render_snapshots(
         // motion; the browser animates continuously off its frame count).
         let time = i as f32 * 0.7;
         render::render_scene(
-            &dev, &queue, &camera, &instances, &glass, &mesh_trees, &grid, &surface, time, &out_path,
+            &dev, &queue, &camera, &instances, &glass, &mesh_trees, &surface, time, &out_path,
         )?;
         out_paths.push(out_path);
     }

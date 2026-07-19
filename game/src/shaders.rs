@@ -276,6 +276,76 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 "#
 );
 
+/// Ground shader for the solid terrain surface. Same vertex/instance
+/// layout as the mesh pipeline (so it uses the same pipeline factory and
+/// buffers), but it carries WORLD XZ to the fragment and paints a faint,
+/// WORLD-ANCHORED reference grid there — major lines every 80 units (the
+/// CDDA cell), minor every 40. This replaces the old draped-bar dev-grid:
+/// the grid is now free fragment math, fixed to the world (not centred on
+/// the player), and always present on the ground.
+pub const GROUND_SHADER_WGSL: &str = r#"
+struct Camera { view_proj: mat4x4<f32>, wind: vec4<f32> };
+@group(0) @binding(0) var<uniform> camera: Camera;
+
+struct VIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+};
+struct IIn {
+    @location(3) i_pos: vec3<f32>,
+    @location(4) i_color: vec3<f32>,
+    @location(5) i_scale: vec3<f32>,
+    @location(6) i_axis: vec4<f32>,
+};
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) color: vec3<f32>,
+    @location(2) world_xz: vec2<f32>,
+};
+
+@vertex
+fn vs(v: VIn, i: IIn) -> VOut {
+    // The surface is drawn with an identity instance, so world = v.pos.
+    let world = v.pos * i.i_scale + i.i_pos;
+    var o: VOut;
+    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    o.normal = normalize(v.normal / i.i_scale);
+    o.color = i.i_color;
+    o.world_xz = world.xz;
+    return o;
+}
+
+const LIGHT_DIR: vec3<f32> = vec3<f32>(0.3, 0.85, 0.4);
+const AMBIENT: f32 = 0.25;
+
+// Distance (world units) from `coord` to the nearest line at `spacing`.
+fn line_dist(coord: f32, spacing: f32) -> f32 {
+    return abs(fract(coord / spacing - 0.5) - 0.5) * spacing;
+}
+// Anti-aliased line intensity: ~1 on the line, fading over one pixel.
+fn line_at(coord: f32, spacing: f32) -> f32 {
+    let d = line_dist(coord, spacing);
+    let w = fwidth(coord);
+    return 1.0 - smoothstep(0.0, w, d);
+}
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let l = normalize(LIGHT_DIR);
+    let ndotl = max(dot(normalize(in.normal), l), 0.0);
+    let k = AMBIENT + (1.0 - AMBIENT) * ndotl;
+    var col = in.color * k;
+    // World-anchored grid: major at 80, minor offset by 40.
+    let major = max(line_at(in.world_xz.x, 80.0), line_at(in.world_xz.y, 80.0));
+    let minor = max(line_at(in.world_xz.x + 40.0, 80.0), line_at(in.world_xz.y + 40.0, 80.0));
+    let grid_col = vec3<f32>(0.55, 0.60, 0.68);
+    col = mix(col, grid_col, major * 0.30 + minor * 0.14);
+    return vec4<f32>(col, 1.0);
+}
+"#;
+
 /// Mesh pipeline shader for LEAF cards — the SAME shared layout as
 /// `MESH_SHADER_WGSL` (so the instance/vertex ABI is one source), a
 /// vertex stage that adds WIND SWAY, and a fragment that carves a leaf
