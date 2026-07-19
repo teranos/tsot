@@ -7,6 +7,18 @@
 use crate::scene::{MeshInstance, SceneSnapshot};
 use crate::tree_mesh::TreeSpecies;
 
+fn cross_v(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+fn norm_v(v: [f32; 3]) -> [f32; 3] {
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+    [v[0] / l, v[1] / l, v[2] / l]
+}
+
 /// Deterministic per-tree seed from world position — same tile → same
 /// seed on every peer, so the branch skeleton is identical everywhere.
 fn tree_seed(x: f32, z: f32) -> u32 {
@@ -273,51 +285,87 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                 tip_i += 1;
                 continue;
             }
-            // Live tip → a small Fibonacci-sphere ball of leaves so
-            // foliage sits at the branch ends. Each leaf gets an autumn
-            // age: mostly green (roll²), ceilinged by the species' autumn
-            // — pine stays green, oak reddens, birch yellows.
-            // Each cluster gets its OWN random spin, so no two tips are the
-            // identical Fibonacci spray (without this, leaf k points the
-            // same world direction in every cluster — a lattice of aligned
-            // cards). Each leaf then gets a small directional jitter, so
-            // even within a cluster the cards face — and roll — every which
-            // way, like real foliage.
+            // Live tip → a forward-facing TUFT of leaves growing off the
+            // branch tip along its own axis. Real trees look the way
+            // they do because leaves cluster at the end of TWIGS, not
+            // scattered in a sphere. Each leaf sits along the last bit
+            // of the branch axis (t ∈ [0, tuft_len]) at a small radial
+            // offset, phyllotactically indexed so twigs don't overlap.
+            //
+            // Per-cluster random spin so each tuft is angled differently;
+            // per-leaf jitter so the tuft isn't a rigid Fibonacci lattice.
             let spin =
-                leaf_hash01(seed, 0xC0FE_0000 ^ tip_i.wrapping_mul(2_654_435_761)) * std::f32::consts::TAU;
+                leaf_hash01(seed, 0xC0FE_0000 ^ tip_i.wrapping_mul(2_654_435_761))
+                    * std::f32::consts::TAU;
             let leaves_this_tip = ((sp.leaves_per_tip as f32) * tune.leaf_density_mult)
                 .round()
                 .clamp(0.0, 256.0) as u32;
+            // Tuft geometry, in world units. The tuft extends `tuft_len`
+            // forward from the tip along `seg.axis`; leaves spread up to
+            // `tuft_r` perpendicular to that axis.
+            let tuft_len = cluster_r * 0.9;
+            let tuft_r = cluster_r * 0.55;
+            // Frame with `seg.axis` as up: `right` any unit vec ⟂ axis,
+            // `fwd` = axis × right. Same construction as WGSL
+            // `basis_from_axis` — a limb is symmetric about its axis so
+            // any perpendicular basis works.
+            let axis_v = [seg.axis[0], seg.axis[1], seg.axis[2]];
+            let ref_v = if axis_v[2].abs() > 0.9 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [0.0, 0.0, 1.0]
+            };
+            let right_v = norm_v(cross_v(axis_v, ref_v));
+            let fwd_v = cross_v(right_v, axis_v);
             for k in 0..leaves_this_tip {
-                let ky = 1.0 - 2.0 * (k as f32 + 0.5) / (leaves_this_tip.max(1) as f32);
-                let kr = (1.0 - ky * ky).max(0.0).sqrt();
+                // Phyllotactic angle around the axis, per-cluster spun.
                 let kt = (k as f32) * GOLDEN_ANGLE_RAD + spin;
+                // Depth along axis: uniform along [0.15, 1.0] * tuft_len.
+                let t_frac = 0.15 + 0.85 * (k as f32 + 0.5) / (leaves_this_tip.max(1) as f32);
+                // Radial spread widens along the axis: tight at base,
+                // wider at the outer end. Reads as a bouquet, not a ring.
+                let r_frac = t_frac.sqrt();
+                let jt = leaf_hash01(seed, leaf_i.wrapping_mul(0x9E37_79B9)) - 0.5;
+                let jr = leaf_hash01(seed, leaf_i.wrapping_mul(0x85EB_CA6B)) - 0.5;
+                let jaxis = leaf_hash01(seed, leaf_i.wrapping_mul(0xC2B2_AE35)) - 0.5;
                 let roll = leaf_hash01(seed, leaf_i);
-                let jx = leaf_hash01(seed, leaf_i.wrapping_mul(0x9E37_79B9)) - 0.5;
-                let jy = leaf_hash01(seed, leaf_i.wrapping_mul(0x85EB_CA6B)) - 0.5;
-                let jz = leaf_hash01(seed, leaf_i.wrapping_mul(0xC2B2_AE35)) - 0.5;
                 leaf_i += 1;
-                const JIT: f32 = 0.55; // directional jitter strength
-                let mut dir = [
-                    kr * kt.cos() + jx * JIT,
-                    ky + jy * JIT,
-                    kr * kt.sin() + jz * JIT,
+                let along = t_frac * tuft_len * (1.0 + 0.15 * jaxis);
+                let radial = r_frac * tuft_r * (1.0 + 0.35 * jr);
+                let angle = kt + 0.4 * jt;
+                let (cos_a, sin_a) = (angle.cos(), angle.sin());
+                // Leaf world position = tip + along*axis + radial*(cos*right + sin*fwd).
+                let radial_v = [
+                    cos_a * right_v[0] + sin_a * fwd_v[0],
+                    cos_a * right_v[1] + sin_a * fwd_v[1],
+                    cos_a * right_v[2] + sin_a * fwd_v[2],
                 ];
-                let dl = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-3);
-                dir = [dir[0] / dl, dir[1] / dl, dir[2] / dl];
+                let pos = [
+                    wx + along * axis_v[0] + radial * radial_v[0],
+                    wy + along * axis_v[1] + radial * radial_v[1],
+                    wz + along * axis_v[2] + radial * radial_v[2],
+                ];
+                // Leaf card faces mostly outward — a blend of the axis
+                // and its own radial offset so leaves nearer the base
+                // point more sideways, leaves at the tip point mostly
+                // forward. Reads as the natural fan of a bouquet.
+                let face_axis = 0.55 + 0.35 * t_frac;
+                let face_radial = 1.0 - face_axis;
+                let mut card_dir = [
+                    face_axis * axis_v[0] + face_radial * radial_v[0],
+                    face_axis * axis_v[1] + face_radial * radial_v[1],
+                    face_axis * axis_v[2] + face_radial * radial_v[2],
+                ];
+                card_dir = norm_v(card_dir);
                 let age = (roll * roll * roll * sp.autumn * tune.autumn_mult).clamp(0.0, 1.0);
                 canopy_elements.push(MeshInstance {
-                    pos: [
-                        wx + cluster_r * dir[0],
-                        wy + cluster_r * dir[1],
-                        wz + cluster_r * dir[2],
-                    ],
+                    pos,
                     color: autumn_ramp(sp.leaf_green, age),
                     // Flat card: width (x) × length (z = width × aspect).
                     scale: [element_r, element_r, element_r * sp.leaf_aspect],
-                    // Inherit the twig's sway so leaf and branch tip move
-                    // together (same weight, same world point → lockstep).
-                    axis: [dir[0], dir[1], dir[2], sway],
+                    // Leaves at the tuft inherit the twig's sway so leaf
+                    // and branch tip move in lockstep.
+                    axis: [card_dir[0], card_dir[1], card_dir[2], sway],
                 });
             }
             // Hang a fruit at some LIVE tips of a bearing apple-type tree —
