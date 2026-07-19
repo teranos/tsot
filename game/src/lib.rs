@@ -38,6 +38,7 @@ pub mod tree_emit;
 pub mod tree_mesh;
 pub mod tree_surface;
 pub mod trees;
+pub mod tune;
 pub mod watermark;
 
 pub mod gpu_web;

@@ -46,12 +46,10 @@ thread_local! {
 }
 
 /// The canonical wood mesh for `sp`. Generated on first call from
-/// `tree_surface(CANONICAL_SEED, sp)`, cached forever thread-locally.
-/// Every tree of the species instances this mesh — that's what makes
-/// the browser path viable at all.
+/// `tree_surface(CANONICAL_SEED, sp)`, cached forever thread-locally
+/// UNTIL `invalidate_species_cache()` fires (a tune slider commit).
 ///
-/// Bounded budget: 8 species × ~1 MB each ≈ 8 MB retained, ever. No
-/// per-tree cache, no eviction, no memoizer.
+/// Bounded budget: 8 species × ~1 MB each ≈ 8 MB retained.
 pub fn species_wood_mesh(sp: &'static TreeSpecies) -> WoodMesh {
     let key = sp as *const TreeSpecies as usize;
     if let Some(hit) = SPECIES_WOOD.with(|c| c.borrow().get(&key).cloned()) {
@@ -65,16 +63,16 @@ pub fn species_wood_mesh(sp: &'static TreeSpecies) -> WoodMesh {
     mesh
 }
 
+/// Drop every cached species mesh. Called by the tune HUD after a
+/// wood-shape slider commit — the next `species_wood_mesh` call
+/// regenerates each species with the new params.
+pub fn invalidate_species_cache() {
+    SPECIES_WOOD.with(|c| c.borrow_mut().clear());
+}
+
 /// Per §3b: 5 buttress roots.
 const ROOT_COUNT: usize = 5;
-/// Resolution floor + ceiling. Canonical-per-species means we bake 8
-/// meshes total over the process lifetime — the per-frame cost is
-/// zero, so we can afford much higher fidelity than the earlier
-/// per-tree design allowed. Ceiling sized so a slender-trunk species
-/// (birch: trunk_radius=0.02) can get voxel < half a trunk radius,
-/// which is what stops marching-tet banding on thin cylinders.
-const RES_MIN: usize = 40;
-const RES_MAX: usize = 192;
+// Resolution clamp lives on `tune::TuneParams::wood_res_min/max`.
 
 /// A round-cone in unit tree space. The trunk, every branch, and every
 /// root is one of these — the whole tree is a `smin` over a `Vec<Cone>`.
@@ -99,28 +97,21 @@ struct Cone {
 /// bark UV so the existing bark fragment shader lights the surface with
 /// the same procedural furrows the instanced trunks use.
 pub fn tree_surface(seed: u32, sp: &TreeSpecies) -> (Vec<MeshVertex>, Vec<u32>) {
+    let t = crate::tune::get();
     let segs = tree_branches(seed, sp);
-    let cones = collect_cones(seed, sp, &segs);
+    let cones = collect_cones(seed, sp, &segs, &t);
 
-    let (min, max) = aabb(&cones, sp.trunk_radius * 2.0);
+    let (min, max) = aabb(&cones, sp.trunk_radius * t.wood_aabb_pad);
     let span = (max[0] - min[0]).max(max[1] - min[1]).max(max[2] - min[2]);
-    // Resolution driven by TRUNK THICKNESS: voxel must be smaller than
-    // half a trunk radius, else the marching-tet cross-section bands a
-    // thin cylinder into stacked rings (the "broken chunks" symptom on
-    // birch). res = span / (trunk_radius * 0.4) targets voxel ≈ 0.4×
-    // trunk radius. Clamped to keep bake time bounded.
-    let res = ((span / (sp.trunk_radius * 0.4)).ceil() as usize).clamp(RES_MIN, RES_MAX);
+    // Resolution driven by trunk thickness: voxel target = trunk_radius
+    // × tune.wood_voxel_ratio. Smaller ratio → higher res → smoother
+    // thin trunks, at bake-cost.
+    let res = ((span / (sp.trunk_radius * t.wood_voxel_ratio)).ceil() as usize)
+        .clamp(t.wood_res_min as usize, t.wood_res_max as usize);
     let step = [span / res as f32; 3];
     let voxel = step[0];
-    // Radius floor: a limb thinner than one voxel slips between grid
-    // lines and vanishes. Floor to half a voxel — tight enough that
-    // twigs stay near their intended thickness, wide enough that
-    // marching-tet still catches them.
-    let rfloor = voxel * 0.5;
-    // Smin blend radius: the fillet where two touching limbs melt into
-    // one surface. Tight — a wider blend fuses distinct limbs at the
-    // crown into one bulbous blob (the "mushroom cap" symptom).
-    let blend = voxel * 0.5;
+    let rfloor = voxel * t.wood_rfloor_coeff;
+    let blend = voxel * t.wood_blend_coeff;
 
     let cones_field: Vec<Cone> = cones
         .iter()
@@ -166,7 +157,12 @@ pub fn tree_surface(seed: u32, sp: &TreeSpecies) -> (Vec<MeshVertex>, Vec<u32>) 
     marching_tetrahedra(&field, &grid, &vertex)
 }
 
-fn collect_cones(seed: u32, sp: &TreeSpecies, segs: &[BranchSegment]) -> Vec<Cone> {
+fn collect_cones(
+    seed: u32,
+    sp: &TreeSpecies,
+    segs: &[BranchSegment],
+    t: &crate::tune::TuneParams,
+) -> Vec<Cone> {
     let mut cones = Vec::with_capacity(segs.len() + ROOT_COUNT);
     // Every skeleton limb is one round-cone. Interior limbs taper from
     // base_radius to base_radius·radius_shrink (matches the next child
@@ -192,11 +188,11 @@ fn collect_cones(seed: u32, sp: &TreeSpecies, segs: &[BranchSegment]) -> Vec<Con
     // than being a stump on top of it) down and out into the ground.
     // Their phase spreads on seed — no two trees flare in the same
     // direction, and the same seed always flares the same way.
-    let ankle_y = sp.trunk_radius * 1.5;
-    let reach = sp.trunk_radius * 7.0;
-    let depth = sp.trunk_radius * 3.5;
-    let ra = sp.trunk_radius * 1.15;
-    let rb = sp.trunk_radius * 0.35;
+    let ankle_y = sp.trunk_radius * t.root_ankle_y;
+    let reach = sp.trunk_radius * t.root_reach;
+    let depth = sp.trunk_radius * t.root_depth;
+    let ra = sp.trunk_radius * t.root_ra_mult;
+    let rb = sp.trunk_radius * t.root_rb_mult;
     let seed_phase = (seed as f32) * crate::tree_mesh::GOLDEN_ANGLE_RAD;
     for i in 0..ROOT_COUNT {
         let theta = seed_phase + (i as f32 / ROOT_COUNT as f32) * std::f32::consts::TAU;
