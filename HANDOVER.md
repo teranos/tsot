@@ -8,26 +8,14 @@ SC4-style terrain height for `game/`. All work is committed and pushed;
 diff is `game/`-only; no PR opened yet. CI was last green at `28e9459`
 (commits after it are the collision fix + docs).
 
-## Traps
-
-- **Nightly required** — `cargo +nightly` everywhere (bevy_ecs 0.19 needs
-  rustc ≥ 1.95). Plain `cargo` won't compile.
-- **Headless render** (the only accepted proof) — `game-native` under
-  lavapipe: `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`,
-  frames via `SEER_MULTI_FRAME_DIR` / `SEER_FRAMES`.
-- **Before pushing, gate clippy on both targets** — the CI failure mode
-  that keeps recurring:
-  ```
-  cargo +nightly clippy --lib -- -D warnings
-  cargo +nightly clippy --lib --target wasm32-unknown-unknown -- -D warnings
-  ```
-- **No wasm-bindgen** — every browser call is an `env.*` import in
-  `game/imports.allow`. This branch added none; reuse existing crossings.
-
 ## Open items a reviewer will question
 
 - **Browser proof is the live site, not a captured frame** — headless
   Chromium capture stayed flaky (GPU init stalls under
   `--virtual-time-budget`). game.sbvh.nl was user-verified instead.
-- **Collision is XZ-only** — deliberate: with real sim height, colliders
-  at authored `y` never overlap a player on a hill.
+- **Collision is XZ-only for now; 3D is the target.** Real 3D physics
+  (gravity, capsule collider, colliders with Y extent) is on the roadmap
+  — a helicopter needs it. The XZ resolve on this branch is scaffolding
+  to be lifted in a follow-on branch, not a locked-in choice. Static
+  colliders still sit at authored `y`; ground-follow is a heightfield
+  lookup, not integration. Both flip in the 3D-collision branch.

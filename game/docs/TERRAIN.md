@@ -285,12 +285,17 @@ aligned), cheaper and no longer player-centred.
 - **Browser parity landed (Slice 8).** The wasm/browser render draws
   surface, shader-grid and draped world like native; live at
   game.sbvh.nl. No new `env.*` crossings.
-- Player/NPC height is **real in the sim** (Slice 7). Static colliders
-  still sit at authored `y`, so `resolve_collisions` collides on the
-  **ground plane (XZ)** rather than in 3D — otherwise a player on a hill
-  walks through walls pinned at `y=0`. Proximity triggers (NPC bump,
-  jukebox range) are still 3D-distance; harmless while relief is gentle,
-  and can be XZ'd the same way if they ever misfire on a slope.
+- Player/NPC height is **real in the sim** (Slice 7). Ground-follow is
+  a heightfield lookup (`Position.y = height(x, z)`), not gravity
+  integration. Static colliders sit at authored `y` with no Y extent, so
+  `resolve_collisions` collides on the **ground plane (XZ)**. This is
+  scaffolding — **real 3D physics is the target** (gravity, capsule
+  player collider, colliders with Y extent, air/ground state), driven by
+  a helicopter on the roadmap. The lift lands in a follow-on branch
+  (physics/3d-collision); it will replace ground-follow with velocity
+  integration and give every static prop a real Y extent (trees layer:
+  trunk solid, canopy flyable-through). Proximity triggers stay 3D by
+  default and become natural once the world is 3D.
 
 ## Deferred (not this branch)
 
