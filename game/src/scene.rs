@@ -418,65 +418,22 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let mut instances: Vec<SceneInstance> = Vec::with_capacity(
         1 + snap.trees.len() + snap.obstacles.len() + snap.fires.len() + snap.trails.len() + 1,
     );
+    // Backdrop plane, dropped BENEATH the draped grid (top well below the
+    // heightfield's minimum) so it never occludes the grid where terrain
+    // dips below zero — e.g. a stamp pad at negative elevation. The
+    // heightfield surface mesh will replace this later (TERRAIN.md).
     instances.push(SceneInstance {
-        pos: [snap.player.x, -50.0, snap.player.z],
+        pos: [snap.player.x, -300.0, snap.player.z],
         color: [0.09, 0.11, 0.15],
         scale: [FLOOR_FOLLOW_HALF * 2.0, 100.0, FLOOR_FOLLOW_HALF * 2.0],
     });
-    // Dev grid.
+    // Dev grid: DRAPED over the heightfield and drawn through the MESH
+    // pipeline now (`dev_grid_mesh`; docs/TERRAIN.md, Slice 4/5), no
+    // longer thin cube instances. The native render calls dev_grid_mesh
+    // directly and draws it in the mesh pass. (The wasm/browser path does
+    // not yet mirror this — its grid is absent until the web mesh grid is
+    // wired; native-first per RENDER.md.)
     //
-    // Two layers so wall placement can be eyeballed unambiguously:
-    //   * MAJOR (80 units, brighter) — CDDA cell boundaries. Walls
-    //     sit either on these lines (outer edges) or exactly between
-    //     them (dividers at cell centre).
-    //   * MINOR (40 units, fainter) — cell centres. Odd-width mapgens
-    //     (cx = width/2 = 2.5) offset cell corners by 40 from any
-    //     80-multiple, so the minor lines also hit the corners for
-    //     those buildings. Together the two layers show every place
-    //     a wall segment can legitimately land.
-    //
-    // Snapped to the grid so lines stay stationary as the player moves.
-    const GRID_HALF: f32 = 2000.0;
-    const CELL_STEP: f32 = 80.0;
-    const HALF_STEP: f32 = 40.0;
-    const MINOR_COLOR: [f32; 3] = [0.13, 0.15, 0.19];
-    const MAJOR_COLOR: [f32; 3] = [0.22, 0.24, 0.30];
-    const GRID_THICK: f32 = 2.0;
-    let px_major = (snap.player.x / CELL_STEP).round() * CELL_STEP;
-    let pz_major = (snap.player.z / CELL_STEP).round() * CELL_STEP;
-    let n_major = (GRID_HALF / CELL_STEP) as i32;
-    for i in -n_major..=n_major {
-        let x = px_major + (i as f32) * CELL_STEP;
-        instances.push(SceneInstance {
-            pos: [x, 0.1, pz_major],
-            color: MAJOR_COLOR,
-            scale: [GRID_THICK, 1.0, GRID_HALF * 2.0],
-        });
-        let z = pz_major + (i as f32) * CELL_STEP;
-        instances.push(SceneInstance {
-            pos: [px_major, 0.1, z],
-            color: MAJOR_COLOR,
-            scale: [GRID_HALF * 2.0, 1.0, GRID_THICK],
-        });
-    }
-    // Minor grid at cell centres — offset by half a cell from the
-    // major grid so it never overlaps with a major line.
-    let px_minor = px_major + HALF_STEP;
-    let pz_minor = pz_major + HALF_STEP;
-    for i in -n_major..=n_major {
-        let x = px_minor + (i as f32) * CELL_STEP;
-        instances.push(SceneInstance {
-            pos: [x, 0.1, pz_minor],
-            color: MINOR_COLOR,
-            scale: [GRID_THICK, 1.0, GRID_HALF * 2.0],
-        });
-        let z = pz_minor + (i as f32) * CELL_STEP;
-        instances.push(SceneInstance {
-            pos: [px_minor, 0.1, z],
-            color: MINOR_COLOR,
-            scale: [GRID_HALF * 2.0, 1.0, GRID_THICK],
-        });
-    }
     // Trail — a thin flat rectangle sitting just above the ground.
     // Length is baked in via crate::trail::TRAIL_END_Z - TRAIL_START_Z.
     let trail_length = crate::trail::TRAIL_END_Z - crate::trail::TRAIL_START_Z;
@@ -750,6 +707,29 @@ mod tests {
             .iter()
             .fold((f32::MAX, f32::MIN), |(lo, hi), i| (lo.min(i.pos[1]), hi.max(i.pos[1])));
         assert!(hi - lo > 50.0, "grid Y barely varies ({:.1}) — not draped over relief", hi - lo);
+    }
+
+    #[test]
+    fn cube_grid_is_gone_from_the_instance_path() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![],
+            jukeboxes: vec![],
+            player: Vec3::new(0.0, 20.0, 0.0),
+        };
+        let instances = snapshot_to_instances(&snap);
+        // The dev-grid used to add ~200 thin cubes at y=0.1. It's a draped
+        // mesh now (dev_grid_mesh), so nothing sits on that plane anymore.
+        assert!(
+            instances.iter().all(|i| (i.pos[1] - 0.1).abs() > 1e-6),
+            "cube grid still emitted — found a SceneInstance at y=0.1"
+        );
     }
 
     #[test]

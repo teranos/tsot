@@ -165,6 +165,44 @@ pub fn canopy_element_mesh() -> (Vec<MeshVertex>, Vec<u32>) {
 /// visible from either side (a single-sided quad vanishes when it faces
 /// away under back-face culling). The instance's `axis` rotates +Y → the
 /// leaf's facing direction; instance scale sets width (x) × length (z).
+/// A unit bar centred at the origin, ±0.5 on every axis, with per-face
+/// flat normals and uv fixed at (0,0) so the mesh shader's procedural
+/// bark collapses to a uniform tint. The draped dev-grid instances this,
+/// one per segment (scale = [thick, length, thick], axis = segment dir).
+pub fn unit_bar_mesh() -> (Vec<MeshVertex>, Vec<u32>) {
+    // (normal, u-axis, v-axis) per face — the same face basis as the
+    // world cube geometry.
+    let faces: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+        ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        ([0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+        ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+        ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+        ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+    ];
+    let mut verts: Vec<MeshVertex> = Vec::with_capacity(24);
+    let mut indices: Vec<u32> = Vec::with_capacity(36);
+    for (n, u, v) in faces {
+        let base = verts.len() as u32;
+        let center = [n[0] * 0.5, n[1] * 0.5, n[2] * 0.5];
+        let mk = |su: f32, sv: f32| MeshVertex {
+            pos: [
+                center[0] + u[0] * su * 0.5 + v[0] * sv * 0.5,
+                center[1] + u[1] * su * 0.5 + v[1] * sv * 0.5,
+                center[2] + u[2] * su * 0.5 + v[2] * sv * 0.5,
+            ],
+            normal: n,
+            uv: [0.0, 0.0],
+        };
+        verts.push(mk(-1.0, -1.0));
+        verts.push(mk(1.0, -1.0));
+        verts.push(mk(1.0, 1.0));
+        verts.push(mk(-1.0, 1.0));
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    (verts, indices)
+}
+
 pub fn leaf_quad_mesh() -> (Vec<MeshVertex>, Vec<u32>) {
     let n = [0.0, 1.0, 0.0];
     let v = |x: f32, z: f32, u: f32, w: f32| MeshVertex {

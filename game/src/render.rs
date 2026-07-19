@@ -58,6 +58,7 @@ pub fn render_scene(
     instances: &[SceneInstance],
     glass_instances: &[SceneInstance],
     mesh_trees: &MeshTreeInstances,
+    grid: &[MeshInstance],
     time: f32,
     out_path: &str,
 ) -> Result<()> {
@@ -168,6 +169,34 @@ pub fn render_scene(
             0,
             as_bytes(&mesh_trees.canopy_elements),
         );
+    }
+
+    // Draped dev-grid: one shared unit bar, instanced per segment, drawn
+    // through the mesh pipeline (see scene::dev_grid_mesh, TERRAIN.md).
+    let (grid_verts, grid_indices) = tree_mesh::unit_bar_mesh();
+    let grid_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.grid.vertex"),
+        size: std::mem::size_of_val(&grid_verts[..]) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(grid_vertex_buf.wgpu(), 0, as_bytes(&grid_verts));
+    let grid_index_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.grid.index"),
+        size: std::mem::size_of_val(&grid_indices[..]) as u64,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(grid_index_buf.wgpu(), 0, as_bytes(&grid_indices));
+    let grid_len = grid.len();
+    let grid_instance_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.grid.instance"),
+        size: (grid_len.max(1) * std::mem::size_of::<MeshInstance>()) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    if grid_len > 0 {
+        queue.write_buffer(grid_instance_buf.wgpu(), 0, as_bytes(grid));
     }
 
     let tp = crate::tune::get();
@@ -492,7 +521,7 @@ pub fn render_scene(
         pass.set_vertex_buffer(1, instance_buf.wgpu().slice(..));
         pass.draw(0..vertices.len() as u32, 0..instances.len() as u32);
     }
-    let has_mesh_work = !species_bufs.is_empty() || canopy_len > 0;
+    let has_mesh_work = !species_bufs.is_empty() || canopy_len > 0 || grid_len > 0;
     if has_mesh_work {
         // Mesh pass — one dispatch per species drawing that species'
         // wood mesh instanced across its trees, then one canopy
@@ -527,6 +556,13 @@ pub fn render_scene(
             pass.set_vertex_buffer(1, sb.instance_buf.wgpu().slice(..));
             pass.set_index_buffer(sb.index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..sb.index_count, 0, 0..sb.instance_count);
+        }
+        // Draped dev-grid — shared unit bar, one instance per segment.
+        if grid_len > 0 {
+            pass.set_vertex_buffer(0, grid_vertex_buf.wgpu().slice(..));
+            pass.set_vertex_buffer(1, grid_instance_buf.wgpu().slice(..));
+            pass.set_index_buffer(grid_index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..grid_indices.len() as u32, 0, 0..grid_len as u32);
         }
         if canopy_len > 0 {
             pass.set_pipeline(&leaf_pipeline);
