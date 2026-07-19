@@ -440,6 +440,18 @@ pub fn snapshot_to_mesh_instances_with_wood(snap: &SceneSnapshot) -> MeshTreeIns
     out
 }
 
+impl MeshTreeInstances {
+    /// Drape every tree mesh stream onto the terrain through the shared
+    /// choke point. One call covers trunks + canopy + wood.
+    pub fn drape(&mut self) {
+        crate::scene::drape_mesh(&mut self.trunks);
+        crate::scene::drape_mesh(&mut self.canopy_elements);
+        for (_, v) in &mut self.wood_by_species {
+            crate::scene::drape_mesh(v);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -114,7 +114,7 @@ fn base_height(x: f32, z: f32) -> f32 {
     // Octave 1: broad rolling relief (~one chunk wavelength).
     // Octave 2: a smaller ripple, offset so its lattice doesn't align
     // with octave 1. Both amplitudes keep max slope comfortably < 0.5.
-    140.0 * value_noise(x, z, 2400.0) + 24.0 * value_noise(x + 1000.0, z - 1000.0, 900.0)
+    300.0 * value_noise(x, z, 2400.0) + 50.0 * value_noise(x + 1000.0, z - 1000.0, 900.0)
 }
 
 /// Deterministic pseudo-random value in `[-1, 1]` for an integer

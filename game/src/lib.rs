@@ -798,12 +798,18 @@ fn render_single(
     out_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (dev, queue) = init_wgpu()?;
-    let instances = scene::snapshot_to_instances(snap);
-    let glass = scene::snapshot_to_glass_instances(snap);
-    let mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
+    let mut instances = scene::snapshot_to_instances(snap);
+    let mut glass = scene::snapshot_to_glass_instances(snap);
+    let mut mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
+    // One draping pass covers every entity stream (buildings, props,
+    // trees, player); the grid drapes at emit (its bars tilt per slope).
+    scene::drape(&mut instances);
+    scene::drape(&mut glass);
+    mesh_trees.drape();
     let grid = scene::dev_grid_mesh(snap.player.x, snap.player.z);
+    let cam_lift = terrain::height(snap.player.x, snap.player.z);
     let camera = scene::SceneCamera::follow(
-        [snap.player.x, snap.player.y, snap.player.z],
+        [snap.player.x, snap.player.y + cam_lift, snap.player.z],
         room::FLOOR_HALF,
     );
     render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, &grid, 0.0, out_path)?;
@@ -820,12 +826,16 @@ fn render_snapshots(
     let mut out_paths = Vec::with_capacity(snapshots.len());
     for (i, snap) in snapshots.iter().enumerate() {
         let out_path = format!("{dir}/frame-{i}.png");
-        let instances = scene::snapshot_to_instances(snap);
-        let glass = scene::snapshot_to_glass_instances(snap);
-        let mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
+        let mut instances = scene::snapshot_to_instances(snap);
+        let mut glass = scene::snapshot_to_glass_instances(snap);
+        let mut mesh_trees = tree_emit::snapshot_to_mesh_instances_with_wood(snap);
+        scene::drape(&mut instances);
+        scene::drape(&mut glass);
+        mesh_trees.drape();
         let grid = scene::dev_grid_mesh(snap.player.x, snap.player.z);
+        let cam_lift = terrain::height(snap.player.x, snap.player.z);
         let camera = scene::SceneCamera::follow(
-            [snap.player.x, snap.player.y, snap.player.z],
+            [snap.player.x, snap.player.y + cam_lift, snap.player.z],
             room::FLOOR_HALF,
         );
         // Each tour stop gets a distinct wind phase so the still frames

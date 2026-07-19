@@ -418,15 +418,10 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let mut instances: Vec<SceneInstance> = Vec::with_capacity(
         1 + snap.trees.len() + snap.obstacles.len() + snap.fires.len() + snap.trails.len() + 1,
     );
-    // Backdrop plane, dropped BENEATH the draped grid (top well below the
-    // heightfield's minimum) so it never occludes the grid where terrain
-    // dips below zero — e.g. a stamp pad at negative elevation. The
-    // heightfield surface mesh will replace this later (TERRAIN.md).
-    instances.push(SceneInstance {
-        pos: [snap.player.x, -300.0, snap.player.z],
-        color: [0.09, 0.11, 0.15],
-        scale: [FLOOR_FOLLOW_HALF * 2.0, 100.0, FLOOR_FOLLOW_HALF * 2.0],
-    });
+    // No flat backdrop plane during the terrain phase — it occluded the
+    // draped grid wherever the surface dipped below it. The draped grid
+    // IS the ground reference now; the heightfield surface mesh replaces
+    // it properly later (TERRAIN.md).
     // Dev grid: DRAPED over the heightfield and drawn through the MESH
     // pipeline now (`dev_grid_mesh`; docs/TERRAIN.md, Slice 4/5), no
     // longer thin cube instances. The native render calls dev_grid_mesh
@@ -596,6 +591,29 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
         scale: [70.0, 140.0, 70.0],
     });
     instances
+}
+
+/// Sit a batch of world instances ON the terrain — lift each by the
+/// ground height under its XZ. THE single draping choke point: every
+/// renderable (buildings, trees, campfires, obstacles, pins, the
+/// player…) flows through `drape`/`drape_mesh`, so a NEW entity type
+/// needs no terrain code of its own — it drapes for free as long as it
+/// ends up in one of these instance streams.
+///
+/// Inside a stamp footprint `height` is the flat pad level, so a
+/// building rises rigidly onto its (flat) pad; loose props drape onto
+/// the rolling surface.
+pub fn drape(instances: &mut [SceneInstance]) {
+    for i in instances {
+        i.pos[1] += crate::terrain::height(i.pos[0], i.pos[2]);
+    }
+}
+
+/// `drape` for the mesh pipeline's instances (see `drape`).
+pub fn drape_mesh(instances: &mut [MeshInstance]) {
+    for i in instances {
+        i.pos[1] += crate::terrain::height(i.pos[0], i.pos[2]);
+    }
 }
 
 /// Every wall/roof cut away by `snapshot_to_instances` — surfaced here
