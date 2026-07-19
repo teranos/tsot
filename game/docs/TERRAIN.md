@@ -247,8 +247,9 @@ aligned), cheaper and no longer player-centred.
   mirrors none of this (grid, surface, draping) — the cube grid was
   removed from the shared instance path, so game.sbvh.nl has no terrain.
 - Player/NPC height is now **real in the sim** (Slice 7). Static
-  colliders (trees, walls, obstacles) still sit at authored `y`, so
-  slope-aware collision for those is the remaining physics follow-on.
+  colliders still sit at authored `y`, so `resolve_collisions` collides
+  on the **ground plane (XZ)** rather than in 3D — otherwise a player on
+  a hill walks through walls pinned at `y=0`.
 
 ## Deferred (not this branch)
 
