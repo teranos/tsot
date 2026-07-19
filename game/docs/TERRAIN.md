@@ -213,12 +213,12 @@ render-time only; the sim is still flat (that's Slice 7).
       relief only outside them; nothing else regresses
 - [x] Post-5 — whole scene render-draped via one choke point
       (`scene::drape`); backdrop floor removed; amplitude 300
-- [ ] Slice 6 — solid heightfield surface mesh: verts on `height`,
+- [x] Slice 6 — solid heightfield surface mesh: verts on `height`,
       gradient normals, coplanar over pads
-- [ ] Slice 6 — renders as solid Lambert-lit ground on lavapipe (lit
-      hills, shaded valleys, flat pads); one ground colour
-- [ ] Slice 7 — player `Position.y` follows `height(x, z)` in the SIM;
-      pad height on a footprint; no render double-lift
+- [x] Slice 6 — renders as solid Lambert-lit ground on lavapipe; one
+      mossy ground colour (shading gentle because the terrain is gentle)
+- [x] Slice 7 — player & NPC `Position.y` follow `height(x, z)` in the
+      SIM; pad height on a footprint; camera reads it, no double-lift
 - [ ] Slice 8 — `imports.allow` + boundary check green with the new
       wasm crossings; JS shim layout tests hold
 - [ ] Slice 8 — browser render (headless Chromium / game.sbvh.nl) shows
@@ -229,9 +229,9 @@ render-time only; the sim is still flat (that's Slice 7).
 - **Browser parity is Slice 8.** Until then the wasm/browser render
   mirrors none of this (grid, surface, draping) — the cube grid was
   removed from the shared instance path, so game.sbvh.nl has no terrain.
-- Draping is **render-time only** — the sim is still flat XZ. Slice 7
-  makes the player's height real; guard against double-lifting
-  sim-driven entities that then carry a real `y`.
+- Player/NPC height is now **real in the sim** (Slice 7). Static
+  colliders (trees, walls, obstacles) still sit at authored `y`, so
+  slope-aware collision for those is the remaining physics follow-on.
 
 ## Deferred (not this branch)
 
