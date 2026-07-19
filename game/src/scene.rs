@@ -348,6 +348,72 @@ fn is_fence(k: PropKind) -> bool {
 /// invisible.)
 const FLOOR_FOLLOW_HALF: f32 = 6000.0;
 
+/// The dev-grid lifted just above the terrain surface, so it reads as
+/// sitting on the ground without z-fighting it.
+pub const GRID_EPS: f32 = 3.0;
+
+const DGRID_HALF: f32 = 2000.0;
+const DGRID_CELL: f32 = 80.0; // CDDA cell — major lines
+const DGRID_HALFCELL: f32 = 40.0; // minor lines, offset half a cell
+const DGRID_SEG: f32 = 80.0; // drape resolution — short enough to follow relief
+const DGRID_THICK: f32 = 5.0;
+const DGRID_MAJOR: [f32; 3] = [0.34, 0.37, 0.44];
+const DGRID_MINOR: [f32; 3] = [0.20, 0.22, 0.27];
+
+/// The dev-grid, DRAPED over the heightfield and emitted as MESH-pipeline
+/// instances (never cube instances — see `docs/TERRAIN.md`, Slice 4).
+///
+/// A single stretched cube can't bend to a curved surface, so each grid
+/// line is a run of short segments; each segment is one `MeshInstance` of
+/// the shared unit bar, with `axis` pointing along the segment in 3D so
+/// it tilts with the slope. Major (CDDA cell, brighter) + minor (cell
+/// centres, fainter), snapped to the player so lines stay put as they
+/// move. `wgpu` wiring is Slice 5.
+pub fn dev_grid_mesh(px: f32, pz: f32) -> Vec<MeshInstance> {
+    // One axis-aligned line, walked in SEG-long segments each draped at
+    // height(x,z)+ε and oriented along its own 3D direction.
+    fn line(along_x: bool, fixed: f32, center: f32, color: [f32; 3], out: &mut Vec<MeshInstance>) {
+        let steps = (2.0 * DGRID_HALF / DGRID_SEG) as i32;
+        for s in 0..steps {
+            let a = center - DGRID_HALF + s as f32 * DGRID_SEG;
+            let b = a + DGRID_SEG;
+            let (ax, az, bx, bz) = if along_x {
+                (a, fixed, b, fixed)
+            } else {
+                (fixed, a, fixed, b)
+            };
+            let pa = Vec3::new(ax, crate::terrain::height(ax, az) + GRID_EPS, az);
+            let pb = Vec3::new(bx, crate::terrain::height(bx, bz) + GRID_EPS, bz);
+            let d = pb - pa;
+            let len = d.length();
+            if len < 1e-4 {
+                continue;
+            }
+            let dir = d / len;
+            let mid = (pa + pb) * 0.5;
+            out.push(MeshInstance {
+                pos: [mid.x, mid.y, mid.z],
+                color,
+                scale: [DGRID_THICK, len, DGRID_THICK],
+                axis: [dir.x, dir.y, dir.z, 0.0],
+            });
+        }
+    }
+
+    let pxm = (px / DGRID_CELL).round() * DGRID_CELL;
+    let pzm = (pz / DGRID_CELL).round() * DGRID_CELL;
+    let n = (DGRID_HALF / DGRID_CELL) as i32;
+    let mut out = Vec::new();
+    for i in -n..=n {
+        let off = i as f32 * DGRID_CELL;
+        line(false, pxm + off, pzm, DGRID_MAJOR, &mut out); // along Z at fixed x
+        line(true, pzm + off, pxm, DGRID_MAJOR, &mut out); // along X at fixed z
+        line(false, pxm + DGRID_HALFCELL + off, pzm + DGRID_HALFCELL, DGRID_MINOR, &mut out);
+        line(true, pzm + DGRID_HALFCELL + off, pxm + DGRID_HALFCELL, DGRID_MINOR, &mut out);
+    }
+    out
+}
+
 pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let mut instances: Vec<SceneInstance> = Vec::with_capacity(
         1 + snap.trees.len() + snap.obstacles.len() + snap.fires.len() + snap.trails.len() + 1,
@@ -654,6 +720,37 @@ pub fn snapshot_to_glass_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dev_grid_drapes_on_the_heightfield() {
+        // Every segment sits on the surface (midpoint Y = height + lift),
+        // whatever the surface does under it.
+        let on_surface = |grid: &[MeshInstance]| {
+            for inst in grid.iter().step_by(37) {
+                let (x, y, z) = (inst.pos[0], inst.pos[1], inst.pos[2]);
+                let surf = crate::terrain::height(x, z) + GRID_EPS;
+                assert!(
+                    (y - surf).abs() < 20.0,
+                    "grid off-surface at ({x:.0},{z:.0}): y={y:.1} surf={surf:.1}"
+                );
+            }
+        };
+
+        // Over the school pad (grid half 2000 < pad half 2908 → wholly on
+        // pad): draped, and flat, because the surface there is flat.
+        let on_pad = dev_grid_mesh(10_800.0, 44_400.0);
+        assert!(!on_pad.is_empty(), "no grid instances emitted");
+        on_surface(&on_pad);
+
+        // Over open terrain: draped, and genuinely rolling — Y varies. The
+        // old y=0.1 cube grid would have zero spread here.
+        let open = dev_grid_mesh(0.0, 0.0);
+        on_surface(&open);
+        let (lo, hi) = open
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), i| (lo.min(i.pos[1]), hi.max(i.pos[1])));
+        assert!(hi - lo > 50.0, "grid Y barely varies ({:.1}) — not draped over relief", hi - lo);
+    }
 
     #[test]
     fn instance_attrs_match_the_repr_c_struct() {
