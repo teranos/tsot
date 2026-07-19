@@ -33,6 +33,7 @@ pub mod scene;
 pub mod sfx;
 pub mod shaders;
 pub mod template;
+pub mod terrain;
 pub mod trail;
 pub mod tree_emit;
 pub mod tree_mesh;
