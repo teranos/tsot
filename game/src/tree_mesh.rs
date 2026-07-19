@@ -693,6 +693,11 @@ fn grow_limb(
 /// coarse the "bends" read as elbows.
 pub const TRUNK_SEGMENTS: u32 = 4;
 
+/// One trunk segment's book-keeping used to attach primaries: end
+/// position, this segment's axis, its length, its base radius, its top
+/// radius. Grouped once so `point_along_trunk` doesn't need a 5-tuple.
+type TrunkTop = ([f32; 3], [f32; 3], f32, f32, f32);
+
 pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
     // Spread the seed through the state and force it odd/non-zero so
     // even seed 0 gives a non-degenerate tree.
@@ -714,14 +719,20 @@ pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
     let seg_len = sp.base_y.1 / TRUNK_SEGMENTS as f32;
     let mut trunk_axis = [0.0f32, 1.0, 0.0];
     let mut trunk_base = [0.0f32, 0.0, 0.0];
-    // Cumulative along-trunk length at each segment's END, for primary
-    // attachment interpolation below.
-    let mut trunk_tops: Vec<([f32; 3], [f32; 3], f32)> = Vec::with_capacity(TRUNK_SEGMENTS as usize);
-    for _ in 0..TRUNK_SEGMENTS {
+    // Per-segment stored data for primary attachment: (end position,
+    // this segment's axis, its length, its base_radius, its top_radius).
+    let mut trunk_tops: Vec<TrunkTop> = Vec::with_capacity(TRUNK_SEGMENTS as usize);
+    for i in 0..TRUNK_SEGMENTS {
+        // Geometric radius shrink across segments so segment i+1's base
+        // radius equals segment i's top radius — no beading at the
+        // joints. Segment 0 starts at trunk_radius; segment N-1 ends at
+        // trunk_radius × radius_shrink^N, matching where thin outer
+        // branches would live.
+        let base_r = sp.trunk_radius * sp.radius_shrink.powi(i as i32);
+        let top_r = base_r * sp.radius_shrink;
         // Per-segment tilt: bend by `curve` radians toward `bend_dir`.
-        // The tilt-add + renormalize approximates a rotation of `axis`
-        // by `curve` around the horizontal perpendicular. Small angle
-        // (< 30°) is accurate enough that the mesh reads naturally.
+        // Small-angle tilt+renormalize approximates a rotation of
+        // `axis` around the horizontal perpendicular by `curve`.
         let tilt = curve;
         let mut new_axis = [
             trunk_axis[0] + bend_dir[0] * tilt,
@@ -738,7 +749,7 @@ pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
             base: trunk_base,
             axis: new_axis,
             length: seg_len,
-            base_radius: sp.trunk_radius,
+            base_radius: base_r,
             is_tip: false,
             is_dead: false,
         });
@@ -747,7 +758,7 @@ pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
             trunk_base[1] + new_axis[1] * seg_len,
             trunk_base[2] + new_axis[2] * seg_len,
         ];
-        trunk_tops.push((end, new_axis, seg_len));
+        trunk_tops.push((end, new_axis, seg_len, base_r, top_r));
         trunk_base = end;
         trunk_axis = new_axis;
     }
@@ -764,30 +775,32 @@ pub fn tree_branches(seed: u32, sp: &TreeSpecies) -> Vec<BranchSegment> {
     for c in 0..primaries {
         let frac = c as f32 / primaries.max(1) as f32;
         let t = lo_frac + (1.0 - lo_frac) * frac;
-        let (base, _local_axis) = point_along_trunk(&trunk_tops, t, sp.base_y.1);
+        let (base, _local_axis, local_r) = point_along_trunk(&trunk_tops, t, sp.base_y.1);
         let spread = rangef(&mut rng, sp.primary_spread);
         let phi = azim0 + (c as f32) * GOLDEN_ANGLE_RAD;
         let radial = [phi.cos(), 0.0, phi.sin()];
         let dir = v_norm(v_add([0.0, spread.cos(), 0.0], v_scale(radial, spread.sin())));
         let len = rangef(&mut rng, sp.primary_len) * (1.0 - 0.4 * frac);
-        let primary_radius = sp.trunk_radius * sp.radius_shrink;
+        // Primary radius derives from the LOCAL trunk radius at the
+        // attach point, not the fat root trunk_radius — so a primary
+        // branching high on the tree (where the trunk is thin) is
+        // itself thin, not ballooning out.
+        let primary_radius = local_r * sp.radius_shrink;
         grow_limb(&mut out, base, dir, len, primary_radius, sp.max_depth, sp, tree_dead, &mut rng);
     }
     out
 }
 
 /// Sample a point along the curved trunk at along-trunk fraction t.
-/// `tops` is one entry per trunk segment: (end position, axis,
-/// segment length). `total_len` = sum of segment lengths ≈ base_y.1.
-fn point_along_trunk(
-    tops: &[([f32; 3], [f32; 3], f32)],
-    t: f32,
-    total_len: f32,
-) -> ([f32; 3], [f32; 3]) {
+/// `tops` is one entry per trunk segment: (end position, axis, length,
+/// base_radius, top_radius). `total_len` = sum of segment lengths ≈
+/// base_y.1. Returns (position, axis at that point, local trunk radius
+/// linearly interpolated between the segment's base and top radii).
+fn point_along_trunk(tops: &[TrunkTop], t: f32, total_len: f32) -> ([f32; 3], [f32; 3], f32) {
     let target = t * total_len;
     let mut acc = 0.0f32;
     let mut base = [0.0f32, 0.0, 0.0];
-    for &(end, axis, len) in tops {
+    for &(end, axis, len, base_r, top_r) in tops {
         if acc + len >= target {
             let f = ((target - acc) / len).clamp(0.0, 1.0);
             return (
@@ -797,14 +810,15 @@ fn point_along_trunk(
                     base[2] + axis[2] * len * f,
                 ],
                 axis,
+                base_r * (1.0 - f) + top_r * f,
             );
         }
         acc += len;
         base = end;
     }
     // t past the top: last segment's tip.
-    let (end, axis, _) = *tops.last().expect("trunk has at least one segment");
-    (end, axis)
+    let &(end, axis, _len, _base_r, top_r) = tops.last().expect("trunk has at least one segment");
+    (end, axis, top_r)
 }
 
 #[cfg(test)]
