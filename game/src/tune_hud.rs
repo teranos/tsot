@@ -346,6 +346,8 @@ pub fn tune_hud_system(mut state: ResMut<TuneHudState>) {
         return;
     }
     let touches = crate::gpu_web::touches();
+    let pointer = crate::input::pointer_ndc();
+    let wheel_delta = crate::input::wheel_delta();
     let fields = Field::all();
     let mut params = tune::get();
     let mut wood_dirty = false;
@@ -379,6 +381,38 @@ pub fn tune_hud_system(mut state: ResMut<TuneHudState>) {
         color: BG_COLOR,
         alpha: BG_ALPHA,
     });
+
+    // Which row does the pointer sit over, if any? Pointer arrives in
+    // NDC; only y-bucketing matters (rows are stacked vertically), and
+    // we also gate on x so hovering outside the panel doesn't count.
+    let hovered_row = pointer.and_then(|p| {
+        if p[0] < panel_left || p[0] > panel_right {
+            return None;
+        }
+        for row_index in 0..fields.len() {
+            let row_top_ndc = panel_top - row_index as f32 * row_h;
+            let row_bot_ndc = row_top_ndc - row_h;
+            if p[1] <= row_top_ndc && p[1] >= row_bot_ndc {
+                return Some(row_index);
+            }
+        }
+        None
+    });
+
+    // Wheel adjusts the hovered row's field. Sensitivity: one notch =
+    // one step. Ignored if pointer isn't over a row (wheel elsewhere
+    // is free to be consumed by future subsystems).
+    if wheel_delta != 0
+        && let Some(row_index) = hovered_row
+    {
+        let field = fields[row_index];
+        let step = field.step();
+        let v = field.read(&params) + (wheel_delta as f32) * step;
+        field.write(&mut params, v);
+        if field.invalidates_wood() {
+            wood_dirty = true;
+        }
+    }
 
     for (row_index, field) in fields.iter().enumerate() {
         let label = label_text(*field, &params);
@@ -415,12 +449,14 @@ pub fn tune_hud_system(mut state: ResMut<TuneHudState>) {
             }
         }
 
-        // Row stripe (subtle horizontal band behind the row).
+        // Row stripe. When the pointer hovers this row, brighter tint
+        // and higher alpha so the "wheel target" is unambiguous.
+        let is_hovered = hovered_row == Some(row_index);
         out.push(DpadInstance {
             center_ndc: [bg_cx, minus.center_ndc[1]],
             half_size_ndc: [(panel_right - panel_left) * 0.5, row_h * 0.45],
-            color: BG_COLOR,
-            alpha: ROW_ALPHA,
+            color: if is_hovered { [0.20, 0.35, 0.55] } else { BG_COLOR },
+            alpha: if is_hovered { 0.45 } else { ROW_ALPHA },
         });
 
         // `-` button.

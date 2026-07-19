@@ -167,7 +167,38 @@ if (gameCanvas) {
   })
   gameCanvas.addEventListener('mouseup', () => { mouseTouch = null })
   gameCanvas.addEventListener('mouseleave', () => { mouseTouch = null })
+
+  // Mouse-wheel + pointer position for tune-HUD sliders (and any
+  // future in-game knob / scroll). Deliberate additions to the env
+  // surface — game/web/CLAUDE.md exception, see imports.allow.
+  //
+  // Wheel: accumulate the browser's deltaY across a frame. Rust reads
+  // and resets via game_wheel_delta; sign convention is "up = positive"
+  // so the intuitive scroll direction increases a slider.
+  //
+  // Pointer: independent of button state. Cleared to off-canvas
+  // sentinel (-2, -2) on pointerleave so Rust can distinguish
+  // "pointer over UI" from "pointer nowhere".
+  gameCanvas.addEventListener('wheel', ev => {
+    ev.preventDefault()
+    wheelAccum -= Math.round(ev.deltaY)
+  }, { passive: false })
+  gameCanvas.addEventListener('pointermove', ev => {
+    const p = clientToNdc(ev.clientX, ev.clientY, gameCanvas)
+    pointerNdcX = p.x
+    pointerNdcY = p.y
+  })
+  gameCanvas.addEventListener('pointerleave', () => {
+    pointerNdcX = -2
+    pointerNdcY = -2
+  })
 }
+
+// Wheel + pointer state. Off-canvas sentinel is |v| > 1 which Rust's
+// `input::pointer_ndc()` maps to `None`.
+let wheelAccum = 0
+let pointerNdcX = -2
+let pointerNdcY = -2
 
 // IndexedDB identity storage. Rust owns the bytes; JS owns the store.
 // Pre-boot: try to load "self" so Rust's game_identity_load gets a
@@ -600,6 +631,13 @@ async function main() {
         }
       },
       game_input_state: (): number => inputBits,
+      game_wheel_delta: (): number => {
+        const d = wheelAccum | 0
+        wheelAccum = 0
+        return d
+      },
+      game_pointer_ndc_x: (): number => pointerNdcX,
+      game_pointer_ndc_y: (): number => pointerNdcY,
       game_touch_state: (outPtr: number, outMax: number): number => {
         if (!memory) return 0
         const total = activeTouches.length + (mouseTouch ? 1 : 0)

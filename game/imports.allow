@@ -39,6 +39,9 @@ env.game_gpu_render_mesh
 env.game_touch_state
 env.game_viewport_size
 env.game_input_state
+env.game_wheel_delta
+env.game_pointer_ndc_x
+env.game_pointer_ndc_y
 env.game_identity_load
 env.game_identity_save
 env.game_random_bytes

@@ -20,6 +20,14 @@ pub mod key {
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn game_input_state() -> u32;
+    /// Accumulated wheel deltaY since last read, in browser wheel-notch
+    /// units (positive = scrolled up in our convention). Reading resets
+    /// the accumulator; call at most once per consumer per frame.
+    fn game_wheel_delta() -> i32;
+    /// Current pointer position in NDC. Out-of-range (< -1 or > 1) means
+    /// the pointer isn't over the canvas.
+    fn game_pointer_ndc_x() -> f32;
+    fn game_pointer_ndc_y() -> f32;
 }
 
 static TOUCH_BITS: AtomicU32 = AtomicU32::new(0);
@@ -39,4 +47,35 @@ pub fn state() -> u32 {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn state() -> u32 {
     TOUCH_BITS.load(Ordering::Relaxed)
+}
+
+/// Accumulated mouse-wheel delta since last call. Positive = wheel up.
+/// Reading resets the accumulator on the JS side.
+#[cfg(target_arch = "wasm32")]
+pub fn wheel_delta() -> i32 {
+    unsafe { game_wheel_delta() }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wheel_delta() -> i32 {
+    0
+}
+
+/// Current pointer position in NDC (\[−1, 1\] × \[−1, 1\]). Returns
+/// `None` when the pointer isn't over the canvas — JS reports off-range
+/// coords in that case and we filter here so callers can pattern-match.
+#[cfg(target_arch = "wasm32")]
+pub fn pointer_ndc() -> Option<[f32; 2]> {
+    let x = unsafe { game_pointer_ndc_x() };
+    let y = unsafe { game_pointer_ndc_y() };
+    if x.abs() > 1.0 || y.abs() > 1.0 {
+        None
+    } else {
+        Some([x, y])
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn pointer_ndc() -> Option<[f32; 2]> {
+    None
 }

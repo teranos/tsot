@@ -245,6 +245,25 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         "game_input_state",
         |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<u32> { Ok(0) },
     )?;
+    // Wheel delta: mouse-wheel accumulator, resets on read. Under
+    // wasmtime there's no cursor, so always zero.
+    linker.func_wrap(
+        "env",
+        "game_wheel_delta",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<i32> { Ok(0) },
+    )?;
+    // Pointer NDC x/y: cursor position in normalised device coords.
+    // Off-screen (out-of-range) is the default when there's no pointer.
+    linker.func_wrap(
+        "env",
+        "game_pointer_ndc_x",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<f32> { Ok(-2.0) },
+    )?;
+    linker.func_wrap(
+        "env",
+        "game_pointer_ndc_y",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<f32> { Ok(-2.0) },
+    )?;
     linker.func_wrap(
         "env",
         "game_show_exclamation",
