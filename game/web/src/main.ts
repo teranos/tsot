@@ -172,16 +172,18 @@ if (gameCanvas) {
   // future in-game knob / scroll). Deliberate additions to the env
   // surface — game/web/CLAUDE.md exception, see imports.allow.
   //
-  // Wheel: accumulate the browser's deltaY across a frame. Rust reads
-  // and resets via game_wheel_delta; sign convention is "up = positive"
-  // so the intuitive scroll direction increases a slider.
+  // Wheel: accumulate the browser's HORIZONTAL delta (deltaX) across
+  // a frame. Trackpad two-finger horizontal swipe reads as scroll-in-
+  // a-value-line. Right = positive = value increases. Vertical wheel
+  // (deltaY) is left free so it can drive future scroll lists / camera
+  // zoom without conflict. Rust reads + resets via game_wheel_delta.
   //
   // Pointer: independent of button state. Cleared to off-canvas
   // sentinel (-2, -2) on pointerleave so Rust can distinguish
   // "pointer over UI" from "pointer nowhere".
   gameCanvas.addEventListener('wheel', ev => {
     ev.preventDefault()
-    wheelAccum -= Math.round(ev.deltaY)
+    wheelAccum += Math.round(ev.deltaX)
   }, { passive: false })
   gameCanvas.addEventListener('pointermove', ev => {
     const p = clientToNdc(ev.clientX, ev.clientY, gameCanvas)
