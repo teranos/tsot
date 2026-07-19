@@ -57,7 +57,7 @@ pub fn height(x: f32, z: f32) -> f32 {
             let out = cheb - ph;
             if out < SKIRT {
                 let t = out / SKIRT;
-                if skirt.map_or(true, |(_, pt)| t < pt) {
+                if skirt.is_none_or(|(_, pt)| t < pt) {
                     skirt = Some((base_height(anchor.x, anchor.z), t));
                 }
             }

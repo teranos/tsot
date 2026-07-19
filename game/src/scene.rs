@@ -341,13 +341,6 @@ fn is_fence(k: PropKind) -> bool {
     matches!(k, PropKind::Fence | PropKind::FenceNS | PropKind::FenceEW)
 }
 
-/// The floor is a single plane that follows the player — no world
-/// edge. Half-extent large enough to exceed the view and the streamed
-/// chunk region, so a uniform floor always fills the screen no matter
-/// how far you roam. (A flat, untextured plane sliding under you is
-/// invisible.)
-const FLOOR_FOLLOW_HALF: f32 = 6000.0;
-
 /// The dev-grid lifted just above the terrain surface, so it reads as
 /// sitting on the ground without z-fighting it.
 pub const GRID_EPS: f32 = 3.0;
