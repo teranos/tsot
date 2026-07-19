@@ -11,13 +11,14 @@
 use crate::build_info;
 use crate::dpad::DpadInstance;
 
-const GLYPH_W: usize = 3;
-const GLYPH_H: usize = 5;
+pub const GLYPH_W: usize = 3;
+pub const GLYPH_H: usize = 5;
 
 /// 3x5 bitmap for a char: 5 rows, low 3 bits each (bit 2 = leftmost
-/// column). Covers hex digits (real commit shas) plus the letters in
-/// "unknown" (what build_info reports off-CI). Unknown chars → skipped.
-fn glyph(c: char) -> Option<[u8; GLYPH_H]> {
+/// column). Covers hex digits (commit shas), the letters in "unknown",
+/// the full lowercase alphabet + `.` `-` `+` `:` for the tune-HUD's
+/// numeric labels. Unknown chars → skipped by the caller.
+pub fn glyph(c: char) -> Option<[u8; GLYPH_H]> {
     Some(match c {
         '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
         '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
@@ -35,13 +36,79 @@ fn glyph(c: char) -> Option<[u8; GLYPH_H]> {
         'd' => [0b001, 0b001, 0b111, 0b101, 0b111],
         'e' => [0b111, 0b100, 0b111, 0b100, 0b111],
         'f' => [0b111, 0b100, 0b110, 0b100, 0b100],
-        'u' => [0b101, 0b101, 0b101, 0b101, 0b111],
-        'n' => [0b000, 0b110, 0b101, 0b101, 0b101],
+        'g' => [0b111, 0b100, 0b101, 0b101, 0b111],
+        'h' => [0b101, 0b101, 0b111, 0b101, 0b101],
+        'i' => [0b111, 0b010, 0b010, 0b010, 0b111],
+        'j' => [0b001, 0b001, 0b001, 0b101, 0b111],
         'k' => [0b101, 0b110, 0b100, 0b110, 0b101],
+        'l' => [0b100, 0b100, 0b100, 0b100, 0b111],
+        'm' => [0b101, 0b111, 0b111, 0b101, 0b101],
+        'n' => [0b000, 0b110, 0b101, 0b101, 0b101],
         'o' => [0b000, 0b111, 0b101, 0b101, 0b111],
+        'p' => [0b111, 0b101, 0b111, 0b100, 0b100],
+        'q' => [0b111, 0b101, 0b111, 0b001, 0b001],
+        'r' => [0b111, 0b101, 0b110, 0b101, 0b101],
+        's' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        't' => [0b111, 0b010, 0b010, 0b010, 0b010],
+        'u' => [0b101, 0b101, 0b101, 0b101, 0b111],
+        'v' => [0b101, 0b101, 0b101, 0b101, 0b010],
         'w' => [0b101, 0b101, 0b101, 0b111, 0b101],
+        'x' => [0b101, 0b101, 0b010, 0b101, 0b101],
+        'y' => [0b101, 0b101, 0b010, 0b010, 0b010],
+        'z' => [0b111, 0b001, 0b010, 0b100, 0b111],
+        '.' => [0b000, 0b000, 0b000, 0b000, 0b010],
+        '-' => [0b000, 0b000, 0b111, 0b000, 0b000],
+        '+' => [0b000, 0b010, 0b111, 0b010, 0b000],
+        ':' => [0b000, 0b010, 0b000, 0b010, 0b000],
+        ' ' => [0b000, 0b000, 0b000, 0b000, 0b000],
         _ => return None,
     })
+}
+
+/// Emit UI quads for `text` at (left, top) in NDC, with `pixel` scale
+/// per glyph-pixel in NDC per axis. One glyph column of gap between
+/// characters. Returned quads carry `color` and `alpha`.
+pub fn text_quads(
+    text: &str,
+    left_ndc: f32,
+    top_ndc: f32,
+    pixel_ndc: [f32; 2],
+    color: [f32; 3],
+    alpha: f32,
+) -> Vec<DpadInstance> {
+    let (sx, sy) = (pixel_ndc[0], pixel_ndc[1]);
+    let mut out = Vec::new();
+    for (ci, ch) in text.chars().enumerate() {
+        let Some(rows) = glyph(ch) else { continue };
+        let col0 = ci * (GLYPH_W + 1);
+        for (r, row) in rows.iter().enumerate() {
+            for c in 0..GLYPH_W {
+                if row & (1 << (GLYPH_W - 1 - c)) != 0 {
+                    let g = col0 + c;
+                    out.push(DpadInstance {
+                        center_ndc: [
+                            left_ndc + (g as f32 + 0.5) * sx,
+                            top_ndc - (r as f32 + 0.5) * sy,
+                        ],
+                        half_size_ndc: [sx * 0.5, sy * 0.5],
+                        color,
+                        alpha,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Width in NDC of `text` rendered at `pixel_ndc.x` per glyph-pixel.
+pub fn text_width_ndc(text: &str, pixel_ndc_x: f32) -> f32 {
+    let n = text.chars().count();
+    if n == 0 {
+        return 0.0;
+    }
+    // n glyphs × 3 cols + (n-1) gap cols = 4n - 1 cols.
+    (4 * n - 1) as f32 * pixel_ndc_x
 }
 
 /// How many leading commit chars to show.
@@ -60,33 +127,13 @@ pub fn watermark_quads(viewport: (u32, u32)) -> Vec<DpadInstance> {
     let (w, h) = (viewport.0.max(1) as f32, viewport.1.max(1) as f32);
     let ndc_x = 2.0 / w;
     let ndc_y = 2.0 / h;
-    let sx = PIXEL_PX * ndc_x; // one font pixel, NDC width
-    let sy = PIXEL_PX * ndc_y; // one font pixel, NDC height
-    let cols = text.chars().count() * (GLYPH_W + 1); // glyph + 1-col gap
-    let total_w = cols as f32 * sx;
+    let sx = PIXEL_PX * ndc_x;
+    let sy = PIXEL_PX * ndc_y;
+    let total_w = text_width_ndc(&text, sx);
     let right = 1.0 - MARGIN_PX * ndc_x;
     let left = right - total_w;
     let top = 1.0 - MARGIN_PX * ndc_y;
-
-    let mut out = Vec::new();
-    for (ci, ch) in text.chars().enumerate() {
-        let Some(rows) = glyph(ch) else { continue };
-        let col0 = ci * (GLYPH_W + 1);
-        for (r, row) in rows.iter().enumerate() {
-            for c in 0..GLYPH_W {
-                if row & (1 << (GLYPH_W - 1 - c)) != 0 {
-                    let g = col0 + c;
-                    out.push(DpadInstance {
-                        center_ndc: [left + (g as f32 + 0.5) * sx, top - (r as f32 + 0.5) * sy],
-                        half_size_ndc: [sx * 0.5, sy * 0.5],
-                        color: COLOR,
-                        alpha: ALPHA,
-                    });
-                }
-            }
-        }
-    }
-    out
+    text_quads(&text, left, top, [sx, sy], COLOR, ALPHA)
 }
 
 #[cfg(test)]

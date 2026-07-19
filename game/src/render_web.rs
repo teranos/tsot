@@ -649,5 +649,6 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     ui.extend(hud::current_instances());
     ui.extend(crate::watermark::watermark_quads(gpu_web::viewport_size()));
     ui.extend(crate::bang::current_instances());
+    ui.extend(crate::tune_hud::current_instances());
     frame_ui(&ui)
 }

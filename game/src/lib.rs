@@ -39,6 +39,7 @@ pub mod tree_mesh;
 pub mod tree_surface;
 pub mod trees;
 pub mod tune;
+pub mod tune_hud;
 pub mod watermark;
 
 pub mod gpu_web;
@@ -571,6 +572,7 @@ fn _init() {
             bang::setup_bang.after(setup),
             campfire::setup_campfire.after(setup),
             dpad::setup_dpad.after(setup),
+            tune_hud::setup_tune_hud.after(setup),
             hud::setup_hud.after(setup),
             jukebox::setup_jukebox.after(setup),
             map::setup_pins.after(setup),
@@ -598,6 +600,7 @@ fn _init() {
             campfire::flicker_fire.after(physics::resolve_remote_player_collisions),
             campfire::campfire_crackle_system.after(campfire::flicker_fire),
             dpad::dpad_input_system.after(campfire::campfire_crackle_system),
+            tune_hud::tune_hud_system.after(dpad::dpad_input_system),
             hud::hud_input_system.after(dpad::dpad_input_system),
             jukebox::jukebox_proximity_system.after(physics::resolve_collisions),
             tick.after(campfire::flicker_fire),

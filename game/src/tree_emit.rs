@@ -78,6 +78,7 @@ fn autumn_ramp(green: [f32; 3], age: f32) -> [f32; 3] {
 
 pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
     use crate::tree_mesh::{GOLDEN_ANGLE_RAD, tree_branches};
+    let tune = crate::tune::get();
     // axis = [dir.xyz, sway]. UP is the vertical, rigid orientation (sway
     // 0) shared by the trunk, stump, and nest.
     const UP: [f32; 4] = [0.0, 1.0, 0.0, 0.0];
@@ -132,8 +133,8 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         // (the root limb) and is drawn by the loop below like any other
         // limb, so radius flows continuously from bole to tips and the
         // trunk→primary junction is a real fork, not two things overlapping.
-        let element_r = h * sp.leaf_element_ratio;
-        let cluster_r = h * sp.cluster_radius_ratio;
+        let element_r = h * sp.leaf_element_ratio * tune.leaf_size_mult;
+        let cluster_r = h * sp.cluster_radius_ratio * tune.leaf_cluster_mult;
         // A weathered grey-brown for dead twigs, so a bare limb reads as
         // deadwood among the living branches.
         const DEAD_LIMB_COLOR: [f32; 3] = [0.34, 0.30, 0.25];
@@ -155,7 +156,8 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
         // if we relied on the skeleton's own `is_dead` flag, every oak
         // in the world would have identical deadwood placement. We
         // re-roll per (tree, tip_index) so a stand still shows variety.
-        let tree_dead = leaf_hash01(seed, 0xD3AD_0000) < sp.dead_limb_odds;
+        let tree_dead =
+            leaf_hash01(seed, 0xD3AD_0000) < sp.dead_limb_odds * tune.deadwood_mult;
         const DEAD_TIP_CHANCE: f32 = 0.18;
         // Fruit: SOME trees of a fruiting species bear (a per-tree roll,
         // so a stand is a mix of laden and bare trees). Witch's snot on
@@ -283,8 +285,11 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
             // way, like real foliage.
             let spin =
                 leaf_hash01(seed, 0xC0FE_0000 ^ tip_i.wrapping_mul(2_654_435_761)) * std::f32::consts::TAU;
-            for k in 0..sp.leaves_per_tip {
-                let ky = 1.0 - 2.0 * (k as f32 + 0.5) / (sp.leaves_per_tip as f32);
+            let leaves_this_tip = ((sp.leaves_per_tip as f32) * tune.leaf_density_mult)
+                .round()
+                .clamp(0.0, 256.0) as u32;
+            for k in 0..leaves_this_tip {
+                let ky = 1.0 - 2.0 * (k as f32 + 0.5) / (leaves_this_tip.max(1) as f32);
                 let kr = (1.0 - ky * ky).max(0.0).sqrt();
                 let kt = (k as f32) * GOLDEN_ANGLE_RAD + spin;
                 let roll = leaf_hash01(seed, leaf_i);
@@ -300,7 +305,7 @@ pub fn snapshot_to_mesh_instances(snap: &SceneSnapshot) -> MeshTreeInstances {
                 ];
                 let dl = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-3);
                 dir = [dir[0] / dl, dir[1] / dl, dir[2] / dl];
-                let age = roll * roll * roll * sp.autumn;
+                let age = (roll * roll * roll * sp.autumn * tune.autumn_mult).clamp(0.0, 1.0);
                 canopy_elements.push(MeshInstance {
                     pos: [
                         wx + cluster_r * dir[0],
@@ -370,7 +375,7 @@ pub fn snapshot_to_mesh_instances_with_wood(snap: &SceneSnapshot) -> MeshTreeIns
             pos: [t.x, t.y, t.z],
             color: sp.trunk_color,
             scale: [*h, *h, *h],
-            axis: [0.0, 1.0, 0.0, 0.2],
+            axis: [0.0, 1.0, 0.0, crate::tune::get().wind_wood_sway],
         };
         // Ptr-equality dedup so the render layer draws one batch per
         // species. Species count is small (< 10), linear scan wins.
