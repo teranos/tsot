@@ -807,12 +807,15 @@ fn render_single(
     scene::drape(&mut glass);
     mesh_trees.drape();
     let grid = scene::dev_grid_mesh(snap.player.x, snap.player.z);
+    let surface = scene::terrain_surface_mesh(snap.player.x, snap.player.z);
     let cam_lift = terrain::height(snap.player.x, snap.player.z);
     let camera = scene::SceneCamera::follow(
         [snap.player.x, snap.player.y + cam_lift, snap.player.z],
         room::FLOOR_HALF,
     );
-    render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, &grid, 0.0, out_path)?;
+    render::render_scene(
+        &dev, &queue, &camera, &instances, &glass, &mesh_trees, &grid, &surface, 0.0, out_path,
+    )?;
     Ok(())
 }
 
@@ -833,6 +836,7 @@ fn render_snapshots(
         scene::drape(&mut glass);
         mesh_trees.drape();
         let grid = scene::dev_grid_mesh(snap.player.x, snap.player.z);
+        let surface = scene::terrain_surface_mesh(snap.player.x, snap.player.z);
         let cam_lift = terrain::height(snap.player.x, snap.player.z);
         let camera = scene::SceneCamera::follow(
             [snap.player.x, snap.player.y + cam_lift, snap.player.z],
@@ -842,7 +846,9 @@ fn render_snapshots(
         // aren't all the identical leaf offset (a single PNG can't show
         // motion; the browser animates continuously off its frame count).
         let time = i as f32 * 0.7;
-        render::render_scene(&dev, &queue, &camera, &instances, &glass, &mesh_trees, &grid, time, &out_path)?;
+        render::render_scene(
+            &dev, &queue, &camera, &instances, &glass, &mesh_trees, &grid, &surface, time, &out_path,
+        )?;
         out_paths.push(out_path);
     }
     Ok(out_paths)

@@ -59,6 +59,7 @@ pub fn render_scene(
     glass_instances: &[SceneInstance],
     mesh_trees: &MeshTreeInstances,
     grid: &[MeshInstance],
+    surface: &crate::scene::TerrainSurface,
     time: f32,
     out_path: &str,
 ) -> Result<()> {
@@ -197,6 +198,38 @@ pub fn render_scene(
     });
     if grid_len > 0 {
         queue.write_buffer(grid_instance_buf.wgpu(), 0, as_bytes(grid));
+    }
+
+    // Solid terrain surface — one mesh drawn once (identity instance).
+    let surf_len = surface.indices.len();
+    let surface_vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.surface.vertex"),
+        size: (std::mem::size_of_val(&surface.verts[..]) as u64).max(4),
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let surface_index_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.surface.index"),
+        size: (std::mem::size_of_val(&surface.indices[..]) as u64).max(4),
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let surface_instance = [MeshInstance {
+        pos: [0.0, 0.0, 0.0],
+        color: [0.20, 0.26, 0.15], // one mossy ground colour; Lambert does the rest
+        scale: [1.0, 1.0, 1.0],
+        axis: [0.0, 1.0, 0.0, 0.0], // identity — surface verts are world-space
+    }];
+    let surface_instance_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("seer.render.mesh.surface.instance"),
+        size: std::mem::size_of_val(&surface_instance) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    if surf_len > 0 {
+        queue.write_buffer(surface_vertex_buf.wgpu(), 0, as_bytes(&surface.verts));
+        queue.write_buffer(surface_index_buf.wgpu(), 0, as_bytes(&surface.indices));
+        queue.write_buffer(surface_instance_buf.wgpu(), 0, as_bytes(&surface_instance));
     }
 
     let tp = crate::tune::get();
@@ -521,7 +554,8 @@ pub fn render_scene(
         pass.set_vertex_buffer(1, instance_buf.wgpu().slice(..));
         pass.draw(0..vertices.len() as u32, 0..instances.len() as u32);
     }
-    let has_mesh_work = !species_bufs.is_empty() || canopy_len > 0 || grid_len > 0;
+    let has_mesh_work =
+        !species_bufs.is_empty() || canopy_len > 0 || grid_len > 0 || surf_len > 0;
     if has_mesh_work {
         // Mesh pass — one dispatch per species drawing that species'
         // wood mesh instanced across its trees, then one canopy
@@ -551,6 +585,13 @@ pub fn render_scene(
         });
         pass.set_pipeline(&mesh_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
+        // Solid ground first — the grid and props draw over it.
+        if surf_len > 0 {
+            pass.set_vertex_buffer(0, surface_vertex_buf.wgpu().slice(..));
+            pass.set_vertex_buffer(1, surface_instance_buf.wgpu().slice(..));
+            pass.set_index_buffer(surface_index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..surf_len as u32, 0, 0..1);
+        }
         for sb in &species_bufs {
             pass.set_vertex_buffer(0, sb.vertex_buf.wgpu().slice(..));
             pass.set_vertex_buffer(1, sb.instance_buf.wgpu().slice(..));
