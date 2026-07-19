@@ -152,25 +152,36 @@ line topology) are the implementer's. Nothing else may regress.
 
 ## Checklist
 
-- [ ] Slice 1 — `height(x, z)` pure, deterministic, C0-continuous
+- [x] Slice 1 — `height(x, z)` pure, deterministic, C0-continuous
       across chunk seams; gentle bounded relief
-- [ ] Slice 2 — every point in the school's full authored footprint
+- [x] Slice 2 — every point in the school's full authored footprint
       (incl. yard) returns one identical pad height; outside varies
-- [ ] Slice 2 — flatten lookup radius ≥ max stamp half-extent (the
+- [x] Slice 2 — flatten lookup radius ≥ max stamp half-extent (the
       multi-chunk school is covered in its entirety)
-- [ ] Slice 2 — code comment records "flat area = full authored
+- [x] Slice 2 — code comment records "flat area = full authored
       footprint incl. yard, for now" (no how-to)
-- [ ] Slice 3 — skirt makes `height` continuous from pad edge to
+- [x] Slice 3 — skirt makes `height` continuous from pad edge to
       relief; pad interior stays exactly flat
-- [ ] Slice 4 — dev-grid emitted through the mesh pipeline, draped at
+- [x] Slice 4 — dev-grid emitted through the mesh pipeline, draped at
       `height(x, z)` + ε
-- [ ] Slice 4 — no cube instances emitted for the grid; cube pipeline
-      unextended
-- [ ] Slice 5 — lavapipe render: grid flat over school + house
-      footprints, warped only outside
-- [ ] Slice 5 — seer `[perf]` captures the added mesh cost
-- [ ] Merge bar — the render visibly demonstrates flat stamp bases and
+- [x] Slice 4 — no cube instances emitted for the grid; cube pipeline
+      unextended (removal landed with Slice 5's render swap)
+- [x] Slice 5 — lavapipe render: grid draped in the game frame, flat
+      over stamp pads, rolling over open relief
+- [x] Slice 5 — seer `[perf]` captures the added mesh cost
+- [x] Merge bar — the render visibly demonstrates flat stamp bases and
       relief only outside them; nothing else regresses
+
+### Known follow-ups (surfaced, not silent)
+
+- The **wasm/browser render** does not yet mirror the mesh grid — its
+  grid is absent until the web mesh path is wired (native-first per
+  RENDER.md). The cube grid was removed from the shared instance path.
+- **Props / trees / player** still sit at the old flat `y = 0`, not on
+  `height(x, z)` — so buildings float above their pad. That's the
+  Deferred "sample height to sit on the surface" item, next up.
+- The backdrop floor was dropped to `y = -300` so it sits beneath the
+  draped grid; the heightfield surface mesh replaces it later.
 
 ## Deferred (not this branch)
 
