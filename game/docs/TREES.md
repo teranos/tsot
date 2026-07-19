@@ -43,6 +43,24 @@ Per-tree mesh generation was tried first and crashed the browser tab.
   The apple orchard is the first authored stand.
 - Stumps are a cut-state of any species (not their own species).
 
+## Life stages
+
+Every tree has a `LifeStage` on its `TreeTrunk` component. Stage is
+orthogonal to species — a dying oak stays an oak. Transitions between
+stages don't rewrite species; they change what parts of the tree get
+drawn and how.
+
+- `Mature` — the default. Wood + full canopy. What every tree is today.
+- `Snag` — dead but still standing. Same species wood mesh; no
+  leaves, no fruit, no autumn tint; more limbs marked `is_dead`;
+  wood tint blended toward the deadwood colour.
+- `Stump` — the short remainder of a felled tree. Species bark kept.
+  Today's `TreeTrunk.stump: bool` collapses into this variant.
+- `Sapling`, `Fallen` — reserved. Not implemented in the first slice.
+
+`DEAD` as a species is retired. `t_tree_dead*` CDDA tiles map to a
+real species + `LifeStage::Snag`.
+
 ## Not done
 
 - **Flat-cut crown top.** Trunk stops at `sp.base_y.1` with no tapered
@@ -56,13 +74,10 @@ Per-tree mesh generation was tried first and crashed the browser tab.
   emit is an SDF-primitive artefact; semantically it's one limb.
   Unwind by keeping one `BranchSegment` and bending inside
   `collect_cones`.
-- **`DEAD` is its own species.** Same category mistake as stump was;
-  should be a `Snag` life-stage of any species (a dead oak keeps oak
-  bark).
-- **Life-stage axis** — `LifeStage` enum on `TreeTrunk`
-  (Sapling · Mature · Snag · Stump · Fallen). Saplings (CDDA
-  `t_tree_young` is dropped today). Decomposition scalar
-  snag → punky → fallen log + root mound.
+- **Sapling and Fallen life-stages.** Enum variants reserved; not
+  drawn yet. Saplings — CDDA's `t_tree_young` is dropped today.
+  Fallen — decomposition scalar snag → punky → fallen log + root
+  mound.
 - **Per-tree tunable overrides** — right-click a tree to edit only
   that instance's shape params. Requires: tree ray-pick from pointer,
   per-instance param storage, per-tree mesh regeneration for edited
