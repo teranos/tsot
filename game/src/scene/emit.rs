@@ -1,0 +1,508 @@
+use super::instance::SceneInstance;
+use super::props::{FENCE_BOTTOM_Y, FENCE_TOP_Y, is_fence, prop_appearance};
+use super::snapshot::SceneSnapshot;
+use crate::template::PropKind;
+
+pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
+    let mut instances: Vec<SceneInstance> = Vec::with_capacity(
+        1 + snap.trees.len() + snap.obstacles.len() + snap.fires.len() + snap.trails.len() + 1,
+    );
+    // No flat backdrop plane and no grid geometry: the solid terrain
+    // surface (terrain_surface_mesh) IS the ground, and the faint
+    // world-anchored reference grid is painted in its shader
+    // (GROUND_SHADER_WGSL) — see docs/TERRAIN.md.
+    //
+    // Trail — a thin flat rectangle sitting just above the ground.
+    // Length is baked in via crate::trail::TRAIL_END_Z - TRAIL_START_Z.
+    let trail_length = crate::trail::TRAIL_END_Z - crate::trail::TRAIL_START_Z;
+    for t in &snap.trails {
+        instances.push(SceneInstance {
+            pos: [t.x, t.y, t.z],
+            color: [0.18, 0.15, 0.10],
+            scale: [crate::trail::TRAIL_WIDTH, 1.0, trail_length],
+        });
+    }
+    // Trees are no longer emitted here — they render through the mesh
+    // pipeline (tapered trunk mesh + compound-instanced icosahedron
+    // canopy). See `snapshot_to_mesh_instances` and `game/docs/RENDER.md`.
+    for o in &snap.obstacles {
+        instances.push(SceneInstance {
+            pos: [o.x, 40.0, o.z],
+            color: [0.92, 0.70, 0.03],
+            scale: [60.0, 80.0, 60.0],
+        });
+    }
+    for (fire_pos, intensity) in &snap.fires {
+        let i = intensity.clamp(0.5, 1.5);
+        instances.push(SceneInstance {
+            pos: [fire_pos.x, 30.0, fire_pos.z],
+            color: [1.0 * i, 0.45 * i, 0.08 * i],
+            scale: [50.0, 60.0, 50.0],
+        });
+    }
+    // Remote peers — per-peer colour so two players are visually
+    // distinct from each other and from NPCs.
+    for p in &snap.remote_peers {
+        instances.push(SceneInstance {
+            pos: [p.pos.x, 60.0, p.pos.z],
+            color: p.color,
+            scale: [70.0, 140.0, 70.0],
+        });
+    }
+    for n in &snap.npcs {
+        instances.push(SceneInstance {
+            pos: [n.x, 60.0, n.z],
+            color: [0.95, 0.25, 0.20],
+            scale: [70.0, 140.0, 70.0],
+        });
+    }
+    // Named-zone markers — thin emissive-yellow rods so the layout
+    // reads at a glance. Rave's rod+sphere+label overlay lands when
+    // we grow text primitives in the shim.
+    for p in &snap.pins {
+        instances.push(SceneInstance {
+            pos: [p.x, 40.0, p.z],
+            color: [1.0, 0.9, 0.2],
+            scale: [20.0, 80.0, 20.0],
+        });
+    }
+    // Roof cut-away: when the player is genuinely under a roof, hide
+    // that building's roof so the interior is visible. "Inside" = the
+    // player is within a roof slab's footprint (half-width CDDA_TILE/2).
+    // The cut-away is anchored to the FOUND overhead roof cell, not the
+    // player, so a neighbouring building's roof/walls stay solid even
+    // when they'd be within the player's own cut radius.
+    let roof_half = cdda::CDDA_TILE / 2.0;
+    let overhead = snap.structures.iter().find(|(p, k, _, _)| {
+        *k == PropKind::Roof
+            && (p.x - snap.player.x).abs() <= roof_half
+            && (p.z - snap.player.z).abs() <= roof_half
+    });
+    let under_roof = overhead.is_some();
+    // Tight enough that a neighbouring building's walls stay solid
+    // (buildings sit ≥ 1 chunk apart, so anything past 800 is a
+    // different structure), loose enough to reach a big CDDA house's
+    // far perimeter from the overhead cell.
+    let cutaway_radius = 800.0_f32;
+    let overhead_pos = overhead.map(|(p, _, _, _)| *p).unwrap_or(snap.player);
+    // The isometric camera looks from +x,+z, so nearer props have a
+    // larger x+z. When inside, hide this building's roof AND its
+    // camera-facing walls (in front of the player) so the interior
+    // shows; the far walls stay as a backdrop.
+    let player_depth = snap.player.x + snap.player.z;
+
+    // Structure props (walls, furniture, roof). Size comes from the
+    // kind; colour is the prop's own tint (walls by material) or the
+    // kind default. Ground props sit on the floor (base at y=0);
+    // elevated props (the roof) carry their height in pos.y.
+    for (pos, kind, tint, size_override) in &snap.structures {
+        // Glass panes are drawn in the separate alpha-blended pass
+        // (see `snapshot_to_glass_instances`), never here.
+        if kind.is_window() {
+            continue;
+        }
+        let in_footprint = (pos.x - overhead_pos.x).abs() < cutaway_radius
+            && (pos.z - overhead_pos.z).abs() < cutaway_radius;
+        if under_roof && in_footprint {
+            if *kind == PropKind::Roof {
+                continue; // see-through roof
+            }
+            let is_wall =
+                matches!(kind, PropKind::Wall | PropKind::WallNS | PropKind::WallEW);
+            if is_wall && (pos.x + pos.z) > player_depth + 40.0 {
+                continue; // see-through camera-facing wall
+            }
+        }
+        let (default_color, default_scale) = prop_appearance(*kind);
+        let color = tint.unwrap_or(default_color);
+        let scale = size_override
+            .map(|s| [s.x, s.y, s.z])
+            .unwrap_or(default_scale);
+        if is_fence(*kind) {
+            // Bottom + top rail, gap between. Two thin bars per fence cell.
+            instances.push(SceneInstance {
+                pos: [pos.x, FENCE_BOTTOM_Y, pos.z],
+                color,
+                scale,
+            });
+            instances.push(SceneInstance {
+                pos: [pos.x, FENCE_TOP_Y, pos.z],
+                color,
+                scale,
+            });
+            // Vertical post at each end of the cell along the fence's
+            // axis, so the run reads as posts + rails, not floating bars.
+            let post_scale = [8.0, 60.0, 8.0];
+            let (dx, dz) = match *kind {
+                PropKind::FenceEW => (40.0, 0.0),
+                PropKind::FenceNS => (0.0, 40.0),
+                _ => (0.0, 0.0),
+            };
+            instances.push(SceneInstance {
+                pos: [pos.x - dx, post_scale[1] * 0.5, pos.z - dz],
+                color,
+                scale: post_scale,
+            });
+            instances.push(SceneInstance {
+                pos: [pos.x + dx, post_scale[1] * 0.5, pos.z + dz],
+                color,
+                scale: post_scale,
+            });
+            continue;
+        }
+        instances.push(SceneInstance {
+            pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
+            color,
+            scale,
+        });
+    }
+    // Purple jukebox — a squat solid box you toggle the music at.
+    for j in &snap.jukeboxes {
+        instances.push(SceneInstance {
+            pos: [j.x, crate::jukebox::JUKEBOX_SIZE.y * 0.5, j.z],
+            color: crate::jukebox::JUKEBOX_COLOR,
+            scale: [
+                crate::jukebox::JUKEBOX_SIZE.x,
+                crate::jukebox::JUKEBOX_SIZE.y,
+                crate::jukebox::JUKEBOX_SIZE.z,
+            ],
+        });
+    }
+    instances.push(SceneInstance {
+        pos: [snap.player.x, 60.0, snap.player.z],
+        color: [0.13, 0.83, 0.93],
+        scale: [70.0, 140.0, 70.0],
+    });
+    instances
+}
+
+/// Every wall/roof cut away by `snapshot_to_instances` — surfaced here
+/// as low-alpha ghost instances so the player still sees an outline of
+/// the building they're inside, rather than the geometry silently
+/// disappearing. Same eligibility test as the cut-away in
+/// `snapshot_to_instances`, inverted: this returns exactly what the
+/// opaque pass skips (never the other way around, so no double-draw).
+pub fn snapshot_to_ghost_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
+    let roof_half = cdda::CDDA_TILE / 2.0;
+    let overhead = snap.structures.iter().find(|(p, k, _, _)| {
+        *k == PropKind::Roof
+            && (p.x - snap.player.x).abs() <= roof_half
+            && (p.z - snap.player.z).abs() <= roof_half
+    });
+    let Some(overhead) = overhead else {
+        return Vec::new();
+    };
+    let overhead_pos = overhead.0;
+    let cutaway_radius = 800.0_f32;
+    let player_depth = snap.player.x + snap.player.z;
+    let mut out = Vec::new();
+    for (pos, kind, tint, size_override) in &snap.structures {
+        if kind.is_window() {
+            continue;
+        }
+        let in_footprint = (pos.x - overhead_pos.x).abs() < cutaway_radius
+            && (pos.z - overhead_pos.z).abs() < cutaway_radius;
+        if !in_footprint {
+            continue;
+        }
+        let is_ghost = *kind == PropKind::Roof
+            || (matches!(
+                kind,
+                PropKind::Wall | PropKind::WallNS | PropKind::WallEW
+            ) && (pos.x + pos.z) > player_depth + 40.0);
+        if !is_ghost {
+            continue;
+        }
+        let (default_color, default_scale) = prop_appearance(*kind);
+        let color = tint.unwrap_or(default_color);
+        let scale = size_override
+            .map(|s| [s.x, s.y, s.z])
+            .unwrap_or(default_scale);
+        out.push(SceneInstance {
+            pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
+            color,
+            scale,
+        });
+    }
+    out
+}
+
+/// The translucent glass panes, as instances for the alpha-blended
+/// glass pass. Separate from `snapshot_to_instances` so the opaque
+/// world can draw + write depth first, then glass blends over it. Glass
+/// is see-through by construction, so — unlike opaque near walls — it's
+/// never cut away when the player is inside.
+pub fn snapshot_to_glass_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
+    let mut out = Vec::new();
+    for (pos, kind, tint, size_override) in &snap.structures {
+        if !kind.is_window() {
+            continue;
+        }
+        let (default_color, default_scale) = prop_appearance(*kind);
+        let color = tint.unwrap_or(default_color);
+        let scale = size_override
+            .map(|s| [s.x, s.y, s.z])
+            .unwrap_or(default_scale);
+        out.push(SceneInstance {
+            pos: [pos.x, pos.y + scale[1] * 0.5, pos.z],
+            color,
+            scale,
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy_math::Vec3;
+
+    #[test]
+    fn cube_grid_is_gone_from_the_instance_path() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![],
+            jukeboxes: vec![],
+            player: Vec3::new(0.0, 20.0, 0.0),
+        };
+        let instances = snapshot_to_instances(&snap);
+        // The dev-grid used to add ~200 thin cubes at y=0.1. The reference
+        // grid is painted in the ground shader now — no grid geometry.
+        assert!(
+            instances.iter().all(|i| (i.pos[1] - 0.1).abs() > 1e-6),
+            "cube grid still emitted — found a SceneInstance at y=0.1"
+        );
+    }
+
+    #[test]
+    fn floor_follows_the_player_so_there_is_no_world_edge() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![],
+            jukeboxes: vec![],
+            player: Vec3::new(123_456.0, 20.0, -98_765.0),
+        };
+        let instances = snapshot_to_instances(&snap);
+        // The floor is the first instance; it sits under the player.
+        assert_eq!(instances[0].pos[0], 123_456.0);
+        assert_eq!(instances[0].pos[2], -98_765.0);
+    }
+
+    #[test]
+    fn roof_is_seethrough_when_the_player_is_under_it() {
+        let snap = |px: f32| SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![(Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None, None)],
+            jukeboxes: vec![],
+            player: Vec3::new(px, 20.0, 0.0),
+        };
+        // The roof is the only instance above y=100; check its presence.
+        let has_roof = |px: f32| snapshot_to_instances(&snap(px)).iter().any(|i| i.pos[1] > 100.0);
+        assert!(!has_roof(0.0), "roof should be hidden when the player is under it");
+        assert!(has_roof(5000.0), "roof should render when the player is far away");
+        // Just outside the slab's half-width (CDDA_TILE/2 = 40): the
+        // player is next to the wall but NOT under the roof, so the
+        // cut-away must NOT trigger — walls/roof stay solid.
+        assert!(
+            has_roof(60.0),
+            "standing close to a wall from outside must not make it see-through"
+        );
+    }
+
+    fn structure_at(
+        x: f32,
+        y: f32,
+        z: f32,
+        kind: PropKind,
+    ) -> (Vec3, PropKind, Option<[f32; 3]>, Option<Vec3>) {
+        (Vec3::new(x, y, z), kind, None, None)
+    }
+
+    #[test]
+    fn cut_away_stays_within_the_building_you_are_actually_under() {
+        // Player is inside building A (roof at origin). Building B sits
+        // ~900 units east but is a separate building (its own roof).
+        // B's camera-facing wall must stay solid.
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![
+                // Building A: roof over the player.
+                structure_at(0.0, 220.0, 0.0, PropKind::Roof),
+                // Building B: its own roof 900 units east, plus a
+                // camera-facing wall next to that roof.
+                structure_at(900.0, 220.0, 900.0, PropKind::Roof),
+                structure_at(900.0, 0.0, 900.0, PropKind::Wall),
+            ],
+            jukeboxes: vec![],
+            player: Vec3::ZERO,
+        };
+        let opaque = snapshot_to_instances(&snap);
+        let has_neighbor_wall = opaque.iter().any(|i| {
+            i.pos[0] > 800.0 && (90.0..140.0).contains(&i.pos[1])
+        });
+        assert!(
+            has_neighbor_wall,
+            "neighbouring building's wall got cut — cut-away leaked past the current building's footprint: {:?}",
+            opaque.iter().map(|i| (i.pos, i.scale)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn near_walls_are_cut_away_when_inside() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![
+                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None, None), // overhead → inside
+                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None, None), // camera-facing (x+z>0)
+                (Vec3::new(-300.0, 0.0, -300.0), PropKind::Wall, None, None), // far side
+            ],
+            jukeboxes: vec![],
+            player: Vec3::ZERO,
+        };
+        let inst = snapshot_to_instances(&snap);
+        // Walls render around y=110; only the far wall should survive.
+        let walls: Vec<_> = inst.iter().filter(|i| (90.0..140.0).contains(&i.pos[1])).collect();
+        assert_eq!(walls.len(), 1, "only the far wall should remain when inside");
+        assert!(walls[0].pos[0] < 0.0, "the surviving wall is the far one");
+    }
+
+    #[test]
+    fn cut_away_wall_and_roof_surface_as_ghost_instances() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![
+                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None, None), // overhead → inside
+                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None, None), // camera-facing (x+z>0)
+                (Vec3::new(-300.0, 0.0, -300.0), PropKind::Wall, None, None), // far side (still opaque)
+            ],
+            jukeboxes: vec![],
+            player: Vec3::ZERO,
+        };
+        let opaque = snapshot_to_instances(&snap);
+        let ghost = snapshot_to_ghost_instances(&snap);
+        // The opaque pass keeps the far wall only.
+        let opaque_walls: Vec<_> = opaque.iter().filter(|i| (90.0..140.0).contains(&i.pos[1])).collect();
+        assert_eq!(opaque_walls.len(), 1);
+        assert!(opaque_walls[0].pos[0] < 0.0);
+        // Ghost carries what the opaque pass dropped: the camera-facing
+        // wall + the roof — never the far wall (still opaque).
+        assert_eq!(ghost.len(), 2, "expected roof + camera-facing wall as ghosts");
+        assert!(ghost.iter().any(|i| i.pos[1] > 200.0), "ghost includes the roof");
+        assert!(
+            ghost.iter().any(|i| i.pos[0] > 0.0 && (90.0..140.0).contains(&i.pos[1])),
+            "ghost includes the camera-facing wall"
+        );
+    }
+
+    #[test]
+    fn ghost_is_empty_when_not_under_roof() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![
+                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None, None),
+                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None, None),
+            ],
+            jukeboxes: vec![],
+            player: Vec3::new(5000.0, 0.0, 5000.0), // far from any roof
+        };
+        assert!(snapshot_to_ghost_instances(&snap).is_empty());
+    }
+
+    #[test]
+    fn windows_render_in_the_glass_pass_not_the_opaque_pass() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![
+                (Vec3::new(300.0, 0.0, 0.0), PropKind::WallNS, None, None),
+                (Vec3::new(300.0, 0.0, 80.0), PropKind::WindowNS, Some([0.5, 0.68, 0.82]), None),
+            ],
+            jukeboxes: vec![],
+            player: Vec3::ZERO,
+        };
+        let opaque = snapshot_to_instances(&snap);
+        let glass = snapshot_to_glass_instances(&snap);
+        // The glass pass carries exactly the one window pane.
+        assert_eq!(glass.len(), 1, "the window belongs to the glass pass");
+        assert_eq!(glass[0].color, [0.5, 0.68, 0.82], "keeps its glass tint");
+        // The opaque pass has the wall but not the window: no opaque
+        // instance sits at the window's position.
+        assert!(
+            !opaque.iter().any(|i| i.pos[0] == 300.0 && i.pos[2] == 80.0),
+            "the window must not be drawn opaque"
+        );
+        assert!(
+            opaque.iter().any(|i| i.pos[0] == 300.0 && i.pos[2] == 0.0),
+            "the wall still draws opaque"
+        );
+    }
+
+    #[test]
+    fn jukebox_renders_as_a_purple_box() {
+        let snap = SceneSnapshot {
+            trees: vec![],
+            obstacles: vec![],
+            fires: vec![],
+            npcs: vec![],
+            pins: vec![],
+            trails: vec![],
+            remote_peers: vec![],
+            structures: vec![],
+            jukeboxes: vec![Vec3::new(200.0, 0.0, 2400.0)],
+            player: Vec3::ZERO,
+        };
+        let inst = snapshot_to_instances(&snap);
+        assert!(
+            inst.iter()
+                .any(|i| i.color == crate::jukebox::JUKEBOX_COLOR && i.pos[0] == 200.0),
+            "the jukebox should render at its position in its purple colour"
+        );
+    }
+}
