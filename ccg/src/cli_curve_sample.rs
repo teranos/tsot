@@ -42,7 +42,7 @@ use tsot::sim::stats::GameStats;
 
 use crate::parse_u64_hex_or_dec;
 use tsot::sim;
-use tsot::sim::genome::{random_genome, to_deck};
+use tsot::sim::genome::{random_genome, to_units};
 
 thread_local! {
     /// Per-thread CardRegistry. `mlua::Lua` is `!Send`, so each rayon
@@ -188,9 +188,9 @@ pub fn run_curve_sample(
         .into_par_iter()
         .map(|spec| {
             let reg = worker_registry();
-            let deck_a = to_deck(&reg, &spec.genome_a).expect("to_deck A");
-            let deck_b = to_deck(&reg, &spec.genome_b).expect("to_deck B");
-            let state = GameState::new(deck_a, deck_b);
+            let deck_a = to_units(&reg, &spec.genome_a).expect("to_units A");
+            let deck_b = to_units(&reg, &spec.genome_b).expect("to_units B");
+            let state = GameState::from_units(deck_a, deck_b);
             let mut game_rng = StdRng::seed_from_u64(spec.seed);
             let mut log: Vec<String> = Vec::new();
             // Clear any failure entries lingering from a prior game
