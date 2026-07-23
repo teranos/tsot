@@ -198,9 +198,25 @@ Each slice is failing-test-first; nothing else may regress.
    follow-up for slice 4: `MeshVertex` has no colour channel —
    per-material wall colour needs per-vertex colour, a colour →
    submesh split, or one instance per colour group at bake.
+   The colour design target (from discussion): walls carry their
+   exterior material colour from the graph, and INTERIOR faces get
+   per-room colours — rooms derived from the graph's enclosure
+   faces, palette seeded per building (HOUSE_VARIANTS-style) so
+   colours vary across buildings but cohere within one. A wall
+   face's colour then depends on which side of the wall it is and
+   which room that side bounds — one more reason the colour
+   channel wants to live per-vertex (the two side faces of one
+   band differ), decided at bake.
 3. **Openings** — no wall triangle intrudes into a window's glass
    band; doorways get jambs; band faces of one run lie only in the
    run's two side planes.
+   **Landed** — universal Y-banding at the sill/lintel lines (every
+   vertical face splits on `Y_BANDS`, so solid-meets-window stays
+   manifold by construction); windows emit sill + lintel + reveals,
+   glass band open for the alpha pass; door jambs came free with
+   slice 2. Pinned by the window fixture (glass-band-open,
+   coplanarity, manifold) and the same assertions over every
+   window node of the P-shape graph end-to-end.
 4. **Bake + draw swap** — buildings with a graph stop emitting
    `Wall*` (and window sill/lintel) cube instances; glass panes
    keep emitting. The lavapipe tour render is the merge bar,

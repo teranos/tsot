@@ -10,10 +10,13 @@
 //! doubled-edge artifact came from separate boxes shading their own
 //! end-caps inside the joint, not from the crease.
 //!
-//! Slice 2 scope: Solid (and Window — full-height for now, bands come
-//! in slice 3) geometry. Door nodes carry no lateral offsets and
-//! tessellate as gaps; a run ending beside a door caps at the cell
-//! boundary — which IS the door jamb.
+//! Openings (slice 3): every vertical face is split on the canonical
+//! sill/lintel lines (`Y_BANDS`) so band edges always meet band edges.
+//! Window cells occupy only the outer bands — the glass band stays
+//! open for the alpha pass — with sill top, lintel underside, and
+//! reveals closing the solid neighbours. Door nodes carry no lateral
+//! offsets and tessellate as gaps; a run ending beside a door caps at
+//! the cell boundary — which IS the door jamb.
 
 use cdda::{WallGraph, WallNode};
 
@@ -21,11 +24,26 @@ use crate::tree_mesh::MeshVertex;
 
 /// Wall height — matches the prop path's wall size and `ROOF_HEIGHT`.
 pub const WALL_HEIGHT: f32 = 220.0;
+/// Window sill top — the tessellation constant (RENDER.md decision 1:
+/// sill/lintel are not authored data). Matches the prop path's layers.
+pub const SILL_TOP: f32 = 60.0;
+/// Window lintel underside — glass band is SILL_TOP..HEAD_BOTTOM.
+pub const HEAD_BOTTOM: f32 = 180.0;
 /// Half thickness — matches `placement.rs`'s `WALL_HALF_THICKNESS`.
 const HT: f32 = 12.0;
 const CELL: f32 = cdda::CDDA_TILE;
 const HC: f32 = CDDA_HALF;
 const CDDA_HALF: f32 = 40.0;
+
+/// The three canonical vertical bands. EVERY vertical face is split on
+/// these lines — solid walls occupy all three, windows only the outer
+/// two — so band edges always meet band edges and the mesh stays
+/// manifold wherever solid meets window.
+const Y_BANDS: [(f32, f32); 3] = [
+    (0.0, SILL_TOP),
+    (SILL_TOP, HEAD_BOTTOM),
+    (HEAD_BOTTOM, WALL_HEIGHT),
+];
 
 /// Tessellate the whole graph. Offsets are template-local (same space
 /// as `Prop.offset`); the caller instances the result at the building
@@ -116,42 +134,45 @@ pub fn wall_graph_mesh(g: &WallGraph) -> (Vec<MeshVertex>, Vec<u32>) {
             [sx - HT, WALL_HEIGHT, sz + HT],
             [0.0, 1.0, 0.0],
         );
-        // Side faces only where no run abuts.
-        if !attached.contains(&(k, W)) {
-            out.quad(
-                [sx - HT, 0.0, sz + HT],
-                [sx - HT, 0.0, sz - HT],
-                [sx - HT, WALL_HEIGHT, sz - HT],
-                [sx - HT, WALL_HEIGHT, sz + HT],
-                [-1.0, 0.0, 0.0],
-            );
-        }
-        if !attached.contains(&(k, E)) {
-            out.quad(
-                [sx + HT, 0.0, sz - HT],
-                [sx + HT, 0.0, sz + HT],
-                [sx + HT, WALL_HEIGHT, sz + HT],
-                [sx + HT, WALL_HEIGHT, sz - HT],
-                [1.0, 0.0, 0.0],
-            );
-        }
-        if !attached.contains(&(k, N)) {
-            out.quad(
-                [sx - HT, 0.0, sz - HT],
-                [sx + HT, 0.0, sz - HT],
-                [sx + HT, WALL_HEIGHT, sz - HT],
-                [sx - HT, WALL_HEIGHT, sz - HT],
-                [0.0, 0.0, -1.0],
-            );
-        }
-        if !attached.contains(&(k, S)) {
-            out.quad(
-                [sx + HT, 0.0, sz + HT],
-                [sx - HT, 0.0, sz + HT],
-                [sx - HT, WALL_HEIGHT, sz + HT],
-                [sx + HT, WALL_HEIGHT, sz + HT],
-                [0.0, 0.0, 1.0],
-            );
+        // Side faces only where no run abuts — banded on the canonical
+        // Y lines so square edges always meet banded run edges.
+        for (y0, y1) in Y_BANDS {
+            if !attached.contains(&(k, W)) {
+                out.quad(
+                    [sx - HT, y0, sz + HT],
+                    [sx - HT, y0, sz - HT],
+                    [sx - HT, y1, sz - HT],
+                    [sx - HT, y1, sz + HT],
+                    [-1.0, 0.0, 0.0],
+                );
+            }
+            if !attached.contains(&(k, E)) {
+                out.quad(
+                    [sx + HT, y0, sz - HT],
+                    [sx + HT, y0, sz + HT],
+                    [sx + HT, y1, sz + HT],
+                    [sx + HT, y1, sz - HT],
+                    [1.0, 0.0, 0.0],
+                );
+            }
+            if !attached.contains(&(k, N)) {
+                out.quad(
+                    [sx - HT, y0, sz - HT],
+                    [sx + HT, y0, sz - HT],
+                    [sx + HT, y1, sz - HT],
+                    [sx - HT, y1, sz - HT],
+                    [0.0, 0.0, -1.0],
+                );
+            }
+            if !attached.contains(&(k, S)) {
+                out.quad(
+                    [sx + HT, y0, sz + HT],
+                    [sx - HT, y0, sz + HT],
+                    [sx - HT, y1, sz + HT],
+                    [sx + HT, y1, sz + HT],
+                    [0.0, 0.0, 1.0],
+                );
+            }
         }
     }
 
@@ -300,40 +321,148 @@ fn emit_axis_run<'a>(
         if s.hi - s.lo <= 1e-3 {
             continue;
         }
-        emit_band(out, axis, lateral, s.lo, s.hi, s.cap_lo, s.cap_hi);
+        // Sub-split the seg into stretches of consecutive same-kind
+        // cells: solid stretches occupy all three Y bands, window
+        // stretches only the outer two (the glass band stays open for
+        // the alpha pass). Stretch boundaries are cell edges.
+        let mut stretches: Vec<(f32, f32, bool)> = Vec::new();
+        for n in run {
+            let c0 = (along(n) - HC).max(s.lo);
+            let c1 = (along(n) + HC).min(s.hi);
+            if c1 - c0 <= 1e-3 {
+                continue;
+            }
+            let win = n.kind == cdda::WallCellKind::Window;
+            match stretches.last_mut() {
+                Some((_, hi, w)) if *w == win && (*hi - c0).abs() < 1e-3 => *hi = c1,
+                _ => stretches.push((c0, c1, win)),
+            }
+        }
+        for i in 0..stretches.len() {
+            let (lo, hi, win) = stretches[i];
+            let span = Span {
+                lo,
+                hi,
+                window: win,
+                cap_lo: i == 0 && s.cap_lo,
+                cap_hi: i == stretches.len() - 1 && s.cap_hi,
+            };
+            emit_stretch(out, axis, lateral, span);
+            // Reveal at a solid|window boundary: the band-1 face that
+            // closes the solid side, facing into the glass opening.
+            if i > 0 && stretches[i - 1].2 != win {
+                emit_reveal(out, axis, lateral, lo, win);
+            }
+        }
     }
 }
 
-/// One rectangular band: two side faces, a top cap, and optional end
-/// caps, in the band's axis orientation.
-fn emit_band(out: &mut MeshOut, axis: Axis, lateral: f32, lo: f32, hi: f32, cap_lo: bool, cap_hi: bool) {
+/// One same-kind interval of a run in along-axis coordinates.
+struct Span {
+    lo: f32,
+    hi: f32,
+    window: bool,
+    cap_lo: bool,
+    cap_hi: bool,
+}
+
+/// One same-kind stretch of a run: banded side faces (all three Y
+/// bands for solid, outer two for a window), a top cap, sill top /
+/// lintel underside for windows, and optional banded end caps.
+fn emit_stretch(out: &mut MeshOut, axis: Axis, lateral: f32, span: Span) {
+    let Span { lo, hi, window, cap_lo, cap_hi } = span;
     let h = WALL_HEIGHT;
+    let solid_bands: &[(f32, f32)] = &Y_BANDS;
+    let window_bands: &[(f32, f32)] = &[Y_BANDS[0], Y_BANDS[2]];
+    let bands = if window { window_bands } else { solid_bands };
     match axis {
         Axis::Ew => {
             let (z0, z1) = (lateral - HT, lateral + HT);
-            // North face (−z) and south face (+z).
-            out.quad([lo, 0.0, z0], [hi, 0.0, z0], [hi, h, z0], [lo, h, z0], [0.0, 0.0, -1.0]);
-            out.quad([hi, 0.0, z1], [lo, 0.0, z1], [lo, h, z1], [hi, h, z1], [0.0, 0.0, 1.0]);
+            for &(y0, y1) in bands {
+                // North face (−z) and south face (+z).
+                out.quad([lo, y0, z0], [hi, y0, z0], [hi, y1, z0], [lo, y1, z0], [0.0, 0.0, -1.0]);
+                out.quad([hi, y0, z1], [lo, y0, z1], [lo, y1, z1], [hi, y1, z1], [0.0, 0.0, 1.0]);
+                if cap_lo {
+                    out.quad([lo, y0, z1], [lo, y0, z0], [lo, y1, z0], [lo, y1, z1], [-1.0, 0.0, 0.0]);
+                }
+                if cap_hi {
+                    out.quad([hi, y0, z0], [hi, y0, z1], [hi, y1, z1], [hi, y1, z0], [1.0, 0.0, 0.0]);
+                }
+            }
             // Top.
             out.quad([lo, h, z0], [hi, h, z0], [hi, h, z1], [lo, h, z1], [0.0, 1.0, 0.0]);
-            if cap_lo {
-                out.quad([lo, 0.0, z1], [lo, 0.0, z0], [lo, h, z0], [lo, h, z1], [-1.0, 0.0, 0.0]);
-            }
-            if cap_hi {
-                out.quad([hi, 0.0, z0], [hi, 0.0, z1], [hi, h, z1], [hi, h, z0], [1.0, 0.0, 0.0]);
+            if window {
+                // Sill top surface (+y) and lintel underside (−y).
+                out.quad(
+                    [lo, SILL_TOP, z0],
+                    [hi, SILL_TOP, z0],
+                    [hi, SILL_TOP, z1],
+                    [lo, SILL_TOP, z1],
+                    [0.0, 1.0, 0.0],
+                );
+                out.quad(
+                    [hi, HEAD_BOTTOM, z0],
+                    [lo, HEAD_BOTTOM, z0],
+                    [lo, HEAD_BOTTOM, z1],
+                    [hi, HEAD_BOTTOM, z1],
+                    [0.0, -1.0, 0.0],
+                );
             }
         }
         Axis::Ns => {
             let (x0, x1) = (lateral - HT, lateral + HT);
-            // West face (−x) and east face (+x).
-            out.quad([x0, 0.0, hi], [x0, 0.0, lo], [x0, h, lo], [x0, h, hi], [-1.0, 0.0, 0.0]);
-            out.quad([x1, 0.0, lo], [x1, 0.0, hi], [x1, h, hi], [x1, h, lo], [1.0, 0.0, 0.0]);
-            out.quad([x0, h, lo], [x1, h, lo], [x1, h, hi], [x0, h, hi], [0.0, 1.0, 0.0]);
-            if cap_lo {
-                out.quad([x0, 0.0, lo], [x1, 0.0, lo], [x1, h, lo], [x0, h, lo], [0.0, 0.0, -1.0]);
+            for &(y0, y1) in bands {
+                // West face (−x) and east face (+x).
+                out.quad([x0, y0, hi], [x0, y0, lo], [x0, y1, lo], [x0, y1, hi], [-1.0, 0.0, 0.0]);
+                out.quad([x1, y0, lo], [x1, y0, hi], [x1, y1, hi], [x1, y1, lo], [1.0, 0.0, 0.0]);
+                if cap_lo {
+                    out.quad([x0, y0, lo], [x1, y0, lo], [x1, y1, lo], [x0, y1, lo], [0.0, 0.0, -1.0]);
+                }
+                if cap_hi {
+                    out.quad([x1, y0, hi], [x0, y0, hi], [x0, y1, hi], [x1, y1, hi], [0.0, 0.0, 1.0]);
+                }
             }
-            if cap_hi {
-                out.quad([x1, 0.0, hi], [x0, 0.0, hi], [x0, h, hi], [x1, h, hi], [0.0, 0.0, 1.0]);
+            out.quad([x0, h, lo], [x1, h, lo], [x1, h, hi], [x0, h, hi], [0.0, 1.0, 0.0]);
+            if window {
+                out.quad(
+                    [x0, SILL_TOP, lo],
+                    [x1, SILL_TOP, lo],
+                    [x1, SILL_TOP, hi],
+                    [x0, SILL_TOP, hi],
+                    [0.0, 1.0, 0.0],
+                );
+                out.quad(
+                    [x1, HEAD_BOTTOM, lo],
+                    [x0, HEAD_BOTTOM, lo],
+                    [x0, HEAD_BOTTOM, hi],
+                    [x1, HEAD_BOTTOM, hi],
+                    [0.0, -1.0, 0.0],
+                );
+            }
+        }
+    }
+}
+
+/// The band-1 face at a solid|window boundary — closes the solid
+/// stretch's cross-section and faces into the glass opening.
+/// `facing_positive` = the window lies on the +axis side of `at`.
+fn emit_reveal(out: &mut MeshOut, axis: Axis, lateral: f32, at: f32, facing_positive: bool) {
+    let (y0, y1) = Y_BANDS[1];
+    match axis {
+        Axis::Ew => {
+            let (z0, z1) = (lateral - HT, lateral + HT);
+            if facing_positive {
+                out.quad([at, y0, z0], [at, y0, z1], [at, y1, z1], [at, y1, z0], [1.0, 0.0, 0.0]);
+            } else {
+                out.quad([at, y0, z1], [at, y0, z0], [at, y1, z0], [at, y1, z1], [-1.0, 0.0, 0.0]);
+            }
+        }
+        Axis::Ns => {
+            let (x0, x1) = (lateral - HT, lateral + HT);
+            if facing_positive {
+                out.quad([x1, y0, at], [x0, y0, at], [x0, y1, at], [x1, y1, at], [0.0, 0.0, 1.0]);
+            } else {
+                out.quad([x0, y0, at], [x1, y0, at], [x1, y1, at], [x0, y1, at], [0.0, 0.0, -1.0]);
             }
         }
     }
@@ -531,6 +660,73 @@ mod tests {
         assert!(verts.iter().any(|v| (v.pos[2] - 120.0).abs() < 1e-3), "divider band missing");
     }
 
+    /// No triangle centroid strictly inside the open glass volume of a
+    /// window cell — the glass band belongs to the alpha pass, the wall
+    /// mesh must leave it open. Reveals live ON the boundary planes.
+    fn assert_glass_band_open(verts: &[MeshVertex], idx: &[u32], n: &WallNode) {
+        for t in idx.chunks(3) {
+            let c = t.iter().fold([0.0f32; 3], |acc, &i| {
+                let p = verts[i as usize].pos;
+                [acc[0] + p[0] / 3.0, acc[1] + p[1] / 3.0, acc[2] + p[2] / 3.0]
+            });
+            let inside = (c[0] - n.offset.x).abs() < CDDA_HALF - 1.0
+                && (c[2] - n.offset.z).abs() < CDDA_HALF - 1.0
+                && c[1] > SILL_TOP + 0.5
+                && c[1] < HEAD_BOTTOM - 0.5;
+            assert!(
+                !inside,
+                "face centroid {c:?} inside the glass band of the window at {:?}",
+                n.offset
+            );
+        }
+    }
+
+    #[test]
+    fn window_opens_the_glass_band_and_stays_manifold() {
+        // Three-cell perimeter run, middle cell is a window: the wall
+        // mesh emits sill (0..60) and lintel (180..220) but leaves the
+        // glass band open, with reveals closing the solid neighbours.
+        let mut mid = node(80.0, 0.0, Some(-28.0), None);
+        mid.kind = WallCellKind::Window;
+        let g = WallGraph {
+            nodes: vec![
+                node(0.0, 0.0, Some(-28.0), None),
+                mid,
+                node(160.0, 0.0, Some(-28.0), None),
+            ],
+            edges: vec![WallEdge { a: 0, b: 1 }, WallEdge { a: 1, b: 2 }],
+        };
+        let (verts, idx) = wall_graph_mesh(&g);
+        assert_manifold_or_grounded(&verts, &idx);
+        assert_glass_band_open(&verts, &idx, &g.nodes[1]);
+        // Sill top surface and lintel underside exist.
+        assert!(
+            verts.iter().any(|v| (v.pos[1] - SILL_TOP).abs() < 1e-3),
+            "sill top missing"
+        );
+        assert!(
+            verts.iter().any(|v| (v.pos[1] - HEAD_BOTTOM).abs() < 1e-3),
+            "lintel underside missing"
+        );
+        // Reveals: geometry at the window's side boundaries within the
+        // glass band (x = 40 and 120, between y 60 and 180).
+        assert!(
+            verts.iter().any(|v| (v.pos[0] - 40.0).abs() < 1e-3
+                && v.pos[1] > SILL_TOP - 1e-3
+                && v.pos[1] < HEAD_BOTTOM + 1e-3),
+            "west reveal missing"
+        );
+        // Coplanarity: every side-face vertex lies in one of the run's
+        // two side planes (z = −40 or z = −16); nothing bulges.
+        for v in &verts {
+            if v.normal[2].abs() > 0.5 {
+                let on_planes =
+                    (v.pos[2] + 40.0).abs() < 1e-3 || (v.pos[2] + 16.0).abs() < 1e-3;
+                assert!(on_planes, "side-face vertex off the run planes: {:?}", v.pos);
+            }
+        }
+    }
+
     #[test]
     fn p_shape_meshes_manifold_with_clean_miters_and_door_gaps() {
         // End-to-end: the real graph from the cdda importer.
@@ -560,6 +756,10 @@ mod tests {
         for n in t.walls.nodes.iter().filter(|n| n.ew.is_some() && n.ns.is_some()) {
             let (cx, cz) = square_center(n);
             assert_no_faces_inside_square(&verts, &idx, cx, cz);
+        }
+        // Windows are open in the glass band, on the real graph too.
+        for n in t.walls.nodes.iter().filter(|n| n.kind == WallCellKind::Window) {
+            assert_glass_band_open(&verts, &idx, n);
         }
         // Door cells are gaps: no geometry strictly inside a door
         // cell's interior (jambs live ON the cell boundary).
