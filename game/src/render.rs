@@ -25,7 +25,7 @@ use crate::obs;
 use crate::scene::{GpuVertex, MeshInstance, SceneCamera, SceneInstance, as_bytes, cube_geometry};
 use crate::shaders::{
     GLASS_SHADER_WGSL, GROUND_SHADER_WGSL, LEAF_SHADER_WGSL, MESH_SHADER_WGSL, SHADER_WGSL,
-    WALL_SHADER_WGSL,
+    WALL_GHOST_SHADER_WGSL, WALL_SHADER_WGSL,
 };
 use crate::tree_emit::MeshTreeInstances;
 use crate::tree_mesh::{self, MeshVertex};
@@ -37,8 +37,13 @@ use crate::tree_mesh::{self, MeshVertex};
 pub struct WallDrawPart<'a> {
     pub verts: &'a [MeshVertex],
     pub indices: &'a [u32],
+    /// Near triangles depth-DESCENDING (see `wall_bake`) — the ghost
+    /// pass draws `ghost_indices[..ghost_count]`: exactly the set the
+    /// opaque draw skipped.
+    pub ghost_indices: &'a [u32],
     pub instance: MeshInstance,
     pub draw_count: u32,
+    pub ghost_count: u32,
 }
 
 const TARGET_SIZE: u32 = 512;
@@ -223,12 +228,14 @@ pub fn render_scene(
     struct WallBufs {
         vertex_buf: crate::gpu::SeerBuffer,
         index_buf: crate::gpu::SeerBuffer,
+        ghost_index_buf: Option<crate::gpu::SeerBuffer>,
         instance_buf: crate::gpu::SeerBuffer,
         draw_count: u32,
+        ghost_count: u32,
     }
     let mut wall_bufs: Vec<WallBufs> = Vec::with_capacity(walls.len());
     for part in walls {
-        if part.draw_count == 0 || part.verts.is_empty() {
+        if (part.draw_count == 0 && part.ghost_count == 0) || part.verts.is_empty() {
             continue;
         }
         let vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
@@ -253,7 +260,26 @@ pub fn render_scene(
             mapped_at_creation: false,
         });
         queue.write_buffer(instance_buf.wgpu(), 0, as_bytes(&inst));
-        wall_bufs.push(WallBufs { vertex_buf, index_buf, instance_buf, draw_count: part.draw_count });
+        let ghost_index_buf = if part.ghost_count > 0 {
+            let b = dev.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("seer.render.mesh.wall.ghost_index"),
+                size: std::mem::size_of_val(part.ghost_indices) as u64,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(b.wgpu(), 0, as_bytes(part.ghost_indices));
+            Some(b)
+        } else {
+            None
+        };
+        wall_bufs.push(WallBufs {
+            vertex_buf,
+            index_buf,
+            ghost_index_buf,
+            instance_buf,
+            draw_count: part.draw_count,
+            ghost_count: part.ghost_count,
+        });
     }
 
     let tp = crate::tune::get();
@@ -541,6 +567,71 @@ pub fn render_scene(
         source: wgpu::ShaderSource::Wgsl(WALL_SHADER_WGSL.into()),
     });
     let wall_pipeline = make_mesh_pipeline(wall_shader.wgpu(), "seer.render.wall.pipeline");
+    // Wall GHOST pipeline: mesh layout, alpha-blended, depth-test on,
+    // depth-write OFF — cut-away walls leave an outline, never vanish.
+    let wall_ghost_shader = dev.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("seer.render.wall_ghost.shader"),
+        source: wgpu::ShaderSource::Wgsl(WALL_GHOST_SHADER_WGSL.into()),
+    });
+    let wall_ghost_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("seer.render.wall_ghost.pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: wall_ghost_shader.wgpu(),
+            entry_point: Some("vs"),
+            compilation_options: Default::default(),
+            buffers: &[
+                wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MeshVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3,
+                        1 => Float32x3,
+                        2 => Float32x2
+                    ],
+                },
+                wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MeshInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        3 => Float32x3,
+                        4 => Float32x3,
+                        5 => Float32x3,
+                        6 => Float32x4
+                    ],
+                },
+            ],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Back),
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: wall_ghost_shader.wgpu(),
+            entry_point: Some("fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: TARGET_FORMAT,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
 
     // Readback path: color texture → staging buffer → CPU → PNG.
     // Row pitch must be a multiple of 256 bytes (COPY_BYTES_PER_ROW
@@ -690,6 +781,43 @@ pub fn render_scene(
         pass.set_vertex_buffer(0, vertex_buf.wgpu().slice(..));
         pass.set_vertex_buffer(1, glass_buf.wgpu().slice(..));
         pass.draw(0..vertices.len() as u32, 0..glass_instances.len() as u32);
+    }
+    let has_wall_ghosts = wall_bufs.iter().any(|w| w.ghost_count > 0);
+    if has_wall_ghosts {
+        // Wall ghost pass — cut-away near walls at low alpha, after
+        // glass so the outline sits on top of the panes.
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("seer.render.wall_ghost.pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &color_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&wall_ghost_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        for wb in &wall_bufs {
+            let Some(gib) = &wb.ghost_index_buf else { continue };
+            pass.set_vertex_buffer(0, wb.vertex_buf.wgpu().slice(..));
+            pass.set_vertex_buffer(1, wb.instance_buf.wgpu().slice(..));
+            pass.set_index_buffer(gib.wgpu().slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..wb.ghost_count, 0, 0..1);
+        }
     }
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {

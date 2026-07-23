@@ -1138,7 +1138,7 @@ async function main() {
       // pass doesn't require reshaping every mesh buffer in the world.
       game_gpu_render_pipeline_create_mesh: (
         pipelineLayoutH: number, shaderH: number, vertexStride: number, instanceStride: number,
-        colorFormat: number, depthFormat: number, labelPtr: number, labelLen: number,
+        colorFormat: number, depthFormat: number, ghost: number, labelPtr: number, labelLen: number,
       ): number => {
         if (!device) return 0
         const pl = pipelineLayouts.get(pipelineLayoutH)
@@ -1170,8 +1170,16 @@ async function main() {
               ],
             },
             primitive: { topology: 'triangle-list', frontFace: 'ccw', cullMode: 'back' },
-            depthStencil: { format: depthFmt, depthWriteEnabled: true, depthCompare: 'less' },
-            fragment: { module: shader, entryPoint: 'fs', targets: [{ format: colorFmt }] },
+            // ghost=1: the translucent cut-away variant — alpha-blended,
+            // depth-tested, NOT depth-writing (wall-mesh ghost pass).
+            depthStencil: { format: depthFmt, depthWriteEnabled: ghost === 0, depthCompare: 'less' },
+            fragment: { module: shader, entryPoint: 'fs', targets: [{
+              format: colorFmt,
+              ...(ghost !== 0 ? { blend: {
+                color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              } } : {}),
+            }] },
           })
           const h = nextHandle++
           renderPipelines.set(h, pipeline)

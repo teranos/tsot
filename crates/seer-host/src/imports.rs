@@ -471,7 +471,7 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         |_caller: Caller<'_, Arc<Mutex<HostState>>>,
          _pipeline_layout: u32, _shader: u32, _vertex_stride: u32,
          _instance_stride: u32, _color_format: u32, _depth_format: u32,
-         _label_ptr: u32, _label_len: u32|
+         _ghost: u32, _label_ptr: u32, _label_len: u32|
          -> Result<u32> { Ok(1) },
     )?;
     linker.func_wrap(

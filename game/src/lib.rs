@@ -822,16 +822,21 @@ fn wall_draws<'a>(
             (snap.player.x - pw.anchor.x) + (snap.player.z - pw.anchor.z) + 40.0;
         let y = terrain::height(pw.anchor.x, pw.anchor.z);
         for part in &pw.bake.parts {
-            let draw_count = if inside {
+            let (draw_count, ghost_count) = if inside {
                 let visible_near =
                     part.near_depths.partition_point(|d| *d <= local_depth);
-                (part.near_start + visible_near * 3) as u32
+                let near_total = part.near_depths.len();
+                (
+                    (part.near_start + visible_near * 3) as u32,
+                    ((near_total - visible_near) * 3) as u32,
+                )
             } else {
-                part.indices.len() as u32
+                (part.indices.len() as u32, 0)
             };
             out.push(render::WallDrawPart {
                 verts: &part.verts,
                 indices: &part.indices,
+                ghost_indices: &part.ghost_indices,
                 instance: scene::MeshInstance {
                     pos: [pw.anchor.x, y, pw.anchor.z],
                     color: part.color,
@@ -839,6 +844,7 @@ fn wall_draws<'a>(
                     axis: [0.0, 1.0, 0.0, 0.0],
                 },
                 draw_count,
+                ghost_count,
             });
         }
     }

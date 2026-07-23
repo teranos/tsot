@@ -312,6 +312,39 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 "#
 );
 
+/// Ghost fragment for cut-away WALL MESH geometry — the mesh-layout
+/// sibling of GHOST_SHADER_WGSL: same faint alpha, so a wall that the
+/// cut-away removed still leaves its outline instead of silently
+/// vanishing. Drawn with the ghost mesh pipeline (alpha blend, depth
+/// test on, depth write off).
+pub const WALL_GHOST_SHADER_WGSL: &str = concat!(
+    mesh_layout_wgsl!(),
+    r#"
+@vertex
+fn vs(v: VIn, i: IIn) -> VOut {
+    let rot = basis_from_axis(i.i_axis.xyz);
+    var world = rot * (v.pos * i.i_scale) + i.i_pos;
+    world = world + wind_offset(world, camera.wind.x, camera.wind.y * i.i_axis.w * v.pos.y, camera.wind.z);
+    var o: VOut;
+    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    o.normal = normalize(rot * (v.normal / i.i_scale));
+    o.color = i.i_color;
+    o.uv = v.uv;
+    return o;
+}
+
+const GHOST_ALPHA: f32 = 0.15;
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let l = normalize(LIGHT_DIR);
+    let ndotl = max(dot(normalize(in.normal), l), 0.0);
+    let k = 0.42 + 0.58 * ndotl;
+    return vec4<f32>(in.color * k, GHOST_ALPHA);
+}
+"#
+);
+
 /// Ground shader for the solid terrain surface. Same vertex/instance
 /// layout as the mesh pipeline (so it uses the same pipeline factory and
 /// buffers), but it carries WORLD XZ to the fragment and paints a faint,

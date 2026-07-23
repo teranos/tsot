@@ -35,6 +35,11 @@ pub struct WallPart {
     /// draw cut exactly at the player's depth: draw near triangles
     /// whose depth ≤ the player's, skip the rest.
     pub near_depths: Vec<f32>,
+    /// The SAME near triangles, depth-DESCENDING: the ghost pass draws
+    /// the first (near_total − visible_near) of these — always a
+    /// prefix, because the web mesh crossing can only draw prefixes —
+    /// and that prefix is exactly the set the opaque draw skipped.
+    pub ghost_indices: Vec<u32>,
 }
 
 /// A building's baked wall mesh: colour-grouped, cut-away-ordered.
@@ -178,7 +183,9 @@ pub fn bake_walls(g: &WallGraph, seed: u32) -> WallBake {
             for (_, t) in &near {
                 far.extend_from_slice(t);
             }
-            WallPart { color, verts, indices: far, near_start, near_depths }
+            let ghost_indices: Vec<u32> =
+                near.iter().rev().flat_map(|(_, t)| t.iter().copied()).collect();
+            WallPart { color, verts, indices: far, near_start, near_depths, ghost_indices }
         })
         .collect();
     WallBake { parts }
@@ -355,6 +362,52 @@ mod tests {
                 .filter(|p| (p.color[0] - material[0]).abs() > 1e-3)
                 .count();
             assert!(room_parts >= 2, "rotation {rot}: room-coloured parts missing");
+        }
+    }
+
+    #[test]
+    fn ghost_indices_complement_the_opaque_draw_exactly() {
+        // Ghost = exactly what the opaque draw skipped, never both —
+        // slice 5's invariant, by construction: near triangles sorted
+        // depth-ASCENDING in `indices[near_start..]` for the opaque
+        // draw, and the SAME triangles depth-DESCENDING in
+        // `ghost_indices` so the cut set is always a prefix (the web
+        // crossing can only draw prefixes). For every possible cut
+        // depth k, opaque's k nearest-visible + ghost's (N−k) prefix
+        // must partition the near set.
+        let bake = bake_walls(&p_shape_graph(), 0);
+        for p in &bake.parts {
+            let near: Vec<&[u32]> = p.indices[p.near_start..].chunks(3).collect();
+            let ghost: Vec<&[u32]> = p.ghost_indices.chunks(3).collect();
+            assert_eq!(near.len(), ghost.len(), "ghost covers the whole near set");
+            let n = near.len();
+            for k in 0..=n {
+                // Opaque draws near[..k]; ghost draws ghost[..n-k].
+                let mut opaque: Vec<&[u32]> = near[..k].to_vec();
+                let mut ghosted: Vec<&[u32]> = ghost[..n - k].to_vec();
+                opaque.sort();
+                ghosted.sort();
+                let mut union = opaque.clone();
+                union.extend(ghosted.iter());
+                union.sort();
+                union.dedup();
+                assert_eq!(
+                    union.len(),
+                    n,
+                    "opaque[..{k}] and ghost[..{}] must partition the near set",
+                    n - k
+                );
+            }
+            // Ghost ordering is depth-descending.
+            let depth = |t: &[u32]| -> f32 {
+                t.iter().fold(0.0f32, |acc, &i| {
+                    let v = p.verts[i as usize].pos;
+                    acc + (v[0] + v[2]) / 3.0
+                })
+            };
+            for w in ghost.windows(2) {
+                assert!(depth(w[0]) >= depth(w[1]) - 1e-3, "ghost not depth-descending");
+            }
         }
     }
 

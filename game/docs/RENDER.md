@@ -246,6 +246,18 @@ Each slice is failing-test-first; nothing else may regress.
 5. **Near/far ranges + ghost parity** — the `emit.rs` property
    (ghost = exactly what opaque skipped, never both) holds for the
    mesh's index ranges.
+   **Landed** — the invariant holds by construction: the bake
+   stores the near triangles twice, depth-ASCENDING for the opaque
+   draw (visible prefix grows with player depth) and
+   depth-DESCENDING in `ghost_indices` (the cut set is always a
+   prefix — the web mesh crossing can only draw prefixes). The
+   complement property is pinned for every possible cut depth by
+   test. `WALL_GHOST_SHADER_WGSL` draws the cut set at α=0.15,
+   alpha-blended, depth-tested, not depth-writing, after glass, on
+   BOTH paths (the native path gains its first ghost pass). The
+   `create_mesh` factory crossing grew a `ghost` flag parameter —
+   same import set, `imports.allow` unchanged, JS shim + seer-host
+   mirror updated in the same diff.
 6. **Browser parity** — `seer-imports-check` green with
    `imports.allow` unchanged (decision 7 says no new crossings; a
    test proves it); `web_shim` ABI tests hold; merge bar is the

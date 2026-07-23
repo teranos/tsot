@@ -18,7 +18,7 @@ use crate::scene::{
 use crate::shaders::{
     GHOST_SHADER_WGSL, GLASS_SHADER_WGSL, GROUND_SHADER_WGSL, LEAF_SHADER_WGSL, MESH_SHADER_WGSL,
     SHADER_WGSL,
-    UI_SHADER_WGSL, WALL_SHADER_WGSL,
+    UI_SHADER_WGSL, WALL_GHOST_SHADER_WGSL, WALL_SHADER_WGSL,
 };
 use crate::tree_mesh::{self, MeshVertex};
 
@@ -89,6 +89,7 @@ struct RenderWebState {
     // per colour part when the player crosses a chunk; drawn each frame
     // with the cut-away index range (no re-upload).
     wall_pipeline: gpu_web::GameRenderPipeline,
+    wall_ghost_pipeline: gpu_web::GameRenderPipeline,
     walls_gpu: Vec<WallPartGpu>,
     walls_chunk_key: Option<(i32, i32)>,
 }
@@ -99,6 +100,9 @@ struct RenderWebState {
 struct WallPartGpu {
     vertex_buf: gpu_web::GameBuffer,
     index_buf: gpu_web::GameBuffer,
+    /// Near triangles depth-DESCENDING — the ghost pass draws a prefix
+    /// of these: exactly what the opaque draw skipped.
+    ghost_index_buf: gpu_web::GameBuffer,
     instance_buf: gpu_web::GameBuffer,
     index_total: u32,
     near_start: u32,
@@ -327,6 +331,28 @@ pub fn init(canvas_id: &str) -> bool {
         obs::emit("[render_web] init: wall pipeline null");
         return false;
     };
+    // Wall GHOST pipeline: same mesh layout, translucent variant (the
+    // ghost flag on the shared factory crossing) + the faint fragment.
+    let wall_ghost_shader =
+        gpu_web::GameShaderModule::create(WALL_GHOST_SHADER_WGSL, "render_web.wall_ghost.shader");
+    let Some(wall_ghost_shader) = wall_ghost_shader else {
+        obs::emit("[render_web] init: wall ghost shader null");
+        return false;
+    };
+    let wall_ghost_pipeline = gpu_web::GameRenderPipeline::create_mesh_with(
+        &pl_layout,
+        &wall_ghost_shader,
+        std::mem::size_of::<MeshVertex>() as u32,
+        std::mem::size_of::<MeshInstance>() as u32,
+        gpu_web::color_format::BGRA8UNORM,
+        gpu_web::depth_format::DEPTH32FLOAT,
+        true,
+        "render_web.wall_ghost.pipeline",
+    );
+    let Some(wall_ghost_pipeline) = wall_ghost_pipeline else {
+        obs::emit("[render_web] init: wall ghost pipeline null");
+        return false;
+    };
 
     // Canopy: baked once at init (unit leaf card). Wood buffers grow
     // lazily on the first non-empty snapshot.
@@ -386,6 +412,7 @@ pub fn init(canvas_id: &str) -> bool {
             surface_index_count: 0,
             surface_snap_key: None,
             wall_pipeline,
+            wall_ghost_pipeline,
             walls_gpu: Vec::new(),
             walls_chunk_key: None,
         });
@@ -811,17 +838,26 @@ pub fn frame_walls(snap: &scene::SceneSnapshot, bt: &crate::buildings::BuildingT
                         gpu_web::usage::VERTEX | gpu_web::usage::COPY_DST,
                         "render_web.mesh.wall.instance",
                     );
-                    let (Some(vertex_buf), Some(index_buf), Some(instance_buf)) =
-                        (vertex_buf, index_buf, instance_buf)
+                    let ghost_index_buf = gpu_web::GameBuffer::create(
+                        (std::mem::size_of_val(&part.ghost_indices[..]) as u32).max(4),
+                        gpu_web::usage::INDEX | gpu_web::usage::COPY_DST,
+                        "render_web.mesh.wall.ghost_index",
+                    );
+                    let (Some(vertex_buf), Some(index_buf), Some(ghost_index_buf), Some(instance_buf)) =
+                        (vertex_buf, index_buf, ghost_index_buf, instance_buf)
                     else {
                         return 4;
                     };
                     vertex_buf.write(as_bytes(&part.verts));
                     index_buf.write(as_bytes(&part.indices));
+                    if !part.ghost_indices.is_empty() {
+                        ghost_index_buf.write(as_bytes(&part.ghost_indices));
+                    }
                     instance_buf.write(as_bytes(&inst));
                     gpu.push(WallPartGpu {
                         vertex_buf,
                         index_buf,
+                        ghost_index_buf,
                         instance_buf,
                         index_total: part.indices.len() as u32,
                         near_start: part.near_start as u32,
@@ -854,6 +890,48 @@ pub fn frame_walls(snap: &scene::SceneSnapshot, bt: &crate::buildings::BuildingT
                 &part.index_buf,
                 &part.instance_buf,
                 draw_count,
+                1,
+                0,
+            );
+            if r != 0 {
+                return r;
+            }
+        }
+        0
+    })
+}
+
+/// Wall-mesh GHOST pass — the cut-away near walls at low alpha, drawn
+/// after the cube ghost pass. Ghost = exactly what the opaque wall
+/// draw skipped: the ghost index buffer holds the near triangles
+/// depth-DESCENDING, so the cut set is always a prefix.
+pub fn frame_walls_ghost(snap: &scene::SceneSnapshot) -> u32 {
+    STATE.with(|c| {
+        let mut opt = c.borrow_mut();
+        let Some(state) = opt.as_mut() else {
+            return 2;
+        };
+        for part in &state.walls_gpu {
+            let anchor = bevy_math::Vec3::new(part.anchor[0], 0.0, part.anchor[1]);
+            if !crate::wall_bake::player_inside(anchor, snap) {
+                continue; // nothing was cut → nothing to ghost
+            }
+            let local_depth =
+                (snap.player.x - part.anchor[0]) + (snap.player.z - part.anchor[1]) + 40.0;
+            let visible_near = part.near_depths.partition_point(|d| *d <= local_depth) as u32;
+            let near_total = part.near_depths.len() as u32;
+            let ghost_count = (near_total - visible_near) * 3;
+            if ghost_count == 0 {
+                continue;
+            }
+            let r = gpu_web::render_mesh(
+                &state.target,
+                &state.wall_ghost_pipeline,
+                &state.bind_group,
+                &part.vertex_buf,
+                &part.ghost_index_buf,
+                &part.instance_buf,
+                ghost_count,
                 1,
                 0,
             );
@@ -960,6 +1038,10 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     let ghost_result = frame_ghost(&ghost);
     if ghost_result != 0 {
         return ghost_result;
+    }
+    let wall_ghost_result = frame_walls_ghost(&snap);
+    if wall_ghost_result != 0 {
+        return wall_ghost_result;
     }
     // D-pad, HUD quads, build watermark, NPC-bump "!" — all one UI
     // pass. The watermark is the running binary drawing its own commit.
