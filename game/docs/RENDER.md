@@ -187,6 +187,17 @@ Each slice is failing-test-first; nothing else may regress.
    joint (every interior edge shared by exactly two triangles) and
    emits **zero faces inside the node's miter square**. That is
    the machine-checkable proxy for "one wall turning."
+   **Landed** — `game/src/wall_mesh.rs`: runs are quad bands split
+   around junction squares, squares emit only unattached faces,
+   jambs cap runs at door cells, manifold-or-grounded pinned by
+   test on the straight / L / T fixtures AND the full P-shape
+   graph end-to-end. Slice 3's opening bands and the door-gap
+   invariant are partly pre-paid (doors already tessellate as
+   gaps with jambs). Diagnostics:
+   `cargo run --example wall_mesh_preview [house_01]`. Known
+   follow-up for slice 4: `MeshVertex` has no colour channel —
+   per-material wall colour needs per-vertex colour, a colour →
+   submesh split, or one instance per colour group at bake.
 3. **Openings** — no wall triangle intrudes into a window's glass
    band; doorways get jambs; band faces of one run lie only in the
    run's two side planes.

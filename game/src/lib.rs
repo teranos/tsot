@@ -41,6 +41,7 @@ pub mod tree_surface;
 pub mod trees;
 pub mod tune;
 pub mod tune_hud;
+pub mod wall_mesh;
 pub mod watermark;
 
 pub mod gpu_web;

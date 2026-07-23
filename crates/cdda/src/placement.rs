@@ -281,6 +281,11 @@ pub fn mapgen_to_template(
         color: Option<[f32; 3]>,
     }
     let mut segments: Vec<Seg> = Vec::new();
+    // Per-cell lateral centerline offsets (EW z-offset, NS x-offset)
+    // captured from the same slot decisions the segments are pushed
+    // from — the wall graph carries them so the mesh tessellator
+    // places walls exactly where the collider props sit.
+    let mut cell_axis: HashMap<(usize, usize), (Option<f32>, Option<f32>)> = HashMap::new();
 
     for r_idx in 0..height {
         for c_idx in 0..width {
@@ -412,6 +417,33 @@ pub fn mapgen_to_template(
             if !anything {
                 segments.push(h_seg(SlotKind::CentreEW));
             }
+
+            // Record this cell's lateral offsets for the wall graph.
+            // Centred slots (divider / stub / isolated / freestanding
+            // both-sides-exterior) win over a single outer edge; a
+            // lone outer edge records ±(half − 12).
+            let lat = half - WALL_HALF_THICKNESS;
+            let ew_off = if divider_ew || need_ew_stub || !anything {
+                Some(0.0)
+            } else {
+                match (emit_n, emit_s) {
+                    (true, true) => Some(0.0),
+                    (true, false) => Some(-lat),
+                    (false, true) => Some(lat),
+                    (false, false) => None,
+                }
+            };
+            let ns_off = if divider_ns || need_ns_stub {
+                Some(0.0)
+            } else {
+                match (emit_w, emit_e) {
+                    (true, true) => Some(0.0),
+                    (true, false) => Some(-lat),
+                    (false, true) => Some(lat),
+                    (false, false) => None,
+                }
+            };
+            cell_axis.insert((r_idx, c_idx), (ew_off, ns_off));
         }
     }
 
@@ -674,6 +706,9 @@ pub fn mapgen_to_template(
             }
             if let Some((kind, color)) = cell_wall_kind(ch, &terrain) {
                 node_id.insert((r_idx, c_idx), wall_nodes.len() as u32);
+                // Doors emit no slots (they're gaps in the prop path),
+                // so they're absent from cell_axis → (None, None).
+                let (ew, ns) = cell_axis.get(&(r_idx, c_idx)).copied().unwrap_or((None, None));
                 wall_nodes.push(WallNode {
                     offset: Vec3::new(
                         (c_idx as f32 - cx) * tile_size,
@@ -682,6 +717,8 @@ pub fn mapgen_to_template(
                     ),
                     kind,
                     color,
+                    ew,
+                    ns,
                 });
             }
         }
@@ -1251,6 +1288,40 @@ mod tests {
         assert_eq!(g.nodes[node_at(0, 0)].kind, WallCellKind::Solid);
         // Solid walls carry their material colour into the graph.
         assert!(g.nodes[node_at(0, 0)].color.is_some(), "wall node keeps material colour");
+    }
+
+    #[test]
+    fn wall_nodes_carry_lateral_centerline_offsets() {
+        // The mesh tessellator must place wall centerlines exactly
+        // where the prop path places walls — perimeter runs hug the
+        // outer cell edge (±28 = half − WALL_HALF_THICKNESS), dividers
+        // are centred (0) — or the visual wall diverges from the
+        // collider wall. Each node carries at most one EW and one NS
+        // lateral offset (the one-wall-per-axis invariant), taken from
+        // the same slot classification pass 2 emits props from.
+        let t = mapgen_to_template(p_shape_json(), "p_shape", CDDA_TILE, 0).unwrap();
+        let g = &t.walls;
+        let node_at = |row: i32, col: i32| -> &crate::template::WallNode {
+            let (x, z) = p_cell(row, col);
+            g.nodes
+                .iter()
+                .find(|n| (n.offset.x - x).abs() < 1e-3 && (n.offset.z - z).abs() < 1e-3)
+                .unwrap_or_else(|| panic!("no wall node at cell ({row}, {col})"))
+        };
+        // NW corner (0,0): north perimeter (EW at −28) + west perimeter
+        // (NS at −28).
+        assert_eq!(node_at(0, 0).ew, Some(-28.0), "corner north-outer EW offset");
+        assert_eq!(node_at(0, 0).ns, Some(-28.0), "corner west-outer NS offset");
+        // Top perimeter mid-cell (0,1): EW only.
+        assert_eq!(node_at(0, 1).ew, Some(-28.0));
+        assert_eq!(node_at(0, 1).ns, None, "no NS wall through a plain EW perimeter cell");
+        // The col-2 T-junction cell (0,2): north perimeter EW + the
+        // divider stub NS, centred.
+        assert_eq!(node_at(0, 2).ew, Some(-28.0));
+        assert_eq!(node_at(0, 2).ns, Some(0.0), "T-junction stub is centred like its divider");
+        // Door cells emit no wall geometry — no offsets.
+        assert_eq!(node_at(1, 2).ew, None);
+        assert_eq!(node_at(1, 2).ns, None);
     }
 
     #[test]

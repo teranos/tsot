@@ -147,6 +147,15 @@ pub struct WallNode {
     pub kind: WallCellKind,
     /// Material colour (walls); `None` for doors and unresolved cells.
     pub color: Option<[f32; 3]>,
+    /// Lateral centerline offset of this cell's EW wall piece relative
+    /// to the cell centre (−28 north-outer / +28 south-outer / 0
+    /// divider, at tile 80) — `None` if the cell emits no EW wall.
+    /// Comes from the same slot classification the prop path emits
+    /// from, so mesh walls sit exactly where collider walls sit. At
+    /// most one offset per axis (the one-wall-per-axis invariant).
+    pub ew: Option<f32>,
+    /// Same for the NS wall piece (x offset). Doors carry `None`/`None`.
+    pub ns: Option<f32>,
 }
 
 /// A unit adjacency between two 4-adjacent wall-line cells — indices
@@ -280,6 +289,15 @@ impl Template {
                     mix_bytes(&c[2].to_le_bytes(), &mut mix);
                 }
             }
+            for off in [n.ew, n.ns] {
+                match off {
+                    None => mix(0),
+                    Some(v) => {
+                        mix(1);
+                        mix_bytes(&v.to_le_bytes(), &mut mix);
+                    }
+                }
+            }
         }
         for e in &self.walls.edges {
             mix_bytes(&e.a.to_le_bytes(), &mut mix);
@@ -376,7 +394,11 @@ pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
         })
         .collect();
     // Wall nodes rotate like props; node ORDER (= identity) and the
-    // edge list are untouched, so ids stay valid across rotation.
+    // edge list are untouched, so ids stay valid across rotation. The
+    // lateral offsets swap axes with the walls they describe: under
+    // (x, z) → (−z, x) an EW wall at z-offset d becomes an NS wall at
+    // x-offset −d, and an NS wall at x-offset e becomes an EW wall at
+    // z-offset e.
     let walls = WallGraph {
         nodes: t
             .walls
@@ -390,7 +412,13 @@ pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
                     3 => (z, -x),
                     _ => (x, z),
                 };
-                WallNode { offset: Vec3::new(rx, n.offset.y, rz), ..*n }
+                let (ew, ns) = match q {
+                    1 => (n.ns, n.ew.map(|d| -d)),
+                    2 => (n.ew.map(|d| -d), n.ns.map(|d| -d)),
+                    3 => (n.ns.map(|d| -d), n.ew),
+                    _ => (n.ew, n.ns),
+                };
+                WallNode { offset: Vec3::new(rx, n.offset.y, rz), ew, ns, ..*n }
             })
             .collect(),
         edges: t.walls.edges.clone(),
@@ -453,11 +481,15 @@ mod tests {
                         offset: Vec3::new(10.0, 0.0, 0.0),
                         kind: WallCellKind::Solid,
                         color: None,
+                        ew: None,
+                        ns: None,
                     },
                     WallNode {
                         offset: Vec3::new(10.0, 0.0, 80.0),
                         kind: WallCellKind::Door,
                         color: None,
+                        ew: None,
+                        ns: None,
                     },
                 ],
                 edges: vec![WallEdge { a: 0, b: 1 }],
@@ -487,6 +519,8 @@ mod tests {
                     offset: Vec3::new(0.0, 0.0, 0.0),
                     kind,
                     color: None,
+                    ew: None,
+                    ns: None,
                 }],
                 edges: vec![],
             },
@@ -502,11 +536,13 @@ mod tests {
             trees: vec![],
             walls: WallGraph {
                 nodes: vec![
-                    WallNode { offset: Vec3::ZERO, kind: WallCellKind::Solid, color: None },
+                    WallNode { offset: Vec3::ZERO, kind: WallCellKind::Solid, color: None, ew: None, ns: None },
                     WallNode {
                         offset: Vec3::new(80.0, 0.0, 0.0),
                         kind: WallCellKind::Solid,
                         color: None,
+                        ew: None,
+                        ns: None,
                     },
                 ],
                 edges,
