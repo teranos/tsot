@@ -123,20 +123,41 @@ pub(crate) fn cell_to_tree(ch: char, terrain: &HashMap<char, String>) -> Option<
     })
 }
 
-/// Does a char's resolved terrain id form part of the wall LINE — the
-/// connective tissue that seals a building's interior? Walls, windows,
-/// doors, gates all qualify (doors + gates don't render as a prop yet,
-/// but they still complete the wall line for flood-fill).
+/// What a wall-line cell IS — the per-cell kind the `WallGraph` node
+/// carries. `None` = not part of the wall line at all.
 ///
 /// Fences are DELIBERATELY excluded: they bound a yard, not a room. A
 /// fenced-in area must stay exterior for flood-fill, or the building
 /// walls facing that yard get misclassified as room-to-room dividers.
+pub(crate) fn cell_wall_kind(
+    ch: char,
+    terrain: &HashMap<char, String>,
+) -> Option<(crate::template::WallCellKind, Option<[f32; 3]>)> {
+    use crate::template::WallCellKind;
+    let t = terrain.get(&ch)?;
+    if t.contains("fence") {
+        return None;
+    }
+    if t.contains("window") {
+        return Some((WallCellKind::Window, Some(WINDOW_COLOR)));
+    }
+    if t.contains("door") || t.contains("gate") {
+        return Some((WallCellKind::Door, None));
+    }
+    if t.contains("wall") {
+        return Some((WallCellKind::Solid, Some(wall_color(t))));
+    }
+    None
+}
+
+/// Does a char's resolved terrain id form part of the wall LINE — the
+/// connective tissue that seals a building's interior? Walls, windows,
+/// doors, gates all qualify (doors + gates don't render as a prop yet,
+/// but they still complete the wall line for flood-fill). Delegates to
+/// `cell_wall_kind` — ONE definition of the wall line, so the graph
+/// and the flood-fill can never disagree about what seals a room.
 pub(crate) fn is_wall_line_char(ch: char, terrain: &HashMap<char, String>) -> bool {
-    let Some(t) = terrain.get(&ch) else {
-        return false;
-    };
-    (t.contains("wall") || t.contains("window") || t.contains("door") || t.contains("gate"))
-        && !t.contains("fence")
+    cell_wall_kind(ch, terrain).is_some()
 }
 
 #[cfg(test)]

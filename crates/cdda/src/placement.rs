@@ -21,9 +21,11 @@ use std::fmt;
 
 use bevy_math::Vec3;
 
-use crate::template::{Prop, PropKind, Template, TreePlacement};
+use crate::template::{
+    Prop, PropKind, Template, TreePlacement, WallEdge, WallGraph, WallNode,
+};
 
-use super::cells::{cell_to_prop, cell_to_tree, is_wall_line_char};
+use super::cells::{cell_to_prop, cell_to_tree, cell_wall_kind, is_wall_line_char};
 use super::parse::{Entry, first_id, om_matches};
 
 /// World units per CDDA tile. Wall props are sized to this (see the
@@ -656,7 +658,53 @@ pub fn mapgen_to_template(
         }
     }
 
-    Ok(Template { props, trees })
+    // Wall-graph layer — the wall-line topology as cell-quantum nodes
+    // + 4-adjacencies. Row-major construction makes node/edge ids (vec
+    // indices) deterministic per mapgen: the stable address future
+    // mutation state (break / burn / curtains) writes to. Same cell
+    // classifier as the flood-fill (`cell_wall_kind` backs
+    // `is_wall_line_char`), so graph and interior detection can never
+    // disagree about what seals a room.
+    let mut wall_nodes: Vec<WallNode> = Vec::new();
+    let mut node_id: HashMap<(usize, usize), u32> = HashMap::new();
+    for (r_idx, row) in obj.rows.iter().enumerate() {
+        for (c_idx, ch) in row.chars().enumerate() {
+            if c_idx >= width {
+                break;
+            }
+            if let Some((kind, color)) = cell_wall_kind(ch, &terrain) {
+                node_id.insert((r_idx, c_idx), wall_nodes.len() as u32);
+                wall_nodes.push(WallNode {
+                    offset: Vec3::new(
+                        (c_idx as f32 - cx) * tile_size,
+                        0.0,
+                        (r_idx as f32 - cz) * tile_size,
+                    ),
+                    kind,
+                    color,
+                });
+            }
+        }
+    }
+    let mut wall_edges: Vec<WallEdge> = Vec::new();
+    for (r_idx, row) in obj.rows.iter().enumerate() {
+        for (c_idx, _) in row.chars().enumerate().take(width) {
+            let Some(&a) = node_id.get(&(r_idx, c_idx)) else { continue };
+            // East + south neighbours only — every adjacency once.
+            if let Some(&b) = node_id.get(&(r_idx, c_idx + 1)) {
+                wall_edges.push(WallEdge { a, b });
+            }
+            if let Some(&b) = node_id.get(&(r_idx + 1, c_idx)) {
+                wall_edges.push(WallEdge { a, b });
+            }
+        }
+    }
+
+    Ok(Template {
+        props,
+        trees,
+        walls: WallGraph { nodes: wall_nodes, edges: wall_edges },
+    })
 }
 
 /// Import a roof z-level by OCCUPANCY — every non-blank cell becomes a
@@ -1094,6 +1142,142 @@ mod tests {
             ));
         }
         panic!("\n{}\n", lines.join("\n"));
+    }
+
+    /// The P-shape fixture (the user's typed spec, same rows as the
+    /// dump test) as JSON — the WallGraph slice-1 fixture.
+    fn p_shape_json() -> &'static str {
+        r#"[{
+            "om_terrain": "p_shape",
+            "object": {
+                "rows": [
+                    "wwwww",
+                    "o d w",
+                    "wdwdw",
+                    "  w w",
+                    "  w o",
+                    "  www"
+                ],
+                "terrain": {
+                    "w": "t_wall",
+                    "o": "t_window",
+                    "d": "t_door_c"
+                }
+            }
+        }]"#
+    }
+
+    /// World offset of cell (row, col) in the 5×6 P-shape grid —
+    /// cx = 2.5, cz = 3.0, tile 80 (same math as prop emission).
+    fn p_cell(row: i32, col: i32) -> (f32, f32) {
+        ((col as f32 - 2.5) * 80.0, (row as f32 - 3.0) * 80.0)
+    }
+
+    #[test]
+    fn wall_graph_p_shape_invariants() {
+        let t = mapgen_to_template(p_shape_json(), "p_shape", CDDA_TILE, 0).unwrap();
+        let g = &t.walls;
+
+        // One node per wall-line cell (walls, windows, doors — fences
+        // never). Row-major count over the fixture: 5+3+5+2+2+3.
+        assert_eq!(g.nodes.len(), 20, "one node per wall-line cell");
+        // Unit adjacencies between 4-adjacent wall-line cells:
+        // horizontal 4+0+4+0+0+2 = 10, vertical 2+0+5+0+5 = 12.
+        assert_eq!(g.edges.len(), 22, "one edge per wall-line adjacency");
+
+        let node_at = |row: i32, col: i32| -> usize {
+            let (x, z) = p_cell(row, col);
+            g.nodes
+                .iter()
+                .position(|n| (n.offset.x - x).abs() < 1e-3 && (n.offset.z - z).abs() < 1e-3)
+                .unwrap_or_else(|| panic!("no wall node at cell ({row}, {col})"))
+        };
+        let degree = |id: usize| -> usize {
+            g.edges
+                .iter()
+                .filter(|e| e.a as usize == id || e.b as usize == id)
+                .count()
+        };
+
+        // Sealed: every node participates in the wall line — no loose
+        // ends anywhere in this fixture.
+        for (i, n) in g.nodes.iter().enumerate() {
+            assert!(degree(i) >= 2, "dangling wall node {i} at {:?}", n.offset);
+        }
+
+        // Connected: the whole graph is ONE wall system.
+        let mut seen = vec![false; g.nodes.len()];
+        let mut stack = vec![0usize];
+        while let Some(i) = stack.pop() {
+            if seen[i] {
+                continue;
+            }
+            seen[i] = true;
+            for e in &g.edges {
+                if e.a as usize == i {
+                    stack.push(e.b as usize);
+                }
+                if e.b as usize == i {
+                    stack.push(e.a as usize);
+                }
+            }
+        }
+        assert!(seen.iter().all(|s| *s), "wall graph is disconnected");
+
+        // Closed loops: cyclomatic number E − V + C. The P-shape has
+        // exactly 3 independent cycles — the top box's two door-split
+        // rooms and the lower stem's room.
+        assert_eq!(
+            g.edges.len() - g.nodes.len() + 1,
+            3,
+            "P-shape wall line closes 3 independent loops"
+        );
+
+        // T-junction: the top perimeter cell where the col-2 divider
+        // meets it (row 0, col 2) has degree 3.
+        assert_eq!(degree(node_at(0, 2)), 3, "T-junction node degree");
+        // And the east perimeter where the row-2 run meets it.
+        assert_eq!(degree(node_at(2, 4)), 3, "east T-junction node degree");
+        // The four-way crossing at (2, 2) has degree 4.
+        assert_eq!(degree(node_at(2, 2)), 4, "crossing node degree");
+
+        // Kinds ride the nodes: the cell is the CDDA damage quantum.
+        use crate::template::WallCellKind;
+        assert_eq!(g.nodes[node_at(1, 0)].kind, WallCellKind::Window);
+        assert_eq!(g.nodes[node_at(4, 4)].kind, WallCellKind::Window);
+        assert_eq!(g.nodes[node_at(1, 2)].kind, WallCellKind::Door);
+        assert_eq!(g.nodes[node_at(2, 1)].kind, WallCellKind::Door);
+        assert_eq!(g.nodes[node_at(2, 3)].kind, WallCellKind::Door);
+        assert_eq!(g.nodes[node_at(0, 0)].kind, WallCellKind::Solid);
+        // Solid walls carry their material colour into the graph.
+        assert!(g.nodes[node_at(0, 0)].color.is_some(), "wall node keeps material colour");
+    }
+
+    #[test]
+    fn wall_graph_ids_are_deterministic_across_loads() {
+        // Node/edge IDs are vec indices — two loads of the same mapgen
+        // must produce byte-identical graphs, or mutation state (future
+        // overlay) would address the wrong wall after a reload.
+        let a = mapgen_to_template(p_shape_json(), "p_shape", CDDA_TILE, 0).unwrap();
+        let b = mapgen_to_template(p_shape_json(), "p_shape", CDDA_TILE, 0).unwrap();
+        assert_eq!(a.walls, b.walls, "wall graph must be deterministic");
+        assert!(!a.walls.nodes.is_empty(), "P-shape graph must not be empty");
+    }
+
+    #[test]
+    fn fence_ring_contributes_no_wall_graph() {
+        // Fences bound a yard, not a room — they are excluded from the
+        // wall line and must be excluded from the graph the same way.
+        let json = r#"[{
+            "om_terrain": "tt",
+            "object": {
+                "rows": ["fffff", "f...f", "f...f", "f...f", "fffff"],
+                "terrain": {"f": "t_fence_barbed", ".": "t_floor"}
+            }
+        }]"#;
+        let t = mapgen_to_template(json, "tt", CDDA_TILE, 0).unwrap();
+        assert!(t.walls.nodes.is_empty(), "fence cells must not become wall nodes");
+        assert!(t.walls.edges.is_empty());
     }
 
     #[test]

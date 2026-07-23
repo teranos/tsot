@@ -97,15 +97,19 @@ render.
 ### Locked decisions
 
 1. **cdda emits a `WallGraph`; game tessellates.** `Template`
-   grows a third layer exactly as it grew `trees`: nodes at
-   cell-corner lattice points, edges per cell boundary carrying
-   material colour and a segment kind (`Solid`, `Door`,
-   `Window { sill_y, lintel_y }`). The graph is built from the
-   slot lattice `placement.rs` already constructs — never traced
-   back out of coalesced `Prop` boxes. The `Prop` path stays
-   untouched: it remains the collider source and the render
-   fallback. The graph rotates in `rotate_template` and mixes into
-   `stable_digest`, both trees-style.
+   grows a third layer exactly as it grew `trees`: **nodes are
+   wall-line cells** (the CDDA damage quantum — CDDA bashes per
+   tile), each carrying its kind (`Solid`, `Window`, `Door`) and
+   material colour; **edges are their 4-adjacencies**. Runs, closed
+   loops (enclosure), junction degrees, miters and the mesh all
+   derive from this primitive. The graph is classified by the same
+   `cell_wall_kind` that backs `is_wall_line_char`, so the graph
+   and the flood-fill can never disagree about what seals a room —
+   and it is never traced back out of coalesced `Prop` boxes. The
+   `Prop` path stays untouched: it remains the collider source and
+   the render fallback. The graph rotates in `rotate_template` and
+   mixes into `stable_digest`, both trees-style. Window sill and
+   lintel heights stay tessellation constants, not authored data.
 2. **Stable edge identity, from day one.** Edge IDs are
    deterministic (derived from the authored lattice, asserted by
    test). Reason: breaking a wall, burning it, curtains, broken
@@ -169,10 +173,15 @@ render.
 Each slice is failing-test-first; nothing else may regress.
 
 1. **`WallGraph` in cdda** — on the existing synthetic fixtures
-   (the P-shape building test): the perimeter forms a closed loop,
-   a T-junction node has degree 3, door and window edges carry
-   their kinds, and edge IDs are identical across two loads.
-   Pure data; no render.
+   (the P-shape building test): the perimeter forms closed loops
+   (cyclomatic number pins the room count), a T-junction node has
+   degree 3, door and window nodes carry their kinds, and node/edge
+   IDs are identical across two loads. Pure data; no render.
+   **Landed** — `template.rs` (`WallGraph`/`WallNode`/`WallEdge`/
+   `WallCellKind`, digest + rotation covered), `placement.rs`
+   (row-major build), `cells.rs` (`cell_wall_kind`); diagnostics
+   via `cargo run --example wall_graph_dump` (P-shape or a corpus
+   house).
 2. **`wall_mesh.rs`: straight run + corner** — the corner test is
    the point of the whole scope: the mesh is manifold along the
    joint (every interior edge shared by exactly two triangles) and
