@@ -206,6 +206,20 @@ Each slice is failing-test-first; nothing else may regress.
 - Reading CDDA's own bash data (`str_min`, what a wall becomes)
   instead of authoring our own — cdda README frontier question 2.
 - Per-face material variation; roof mesh.
+- **Enclosure ("room") as a derived artifact of the `WallGraph`.**
+  The graph's closed loops define enclosed space in two strengths:
+  the *hull* (what the perimeter seals — fences deliberately don't,
+  per the flood-fill rule) and the *faces* (individual rooms).
+  Consumers queue up beyond render: terrain's flatten rule could
+  shrink from the full stamp rectangle to the hull + apron so the
+  yard rolls with relief (TERRAIN.md decision 5 left "whether the
+  yard ever rolls" open — the hull is the data that would answer
+  it; yard props must then drape per-prop, and authored yard
+  content bounds how much roll it tolerates); the roof cut-away's
+  radius heuristic becomes point-in-hull; LOS, sound propagation,
+  fire spread and room labels all read the same structure. None of
+  this is walls-on-mesh scope — but the graph is specified with
+  closed loops precisely so these consumers can exist.
 
 ## Frontier — render-adjacent
 
