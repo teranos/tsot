@@ -36,12 +36,14 @@ placement work is functionally correct (see the tests in
 `crates/cdda/src/placement.rs`) but the render doesn't cross the
 "looks like walls" bar. Fix scoped to its own scope below.
 
-## Current scope — mesh substrate, proven on the tree
+## Mesh substrate, proven on the tree — **shipped**
 
-Prove the mesh substrate on the smallest thing: **the tree**. Walls
-stay on cubes for now; the doubled-corner problem is not solved
-here. The point is to land the mesh pipeline itself, with one
-shape (tree) exercising every part of it end-to-end.
+Proved the mesh substrate on the smallest thing: **the tree**. The
+pipeline, the 52-byte `MeshInstance` layout, per-species baked
+meshes and the browser parity all landed — see
+[`TREES.md`](./TREES.md) for what shipped and what's still open on
+the tree itself. The section below is kept as the original scope
+statement.
 
 **Intended behaviour once this lands.**
 
@@ -72,43 +74,138 @@ debris. No textures. No collider changes.
 **Merge criterion.** Trees look like trees. Nothing else regresses.
 seer's frame captures confirm both.
 
-## Later — walls on mesh
+## Current scope — walls on mesh
 
-Replace / augment the cube-instance renderer with a **mesh
-pipeline** so each building's wall system renders as one
-continuous polyhedron.
+Replace the cube-instance walls with a **mesh** per building so
+each wall system renders as one continuous polyhedron. Corners are
+where the geometry turns — no seam because there's no seam to
+render.
 
-**Concept.** Trace the wall boundary of each building as a 2D
-polygon (outer perimeter + interior dividers), extrude to wall
-height, cut door/window openings, generate a triangle mesh. Render
-that as one draw call per building. Corners are where the polygon
-turns 90° — no visible seam because there's no seam to render.
+### The goal (the merge bar)
 
-**Concrete work.**
-1. New JS-side WebGPU import functions in `gpu_web.rs` — mesh
-   pipeline creation, vertex-buffer-per-mesh, indexed draw with
-   variable vertex count. Each new crossing is a hand-wired
-   `env.*` import (see `imports.allow`) and needs mirroring into
-   `seer-host`'s linker or the wasm fails to instantiate.
-2. New shader for mesh rendering (parallel to `SHADER_WGSL`).
-3. Mesh generation in the cdda crate — trace polygons from the
-   wall lattice, tessellate with door/window cutouts. Or keep this
-   game-side and have cdda emit a `WallGraph` the mesh generator
-   consumes; either shape works.
-4. Colliders — cdda's box `Prop.size` output stays; the mesh is
-   for VISUAL. Player physics stays cube-based.
-5. Ghost + glass passes need to consume the mesh too — the mesh
-   generator can produce three variants (opaque / cut / ghost) or
-   the same mesh renders in three passes with a per-pass mask.
-6. Native `render.rs` mirror or accept native-differs-from-wasm.
+> The lavapipe tour render shows the school's and houses' wall
+> corners reading as **one wall turning**, not two boxes meeting —
+> compared directly against the cube-wall baseline frames captured
+> before this scope started
+> ([`img/walls-cubes-baseline-school.png`](./img/walls-cubes-baseline-school.png),
+> [`img/walls-cubes-baseline-house.png`](./img/walls-cubes-baseline-house.png)).
+> Nothing else in the frame regresses; seer's `[perf]` captures
+> mesh cost vs the cube walls it replaces. Same bar shape as
+> TERRAIN.md: development is validated by looking at the render,
+> under strict TDD (failing test first) and errors-surfaced.
 
-**Estimated scope.** 10–20 hours of infra work before the first
-correct-looking wall renders. Own scope, sequenced after the tree.
+### Locked decisions
 
-**Deferred within this plan.**
-- Per-face texture UVs / material variation. First cut: uniform
-  wall material colour.
-- Roof mesh. Slabs stay cube-instances until walls prove out.
+1. **cdda emits a `WallGraph`; game tessellates.** `Template`
+   grows a third layer exactly as it grew `trees`: nodes at
+   cell-corner lattice points, edges per cell boundary carrying
+   material colour and a segment kind (`Solid`, `Door`,
+   `Window { sill_y, lintel_y }`). The graph is built from the
+   slot lattice `placement.rs` already constructs — never traced
+   back out of coalesced `Prop` boxes. The `Prop` path stays
+   untouched: it remains the collider source and the render
+   fallback. The graph rotates in `rotate_template` and mixes into
+   `stable_digest`, both trees-style.
+2. **Stable edge identity, from day one.** Edge IDs are
+   deterministic (derived from the authored lattice, asserted by
+   test). Reason: breaking a wall, burning it, curtains, broken
+   windows are hard requirements of the game. None of that ships
+   in this scope — but mutable wall state needs an *address*, and
+   the edge is the CDDA-idiom damage quantum (CDDA bashes per
+   tile). This decision is the entire extent to which dynamism is
+   in scope here: the address space exists, no mutation does.
+3. **Rectilinear tessellation — no general tessellator.** Every
+   wall is axis-aligned and every opening is an axis-aligned
+   rectangle at known heights (the sill/glass/lintel stack already
+   models this). A wall face is horizontal quad bands — solid
+   below the sill, open at the glass, solid above the lintel —
+   never a polygon-with-holes. Jamb faces at door/window openings
+   are correct (visible wall thickness); faces *inside* joints are
+   the bug this scope exists to kill.
+4. **Nodes own the miter.** Corner and T-junction plan geometry is
+   resolved in the node's thickness×thickness square, once, at
+   tessellation. The 24-unit junction-shortening in `placement.rs`
+   (a cube-volume z-fight workaround) becomes render-dead; it
+   stays in the prop path only because colliders still read it.
+5. **Weld positions, not normals.** A 90° corner keeps a hard
+   crease with two normals — that is what a real wall turning
+   looks like. The doubled-edge artifact comes from two separate
+   boxes shading their own end-caps inside the joint, not from the
+   crease.
+6. **Bake per building, cached and re-bakeable.** One mesh per
+   building, generated lazily, cached on a key that *can*
+   invalidate — `(building_index, version)`, version constant in
+   this scope. The terrain surface set the precedent (cached on a
+   snap key, regenerated on change); when wall state becomes
+   mutable, mutation bumps the version and the next frame re-bakes
+   — the render architecture does not change again. One identity
+   `MeshInstance` per building at its pad anchor; the
+   `scene::drape` choke point is unchanged.
+7. **No new `env.*` crossings, no new shader.** The terrain
+   surface already proved runtime mesh creation reuses the
+   existing mesh crossing — `imports.allow` unchanged. Walls draw
+   through the existing mesh WGSL with uniform material colour.
+   UVs are planar per run (u = distance along the wall,
+   v = height) so damage/crack shading lands later with zero
+   format changes — the reserved UV slots exist for exactly this.
+8. **Cut-away = two index ranges.** The iso camera direction is
+   fixed (eye is always player + (d,d,d)), so which faces are
+   camera-facing is a **static property of the bake**: classify
+   every face by outward normal (`n.x + n.z > 0` → near) and emit
+   near/far index ranges over one vertex buffer. Outside: both
+   opaque. Inside this building: far opaque, near + roof in the
+   ghost pass. No per-frame regeneration, no clip planes. A code
+   comment records the for-now assumption: a rotating camera
+   breaks this bake.
+9. **Glass and roof stay where they are.** Window panes remain
+   cube instances in the alpha-blended glass pass — the wall mesh
+   leaves the hole they sit in. Roof slabs stay cube instances
+   until walls prove out.
+10. **Colliders unchanged.** cdda's box `Prop.size` output is
+    still what physics consumes; the mesh is visual.
+
+### TDD slices
+
+Each slice is failing-test-first; nothing else may regress.
+
+1. **`WallGraph` in cdda** — on the existing synthetic fixtures
+   (the P-shape building test): the perimeter forms a closed loop,
+   a T-junction node has degree 3, door and window edges carry
+   their kinds, and edge IDs are identical across two loads.
+   Pure data; no render.
+2. **`wall_mesh.rs`: straight run + corner** — the corner test is
+   the point of the whole scope: the mesh is manifold along the
+   joint (every interior edge shared by exactly two triangles) and
+   emits **zero faces inside the node's miter square**. That is
+   the machine-checkable proxy for "one wall turning."
+3. **Openings** — no wall triangle intrudes into a window's glass
+   band; doorways get jambs; band faces of one run lie only in the
+   run's two side planes.
+4. **Bake + draw swap** — buildings with a graph stop emitting
+   `Wall*` (and window sill/lintel) cube instances; glass panes
+   keep emitting. The lavapipe tour render is the merge bar,
+   against the baseline frames. seer `[perf]` captures the cost.
+5. **Near/far ranges + ghost parity** — the `emit.rs` property
+   (ghost = exactly what opaque skipped, never both) holds for the
+   mesh's index ranges.
+6. **Browser parity** — `seer-imports-check` green with
+   `imports.allow` unchanged (decision 7 says no new crossings; a
+   test proves it); `web_shim` ABI tests hold; merge bar is the
+   deployed pixel, per TERRAIN.md Slice 8 precedent.
+
+### Deferred (recorded, not this scope)
+
+- **Wall mutation overlay** — per-edge state
+  (`Damaged`/`Breached`, curtains open/closed/broken glass, fire
+  as a per-edge process driving charring → breach). The overlay is
+  runtime world state layered over the immutable authored graph;
+  render bake **and collider emission** must both consume it (one
+  source of truth, or a hole you can see through still blocks).
+  Contested canonical state, flower-pickup-style, when it lands.
+- Damage/crack textures riding the reserved UVs.
+- Reading CDDA's own bash data (`str_min`, what a wall becomes)
+  instead of authoring our own — cdda README frontier question 2.
+- Per-face material variation; roof mesh.
 
 ## Frontier — render-adjacent
 
