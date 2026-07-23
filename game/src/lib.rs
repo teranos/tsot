@@ -41,6 +41,8 @@ pub mod tree_surface;
 pub mod trees;
 pub mod tune;
 pub mod tune_hud;
+pub mod wall_bake;
+pub mod wall_mesh;
 pub mod watermark;
 
 pub mod gpu_web;
@@ -803,6 +805,39 @@ fn init_wgpu() -> Result<(gpu::SeerDevice, wgpu::Queue), Box<dyn std::error::Err
     Ok((gpu::SeerDevice::new(device), queue))
 }
 
+/// Assemble the draw-ready wall parts for one snapshot: bake the
+/// buildings around the player (chunk scan), place each bake at its
+/// pad height, and apply the cut-away range (far-only when inside).
+#[cfg(not(target_arch = "wasm32"))]
+fn wall_draws<'a>(
+    placed: &'a [wall_bake::PlacedWalls],
+    snap: &scene::SceneSnapshot,
+) -> Vec<render::WallDrawPart<'a>> {
+    let mut out = Vec::new();
+    for pw in placed {
+        let inside = wall_bake::player_inside(pw.anchor, snap);
+        let local_depth = wall_bake::local_depth(pw.anchor, snap.player);
+        let y = terrain::height(pw.anchor.x, pw.anchor.z);
+        for part in &pw.bake.parts {
+            let (draw_count, ghost_count) = part.draw_counts(inside, local_depth);
+            out.push(render::WallDrawPart {
+                verts: &part.verts,
+                indices: &part.indices,
+                ghost_indices: &part.ghost_indices,
+                instance: scene::MeshInstance {
+                    pos: [pw.anchor.x, y, pw.anchor.z],
+                    color: part.color,
+                    scale: [1.0, 1.0, 1.0],
+                    axis: [0.0, 1.0, 0.0, 0.0],
+                },
+                draw_count,
+                ghost_count,
+            });
+        }
+    }
+    out
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn render_single(
     snap: &scene::SceneSnapshot,
@@ -818,6 +853,14 @@ fn render_single(
     scene::drape(&mut glass);
     mesh_trees.drape();
     let surface = scene::terrain_surface_mesh(snap.player.x, snap.player.z);
+    // Buildings around the player, baked to wall meshes (RENDER.md
+    // slice 4) — failures from the template load are routed to obs.
+    let (bt, cdda_failures) = crate::buildings::BuildingTemplates::load();
+    for msg in &cdda_failures {
+        obs::emit(msg);
+    }
+    let placed = wall_bake::visible_wall_bakes(snap.player, &bt, chunk::CHUNK_SIZE, 3);
+    let walls = wall_draws(&placed, snap);
     // player.y already carries the ground height (physics::ground_follow),
     // so the camera reads it directly — no render-time lift, no double.
     let camera = scene::SceneCamera::follow(
@@ -825,7 +868,7 @@ fn render_single(
         room::FLOOR_HALF,
     );
     render::render_scene(
-        &dev, &queue, &camera, &instances, &glass, &mesh_trees, &surface, 0.0, out_path,
+        &dev, &queue, &camera, &instances, &glass, &mesh_trees, &surface, &walls, 0.0, out_path,
     )?;
     Ok(())
 }
@@ -837,6 +880,10 @@ fn render_snapshots(
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(dir)?;
     let (dev, queue) = init_wgpu()?;
+    let (bt, cdda_failures) = crate::buildings::BuildingTemplates::load();
+    for msg in &cdda_failures {
+        obs::emit(msg);
+    }
     let mut out_paths = Vec::with_capacity(snapshots.len());
     for (i, snap) in snapshots.iter().enumerate() {
         let out_path = format!("{dir}/frame-{i}.png");
@@ -847,6 +894,8 @@ fn render_snapshots(
         scene::drape(&mut glass);
         mesh_trees.drape();
         let surface = scene::terrain_surface_mesh(snap.player.x, snap.player.z);
+        let placed = wall_bake::visible_wall_bakes(snap.player, &bt, chunk::CHUNK_SIZE, 3);
+        let walls = wall_draws(&placed, snap);
         // player.y already carries the ground height (ground_follow).
         let camera = scene::SceneCamera::follow(
             [snap.player.x, snap.player.y, snap.player.z],
@@ -857,7 +906,7 @@ fn render_snapshots(
         // motion; the browser animates continuously off its frame count).
         let time = i as f32 * 0.7;
         render::render_scene(
-            &dev, &queue, &camera, &instances, &glass, &mesh_trees, &surface, time, &out_path,
+            &dev, &queue, &camera, &instances, &glass, &mesh_trees, &surface, &walls, time, &out_path,
         )?;
         out_paths.push(out_path);
     }

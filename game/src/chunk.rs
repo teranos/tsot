@@ -340,7 +340,7 @@ mod tests {
             .step_by(80)
             .map(|x| Prop::at(Vec3::new(x as f32, 0.0, 0.0), PropKind::Wall))
             .collect();
-        let big = Template { props, trees: vec![] };
+        let big = Template { props, trees: vec![], ..Default::default() };
         let half = big.props.iter().fold(0.0_f32, |m, p| m.max(p.offset.x.abs()));
         let bt = crate::buildings::BuildingTemplates { templates: vec![big.clone()], half_extents: vec![half] };
         // Reach must extend past a single chunk.
@@ -363,7 +363,7 @@ mod tests {
             .map(|x| Prop::at(Vec3::new(x as f32, 0.0, 0.0), PropKind::Wall))
             .collect();
         let bt = crate::buildings::BuildingTemplates {
-            templates: vec![Template { props, trees: vec![] }],
+            templates: vec![Template { props, trees: vec![], ..Default::default() }],
             half_extents: vec![span as f32],
         };
         // Anchor it at a real (deterministic) building chunk.

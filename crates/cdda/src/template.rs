@@ -109,6 +109,74 @@ pub struct TreePlacement {
     pub kind: TreeKind,
 }
 
+/// What one wall-line cell IS — the CDDA damage quantum (CDDA bashes
+/// per tile), so future wall mutation state has a per-cell address.
+/// Fences are never part of the wall line (they bound a yard, not a
+/// room) and never appear in a `WallGraph`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WallCellKind {
+    /// Full-height sealing wall.
+    Solid,
+    /// Glass band in the wall line (sill/lintel heights are the
+    /// tessellator's constants, not authored data).
+    Window,
+    /// Door or gate — a gap in the rendered wall, still sealing the
+    /// interior for flood-fill.
+    Door,
+}
+
+/// Fixed u8 tag per `WallCellKind` for `stable_digest` — pinned like
+/// `prop_kind_tag`, so reordering the enum never shifts a digest.
+pub(crate) fn wall_cell_kind_tag(k: WallCellKind) -> u8 {
+    match k {
+        WallCellKind::Solid => 0,
+        WallCellKind::Window => 1,
+        WallCellKind::Door => 2,
+    }
+}
+
+/// One wall-line cell, positioned relative to the template's anchor
+/// (cell-centre offset, same convention as `Prop`). Node identity is
+/// its index in `WallGraph::nodes` — construction order is
+/// deterministic (row-major over the mapgen), so the same mapgen
+/// always yields the same ids: the stable address future mutation
+/// state (break / burn / curtains) writes to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallNode {
+    pub offset: Vec3,
+    pub kind: WallCellKind,
+    /// Material colour (walls); `None` for doors and unresolved cells.
+    pub color: Option<[f32; 3]>,
+    /// Lateral centerline offset of this cell's EW wall piece relative
+    /// to the cell centre (−28 north-outer / +28 south-outer / 0
+    /// divider, at tile 80) — `None` if the cell emits no EW wall.
+    /// Comes from the same slot classification the prop path emits
+    /// from, so mesh walls sit exactly where collider walls sit. At
+    /// most one offset per axis (the one-wall-per-axis invariant).
+    pub ew: Option<f32>,
+    /// Same for the NS wall piece (x offset). Doors carry `None`/`None`.
+    pub ns: Option<f32>,
+}
+
+/// A unit adjacency between two 4-adjacent wall-line cells — indices
+/// into `WallGraph::nodes`. Edge identity is its index in
+/// `WallGraph::edges`, deterministic for the same reason node ids are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WallEdge {
+    pub a: u32,
+    pub b: u32,
+}
+
+/// The wall-line topology of a template — nodes are wall-line cells
+/// (the damage quantum), edges are their 4-adjacencies. Runs, closed
+/// loops (enclosure), junction degrees, and the mesh tessellation all
+/// derive from this. Empty for templates without walls (an orchard).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WallGraph {
+    pub nodes: Vec<WallNode>,
+    pub edges: Vec<WallEdge>,
+}
+
 /// One prop, positioned relative to the template's anchor.
 #[derive(Clone, Copy, Debug)]
 pub struct Prop {
@@ -149,6 +217,9 @@ pub struct Template {
     /// Authored trees this template places (from `t_tree_*` terrain).
     /// Empty for buildings; populated for a tree field like an orchard.
     pub trees: Vec<TreePlacement>,
+    /// Wall-line topology (walls / windows / doors as cell-quantum
+    /// nodes + adjacencies) — the third authored layer, trees-style.
+    pub walls: WallGraph,
 }
 
 impl Template {
@@ -200,6 +271,37 @@ impl Template {
             mix_bytes(&t.offset.y.to_le_bytes(), &mut mix);
             mix_bytes(&t.offset.z.to_le_bytes(), &mut mix);
             mix(tree_kind_tag(t.kind));
+        }
+        // Wall layer — nodes then edges, so peers agree on the wall
+        // topology (and the node/edge ids mutation state will address)
+        // byte-for-byte.
+        for n in &self.walls.nodes {
+            mix_bytes(&n.offset.x.to_le_bytes(), &mut mix);
+            mix_bytes(&n.offset.y.to_le_bytes(), &mut mix);
+            mix_bytes(&n.offset.z.to_le_bytes(), &mut mix);
+            mix(wall_cell_kind_tag(n.kind));
+            match n.color {
+                None => mix(0),
+                Some(c) => {
+                    mix(1);
+                    mix_bytes(&c[0].to_le_bytes(), &mut mix);
+                    mix_bytes(&c[1].to_le_bytes(), &mut mix);
+                    mix_bytes(&c[2].to_le_bytes(), &mut mix);
+                }
+            }
+            for off in [n.ew, n.ns] {
+                match off {
+                    None => mix(0),
+                    Some(v) => {
+                        mix(1);
+                        mix_bytes(&v.to_le_bytes(), &mut mix);
+                    }
+                }
+            }
+        }
+        for e in &self.walls.edges {
+            mix_bytes(&e.a.to_le_bytes(), &mut mix);
+            mix_bytes(&e.b.to_le_bytes(), &mut mix);
         }
         h
     }
@@ -291,7 +393,37 @@ pub fn rotate_template(t: &Template, quarter_turns: u8) -> Template {
             }
         })
         .collect();
-    Template { props, trees }
+    // Wall nodes rotate like props; node ORDER (= identity) and the
+    // edge list are untouched, so ids stay valid across rotation. The
+    // lateral offsets swap axes with the walls they describe: under
+    // (x, z) → (−z, x) an EW wall at z-offset d becomes an NS wall at
+    // x-offset −d, and an NS wall at x-offset e becomes an EW wall at
+    // z-offset e.
+    let walls = WallGraph {
+        nodes: t
+            .walls
+            .nodes
+            .iter()
+            .map(|n| {
+                let (x, z) = (n.offset.x, n.offset.z);
+                let (rx, rz) = match q {
+                    1 => (-z, x),
+                    2 => (-x, -z),
+                    3 => (z, -x),
+                    _ => (x, z),
+                };
+                let (ew, ns) = match q {
+                    1 => (n.ns, n.ew.map(|d| -d)),
+                    2 => (n.ew.map(|d| -d), n.ns.map(|d| -d)),
+                    3 => (n.ns.map(|d| -d), n.ew),
+                    _ => (n.ew, n.ns),
+                };
+                WallNode { offset: Vec3::new(rx, n.offset.y, rz), ew, ns, ..*n }
+            })
+            .collect(),
+        edges: t.walls.edges.clone(),
+    };
+    Template { props, trees, walls }
 }
 
 #[cfg(test)]
@@ -306,6 +438,7 @@ mod tests {
                 Prop::at(Vec3::new(-5.0, 0.0, 10.0), PropKind::Campfire),
             ],
             trees: vec![],
+            walls: WallGraph::default(),
         };
         let anchor = Vec3::new(100.0, 0.0, -100.0);
         let out = resolve_placements(&t, anchor);
@@ -324,6 +457,7 @@ mod tests {
         let t = Template {
             props: vec![Prop::at(Vec3::new(10.0, 5.0, 0.0), PropKind::WallNS)],
             trees: vec![],
+            walls: WallGraph::default(),
         };
         let r1 = rotate_template(&t, 1);
         assert_eq!(r1.props[0].offset, Vec3::new(0.0, 5.0, 10.0));
@@ -334,10 +468,99 @@ mod tests {
     }
 
     #[test]
+    fn rotate_turns_wall_nodes_and_keeps_edges() {
+        // The wall graph rotates with the template exactly like props
+        // and trees: node offsets turn, node/edge identity (vec order)
+        // is untouched so ids stay valid across rotation.
+        let t = Template {
+            props: vec![],
+            trees: vec![],
+            walls: WallGraph {
+                nodes: vec![
+                    WallNode {
+                        offset: Vec3::new(10.0, 0.0, 0.0),
+                        kind: WallCellKind::Solid,
+                        color: None,
+                        ew: None,
+                        ns: None,
+                    },
+                    WallNode {
+                        offset: Vec3::new(10.0, 0.0, 80.0),
+                        kind: WallCellKind::Door,
+                        color: None,
+                        ew: None,
+                        ns: None,
+                    },
+                ],
+                edges: vec![WallEdge { a: 0, b: 1 }],
+            },
+        };
+        let r1 = rotate_template(&t, 1);
+        // 90°: (x, z) → (−z, x).
+        assert_eq!(r1.walls.nodes[0].offset, Vec3::new(0.0, 0.0, 10.0));
+        assert_eq!(r1.walls.nodes[1].offset, Vec3::new(-80.0, 0.0, 10.0));
+        // Kind, order, and edges unchanged — ids survive rotation.
+        assert_eq!(r1.walls.nodes[1].kind, WallCellKind::Door);
+        assert_eq!(r1.walls.edges, t.walls.edges);
+        // Four quarter-turns are the identity.
+        assert_eq!(rotate_template(&t, 4).walls, t.walls);
+    }
+
+    #[test]
+    fn digest_covers_the_wall_graph() {
+        // Two templates identical except for one wall node's kind must
+        // digest differently — the graph is authored truth like props
+        // and trees, so peers must agree on it byte-for-byte.
+        let base = |kind: WallCellKind| Template {
+            props: vec![],
+            trees: vec![],
+            walls: WallGraph {
+                nodes: vec![WallNode {
+                    offset: Vec3::new(0.0, 0.0, 0.0),
+                    kind,
+                    color: None,
+                    ew: None,
+                    ns: None,
+                }],
+                edges: vec![],
+            },
+        };
+        assert_ne!(
+            base(WallCellKind::Solid).stable_digest(),
+            base(WallCellKind::Door).stable_digest(),
+            "wall node kind must be covered by the digest"
+        );
+        // Edges are covered too.
+        let two_nodes = |edges: Vec<WallEdge>| Template {
+            props: vec![],
+            trees: vec![],
+            walls: WallGraph {
+                nodes: vec![
+                    WallNode { offset: Vec3::ZERO, kind: WallCellKind::Solid, color: None, ew: None, ns: None },
+                    WallNode {
+                        offset: Vec3::new(80.0, 0.0, 0.0),
+                        kind: WallCellKind::Solid,
+                        color: None,
+                        ew: None,
+                        ns: None,
+                    },
+                ],
+                edges,
+            },
+        };
+        assert_ne!(
+            two_nodes(vec![]).stable_digest(),
+            two_nodes(vec![WallEdge { a: 0, b: 1 }]).stable_digest(),
+            "wall edges must be covered by the digest"
+        );
+    }
+
+    #[test]
     fn resolution_is_deterministic() {
         let t = Template {
             props: vec![Prop::at(Vec3::new(7.0, 8.0, 9.0), PropKind::Campfire)],
             trees: vec![],
+            walls: WallGraph::default(),
         };
         let a = resolve_placements(&t, Vec3::splat(3.0));
         let b = resolve_placements(&t, Vec3::splat(3.0));

@@ -1,114 +1,180 @@
 # game/docs — render
 
-The current shape of the game's render pipeline, and the mesh-based
-successor that lands next.
+The game's render pipeline: what draws how, and the record of the
+two mesh scopes (trees, walls) that replaced cube instancing where
+it mattered.
 
-## Current pipeline — cube instancing
+## The passes, today
 
-Every prop is a scaled cube (or thin box). Render passes:
-
-- **opaque** — walls / roof / trees / obstacles / structures.
-- **glass** — window panes, alpha-blended, depth-tested but not
+- **opaque cubes** — roofs, furniture, obstacles, player, NPCs,
+  trails, pins. One unit-cube vertex buffer, per-instance
+  position/colour/scale.
+- **mesh** — the solid terrain surface (ground shader: Lambert +
+  the world-anchored reference grid), building walls (wall
+  shader: plain Lambert, per-room interior colours), tree wood
+  (mesh shader: procedural bark) and canopy (leaf shader:
+  silhouette cards). Indexed instanced draws, one WGSL layout
+  (`MeshVertex` 0/1/2 + `MeshInstance` 3/4/5/6, held to
+  `INSTANCE_ATTRS`).
+- **glass** — window panes, alpha-blended, depth-tested, not
   depth-writing.
-- **ghost** — cut-away walls + roof at α=0.15 when the player is
-  inside a roofed building.
+- **ghost** — cut-away geometry at α=0.15 when the player is
+  inside a roofed building: the roof (cube ghost) and the cut
+  near walls (wall-mesh ghost). Ghost = exactly what the opaque
+  draw skipped, by construction.
 - **UI** — HUD, watermark, dpad, bang overlay.
 
-Every geometry is an instanced draw of one unit cube with per-
-instance position, colour, and scale. Wall runs (see
-[`../../crates/cdda/README.md`](../../crates/cdda/README.md)) are
-already coalesced so adjacent cells emit ONE long prop — the seams
-between run pieces are gone.
+Both render paths (native lavapipe → PNG for seer, browser via the
+hand-wired `gpu_web` seam) draw the same passes from the same
+shared emit/bake code.
 
-## Known limitation
+## Mesh substrate, proven on the tree — shipped
 
-Adjacent wall props render as **separate shaded boxes**. Even when
-placement is exact (no overlap, no gap), the eye reads corners and
-T-junctions as "two walls meeting" rather than "one wall turning."
-Every wall junction — L corners, T-junctions, wall-meets-window,
-divider-meets-perimeter — shows a doubled edge or subtle
-discontinuity. No amount of placement-rule refinement inside the
-cdda crate fixes this; the geometry is right, the rendering
-substrate is wrong for reading as continuous.
+The mesh pipeline was proven on the smallest thing first: the
+tree. Trunk/branch isosurface meshes per species, phyllotactic
+canopy, day-one UV slots, browser parity — see
+[`TREES.md`](./TREES.md) for the full record and the open tree
+work. The bar was "trees look like trees; nothing else regresses."
 
-This was the stamp-template merge blocker for the wall look. The
-placement work is functionally correct (see the tests in
-`crates/cdda/src/placement.rs`) but the render doesn't cross the
-"looks like walls" bar. Fix scoped to its own scope below.
+## Walls on mesh — shipped
 
-## Current scope — mesh substrate, proven on the tree
+Each building's wall system renders as one continuous polyhedron
+baked from its `WallGraph`. Corners are where the geometry turns —
+no seam because there is no seam to render. This closed the
+long-standing cube-wall limitation: adjacent wall props used to
+render as separate shaded boxes, so every junction showed stub
+pillars, T-junction gaps, or doubled edges no placement rule could
+fix.
 
-Prove the mesh substrate on the smallest thing: **the tree**. Walls
-stay on cubes for now; the doubled-corner problem is not solved
-here. The point is to land the mesh pipeline itself, with one
-shape (tree) exercising every part of it end-to-end.
+**Merge bar — met.** The lavapipe tour renders against the cube
+baselines
+([`img/walls-cubes-baseline-school.png`](./img/walls-cubes-baseline-school.png),
+[`img/walls-cubes-baseline-house.png`](./img/walls-cubes-baseline-house.png))
+show corners reading as one wall turning; nothing else regressed;
+the deployed browser build was verified on-device (TERRAIN.md
+Slice 8 precedent). Developed failing-test-first throughout; cdda
+38 / game 144 tests green, `imports.allow` byte-identical.
 
-**Intended behaviour once this lands.**
+### What shipped
 
-1. A second render pipeline exists alongside the cube-instance
-   pipeline. Both run each frame. The cube pipeline draws
-   everything it draws today except trees.
-2. Trees render through the mesh pipeline:
-   - Trunk = tapered geometry (truncated cone, ~12 sides), shared
-     mesh, instanced per tree with per-instance transform.
-   - Canopy = **phyllotactic** — elements placed at successive
-     golden-angle rotations (≈137.5°) around the growth axis,
-     radius scaling per step. Reads as a real crown, not a sphere
-     or a box.
-3. Placement stays deterministic per world cell (same inputs as
-   `trees::tree_at_cell`), so streaming and reproducibility are
-   unchanged.
-4. seer captures `[perf]` for both pipelines in the same frame —
-   first real numbers on mesh cost vs cube cost.
-5. Vertex format reserves UV slots from day one, even though the
-   first cut has no textures. Damage textures (cracks, scorches)
-   are a real downstream goal; skipping UVs now costs a second
-   swap later.
+- **`WallGraph`** (cdda) — the wall-line topology as a third
+  `Template` layer, trees-style. Nodes are wall-line cells (the
+  CDDA damage quantum) carrying kind (`Solid`/`Window`/`Door`),
+  material colour, and per-axis lateral centerline offsets from
+  the same slot classification the prop path emits from — mesh
+  walls sit exactly where collider walls sit. Edges are
+  4-adjacencies. Node/edge ids are deterministic (row-major):
+  the stable address future wall mutation writes to. Rotates in
+  `rotate_template` (ids survive), mixed into `stable_digest`.
+  One cell classifier (`cell_wall_kind`) backs both the graph and
+  the flood-fill, so they can never disagree about what seals a
+  room. Diagnostics: `cargo run --example wall_graph_dump`.
+- **`wall_mesh.rs`** (game) — rectilinear tessellation, no general
+  tessellator. Runs are quad bands split around junction miter
+  squares (nodes own the miter; squares emit only faces no run
+  abuts). Every vertical face splits on the canonical sill/lintel
+  lines (`Y_BANDS`), so solid-meets-window stays manifold by
+  construction: windows occupy the outer bands, the glass band
+  stays open for the alpha pass, reveals close the solid
+  neighbours, and a run capping at a door cell IS the jamb.
+  Positions weld, normals crease (a 90° corner keeps its hard
+  edge — the artifact was end-caps inside joints, never the
+  crease). Invariants pinned by test: manifold-or-grounded on
+  fixtures AND the full P-shape graph, zero faces inside any
+  miter square, glass bands open, side faces coplanar with the
+  run planes. Diagnostics:
+  `cargo run --example wall_mesh_preview [house_01]`.
+- **`wall_bake.rs`** (game) — per-building bakes from the rotated
+  graph. Colour-grouped parts via a per-face resolver: exterior
+  faces keep the authored material; **interior faces colour per
+  room** — rooms derived by flood fill over the graph's cells,
+  palette seeded per building (`ROOM_PALETTE`, one array — tune
+  there), so buildings vary and rooms within one cohere. Cut-away
+  is data, not passes: near (camera-side) triangles are stored
+  depth-ASCENDING after `near_start` for the opaque draw and
+  depth-DESCENDING in `ghost_indices` for the ghost draw, so both
+  per-frame ranges are prefix counts (`WallPart::draw_counts`) —
+  the cut stops exactly at the player's depth, the ghost is
+  exactly the skipped set, zero per-frame re-uploads. FOR NOW:
+  a rotating camera would invalidate this bake.
+- **Both paths** — native `render_scene` takes `WallDrawPart`s;
+  browser `frame_walls`/`frame_walls_ghost` re-bake + re-upload
+  only on player chunk crossings. The `create_mesh` factory
+  crossing gained a `ghost` flag (same import set; JS shim +
+  seer-host mirror updated together). Walls draw with their own
+  WGSL — `WALL_SHADER_WGSL` (plain Lambert, higher ambient for
+  vertical faces) and `WALL_GHOST_SHADER_WGSL` — because the tree
+  mesh shader bakes procedural bark into everything it draws; all
+  three share `mesh_standard_vs_wgsl!` and the layout macro.
+- **emit.rs contract** — `Wall*` and window sill/lintel props
+  never become cube instances (they remain the collider + bake
+  source); glass panes keep emitting; the cube ghost carries only
+  the roof.
 
-**Out of scope here.** Walls, buildings, obstacles, trails, HUD,
-player, glass, ghost — all still on cubes. No destruction. No
-debris. No textures. No collider changes.
+### Locked decisions that held
 
-**Merge criterion.** Trees look like trees. Nothing else regresses.
-seer's frame captures confirm both.
+1. cdda emits the graph; game tessellates — never traced back out
+   of coalesced `Prop` boxes. The `Prop` path is untouched:
+   collider source and render fallback.
+2. Stable per-cell identity from day one — the address space for
+   wall mutation (break/burn/curtains), which ships later as an
+   overlay; the entire extent of dynamism in this scope.
+3. Rectilinear only; openings are axis-aligned bands; sill/lintel
+   are tessellation constants, not authored data.
+4. Colliders unchanged; the mesh is visual.
+5. Glass panes and roof slabs stay cube instances.
+6. Bakes are cached and re-bakeable — when wall mutation lands,
+   a version bump re-bakes; the render architecture is done
+   changing.
 
-## Later — walls on mesh
+### Lessons (paid for once)
 
-Replace / augment the cube-instance renderer with a **mesh
-pipeline** so each building's wall system renders as one
-continuous polyhedron.
+- `f32::to_bits` sorting reverses negatives — split a run at the
+  template centerline and re-created the doubled-corner artifact
+  the scope exists to kill. `total_cmp`.
+- Quad winding was CW-from-normal: every wall drew inside-out and
+  ambient-dark. Invisible to manifold tests; caught by the first
+  GPU frame. The render is the validator.
+- Cut-away classification must use POSITION, not face normal — a
+  far wall's interior face points at the camera but is the
+  backdrop you must keep.
+- The 24-unit junction-shortening in `placement.rs` is render-dead
+  (it was a cube z-fight workaround); it stays only because
+  colliders read the props.
 
-**Concept.** Trace the wall boundary of each building as a 2D
-polygon (outer perimeter + interior dividers), extrude to wall
-height, cut door/window openings, generate a triangle mesh. Render
-that as one draw call per building. Corners are where the polygon
-turns 90° — no visible seam because there's no seam to render.
+### Known follow-ups (surfaced, not silent)
 
-**Concrete work.**
-1. New JS-side WebGPU import functions in `gpu_web.rs` — mesh
-   pipeline creation, vertex-buffer-per-mesh, indexed draw with
-   variable vertex count. Each new crossing is a hand-wired
-   `env.*` import (see `imports.allow`) and needs mirroring into
-   `seer-host`'s linker or the wasm fails to instantiate.
-2. New shader for mesh rendering (parallel to `SHADER_WGSL`).
-3. Mesh generation in the cdda crate — trace polygons from the
-   wall lattice, tessellate with door/window cutouts. Or keep this
-   game-side and have cdda emit a `WallGraph` the mesh generator
-   consumes; either shape works.
-4. Colliders — cdda's box `Prop.size` output stays; the mesh is
-   for VISUAL. Player physics stays cube-based.
-5. Ghost + glass passes need to consume the mesh too — the mesh
-   generator can produce three variants (opaque / cut / ghost) or
-   the same mesh renders in three passes with a per-pass mask.
-6. Native `render.rs` mirror or accept native-differs-from-wasm.
+- A top-cap sliver can show where the depth cut crosses a wall
+  run (cap quad centroid straddles the threshold its side faces
+  don't). Cosmetic.
+- Startup template load grew (~76→195 ms one-time worst frame in
+  debug tours): every template/variant now also builds its graph
+  + offsets at load. One-time cost; cache or lazy-build if it
+  ever matters.
+- Room palette is deliberately muted; louder is a one-array edit
+  in `wall_bake.rs`.
 
-**Estimated scope.** 10–20 hours of infra work before the first
-correct-looking wall renders. Own scope, sequenced after the tree.
+### Deferred (recorded, not this scope)
 
-**Deferred within this plan.**
-- Per-face texture UVs / material variation. First cut: uniform
-  wall material colour.
-- Roof mesh. Slabs stay cube-instances until walls prove out.
+- **Wall mutation overlay** — per-cell state
+  (`Damaged`/`Breached`, curtains open/closed/broken glass, fire
+  as a per-cell process driving charring → breach) layered over
+  the immutable authored graph. Render bake AND collider emission
+  must both consume it (one source of truth, or a hole you can
+  see through still blocks). Contested canonical state,
+  flower-pickup-style, when it lands.
+- Damage/crack textures riding the reserved UVs; reading CDDA's
+  own bash data (cdda README frontier question 2).
+- Roof mesh; per-face material variation.
+- **Enclosure ("room") as a derived artifact of the `WallGraph`.**
+  Closed loops define enclosed space in two strengths: the *hull*
+  (what the perimeter seals — fences deliberately don't) and the
+  *faces* (individual rooms — already consumed by room colours).
+  Queued consumers: terrain's flatten rule shrinking from the
+  stamp rectangle to hull + apron so yards roll (TERRAIN.md
+  decision 5's open call); point-in-hull replacing the roof
+  cut-away radius heuristic; LOS, sound propagation, fire spread,
+  room labels.
 
 ## Frontier — render-adjacent
 

@@ -153,6 +153,7 @@ unsafe extern "C" {
         instance_stride: u32,
         color_format: u32,
         depth_format: u32,
+        ghost: u32,
         label_ptr: *const u8,
         label_len: u32,
     ) -> u32;
@@ -585,6 +586,27 @@ impl GameRenderPipeline {
         depth_format: u32,
         label: &str,
     ) -> Option<Self> {
+        Self::create_mesh_with(
+            pipeline_layout, shader, vertex_stride, instance_stride,
+            color_format, depth_format, false, label,
+        )
+    }
+
+    /// `ghost = true` builds the translucent variant: alpha-blended,
+    /// depth-tested but NOT depth-writing — the wall-mesh ghost pass.
+    /// One factory crossing carries both states (the `ghost` flag), so
+    /// the import set is unchanged.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_mesh_with(
+        pipeline_layout: &GamePipelineLayout,
+        shader: &GameShaderModule,
+        vertex_stride: u32,
+        instance_stride: u32,
+        color_format: u32,
+        depth_format: u32,
+        ghost: bool,
+        label: &str,
+    ) -> Option<Self> {
         let h = unsafe {
             game_gpu_render_pipeline_create_mesh(
                 pipeline_layout.handle,
@@ -593,6 +615,7 @@ impl GameRenderPipeline {
                 instance_stride,
                 color_format,
                 depth_format,
+                ghost as u32,
                 label.as_ptr(),
                 label.len() as u32,
             )

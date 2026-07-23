@@ -229,6 +229,30 @@ const AMBIENT: f32 = 0.25;
     };
 }
 
+/// The standard mesh VERTEX stage — scale in the local +Y frame,
+/// rotate onto the instance axis, translate, sway by the instance
+/// weight pivoting at the base. Shared verbatim by the mesh (trees),
+/// wall, and wall-ghost pipelines; the leaf pipeline has its own vs
+/// (full-weight sway, no base taper).
+macro_rules! mesh_standard_vs_wgsl {
+    () => {
+        r#"
+@vertex
+fn vs(v: VIn, i: IIn) -> VOut {
+    let rot = basis_from_axis(i.i_axis.xyz);
+    var world = rot * (v.pos * i.i_scale) + i.i_pos;
+    world = world + wind_offset(world, camera.wind.x, camera.wind.y * i.i_axis.w * v.pos.y, camera.wind.z);
+    var o: VOut;
+    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    o.normal = normalize(rot * (v.normal / i.i_scale));
+    o.color = i.i_color;
+    o.uv = v.uv;
+    return o;
+}
+"#
+    };
+}
+
 /// Mesh pipeline shader for trunks + branch cones — the shared layout, a
 /// vertex stage that sways each limb by its sway weight PIVOTING AT THE
 /// BASE (thin twigs bend most at their tip, the trunk's weight is 0 so it
@@ -236,27 +260,8 @@ const AMBIENT: f32 = 0.25;
 /// ON (set on the pipeline) so mesh geometry occludes correctly.
 pub const MESH_SHADER_WGSL: &str = concat!(
     mesh_layout_wgsl!(),
+    mesh_standard_vs_wgsl!(),
     r#"
-@vertex
-fn vs(v: VIn, i: IIn) -> VOut {
-    let rot = basis_from_axis(i.i_axis.xyz);
-    // Scale in the limb's local +Y frame, rotate onto the axis, translate.
-    var world = rot * (v.pos * i.i_scale) + i.i_pos;
-    // Wind: sway by the instance's weight, times v.pos.y so the limb
-    // pivots at its base (base held, tip swings). Trunk weight = 0 → no
-    // motion; a thin twig ~1 → its tip flutters most.
-    world = world + wind_offset(world, camera.wind.x, camera.wind.y * i.i_axis.w * v.pos.y, camera.wind.z);
-    var o: VOut;
-    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    // Inverse-transpose for the diagonal scale (divide by scale), then
-    // the same rotation — normals stay correct under non-uniform scale
-    // AND orientation.
-    o.normal = normalize(rot * (v.normal / i.i_scale));
-    o.color = i.i_color;
-    o.uv = v.uv;
-    return o;
-}
-
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let l = normalize(LIGHT_DIR);
@@ -272,6 +277,51 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let grain = 0.88 + 0.12 * sin(in.uv.y * 40.0 + furrow * 4.0);
     let bark = mix(0.70, 1.0, furrow) * grain;
     return vec4<f32>(in.color * k * bark, 1.0);
+}
+"#
+);
+
+/// Wall shader for the walls-on-mesh buildings (RENDER.md slice 4).
+/// Same layout + vertex stage as the mesh pipeline (identity axis,
+/// sway weight 0 → rigid), but the fragment is a plain Lambert with a
+/// whisper of plaster grain from the day-one UV — walls must NOT get
+/// the tree shader's procedural bark furrows. Same pipeline factory,
+/// no new env.* crossing.
+pub const WALL_SHADER_WGSL: &str = concat!(
+    mesh_layout_wgsl!(),
+    mesh_standard_vs_wgsl!(),
+    r#"
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let l = normalize(LIGHT_DIR);
+    let ndotl = max(dot(normalize(in.normal), l), 0.0);
+    // Higher ambient than the tree shader: walls are mostly vertical,
+    // and a near-overhead light leaves vertical faces too dim to read
+    // material or room colour.
+    let k = 0.42 + 0.58 * ndotl;
+    let grain = 0.97 + 0.03 * sin(in.uv.x * 11.0) * sin(in.uv.y * 8.0);
+    return vec4<f32>(in.color * k * grain, 1.0);
+}
+"#
+);
+
+/// Ghost fragment for cut-away WALL MESH geometry — the mesh-layout
+/// sibling of GHOST_SHADER_WGSL: same faint alpha, so a wall that the
+/// cut-away removed still leaves its outline instead of silently
+/// vanishing. Drawn with the ghost mesh pipeline (alpha blend, depth
+/// test on, depth write off).
+pub const WALL_GHOST_SHADER_WGSL: &str = concat!(
+    mesh_layout_wgsl!(),
+    mesh_standard_vs_wgsl!(),
+    r#"
+const GHOST_ALPHA: f32 = 0.15;
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let l = normalize(LIGHT_DIR);
+    let ndotl = max(dot(normalize(in.normal), l), 0.0);
+    let k = 0.42 + 0.58 * ndotl;
+    return vec4<f32>(in.color * k, GHOST_ALPHA);
 }
 "#
 );

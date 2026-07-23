@@ -66,6 +66,7 @@ pub fn campfire_template() -> Template {
     Template {
         props: vec![Prop::at(Vec3::ZERO, PropKind::Campfire)],
         trees: vec![],
+        ..Default::default()
     }
 }
 

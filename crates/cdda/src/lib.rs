@@ -38,5 +38,6 @@ pub use chunks::{
 };
 pub use placement::{CDDA_TILE, CddaError, ROOF_HEIGHT, mapgen_to_template, roof_to_props};
 pub use template::{
-    Prop, PropKind, Template, TreeKind, TreePlacement, resolve_placements, rotate_template,
+    Prop, PropKind, Template, TreeKind, TreePlacement, WallCellKind, WallEdge, WallGraph,
+    WallNode, resolve_placements, rotate_template,
 };
