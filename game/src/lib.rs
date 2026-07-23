@@ -816,23 +816,10 @@ fn wall_draws<'a>(
     let mut out = Vec::new();
     for pw in placed {
         let inside = wall_bake::player_inside(pw.anchor, snap);
-        // Player camera-depth relative to the building anchor, plus the
-        // cube path's old +40 margin — near walls beyond it are cut.
-        let local_depth =
-            (snap.player.x - pw.anchor.x) + (snap.player.z - pw.anchor.z) + 40.0;
+        let local_depth = wall_bake::local_depth(pw.anchor, snap.player);
         let y = terrain::height(pw.anchor.x, pw.anchor.z);
         for part in &pw.bake.parts {
-            let (draw_count, ghost_count) = if inside {
-                let visible_near =
-                    part.near_depths.partition_point(|d| *d <= local_depth);
-                let near_total = part.near_depths.len();
-                (
-                    (part.near_start + visible_near * 3) as u32,
-                    ((near_total - visible_near) * 3) as u32,
-                )
-            } else {
-                (part.indices.len() as u32, 0)
-            };
+            let (draw_count, ghost_count) = part.draw_counts(inside, local_depth);
             out.push(render::WallDrawPart {
                 verts: &part.verts,
                 indices: &part.indices,

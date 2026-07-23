@@ -110,6 +110,19 @@ struct WallPartGpu {
     anchor: [f32; 2],
 }
 
+impl WallPartGpu {
+    /// Same contract as `wall_bake::WallPart::draw_counts`, over the
+    /// uploaded copy of the cut metadata.
+    fn draw_counts(&self, inside: bool, local_depth: f32) -> (u32, u32) {
+        if !inside {
+            return (self.index_total, 0);
+        }
+        let visible_near = self.near_depths.partition_point(|d| *d <= local_depth) as u32;
+        let near_total = self.near_depths.len() as u32;
+        (self.near_start + visible_near * 3, (near_total - visible_near) * 3)
+    }
+}
+
 /// One species' GPU resources on the wasm path. The vertex + index
 /// buffers hold the species wood mesh; `mesh_generation` tracks the
 /// `tree_surface::mesh_generation()` value at last upload so the
@@ -871,14 +884,9 @@ pub fn frame_walls(snap: &scene::SceneSnapshot, bt: &crate::buildings::BuildingT
         }
         for part in &state.walls_gpu {
             let anchor = bevy_math::Vec3::new(part.anchor[0], 0.0, part.anchor[1]);
-            let draw_count = if crate::wall_bake::player_inside(anchor, snap) {
-                let local_depth =
-                    (snap.player.x - part.anchor[0]) + (snap.player.z - part.anchor[1]) + 40.0;
-                let visible_near = part.near_depths.partition_point(|d| *d <= local_depth);
-                part.near_start + (visible_near as u32) * 3
-            } else {
-                part.index_total
-            };
+            let inside = crate::wall_bake::player_inside(anchor, snap);
+            let (draw_count, _) =
+                part.draw_counts(inside, crate::wall_bake::local_depth(anchor, snap.player));
             if draw_count == 0 {
                 continue;
             }
@@ -913,14 +921,9 @@ pub fn frame_walls_ghost(snap: &scene::SceneSnapshot) -> u32 {
         };
         for part in &state.walls_gpu {
             let anchor = bevy_math::Vec3::new(part.anchor[0], 0.0, part.anchor[1]);
-            if !crate::wall_bake::player_inside(anchor, snap) {
-                continue; // nothing was cut → nothing to ghost
-            }
-            let local_depth =
-                (snap.player.x - part.anchor[0]) + (snap.player.z - part.anchor[1]) + 40.0;
-            let visible_near = part.near_depths.partition_point(|d| *d <= local_depth) as u32;
-            let near_total = part.near_depths.len() as u32;
-            let ghost_count = (near_total - visible_near) * 3;
+            let inside = crate::wall_bake::player_inside(anchor, snap);
+            let (_, ghost_count) =
+                part.draw_counts(inside, crate::wall_bake::local_depth(anchor, snap.player));
             if ghost_count == 0 {
                 continue;
             }

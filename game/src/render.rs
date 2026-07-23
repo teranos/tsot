@@ -490,7 +490,9 @@ pub fn render_scene(
     });
     // One descriptor, two pipelines — trunk/branch cones and leaf cards
     // differ only in the fragment shader.
-    let make_mesh_pipeline = |module: &wgpu::ShaderModule, label: &str| {
+    // `ghost = true` builds the translucent variant: alpha-blended,
+    // depth-tested but not depth-writing (the wall-mesh ghost pass).
+    let make_mesh_pipeline_with = |module: &wgpu::ShaderModule, label: &str, ghost: bool| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&pipeline_layout),
@@ -531,7 +533,7 @@ pub fn render_scene(
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
+                depth_write_enabled: Some(!ghost),
                 depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
@@ -543,7 +545,7 @@ pub fn render_scene(
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: TARGET_FORMAT,
-                    blend: None,
+                    blend: if ghost { Some(wgpu::BlendState::ALPHA_BLENDING) } else { None },
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -551,6 +553,8 @@ pub fn render_scene(
             cache: None,
         })
     };
+    let make_mesh_pipeline =
+        |module: &wgpu::ShaderModule, label: &str| make_mesh_pipeline_with(module, label, false);
     let mesh_pipeline = make_mesh_pipeline(mesh_shader.wgpu(), "seer.render.mesh.pipeline");
     let leaf_pipeline = make_mesh_pipeline(leaf_shader.wgpu(), "seer.render.leaf.pipeline");
     // Ground pipeline: same vertex/instance layout as the mesh pipeline,
@@ -573,65 +577,8 @@ pub fn render_scene(
         label: Some("seer.render.wall_ghost.shader"),
         source: wgpu::ShaderSource::Wgsl(WALL_GHOST_SHADER_WGSL.into()),
     });
-    let wall_ghost_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("seer.render.wall_ghost.pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: wall_ghost_shader.wgpu(),
-            entry_point: Some("vs"),
-            compilation_options: Default::default(),
-            buffers: &[
-                wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<MeshVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3,
-                        1 => Float32x3,
-                        2 => Float32x2
-                    ],
-                },
-                wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<MeshInstance>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![
-                        3 => Float32x3,
-                        4 => Float32x3,
-                        5 => Float32x3,
-                        6 => Float32x4
-                    ],
-                },
-            ],
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::Less),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: wall_ghost_shader.wgpu(),
-            entry_point: Some("fs"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: TARGET_FORMAT,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    });
+    let wall_ghost_pipeline =
+        make_mesh_pipeline_with(wall_ghost_shader.wgpu(), "seer.render.wall_ghost.pipeline", true);
 
     // Readback path: color texture → staging buffer → CPU → PNG.
     // Row pitch must be a multiple of 256 bytes (COPY_BYTES_PER_ROW

@@ -42,6 +42,33 @@ pub struct WallPart {
     pub ghost_indices: Vec<u32>,
 }
 
+impl WallPart {
+    /// The per-frame draw ranges: (opaque index count, ghost index
+    /// count). Outside a building everything is opaque and nothing
+    /// ghosts; inside, near triangles up to `local_depth` stay opaque
+    /// and the rest — exactly the skipped set — ghost. `local_depth`
+    /// is the player's camera depth relative to the building anchor
+    /// (see `local_depth`).
+    pub fn draw_counts(&self, inside: bool, local_depth: f32) -> (u32, u32) {
+        if !inside {
+            return (self.indices.len() as u32, 0);
+        }
+        let visible_near = self.near_depths.partition_point(|d| *d <= local_depth);
+        let near_total = self.near_depths.len();
+        (
+            (self.near_start + visible_near * 3) as u32,
+            ((near_total - visible_near) * 3) as u32,
+        )
+    }
+}
+
+/// The player's camera depth relative to a building anchor, with the
+/// cube path's historical +40 margin — the cut threshold for
+/// `WallPart::draw_counts`.
+pub fn local_depth(anchor: Vec3, player: Vec3) -> f32 {
+    (player.x - anchor.x) + (player.z - anchor.z) + 40.0
+}
+
 /// A building's baked wall mesh: colour-grouped, cut-away-ordered.
 pub struct WallBake {
     pub parts: Vec<WallPart>,

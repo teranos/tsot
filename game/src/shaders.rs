@@ -229,6 +229,30 @@ const AMBIENT: f32 = 0.25;
     };
 }
 
+/// The standard mesh VERTEX stage — scale in the local +Y frame,
+/// rotate onto the instance axis, translate, sway by the instance
+/// weight pivoting at the base. Shared verbatim by the mesh (trees),
+/// wall, and wall-ghost pipelines; the leaf pipeline has its own vs
+/// (full-weight sway, no base taper).
+macro_rules! mesh_standard_vs_wgsl {
+    () => {
+        r#"
+@vertex
+fn vs(v: VIn, i: IIn) -> VOut {
+    let rot = basis_from_axis(i.i_axis.xyz);
+    var world = rot * (v.pos * i.i_scale) + i.i_pos;
+    world = world + wind_offset(world, camera.wind.x, camera.wind.y * i.i_axis.w * v.pos.y, camera.wind.z);
+    var o: VOut;
+    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    o.normal = normalize(rot * (v.normal / i.i_scale));
+    o.color = i.i_color;
+    o.uv = v.uv;
+    return o;
+}
+"#
+    };
+}
+
 /// Mesh pipeline shader for trunks + branch cones — the shared layout, a
 /// vertex stage that sways each limb by its sway weight PIVOTING AT THE
 /// BASE (thin twigs bend most at their tip, the trunk's weight is 0 so it
@@ -236,27 +260,8 @@ const AMBIENT: f32 = 0.25;
 /// ON (set on the pipeline) so mesh geometry occludes correctly.
 pub const MESH_SHADER_WGSL: &str = concat!(
     mesh_layout_wgsl!(),
+    mesh_standard_vs_wgsl!(),
     r#"
-@vertex
-fn vs(v: VIn, i: IIn) -> VOut {
-    let rot = basis_from_axis(i.i_axis.xyz);
-    // Scale in the limb's local +Y frame, rotate onto the axis, translate.
-    var world = rot * (v.pos * i.i_scale) + i.i_pos;
-    // Wind: sway by the instance's weight, times v.pos.y so the limb
-    // pivots at its base (base held, tip swings). Trunk weight = 0 → no
-    // motion; a thin twig ~1 → its tip flutters most.
-    world = world + wind_offset(world, camera.wind.x, camera.wind.y * i.i_axis.w * v.pos.y, camera.wind.z);
-    var o: VOut;
-    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    // Inverse-transpose for the diagonal scale (divide by scale), then
-    // the same rotation — normals stay correct under non-uniform scale
-    // AND orientation.
-    o.normal = normalize(rot * (v.normal / i.i_scale));
-    o.color = i.i_color;
-    o.uv = v.uv;
-    return o;
-}
-
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let l = normalize(LIGHT_DIR);
@@ -284,20 +289,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 /// no new env.* crossing.
 pub const WALL_SHADER_WGSL: &str = concat!(
     mesh_layout_wgsl!(),
+    mesh_standard_vs_wgsl!(),
     r#"
-@vertex
-fn vs(v: VIn, i: IIn) -> VOut {
-    let rot = basis_from_axis(i.i_axis.xyz);
-    var world = rot * (v.pos * i.i_scale) + i.i_pos;
-    world = world + wind_offset(world, camera.wind.x, camera.wind.y * i.i_axis.w * v.pos.y, camera.wind.z);
-    var o: VOut;
-    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    o.normal = normalize(rot * (v.normal / i.i_scale));
-    o.color = i.i_color;
-    o.uv = v.uv;
-    return o;
-}
-
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let l = normalize(LIGHT_DIR);
@@ -319,20 +312,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 /// test on, depth write off).
 pub const WALL_GHOST_SHADER_WGSL: &str = concat!(
     mesh_layout_wgsl!(),
+    mesh_standard_vs_wgsl!(),
     r#"
-@vertex
-fn vs(v: VIn, i: IIn) -> VOut {
-    let rot = basis_from_axis(i.i_axis.xyz);
-    var world = rot * (v.pos * i.i_scale) + i.i_pos;
-    world = world + wind_offset(world, camera.wind.x, camera.wind.y * i.i_axis.w * v.pos.y, camera.wind.z);
-    var o: VOut;
-    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    o.normal = normalize(rot * (v.normal / i.i_scale));
-    o.color = i.i_color;
-    o.uv = v.uv;
-    return o;
-}
-
 const GHOST_ALPHA: f32 = 0.15;
 
 @fragment
