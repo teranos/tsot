@@ -276,6 +276,42 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 "#
 );
 
+/// Wall shader for the walls-on-mesh buildings (RENDER.md slice 4).
+/// Same layout + vertex stage as the mesh pipeline (identity axis,
+/// sway weight 0 → rigid), but the fragment is a plain Lambert with a
+/// whisper of plaster grain from the day-one UV — walls must NOT get
+/// the tree shader's procedural bark furrows. Same pipeline factory,
+/// no new env.* crossing.
+pub const WALL_SHADER_WGSL: &str = concat!(
+    mesh_layout_wgsl!(),
+    r#"
+@vertex
+fn vs(v: VIn, i: IIn) -> VOut {
+    let rot = basis_from_axis(i.i_axis.xyz);
+    var world = rot * (v.pos * i.i_scale) + i.i_pos;
+    world = world + wind_offset(world, camera.wind.x, camera.wind.y * i.i_axis.w * v.pos.y, camera.wind.z);
+    var o: VOut;
+    o.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    o.normal = normalize(rot * (v.normal / i.i_scale));
+    o.color = i.i_color;
+    o.uv = v.uv;
+    return o;
+}
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let l = normalize(LIGHT_DIR);
+    let ndotl = max(dot(normalize(in.normal), l), 0.0);
+    // Higher ambient than the tree shader: walls are mostly vertical,
+    // and a near-overhead light leaves vertical faces too dim to read
+    // material or room colour.
+    let k = 0.42 + 0.58 * ndotl;
+    let grain = 0.97 + 0.03 * sin(in.uv.x * 11.0) * sin(in.uv.y * 8.0);
+    return vec4<f32>(in.color * k * grain, 1.0);
+}
+"#
+);
+
 /// Ground shader for the solid terrain surface. Same vertex/instance
 /// layout as the mesh pipeline (so it uses the same pipeline factory and
 /// buffers), but it carries WORLD XZ to the fragment and paints a faint,

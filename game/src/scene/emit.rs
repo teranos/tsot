@@ -79,39 +79,31 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             && (p.z - snap.player.z).abs() <= roof_half
     });
     let under_roof = overhead.is_some();
-    // Tight enough that a neighbouring building's walls stay solid
+    // Tight enough that a neighbouring building's roof stays solid
     // (buildings sit ≥ 1 chunk apart, so anything past 800 is a
-    // different structure), loose enough to reach a big CDDA house's
-    // far perimeter from the overhead cell.
+    // different structure), loose enough to cover a big CDDA house's
+    // roof from the overhead cell.
     let cutaway_radius = 800.0_f32;
     let overhead_pos = overhead.map(|(p, _, _, _)| *p).unwrap_or(snap.player);
-    // The isometric camera looks from +x,+z, so nearer props have a
-    // larger x+z. When inside, hide this building's roof AND its
-    // camera-facing walls (in front of the player) so the interior
-    // shows; the far walls stay as a backdrop.
-    let player_depth = snap.player.x + snap.player.z;
 
-    // Structure props (walls, furniture, roof). Size comes from the
-    // kind; colour is the prop's own tint (walls by material) or the
-    // kind default. Ground props sit on the floor (base at y=0);
-    // elevated props (the roof) carry their height in pos.y.
+    // Structure props (furniture, roof). Size comes from the kind;
+    // colour is the prop's own tint or the kind default. Ground props
+    // sit on the floor (base at y=0); elevated props (the roof) carry
+    // their height in pos.y.
     for (pos, kind, tint, size_override) in &snap.structures {
         // Glass panes are drawn in the separate alpha-blended pass
-        // (see `snapshot_to_glass_instances`), never here.
-        if kind.is_window() {
+        // (see `snapshot_to_glass_instances`), never here. Walls are
+        // MESH citizens (RENDER.md slice 4): their props remain the
+        // collider + bake source but never become cube instances.
+        if kind.is_window()
+            || matches!(kind, PropKind::Wall | PropKind::WallNS | PropKind::WallEW)
+        {
             continue;
         }
         let in_footprint = (pos.x - overhead_pos.x).abs() < cutaway_radius
             && (pos.z - overhead_pos.z).abs() < cutaway_radius;
-        if under_roof && in_footprint {
-            if *kind == PropKind::Roof {
-                continue; // see-through roof
-            }
-            let is_wall =
-                matches!(kind, PropKind::Wall | PropKind::WallNS | PropKind::WallEW);
-            if is_wall && (pos.x + pos.z) > player_depth + 40.0 {
-                continue; // see-through camera-facing wall
-            }
+        if under_roof && in_footprint && *kind == PropKind::Roof {
+            continue; // see-through roof
         }
         let (default_color, default_scale) = prop_appearance(*kind);
         let color = tint.unwrap_or(default_color);
@@ -194,23 +186,17 @@ pub fn snapshot_to_ghost_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     };
     let overhead_pos = overhead.0;
     let cutaway_radius = 800.0_f32;
-    let player_depth = snap.player.x + snap.player.z;
     let mut out = Vec::new();
     for (pos, kind, tint, size_override) in &snap.structures {
-        if kind.is_window() {
+        // Only the cut-away ROOF ghosts here — walls are mesh citizens
+        // (their near-half is skipped at the mesh draw; a mesh ghost
+        // pass is slice 5).
+        if *kind != PropKind::Roof {
             continue;
         }
         let in_footprint = (pos.x - overhead_pos.x).abs() < cutaway_radius
             && (pos.z - overhead_pos.z).abs() < cutaway_radius;
         if !in_footprint {
-            continue;
-        }
-        let is_ghost = *kind == PropKind::Roof
-            || (matches!(
-                kind,
-                PropKind::Wall | PropKind::WallNS | PropKind::WallEW
-            ) && (pos.x + pos.z) > player_depth + 40.0);
-        if !is_ghost {
             continue;
         }
         let (default_color, default_scale) = prop_appearance(*kind);
@@ -361,19 +347,21 @@ mod tests {
             player: Vec3::ZERO,
         };
         let opaque = snapshot_to_instances(&snap);
-        let has_neighbor_wall = opaque.iter().any(|i| {
-            i.pos[0] > 800.0 && (90.0..140.0).contains(&i.pos[1])
-        });
+        // Building B's roof must stay solid while the player is inside A.
+        let has_neighbor_roof = opaque.iter().any(|i| i.pos[0] > 800.0 && i.pos[1] > 200.0);
         assert!(
-            has_neighbor_wall,
-            "neighbouring building's wall got cut — cut-away leaked past the current building's footprint: {:?}",
+            has_neighbor_roof,
+            "neighbouring building's roof got cut — cut-away leaked past the current building's footprint: {:?}",
             opaque.iter().map(|i| (i.pos, i.scale)).collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn near_walls_are_cut_away_when_inside() {
-        let snap = SceneSnapshot {
+    fn walls_never_render_as_cube_instances() {
+        // Walls-on-mesh (RENDER.md slice 4): Wall* structure props are
+        // collider + mesh-bake sources, never cube instances — inside
+        // OR outside a building.
+        let snap = |player: Vec3| SceneSnapshot {
             trees: vec![],
             obstacles: vec![],
             fires: vec![],
@@ -382,18 +370,22 @@ mod tests {
             trails: vec![],
             remote_peers: vec![],
             structures: vec![
-                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None, None), // overhead → inside
-                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None, None), // camera-facing (x+z>0)
-                (Vec3::new(-300.0, 0.0, -300.0), PropKind::Wall, None, None), // far side
+                (Vec3::new(0.0, 220.0, 0.0), PropKind::Roof, None, None),
+                (Vec3::new(300.0, 0.0, 300.0), PropKind::Wall, None, None),
+                (Vec3::new(-300.0, 0.0, -300.0), PropKind::WallNS, None, None),
+                (Vec3::new(100.0, 0.0, -300.0), PropKind::WallEW, None, None),
             ],
             jukeboxes: vec![],
-            player: Vec3::ZERO,
+            player,
         };
-        let inst = snapshot_to_instances(&snap);
-        // Walls render around y=110; only the far wall should survive.
-        let walls: Vec<_> = inst.iter().filter(|i| (90.0..140.0).contains(&i.pos[1])).collect();
-        assert_eq!(walls.len(), 1, "only the far wall should remain when inside");
-        assert!(walls[0].pos[0] < 0.0, "the surviving wall is the far one");
+        for player in [Vec3::ZERO, Vec3::new(5000.0, 0.0, 5000.0)] {
+            let inst = snapshot_to_instances(&snap(player));
+            // Walls used to render around y=110; nothing does now.
+            assert!(
+                !inst.iter().any(|i| (90.0..140.0).contains(&i.pos[1])),
+                "wall cube instance leaked into the opaque pass"
+            );
+        }
     }
 
     #[test]
@@ -416,18 +408,13 @@ mod tests {
         };
         let opaque = snapshot_to_instances(&snap);
         let ghost = snapshot_to_ghost_instances(&snap);
-        // The opaque pass keeps the far wall only.
-        let opaque_walls: Vec<_> = opaque.iter().filter(|i| (90.0..140.0).contains(&i.pos[1])).collect();
-        assert_eq!(opaque_walls.len(), 1);
-        assert!(opaque_walls[0].pos[0] < 0.0);
-        // Ghost carries what the opaque pass dropped: the camera-facing
-        // wall + the roof — never the far wall (still opaque).
-        assert_eq!(ghost.len(), 2, "expected roof + camera-facing wall as ghosts");
-        assert!(ghost.iter().any(|i| i.pos[1] > 200.0), "ghost includes the roof");
-        assert!(
-            ghost.iter().any(|i| i.pos[0] > 0.0 && (90.0..140.0).contains(&i.pos[1])),
-            "ghost includes the camera-facing wall"
-        );
+        // Walls are mesh citizens now: no wall cubes in either pass.
+        assert!(!opaque.iter().any(|i| (90.0..140.0).contains(&i.pos[1])));
+        assert!(!ghost.iter().any(|i| (90.0..140.0).contains(&i.pos[1])));
+        // Ghost carries exactly the cut-away roof (wall ghosting moves
+        // to the mesh path in slice 5).
+        assert_eq!(ghost.len(), 1, "expected exactly the roof as ghost");
+        assert!(ghost[0].pos[1] > 200.0, "ghost is the roof");
     }
 
     #[test]
@@ -472,15 +459,15 @@ mod tests {
         // The glass pass carries exactly the one window pane.
         assert_eq!(glass.len(), 1, "the window belongs to the glass pass");
         assert_eq!(glass[0].color, [0.5, 0.68, 0.82], "keeps its glass tint");
-        // The opaque pass has the wall but not the window: no opaque
-        // instance sits at the window's position.
+        // Neither the window nor the wall draws opaque — walls are mesh
+        // citizens (slice 4), glass panes are the alpha pass's.
         assert!(
             !opaque.iter().any(|i| i.pos[0] == 300.0 && i.pos[2] == 80.0),
             "the window must not be drawn opaque"
         );
         assert!(
-            opaque.iter().any(|i| i.pos[0] == 300.0 && i.pos[2] == 0.0),
-            "the wall still draws opaque"
+            !opaque.iter().any(|i| i.pos[0] == 300.0 && i.pos[2] == 0.0),
+            "the wall must not draw as a cube any more"
         );
     }
 

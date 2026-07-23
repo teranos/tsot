@@ -45,12 +45,20 @@ const Y_BANDS: [(f32, f32); 3] = [
     (HEAD_BOTTOM, WALL_HEIGHT),
 ];
 
-/// Tessellate the whole graph. Offsets are template-local (same space
-/// as `Prop.offset`); the caller instances the result at the building
-/// anchor. Returns indexed triangles in the mesh pipeline's vertex
-/// format.
-pub fn wall_graph_mesh(g: &WallGraph) -> (Vec<MeshVertex>, Vec<u32>) {
-    let mut out = MeshOut::default();
+/// Per-face colour resolution: (face centroid, face normal, material
+/// colour) → final colour. The bake layer uses this to give interior
+/// faces per-room colours while exterior faces keep their material.
+pub type ColorResolver<'r> = &'r dyn Fn([f32; 3], [f32; 3], [f32; 3]) -> [f32; 3];
+
+/// Tessellate the whole graph with per-face colour resolution,
+/// returning one (colour, verts, indices) group per resolved colour.
+/// Offsets are template-local (same space as `Prop.offset`); the
+/// caller instances the result at the building anchor.
+pub fn wall_graph_mesh_with(
+    g: &WallGraph,
+    resolve: ColorResolver<'_>,
+) -> Vec<([f32; 3], Vec<MeshVertex>, Vec<u32>)> {
+    let mut out = MeshOut::new(resolve);
 
     // Neighbor lookups by exact cell offset — the graph's edges are the
     // source of adjacency; positions identify direction.
@@ -126,6 +134,7 @@ pub fn wall_graph_mesh(g: &WallGraph) -> (Vec<MeshVertex>, Vec<u32>) {
     for n in g.nodes.iter().filter(|n| is_junction(n)) {
         let (sx, sz) = square_center(n);
         let k = key(n.offset.x, n.offset.z);
+        out.material = n.color.unwrap_or(GENERIC_WALL);
         // Top cap.
         out.quad(
             [sx - HT, WALL_HEIGHT, sz - HT],
@@ -176,7 +185,23 @@ pub fn wall_graph_mesh(g: &WallGraph) -> (Vec<MeshVertex>, Vec<u32>) {
         }
     }
 
-    (out.verts, out.idx)
+    out.groups
+}
+
+/// Tessellate with material colours only (no room resolution) and
+/// concatenate all groups — the shape the invariant tests and the
+/// preview diagnostic consume.
+pub fn wall_graph_mesh(g: &WallGraph) -> (Vec<MeshVertex>, Vec<u32>) {
+    let material_only = |_c: [f32; 3], _n: [f32; 3], m: [f32; 3]| m;
+    let groups = wall_graph_mesh_with(g, &material_only);
+    let mut verts = Vec::new();
+    let mut idx = Vec::new();
+    for (_, v, i) in groups {
+        let base = verts.len() as u32;
+        verts.extend(v);
+        idx.extend(i.into_iter().map(|x| x + base));
+    }
+    (verts, idx)
 }
 
 /// A junction node's miter square centre in template-local space.
@@ -194,7 +219,7 @@ enum Axis {
 /// free ends (building ends and door jambs), and record which square
 /// sides the segments abut.
 fn emit_axis_run<'a>(
-    out: &mut MeshOut,
+    out: &mut MeshOut<'_>,
     run: &[&WallNode],
     axis: Axis,
     node_at: &dyn Fn(f32, f32) -> Option<&'a WallNode>,
@@ -217,6 +242,15 @@ fn emit_axis_run<'a>(
         Axis::Ew => run[0].offset.z + run[0].ew.unwrap(),
         Axis::Ns => run[0].offset.x + run[0].ns.unwrap(),
     };
+    // Material for everything this run emits — a Solid node's colour
+    // if the run has one (window frames take the wall material, like
+    // the prop path's wall_color_near), else any node colour.
+    out.material = run
+        .iter()
+        .find(|n| n.kind == cdda::WallCellKind::Solid)
+        .and_then(|n| n.color)
+        .or_else(|| run.iter().find_map(|n| n.color))
+        .unwrap_or(GENERIC_WALL);
     // Does the run's line continue past this end node as a DOOR (a
     // wall-line cell with no same-axis offset)? Then a jamb segment
     // extends from the square to the cell edge. A neighbor carrying a
@@ -369,7 +403,7 @@ struct Span {
 /// One same-kind stretch of a run: banded side faces (all three Y
 /// bands for solid, outer two for a window), a top cap, sill top /
 /// lintel underside for windows, and optional banded end caps.
-fn emit_stretch(out: &mut MeshOut, axis: Axis, lateral: f32, span: Span) {
+fn emit_stretch(out: &mut MeshOut<'_>, axis: Axis, lateral: f32, span: Span) {
     let Span { lo, hi, window, cap_lo, cap_hi } = span;
     let h = WALL_HEIGHT;
     let solid_bands: &[(f32, f32)] = &Y_BANDS;
@@ -446,7 +480,7 @@ fn emit_stretch(out: &mut MeshOut, axis: Axis, lateral: f32, span: Span) {
 /// The band-1 face at a solid|window boundary — closes the solid
 /// stretch's cross-section and faces into the glass opening.
 /// `facing_positive` = the window lies on the +axis side of `at`.
-fn emit_reveal(out: &mut MeshOut, axis: Axis, lateral: f32, at: f32, facing_positive: bool) {
+fn emit_reveal(out: &mut MeshOut<'_>, axis: Axis, lateral: f32, at: f32, facing_positive: bool) {
     let (y0, y1) = Y_BANDS[1];
     match axis {
         Axis::Ew => {
@@ -468,18 +502,45 @@ fn emit_reveal(out: &mut MeshOut, axis: Axis, lateral: f32, at: f32, facing_posi
     }
 }
 
-#[derive(Default)]
-struct MeshOut {
-    verts: Vec<MeshVertex>,
-    idx: Vec<u32>,
+/// Fallback material for wall cells that resolved without a colour.
+const GENERIC_WALL: [f32; 3] = [0.48, 0.47, 0.50];
+
+struct MeshOut<'r> {
+    resolver: ColorResolver<'r>,
+    /// The material colour of whatever is currently being emitted —
+    /// set by the run / square emitters before their quads.
+    material: [f32; 3],
+    groups: Vec<([f32; 3], Vec<MeshVertex>, Vec<u32>)>,
 }
 
-impl MeshOut {
-    /// Push a quad as two CCW triangles. `a..d` wind counter-clockwise
+impl<'r> MeshOut<'r> {
+    fn new(resolver: ColorResolver<'r>) -> Self {
+        Self { resolver, material: GENERIC_WALL, groups: Vec::new() }
+    }
+
+    /// Push a quad as two CCW triangles into the colour group the
+    /// resolver picks for this face. `a..d` wind counter-clockwise
     /// seen from the normal side. UVs are planar in the quad's plane
     /// (world units / CELL).
     fn quad(&mut self, a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3], n: [f32; 3]) {
-        let base = self.verts.len() as u32;
+        let centroid = [
+            (a[0] + b[0] + c[0] + d[0]) * 0.25,
+            (a[1] + b[1] + c[1] + d[1]) * 0.25,
+            (a[2] + b[2] + c[2] + d[2]) * 0.25,
+        ];
+        let color = (self.resolver)(centroid, n, self.material);
+        let key = [color[0].to_bits(), color[1].to_bits(), color[2].to_bits()];
+        let gi = match self.groups.iter().position(|(c, _, _)| {
+            [c[0].to_bits(), c[1].to_bits(), c[2].to_bits()] == key
+        }) {
+            Some(i) => i,
+            None => {
+                self.groups.push((color, Vec::new(), Vec::new()));
+                self.groups.len() - 1
+            }
+        };
+        let (_, verts, idx) = &mut self.groups[gi];
+        let base = verts.len() as u32;
         let uv = |p: [f32; 3]| -> [f32; 2] {
             if n[1].abs() > 0.5 {
                 [p[0] / CELL, p[2] / CELL]
@@ -490,9 +551,13 @@ impl MeshOut {
             }
         };
         for p in [a, b, c, d] {
-            self.verts.push(MeshVertex { pos: p, normal: n, uv: uv(p) });
+            verts.push(MeshVertex { pos: p, normal: n, uv: uv(p) });
         }
-        self.idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        // Winding: the corner conventions above run CLOCKWISE seen
+        // from the normal side, so emit reversed triangles — wgpu's
+        // front_face is CCW and back faces are culled. (Caught by the
+        // first GPU render: every wall drew inside-out, ambient-dark.)
+        idx.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
     }
 }
 

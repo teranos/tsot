@@ -25,9 +25,21 @@ use crate::obs;
 use crate::scene::{GpuVertex, MeshInstance, SceneCamera, SceneInstance, as_bytes, cube_geometry};
 use crate::shaders::{
     GLASS_SHADER_WGSL, GROUND_SHADER_WGSL, LEAF_SHADER_WGSL, MESH_SHADER_WGSL, SHADER_WGSL,
+    WALL_SHADER_WGSL,
 };
 use crate::tree_emit::MeshTreeInstances;
 use crate::tree_mesh::{self, MeshVertex};
+
+/// One colour part of a building's wall mesh, ready to draw: geometry
+/// borrowed from the bake, its placed instance, and the cut-away-aware
+/// index count (`indices[..draw_count]` — far-only when the player is
+/// inside the building; see `wall_bake`).
+pub struct WallDrawPart<'a> {
+    pub verts: &'a [MeshVertex],
+    pub indices: &'a [u32],
+    pub instance: MeshInstance,
+    pub draw_count: u32,
+}
 
 const TARGET_SIZE: u32 = 512;
 const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -61,6 +73,7 @@ pub fn render_scene(
     glass_instances: &[SceneInstance],
     mesh_trees: &MeshTreeInstances,
     surface: &crate::scene::TerrainSurface,
+    walls: &[WallDrawPart<'_>],
     time: f32,
     out_path: &str,
 ) -> Result<()> {
@@ -203,6 +216,44 @@ pub fn render_scene(
         queue.write_buffer(surface_vertex_buf.wgpu(), 0, as_bytes(&surface.verts));
         queue.write_buffer(surface_index_buf.wgpu(), 0, as_bytes(&surface.indices));
         queue.write_buffer(surface_instance_buf.wgpu(), 0, as_bytes(&surface_instance));
+    }
+
+    // Building wall meshes — one vertex/index/instance buffer per
+    // colour part (see wall_bake). draw_count applies the cut-away.
+    struct WallBufs {
+        vertex_buf: crate::gpu::SeerBuffer,
+        index_buf: crate::gpu::SeerBuffer,
+        instance_buf: crate::gpu::SeerBuffer,
+        draw_count: u32,
+    }
+    let mut wall_bufs: Vec<WallBufs> = Vec::with_capacity(walls.len());
+    for part in walls {
+        if part.draw_count == 0 || part.verts.is_empty() {
+            continue;
+        }
+        let vertex_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("seer.render.mesh.wall.vertex"),
+            size: std::mem::size_of_val(part.verts) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(vertex_buf.wgpu(), 0, as_bytes(part.verts));
+        let index_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("seer.render.mesh.wall.index"),
+            size: std::mem::size_of_val(part.indices) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(index_buf.wgpu(), 0, as_bytes(part.indices));
+        let inst = [part.instance];
+        let instance_buf = dev.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("seer.render.mesh.wall.instance"),
+            size: std::mem::size_of_val(&inst) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(instance_buf.wgpu(), 0, as_bytes(&inst));
+        wall_bufs.push(WallBufs { vertex_buf, index_buf, instance_buf, draw_count: part.draw_count });
     }
 
     let tp = crate::tune::get();
@@ -484,6 +535,12 @@ pub fn render_scene(
         source: wgpu::ShaderSource::Wgsl(GROUND_SHADER_WGSL.into()),
     });
     let ground_pipeline = make_mesh_pipeline(ground_shader.wgpu(), "seer.render.ground.pipeline");
+    // Wall pipeline: mesh layout, plain-Lambert fragment (no bark).
+    let wall_shader = dev.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("seer.render.wall.shader"),
+        source: wgpu::ShaderSource::Wgsl(WALL_SHADER_WGSL.into()),
+    });
+    let wall_pipeline = make_mesh_pipeline(wall_shader.wgpu(), "seer.render.wall.pipeline");
 
     // Readback path: color texture → staging buffer → CPU → PNG.
     // Row pitch must be a multiple of 256 bytes (COPY_BYTES_PER_ROW
@@ -536,7 +593,7 @@ pub fn render_scene(
         pass.draw(0..vertices.len() as u32, 0..instances.len() as u32);
     }
     let has_mesh_work =
-        !species_bufs.is_empty() || canopy_len > 0 || surf_len > 0;
+        !species_bufs.is_empty() || canopy_len > 0 || surf_len > 0 || !wall_bufs.is_empty();
     if has_mesh_work {
         // Mesh pass — one dispatch per species drawing that species'
         // wood mesh instanced across its trees, then one canopy
@@ -575,6 +632,18 @@ pub fn render_scene(
             pass.set_vertex_buffer(1, surface_instance_buf.wgpu().slice(..));
             pass.set_index_buffer(surface_index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..surf_len as u32, 0, 0..1);
+            pass.set_pipeline(&mesh_pipeline);
+        }
+        // Building walls — wall pipeline (plain Lambert), then back to
+        // the mesh pipeline for the trees.
+        if !wall_bufs.is_empty() {
+            pass.set_pipeline(&wall_pipeline);
+            for wb in &wall_bufs {
+                pass.set_vertex_buffer(0, wb.vertex_buf.wgpu().slice(..));
+                pass.set_vertex_buffer(1, wb.instance_buf.wgpu().slice(..));
+                pass.set_index_buffer(wb.index_buf.wgpu().slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..wb.draw_count, 0, 0..1);
+            }
             pass.set_pipeline(&mesh_pipeline);
         }
         for sb in &species_bufs {
@@ -674,12 +743,13 @@ pub fn render_scene(
         .map(|(_, v)| v.len())
         .sum();
     obs::emit(&format!(
-        "[render] wrote {out_path} ({} cube instances, {} vertices, {} wood species / {} wood trees, {} canopy elements)",
+        "[render] wrote {out_path} ({} cube instances, {} vertices, {} wood species / {} wood trees, {} canopy elements, {} wall parts)",
         instances.len(),
         vertices.len(),
         mesh_trees.wood_by_species.len(),
         wood_tree_count,
         mesh_trees.canopy_elements.len(),
+        walls.len(),
     ));
     Ok(())
 }

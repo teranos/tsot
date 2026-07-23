@@ -221,6 +221,28 @@ Each slice is failing-test-first; nothing else may regress.
    `Wall*` (and window sill/lintel) cube instances; glass panes
    keep emitting. The lavapipe tour render is the merge bar,
    against the baseline frames. seer `[perf]` captures the cost.
+   **Landed** — `wall_bake.rs`: per-building bakes from the
+   rotated graph (chunk-scan, pure), colour-grouped parts, and the
+   ROOM COLOUR model from design discussion arrived early:
+   interior faces colour per room (graph-derived flood fill),
+   palette seeded per building, exterior keeps material. Cut-away
+   went one better than the static split: near triangles are
+   depth-SORTED at bake, so the draw range cuts exactly at the
+   player's depth (cube-path parity) with zero re-uploads. Both
+   render paths draw the parts (native `render_scene`, browser
+   `frame_walls` with a chunk-crossing bake cache) — slice 6 is
+   mostly pre-paid; its deployed-pixel check remains. Amendment
+   to decision 7: walls DID need their own WGSL (the mesh shader
+   bakes procedural BARK into everything it draws) — same layout,
+   same pipeline factory, plain Lambert with higher ambient for
+   vertical faces; still zero new `env.*` crossings
+   (`imports.allow` unchanged). Two lessons the render taught:
+   quad winding was CW-from-normal (every wall drew inside-out,
+   ambient-dark — invisible to the manifold tests, caught by the
+   first GPU frame), and near/far must classify by POSITION, not
+   face normal (a far wall's interior face points at the camera
+   but is the backdrop). Known cosmetic follow-up: a top-cap
+   sliver can show where the depth cut crosses a wall run.
 5. **Near/far ranges + ghost parity** — the `emit.rs` property
    (ghost = exactly what opaque skipped, never both) holds for the
    mesh's index ranges.
