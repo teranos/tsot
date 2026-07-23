@@ -42,17 +42,16 @@ Junctions currently shorten NS runs by 24 units at their EW-facing
 ends so perpendicular walls don't share a 3D volume (z-fight
 avoidance). See the **known rendering limitation** below.
 
-## Known rendering limitation
+## Rendering (walls-on-mesh — resolved)
 
-Adjacent wall props render as separate shaded pieces in the game's
-current cube-instance render pipeline. Even when the crate's
-placement math is exact (no overlap, no gap), the renderer draws
-each `Wall*` prop as its own box and the eye reads corners as
-"two walls meeting" rather than "one wall turning." No amount of
-placement-rule refinement fixes this — the fix is a mesh pipeline
-on the game side (one traced polyhedron per building with door /
-window cutouts). See [`../../game/docs/RENDER.md`](../../game/docs/RENDER.md)
-for the plan.
+Walls no longer render from the `Prop` boxes: the crate emits a
+`WallGraph` (a third `Template` layer — wall-line cells with kind,
+material colour and lateral centerline offsets, plus their
+4-adjacencies) and the game tessellates each building into one
+continuous mesh. The `Prop` path remains the collider source and
+render fallback; the junction-shortening below survives only for
+colliders. See [`../../game/docs/RENDER.md`](../../game/docs/RENDER.md)
+for the shipped scope.
 
 ## Deferred (not this crate yet)
 
