@@ -297,38 +297,51 @@ aligned), cheaper and no longer player-centred.
   trunk solid, canopy flyable-through). Proximity triggers stay 3D by
   default and become natural once the world is 3D.
 
-## Slice 9 — Pangaea continent + sea level (in progress)
+## Slice 9 — Pangaea continent + sea level (heightfield landed)
 
 One landmass, one ocean — the simplest water story that answers
 "terrain: hills, cliffs, lakes, seas" (`README.md`) without inventing a
 second system. No new heightfield: the continent bakes into
-`height(x, z)` itself as a third, much-lower-frequency term — the same
-skirt/fade idiom Slice 3 already uses for CDDA pads, just inverted (a
-flat area reached going *outward* instead of staying *inside* a
-footprint, and *below* sea level instead of above it). Everything that
-already samples `height()` — the surface mesh, the shader-grid,
-prop/tree placement, `ground_follow` — inherits the coastline for
-free, by construction, same as every other slice.
+`base_height(x, z)` as a large-scale radial term layered on the
+existing two-octave relief — full relief amplitude inside
+`CONTINENT_RADIUS` (60,000 world units around spawn), fading smoothly
+across a `SHORE_BAND` (40,000 units) to a flat `OCEAN_FLOOR`, using the
+same fade idiom Slice 3 uses for CDDA pad skirts (just inverted: a flat
+area reached going *outward* instead of staying *inside* a footprint,
+and *below* `SEA_LEVEL` instead of above it). Everything that already
+samples `height()` — the surface mesh, the shader-grid, prop/tree
+placement, `ground_follow` — inherits the coastline for free, by
+construction, same as every other slice.
 
-- **Test (written, red):** `terrain::height` puts land at spawn
-  (origin), a flat ocean floor far enough out that no single landmass
-  reaches it, and a continuous (non-cliff) shoreline between the two —
-  `continent_has_land_at_spawn_and_flat_ocean_floor_far_away` and
-  `continent_shoreline_transitions_continuously` in `src/terrain.rs`.
-  Both fail today: `height()` is unbounded rolling relief in every
-  direction — no continent, no sea level, no ocean floor.
-- **Not yet done — the mask itself.** Implementation deliberately not
-  started. Mechanics (radial vs. noise-warped coastline, continent
-  radius, shore-band width, ocean-floor depth) are the implementer's
-  call, same as every other slice's mechanics note.
-- **Done, when:** both tests above are green, every existing terrain
-  test (Slices 1–7) stays green unmodified, and the merge-bar render
-  shows one continuous coastline around the spawn landmass with open
-  ocean beyond it.
+- **Tests (green):** `continent_has_land_at_spawn_and_flat_ocean_floor_far_away`
+  and `continent_shoreline_transitions_continuously` in `src/terrain.rs`.
+  All pre-existing terrain tests (Slices 1–7) stay green, unmodified.
+- **Done, still open:** the merge-bar render (one continuous coastline
+  around the spawn landmass, open ocean beyond) hasn't been captured —
+  no display in this environment. The mask itself is landed and tested;
+  visual confirmation is a follow-up.
+- **A latent Slice 3 edge case, surfaced, not fixed here.** The
+  shoreline-continuity test originally swept `height()` (the full
+  CDDA-composited function), not `base_height`. That failed — not from
+  the continent, but from Slice 3's "nearest pad wins" tie-break:
+  `height()` picks the closest stamp by skirt distance `t`, and at the
+  exact point where the closest stamp switches between two competing
+  anchors, their two *different, fixed* pad heights both get evaluated
+  at the same `t`, which is only continuous if the two pads happen to
+  be near-equal. Pre-existing relief kept pad heights close enough that
+  this never tripped a sampled test; the continent's wider dynamic
+  range (spawn ~900, deep ocean ~-800) made it a real, reproducible
+  cliff (confirmed present with no continent code at all, at the same
+  coordinate, in the original red run). Out of scope to fix as part of
+  Slice 9 — recorded here so it isn't silently swallowed. The
+  shoreline test now probes `base_height` directly, which is what this
+  slice actually owns.
 
-**Known follow-ups (surfaced, not deferred silently), once the mask
-lands:**
+**Known follow-ups (surfaced, not deferred silently):**
 
+- Fix the Slice 3 nearest-pad tie-break discontinuity above — pads
+  should blend by proximity, not switch discretely, or the switch
+  needs to land where the two candidates already agree.
 - CDDA stamp anchors need a `height(anchor) < SEA_LEVEL` filter —
   nothing stops a building from placing underwater today.
 - Player/NPC movement has no shoreline collision yet —
