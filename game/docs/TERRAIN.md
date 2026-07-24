@@ -297,14 +297,59 @@ aligned), cheaper and no longer player-centred.
   trunk solid, canopy flyable-through). Proximity triggers stay 3D by
   default and become natural once the world is 3D.
 
+## Slice 9 — Pangaea continent + sea level (in progress)
+
+One landmass, one ocean — the simplest water story that answers
+"terrain: hills, cliffs, lakes, seas" (`README.md`) without inventing a
+second system. No new heightfield: the continent bakes into
+`height(x, z)` itself as a third, much-lower-frequency term — the same
+skirt/fade idiom Slice 3 already uses for CDDA pads, just inverted (a
+flat area reached going *outward* instead of staying *inside* a
+footprint, and *below* sea level instead of above it). Everything that
+already samples `height()` — the surface mesh, the shader-grid,
+prop/tree placement, `ground_follow` — inherits the coastline for
+free, by construction, same as every other slice.
+
+- **Test (written, red):** `terrain::height` puts land at spawn
+  (origin), a flat ocean floor far enough out that no single landmass
+  reaches it, and a continuous (non-cliff) shoreline between the two —
+  `continent_has_land_at_spawn_and_flat_ocean_floor_far_away` and
+  `continent_shoreline_transitions_continuously` in `src/terrain.rs`.
+  Both fail today: `height()` is unbounded rolling relief in every
+  direction — no continent, no sea level, no ocean floor.
+- **Not yet done — the mask itself.** Implementation deliberately not
+  started. Mechanics (radial vs. noise-warped coastline, continent
+  radius, shore-band width, ocean-floor depth) are the implementer's
+  call, same as every other slice's mechanics note.
+- **Done, when:** both tests above are green, every existing terrain
+  test (Slices 1–7) stays green unmodified, and the merge-bar render
+  shows one continuous coastline around the spawn landmass with open
+  ocean beyond it.
+
+**Known follow-ups (surfaced, not deferred silently), once the mask
+lands:**
+
+- CDDA stamp anchors need a `height(anchor) < SEA_LEVEL` filter —
+  nothing stops a building from placing underwater today.
+- Player/NPC movement has no shoreline collision yet —
+  `ground_follow` will walk them straight out onto the ocean floor.
+  Swimming and boats stay out of scope for this slice; the shoreline
+  should at least block, the same way a static collider blocks today.
+- The visible water surface — a flat plane at `SEA_LEVEL`, candidate:
+  the same zero-geometry ground-shader trick already used for the
+  reference grid — is not built yet. This slice is heightfield-only;
+  there is land and ocean floor, but nothing blue to render yet.
+
 ## Deferred (not this branch)
 
 Recorded so the boundary is explicit; no slices here. (The solid
 surface, the world-draping, and terrain movement graduated to Slices
-6/7 and the post-5 work; what stays deferred:)
+6/7 and the post-5 work; the continent + sea level graduated to Slice
+9 above; what stays deferred:)
 
 - Slope/altitude **materials** (grass / rock / snow), textures, UVs —
   Slice 6 is one lit ground colour, not biome materials.
-- Water plane at sea level; oceans, lakes, rivers.
+- Rivers, lakes, and any water body other than the one ocean —
+  Slice 9 is a single continent and a single surrounding sea.
 - Dramatic landforms — mountains, cliffs, beaches, sand, clay.
 - Iso-voxel multi-z descent/ascent (`RENDER.md` frontier).

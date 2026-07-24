@@ -310,6 +310,67 @@ mod tests {
         }
     }
 
+    /// Slice 9 target: `height` describes a single Pangaea-like
+    /// landmass around spawn (the origin) surrounded by a flat ocean
+    /// floor, with no separate water system — the continent is baked
+    /// into the one heightfield. See `docs/TERRAIN.md`, Slice 9.
+    ///
+    /// RED: today's `height()` has no continent or sea level — it's
+    /// unbounded rolling relief in every direction — so this fails.
+    #[test]
+    fn continent_has_land_at_spawn_and_flat_ocean_floor_far_away() {
+        // Sea level: world units above/below this are land/ocean.
+        const SEA_LEVEL: f32 = 0.0;
+        // Far enough from spawn that no single reasonably sized
+        // landmass could still be land out there.
+        const DEEP_OCEAN_RADIUS: f32 = 200_000.0;
+
+        assert!(
+            height(0.0, 0.0) > SEA_LEVEL,
+            "spawn is not land: height(0,0) = {}",
+            height(0.0, 0.0)
+        );
+
+        for &(x, z) in &[
+            (DEEP_OCEAN_RADIUS, 0.0),
+            (-DEEP_OCEAN_RADIUS, 0.0),
+            (0.0, DEEP_OCEAN_RADIUS),
+            (0.0, -DEEP_OCEAN_RADIUS),
+            (DEEP_OCEAN_RADIUS, DEEP_OCEAN_RADIUS),
+        ] {
+            let h = height(x, z);
+            assert!(h < SEA_LEVEL, "expected deep ocean at ({x},{z}), got land height {h}");
+        }
+
+        // The ocean floor is flat out there, like a CDDA pad — once
+        // we're deep enough it stops undulating with the land's relief
+        // noise. Two far-apart deep-ocean points read (near) identical.
+        let a = height(DEEP_OCEAN_RADIUS, 0.0);
+        let b = height(DEEP_OCEAN_RADIUS * 1.3, DEEP_OCEAN_RADIUS * 0.7);
+        assert!((a - b).abs() < 1.0, "ocean floor is not flat: {a} vs {b}");
+    }
+
+    /// Slice 9 target, continued: the coastline is a shore, not a
+    /// cliff. Same slope discipline as the CDDA pad skirt (Slice 3),
+    /// applied to the land/ocean transition instead of a stamp edge.
+    ///
+    /// RED: with no continent mask yet, this only incidentally passes
+    /// (open relief already respects `SLOPE_CAP` everywhere) — it's
+    /// pinned here so it stays true once the shoreline exists, and so
+    /// the companion test above is the one that actually demonstrates
+    /// red.
+    #[test]
+    fn continent_shoreline_transitions_continuously() {
+        const SLOPE_CAP: f32 = 0.5;
+        const STEP: f32 = 1.0;
+        let mut r = 0.0f32;
+        while r < 200_000.0 {
+            let slope = (height(r + STEP, 0.0) - height(r, 0.0)).abs() / STEP;
+            assert!(slope <= SLOPE_CAP, "cliff at the shoreline: slope {slope} > {SLOPE_CAP} at r={r}");
+            r += 500.0;
+        }
+    }
+
     #[test]
     fn height_is_a_deterministic_gentle_continuous_field() {
         use crate::chunk::CHUNK_SIZE;
