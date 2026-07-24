@@ -9,7 +9,8 @@ How card abilities are authored, executed, and triggered.
 **Events** (`card::EventName`):
 `on_enter_board`, `on_die`, `on_would_die`, `on_attack`, `on_block`,
 `on_blocked_by`, `on_play`, `on_attached_as_cost`,
-`on_dealt_damage_to_player`, `on_turn_begin`, `on_creature_dies`.
+`on_dealt_damage_to_player`, `on_turn_begin`, `on_creature_dies`,
+`on_zone_change`.
 
 `on_would_die` opens the death-replacement window (RULES.md P.40).
 
@@ -56,11 +57,9 @@ inside `on_would_die` (see RULES.md P.40):
 
 ## Outstanding
 
-**Events still to wire:** `on_turn_end`, generic `on_zone_change`,
-`on_draw`, `on_discard`, `on_attach` (distinct from `on_attached_as_cost`),
-`on_detach`, `on_combat_begin`, `on_main_phase_begin`, plus
-`on_damage_to_creature` (the creature-target equivalent of
-`on_dealt_damage_to_player`).
+**Events still to wire:** `on_turn_end`, `on_combat_begin`,
+`on_main_phase_begin`, plus `on_damage_to_creature` (the
+creature-target equivalent of `on_dealt_damage_to_player`).
 
 **`game.*` gaps:** `game.search(zone, filter)` for tutor effects;
 `game.modify_card(card_id, prop, value)` for color/symbol/type

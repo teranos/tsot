@@ -546,6 +546,17 @@ pub enum EventName {
     /// queue. Re-scheduling from inside the handler makes it recurring.
     /// "At the beginning of your next turn, <do the scheduled thing>."
     OnDelayedTrigger,
+    /// Fires on every zone transition, broadcast to (a) the moving card
+    /// itself and (b) every card on BOARD. No exclusion — self-move
+    /// triggers ("if you discard this card, draw two cards") need the
+    /// moving card to observe its own transition. Handler signature is
+    /// `(game, self, moving, from, to)` where `moving` is a partner-table
+    /// (`{ instance_id, owner, controller, attached }`) and `from`/`to`
+    /// are zone strings (`"board"`, `"graveyard"`, `"exile"`, `"hand"`,
+    /// `"deck"`, `"attached"`). Subsumes the narrower on_creature_dies /
+    /// on_draw / on_discard / on_attach / on_detach patterns — those
+    /// remain as sugar; authors can equivalently filter this one.
+    OnZoneChange,
 }
 
 impl EventName {
@@ -565,11 +576,12 @@ impl EventName {
             EventName::OnCreatureDies => "on_creature_dies",
             EventName::OnTapped => "on_tapped",
             EventName::OnDelayedTrigger => "on_delayed_trigger",
+            EventName::OnZoneChange => "on_zone_change",
         }
     }
 
     /// All known event names, for loader iteration.
-    pub const ALL: [EventName; 13] = [
+    pub const ALL: [EventName; 14] = [
         EventName::OnEnterBoard,
         EventName::OnDie,
         EventName::OnWouldDie,
@@ -583,6 +595,7 @@ impl EventName {
         EventName::OnCreatureDies,
         EventName::OnTapped,
         EventName::OnDelayedTrigger,
+        EventName::OnZoneChange,
     ];
 }
 

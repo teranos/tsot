@@ -765,6 +765,7 @@ impl GameState {
                 Zone::Deck,
                 Zone::Graveyard,
                 "play-mill-cost",
+                ctx.as_deref_mut(),
             );
             if !is_cardless {
                 payments_snapshot.mill.push(top.clone());
@@ -787,6 +788,7 @@ impl GameState {
                     Zone::Graveyard,
                     Zone::Exile,
                     "play-gy-cost-auto",
+                    ctx.as_deref_mut(),
                 );
             }
         } else {
@@ -798,6 +800,7 @@ impl GameState {
                     Zone::Graveyard,
                     Zone::Exile,
                     "play-gy-cost-explicit",
+                    ctx.as_deref_mut(),
                 );
             }
         }
@@ -828,6 +831,7 @@ impl GameState {
                     Zone::Board,
                     Zone::Graveyard,
                     "play-jewel-sacrifice",
+                    ctx.as_deref_mut(),
                 );
             }
             self.bump_action("jewel_tap_substitution", player);
@@ -842,6 +846,7 @@ impl GameState {
                 Zone::Graveyard,
                 Zone::Exile,
                 "play-gy-hand-substitute",
+                ctx.as_deref_mut(),
             );
             self.bump_action("gy_hand_substitution", player);
         }
@@ -856,6 +861,7 @@ impl GameState {
                 Zone::Board,
                 Zone::Graveyard,
                 "play-sacrifice-cost",
+                ctx.as_deref_mut(),
             );
             self.bump_action("sacrificed_as_cost", player);
         }
@@ -1191,6 +1197,7 @@ impl GameState {
                     Zone::Hand,
                     Zone::Graveyard,
                     "play-self-exile-hand-pay",
+                    ctx.as_deref_mut(),
                 );
             }
             for aid in choices.attached_payment_ids.clone() {
@@ -1238,6 +1245,7 @@ impl GameState {
                     Zone::Hand,
                     Zone::Graveyard,
                     "play-hand-payment-discard",
+                    ctx.as_deref_mut(),
                 );
             }
         }
@@ -1404,6 +1412,7 @@ impl GameState {
                 Zone::Board,
                 Zone::Graveyard,
                 "cleanup-b8-death",
+                None,
             );
         }
     }
@@ -1505,13 +1514,18 @@ impl GameState {
                     self.set_damage(&iid, 0.0);
                 }
                 Some(DeathReplacement::Redirect(zone)) => {
-                    // Quiet relocation — no on_die, no broadcast, no cascade.
+                    // Quiet relocation — no on_die, no cascade. on_zone_change
+                    // DOES fire: it's ubiquitous by design (subsumes the
+                    // narrower on_creature_dies), so watchers still observe
+                    // the transition. If a design needs a truly silent move,
+                    // add an opt-in flag rather than gating the primitive.
                     let _ = self.move_card_or_emit(
                         &iid,
                         owner,
                         Zone::Board,
                         zone,
                         "would-die-redirect",
+                        ctx.as_deref_mut(),
                     );
                 }
                 None => {
@@ -1522,6 +1536,7 @@ impl GameState {
                         Zone::Board,
                         Zone::Graveyard,
                         "death",
+                        ctx.as_deref_mut(),
                     );
                     died.push(iid.clone());
                     if let Some(c) = ctx.as_deref_mut() {

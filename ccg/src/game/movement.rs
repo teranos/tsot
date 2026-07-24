@@ -2,6 +2,7 @@
 //!
 //! The single canonical place where a card's position between zones changes.
 
+use super::context::EventContext;
 use super::journal::JournalEntry;
 use super::state::{GameState, InstanceId, PlayerId, PlayerState, Zone};
 
@@ -53,6 +54,32 @@ impl GameState {
         Ok(())
     }
 
+    /// Move a card between zones AND broadcast `OnZoneChange` to the
+    /// moving card + every card on BOARD (both players). No exclusion —
+    /// self-move triggers ("if you discard this card, draw two cards")
+    /// need the moving card to observe its own transition.
+    pub fn move_card_and_fire(
+        &mut self,
+        iid: &InstanceId,
+        side: PlayerId,
+        from: Zone,
+        to: Zone,
+        ctx: &mut super::EventContext<'_>,
+    ) -> Result<(), MoveError> {
+        self.move_card(iid, side, from, to)?;
+        let lua = ctx.lua;
+        let oracle = ctx.oracle();
+        super::lua_api::broadcast_zone_change(
+            lua,
+            self,
+            oracle,
+            iid,
+            from.as_str(),
+            to.as_str(),
+        );
+        Ok(())
+    }
+
     /// Sacred-error wrapper around [`move_card`]. Routes the `NotInZone`
     /// failure through the typed Error pipeline with a caller-supplied
     /// `region` tag (e.g. `"combat-mill"`, `"play-discard"`, `"upkeep-draw"`)
@@ -75,6 +102,7 @@ impl GameState {
         from: Zone,
         to: Zone,
         region: &'static str,
+        ctx: Option<&mut EventContext<'_>>,
     ) -> Result<(), MoveError> {
         let result = self.move_card(iid, side, from, to);
         if let Err(ref e) = result {
@@ -86,6 +114,23 @@ impl GameState {
                     "zone-move failed: {iid} not in {from:?} (tried to move to {to:?})"
                 ),
                 format!("{e:?}; player={side:?}"),
+            );
+            return result;
+        }
+        // Fold: broadcast on_zone_change whenever a caller has a Lua VM
+        // available. `None` = caller genuinely has no VM (rollback replay,
+        // sim setup, unit-test scaffolding) — broadcast is skipped there,
+        // by design.
+        if let Some(ctx) = ctx {
+            let lua = ctx.lua;
+            let oracle = ctx.oracle();
+            super::lua_api::broadcast_zone_change(
+                lua,
+                self,
+                oracle,
+                iid,
+                from.as_str(),
+                to.as_str(),
             );
         }
         result
@@ -183,6 +228,7 @@ mod tests {
             Zone::Hand,
             Zone::Graveyard,
             "test-region",
+            None,
         );
         assert!(matches!(result, Err(MoveError::NotInZone)));
         let errors = crate::error::drain();
@@ -215,6 +261,7 @@ mod tests {
             Zone::Hand,
             Zone::Graveyard,
             "test-region",
+            None,
         );
         assert!(result.is_ok());
         let errors = crate::error::drain();

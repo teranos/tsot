@@ -215,7 +215,7 @@ impl GameState {
             let amount = effective_cost_amount(c, x_val);
             match c.source {
                 CostSource::Hand => {
-                    lua_api::do_smart_discard(self, controller, amount);
+                    lua_api::do_smart_discard(self, controller, amount, ctx.as_deref_mut());
                 }
                 CostSource::Mill => {
                     for _ in 0..amount {
@@ -226,6 +226,7 @@ impl GameState {
                                 Zone::Deck,
                                 Zone::Graveyard,
                                 "activate-mill-cost",
+                                ctx.as_deref_mut(),
                             );
                             self.bump_action("mill", controller);
                         }
@@ -240,6 +241,7 @@ impl GameState {
                                 Zone::Graveyard,
                                 Zone::Exile,
                                 "activate-graveyard-cost",
+                                ctx.as_deref_mut(),
                             );
                         }
                     }
@@ -257,6 +259,7 @@ impl GameState {
                 Zone::Board,
                 Zone::Graveyard,
                 "activate-sacrifice-cost",
+                ctx.as_deref_mut(),
             );
             self.bump_action("sacrificed_as_cost", controller);
         }
@@ -282,8 +285,9 @@ impl GameState {
         // Fire effect. Per A.5 this is inline / synchronous; the
         // handler returning is the end of the activation. The X value
         // remains visible via `game.x_value()` (set above before the
-        // validate hook).
-        if let Some(c) = ctx {
+        // validate hook). Reborrow so ctx survives for the post-effect
+        // self-exile moves below.
+        if let Some(c) = ctx.as_deref_mut() {
             lua_api::fire_activated(c.lua, self, c.oracle(), iid, handler)
                 .map_err(ActivateError::ChoicePending)?;
         }
@@ -305,6 +309,7 @@ impl GameState {
                     Zone::Board,
                     Zone::Exile,
                     "activate-self-exile-cost",
+                    ctx.as_deref_mut(),
                 );
             } else if self.player(controller).graveyard.contains(iid) {
                 let _ = self.move_card_or_emit(
@@ -313,6 +318,7 @@ impl GameState {
                     Zone::Graveyard,
                     Zone::Exile,
                     "activate-self-exile-cost",
+                    ctx.as_deref_mut(),
                 );
             } else if self.player(controller).hand.contains(iid) {
                 let _ = self.move_card_or_emit(
@@ -321,6 +327,7 @@ impl GameState {
                     Zone::Hand,
                     Zone::Exile,
                     "activate-self-exile-cost",
+                    ctx.as_deref_mut(),
                 );
             } else if self.player(controller).deck.contains(iid) {
                 let _ = self.move_card_or_emit(
@@ -329,6 +336,7 @@ impl GameState {
                     Zone::Deck,
                     Zone::Exile,
                     "activate-self-exile-cost",
+                    ctx,
                 );
             } else if self.player(controller).exile.contains(iid) {
                 // Already in exile — no-op (rare but legal: a card

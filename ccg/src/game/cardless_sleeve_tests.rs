@@ -34,7 +34,7 @@ fn z8b_draw_collects_cardless_sleeves_free_then_draws_one_card() {
     }
     let hand_before = s.a.hand.len();
 
-    let drew = s.draw_one(PlayerId::A);
+    let drew = s.draw_one(PlayerId::A, None);
 
     assert!(drew, "a card-bearing sleeve was drawn");
     // Z.8b: 3 empties collected for free + 1 real card = 4 units to hand.
@@ -58,7 +58,7 @@ fn z8b_draw_reports_deckout_when_only_cardless_remain() {
     }
     let hand_before = s.a.hand.len();
 
-    let drew = s.draw_one(PlayerId::A);
+    let drew = s.draw_one(PlayerId::A, None);
 
     assert!(!drew, "no card-bearing sleeve to draw → false (caller deckouts)");
     assert!(s.a.deck.is_empty(), "every cardless sleeve was collected");
@@ -76,7 +76,7 @@ fn z8b_draw_of_a_normal_top_is_an_ordinary_single_draw() {
     let top = s.a.deck[0].clone();
     let hand_before = s.a.hand.len();
 
-    let drew = s.draw_one(PlayerId::A);
+    let drew = s.draw_one(PlayerId::A, None);
 
     assert!(drew);
     assert_eq!(s.a.hand.len(), hand_before + 1);

@@ -3221,7 +3221,7 @@ fn lua_damage_to_player_mills_n_from_their_deck_to_exile() {
     let exile_before = s.player(pid_b).exile.len();
     // Drive through the Lua-API entry point (not just set_damage)
     // by emulating the binding's call shape.
-    let res = crate::game::lua_api::do_damage(&mut s, "b", 3.0);
+    let res = crate::game::lua_api::do_damage(&mut s, "b", 3.0, None);
     assert!(res.is_ok());
     assert_eq!(
         s.player(pid_b).deck.len(),

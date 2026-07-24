@@ -53,7 +53,34 @@ PROMOTE ?= 1
 PLATEAU_K   ?= 4
 PLATEAU_EPS ?= 0.010
 
-.PHONY: help matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts assets wasm wasm-serve wasm-dev wasm-dev-serve clean-wasm art art-forever
+.PHONY: help test test-name build check clippy matchup-decks evolve evolve-deep evolve-mcts evolve-uct report curate-baselines clean-champions pool prune-champions probe probe-long matchup-mcts assets wasm wasm-serve wasm-dev wasm-dev-serve clean-wasm art art-forever
+
+# Rust dev cycle — the ONLY sanctioned entry points for build / test /
+# lint. Bare `cargo build` / `cargo test` / `cargo clippy` are NOT the
+# contract. Everything routes through here so behaviour is uniform and
+# scriptable. CLAUDE.md § "long jobs write to a file the user can tail"
+# — targets tee to a log so the developer can `tail -f test.log`
+# without the invoker truncating output.
+test:
+	@rm -f test.log
+	@bash -o pipefail -c "cargo test --lib --tests 2>&1 | tee test.log"
+
+# Run a subset by name: `make test-name NAME=on_zone_change`
+test-name:
+	@rm -f test.log
+	@bash -o pipefail -c "cargo test --lib --tests $(NAME) 2>&1 | tee test.log"
+
+build:
+	@rm -f build.log
+	@bash -o pipefail -c "cargo build --release 2>&1 | tee build.log"
+
+check:
+	@rm -f check.log
+	@bash -o pipefail -c "cargo check --all-targets 2>&1 | tee check.log"
+
+clippy:
+	@rm -f clippy.log
+	@bash -o pipefail -c "cargo clippy --all-targets 2>&1 | tee clippy.log"
 
 help:
 	@echo ""

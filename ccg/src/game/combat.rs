@@ -459,6 +459,7 @@ impl GameState {
                 Zone::Deck,
                 Zone::Exile,
                 "combat-damage-mill",
+                ctx.as_deref_mut(),
             );
         }
         if mill_n > 0 {

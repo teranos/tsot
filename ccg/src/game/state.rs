@@ -52,6 +52,20 @@ pub enum Zone {
     Exile,
 }
 
+impl Zone {
+    /// Lowercase name matching the strings used by `parse_zone` and by
+    /// Lua handlers (`from`/`to` args of `on_zone_change`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Zone::Board => "board",
+            Zone::Deck => "deck",
+            Zone::Hand => "hand",
+            Zone::Graveyard => "graveyard",
+            Zone::Exile => "exile",
+        }
+    }
+}
+
 pub type InstanceId = String;
 
 /// A deck-building unit: a sleeve holding a card, or a cardless sleeve
