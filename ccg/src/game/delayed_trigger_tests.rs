@@ -13,8 +13,10 @@ use crate::game::context::EventContext;
 use crate::game::lua_api::fire_self_only;
 use crate::game::test_helpers::*;
 
-fn fixture_registry() -> crate::card::CardRegistry {
-    let tmp = std::env::temp_dir().join("tsot_fixture_delayed_probe");
+fn fixture_registry(test_name: &str) -> crate::card::CardRegistry {
+    // Per-test tempdir so parallel `cargo test` runs don't race on the
+    // shared "delayed_probe" dir (mkdir → clean → write → load).
+    let tmp = std::env::temp_dir().join(format!("tsot_fixture_delayed_probe_{test_name}"));
     std::fs::create_dir_all(&tmp).unwrap();
     if let Ok(rd) = std::fs::read_dir(&tmp) {
         for e in rd.flatten() {
@@ -53,7 +55,7 @@ fn probe_on_board(s: &mut GameState, registry: &crate::card::CardRegistry) -> In
 
 #[test]
 fn schedule_next_turn_registers_a_delayed_trigger_for_the_owner() {
-    let registry = fixture_registry();
+    let registry = fixture_registry("schedule_registers");
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let iid = probe_on_board(&mut s, &registry);
 
@@ -69,7 +71,7 @@ fn schedule_next_turn_registers_a_delayed_trigger_for_the_owner() {
 
 #[test]
 fn delayed_trigger_fires_at_the_scheduling_players_next_turn() {
-    let registry = fixture_registry();
+    let registry = fixture_registry("fires_next_turn");
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let iid = probe_on_board(&mut s, &registry);
     s.delayed_triggers.push(crate::game::DelayedTrigger { fire_for: PlayerId::A, iid: iid.clone() });
@@ -91,7 +93,7 @@ fn delayed_trigger_fires_at_the_scheduling_players_next_turn() {
 
 #[test]
 fn delayed_trigger_does_not_fire_on_the_opponents_turn() {
-    let registry = fixture_registry();
+    let registry = fixture_registry("no_fire_opponent");
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let iid = probe_on_board(&mut s, &registry);
     s.delayed_triggers.push(crate::game::DelayedTrigger { fire_for: PlayerId::A, iid });
@@ -153,7 +155,7 @@ fn rollback_restores_a_fired_delayed_trigger_and_the_whole_state() {
     // rollback can't put it back. This asserts the ENTIRE state (not a
     // hand-picked subset) round-trips through a journaled turn advance
     // that fires — and removes — a delayed trigger.
-    let registry = fixture_registry();
+    let registry = fixture_registry("rollback_restores");
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let iid = probe_on_board(&mut s, &registry);
     // Schedule it before opening a journal — this is the pre-rollout
