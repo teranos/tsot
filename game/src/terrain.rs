@@ -108,13 +108,52 @@ fn stamps() -> &'static Stamps {
     })
 }
 
-/// The bare relief field, before stamp flattening — two octaves of value
-/// noise over world coordinates.
+/// Sea level, in world units. Heights above this are land; at or below,
+/// ocean. The eventual water-plane render sits here too. See
+/// `docs/TERRAIN.md`, Slice 9.
+pub const SEA_LEVEL: f32 = 0.0;
+
+/// Half-extent of the single Pangaea-like landmass, centred on spawn
+/// (the origin). Comfortably contains everything currently placed near
+/// spawn (rooms, pins, the nearest CDDA stamps), with room to spare.
+const CONTINENT_RADIUS: f32 = 60_000.0;
+
+/// Width of the shoreline band the landmass fades to open ocean
+/// across. Wide relative to the relief amplitude so the added grade
+/// stays well under the slope cap even layered on top of existing
+/// relief.
+const SHORE_BAND: f32 = 40_000.0;
+
+/// Elevation at the centre of the continent. Clears the relief
+/// amplitude (300 + 50) with margin, so no point inside the landmass
+/// can read as underwater from relief alone.
+const LAND_HEIGHT: f32 = 900.0;
+
+/// Flat ocean floor elevation, reached a full shore band past the
+/// coast. Same idiom as a CDDA pad's skirt (Slice 3), inverted: flat
+/// low out past the shore instead of flat high inside a footprint.
+const OCEAN_FLOOR: f32 = -800.0;
+
+/// The bare relief field, before stamp flattening — two octaves of
+/// value noise over world coordinates, shaped by a single continent:
+/// full amplitude near spawn, fading to a flat ocean floor beyond the
+/// shoreline. See `docs/TERRAIN.md`, Slice 9.
 fn base_height(x: f32, z: f32) -> f32 {
     // Octave 1: broad rolling relief (~one chunk wavelength).
     // Octave 2: a smaller ripple, offset so its lattice doesn't align
     // with octave 1. Both amplitudes keep max slope comfortably < 0.5.
-    300.0 * value_noise(x, z, 2400.0) + 50.0 * value_noise(x + 1000.0, z - 1000.0, 900.0)
+    let relief =
+        300.0 * value_noise(x, z, 2400.0) + 50.0 * value_noise(x + 1000.0, z - 1000.0, 900.0);
+    let r = (x * x + z * z).sqrt();
+    if r <= CONTINENT_RADIUS {
+        return LAND_HEIGHT + relief;
+    }
+    // fade(0) at the coast joins the branch above continuously; fade(1)
+    // a shore band later reaches the ocean floor with the relief faded
+    // out entirely, so the floor reads flat, not just deep.
+    let ft = fade(((r - CONTINENT_RADIUS) / SHORE_BAND).min(1.0));
+    let elevation = LAND_HEIGHT + (OCEAN_FLOOR - LAND_HEIGHT) * ft;
+    elevation + relief * (1.0 - ft)
 }
 
 /// Deterministic pseudo-random value in `[-1, 1]` for an integer
@@ -307,6 +346,69 @@ mod tests {
                     "hard step across pad edge: slope {slope} > {SLOPE_CAP} at s={s:.0}"
                 );
             }
+        }
+    }
+
+    /// Slice 9 target: `height` describes a single Pangaea-like
+    /// landmass around spawn (the origin) surrounded by a flat ocean
+    /// floor, with no separate water system — the continent is baked
+    /// into the one heightfield. See `docs/TERRAIN.md`, Slice 9.
+    ///
+    /// RED: today's `height()` has no continent or sea level — it's
+    /// unbounded rolling relief in every direction — so this fails.
+    #[test]
+    fn continent_has_land_at_spawn_and_flat_ocean_floor_far_away() {
+        // Sea level: world units above/below this are land/ocean.
+        const SEA_LEVEL: f32 = 0.0;
+        // Far enough from spawn that no single reasonably sized
+        // landmass could still be land out there.
+        const DEEP_OCEAN_RADIUS: f32 = 200_000.0;
+
+        assert!(
+            height(0.0, 0.0) > SEA_LEVEL,
+            "spawn is not land: height(0,0) = {}",
+            height(0.0, 0.0)
+        );
+
+        for &(x, z) in &[
+            (DEEP_OCEAN_RADIUS, 0.0),
+            (-DEEP_OCEAN_RADIUS, 0.0),
+            (0.0, DEEP_OCEAN_RADIUS),
+            (0.0, -DEEP_OCEAN_RADIUS),
+            (DEEP_OCEAN_RADIUS, DEEP_OCEAN_RADIUS),
+        ] {
+            let h = height(x, z);
+            assert!(h < SEA_LEVEL, "expected deep ocean at ({x},{z}), got land height {h}");
+        }
+
+        // The ocean floor is flat out there, like a CDDA pad — once
+        // we're deep enough it stops undulating with the land's relief
+        // noise. Two far-apart deep-ocean points read (near) identical.
+        let a = height(DEEP_OCEAN_RADIUS, 0.0);
+        let b = height(DEEP_OCEAN_RADIUS * 1.3, DEEP_OCEAN_RADIUS * 0.7);
+        assert!((a - b).abs() < 1.0, "ocean floor is not flat: {a} vs {b}");
+    }
+
+    /// Slice 9 target, continued: the coastline is a shore, not a
+    /// cliff. Same slope discipline as the CDDA pad skirt (Slice 3),
+    /// applied to the land/ocean transition instead of a stamp edge.
+    ///
+    /// Probes `base_height` directly — the field Slice 9 actually
+    /// shapes — not `height()`. `height()` additionally layers in
+    /// Slice 2/3's CDDA stamp-flatten skirts, a separate already-shipped
+    /// concern with its own coverage; sweeping it here would also catch
+    /// stamp-skirt tie-break jumps unrelated to the continent (verified:
+    /// the pre-mask RED run already failed this way at the same r, with
+    /// no continent code involved).
+    #[test]
+    fn continent_shoreline_transitions_continuously() {
+        const SLOPE_CAP: f32 = 0.5;
+        const STEP: f32 = 1.0;
+        let mut r = 0.0f32;
+        while r < 200_000.0 {
+            let slope = (base_height(r + STEP, 0.0) - base_height(r, 0.0)).abs() / STEP;
+            assert!(slope <= SLOPE_CAP, "cliff at the shoreline: slope {slope} > {SLOPE_CAP} at r={r}");
+            r += 500.0;
         }
     }
 

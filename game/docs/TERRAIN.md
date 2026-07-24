@@ -297,14 +297,72 @@ aligned), cheaper and no longer player-centred.
   trunk solid, canopy flyable-through). Proximity triggers stay 3D by
   default and become natural once the world is 3D.
 
+## Slice 9 — Pangaea continent + sea level (heightfield landed)
+
+One landmass, one ocean — the simplest water story that answers
+"terrain: hills, cliffs, lakes, seas" (`README.md`) without inventing a
+second system. No new heightfield: the continent bakes into
+`base_height(x, z)` as a large-scale radial term layered on the
+existing two-octave relief — full relief amplitude inside
+`CONTINENT_RADIUS` (60,000 world units around spawn), fading smoothly
+across a `SHORE_BAND` (40,000 units) to a flat `OCEAN_FLOOR`, using the
+same fade idiom Slice 3 uses for CDDA pad skirts (just inverted: a flat
+area reached going *outward* instead of staying *inside* a footprint,
+and *below* `SEA_LEVEL` instead of above it). Everything that already
+samples `height()` — the surface mesh, the shader-grid, prop/tree
+placement, `ground_follow` — inherits the coastline for free, by
+construction, same as every other slice.
+
+- **Tests (green):** `continent_has_land_at_spawn_and_flat_ocean_floor_far_away`
+  and `continent_shoreline_transitions_continuously` in `src/terrain.rs`.
+  All pre-existing terrain tests (Slices 1–7) stay green, unmodified.
+- **Done, still open:** the merge-bar render (one continuous coastline
+  around the spawn landmass, open ocean beyond) hasn't been captured —
+  no display in this environment. The mask itself is landed and tested;
+  visual confirmation is a follow-up.
+- **A latent Slice 3 edge case, surfaced, not fixed here.** The
+  shoreline-continuity test originally swept `height()` (the full
+  CDDA-composited function), not `base_height`. That failed — not from
+  the continent, but from Slice 3's "nearest pad wins" tie-break:
+  `height()` picks the closest stamp by skirt distance `t`, and at the
+  exact point where the closest stamp switches between two competing
+  anchors, their two *different, fixed* pad heights both get evaluated
+  at the same `t`, which is only continuous if the two pads happen to
+  be near-equal. Pre-existing relief kept pad heights close enough that
+  this never tripped a sampled test; the continent's wider dynamic
+  range (spawn ~900, deep ocean ~-800) made it a real, reproducible
+  cliff (confirmed present with no continent code at all, at the same
+  coordinate, in the original red run). Out of scope to fix as part of
+  Slice 9 — recorded here so it isn't silently swallowed. The
+  shoreline test now probes `base_height` directly, which is what this
+  slice actually owns.
+
+**Known follow-ups (surfaced, not deferred silently):**
+
+- Fix the Slice 3 nearest-pad tie-break discontinuity above — pads
+  should blend by proximity, not switch discretely, or the switch
+  needs to land where the two candidates already agree.
+- CDDA stamp anchors need a `height(anchor) < SEA_LEVEL` filter —
+  nothing stops a building from placing underwater today.
+- Player/NPC movement has no shoreline collision yet —
+  `ground_follow` will walk them straight out onto the ocean floor.
+  Swimming and boats stay out of scope for this slice; the shoreline
+  should at least block, the same way a static collider blocks today.
+- The visible water surface — a flat plane at `SEA_LEVEL`, candidate:
+  the same zero-geometry ground-shader trick already used for the
+  reference grid — is not built yet. This slice is heightfield-only;
+  there is land and ocean floor, but nothing blue to render yet.
+
 ## Deferred (not this branch)
 
 Recorded so the boundary is explicit; no slices here. (The solid
 surface, the world-draping, and terrain movement graduated to Slices
-6/7 and the post-5 work; what stays deferred:)
+6/7 and the post-5 work; the continent + sea level graduated to Slice
+9 above; what stays deferred:)
 
 - Slope/altitude **materials** (grass / rock / snow), textures, UVs —
   Slice 6 is one lit ground colour, not biome materials.
-- Water plane at sea level; oceans, lakes, rivers.
+- Rivers, lakes, and any water body other than the one ocean —
+  Slice 9 is a single continent and a single surrounding sea.
 - Dramatic landforms — mountains, cliffs, beaches, sand, clay.
 - Iso-voxel multi-z descent/ascent (`RENDER.md` frontier).
