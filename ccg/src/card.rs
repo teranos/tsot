@@ -1,4 +1,5 @@
 mod loader;
+mod sugar;
 
 pub use loader::{load_card, load_cards_dir, load_cards_embedded};
 
