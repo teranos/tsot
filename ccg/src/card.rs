@@ -1,4 +1,5 @@
 mod loader;
+mod sugar;
 
 pub use loader::{load_card, load_cards_dir, load_cards_embedded};
 
@@ -492,14 +493,12 @@ pub enum StaticCondition {
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub enum EventName {
-    OnEnterBoard,
-    OnDie,
     /// Fires self-only on a creature the moment it *would* die (a lethal
-    /// Board→GRAVEYARD move), BEFORE any move happens — the one window
-    /// `OnDie` doesn't give (OnDie fires after the move). The handler may
+    /// Board→GRAVEYARD move), BEFORE any move happens. The handler may
     /// call `game.prevent_death(self)` (survive on the board, damage
     /// cleared) or `game.redirect_death(self, zone)` (leave to `zone`
-    /// quietly instead of the graveyard). No call → the death proceeds.
+    /// quietly instead of the graveyard). No call → the death proceeds
+    /// and `on_zone_change` observes the Board→GRAVEYARD move.
     /// The White Elephant's "if this would die, shed to survive / else
     /// exile" replacement.
     OnWouldDie,
@@ -507,11 +506,6 @@ pub enum EventName {
     OnBlock,
     OnBlockedBy,
     OnPlay,
-    /// Fires on a card the moment it gets attached as a HAND-payment cost
-    /// to a played card. Handler receives `(game, self, partner)` where
-    /// `partner` is the card being paid for. Powers the zebra / mantis-shrimp
-    /// "if attached as cost to matching-color, may reveal & draw" cycle.
-    OnAttachedAsCost,
     /// Fires on a creature after it successfully damaged a player via
     /// an unblocked attack (per B.2). Also fires on each of that
     /// creature's attached cards — Klotho-style mutations declare the
@@ -525,15 +519,6 @@ pub enum EventName {
     /// boards' cards — mutations that declare the handler receive
     /// `self` = the mutation. "At the beginning of your turn..."
     OnTurnBegin,
-    /// Watcher event: fires on every BOARD card whenever any creature
-    /// dies (moved BOARD → GRAVEYARD). Handler signature is
-    /// `(game, self, dying)` where `self` is the watcher and `dying`
-    /// is the creature that just died. Distinct from `OnDie`, which
-    /// fires self-only on the dying card itself. The dying card does
-    /// NOT receive its own `OnCreatureDies` (it's no longer on BOARD
-    /// by the time the broadcast fires). Used by Avatar of Greed and
-    /// any other "whenever a creature dies, ..." trigger.
-    OnCreatureDies,
     /// Fires on a creature the moment it becomes tapped by attacking
     /// (declare_attacker). Handler receives `self` = the tapped creature.
     /// Window Cleaner's "whenever this becomes tapped" trigger. Fires on
@@ -546,43 +531,49 @@ pub enum EventName {
     /// queue. Re-scheduling from inside the handler makes it recurring.
     /// "At the beginning of your next turn, <do the scheduled thing>."
     OnDelayedTrigger,
+    /// Single unifying zone-transition event. Fires on every zone move,
+    /// broadcast to (a) the moving card itself, (b) every card on BOARD,
+    /// and (c) every child (P.29 same_sleeve + attached) of every BOARD
+    /// card. No exclusion — self-move triggers ("if you discard this card,
+    /// draw two cards") need the moving card to observe its own transition.
+    /// Handler signature: `(game, self, moving, from, to)` where `moving`
+    /// is a partner-table (`{ instance_id, owner, controller, attached }`)
+    /// and `from` / `to` are zone strings (`"board"`, `"graveyard"`,
+    /// `"exile"`, `"hand"`, `"deck"`). Cards filter by `(from, to,
+    /// moving.instance_id)` to recover the narrower ETB / death /
+    /// attach-as-cost / watcher patterns — see LUA.md for templates.
+    OnZoneChange,
 }
 
 impl EventName {
     /// The Lua field name used to declare this handler on a card table.
     pub fn lua_key(self) -> &'static str {
         match self {
-            EventName::OnEnterBoard => "on_enter_board",
-            EventName::OnDie => "on_die",
             EventName::OnWouldDie => "on_would_die",
             EventName::OnAttack => "on_attack",
             EventName::OnBlock => "on_block",
             EventName::OnBlockedBy => "on_blocked_by",
             EventName::OnPlay => "on_play",
-            EventName::OnAttachedAsCost => "on_attached_as_cost",
             EventName::OnDealtDamageToPlayer => "on_dealt_damage_to_player",
             EventName::OnTurnBegin => "on_turn_begin",
-            EventName::OnCreatureDies => "on_creature_dies",
             EventName::OnTapped => "on_tapped",
             EventName::OnDelayedTrigger => "on_delayed_trigger",
+            EventName::OnZoneChange => "on_zone_change",
         }
     }
 
     /// All known event names, for loader iteration.
-    pub const ALL: [EventName; 13] = [
-        EventName::OnEnterBoard,
-        EventName::OnDie,
+    pub const ALL: [EventName; 10] = [
         EventName::OnWouldDie,
         EventName::OnAttack,
         EventName::OnBlock,
         EventName::OnBlockedBy,
         EventName::OnPlay,
-        EventName::OnAttachedAsCost,
         EventName::OnDealtDamageToPlayer,
         EventName::OnTurnBegin,
-        EventName::OnCreatureDies,
         EventName::OnTapped,
         EventName::OnDelayedTrigger,
+        EventName::OnZoneChange,
     ];
 }
 

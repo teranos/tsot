@@ -1,0 +1,50 @@
+name: ccg-tests
+
+# Fast correctness gate for ccg/ — mirrors `make test` + `make clippy`
+# on every push and PR that touches ccg/. The weekly `ccg-stress.yml`
+# soak is a different beast (thousands of games under Stress AI); this
+# gate is the sub-5-minute unit + integration suite the developer sees
+# locally, run in CI so PRs don't sail through with a red suite.
+#
+# Path filter: skip when the change doesn't touch ccg/ (game/roam PRs
+# don't need to pay the ccg cost). Include the workflow file itself so
+# editing this file re-triggers it.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'ccg/**'
+      - '.github/workflows/ccg-tests.yml'
+  pull_request:
+    paths:
+      - 'ccg/**'
+      - '.github/workflows/ccg-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo:
+    name: ccg — cargo test + clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ccg
+
+      # `make test` — the sanctioned entry point per ccg/CLAUDE.md.
+      # Runs `cargo test --lib --tests` and tees to test.log so long
+      # jobs stay tailable.
+      - name: ccg — make test
+        working-directory: ccg
+        run: make test
+
+      # `make clippy` — same tee-to-log discipline.
+      - name: ccg — make clippy
+        working-directory: ccg
+        run: make clippy

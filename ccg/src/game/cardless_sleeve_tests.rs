@@ -34,7 +34,7 @@ fn z8b_draw_collects_cardless_sleeves_free_then_draws_one_card() {
     }
     let hand_before = s.a.hand.len();
 
-    let drew = s.draw_one(PlayerId::A);
+    let drew = s.draw_one(PlayerId::A, None);
 
     assert!(drew, "a card-bearing sleeve was drawn");
     // Z.8b: 3 empties collected for free + 1 real card = 4 units to hand.
@@ -58,7 +58,7 @@ fn z8b_draw_reports_deckout_when_only_cardless_remain() {
     }
     let hand_before = s.a.hand.len();
 
-    let drew = s.draw_one(PlayerId::A);
+    let drew = s.draw_one(PlayerId::A, None);
 
     assert!(!drew, "no card-bearing sleeve to draw → false (caller deckouts)");
     assert!(s.a.deck.is_empty(), "every cardless sleeve was collected");
@@ -76,7 +76,7 @@ fn z8b_draw_of_a_normal_top_is_an_ordinary_single_draw() {
     let top = s.a.deck[0].clone();
     let hand_before = s.a.hand.len();
 
-    let drew = s.draw_one(PlayerId::A);
+    let drew = s.draw_one(PlayerId::A, None);
 
     assert!(drew);
     assert_eq!(s.a.hand.len(), hand_before + 1);
@@ -332,7 +332,7 @@ fn attach_cardless_from_deck_finds_scattered_cardless_and_attaches_n() {
         make_cardless(&mut s, c);
     }
 
-    let n = s.attach_cardless_from_deck(&host, PlayerId::A, 2);
+    let n = s.attach_cardless_from_deck(&host, PlayerId::A, 2, None);
 
     assert_eq!(n, 2, "attaches up to 2 cardless sleeves");
     let attached = &s.card_pool.get(&host).unwrap().attached;
@@ -358,7 +358,7 @@ fn attach_cardless_from_hand_takes_empty_sleeves_out_of_hand() {
     make_cardless(&mut s, &h0);
     make_cardless(&mut s, &h1);
 
-    let n = s.attach_cardless_from_hand(&host, PlayerId::A, 1);
+    let n = s.attach_cardless_from_hand(&host, PlayerId::A, 1, None);
 
     assert_eq!(n, 1, "attaches one empty sleeve from hand");
     let attached = &s.card_pool.get(&host).unwrap().attached;

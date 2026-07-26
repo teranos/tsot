@@ -2,6 +2,7 @@
 //!
 //! The single canonical place where a card's position between zones changes.
 
+use super::context::EventContext;
 use super::journal::JournalEntry;
 use super::state::{GameState, InstanceId, PlayerId, PlayerState, Zone};
 
@@ -50,6 +51,16 @@ impl GameState {
                 to_zone: to,
             });
         }
+        // Per-turn graveyard-add counter (Rebuke, ...). Lives at the
+        // primitive layer so every zone move — raw `move_card`,
+        // `move_card_or_emit`, or engine helpers that skip the sacred-
+        // error wrapper (`do_mill`, `do_move`) — bumps consistently.
+        // Rollback restores via journal state assignment, not by calling
+        // this method, so no double-count risk.
+        if to == Zone::Graveyard {
+            let n = self.graveyard_added_this_turn.saturating_add(1);
+            self.set_graveyard_added_this_turn(n);
+        }
         Ok(())
     }
 
@@ -75,6 +86,7 @@ impl GameState {
         from: Zone,
         to: Zone,
         region: &'static str,
+        ctx: Option<&mut EventContext<'_>>,
     ) -> Result<(), MoveError> {
         let result = self.move_card(iid, side, from, to);
         if let Err(ref e) = result {
@@ -86,6 +98,23 @@ impl GameState {
                     "zone-move failed: {iid} not in {from:?} (tried to move to {to:?})"
                 ),
                 format!("{e:?}; player={side:?}"),
+            );
+            return result;
+        }
+        // Fold: broadcast on_zone_change whenever a caller has a Lua VM
+        // available. `None` = caller genuinely has no VM (rollback replay,
+        // sim setup, unit-test scaffolding) — broadcast is skipped there,
+        // by design.
+        if let Some(ctx) = ctx {
+            let lua = ctx.lua;
+            let oracle = ctx.oracle();
+            super::lua_api::broadcast_zone_change(
+                lua,
+                self,
+                oracle,
+                iid,
+                from.as_str(),
+                to.as_str(),
             );
         }
         result
@@ -129,7 +158,11 @@ impl GameState {
     ///
     /// Per-attached owner lookup: a stolen attachment still returns to
     /// its real owner's exile, not the host's owner's exile.
-    pub fn exile_remaining_attached(&mut self, host: &InstanceId) {
+    pub fn exile_remaining_attached(
+        &mut self,
+        host: &InstanceId,
+        mut ctx: Option<&mut EventContext<'_>>,
+    ) {
         let attached_snapshot: Vec<InstanceId> = self
             .card_pool
             .get(host)
@@ -148,6 +181,18 @@ impl GameState {
                 .map(|i| i.owner)
                 .unwrap_or_else(|| self.active_player);
             self.add_to_zone(aid, owner, Zone::Exile);
+            // Under user ontology, an attached sleeve is on BOARD; the
+            // P.8 cascade moves it BOARD → EXILE, so on_zone_change fires.
+            if let Some(c) = ctx.as_deref_mut() {
+                super::lua_api::broadcast_zone_change(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    aid,
+                    "board",
+                    Zone::Exile.as_str(),
+                );
+            }
         }
     }
 }
@@ -183,6 +228,7 @@ mod tests {
             Zone::Hand,
             Zone::Graveyard,
             "test-region",
+            None,
         );
         assert!(matches!(result, Err(MoveError::NotInZone)));
         let errors = crate::error::drain();
@@ -215,6 +261,7 @@ mod tests {
             Zone::Hand,
             Zone::Graveyard,
             "test-region",
+            None,
         );
         assert!(result.is_ok());
         let errors = crate::error::drain();
@@ -238,7 +285,7 @@ mod tests {
         s.set_summoning_sick(&iid, true);
         s.set_winner(Some(PlayerId::A), "test");
         s.bump_action("test", PlayerId::A);
-        s.bump_event_fire(crate::card::EventName::OnDie, PlayerId::B);
+        s.bump_event_fire(crate::card::EventName::OnZoneChange, PlayerId::B);
 
         let after_mutations = format!("{:?}", s);
         assert_ne!(snapshot, after_mutations, "mutations should have visible effect");

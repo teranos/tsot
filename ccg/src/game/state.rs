@@ -52,6 +52,20 @@ pub enum Zone {
     Exile,
 }
 
+impl Zone {
+    /// Lowercase name matching the strings used by `parse_zone` and by
+    /// Lua handlers (`from`/`to` args of `on_zone_change`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Zone::Board => "board",
+            Zone::Deck => "deck",
+            Zone::Hand => "hand",
+            Zone::Graveyard => "graveyard",
+            Zone::Exile => "exile",
+        }
+    }
+}
+
 pub type InstanceId = String;
 
 /// A deck-building unit: a sleeve holding a card, or a cardless sleeve
@@ -420,6 +434,13 @@ pub struct GameState {
     /// only has one attacking side per turn anyway.
     #[serde(default)]
     pub creature_attacked_this_turn: bool,
+    /// Count of cards moved into ANY player's GRAVEYARD during the current
+    /// turn. Bumped by `move_card_or_emit` on any `to == Zone::Graveyard`
+    /// transition. Reset to 0 on End → Untap. Read by Rebuke and any card
+    /// whose effect scales with graveyard activity this turn ("for every
+    /// card that was put into a graveyard this turn, X").
+    #[serde(default)]
+    pub graveyard_added_this_turn: u32,
     /// P.35: per-player flag, set true when that player casts a Symbol
     /// (`CardType::Symbol`) successfully. Reset to false for both
     /// players on End → Untap transition. Indexed by player (0 = A,
@@ -546,6 +567,7 @@ impl GameState {
             replay_journal: None,
             priority: None,
             creature_attacked_this_turn: false,
+            graveyard_added_this_turn: 0,
             symbol_cast_this_turn: [false; 2],
             current_activation_x: None,
             current_cast_payments: None,
@@ -754,6 +776,20 @@ impl GameState {
         self.creature_attacked_this_turn = now;
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetCreatureAttackedThisTurn { was, now });
+        }
+    }
+
+    /// Journaled setter for the per-turn graveyard-add counter. Used by
+    /// `move_card_or_emit` to bump on any `to == Zone::Graveyard` move, and
+    /// by the turn loop to reset to 0 on End → Untap.
+    pub fn set_graveyard_added_this_turn(&mut self, now: u32) {
+        let was = self.graveyard_added_this_turn;
+        if was == now {
+            return;
+        }
+        self.graveyard_added_this_turn = now;
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetGraveyardAddedThisTurn { was, now });
         }
     }
 
@@ -1453,6 +1489,7 @@ impl GameState {
         host: &InstanceId,
         player: PlayerId,
         n: usize,
+        mut ctx: Option<&mut super::context::EventContext<'_>>,
     ) -> usize {
         if !self.card_pool.contains_key(host) {
             return 0;
@@ -1469,6 +1506,19 @@ impl GameState {
             let _ = self.remove_from_zone(iid, player, Zone::Deck);
             self.add_attached(host, iid);
             self.set_face_down(iid, true);
+            // Attach that crosses a zone (DECK → board-under-host) is a
+            // zone transition. Under user ontology attached sleeves sit
+            // on BOARD, so `to = "board"`.
+            if let Some(c) = ctx.as_deref_mut() {
+                super::lua_api::broadcast_zone_change(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    iid,
+                    Zone::Deck.as_str(),
+                    "board",
+                );
+            }
         }
         found.len()
     }
@@ -1484,6 +1534,7 @@ impl GameState {
         host: &InstanceId,
         player: PlayerId,
         n: usize,
+        mut ctx: Option<&mut super::context::EventContext<'_>>,
     ) -> usize {
         if !self.card_pool.contains_key(host) {
             return 0;
@@ -1500,6 +1551,16 @@ impl GameState {
             let _ = self.remove_from_zone(iid, player, Zone::Hand);
             self.add_attached(host, iid);
             self.set_face_down(iid, true);
+            if let Some(c) = ctx.as_deref_mut() {
+                super::lua_api::broadcast_zone_change(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    iid,
+                    Zone::Hand.as_str(),
+                    "board",
+                );
+            }
         }
         found.len()
     }

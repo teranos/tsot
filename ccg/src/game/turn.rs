@@ -47,6 +47,7 @@ impl GameState {
                 self.clear_eot_modifiers();
                 self.set_creature_attacked_this_turn(false);
                 self.clear_all_attacked_this_turn();
+                self.set_graveyard_added_this_turn(0);
                 // P.35: clear the per-player Symbol-cast cap so each
                 // player gets one cast per their own turn. Both
                 // players reset; only the active player can ever set
@@ -126,8 +127,9 @@ impl GameState {
         // OnTurnBegin: fires when entering Untap (start of a new turn).
         // Broadcasts to every BOARD card of the active player plus
         // every card attached to one of those cards.
+        let mut ctx = ctx;
         if matches!(next, Phase::Untap) {
-            if let Some(c) = ctx {
+            if let Some(c) = ctx.as_deref_mut() {
                 let board: Vec<InstanceId> = self.player(self.active_player).board.clone();
                 for iid in &board {
                     // Z.7: fused same-sleeve mutations get their phase-entry
@@ -182,15 +184,15 @@ impl GameState {
                     .map_err(TurnError::ChoicePending)?;
             }
         }
-        self.enter_phase_action();
+        self.enter_phase_action(ctx);
         Ok(())
     }
 
-    fn enter_phase_action(&mut self) {
+    fn enter_phase_action(&mut self, ctx: Option<&mut EventContext>) {
         match self.phase {
             Phase::Untap => self.do_untap_step(),
-            Phase::Draw => self.do_draw_step(),
-            Phase::End => self.do_end_step(),
+            Phase::Draw => self.do_draw_step(ctx),
+            Phase::End => self.do_end_step(ctx),
             // TODO(events): each phase entry should fire phase-begin triggers per A.1.
             // E.g., "at the beginning of your upkeep / draw step / combat / end step".
             // Also: end of turn must fire end-of-turn triggers (e.g., delayed effects
@@ -236,9 +238,9 @@ impl GameState {
 
     /// U.3 + U.4: active player draws 1 card from the top of their DECK.
     /// L.1: if the DECK is empty, the active player loses immediately.
-    fn do_draw_step(&mut self) {
+    fn do_draw_step(&mut self, ctx: Option<&mut EventContext>) {
         let pid = self.active_player;
-        if !self.draw_one(pid) {
+        if !self.draw_one(pid, ctx) {
             self.set_winner(Some(pid.opponent()), "deckout_draw");
         }
     }
@@ -250,7 +252,11 @@ impl GameState {
     /// card was drawn, `false` if the deck emptied first (the caller
     /// resolves the deckout per L.1). All moves go through the journaled
     /// `move_card_or_emit`, so this rolls back cleanly.
-    pub(crate) fn draw_one(&mut self, pid: super::state::PlayerId) -> bool {
+    pub(crate) fn draw_one(
+        &mut self,
+        pid: super::state::PlayerId,
+        mut ctx: Option<&mut EventContext>,
+    ) -> bool {
         loop {
             let Some(top) = self.player(pid).deck.first().cloned() else {
                 return false; // deck empty — no card drawn
@@ -260,8 +266,16 @@ impl GameState {
                 .get(&top)
                 .map(|s| s.is_cardless())
                 .unwrap_or(false);
-            // Sacred-error sweep: deck-top → hand.
-            let _ = self.move_card_or_emit(&top, pid, Zone::Deck, Zone::Hand, "draw-z8b");
+            // Sacred-error sweep: deck-top → hand. `on_zone_change` broadcasts
+            // when ctx is Some (subsumes the yet-to-exist on_draw event).
+            let _ = self.move_card_or_emit(
+                &top,
+                pid,
+                Zone::Deck,
+                Zone::Hand,
+                "draw-z8b",
+                ctx.as_deref_mut(),
+            );
             if !cardless {
                 return true; // drew a card-bearing sleeve
             }
@@ -271,7 +285,7 @@ impl GameState {
 
     /// U.10: at End phase, the active player discards down to a HAND size of 6.
     /// Discarded cards go to GRAVEYARD.
-    fn do_end_step(&mut self) {
+    fn do_end_step(&mut self, mut ctx: Option<&mut EventContext>) {
         const MAX_HAND: usize = 6;
         let pid = self.active_player;
         // Z.8f: cardless sleeves in HAND don't count toward the max hand
@@ -304,6 +318,7 @@ impl GameState {
                 Zone::Hand,
                 Zone::Graveyard,
                 "turn-end-discard",
+                ctx.as_deref_mut(),
             );
             self.bump_action("discard", pid);
         }
@@ -392,7 +407,7 @@ mod tests {
         assert_eq!(s.a.hand.len(), 10);
         assert_eq!(s.a.hand.iter().filter(|i| !s.is_cardless(i)).count(), 8);
 
-        s.do_end_step();
+        s.do_end_step(None);
 
         // Discarded down to 6 card-bearing sleeves; the 2 cardless stay.
         assert_eq!(
@@ -420,7 +435,7 @@ mod tests {
         }
         let hand_before = s.a.hand.clone();
 
-        s.do_end_step();
+        s.do_end_step(None);
 
         // 6 real <= 6 → no discard, even though 9 sleeves exceed the cap.
         assert_eq!(

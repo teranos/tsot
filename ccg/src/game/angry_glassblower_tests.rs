@@ -80,7 +80,7 @@ fn glassblower_on_damage_exiles_an_empty_sleeve_then_draws_and_discards() {
     // Attach an empty sleeve straight onto him (as if a prior swing did).
     let sleeve = s.a.hand[0].clone();
     s.card_pool.get_mut(&sleeve).unwrap().content = None;
-    s.attach_cardless_from_hand(&host, PlayerId::A, 1);
+    s.attach_cardless_from_hand(&host, PlayerId::A, 1, None);
     assert_eq!(s.card_pool.get(&host).unwrap().attached, vec![sleeve.clone()]);
 
     let deck_before = s.a.deck.len();

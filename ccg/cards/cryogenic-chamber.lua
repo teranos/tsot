@@ -22,10 +22,8 @@ return {
 	},
 	flavor = "Vitrified. The clock waits with it.",
 	on_enter_board = function(game, self)
-		-- Build the pool: every creature on either player's board, excluding
-		-- the chamber itself. Self-targeting is silently skipped — the
-		-- chamber isn't a creature anyway, but we belt-and-suspenders the
-		-- check for forward-compat (granted-type statics might lie).
+		-- ETB: build the pool of every creature on either board (excluding
+		-- the chamber itself; belt-and-suspenders) and freeze the pick.
 		local pool = {}
 		for _, side in ipairs({ self.owner, game.opponent(self.owner) }) do
 			for _, iid in ipairs(game.zones(side).board) do
@@ -52,12 +50,10 @@ return {
 		end
 	end,
 	on_die = function(game, self)
-		-- The chamber is leaving the board (combat or otherwise). Each
-		-- card it was holding gets queued for return at the next main
-		-- phase (Main1 OR Main2 of any player's turn, whichever comes
-		-- first). After this handler runs, P.8 cascades any remaining
-		-- attached cards into EXILE — that's where the queued iids live
-		-- until the turn loop flushes them back to their owner's board.
+		-- Chamber died: queue each held card for return at next main phase.
+		-- After this handler runs, P.8 cascades any remaining attached
+		-- cards into EXILE — that's where the queued iids live until the
+		-- turn loop flushes them back to their owner's board.
 		for _, iid in ipairs(self.attached) do
 			game.schedule_return_at_next_main(iid)
 		end

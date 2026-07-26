@@ -285,7 +285,7 @@ mod tests {
     fn uct_config_round_trips_byte_identical_through_trace_json() {
         let cfg = super::super::uct::UctConfig {
             iterations: 5,
-            exploration_c: 1.41421356,
+            exploration_c: std::f64::consts::SQRT_2,
             base_seed: 0xDEAD_BEEF_CAFE_1234,
             max_candidates: 42,
             rollout_turn_cap: 3,

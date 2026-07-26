@@ -214,11 +214,18 @@ fn combat_death_whose_on_die_burns_a_bystander_settles_it_in_combat() {
     s.b.hand.retain(|i| i != &bystander);
     s.b.board.push(bystander.clone());
 
-    // Blocker: a 1/1 that dies to the attacker; its on_die burns the
-    // bystander for lethal.
+    // Blocker: a 1/1 that dies to the attacker; its on_zone_change
+    // handler (the on_die successor, filtered to a Board → Graveyard
+    // self-move) burns the bystander for lethal.
     let blk = s.b.hand[0].clone();
-    let on_die: mlua::Function = lua
-        .load(format!("return function(game, self) game.damage('{bystander}', 5) end"))
+    let on_zone_change: mlua::Function = lua
+        .load(format!(
+            r#"return function(game, self, moving, from, to)
+                if moving.instance_id ~= self.instance_id then return end
+                if from ~= "board" or to ~= "graveyard" then return end
+                game.damage('{bystander}', 5)
+            end"#
+        ))
         .eval()
         .unwrap();
     s.card_pool
@@ -226,7 +233,7 @@ fn combat_death_whose_on_die_burns_a_bystander_settles_it_in_combat() {
         .unwrap()
         .card_mut()
         .handlers
-        .insert(crate::card::EventName::OnDie, on_die);
+        .insert(crate::card::EventName::OnZoneChange, on_zone_change);
     s.b.hand.retain(|i| i != &blk);
     s.b.board.push(blk.clone());
 

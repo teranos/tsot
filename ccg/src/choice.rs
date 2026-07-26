@@ -511,7 +511,7 @@ fn pitch_score(state: &GameState, candidate_iid: &InstanceId, host_iid: &Instanc
     if cand
         .card()
         .handlers
-        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+        .contains_key(&crate::card::EventName::OnZoneChange)
     {
         let host_is_creature = host.card().kind == crate::card::CardType::Creature;
         let color_overlap = cand
@@ -539,13 +539,9 @@ fn pitch_score(state: &GameState, candidate_iid: &InstanceId, host_iid: &Instanc
     {
         score -= 20;
     }
-    if cand
-        .card()
-        .handlers
-        .contains_key(&crate::card::EventName::OnEnterBoard)
-    {
-        score -= 10;
-    }
+    // on_zone_change fold — subsumes the former OnEnterBoard signal
+    // (already covered by the pitch-payoff branch above if the
+    // candidate declares zone-change).
     if cand
         .card()
         .handlers
@@ -598,7 +594,7 @@ fn target_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) 
     if cand
         .card()
         .handlers
-        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+        .contains_key(&crate::card::EventName::OnZoneChange)
     {
         score += 10;
     }
@@ -644,7 +640,7 @@ fn steal_score(state: &GameState, candidate_iid: &InstanceId, asker: PlayerId) -
         if att
             .card()
             .handlers
-            .contains_key(&crate::card::EventName::OnAttachedAsCost)
+            .contains_key(&crate::card::EventName::OnZoneChange)
         {
             score += 30;
         }
@@ -687,7 +683,7 @@ fn attached_value_score(state: &GameState, candidate_iid: &InstanceId) -> i32 {
     if cand
         .card()
         .handlers
-        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+        .contains_key(&crate::card::EventName::OnZoneChange)
     {
         score += 100;
     }
@@ -723,7 +719,7 @@ fn remove_threat_score(state: &GameState, candidate_iid: &InstanceId, asker: Pla
     if cand
         .card()
         .handlers
-        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+        .contains_key(&crate::card::EventName::OnZoneChange)
     {
         score += 10;
     }
@@ -751,7 +747,7 @@ fn recur_score(state: &GameState, candidate_iid: &InstanceId) -> i32 {
     if cand
         .card()
         .handlers
-        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+        .contains_key(&crate::card::EventName::OnZoneChange)
     {
         score += 20;
     }
@@ -780,7 +776,7 @@ fn low_value_own_score(state: &GameState, candidate_iid: &InstanceId, asker: Pla
     if cand
         .card()
         .handlers
-        .contains_key(&crate::card::EventName::OnAttachedAsCost)
+        .contains_key(&crate::card::EventName::OnZoneChange)
     {
         score -= 50;
     }

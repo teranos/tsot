@@ -113,7 +113,12 @@ fn find_host_of_attached(s: &GameState, iid: &str) -> Option<InstanceId> {
 // --- Pure logic for each API method. All mutations go through journaled
 // helpers on GameState so handler effects are rollback-safe.
 
-pub(crate) fn do_damage(s: &mut GameState, target: &str, n: f32) -> Result<()> {
+pub(crate) fn do_damage(
+    s: &mut GameState,
+    target: &str,
+    n: f32,
+    mut ctx: Option<&mut crate::game::EventContext<'_>>,
+) -> Result<()> {
     // Two targeting modes per RULES (cards say "deal N damage to any
     // target" — creature or player):
     //
@@ -135,7 +140,14 @@ pub(crate) fn do_damage(s: &mut GameState, target: &str, n: f32) -> Result<()> {
         let take = (n.max(0.0) as usize).min(s.player(pid).deck.len());
         for _ in 0..take {
             if let Some(top) = s.player(pid).deck.first().cloned() {
-                let _ = s.move_card(&top, pid, crate::game::Zone::Deck, crate::game::Zone::Exile);
+                let _ = s.move_card_or_emit(
+                    &top,
+                    pid,
+                    crate::game::Zone::Deck,
+                    crate::game::Zone::Exile,
+                    "damage-player-mill",
+                    ctx.as_deref_mut(),
+                );
             }
         }
         s.bump_action("damage", pid);
@@ -165,7 +177,14 @@ pub(crate) fn do_damage(s: &mut GameState, target: &str, n: f32) -> Result<()> {
     Ok(())
 }
 
-fn do_mill(s: &mut GameState, pid_str: &str, n: i32, dest_str: &str) -> Result<()> {
+fn do_mill(
+    lua: &Lua,
+    s: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
+    pid_str: &str,
+    n: i32,
+    dest_str: &str,
+) -> Result<()> {
     let pid = parse_pid(pid_str)?;
     let dest = parse_mill_zone(dest_str)?;
     let take = (n.max(0) as usize).min(s.player(pid).deck.len());
@@ -175,17 +194,25 @@ fn do_mill(s: &mut GameState, pid_str: &str, n: i32, dest_str: &str) -> Result<(
         };
         let _ = s.move_card(&top, pid, Zone::Deck, dest);
         s.bump_action("mill", pid);
+        broadcast_zone_change(lua, s, oracle, &top, Zone::Deck.as_str(), dest.as_str());
     }
     Ok(())
 }
 
-fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
+fn do_draw(
+    lua: &Lua,
+    s: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
+    pid_str: &str,
+    n: i32,
+) -> Result<()> {
     let pid = parse_pid(pid_str)?;
     for _ in 0..n.max(0) {
         // Z.8b: draw_one collects any cardless sleeves on top for free and
         // draws the first card-bearing sleeve. false = the deck emptied
         // before a card was drawn → L.1 handler-draw deckout.
-        if !s.draw_one(pid) {
+        let mut ctx = crate::game::EventContext::new(lua, oracle);
+        if !s.draw_one(pid, Some(&mut ctx)) {
             // L.1: effect-draw on an empty deck → drawing player loses.
             // Counted separately from "voluntary suicide" plays caught by
             // preview-rollback (those increment `preview_skip_suicide`).
@@ -201,9 +228,14 @@ fn do_draw(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
     Ok(())
 }
 
-fn do_discard(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
+fn do_discard(
+    s: &mut GameState,
+    pid_str: &str,
+    n: i32,
+    ctx: Option<&mut crate::game::EventContext<'_>>,
+) -> Result<()> {
     let pid = parse_pid(pid_str)?;
-    do_smart_discard(s, pid, n.max(0) as usize);
+    do_smart_discard(s, pid, n.max(0) as usize, ctx);
     Ok(())
 }
 
@@ -211,7 +243,12 @@ fn do_discard(s: &mut GameState, pid_str: &str, n: i32) -> Result<()> {
 /// `PlayerId` and a clamped count — callable from engine code that's
 /// already parsed the player. Used by activated-ability cost payment
 /// in `play.rs::activate_ability` for HAND-source components.
-pub(crate) fn do_smart_discard(s: &mut GameState, pid: PlayerId, n: usize) {
+pub(crate) fn do_smart_discard(
+    s: &mut GameState,
+    pid: PlayerId,
+    n: usize,
+    mut ctx: Option<&mut crate::game::EventContext<'_>>,
+) {
     let take = n.min(s.player(pid).hand.len());
     // Smart-discard heuristic: at each slot, score every hand card and
     // pick the highest score (= the most-discardable). See `discard_score`
@@ -253,7 +290,14 @@ pub(crate) fn do_smart_discard(s: &mut GameState, pid: PlayerId, n: usize) {
         // piggybacks on the existing journaled bump_action plumbing so a
         // preview-and-rollback correctly undoes the count too.
         let card_id = s.card_pool.get(&iid).map(|c| c.card().id.clone());
-        let _ = s.move_card(&iid, pid, Zone::Hand, Zone::Graveyard);
+        let _ = s.move_card_or_emit(
+            &iid,
+            pid,
+            Zone::Hand,
+            Zone::Graveyard,
+            "smart-discard",
+            ctx.as_deref_mut(),
+        );
         s.bump_action("discard", pid);
         if let Some(cid) = card_id {
             s.bump_action(&format!("discarded:{cid}"), pid);
@@ -268,9 +312,10 @@ pub(crate) fn do_smart_discard(s: &mut GameState, pid: PlayerId, n: usize) {
 /// Signals (v1):
 /// - Body value: bigger creatures are worth keeping (negative score).
 /// - Handler-bearing cards have play-value worth holding (negative bonus
-///   per handler kind).
-/// - Pitch-payoff cards (OnAttachedAsCost handlers, e.g. jewels) are tools
-///   for cost-substitution and have outsized loss-on-discard — big penalty.
+///   per handler kind). on_zone_change fold — any card that carries the
+///   unified zone-transition handler is treated as "interesting" and
+///   penalised for discard, subsuming the former OnEnterBoard / OnDie /
+///   OnAttachedAsCost signals (each of which was a filtered subcase).
 fn discard_score(state: &GameState, iid: &InstanceId) -> i32 {
     let Some(c) = state.card_pool.get(iid) else {
         return 0;
@@ -282,17 +327,11 @@ fn discard_score(state: &GameState, iid: &InstanceId) -> i32 {
     if h.contains_key(&crate::card::EventName::OnPlay) {
         s -= 10;
     }
-    if h.contains_key(&crate::card::EventName::OnEnterBoard) {
+    if h.contains_key(&crate::card::EventName::OnZoneChange) {
         s -= 10;
-    }
-    if h.contains_key(&crate::card::EventName::OnDie) {
-        s -= 5;
     }
     if h.contains_key(&crate::card::EventName::OnAttack) {
         s -= 5;
-    }
-    if h.contains_key(&crate::card::EventName::OnAttachedAsCost) {
-        s -= 50;
     }
     s
 }
@@ -398,20 +437,19 @@ fn do_set_tapped(s: &mut GameState, iid: &str, tapped: bool) -> Result<()> {
 /// Used by theft effects like opponent-draw's literal "take cards from
 /// opponent's deck into your hand."
 ///
-/// Returns true iff this move is an "entry" (non-board origin → BOARD
-/// destination): the caller should fire `OnEnterBoard` on `iid`. The
-/// board→board case (e.g., beguile's controller-swap) returns false —
-/// that's a relocation, not an entry, and shouldn't re-trigger ETB.
-/// Attached → board returns true: the attached zone is a non-board
-/// origin, so reanimation-from-attached behaves like reanimation-from-
-/// graveyard. Hand → board likewise returns true (cards that "bypass
-/// the cast" and place a creature directly).
+/// Board→BOARD moves (beguile's controller-swap) don't apply B.3
+/// summoning sickness; every non-board origin → BOARD does.
+/// The on-entry trigger for the moved card is delivered by
+/// `broadcast_zone_change` — the caller broadcasts after the move,
+/// and any `on_zone_change` handler on the card observes the
+/// transition (including reanimation, hand→board placements, and
+/// exile→board returns).
 fn do_move_to(
     s: &mut GameState,
     iid: &str,
     target_player_str: &str,
     dest_str: &str,
-) -> Result<bool> {
+) -> Result<()> {
     let dest = parse_zone(dest_str)?;
     let target = parse_pid(target_player_str)?;
     let iid_owned = iid.to_string();
@@ -461,7 +499,7 @@ fn do_move_to(
             s.set_summoning_sick(&iid_owned, true);
         }
     }
-    Ok(etb)
+    Ok(())
 }
 
 fn do_move(s: &mut GameState, iid: &str, dest_str: &str) -> Result<()> {
@@ -675,34 +713,84 @@ macro_rules! build_game_table {
         )?;
 
         let cell_dmg = &$cell;
+        let cell_dmg_o = &$oracle_cell;
+        let dmg_lua = $lua;
         game.set(
             "damage",
             $scope.create_function_mut(move |_, (iid, n): (String, f32)| {
-                do_damage(&mut *cell_dmg.borrow_mut(), &iid, n)
+                let mut s = cell_dmg.borrow_mut();
+                let mut o = cell_dmg_o.borrow_mut();
+                let mut ctx = crate::game::EventContext::new(dmg_lua, &mut **o);
+                do_damage(&mut *s, &iid, n, Some(&mut ctx))
             })?,
         )?;
 
         let cell_mill = &$cell;
+        let cell_mill_o = &$oracle_cell;
+        let mill_lua = $lua;
         game.set(
             "mill",
             $scope.create_function_mut(move |_, (pid, n, dest): (String, i32, String)| {
-                do_mill(&mut *cell_mill.borrow_mut(), &pid, n, &dest)
+                let mut s = cell_mill.borrow_mut();
+                let mut o = cell_mill_o.borrow_mut();
+                do_mill(mill_lua, &mut *s, &mut **o, &pid, n, &dest)
             })?,
         )?;
 
         let cell_draw = &$cell;
+        let cell_draw_o = &$oracle_cell;
+        let draw_lua = $lua;
         game.set(
             "draw",
             $scope.create_function_mut(move |_, (pid, n): (String, i32)| {
-                do_draw(&mut *cell_draw.borrow_mut(), &pid, n)
+                let mut s = cell_draw.borrow_mut();
+                let mut o = cell_draw_o.borrow_mut();
+                do_draw(draw_lua, &mut *s, &mut **o, &pid, n)
             })?,
         )?;
 
         let cell_move = &$cell;
+        let cell_move_o = &$oracle_cell;
+        let move_lua = $lua;
         game.set(
             "move",
             $scope.create_function_mut(move |_, (iid, dest): (String, String)| {
-                do_move(&mut *cell_move.borrow_mut(), &iid, &dest)
+                // Snapshot the from-string BEFORE the move so the broadcast
+                // uses the real origin. Attached-source moves get
+                // `from = "board"` — an attached sleeve sits on BOARD per
+                // ontology, so a detach-and-move to a non-board zone IS a
+                // board→dest transition.
+                let from_str: Option<&'static str> = {
+                    let s = cell_move.borrow();
+                    if let Some(ctrl) =
+                        s.card_pool.get(&iid).map(|i| i.controller)
+                    {
+                        if let Some(z) = find_zone_of(&s, ctrl, &iid) {
+                            Some(z.as_str())
+                        } else if find_host_of_attached(&s, &iid).is_some() {
+                            Some("board")
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+                do_move(&mut *cell_move.borrow_mut(), &iid, &dest)?;
+                if let Some(from) = from_str {
+                    let to = parse_zone(&dest)?;
+                    let mut s = cell_move.borrow_mut();
+                    let mut o = cell_move_o.borrow_mut();
+                    broadcast_zone_change(
+                        move_lua,
+                        &mut *s,
+                        &mut **o,
+                        &iid,
+                        from,
+                        to.as_str(),
+                    );
+                }
+                Ok(())
             })?,
         )?;
 
@@ -713,21 +801,43 @@ macro_rules! build_game_table {
             "move_to",
             $scope.create_function_mut(
                 move |_, (iid, target_player, dest): (String, String, String)| {
-                    let fire_etb = do_move_to(
+                    // Snapshot the from-string BEFORE the move (same shape as
+                    // game.move above): attached-source → `"board"`.
+                    let from_str: Option<&'static str> = {
+                        let s = cell_move_to.borrow();
+                        if let Some(inst) = s.card_pool.get(&iid) {
+                            let owner = inst.owner;
+                            let ctrl = inst.controller;
+                            if let Some(z) = find_zone_of(&s, owner, &iid) {
+                                Some(z.as_str())
+                            } else if let Some(z) = find_zone_of(&s, ctrl, &iid) {
+                                Some(z.as_str())
+                            } else if find_host_of_attached(&s, &iid).is_some() {
+                                Some("board")
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    let _ = do_move_to(
                         &mut *cell_move_to.borrow_mut(),
                         &iid,
                         &target_player,
                         &dest,
                     )?;
-                    if fire_etb {
+                    if let Some(from) = from_str {
+                        let to = parse_zone(&dest)?;
                         let mut s = cell_move_to.borrow_mut();
                         let mut o = cell_move_to_o.borrow_mut();
-                        fire_self_only(
+                        broadcast_zone_change(
                             move_to_lua,
                             &mut *s,
                             &mut **o,
-                            EventName::OnEnterBoard,
                             &iid,
+                            from,
+                            to.as_str(),
                         );
                     }
                     Ok(())
@@ -802,6 +912,17 @@ macro_rules! build_game_table {
             "creature_attacked_this_turn",
             $scope.create_function_mut(move |_, ()| -> Result<bool> {
                 Ok(cell_atk_q.borrow().creature_attacked_this_turn)
+            })?,
+        )?;
+
+        // game.graveyard_added_this_turn() → count of cards moved into ANY
+        // player's GRAVEYARD during the current turn. Reset on End → Untap.
+        // Rebuke reads this to scale its mill.
+        let cell_gyc = &$cell;
+        game.set(
+            "graveyard_added_this_turn",
+            $scope.create_function_mut(move |_, ()| -> Result<i32> {
+                Ok(cell_gyc.borrow().graveyard_added_this_turn as i32)
             })?,
         )?;
 
@@ -903,6 +1024,8 @@ macro_rules! build_game_table {
         // owner's deck (index 0 per V.1). Used by cantrips like Sprout
         // that pull from the bottom of the deck up to the top.
         let cell_mtd = &$cell;
+        let cell_mtd_o = &$oracle_cell;
+        let mtd_lua = $lua;
         game.set(
             "move_to_deck_top",
             $scope.create_function_mut(move |_, iid: String| -> Result<()> {
@@ -915,13 +1038,18 @@ macro_rules! build_game_table {
                 })?;
                 let owner = inst.owner;
                 let controller = inst.controller;
+                let from_str: &'static str;
                 if let Some(from) = find_zone_of(&s, owner, &iid) {
                     s.remove_from_zone(&iid_owned, owner, from);
+                    from_str = from.as_str();
                 } else if let Some(from) = find_zone_of(&s, controller, &iid) {
                     s.remove_from_zone(&iid_owned, controller, from);
+                    from_str = from.as_str();
                 } else if let Some(host) = find_host_of_attached(&s, &iid) {
                     s.remove_attached(&host, &iid_owned);
                     s.set_face_down(&iid_owned, false);
+                    // attached lives on BOARD per ontology.
+                    from_str = "board";
                 } else {
                     return Err(mlua::Error::runtime(format!(
                         "game.move_to_deck_top: card not in any zone: {iid}"
@@ -929,6 +1057,15 @@ macro_rules! build_game_table {
                 }
                 s.add_to_zone_top(&iid_owned, owner, Zone::Deck);
                 s.bump_action("move_to_deck_top", owner);
+                let mut o = cell_mtd_o.borrow_mut();
+                broadcast_zone_change(
+                    mtd_lua,
+                    &mut *s,
+                    &mut **o,
+                    &iid_owned,
+                    from_str,
+                    Zone::Deck.as_str(),
+                );
                 Ok(())
             })?,
         )?;
@@ -1184,12 +1321,15 @@ macro_rules! build_game_table {
         // "mill to attached" triggers (MYC, ...). C.14 lifted: frame no
         // longer gates the attachment, so any top card is taken.
         let cell_afd = &$cell;
+        let cell_afd_o = &$oracle_cell;
+        let afd_lua = $lua;
         game.set(
             "attach_from_deck",
             $scope.create_function_mut(
                 move |_, (host, player, n): (String, String, i32)| -> Result<()> {
                     let pid = parse_pid(&player)?;
                     let mut s = cell_afd.borrow_mut();
+                    let mut o = cell_afd_o.borrow_mut();
                     if !s.card_pool.contains_key(&host) {
                         return Ok(());
                     }
@@ -1203,6 +1343,15 @@ macro_rules! build_game_table {
                         let _ = s.remove_from_zone(&top, pid, Zone::Deck);
                         s.add_attached(&host, &top);
                         s.set_face_down(&top, true);
+                        // DECK → board (under host). Fire on_zone_change.
+                        broadcast_zone_change(
+                            afd_lua,
+                            &mut *s,
+                            &mut **o,
+                            &top,
+                            Zone::Deck.as_str(),
+                            "board",
+                        );
                     }
                     Ok(())
                 },
@@ -1213,13 +1362,23 @@ macro_rules! build_game_table {
         // `player`'s DECK for up to n cardless sleeves (Z.8) and attach
         // each to `host` face-down (Z.6). Window Cleaner's ETB search.
         let cell_acd = &$cell;
+        let cell_acd_o = &$oracle_cell;
+        let acd_lua = $lua;
         game.set(
             "attach_cardless_from_deck",
             $scope.create_function_mut(
                 move |_, (host, player, n): (String, String, i32)| -> Result<()> {
                     let pid = parse_pid(&player)?;
                     let mut s = cell_acd.borrow_mut();
-                    s.attach_cardless_from_deck(&host, pid, n.max(0) as usize);
+                    let mut o = cell_acd_o.borrow_mut();
+                    let mut ctx =
+                        crate::game::EventContext::new(acd_lua, &mut **o);
+                    s.attach_cardless_from_deck(
+                        &host,
+                        pid,
+                        n.max(0) as usize,
+                        Some(&mut ctx),
+                    );
                     Ok(())
                 },
             )?,
@@ -1230,13 +1389,23 @@ macro_rules! build_game_table {
         // to `host` face-down. Angry Glassblower's on-attack: the empty
         // sleeve it attaches comes out of hand, not the deck.
         let cell_ach = &$cell;
+        let cell_ach_o = &$oracle_cell;
+        let ach_lua = $lua;
         game.set(
             "attach_cardless_from_hand",
             $scope.create_function_mut(
                 move |_, (host, player, n): (String, String, i32)| -> Result<()> {
                     let pid = parse_pid(&player)?;
                     let mut s = cell_ach.borrow_mut();
-                    s.attach_cardless_from_hand(&host, pid, n.max(0) as usize);
+                    let mut o = cell_ach_o.borrow_mut();
+                    let mut ctx =
+                        crate::game::EventContext::new(ach_lua, &mut **o);
+                    s.attach_cardless_from_hand(
+                        &host,
+                        pid,
+                        n.max(0) as usize,
+                        Some(&mut ctx),
+                    );
                     Ok(())
                 },
             )?,
@@ -1336,10 +1505,15 @@ macro_rules! build_game_table {
         )?;
 
         let cell_discard = &$cell;
+        let cell_discard_o = &$oracle_cell;
+        let discard_lua = $lua;
         game.set(
             "discard",
             $scope.create_function_mut(move |_, (pid, n): (String, i32)| {
-                do_discard(&mut *cell_discard.borrow_mut(), &pid, n)
+                let mut s = cell_discard.borrow_mut();
+                let mut o = cell_discard_o.borrow_mut();
+                let mut ctx = crate::game::EventContext::new(discard_lua, &mut **o);
+                do_discard(&mut *s, &pid, n, Some(&mut ctx))
             })?,
         )?;
 
@@ -1890,6 +2064,111 @@ pub(crate) fn fire_with_partner(
     drain_deferred_events(lua, state, oracle).map(|_| ())
 }
 
+/// Snapshot on-BOARD listeners + the moving card, then fire
+/// `OnZoneChange` on each. No exclusion — the moving card gets its own
+/// broadcast so self-move triggers work. Called by
+/// `GameState::move_card_or_emit` (every engine move) and the Lua-side
+/// `game.move` binding after a successful zone mutation.
+pub(crate) fn broadcast_zone_change(
+    lua: &Lua,
+    state: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
+    moving_iid: &InstanceId,
+    from: &str,
+    to: &str,
+) {
+    // Build the listener set: every BOARD card + every child (attached
+    // per Z.6, same_sleeve per Z.7) of every BOARD card + the moving
+    // card itself. Under user ontology attached sleeves + same_sleeve
+    // cards are on BOARD via their host, so they subscribe like any
+    // other board card. Same_sleeve is what lets mutations (PRION etc)
+    // observe their host's death.
+    let mut listeners: Vec<InstanceId> = Vec::new();
+    for host_iid in state.a.board.iter().chain(state.b.board.iter()) {
+        if !listeners.contains(host_iid) {
+            listeners.push(host_iid.clone());
+        }
+        if let Some(host) = state.card_pool.get(host_iid) {
+            for child in host.children() {
+                if !listeners.contains(child) {
+                    listeners.push(child.clone());
+                }
+            }
+        }
+    }
+    if !listeners.contains(moving_iid) {
+        listeners.push(moving_iid.clone());
+    }
+    // Early-out: skip if no listener declared the handler.
+    let has_zc_handler = |iid: &InstanceId| {
+        state
+            .card_pool
+            .get(iid)
+            .is_some_and(|inst| inst.card().handlers.contains_key(&EventName::OnZoneChange))
+    };
+    if !listeners.iter().any(&has_zc_handler) {
+        return;
+    }
+    for listener in &listeners {
+        let _ = fire_zone_change(lua, state, oracle, listener, moving_iid, from, to);
+    }
+}
+
+/// Fire `OnZoneChange` on a single listener. Handler signature is
+/// `function(game, self, moving, from, to)`. Silent no-op if the
+/// listener has no handler. Mirror of `fire_with_partner`.
+#[allow(unused_must_use)]
+pub(crate) fn fire_zone_change(
+    lua: &Lua,
+    state: &mut GameState,
+    oracle: &mut dyn ChoiceOracle,
+    self_iid: &InstanceId,
+    moving_iid: &InstanceId,
+    from: &str,
+    to: &str,
+) -> std::result::Result<(), ChoicePending> {
+    let event = EventName::OnZoneChange;
+    let Some(inst) = state.card_pool.get(self_iid) else {
+        return Ok(());
+    };
+    let Some(handler) = inst.card().handlers.get(&event).cloned() else {
+        return Ok(());
+    };
+    let owner = inst.owner;
+    let card_id = inst.card().id.clone();
+
+    let state_cell = RefCell::new(&mut *state);
+    let oracle_cell = RefCell::new(&mut *oracle);
+    let from_owned = from.to_string();
+    let to_owned = to.to_string();
+    let result: Result<()> = lua.scope(|scope| {
+        let game = build_game_table!(lua, scope, state_cell, oracle_cell, owner);
+        let self_table = build_self_table(lua, &state_cell.borrow(), self_iid)?;
+        let moving_table = build_self_table(lua, &state_cell.borrow(), moving_iid)?;
+        handler.call::<()>((game, self_table, moving_table, from_owned, to_owned))?;
+        Ok(())
+    });
+
+    match result {
+        Ok(()) => credit_fire(state, event, owner),
+        Err(e) => {
+            if let Some(pending) = pending_from_mlua_error(&e) {
+                return Err(pending);
+            }
+            let event_key = event.lua_key();
+            crate::error::emit_region(
+                crate::error::Severity::Error,
+                "lua-handler",
+                event_key,
+                format!("Lua {event_key} handler for {card_id} failed"),
+                mlua_error_chain_why(&e),
+            );
+            eprintln!("[lua] {event_key} handler for {card_id} failed: {e}");
+        }
+    }
+    drain_deferred_events(lua, state, oracle).map(|_| ())
+}
+
 #[cfg(test)]
 mod suppress_tests {
     use super::*;
@@ -1898,9 +2177,10 @@ mod suppress_tests {
     use crate::game::test_helpers::deck_of;
     use rand::SeedableRng;
 
-    /// Install an on_die handler that draws a card for the source's
+    /// Install an OnPlay handler that draws a card for the source's
     /// owner. Used to detect whether fire_self_only ran (hand grew) or
-    /// was skipped (hand unchanged).
+    /// was skipped (hand unchanged). OnPlay is picked over the deleted
+    /// OnDie because it shares the same `(game, self)` shape.
     fn install_draw_handler(lua: &Lua, state: &mut GameState, iid: &InstanceId) {
         let handler: mlua::Function = lua
             .load("return function(game, self) game.draw(self.owner, 1) end")
@@ -1912,7 +2192,7 @@ mod suppress_tests {
             .unwrap()
             .card_mut()
             .handlers
-            .insert(EventName::OnDie, handler);
+            .insert(EventName::OnPlay, handler);
     }
 
     fn make_suppressor_static() -> StaticDef {
@@ -2002,10 +2282,20 @@ mod suppress_tests {
         // Simulate the prior ETB: victim is in chamber's attached list.
         s.add_attached(&chamber_iid, &victim_iid);
 
-        // Fire on_die directly on the chamber (no oracle prompts needed).
+        // Move the chamber Board → Graveyard through the sanctioned path;
+        // the broadcast fires on_zone_change on the chamber itself, which
+        // now carries the death branch (from == "board", to == "graveyard").
         let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
-        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &chamber_iid)
-            .expect("RandomOracle answers locally, no Pending expected");
+        let mut ctx = crate::game::EventContext::new(&lua, &mut oracle);
+        s.move_card_or_emit(
+            &chamber_iid,
+            PlayerId::A,
+            Zone::Board,
+            Zone::Graveyard,
+            "chamber-death-test",
+            Some(&mut ctx),
+        )
+        .expect("chamber Board → Graveyard");
 
         assert!(
             s.pending_main_phase_returns.contains(&victim_iid),
@@ -2027,8 +2317,9 @@ mod suppress_tests {
         let distractor_iid = s.a.hand[1].clone();
 
         // Replace chamber_iid's card with the loaded chamber Card. The
-        // chamber's on_enter_board handler is expected to pick a board
-        // creature (via game.choose_card) and game.attach(self, target).
+        // chamber's on_zone_change handler carries the ETB branch (to ==
+        // "board" AND host_of(self) is nil): pick a board creature via
+        // game.choose_card and game.attach(self, target).
         let chamber_cards =
             load_card(&lua, Path::new("cards/cryogenic-chamber.lua")).expect("load chamber");
         let chamber_card = chamber_cards
@@ -2040,17 +2331,27 @@ mod suppress_tests {
         // eligible targets.
         s.card_pool.get_mut(&victim_iid).unwrap().card_mut().kind = CardType::Creature;
         s.card_pool.get_mut(&distractor_iid).unwrap().card_mut().kind = CardType::Creature;
-        // Put chamber + creatures on board.
-        s.a.hand.retain(|i| i != &chamber_iid && i != &distractor_iid);
+        // Put creatures on board, then place the chamber via a HAND →
+        // BOARD move so on_zone_change fires with the ETB shape (from ==
+        // "hand", to == "board", moving.instance_id == self.instance_id,
+        // host_of(self) == nil).
+        s.a.hand.retain(|i| i != &distractor_iid);
         s.b.hand.retain(|i| i != &victim_iid);
-        s.a.board.push(chamber_iid.clone());
         s.a.board.push(distractor_iid.clone());
         s.b.board.push(victim_iid.clone());
 
         // Oracle picks the opponent's creature (victim).
         let mut oracle = ScriptedOracle::new(vec![ScriptedAnswer::Card(Some(victim_iid.clone()))]);
-        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnEnterBoard, &chamber_iid)
-            .expect("scripted oracle answers locally, no Pending expected");
+        let mut ctx = crate::game::EventContext::new(&lua, &mut oracle);
+        s.move_card_or_emit(
+            &chamber_iid,
+            PlayerId::A,
+            Zone::Hand,
+            Zone::Board,
+            "chamber-etb-test",
+            Some(&mut ctx),
+        )
+        .expect("chamber Hand → Board");
 
         let chamber_inst = s.card_pool.get(&chamber_iid).unwrap();
         assert!(
@@ -2080,7 +2381,7 @@ mod suppress_tests {
         // the hand by 1 (the draw inside the handler).
         let hand_before = s.a.hand.len();
         let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
-        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &host)
+        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnPlay, &host)
             .expect("RandomOracle answers locally, no Pending expected");
         assert_eq!(s.a.hand.len(), hand_before + 1, "baseline: handler must fire and draw");
 
@@ -2088,7 +2389,7 @@ mod suppress_tests {
         s.add_attached(&host, &mutation);
         let hand_with_suppressor = s.a.hand.len();
         let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
-        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnDie, &host)
+        fire_self_only(&lua, &mut s, &mut oracle, EventName::OnPlay, &host)
             .expect("RandomOracle answers locally, no Pending expected");
         assert_eq!(
             s.a.hand.len(),
@@ -2174,7 +2475,7 @@ mod lua_yield_pending_tests {
             .unwrap()
             .card_mut()
             .handlers
-            .insert(EventName::OnDie, handler);
+            .insert(EventName::OnPlay, handler);
     }
 
     /// Build a fresh state with a host (A-side) that has a
@@ -2201,7 +2502,7 @@ mod lua_yield_pending_tests {
 
         // Empty replay → oracle returns ChoicePending on the first
         // choose_card call inside the handler.
-        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnDie, &host);
+        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnPlay, &host);
 
         match result {
             Err(ChoicePending::Card(req)) => {
@@ -2230,7 +2531,7 @@ mod lua_yield_pending_tests {
             HumanReplayOracle::new(RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0)), Some(crate::game::PlayerId::A));
         oracle.reset_replay(vec![ScriptedAnswer::Card(Some(target.clone()))]);
 
-        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnDie, &host);
+        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnPlay, &host);
         assert!(result.is_ok(), "handler must complete when answer is replayed: {result:?}");
         assert_eq!(
             state.card_pool[&target].damage, 1.0,
@@ -2259,12 +2560,12 @@ mod lua_yield_pending_tests {
             .unwrap()
             .card_mut()
             .handlers
-            .insert(EventName::OnDie, handler);
+            .insert(EventName::OnPlay, handler);
 
         let mut oracle =
             HumanReplayOracle::new(RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0)), Some(crate::game::PlayerId::A));
 
-        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnDie, &host);
+        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnPlay, &host);
         match result {
             Err(ChoicePending::Confirm { asker, prompt }) => {
                 assert_eq!(asker, crate::game::PlayerId::A);
@@ -2464,7 +2765,7 @@ mod mlua_chain_walker_tests {
             .unwrap()
             .card_mut()
             .handlers
-            .insert(EventName::OnDie, handler);
+            .insert(EventName::OnPlay, handler);
 
         let mut oracle = RandomOracle::new(rand::rngs::StdRng::seed_from_u64(0));
         // Fire the handler. fire_self_only catches the runtime error,
@@ -2472,7 +2773,7 @@ mod mlua_chain_walker_tests {
         // The function returns Ok(()) (the handler failure does NOT
         // propagate as a ChoicePending) so we don't care about the
         // return value here — we care about the error bus.
-        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnDie, &host_iid);
+        let result = fire_self_only(&lua, &mut state, &mut oracle, EventName::OnPlay, &host_iid);
         assert!(
             result.is_ok(),
             "fire_self_only must Ok-and-emit on a non-Pending Lua error; got {result:?}",
@@ -2489,8 +2790,8 @@ mod mlua_chain_walker_tests {
         let e = &errors[0];
         assert_eq!(e.severity, crate::error::Severity::Error);
         assert_eq!(e.context.surface, "lua-handler");
-        // event_key for OnDie is "on_die" per EventName::lua_key().
-        assert_eq!(e.context.region.as_deref(), Some("on_die"));
+        // event_key for OnPlay is "on_play" per EventName::lua_key().
+        assert_eq!(e.context.region.as_deref(), Some("on_play"));
         // The card-id is empty in this synthetic state (deck_of doesn't
         // populate a real card id on the cloned instance) but the
         // important assertion is on the inner Lua message: the `why`

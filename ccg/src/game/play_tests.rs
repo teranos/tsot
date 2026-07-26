@@ -1759,8 +1759,10 @@ fn draw_two_instant_plays_from_graveyard_cost_and_draws() {
     assert!(s.a.graveyard.contains(&instant_iid));
     assert!(!s.a.board.contains(&instant_iid));
     assert_eq!(s.event_fires[&crate::card::EventName::OnPlay], [1, 0]);
-    // on_enter_board does NOT fire for instants.
-    assert!(!s.event_fires.contains_key(&crate::card::EventName::OnEnterBoard));
+    // Non-board-placed casts route to GRAVEYARD, so any on_zone_change
+    // watcher on BOARD does observe that arrival — but we don't assert
+    // the counter here because it's tangential to the payment / exile
+    // mechanics being tested.
 }
 
 #[test]
@@ -1796,19 +1798,26 @@ fn goblin_scribe_draws_a_card_on_enter_board() {
     assert_eq!(s.a.hand.len(), hand_before);
     assert_eq!(s.a.deck.len(), deck_before - 1);
     assert!(s.a.board.contains(&creature));
-    assert_eq!(
-        s.event_fires[&crate::card::EventName::OnEnterBoard],
-        [1, 0]
-    );
+    // goblin-scribe now filters on_zone_change for the ETB case; the
+    // draw firing is the observable proof.
+    assert!(s.event_fires
+        .get(&crate::card::EventName::OnZoneChange)
+        .is_some_and(|[a, _]| *a >= 1));
 }
 
 #[test]
 fn on_enter_board_handler_fires_after_card_on_board() {
+    // Post-fold: the "ETB" trigger is on_zone_change filtered to
+    // (moving.instance_id == self.instance_id, to == "board",
+    // host_of(self) is nil). The observable outcome is identical.
     let registry = registry_with_fixture(
         "on_enter_board",
         r#"return {
             id = "fire-on-enter",
-            on_enter_board = function(game, self)
+            on_zone_change = function(game, self, moving, from, to)
+                if moving.instance_id ~= self.instance_id then return end
+                if to ~= "board" then return end
+                if game.host_of(self.instance_id) then return end
                 _G.fire_on_enter_count = (_G.fire_on_enter_count or 0) + 1
             end,
         }"#,
@@ -1848,10 +1857,9 @@ fn on_enter_board_handler_fires_after_card_on_board() {
         .unwrap();
     assert_eq!(count, 1);
     assert!(s.a.board.contains(&creature));
-    assert_eq!(
-        s.event_fires[&crate::card::EventName::OnEnterBoard],
-        [1, 0]
-    );
+    assert!(s.event_fires
+        .get(&crate::card::EventName::OnZoneChange)
+        .is_some_and(|[a, _]| *a >= 1));
 }
 
 #[test]
@@ -3221,7 +3229,7 @@ fn lua_damage_to_player_mills_n_from_their_deck_to_exile() {
     let exile_before = s.player(pid_b).exile.len();
     // Drive through the Lua-API entry point (not just set_damage)
     // by emulating the binding's call shape.
-    let res = crate::game::lua_api::do_damage(&mut s, "b", 3.0);
+    let res = crate::game::lua_api::do_damage(&mut s, "b", 3.0, None);
     assert!(res.is_ok());
     assert_eq!(
         s.player(pid_b).deck.len(),

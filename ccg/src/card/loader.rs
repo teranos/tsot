@@ -183,7 +183,7 @@ fn read_activated(t: &Table) -> mlua::Result<Vec<ActivatedAbility>> {
     Ok(out)
 }
 
-fn read_handlers(t: &Table) -> mlua::Result<BTreeMap<EventName, Function>> {
+fn read_handlers(lua: &Lua, t: &Table) -> mlua::Result<BTreeMap<EventName, Function>> {
     let mut out = BTreeMap::new();
     for ev in EventName::ALL {
         match t.get::<Value>(ev.lua_key())? {
@@ -199,6 +199,9 @@ fn read_handlers(t: &Table) -> mlua::Result<BTreeMap<EventName, Function>> {
             }
         }
     }
+    // Loader-side sugar — see `card/sugar.rs`. New convenience keys
+    // live in that module.
+    super::sugar::apply(lua, t, &mut out)?;
     Ok(out)
 }
 
@@ -747,7 +750,7 @@ fn read_condition(c: &Table) -> mlua::Result<StaticCondition> {
 /// Parse a single Lua table into a `Card`. Handles every field except
 /// `variants` (which lives at the file level — see `load_card`). Reused
 /// by both the base-card path and the per-variant merged-table path.
-fn parse_card_table(table: &Table) -> mlua::Result<Card> {
+fn parse_card_table(lua: &Lua, table: &Table) -> mlua::Result<Card> {
     let id: String = table.get("id")?;
     let name = table.get::<Option<String>>("name")?.unwrap_or_default();
     // `symbols` accepts both forms:
@@ -905,7 +908,7 @@ fn parse_card_table(table: &Table) -> mlua::Result<Card> {
     let cost = read_cost(table)?;
     let stats = read_stats(table)?;
     let static_def = read_static(table)?;
-    let handlers = read_handlers(table)?;
+    let handlers = read_handlers(lua, table)?;
     let activated = read_activated(table)?;
     let gy_hand_substitute = table
         .get::<Option<bool>>("gy_hand_substitute")?
@@ -985,7 +988,7 @@ fn load_card_from_source(lua: &Lua, source: &str, chunk_name: &str) -> mlua::Res
         }
     };
 
-    let base = parse_card_table(&table)?;
+    let base = parse_card_table(lua, &table)?;
     let base_id = base.id.clone();
 
     let variants_table: Option<Table> = table.get("variants")?;
@@ -1021,7 +1024,7 @@ fn load_card_from_source(lua: &Lua, source: &str, chunk_name: &str) -> mlua::Res
             // through the base_pairs copy is the wrong one to keep.
             let variant_id = format!("{base_id}-{key}");
             merged.set("id", variant_id.clone())?;
-            let mut variant = parse_card_table(&merged)?;
+            let mut variant = parse_card_table(lua, &merged)?;
             variant.is_variant = true;
             variant.variant_of = Some(base_id.clone());
             out.push(variant);
@@ -1200,7 +1203,7 @@ mod tests {
             Value::Table(t) => t,
             _ => panic!("expected table"),
         };
-        read_handlers(&table).unwrap()
+        read_handlers(lua, &table).unwrap()
     }
 
     #[test]
@@ -1233,14 +1236,14 @@ mod tests {
     fn non_function_handler_value_errors() {
         let lua = Lua::new();
         let value: Value = lua
-            .load(r#"return { id = "x", on_die = 5 }"#)
+            .load(r#"return { id = "x", on_play = 5 }"#)
             .eval()
             .unwrap();
         let table = match value {
             Value::Table(t) => t,
             _ => panic!(),
         };
-        assert!(read_handlers(&table).is_err());
+        assert!(read_handlers(&lua, &table).is_err());
     }
 
     #[test]
@@ -1254,7 +1257,7 @@ mod tests {
             &card_path,
             r#"return {
                 id = "test-handler",
-                on_die = function(game, self) return "fired" end,
+                on_play = function(game, self) return "fired" end,
             }"#,
         )
         .unwrap();
@@ -1265,7 +1268,7 @@ mod tests {
             .iter()
             .find(|c| c.id == "test-handler")
             .unwrap();
-        let handler = card.handlers.get(&EventName::OnDie).unwrap();
+        let handler = card.handlers.get(&EventName::OnPlay).unwrap();
         let result: String = handler.call((Value::Nil, Value::Nil)).unwrap();
         assert_eq!(result, "fired");
 

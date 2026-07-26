@@ -14,7 +14,12 @@ return {
     "T: draw a card, then discard a card.",
     "when this card is attached as a cost to an azure card, that creature gets +1/+1.",
   },
+  on_enter_board = function(game, self)
+    -- ETB proper: enters tapped.
+    game.tap(self.instance_id)
+  end,
   on_attached_as_cost = function(game, self, partner)
+    -- Attached as HAND payment (P.6): +1/+1 on matching-color host.
     local p = game.card(partner.instance_id)
     if not p or not p.colors then return end
     for _, col in ipairs(p.colors) do
@@ -23,9 +28,6 @@ return {
         return
       end
     end
-  end,
-  on_enter_board = function(game, self)
-    game.tap(self.instance_id)
   end,
   activated = {
     {

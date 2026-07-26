@@ -13,8 +13,10 @@ use crate::game::context::EventContext;
 use crate::game::lua_api::fire_self_only;
 use crate::game::test_helpers::*;
 
-fn fixture_registry() -> crate::card::CardRegistry {
-    let tmp = std::env::temp_dir().join("tsot_fixture_delayed_probe");
+fn fixture_registry(test_name: &str) -> crate::card::CardRegistry {
+    // Per-test tempdir so parallel `cargo test` runs don't race on the
+    // shared "delayed_probe" dir (mkdir → clean → write → load).
+    let tmp = std::env::temp_dir().join(format!("tsot_fixture_delayed_probe_{test_name}"));
     std::fs::create_dir_all(&tmp).unwrap();
     if let Ok(rd) = std::fs::read_dir(&tmp) {
         for e in rd.flatten() {
@@ -25,7 +27,10 @@ fn fixture_registry() -> crate::card::CardRegistry {
         tmp.join("delayed-probe.lua"),
         r#"return {
             id = "delayed-probe",
-            on_enter_board = function(game, self)
+            on_zone_change = function(game, self, moving, from, to)
+                if moving.instance_id ~= self.instance_id then return end
+                if to ~= "board" then return end
+                if game.host_of(self.instance_id) then return end
                 game.schedule_next_turn(self.instance_id)
             end,
             on_delayed_trigger = function(game, self)
@@ -53,13 +58,31 @@ fn probe_on_board(s: &mut GameState, registry: &crate::card::CardRegistry) -> In
 
 #[test]
 fn schedule_next_turn_registers_a_delayed_trigger_for_the_owner() {
-    let registry = fixture_registry();
+    let registry = fixture_registry("schedule_registers");
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
-    let iid = probe_on_board(&mut s, &registry);
+    // Post-fold: the ETB successor is on_zone_change filtered to a
+    // Hand → Board move. Set the card's handlers, keep it in HAND,
+    // then drive the move — the broadcast fires the handler, which
+    // schedules the delayed trigger.
+    let card = registry.cards().iter().find(|c| c.id == "delayed-probe").unwrap().clone();
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card_mut().handlers = card.handlers.clone();
+        inst.card_mut().id = card.id.clone();
+    }
 
     let mut oracle = ScriptedOracle::new(vec![]);
-    fire_self_only(registry.lua(), &mut s, &mut oracle, EventName::OnEnterBoard, &iid)
-        .expect("etb answers locally");
+    let mut ctx = EventContext::new(registry.lua(), &mut oracle);
+    s.move_card_or_emit(
+        &iid,
+        PlayerId::A,
+        Zone::Hand,
+        Zone::Board,
+        "delayed-trigger-etb",
+        Some(&mut ctx),
+    )
+    .expect("Hand → Board move");
 
     assert_eq!(s.delayed_triggers.len(), 1, "one delayed trigger registered");
     let t = &s.delayed_triggers[0];
@@ -69,7 +92,7 @@ fn schedule_next_turn_registers_a_delayed_trigger_for_the_owner() {
 
 #[test]
 fn delayed_trigger_fires_at_the_scheduling_players_next_turn() {
-    let registry = fixture_registry();
+    let registry = fixture_registry("fires_next_turn");
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let iid = probe_on_board(&mut s, &registry);
     s.delayed_triggers.push(crate::game::DelayedTrigger { fire_for: PlayerId::A, iid: iid.clone() });
@@ -91,7 +114,7 @@ fn delayed_trigger_fires_at_the_scheduling_players_next_turn() {
 
 #[test]
 fn delayed_trigger_does_not_fire_on_the_opponents_turn() {
-    let registry = fixture_registry();
+    let registry = fixture_registry("no_fire_opponent");
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let iid = probe_on_board(&mut s, &registry);
     s.delayed_triggers.push(crate::game::DelayedTrigger { fire_for: PlayerId::A, iid });
@@ -153,7 +176,7 @@ fn rollback_restores_a_fired_delayed_trigger_and_the_whole_state() {
     // rollback can't put it back. This asserts the ENTIRE state (not a
     // hand-picked subset) round-trips through a journaled turn advance
     // that fires — and removes — a delayed trigger.
-    let registry = fixture_registry();
+    let registry = fixture_registry("rollback_restores");
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
     let iid = probe_on_board(&mut s, &registry);
     // Schedule it before opening a journal — this is the pre-rollout

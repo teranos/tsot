@@ -23,9 +23,10 @@ return {
     modifier = {x = 0, y = -2, subtypes = {"zombie"}},
   },
   on_die = function(game, self)
-    -- Fires on the mutation when its host dies (host → GRAVEYARD per
-    -- P.4, attached → EXILE per P.8). Tutor a zombie from this
-    -- controller's deck to hand. Optional via choose_card.
+    -- PRION is a mutation fused into the host's sleeve (Z.7). When the
+    -- host dies (BOARD → GRAVEYARD), same_sleeve moves with it per P.29,
+    -- so on_die fires on the host's death move.
+    -- Tutor a zombie from this controller's deck to hand.
     local zombies = {}
     for _, iid in ipairs(game.zones(self.controller).deck) do
       local c = game.card(iid)

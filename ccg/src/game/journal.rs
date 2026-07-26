@@ -85,6 +85,10 @@ pub enum JournalEntry {
         was: bool,
         now: bool,
     },
+    SetGraveyardAddedThisTurn {
+        was: u32,
+        now: u32,
+    },
     /// P.35: per-player Symbol-cast cap flag. `player_idx` is 0 (A) or
     /// 1 (B) — matching `GameState::symbol_cast_this_turn`'s indexing.
     SetSymbolCastThisTurn {
@@ -380,6 +384,9 @@ fn apply_inverse(state: &mut GameState, entry: JournalEntry) {
         JournalEntry::SetCreatureAttackedThisTurn { was, .. } => {
             state.creature_attacked_this_turn = was;
         }
+        JournalEntry::SetGraveyardAddedThisTurn { was, .. } => {
+            state.graveyard_added_this_turn = was;
+        }
         JournalEntry::SetSymbolCastThisTurn { player_idx, was, .. } => {
             state.symbol_cast_this_turn[player_idx] = was;
         }
@@ -562,6 +569,9 @@ fn apply_forward(state: &mut GameState, entry: JournalEntry) {
         }
         JournalEntry::SetCreatureAttackedThisTurn { now, .. } => {
             state.creature_attacked_this_turn = now;
+        }
+        JournalEntry::SetGraveyardAddedThisTurn { now, .. } => {
+            state.graveyard_added_this_turn = now;
         }
         JournalEntry::SetSymbolCastThisTurn { player_idx, now, .. } => {
             state.symbol_cast_this_turn[player_idx] = now;

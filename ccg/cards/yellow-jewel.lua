@@ -15,6 +15,9 @@ return {
     "T: draw a card, then discard a card.",
     "when this card is attached as a cost to a yellow card, that creature gets +1/+1.",
   },
+  on_enter_board = function(game, self)
+    game.tap(self.instance_id)
+  end,
   on_attached_as_cost = function(game, self, partner)
     local p = game.card(partner.instance_id)
     if not p or not p.colors then return end
@@ -24,9 +27,6 @@ return {
         return
       end
     end
-  end,
-  on_enter_board = function(game, self)
-    game.tap(self.instance_id)
   end,
   activated = {
     {

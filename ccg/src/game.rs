@@ -42,6 +42,12 @@ mod death_replacement_tests;
 #[cfg(test)]
 mod delayed_trigger_tests;
 
+#[cfg(test)]
+mod on_zone_change_tests;
+
+#[cfg(test)]
+mod rebuke_tests;
+
 pub use combat::{CombatError, CombatOutcome};
 pub use context::EventContext;
 pub use journal::{Journal, JournalEntry};

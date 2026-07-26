@@ -33,11 +33,20 @@ fn window_cleaner_on_board(s: &mut GameState, lua: &mlua::Lua) -> InstanceId {
     host
 }
 
+/// Same as `window_cleaner_on_board` but leaves the card in HAND —
+/// the caller drives the HAND → BOARD move so on_zone_change (the
+/// ETB successor) fires.
+fn window_cleaner_in_hand(s: &mut GameState, lua: &mlua::Lua) -> InstanceId {
+    let host = s.a.hand[0].clone();
+    s.card_pool.get_mut(&host).unwrap().content = Some(window_cleaner(lua));
+    host
+}
+
 #[test]
 fn window_cleaner_etb_attaches_two_cardless_sleeves() {
     let lua = mlua::Lua::new();
     let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
-    let host = window_cleaner_on_board(&mut s, &lua);
+    let host = window_cleaner_in_hand(&mut s, &lua);
 
     // Two cardless sleeves scattered in the deck for the ETB to find.
     let d0 = s.a.deck[3].clone();
@@ -46,9 +55,18 @@ fn window_cleaner_etb_attaches_two_cardless_sleeves() {
         s.card_pool.get_mut(c).unwrap().content = None;
     }
 
+    // HAND → BOARD move broadcasts on_zone_change (the ETB successor).
     let mut oracle = ScriptedOracle::new(vec![]);
-    fire_self_only(&lua, &mut s, &mut oracle, EventName::OnEnterBoard, &host)
-        .expect("ETB answers locally");
+    let mut ctx = crate::game::EventContext::new(&lua, &mut oracle);
+    s.move_card_or_emit(
+        &host,
+        PlayerId::A,
+        Zone::Hand,
+        Zone::Board,
+        "window-cleaner-etb-test",
+        Some(&mut ctx),
+    )
+    .expect("window-cleaner Hand → Board");
 
     let attached = &s.card_pool.get(&host).unwrap().attached;
     assert_eq!(attached.len(), 2, "ETB attaches exactly 2 cardless sleeves");
@@ -74,7 +92,7 @@ fn window_cleaner_on_tap_moves_a_cardless_to_gy_and_draws() {
     for c in [&c0, &c1] {
         s.card_pool.get_mut(c).unwrap().content = None;
     }
-    let attached = s.attach_cardless_from_deck(&host, PlayerId::A, 2);
+    let attached = s.attach_cardless_from_deck(&host, PlayerId::A, 2, None);
     assert_eq!(attached, 2, "precondition: two cardless sleeves attached");
 
     let gy_before = s.a.graveyard.len();
@@ -108,7 +126,7 @@ fn window_cleaner_on_tap_declined_does_nothing() {
     for c in [&c0, &c1] {
         s.card_pool.get_mut(c).unwrap().content = None;
     }
-    s.attach_cardless_from_deck(&host, PlayerId::A, 2);
+    s.attach_cardless_from_deck(&host, PlayerId::A, 2, None);
 
     let gy_before = s.a.graveyard.len();
     let hand_before = s.a.hand.len();
