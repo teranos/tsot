@@ -22,6 +22,7 @@ pub mod input;
 pub mod isosurface;
 pub mod jukebox;
 pub mod map;
+pub mod minimap;
 pub mod music;
 pub mod net;
 pub mod obs;
