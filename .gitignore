@@ -52,3 +52,16 @@ ccg/gen_art/
 
 # Image assets used by gen_art (third-party icons, etc.)
 ccg/assets/icons/
+
+# Claude Code local session state — per-user, never committed.
+.claude/
+
+# Makefile targets tee test/clippy output to logs so long jobs stay
+# tailable; the logs are per-run artifacts, not source.
+ccg/test.log
+ccg/clippy.log
+ccg/check.log
+ccg/build.log
+
+# `nix build` output symlink — regenerated on every build.
+game/result
