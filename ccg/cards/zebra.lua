@@ -16,12 +16,8 @@ return {
     "If this card gets attached as a cost to a black or white card, you may reveal it and draw a card.",
   },
   stats = {x = 2, y = 2},
-  on_zone_change = function(game, self, moving, from, to)
-    if moving.instance_id ~= self.instance_id then return end
-    if from ~= "hand" or to ~= "board" then return end
-    local host_iid = game.host_of(self.instance_id)
-    if not host_iid then return end
-    local p = game.card(host_iid)
+  on_attached_as_cost = function(game, self, partner)
+    local p = game.card(partner.instance_id)
     if not p or not p.colors then return end
     local matches = false
     for _, col in ipairs(p.colors) do

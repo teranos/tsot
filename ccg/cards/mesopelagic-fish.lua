@@ -29,9 +29,7 @@ return {
     "when this creature dies, you may return a non-creature card from your graveyard to your hand",
   },
   stats = {x = 1, y = 1},
-  on_zone_change = function(game, self, moving, from, to)
-    if moving.instance_id ~= self.instance_id then return end
-    if from ~= "board" or to ~= "graveyard" then return end
+  on_die = function(game, self)
     -- Build the pool BEFORE the may-confirm so we only prompt when there's
     -- actually something to recur. This is the pattern all "may" cards
     -- should follow — the oracle can't read the prompt string to decide

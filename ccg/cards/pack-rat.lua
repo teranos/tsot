@@ -28,9 +28,7 @@ return {
 		"can't block cats.",
 		"when this creature dies, return all rat cards attached to this creature or to another creature you control to your hand.",
 	},
-	on_zone_change = function(game, self, moving, from, to)
-		if moving.instance_id ~= self.instance_id then return end
-		if from ~= "board" or to ~= "graveyard" then return end
+	on_die = function(game, self)
 		local seen = {}
 		local to_return = {}
 

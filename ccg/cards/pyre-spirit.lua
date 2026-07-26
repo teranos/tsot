@@ -25,9 +25,7 @@ return {
     "when this creature dies, if the attached card was red, deal 4 damage to any target.",
   },
   stats = {x = 2, y = 3},
-  on_zone_change = function(game, self, moving, from, to)
-    if moving.instance_id ~= self.instance_id then return end
-    if from ~= "board" or to ~= "graveyard" then return end
+  on_die = function(game, self)
     if #self.attached == 0 then return end
     -- 1 hand cost = exactly 1 attached payment card at index 1.
     local attached_iid = self.attached[1]

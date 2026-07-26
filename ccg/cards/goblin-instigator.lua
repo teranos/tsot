@@ -15,10 +15,7 @@ return {
     "when this creature enters the board, destroy target non-purple non-goblin creature.",
   },
   stats = {x = 1, y = 1},
-  on_zone_change = function(game, self, moving, from, to)
-    if moving.instance_id ~= self.instance_id then return end
-    if to ~= "board" then return end
-    if game.host_of(self.instance_id) then return end
+  on_enter_board = function(game, self)
     -- TODO(cast-validate): the "control a goblin" precondition isn't
     -- enforced at cast time yet — the cost gets paid even when no
     -- goblin is in play. Pending a Card.cast_validate hook. For now,

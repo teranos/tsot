@@ -17,32 +17,33 @@ return {
 	},
 	stats = { x = 0.5, y = 3 },
 
-	on_zone_change = function(game, self, moving, from, to)
-		-- Self ETB: look at opponent's top 2 and reorder.
-		if moving.instance_id == self.instance_id and to == "board" and not game.host_of(self.instance_id) then
-			local opp = game.opponent(self.owner)
-			local deck = game.zones(opp).deck
-			if not deck or #deck < 2 then
-				return
-			end
-			local a = deck[1]
-			local b = deck[2]
-			local ca = game.card(a)
-			local cb = game.card(b)
-			if ca and cb then
-				game.print("Top 2: " .. ca.id .. ", " .. cb.id)
-			end
-			local pick = game.choose_card({ a, b }, { prompt = "choose card to put on top" })
-			if pick == a then
-				game.move_to_deck_top(b)
-				game.move_to_deck_top(a)
-			else
-				game.move_to_deck_top(a)
-				game.move_to_deck_top(b)
-			end
+	on_enter_board = function(game, self)
+		-- Look at opponent's top 2 and reorder.
+		local opp = game.opponent(self.owner)
+		local deck = game.zones(opp).deck
+		if not deck or #deck < 2 then
 			return
 		end
-		-- Watcher: any glow card leaves the board → draw.
+		local a = deck[1]
+		local b = deck[2]
+		local ca = game.card(a)
+		local cb = game.card(b)
+		if ca and cb then
+			game.print("Top 2: " .. ca.id .. ", " .. cb.id)
+		end
+		local pick = game.choose_card({ a, b }, { prompt = "choose card to put on top" })
+		if pick == a then
+			game.move_to_deck_top(b)
+			game.move_to_deck_top(a)
+		else
+			game.move_to_deck_top(a)
+			game.move_to_deck_top(b)
+		end
+	end,
+	on_zone_change = function(game, self, moving, from, to)
+		-- Watcher: any glow card leaves the board → draw. Not restricted to
+		-- creature or to graveyard destination, so it's a genuine custom
+		-- on_zone_change beyond what on_creature_dies covers.
 		if from ~= "board" then
 			return
 		end

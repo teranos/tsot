@@ -21,10 +21,7 @@ return {
     "when this creature enters the board, you may discard a card. if you do, this creature enters with a +1/+1 counter.",
   },
   stats = {x = 0, y = 0},
-  on_zone_change = function(game, self, moving, from, to)
-    if moving.instance_id ~= self.instance_id then return end
-    if to ~= "board" then return end
-    if game.host_of(self.instance_id) then return end
+  on_enter_board = function(game, self)
     local hand = game.zones(self.owner).hand
     if #hand == 0 then return end
     if not game.confirm("discard a card for +1/+1 on Eager Goblin?") then

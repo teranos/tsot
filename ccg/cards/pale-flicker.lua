@@ -15,10 +15,7 @@ return {
 	},
 	stats = { x = 3, y = 4 },
 
-	on_zone_change = function(game, self, moving, from, to)
-		if moving.instance_id ~= self.instance_id then return end
-		if to ~= "board" then return end
-		if game.host_of(self.instance_id) then return end
+	on_enter_board = function(game, self)
 		local pool = {}
 		for _, iid in ipairs(game.zones(self.controller).board) do
 			if iid ~= self.instance_id then

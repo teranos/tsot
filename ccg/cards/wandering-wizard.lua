@@ -44,9 +44,7 @@ return {
     modifier = {keyword = "flying"},
     condition = {kind = "owner_graveyard_non_creatures", min = 4},
   },
-  on_zone_change = function(game, self, moving, from, to)
-    if moving.instance_id ~= self.instance_id then return end
-    if from ~= "board" or to ~= "graveyard" then return end
+  on_die = function(game, self)
     game.draw(self.owner, 1)
   end,
 }
