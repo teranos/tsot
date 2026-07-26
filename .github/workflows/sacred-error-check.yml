@@ -56,6 +56,12 @@ jobs:
       # violations), commit the new counts; the job passes.
       - name: Count + compare silent-drop patterns
         run: |
+          # `**` recurses through nested directories only when globstar is
+          # on. Bash-in-GHA-shell does NOT default to it, so without this
+          # opt-in `ccg/src/**/*.rs` collapses to `ccg/src/*/*.rs` and
+          # nested modules (ccg/src/game/**, ccg/src/sim/**, etc.) go
+          # uncounted. Silent regression risk. Turn it on.
+          shopt -s globstar
           mkdir -p .github/sacred-error-baseline
 
           # Patterns to track. Each is (label, glob, ripgrep-pattern).
