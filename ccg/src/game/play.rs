@@ -894,7 +894,7 @@ impl GameState {
         // P.8: cascade attached → EXILE for each sacrificed card, after
         // on_die handlers had their chance to read self.attached.
         for sid in &sac_ids {
-            self.exile_remaining_attached(sid);
+            self.exile_remaining_attached(sid, ctx.as_deref_mut());
         }
 
         // RULES P.33: the cast card itself leaves HAND at cast time. It
@@ -1207,6 +1207,17 @@ impl GameState {
                 self.set_face_down(&aid, false);
                 self.add_to_zone(&aid, player, Zone::Exile);
                 self.bump_action("attached_payment_exile", player);
+                // Attached (on BOARD via host) → EXILE. Fire the broadcast.
+                if let Some(c) = ctx.as_deref_mut() {
+                    lua_api::broadcast_zone_change(
+                        c.lua,
+                        self,
+                        c.oracle(),
+                        &aid,
+                        "board",
+                        Zone::Exile.as_str(),
+                    );
+                }
             }
             self.add_to_zone(instance, player, Zone::Exile);
             if let Some(c) = ctx.as_mut() {
@@ -1238,6 +1249,18 @@ impl GameState {
                 );
                 self.add_attached(instance, hid);
                 self.set_face_down(hid, true);
+                // P.6 attach = HAND → board (under host). Fire the broadcast
+                // so on_zone_change watchers observe the payment's transition.
+                if let Some(c) = ctx.as_deref_mut() {
+                    lua_api::broadcast_zone_change(
+                        c.lua,
+                        self,
+                        c.oracle(),
+                        hid,
+                        Zone::Hand.as_str(),
+                        "board",
+                    );
+                }
             } else {
                 let _ = self.move_card_or_emit(
                     hid,
@@ -1568,7 +1591,7 @@ impl GameState {
                         }
                     }
                     // P.8: cascade attached → EXILE after on_die fires.
-                    self.exile_remaining_attached(&iid);
+                    self.exile_remaining_attached(&iid, ctx.as_deref_mut());
                 }
             }
         }

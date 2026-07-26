@@ -448,3 +448,131 @@ fn move_card_or_emit_fires_on_zone_change_when_ctx_supplied() {
     assert_eq!(to, "graveyard");
     assert_eq!(moving_iid, mover);
 }
+
+/// Attach coverage. A cardless sleeve in HAND attaches to a host on BOARD
+/// (via `attach_cardless_from_hand` — Angry Glassblower's on-attack). Per
+/// user ontology, attached sleeves sit on BOARD, so the transition is
+/// HAND → BOARD and `on_zone_change` watchers must observe it.
+#[test]
+fn attach_from_hand_fires_on_zone_change_hand_to_board() {
+    let registry = registry_with_fixture(
+        "attach_watcher",
+        r#"return {
+            id = "attach-watcher",
+            on_zone_change = function(game, self, moving, from, to)
+                _G.aw_count = (_G.aw_count or 0) + 1
+                _G.aw_from = from
+                _G.aw_to = to
+                _G.aw_moving_iid = moving.instance_id
+            end,
+        }"#,
+    );
+    let fixture = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "attach-watcher")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+
+    let watcher = s.a.hand[0].clone();
+    s.a.hand.retain(|x| x != &watcher);
+    s.a.board.push(watcher.clone());
+    {
+        let inst = s.card_pool.get_mut(&watcher).unwrap();
+        inst.card_mut().handlers = fixture.handlers.clone();
+        inst.card_mut().id = fixture.id.clone();
+    }
+
+    let host = s.a.hand[0].clone();
+    s.a.hand.retain(|x| x != &host);
+    s.a.board.push(host.clone());
+
+    let payment = s.a.hand[0].clone();
+    s.card_pool.get_mut(&payment).unwrap().content = None;
+
+    let lua = registry.lua();
+    lua.globals().set("aw_count", 0_i32).unwrap();
+    lua.globals().set("aw_from", "").unwrap();
+    lua.globals().set("aw_to", "").unwrap();
+    lua.globals().set("aw_moving_iid", "").unwrap();
+
+    let mut oracle = crate::choice::ScriptedOracle::new(vec![]);
+    let mut ctx = crate::game::EventContext::new(lua, &mut oracle);
+    let n = s.attach_cardless_from_hand(&host, PlayerId::A, 1, Some(&mut ctx));
+    assert_eq!(n, 1);
+
+    let count: i32 = lua.globals().get("aw_count").unwrap();
+    let from: String = lua.globals().get("aw_from").unwrap();
+    let to: String = lua.globals().get("aw_to").unwrap();
+    let moving_iid: String = lua.globals().get("aw_moving_iid").unwrap();
+
+    assert_eq!(count, 1, "attach must broadcast on_zone_change");
+    assert_eq!(from, "hand");
+    assert_eq!(to, "board");
+    assert_eq!(moving_iid, payment);
+}
+
+/// Detach coverage. P.8 cascade: when a host with attached cards is
+/// destroyed, those attached cards go to their own owners' EXILE. Under
+/// user ontology, attached sits on BOARD → so the cascade is BOARD → EXILE
+/// per attached, and every on_zone_change watcher must observe each move.
+#[test]
+fn p8_cascade_fires_on_zone_change_board_to_exile() {
+    let registry = registry_with_fixture(
+        "p8_watcher",
+        r#"return {
+            id = "p8-watcher",
+            on_zone_change = function(game, self, moving, from, to)
+                _G.p8_count = (_G.p8_count or 0) + 1
+                _G.p8_last_from = from
+                _G.p8_last_to = to
+            end,
+        }"#,
+    );
+    let fixture = registry
+        .cards()
+        .iter()
+        .find(|c| c.id == "p8-watcher")
+        .unwrap()
+        .clone();
+
+    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
+
+    let watcher = s.a.hand[0].clone();
+    s.a.hand.retain(|x| x != &watcher);
+    s.a.board.push(watcher.clone());
+    {
+        let inst = s.card_pool.get_mut(&watcher).unwrap();
+        inst.card_mut().handlers = fixture.handlers.clone();
+        inst.card_mut().id = fixture.id.clone();
+    }
+
+    let host = s.a.hand[0].clone();
+    s.a.hand.retain(|x| x != &host);
+    s.a.board.push(host.clone());
+
+    let att1 = s.a.hand[0].clone();
+    let att2 = s.a.hand[1].clone();
+    s.a.hand.retain(|x| x != &att1 && x != &att2);
+    s.add_attached(&host, &att1);
+    s.add_attached(&host, &att2);
+
+    let lua = registry.lua();
+    lua.globals().set("p8_count", 0_i32).unwrap();
+    lua.globals().set("p8_last_from", "").unwrap();
+    lua.globals().set("p8_last_to", "").unwrap();
+
+    let mut oracle = crate::choice::ScriptedOracle::new(vec![]);
+    let mut ctx = crate::game::EventContext::new(lua, &mut oracle);
+    s.exile_remaining_attached(&host, Some(&mut ctx));
+
+    let count: i32 = lua.globals().get("p8_count").unwrap();
+    let from: String = lua.globals().get("p8_last_from").unwrap();
+    let to: String = lua.globals().get("p8_last_to").unwrap();
+
+    assert_eq!(count, 2, "one broadcast per attached in the cascade");
+    assert_eq!(from, "board");
+    assert_eq!(to, "exile");
+}

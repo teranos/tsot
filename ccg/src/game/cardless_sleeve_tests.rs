@@ -332,7 +332,7 @@ fn attach_cardless_from_deck_finds_scattered_cardless_and_attaches_n() {
         make_cardless(&mut s, c);
     }
 
-    let n = s.attach_cardless_from_deck(&host, PlayerId::A, 2);
+    let n = s.attach_cardless_from_deck(&host, PlayerId::A, 2, None);
 
     assert_eq!(n, 2, "attaches up to 2 cardless sleeves");
     let attached = &s.card_pool.get(&host).unwrap().attached;
@@ -358,7 +358,7 @@ fn attach_cardless_from_hand_takes_empty_sleeves_out_of_hand() {
     make_cardless(&mut s, &h0);
     make_cardless(&mut s, &h1);
 
-    let n = s.attach_cardless_from_hand(&host, PlayerId::A, 1);
+    let n = s.attach_cardless_from_hand(&host, PlayerId::A, 1, None);
 
     assert_eq!(n, 1, "attaches one empty sleeve from hand");
     let attached = &s.card_pool.get(&host).unwrap().attached;

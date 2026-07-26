@@ -761,19 +761,29 @@ macro_rules! build_game_table {
         game.set(
             "move",
             $scope.create_function_mut(move |_, (iid, dest): (String, String)| {
-                // Snapshot the from-zone BEFORE the move so the broadcast
-                // gets the real `from` string. Attached-source moves
-                // return None here and skip the broadcast (see LUA.md
-                // Zone-change dispatch coverage caveat).
-                let from_zone = {
+                // Snapshot the from-string BEFORE the move so the broadcast
+                // uses the real origin. Attached-source moves get
+                // `from = "board"` — an attached sleeve sits on BOARD per
+                // ontology, so a detach-and-move to a non-board zone IS a
+                // board→dest transition.
+                let from_str: Option<&'static str> = {
                     let s = cell_move.borrow();
-                    s.card_pool
-                        .get(&iid)
-                        .map(|i| i.controller)
-                        .and_then(|c| find_zone_of(&s, c, &iid))
+                    if let Some(ctrl) =
+                        s.card_pool.get(&iid).map(|i| i.controller)
+                    {
+                        if let Some(z) = find_zone_of(&s, ctrl, &iid) {
+                            Some(z.as_str())
+                        } else if find_host_of_attached(&s, &iid).is_some() {
+                            Some("board")
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 };
                 do_move(&mut *cell_move.borrow_mut(), &iid, &dest)?;
-                if let Some(from) = from_zone {
+                if let Some(from) = from_str {
                     let to = parse_zone(&dest)?;
                     let mut s = cell_move.borrow_mut();
                     let mut o = cell_move_o.borrow_mut();
@@ -782,7 +792,7 @@ macro_rules! build_game_table {
                         &mut *s,
                         &mut **o,
                         &iid,
-                        from.as_str(),
+                        from,
                         to.as_str(),
                     );
                 }
@@ -797,12 +807,45 @@ macro_rules! build_game_table {
             "move_to",
             $scope.create_function_mut(
                 move |_, (iid, target_player, dest): (String, String, String)| {
+                    // Snapshot the from-string BEFORE the move (same shape as
+                    // game.move above): attached-source → `"board"`.
+                    let from_str: Option<&'static str> = {
+                        let s = cell_move_to.borrow();
+                        if let Some(inst) = s.card_pool.get(&iid) {
+                            let owner = inst.owner;
+                            let ctrl = inst.controller;
+                            if let Some(z) = find_zone_of(&s, owner, &iid) {
+                                Some(z.as_str())
+                            } else if let Some(z) = find_zone_of(&s, ctrl, &iid) {
+                                Some(z.as_str())
+                            } else if find_host_of_attached(&s, &iid).is_some() {
+                                Some("board")
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
                     let fire_etb = do_move_to(
                         &mut *cell_move_to.borrow_mut(),
                         &iid,
                         &target_player,
                         &dest,
                     )?;
+                    if let Some(from) = from_str {
+                        let to = parse_zone(&dest)?;
+                        let mut s = cell_move_to.borrow_mut();
+                        let mut o = cell_move_to_o.borrow_mut();
+                        broadcast_zone_change(
+                            move_to_lua,
+                            &mut *s,
+                            &mut **o,
+                            &iid,
+                            from,
+                            to.as_str(),
+                        );
+                    }
                     if fire_etb {
                         let mut s = cell_move_to.borrow_mut();
                         let mut o = cell_move_to_o.borrow_mut();
@@ -987,6 +1030,8 @@ macro_rules! build_game_table {
         // owner's deck (index 0 per V.1). Used by cantrips like Sprout
         // that pull from the bottom of the deck up to the top.
         let cell_mtd = &$cell;
+        let cell_mtd_o = &$oracle_cell;
+        let mtd_lua = $lua;
         game.set(
             "move_to_deck_top",
             $scope.create_function_mut(move |_, iid: String| -> Result<()> {
@@ -999,13 +1044,18 @@ macro_rules! build_game_table {
                 })?;
                 let owner = inst.owner;
                 let controller = inst.controller;
+                let from_str: &'static str;
                 if let Some(from) = find_zone_of(&s, owner, &iid) {
                     s.remove_from_zone(&iid_owned, owner, from);
+                    from_str = from.as_str();
                 } else if let Some(from) = find_zone_of(&s, controller, &iid) {
                     s.remove_from_zone(&iid_owned, controller, from);
+                    from_str = from.as_str();
                 } else if let Some(host) = find_host_of_attached(&s, &iid) {
                     s.remove_attached(&host, &iid_owned);
                     s.set_face_down(&iid_owned, false);
+                    // attached lives on BOARD per ontology.
+                    from_str = "board";
                 } else {
                     return Err(mlua::Error::runtime(format!(
                         "game.move_to_deck_top: card not in any zone: {iid}"
@@ -1013,6 +1063,15 @@ macro_rules! build_game_table {
                 }
                 s.add_to_zone_top(&iid_owned, owner, Zone::Deck);
                 s.bump_action("move_to_deck_top", owner);
+                let mut o = cell_mtd_o.borrow_mut();
+                broadcast_zone_change(
+                    mtd_lua,
+                    &mut *s,
+                    &mut **o,
+                    &iid_owned,
+                    from_str,
+                    Zone::Deck.as_str(),
+                );
                 Ok(())
             })?,
         )?;
@@ -1268,12 +1327,15 @@ macro_rules! build_game_table {
         // "mill to attached" triggers (MYC, ...). C.14 lifted: frame no
         // longer gates the attachment, so any top card is taken.
         let cell_afd = &$cell;
+        let cell_afd_o = &$oracle_cell;
+        let afd_lua = $lua;
         game.set(
             "attach_from_deck",
             $scope.create_function_mut(
                 move |_, (host, player, n): (String, String, i32)| -> Result<()> {
                     let pid = parse_pid(&player)?;
                     let mut s = cell_afd.borrow_mut();
+                    let mut o = cell_afd_o.borrow_mut();
                     if !s.card_pool.contains_key(&host) {
                         return Ok(());
                     }
@@ -1287,6 +1349,15 @@ macro_rules! build_game_table {
                         let _ = s.remove_from_zone(&top, pid, Zone::Deck);
                         s.add_attached(&host, &top);
                         s.set_face_down(&top, true);
+                        // DECK → board (under host). Fire on_zone_change.
+                        broadcast_zone_change(
+                            afd_lua,
+                            &mut *s,
+                            &mut **o,
+                            &top,
+                            Zone::Deck.as_str(),
+                            "board",
+                        );
                     }
                     Ok(())
                 },
@@ -1297,13 +1368,23 @@ macro_rules! build_game_table {
         // `player`'s DECK for up to n cardless sleeves (Z.8) and attach
         // each to `host` face-down (Z.6). Window Cleaner's ETB search.
         let cell_acd = &$cell;
+        let cell_acd_o = &$oracle_cell;
+        let acd_lua = $lua;
         game.set(
             "attach_cardless_from_deck",
             $scope.create_function_mut(
                 move |_, (host, player, n): (String, String, i32)| -> Result<()> {
                     let pid = parse_pid(&player)?;
                     let mut s = cell_acd.borrow_mut();
-                    s.attach_cardless_from_deck(&host, pid, n.max(0) as usize);
+                    let mut o = cell_acd_o.borrow_mut();
+                    let mut ctx =
+                        crate::game::EventContext::new(acd_lua, &mut **o);
+                    s.attach_cardless_from_deck(
+                        &host,
+                        pid,
+                        n.max(0) as usize,
+                        Some(&mut ctx),
+                    );
                     Ok(())
                 },
             )?,
@@ -1314,13 +1395,23 @@ macro_rules! build_game_table {
         // to `host` face-down. Angry Glassblower's on-attack: the empty
         // sleeve it attaches comes out of hand, not the deck.
         let cell_ach = &$cell;
+        let cell_ach_o = &$oracle_cell;
+        let ach_lua = $lua;
         game.set(
             "attach_cardless_from_hand",
             $scope.create_function_mut(
                 move |_, (host, player, n): (String, String, i32)| -> Result<()> {
                     let pid = parse_pid(&player)?;
                     let mut s = cell_ach.borrow_mut();
-                    s.attach_cardless_from_hand(&host, pid, n.max(0) as usize);
+                    let mut o = cell_ach_o.borrow_mut();
+                    let mut ctx =
+                        crate::game::EventContext::new(ach_lua, &mut **o);
+                    s.attach_cardless_from_hand(
+                        &host,
+                        pid,
+                        n.max(0) as usize,
+                        Some(&mut ctx),
+                    );
                     Ok(())
                 },
             )?,

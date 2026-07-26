@@ -148,7 +148,11 @@ impl GameState {
     ///
     /// Per-attached owner lookup: a stolen attachment still returns to
     /// its real owner's exile, not the host's owner's exile.
-    pub fn exile_remaining_attached(&mut self, host: &InstanceId) {
+    pub fn exile_remaining_attached(
+        &mut self,
+        host: &InstanceId,
+        mut ctx: Option<&mut EventContext<'_>>,
+    ) {
         let attached_snapshot: Vec<InstanceId> = self
             .card_pool
             .get(host)
@@ -167,6 +171,18 @@ impl GameState {
                 .map(|i| i.owner)
                 .unwrap_or_else(|| self.active_player);
             self.add_to_zone(aid, owner, Zone::Exile);
+            // Under user ontology, an attached sleeve is on BOARD; the
+            // P.8 cascade moves it BOARD → EXILE, so on_zone_change fires.
+            if let Some(c) = ctx.as_deref_mut() {
+                super::lua_api::broadcast_zone_change(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    aid,
+                    "board",
+                    Zone::Exile.as_str(),
+                );
+            }
         }
     }
 }

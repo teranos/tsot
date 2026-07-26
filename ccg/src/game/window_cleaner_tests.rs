@@ -74,7 +74,7 @@ fn window_cleaner_on_tap_moves_a_cardless_to_gy_and_draws() {
     for c in [&c0, &c1] {
         s.card_pool.get_mut(c).unwrap().content = None;
     }
-    let attached = s.attach_cardless_from_deck(&host, PlayerId::A, 2);
+    let attached = s.attach_cardless_from_deck(&host, PlayerId::A, 2, None);
     assert_eq!(attached, 2, "precondition: two cardless sleeves attached");
 
     let gy_before = s.a.graveyard.len();
@@ -108,7 +108,7 @@ fn window_cleaner_on_tap_declined_does_nothing() {
     for c in [&c0, &c1] {
         s.card_pool.get_mut(c).unwrap().content = None;
     }
-    s.attach_cardless_from_deck(&host, PlayerId::A, 2);
+    s.attach_cardless_from_deck(&host, PlayerId::A, 2, None);
 
     let gy_before = s.a.graveyard.len();
     let hand_before = s.a.hand.len();

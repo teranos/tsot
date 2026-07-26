@@ -36,7 +36,7 @@ fn p8_cascade_exiles_attached_payment_but_not_same_sleeve_card() {
     let (mut s, host, payment, sleeved) = host_with_payment_and_sleeve();
 
     // Host dies: P.8's cascade sweeps remaining `attached` cards to EXILE.
-    s.exile_remaining_attached(&host);
+    s.exile_remaining_attached(&host, None);
 
     // The ordinary payment is swept to its owner's EXILE (P.8).
     assert!(

@@ -1467,6 +1467,7 @@ impl GameState {
         host: &InstanceId,
         player: PlayerId,
         n: usize,
+        mut ctx: Option<&mut super::context::EventContext<'_>>,
     ) -> usize {
         if !self.card_pool.contains_key(host) {
             return 0;
@@ -1483,6 +1484,19 @@ impl GameState {
             let _ = self.remove_from_zone(iid, player, Zone::Deck);
             self.add_attached(host, iid);
             self.set_face_down(iid, true);
+            // Attach that crosses a zone (DECK → board-under-host) is a
+            // zone transition. Under user ontology attached sleeves sit
+            // on BOARD, so `to = "board"`.
+            if let Some(c) = ctx.as_deref_mut() {
+                super::lua_api::broadcast_zone_change(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    iid,
+                    Zone::Deck.as_str(),
+                    "board",
+                );
+            }
         }
         found.len()
     }
@@ -1498,6 +1512,7 @@ impl GameState {
         host: &InstanceId,
         player: PlayerId,
         n: usize,
+        mut ctx: Option<&mut super::context::EventContext<'_>>,
     ) -> usize {
         if !self.card_pool.contains_key(host) {
             return 0;
@@ -1514,6 +1529,16 @@ impl GameState {
             let _ = self.remove_from_zone(iid, player, Zone::Hand);
             self.add_attached(host, iid);
             self.set_face_down(iid, true);
+            if let Some(c) = ctx.as_deref_mut() {
+                super::lua_api::broadcast_zone_change(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    iid,
+                    Zone::Hand.as_str(),
+                    "board",
+                );
+            }
         }
         found.len()
     }
