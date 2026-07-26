@@ -1981,9 +1981,9 @@ pub(crate) fn fire_with_partner(
 
 /// Snapshot on-BOARD listeners + the moving card, then fire
 /// `OnZoneChange` on each. No exclusion — the moving card gets its own
-/// broadcast so self-move triggers work. Both zone-move sites — the
-/// Rust-side `GameState::move_card_and_fire` and the Lua-side
-/// `game.move` — call this after a successful zone mutation.
+/// broadcast so self-move triggers work. Called by
+/// `GameState::move_card_or_emit` (every engine move) and the Lua-side
+/// `game.move` binding after a successful zone mutation.
 pub(crate) fn broadcast_zone_change(
     lua: &Lua,
     state: &mut GameState,
@@ -1992,6 +1992,29 @@ pub(crate) fn broadcast_zone_change(
     from: &str,
     to: &str,
 ) {
+    // Fast-path: on_zone_change fires on every engine move, but most
+    // cards don't declare the handler (~4 in the corpus). Skip the
+    // listener-list build + per-listener fire dispatch when no BOARD
+    // card and the moving card itself have a handler — the slow-path
+    // loop below would be a no-op anyway. Recovers most of the ~2.5×
+    // suite slowdown the fold introduced.
+    let has_zc_handler = |iid: &InstanceId| {
+        state
+            .card_pool
+            .get(iid)
+            .is_some_and(|inst| inst.card().handlers.contains_key(&EventName::OnZoneChange))
+    };
+    let any_listener = state
+        .a
+        .board
+        .iter()
+        .chain(state.b.board.iter())
+        .any(&has_zc_handler)
+        || has_zc_handler(moving_iid);
+    if !any_listener {
+        return;
+    }
+
     let mut listeners: Vec<InstanceId> = Vec::new();
     for i in state.a.board.iter().chain(state.b.board.iter()) {
         if !listeners.contains(i) {

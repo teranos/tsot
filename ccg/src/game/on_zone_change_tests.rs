@@ -73,8 +73,15 @@ fn on_zone_change_fires_on_board_watchers() {
 
     let mut oracle = crate::choice::ScriptedOracle::new(vec![]);
     let mut ctx = crate::game::EventContext::new(lua, &mut oracle);
-    s.move_card_and_fire(&mover, PlayerId::A, Zone::Hand, Zone::Graveyard, &mut ctx)
-        .expect("move HAND → GRAVEYARD");
+    s.move_card_or_emit(
+        &mover,
+        PlayerId::A,
+        Zone::Hand,
+        Zone::Graveyard,
+        "test-watcher",
+        Some(&mut ctx),
+    )
+    .expect("move HAND → GRAVEYARD");
 
     let count: i32 = lua.globals().get("zc_count").unwrap();
     let from: String = lua.globals().get("zc_from").unwrap();
@@ -129,8 +136,15 @@ fn on_zone_change_fires_on_the_moving_card_itself() {
 
     let mut oracle = crate::choice::ScriptedOracle::new(vec![]);
     let mut ctx = crate::game::EventContext::new(lua, &mut oracle);
-    s.move_card_and_fire(&iid, PlayerId::A, Zone::Hand, Zone::Graveyard, &mut ctx)
-        .expect("move HAND → GRAVEYARD");
+    s.move_card_or_emit(
+        &iid,
+        PlayerId::A,
+        Zone::Hand,
+        Zone::Graveyard,
+        "test-self-observer",
+        Some(&mut ctx),
+    )
+    .expect("move HAND → GRAVEYARD");
 
     let count: i32 = lua.globals().get("self_count").unwrap();
     let from: String = lua.globals().get("self_from").unwrap();
@@ -183,8 +197,15 @@ fn moth_draws_when_glow_creature_moves_from_board_to_exile() {
 
     let mut oracle = crate::choice::ScriptedOracle::new(vec![]);
     let mut ctx = crate::game::EventContext::new(registry.lua(), &mut oracle);
-    s.move_card_and_fire(&glow_iid, PlayerId::A, Zone::Board, Zone::Exile, &mut ctx)
-        .expect("board → exile");
+    s.move_card_or_emit(
+        &glow_iid,
+        PlayerId::A,
+        Zone::Board,
+        Zone::Exile,
+        "test-moth-glow-exile",
+        Some(&mut ctx),
+    )
+    .expect("board → exile");
 
     assert_eq!(
         s.a.hand.len(),

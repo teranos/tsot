@@ -54,32 +54,6 @@ impl GameState {
         Ok(())
     }
 
-    /// Move a card between zones AND broadcast `OnZoneChange` to the
-    /// moving card + every card on BOARD (both players). No exclusion —
-    /// self-move triggers ("if you discard this card, draw two cards")
-    /// need the moving card to observe its own transition.
-    pub fn move_card_and_fire(
-        &mut self,
-        iid: &InstanceId,
-        side: PlayerId,
-        from: Zone,
-        to: Zone,
-        ctx: &mut super::EventContext<'_>,
-    ) -> Result<(), MoveError> {
-        self.move_card(iid, side, from, to)?;
-        let lua = ctx.lua;
-        let oracle = ctx.oracle();
-        super::lua_api::broadcast_zone_change(
-            lua,
-            self,
-            oracle,
-            iid,
-            from.as_str(),
-            to.as_str(),
-        );
-        Ok(())
-    }
-
     /// Sacred-error wrapper around [`move_card`]. Routes the `NotInZone`
     /// failure through the typed Error pipeline with a caller-supplied
     /// `region` tag (e.g. `"combat-mill"`, `"play-discard"`, `"upkeep-draw"`)
