@@ -28,7 +28,10 @@ return {
     "can't block cats.",
     "when this creature enters the board, you may reveal an attached card. if it is a rat, you may draw a card.",
   },
-  on_enter_board = function(game, self)
+  on_zone_change = function(game, self, moving, from, to)
+    if moving.instance_id ~= self.instance_id then return end
+    if to ~= "board" then return end
+    if game.host_of(self.instance_id) then return end
     if #self.attached == 0 then return end
     if not game.confirm("reveal the attached card?") then return end
     -- 1H+2M cost: only the hand payment attaches (mill goes to graveyard

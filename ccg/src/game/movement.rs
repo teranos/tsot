@@ -285,7 +285,7 @@ mod tests {
         s.set_summoning_sick(&iid, true);
         s.set_winner(Some(PlayerId::A), "test");
         s.bump_action("test", PlayerId::A);
-        s.bump_event_fire(crate::card::EventName::OnDie, PlayerId::B);
+        s.bump_event_fire(crate::card::EventName::OnZoneChange, PlayerId::B);
 
         let after_mutations = format!("{:?}", s);
         assert_ne!(snapshot, after_mutations, "mutations should have visible effect");

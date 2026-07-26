@@ -1233,7 +1233,7 @@ mod tests {
     fn non_function_handler_value_errors() {
         let lua = Lua::new();
         let value: Value = lua
-            .load(r#"return { id = "x", on_die = 5 }"#)
+            .load(r#"return { id = "x", on_play = 5 }"#)
             .eval()
             .unwrap();
         let table = match value {
@@ -1254,7 +1254,7 @@ mod tests {
             &card_path,
             r#"return {
                 id = "test-handler",
-                on_die = function(game, self) return "fired" end,
+                on_play = function(game, self) return "fired" end,
             }"#,
         )
         .unwrap();
@@ -1265,7 +1265,7 @@ mod tests {
             .iter()
             .find(|c| c.id == "test-handler")
             .unwrap();
-        let handler = card.handlers.get(&EventName::OnDie).unwrap();
+        let handler = card.handlers.get(&EventName::OnPlay).unwrap();
         let result: String = handler.call((Value::Nil, Value::Nil)).unwrap();
         assert_eq!(result, "fired");
 

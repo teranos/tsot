@@ -28,7 +28,9 @@ return {
     restrictions = {"cannot_attack", "cannot_be_cost_paid"},
   },
   stats = {x = 1, y = 2},
-  on_die = function(game, self)
+  on_zone_change = function(game, self, moving, from, to)
+    if moving.instance_id ~= self.instance_id then return end
+    if from ~= "board" or to ~= "graveyard" then return end
     if not game.confirm("return an insect from your graveyard?") then
       return
     end

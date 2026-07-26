@@ -22,10 +22,13 @@ return {
     affects = {scope = "attached_host"},
     modifier = {x = 0, y = -2, subtypes = {"zombie"}},
   },
-  on_die = function(game, self)
-    -- Fires on the mutation when its host dies (host → GRAVEYARD per
-    -- P.4, attached → EXILE per P.8). Tutor a zombie from this
-    -- controller's deck to hand. Optional via choose_card.
+  on_zone_change = function(game, self, moving, from, to)
+    -- PRION is a mutation fused into the host's sleeve (Z.7). When the
+    -- host dies (BOARD → GRAVEYARD), same_sleeve moves with it per P.29,
+    -- so moving.instance_id == self.instance_id on the host's death move.
+    -- Tutor a zombie from this controller's deck to hand.
+    if moving.instance_id ~= self.instance_id then return end
+    if from ~= "board" or to ~= "graveyard" then return end
     local zombies = {}
     for _, iid in ipairs(game.zones(self.controller).deck) do
       local c = game.card(iid)

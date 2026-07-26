@@ -7,17 +7,26 @@ How card abilities are authored, executed, and triggered.
 ## Shipped
 
 **Events** (`card::EventName`):
-`on_enter_board`, `on_die`, `on_would_die`, `on_attack`, `on_block`,
-`on_blocked_by`, `on_play`, `on_attached_as_cost`,
-`on_dealt_damage_to_player`, `on_turn_begin`, `on_creature_dies`,
-`on_zone_change`.
+`on_would_die`, `on_attack`, `on_block`, `on_blocked_by`, `on_play`,
+`on_dealt_damage_to_player`, `on_turn_begin`, `on_tapped`,
+`on_delayed_trigger`, `on_zone_change`.
 
 `on_would_die` opens the death-replacement window (RULES.md P.40).
 
-**Handler signature** — `function(game, self, partner?)`. `self` carries
-`{ instance_id, owner, controller, attached }`. `partner` is present
-on the two-card events (`on_blocked_by`, `on_block`,
-`on_creature_dies`, `on_attached_as_cost`).
+`on_zone_change` is the single unifying zone-transition event: broadcast
+to the moving card, every BOARD card, and every child (attached
+per Z.6 / same_sleeve per Z.7) of every BOARD card. Cards filter by
+`(from, to, moving.instance_id)` — filter templates for ETB
+(`to == "board"` + self + no host), death (`from == "board", to ==
+"graveyard"` + self), watcher-on-death (same from/to + other +
+`c.type == "creature"`), and pitch-attach (`from == "hand", to ==
+"board"` + self + `game.host_of(self)`) are documented alongside the
+card cycle they power.
+
+**Handler signature** — `function(game, self, partner?)` for the
+two-card events (`on_blocked_by`, `on_block`), `function(game, self)`
+for the self-only events. `on_zone_change` has its own shape:
+`function(game, self, moving, from, to)`.
 
 **Choice API.** `game.choose_card`, `game.confirm`, `game.choose_player`,
 `game.choose_int`. The wrapper raises `mlua::Error::external(ChoicePending)`;
@@ -80,9 +89,9 @@ can read what they shouldn't through `game.zones(opponent).hand`.
 `face_down` and a couple V-rule references exist in `lua_api.rs` but
 there's no uniform filter.
 
-**Deferred death cascade.** `game.damage` triggering `on_die`
-mid-damage-tick is still the call path; resolving deaths after all
-damage is dealt is still pending.
+**Deferred death cascade.** `game.damage` triggering the death-side
+`on_zone_change` mid-damage-tick is still the call path; resolving
+deaths after all damage is dealt is still pending.
 
 **Card author guide.** Walkthrough of the event taxonomy + `game` API
 through 5–10 example cards. None of the docs in this file substitute

@@ -851,8 +851,9 @@ impl GameState {
             self.bump_action("gy_hand_substitution", player);
         }
 
-        // P.16: SACRIFICE — move chosen BOARD cards to GRAVEYARD and fire
-        // on_die per card (matches combat's death-detection sequence).
+        // P.16: SACRIFICE — move chosen BOARD cards to GRAVEYARD. The
+        // move itself fires on_zone_change (BOARD → GRAVEYARD), so cards
+        // observe the death via that unified event.
         let sac_ids: Vec<InstanceId> = choices.sacrifice_ids.clone();
         for sid in &sac_ids {
             let _ = self.move_card_or_emit(
@@ -865,34 +866,8 @@ impl GameState {
             );
             self.bump_action("sacrificed_as_cost", player);
         }
-        if let Some(c) = ctx.as_mut() {
-            for sid in &sac_ids {
-                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnDie, sid)
-                    .map_err(PlayError::ChoicePending)?;
-                // OnCreatureDies broadcast to BOARD watchers (excludes
-                // the dying card — already moved to GRAVEYARD above).
-                let watchers: Vec<InstanceId> = self
-                    .a
-                    .board
-                    .iter()
-                    .chain(self.b.board.iter())
-                    .cloned()
-                    .collect();
-                for watcher in &watchers {
-                    lua_api::fire_with_partner(
-                        c.lua,
-                        self,
-                        c.oracle(),
-                        EventName::OnCreatureDies,
-                        watcher,
-                        sid,
-                    )
-                    .map_err(PlayError::ChoicePending)?;
-                }
-            }
-        }
         // P.8: cascade attached → EXILE for each sacrificed card, after
-        // on_die handlers had their chance to read self.attached.
+        // on_zone_change handlers had their chance to read self.attached.
         for sid in &sac_ids {
             self.exile_remaining_attached(sid, ctx.as_deref_mut());
         }
@@ -1331,48 +1306,52 @@ impl GameState {
                 self.set_symbol_cast_this_turn(player, true);
                 self.bump_action("symbol_played", player);
             }
+            // Cast landing on BOARD is a HAND → BOARD transition
+            // (via the transient stack per P.33). Broadcast on_zone_change
+            // so ETB-shaped handlers observe the arrival. The
+            // Hand→(stack)→Board path bypasses `move_card_or_emit`, so we
+            // fire the broadcast explicitly here.
+            if let Some(c) = ctx.as_deref_mut() {
+                lua_api::broadcast_zone_change(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    instance,
+                    Zone::Hand.as_str(),
+                    Zone::Board.as_str(),
+                );
+            }
         } else {
             // P.1 default destination: GRAVEYARD (spell convention,
             // typeless P.1, etc.). SelfExile rerouting is handled by
             // the early shortcut above and never reaches here.
             self.add_to_zone(instance, player, Zone::Graveyard);
-        }
-
-        // OnAttachedAsCost: BOARD-placed casts only. Fires per HAND
-        // payment with the payment card as `self` and the host as
-        // `partner`. Powers mantis-shrimp / zebra / pitch-synergy.
-        if is_board_placed {
-            for hid in &payments {
-                if let Some(c) = ctx.as_mut() {
-                    lua_api::fire_with_partner(
-                        c.lua,
-                        self,
-                        c.oracle(),
-                        EventName::OnAttachedAsCost,
-                        hid,
-                        instance,
-                    )
-                    .map_err(PlayError::ChoicePending)?;
-                }
+            // HAND → GRAVEYARD (via stack). Same reasoning as above.
+            if let Some(c) = ctx.as_deref_mut() {
+                lua_api::broadcast_zone_change(
+                    c.lua,
+                    self,
+                    c.oracle(),
+                    instance,
+                    Zone::Hand.as_str(),
+                    Zone::Graveyard.as_str(),
+                );
             }
         }
 
         // OnPlay: fires for every castable kind. The payment snapshot
         // was stashed on GameState by `play_card` before this resolver
         // ran, so handlers can read `game.payment_ids()` here.
+        //
+        // Zone-transition events (payment attach, cast landing on BOARD)
+        // fire via on_zone_change from the moves that produced them —
+        // the pitch-synergy cycle (mantis-shrimp / zebra / jewels) and
+        // ETB triggers all listen there now.
         if let Some(c) = ctx.as_mut() {
             lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnPlay, instance)
                 .map_err(PlayError::ChoicePending)?;
         }
         self.current_cast_payments = None;
-
-        // OnEnterBoard: BOARD-placed casts only.
-        if is_board_placed {
-            if let Some(c) = ctx.as_mut() {
-                lua_api::fire_self_only(c.lua, self, c.oracle(), EventName::OnEnterBoard, instance)
-                    .map_err(PlayError::ChoicePending)?;
-            }
-        }
 
         Ok(())
     }
@@ -1552,7 +1531,11 @@ impl GameState {
                     );
                 }
                 None => {
-                    // Normal death: BOARD → GRAVEYARD, then triggers + cascade.
+                    // Normal death: BOARD → GRAVEYARD. The move fires
+                    // on_zone_change (BOARD → GRAVEYARD) which subsumes the
+                    // former on_die (self-only, filtered by
+                    // `moving.instance_id == self.instance_id`) and
+                    // on_creature_dies (watchers, filtered by the opposite).
                     let _ = self.move_card_or_emit(
                         &iid,
                         owner,
@@ -1562,35 +1545,7 @@ impl GameState {
                         ctx.as_deref_mut(),
                     );
                     died.push(iid.clone());
-                    if let Some(c) = ctx.as_deref_mut() {
-                        lua_api::fire_self_only(
-                            c.lua,
-                            self,
-                            c.oracle(),
-                            EventName::OnDie,
-                            &iid,
-                        )?;
-                        // OnCreatureDies broadcast to BOARD watchers (the
-                        // dead card already left BOARD, so it's excluded).
-                        let watchers: Vec<InstanceId> = self
-                            .a
-                            .board
-                            .iter()
-                            .chain(self.b.board.iter())
-                            .cloned()
-                            .collect();
-                        for watcher in &watchers {
-                            lua_api::fire_with_partner(
-                                c.lua,
-                                self,
-                                c.oracle(),
-                                EventName::OnCreatureDies,
-                                watcher,
-                                &iid,
-                            )?;
-                        }
-                    }
-                    // P.8: cascade attached → EXILE after on_die fires.
+                    // P.8: cascade attached → EXILE after handlers ran.
                     self.exile_remaining_attached(&iid, ctx.as_deref_mut());
                 }
             }

@@ -27,7 +27,10 @@ fn fixture_registry(test_name: &str) -> crate::card::CardRegistry {
         tmp.join("delayed-probe.lua"),
         r#"return {
             id = "delayed-probe",
-            on_enter_board = function(game, self)
+            on_zone_change = function(game, self, moving, from, to)
+                if moving.instance_id ~= self.instance_id then return end
+                if to ~= "board" then return end
+                if game.host_of(self.instance_id) then return end
                 game.schedule_next_turn(self.instance_id)
             end,
             on_delayed_trigger = function(game, self)
@@ -57,11 +60,29 @@ fn probe_on_board(s: &mut GameState, registry: &crate::card::CardRegistry) -> In
 fn schedule_next_turn_registers_a_delayed_trigger_for_the_owner() {
     let registry = fixture_registry("schedule_registers");
     let mut s = GameState::new(deck_of(20, "a"), deck_of(20, "b"));
-    let iid = probe_on_board(&mut s, &registry);
+    // Post-fold: the ETB successor is on_zone_change filtered to a
+    // Hand → Board move. Set the card's handlers, keep it in HAND,
+    // then drive the move — the broadcast fires the handler, which
+    // schedules the delayed trigger.
+    let card = registry.cards().iter().find(|c| c.id == "delayed-probe").unwrap().clone();
+    let iid = s.a.hand[0].clone();
+    {
+        let inst = s.card_pool.get_mut(&iid).unwrap();
+        inst.card_mut().handlers = card.handlers.clone();
+        inst.card_mut().id = card.id.clone();
+    }
 
     let mut oracle = ScriptedOracle::new(vec![]);
-    fire_self_only(registry.lua(), &mut s, &mut oracle, EventName::OnEnterBoard, &iid)
-        .expect("etb answers locally");
+    let mut ctx = EventContext::new(registry.lua(), &mut oracle);
+    s.move_card_or_emit(
+        &iid,
+        PlayerId::A,
+        Zone::Hand,
+        Zone::Board,
+        "delayed-trigger-etb",
+        Some(&mut ctx),
+    )
+    .expect("Hand → Board move");
 
     assert_eq!(s.delayed_triggers.len(), 1, "one delayed trigger registered");
     let t = &s.delayed_triggers[0];

@@ -26,7 +26,10 @@ return {
       {source = "graveyard", amount = 1},
     },
   },
-  on_enter_board = function(game, self)
+  on_zone_change = function(game, self, moving, from, to)
+    if moving.instance_id ~= self.instance_id then return end
+    if to ~= "board" then return end
+    if game.host_of(self.instance_id) then return end
     local pay = game.payment_ids()
     local sac_iids = pay.sacrifice
     if sac_iids == nil or #sac_iids == 0 then return end

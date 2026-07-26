@@ -18,7 +18,10 @@ return {
 		"When this creature enters the board, return target creature to its owners hand.",
 	},
 	stats = { x = 0, y = 1 },
-	on_enter_board = function(game, self)
+	on_zone_change = function(game, self, moving, from, to)
+		if moving.instance_id ~= self.instance_id then return end
+		if to ~= "board" then return end
+		if game.host_of(self.instance_id) then return end
 		local opp = game.opponent(self.owner)
 		local pool = {}
 		for _, iid in ipairs(game.zones(opp).board) do

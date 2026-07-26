@@ -31,7 +31,10 @@ return {
     "when this creature enters the board, search your deck for 2 cardless sleeves and attach them to this card.",
     "when this creature becomes tapped, you may move an attached cardless sleeve to your graveyard and draw a card.",
   },
-  on_enter_board = function(game, self)
+  on_zone_change = function(game, self, moving, from, to)
+    if moving.instance_id ~= self.instance_id then return end
+    if to ~= "board" then return end
+    if game.host_of(self.instance_id) then return end
     -- Z.8 search: pull up to 2 cardless sleeves out of the deck and
     -- attach them face-down. No-op if the deck holds fewer than 2.
     game.attach_cardless_from_deck(self.instance_id, self.owner, 2)

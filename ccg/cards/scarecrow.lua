@@ -34,7 +34,10 @@ return {
     },
     restrictions = {"cannot_attack"},
   },
-  on_enter_board = function(game, self)
+  on_zone_change = function(game, self, moving, from, to)
+    if moving.instance_id ~= self.instance_id then return end
+    if to ~= "board" then return end
+    if game.host_of(self.instance_id) then return end
     -- Gather colors of cards attached to self.
     local attached_colors = {}
     for _, aid in ipairs(self.attached) do

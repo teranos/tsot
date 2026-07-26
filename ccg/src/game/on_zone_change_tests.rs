@@ -222,7 +222,6 @@ fn moth_draws_when_glow_creature_moves_from_board_to_exile() {
 #[test]
 fn moth_draws_when_flicker_exiles_a_glow_creature() {
     use crate::choice::{ScriptedAnswer, ScriptedOracle};
-    use crate::game::lua_api::fire_self_only;
 
     let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
     let moth = registry
@@ -261,11 +260,10 @@ fn moth_draws_when_flicker_exiles_a_glow_creature() {
         inst.card_mut().handlers = std::collections::BTreeMap::new();
     }
 
-    // Flicker on A's board (skip cost / play_card — cycle 2b only
-    // exercises the ETB's game.move firing on_zone_change).
+    // Flicker starts in HAND; the HAND → BOARD move is what fires
+    // on_zone_change (the ETB successor) on it, and Flicker's handler
+    // reads its filter and exiles the glow target.
     let flicker_iid = s.a.hand[0].clone();
-    s.a.hand.retain(|x| x != &flicker_iid);
-    s.a.board.push(flicker_iid.clone());
     {
         let inst = s.card_pool.get_mut(&flicker_iid).unwrap();
         inst.card_mut().handlers = flicker.handlers.clone();
@@ -273,19 +271,24 @@ fn moth_draws_when_flicker_exiles_a_glow_creature() {
         inst.card_mut().face = flicker.face.clone();
     }
 
-    let hand_before = s.a.hand.len();
+    // hand_before EXCLUDES the flicker (about to be moved out of hand);
+    // the moth's draw will bring one card back into hand, so hand_after
+    // should equal hand_before.
+    let hand_before = s.a.hand.len() - 1;
 
     // Script the flicker-target choice.
     let mut oracle =
         ScriptedOracle::new(vec![ScriptedAnswer::Card(Some(target_iid.clone()))]);
-    fire_self_only(
-        registry.lua(),
-        &mut s,
-        &mut oracle,
-        EventName::OnEnterBoard,
+    let mut ctx = crate::game::EventContext::new(registry.lua(), &mut oracle);
+    s.move_card_or_emit(
         &flicker_iid,
+        PlayerId::A,
+        Zone::Hand,
+        Zone::Board,
+        "flicker-etb",
+        Some(&mut ctx),
     )
-    .expect("flicker ETB");
+    .expect("flicker Hand → Board");
 
     assert!(
         s.a.exile.contains(&target_iid),
@@ -305,7 +308,6 @@ fn moth_draws_when_flicker_exiles_a_glow_creature() {
 #[test]
 fn turritopsis_returns_to_board_when_milled_from_deck() {
     use crate::choice::ScriptedOracle;
-    use crate::game::lua_api::fire_self_only;
 
     let registry = crate::card::CardRegistry::load(std::path::Path::new("cards")).unwrap();
     let turritopsis = registry
@@ -331,33 +333,42 @@ fn turritopsis_returns_to_board_when_milled_from_deck() {
         inst.card_mut().subtypes = turritopsis.subtypes.clone();
     }
 
-    // A fixture "miller" on A's board whose on_enter_board handler
-    // calls game.mill on A. Firing OnEnterBoard on it triggers the
-    // mill — exercising the game.mill path end-to-end.
+    // A fixture "miller" — its on_zone_change handler (filtered to
+    // self ETB) calls game.mill on A. Driving a Hand → Board move on
+    // the miller triggers the mill — exercising the game.mill path
+    // end-to-end (mill then broadcasts on_zone_change on the milled
+    // card, which is what Turritopsis observes).
     let miller_iid = s.a.hand[0].clone();
-    s.a.hand.retain(|x| x != &miller_iid);
-    s.a.board.push(miller_iid.clone());
     {
         let handler: mlua::Function = registry
             .lua()
-            .load("return function(game, self) game.mill(self.owner, 1, \"graveyard\") end")
+            .load(
+                r#"return function(game, self, moving, from, to)
+                    if moving.instance_id ~= self.instance_id then return end
+                    if to ~= "board" then return end
+                    if game.host_of(self.instance_id) then return end
+                    game.mill(self.owner, 1, "graveyard")
+                end"#,
+            )
             .eval()
             .unwrap();
         let inst = s.card_pool.get_mut(&miller_iid).unwrap();
         inst.card_mut()
             .handlers
-            .insert(EventName::OnEnterBoard, handler);
+            .insert(EventName::OnZoneChange, handler);
     }
 
     let mut oracle = ScriptedOracle::new(vec![]);
-    fire_self_only(
-        registry.lua(),
-        &mut s,
-        &mut oracle,
-        EventName::OnEnterBoard,
+    let mut ctx = crate::game::EventContext::new(registry.lua(), &mut oracle);
+    s.move_card_or_emit(
         &miller_iid,
+        PlayerId::A,
+        Zone::Hand,
+        Zone::Board,
+        "miller-etb",
+        Some(&mut ctx),
     )
-    .expect("miller ETB");
+    .expect("miller Hand → Board");
 
     assert!(
         s.a.board.contains(&turr_iid),

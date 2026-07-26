@@ -253,6 +253,8 @@ impl GameState {
             }
         }
         for sid in &choices.sacrifice_ids {
+            // BOARD → GRAVEYARD move broadcasts on_zone_change (the
+            // successor of the former on_die self-only event).
             let _ = self.move_card_or_emit(
                 sid,
                 controller,
@@ -262,18 +264,6 @@ impl GameState {
                 ctx.as_deref_mut(),
             );
             self.bump_action("sacrificed_as_cost", controller);
-        }
-        if let Some(c) = ctx.as_deref_mut() {
-            for sid in &choices.sacrifice_ids {
-                lua_api::fire_self_only(
-                    c.lua,
-                    self,
-                    c.oracle(),
-                    crate::card::EventName::OnDie,
-                    sid,
-                )
-                .map_err(ActivateError::ChoicePending)?;
-            }
         }
 
         // Telemetry: bump per-controller action count so HTML reports

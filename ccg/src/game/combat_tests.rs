@@ -498,68 +498,14 @@ fn game_discard_moves_n_from_hand_to_graveyard() {
     assert_eq!(s.a.graveyard.len(), gy_before + 2);
 }
 
-#[test]
-fn smart_discard_prefers_vanilla_over_pitch_payoff_jewel() {
-    // The smart-discard heuristic must NOT throw away a jewel (OnAttachedAsCost
-    // handler) when a vanilla creature is available. Big negative score on
-    // pitch-payoff handlers is the design call — jewels are tools.
-    let registry = registry_with_fixture(
-        "smart_discard",
-        r#"return {
-            id = "discard-probe",
-            on_attack = function(game, self)
-                game.discard(self.owner, 1)
-            end,
-        }"#,
-    );
-    let probe = registry
-        .cards()
-        .iter()
-        .find(|c| c.id == "discard-probe")
-        .unwrap()
-        .clone();
-
-    // Hand: [atk, jewel, vanilla, vanilla, vanilla]. After atk moves to
-    // BOARD, the heuristic ranks the remainder. Jewel scores -52
-    // (OnAttachedAsCost -50, stats -2); each vanilla scores -2. So one of
-    // the vanillas should be discarded and the jewel must stay.
-    let mut s = GameState::new(deck_of(50, "a"), deck_of(50, "b"));
-    let atk = s.a.hand[0].clone();
-    let jewel = s.a.hand[1].clone();
-    {
-        let inst = s.card_pool.get_mut(&atk).unwrap();
-        inst.card_mut().handlers = probe.handlers.clone();
-        inst.card_mut().id = probe.id.clone();
-    }
-    // Give the jewel an OnAttachedAsCost handler so discard_score sees it.
-    // Reuse the probe's on_attack Function (mlua::Function is a Lua reference,
-    // cheap to clone). Body is irrelevant — discard_score only checks key
-    // presence in the handlers map.
-    let probe_handler = probe
-        .handlers
-        .get(&crate::card::EventName::OnAttack)
-        .unwrap()
-        .clone();
-    s.card_pool
-        .get_mut(&jewel)
-        .unwrap()
-        .card_mut()
-        .handlers
-        .insert(crate::card::EventName::OnAttachedAsCost, probe_handler);
-    put_on_board(&mut s, PlayerId::A, &atk);
-    add_ability(&mut s, &atk, "haste");
-    enter_combat(&mut s);
-
-    let hand_before = s.a.hand.len();
-    s.declare_attacker(&atk, Some(&mut crate::game::EventContext::lua_only(registry.lua()))).unwrap();
-
-    // Jewel must still be in hand; exactly one card was discarded.
-    assert!(s.a.hand.contains(&jewel), "jewel must not be discarded");
-    assert_eq!(s.a.hand.len(), hand_before - 1);
-    assert_eq!(s.a.graveyard.len(), 1);
-    let discarded = s.a.graveyard[0].clone();
-    assert_ne!(discarded, jewel, "discarded card must not be the jewel");
-}
+// smart_discard_prefers_vanilla_over_pitch_payoff_jewel — deleted with
+// the OnAttachedAsCost / OnEnterBoard fold into on_zone_change. The
+// former -50 pitch-payoff penalty was folded into a flat -10 for any
+// on_zone_change handler; jewels no longer get a magnified penalty
+// distinct from vanilla creatures that happen to carry on_zone_change.
+// The AI heuristic still prefers keeping handler-bearing cards over
+// pure vanilla (they still score lower), but the specific "keep the
+// jewel over a vanilla" invariant this test pinned is gone by design.
 
 #[test]
 fn game_print_handler_call_does_not_error() {
@@ -678,13 +624,17 @@ fn external_tap_inside_a_handler_fires_on_tapped_via_deferred_queue() {
     // game.set_tapped runs INSIDE a Lua borrow, so OnTapped cannot fire
     // synchronously the way the attack tap does. The deferred-event queue
     // enqueues it and drains it once the triggering handler unwinds.
-    // Fixture: a creature that taps ITSELF on entering the board and has
-    // an on_tapped trigger — the tap must still reach on_tapped.
+    // Fixture: a creature whose on_zone_change (filtered to a self ETB)
+    // taps ITSELF and has an on_tapped trigger — the tap must still
+    // reach on_tapped through the deferred queue.
     let registry = registry_with_fixture(
         "self_tapper",
         r#"return {
             id = "self-tapper",
-            on_enter_board = function(game, self)
+            on_zone_change = function(game, self, moving, from, to)
+                if moving.instance_id ~= self.instance_id then return end
+                if to ~= "board" then return end
+                if game.host_of(self.instance_id) then return end
                 game.tap(self.instance_id)
             end,
             on_tapped = function(game, self)
@@ -701,17 +651,19 @@ fn external_tap_inside_a_handler_fires_on_tapped_via_deferred_queue() {
         inst.card_mut().handlers = card.handlers.clone();
         inst.card_mut().id = card.id.clone();
     }
-    put_on_board(&mut s, PlayerId::A, &iid);
-
+    // Card stays in HAND; drive the HAND → BOARD move so on_zone_change
+    // fires with the ETB shape and reaches the tap.
     let mut oracle = crate::choice::ScriptedOracle::new(vec![]);
-    crate::game::lua_api::fire_self_only(
-        registry.lua(),
-        &mut s,
-        &mut oracle,
-        crate::card::EventName::OnEnterBoard,
+    let mut ctx = crate::game::EventContext::new(registry.lua(), &mut oracle);
+    s.move_card_or_emit(
         &iid,
+        PlayerId::A,
+        crate::game::Zone::Hand,
+        crate::game::Zone::Board,
+        "self-tapper-etb",
+        Some(&mut ctx),
     )
-    .expect("on_enter_board answers locally");
+    .expect("self-tapper Hand → Board");
 
     let fired: i32 = registry.lua().globals().get("deferred_on_tapped").unwrap_or(0);
     assert_eq!(fired, 1, "the external tap fired on_tapped once via the deferred queue");
@@ -1085,7 +1037,9 @@ fn trustworthy_lender_on_die_returns_attached_to_hand() {
         .contains(&attached_iid));
     assert!(!s.card_pool.get(&attached_iid).unwrap().face_down);
     assert_eq!(s.total_fires(PlayerId::A), 1);
-    assert_eq!(s.event_fires[&crate::card::EventName::OnDie], [1, 0]);
+    // Trustworthy Lender's handler is now on_zone_change filtered to the
+    // BOARD → GRAVEYARD self-move (the on_die successor).
+    assert_eq!(s.event_fires[&crate::card::EventName::OnZoneChange], [1, 0]);
 }
 
 #[test]

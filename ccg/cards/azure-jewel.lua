@@ -14,18 +14,25 @@ return {
     "T: draw a card, then discard a card.",
     "when this card is attached as a cost to an azure card, that creature gets +1/+1.",
   },
-  on_attached_as_cost = function(game, self, partner)
-    local p = game.card(partner.instance_id)
-    if not p or not p.colors then return end
-    for _, col in ipairs(p.colors) do
-      if col == "azure" then
-        game.add_modifier(partner.instance_id, "stat_boost", 1, 1)
-        return
+  on_zone_change = function(game, self, moving, from, to)
+    if moving.instance_id ~= self.instance_id then return end
+    if to ~= "board" then return end
+    local host_iid = game.host_of(self.instance_id)
+    if host_iid then
+      -- Attached as HAND payment (P.6): +1/+1 on matching-color host.
+      if from ~= "hand" then return end
+      local p = game.card(host_iid)
+      if not p or not p.colors then return end
+      for _, col in ipairs(p.colors) do
+        if col == "azure" then
+          game.add_modifier(host_iid, "stat_boost", 1, 1)
+          return
+        end
       end
+    else
+      -- ETB proper: enters tapped.
+      game.tap(self.instance_id)
     end
-  end,
-  on_enter_board = function(game, self)
-    game.tap(self.instance_id)
   end,
   activated = {
     {
