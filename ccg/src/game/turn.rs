@@ -47,6 +47,7 @@ impl GameState {
                 self.clear_eot_modifiers();
                 self.set_creature_attacked_this_turn(false);
                 self.clear_all_attacked_this_turn();
+                self.set_graveyard_added_this_turn(0);
                 // P.35: clear the per-player Symbol-cast cap so each
                 // player gets one cast per their own turn. Both
                 // players reset; only the active player can ever set

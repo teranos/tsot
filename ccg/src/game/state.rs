@@ -434,6 +434,13 @@ pub struct GameState {
     /// only has one attacking side per turn anyway.
     #[serde(default)]
     pub creature_attacked_this_turn: bool,
+    /// Count of cards moved into ANY player's GRAVEYARD during the current
+    /// turn. Bumped by `move_card_or_emit` on any `to == Zone::Graveyard`
+    /// transition. Reset to 0 on End → Untap. Read by Rebuke and any card
+    /// whose effect scales with graveyard activity this turn ("for every
+    /// card that was put into a graveyard this turn, X").
+    #[serde(default)]
+    pub graveyard_added_this_turn: u32,
     /// P.35: per-player flag, set true when that player casts a Symbol
     /// (`CardType::Symbol`) successfully. Reset to false for both
     /// players on End → Untap transition. Indexed by player (0 = A,
@@ -560,6 +567,7 @@ impl GameState {
             replay_journal: None,
             priority: None,
             creature_attacked_this_turn: false,
+            graveyard_added_this_turn: 0,
             symbol_cast_this_turn: [false; 2],
             current_activation_x: None,
             current_cast_payments: None,
@@ -768,6 +776,20 @@ impl GameState {
         self.creature_attacked_this_turn = now;
         if let Some(j) = self.active_journal() {
             j.push(super::JournalEntry::SetCreatureAttackedThisTurn { was, now });
+        }
+    }
+
+    /// Journaled setter for the per-turn graveyard-add counter. Used by
+    /// `move_card_or_emit` to bump on any `to == Zone::Graveyard` move, and
+    /// by the turn loop to reset to 0 on End → Untap.
+    pub fn set_graveyard_added_this_turn(&mut self, now: u32) {
+        let was = self.graveyard_added_this_turn;
+        if was == now {
+            return;
+        }
+        self.graveyard_added_this_turn = now;
+        if let Some(j) = self.active_journal() {
+            j.push(super::JournalEntry::SetGraveyardAddedThisTurn { was, now });
         }
     }
 

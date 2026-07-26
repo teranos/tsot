@@ -932,6 +932,17 @@ macro_rules! build_game_table {
             })?,
         )?;
 
+        // game.graveyard_added_this_turn() → count of cards moved into ANY
+        // player's GRAVEYARD during the current turn. Reset on End → Untap.
+        // Rebuke reads this to scale its mill.
+        let cell_gyc = &$cell;
+        game.set(
+            "graveyard_added_this_turn",
+            $scope.create_function_mut(move |_, ()| -> Result<i32> {
+                Ok(cell_gyc.borrow().graveyard_added_this_turn as i32)
+            })?,
+        )?;
+
         // Counter-the-top: convenience for "counter the spell directly
         // underneath me." Used by counterspell.
         let cell_counter_top = &$cell;

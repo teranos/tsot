@@ -91,6 +91,13 @@ impl GameState {
             );
             return result;
         }
+        // Per-turn graveyard-add counter (Rebuke and any card scaling on
+        // "cards put into a graveyard this turn"). Global across both
+        // players; reset on End → Untap.
+        if to == Zone::Graveyard {
+            let n = self.graveyard_added_this_turn.saturating_add(1);
+            self.set_graveyard_added_this_turn(n);
+        }
         // Fold: broadcast on_zone_change whenever a caller has a Lua VM
         // available. `None` = caller genuinely has no VM (rollback replay,
         // sim setup, unit-test scaffolding) — broadcast is skipped there,
