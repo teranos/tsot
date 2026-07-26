@@ -29,6 +29,7 @@ pub mod persist;
 pub mod physics;
 pub mod remote_players;
 pub mod room;
+pub mod rts;
 pub mod scene;
 pub mod sfx;
 pub mod shaders;
