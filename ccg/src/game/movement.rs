@@ -51,6 +51,16 @@ impl GameState {
                 to_zone: to,
             });
         }
+        // Per-turn graveyard-add counter (Rebuke, ...). Lives at the
+        // primitive layer so every zone move — raw `move_card`,
+        // `move_card_or_emit`, or engine helpers that skip the sacred-
+        // error wrapper (`do_mill`, `do_move`) — bumps consistently.
+        // Rollback restores via journal state assignment, not by calling
+        // this method, so no double-count risk.
+        if to == Zone::Graveyard {
+            let n = self.graveyard_added_this_turn.saturating_add(1);
+            self.set_graveyard_added_this_turn(n);
+        }
         Ok(())
     }
 
@@ -90,13 +100,6 @@ impl GameState {
                 format!("{e:?}; player={side:?}"),
             );
             return result;
-        }
-        // Per-turn graveyard-add counter (Rebuke and any card scaling on
-        // "cards put into a graveyard this turn"). Global across both
-        // players; reset on End → Untap.
-        if to == Zone::Graveyard {
-            let n = self.graveyard_added_this_turn.saturating_add(1);
-            self.set_graveyard_added_this_turn(n);
         }
         // Fold: broadcast on_zone_change whenever a caller has a Lua VM
         // available. `None` = caller genuinely has no VM (rollback replay,

@@ -40,7 +40,8 @@ carries the affects-predicate + the effect list. 46 cards use it.
 (`attach`, `attach_from_deck`, `attached_of`, `host_of`), counter helpers
 (`counter`, `counter_top`, `chain`, `legal_counter_targets`,
 `set_intent`), timing helpers (`schedule_return_at_next_main`,
-`grant_extra_turn`, `creature_attacked_this_turn`, `set_summoning_sick`,
+`grant_extra_turn`, `creature_attacked_this_turn`,
+`graveyard_added_this_turn`, `set_summoning_sick`,
 `x_value`, `payment_ids`), and death-replacement primitives valid
 inside `on_would_die` (see RULES.md P.40):
 `prevent_death(self)`, `redirect_death(self, zone)`,
