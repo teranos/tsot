@@ -10,7 +10,7 @@ mod props;
 mod snapshot;
 mod terrain_surface;
 
-pub use camera::SceneCamera;
+pub use camera::{SceneCamera, ZOOM_MAX, ZOOM_MIN};
 pub use drape::{drape, drape_mesh};
 pub use emit::{
     snapshot_to_ghost_instances, snapshot_to_glass_instances, snapshot_to_instances,

@@ -26,6 +26,7 @@ use bevy_ecs::schedule::IntoScheduleConfigs;
 use bevy_math::Vec3;
 
 use crate::physics::{Position, Velocity};
+use crate::scene::{SceneCamera, ZOOM_MAX, ZOOM_MIN};
 
 /// Unit half-width on the ground plane. Same quantum as
 /// `physics::PLAYER_RADIUS` — a unit is a player-scale actor, and
@@ -165,6 +166,82 @@ pub fn separate_units(
         "units are never pushed apart, so a squad stacks into one column on arrival.",
         "tests/rts_move_order.rs",
     );
+}
+
+/// How much world the detached observer covers, in `half_extent`
+/// units. Clamped to `[ZOOM_MIN, ZOOM_MAX]` on construction and on
+/// every nudge, so no caller can put the camera somewhere the world
+/// cannot be drawn from.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct CameraZoom(f32);
+
+impl CameraZoom {
+    pub fn new(half_extent: f32) -> Self {
+        Self(half_extent.clamp(ZOOM_MIN, ZOOM_MAX))
+    }
+
+    pub fn half_extent(self) -> f32 {
+        self.0
+    }
+
+    /// Apply accumulated wheel notches. Positive is wheel-up, which
+    /// zooms IN — a tighter frustum, so the half-extent shrinks.
+    /// Saturates at the bounds rather than wrapping or erroring:
+    /// scrolling past the end of the range is an ordinary thing a
+    /// hand does, not a fault.
+    pub fn nudge(&mut self, _wheel_notches: i32) {
+        refuse(
+            "CameraZoom::nudge",
+            "the wheel does not move the camera, so zoom is stuck wherever it started.",
+            "tests/rts_pointer.rs",
+        );
+    }
+}
+
+/// The world point on the terrain directly under a pointer at `ndc`.
+///
+/// This is the inverse of `SceneCamera::world_to_clip`, and the reason
+/// an RTS on this codebase is affordable: the camera is orthographic,
+/// so there is no perspective divide to undo and the unprojection is
+/// analytic. The only iteration is finding where the resulting ray
+/// meets the heightfield, which is a march plus a bisection, not a
+/// solve.
+///
+/// `None` when the ray never meets the terrain within the camera's far
+/// plane — a pointer aimed at the sky, which is a real thing a cursor
+/// can do near the horizon and must not be answered with a fabricated
+/// coordinate.
+pub fn ground_under(_camera: &SceneCamera, _ndc: [f32; 2]) -> Option<Vec3> {
+    refuse(
+        "ground_under",
+        "the pointer has no world position, so a right-click cannot name a destination.",
+        "tests/rts_pointer.rs",
+    );
+    None
+}
+
+/// Every unit whose position projects inside the NDC rectangle spanned
+/// by two pointer corners — the left-drag selection.
+///
+/// Goes the cheap direction on purpose: project each unit to clip
+/// space with the camera and test it against the rect, rather than
+/// unprojecting the rect into a world frustum. Same answer, no
+/// inversion, and it stays correct at any zoom for free because the
+/// projection is the thing that knows about zoom.
+///
+/// Corners may be given in any order; the rect is normalised.
+pub fn units_in_rect(
+    _camera: &SceneCamera,
+    _units: &[(Entity, Vec3)],
+    _corner_a: [f32; 2],
+    _corner_b: [f32; 2],
+) -> Vec<Entity> {
+    refuse(
+        "units_in_rect",
+        "a drag selects nothing, so there is never anything for a right-click to command.",
+        "tests/rts_pointer.rs",
+    );
+    Vec::new()
 }
 
 /// Register the command layer's systems in `Update`, in the order the
