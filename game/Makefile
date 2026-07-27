@@ -18,7 +18,7 @@ test:
 # non-zero exit from this target is the correct outcome while the work
 # is outstanding.
 red:
-	@cargo +nightly test -- --ignored
+	@cargo +nightly test --no-fail-fast -- --ignored
 
 # Fetch the CDDA map corpus (a pinned dependency, never vendored) into
 # crates/cdda/.cdda-src/ so bare `cargo build`/`cargo test` can compile

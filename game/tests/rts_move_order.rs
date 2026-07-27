@@ -151,10 +151,16 @@ fn arrived_squad_stays_put() {
 }
 
 #[test]
-fn uncommanded_unit_holds_position() {
+fn unordered_unpiloted_unit_holds_position() {
     // The command axiom stated negatively. No `MoveOrder` is not "the
     // key isn't held right now" — it is "was never ordered", and the
-    // unit must not move at all, ever.
+    // unit must not move at all.
+    //
+    // "Unpiloted" is load-bearing in the name: an entity with no order
+    // DOES move when a human has become it and is holding a key. The
+    // guarantee is the conjunction — neither ordered nor piloted means
+    // nothing is driving, and nothing driving means nothing moves.
+    // `tests/rts_authority.rs` owns the piloted half.
     let spawns = vec![Vec3::new(300.0, 0.0, 300.0)];
     let mut app = squad_app(&spawns, None);
     run(&mut app, TICKS);

@@ -60,22 +60,78 @@ pub struct UnitMarker;
 /// symmetry with `Position` but ignored by steering.
 ///
 /// Presence of this component is the command. Absence is not "stop
-/// pressing the key", it is "was never ordered" — an unordered unit
-/// holds position forever.
+/// pressing the key", it is "was never ordered" — an entity that is
+/// neither ordered nor piloted holds position forever.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct MoveOrder(pub Vec3);
+
+/// The pilot seat. At most one entity in the world carries this: the
+/// one the human has *become*.
+///
+/// This is the second of the two input authorities, and they are
+/// exclusive by construction. An ordered entity is driven by
+/// `steer_toward_order` from a destination it was given. A piloted
+/// entity is driven by held input, here and now, the way
+/// `physics::keyboard_input` drives `PlayerMarker`. Nothing may be
+/// both — an entity still being dragged toward a stale destination
+/// while a human holds the wheel is the exact failure this component
+/// exists to make impossible.
+#[derive(Component)]
+pub struct Piloted;
+
+/// A unit currently open to being commanded: one nobody has become.
+/// The query filter that keeps the two authorities from overlapping,
+/// named once so every system that must respect the invariant spells
+/// it the same way.
+pub type Commandable = (With<UnitMarker>, Without<Piloted>);
+
+/// Take the wheel: seat the human in `entity`.
+///
+/// Vacates the seat first, so becoming is also how you switch bodies
+/// and the one-pilot invariant needs no separate enforcement.
+///
+/// Clears any standing `MoveOrder`. The human took over; wherever the
+/// entity had been told to walk is stale intent, and resurrecting it
+/// on `unbecome` would read as the body wandering off on its own.
+pub fn become_pilot(_world: &mut World, _entity: Entity) {
+    refuse(
+        "become_pilot",
+        "the seat stays empty and the entity keeps its old order, so becoming a body does nothing.",
+        "tests/rts_authority.rs",
+    );
+}
+
+/// Leave the wheel. Returns the entity that was seated, so the caller
+/// can park a detached camera exactly where the body stood instead of
+/// cutting to somewhere else; `None` when the seat was already empty.
+pub fn unbecome(_world: &mut World) -> Option<Entity> {
+    refuse(
+        "unbecome",
+        "nothing is ever seated, so there is no body to step out of and no position to hand back.",
+        "tests/rts_authority.rs",
+    );
+    None
+}
 
 /// Order → velocity. Points each ordered unit at its `MoveOrder` on the
 /// XZ plane at `UNIT_SPEED`, and stops it inside `ARRIVE_RADIUS` so
 /// arrived units don't jitter around the target forever.
+///
+/// `Without<Piloted>` is load-bearing, not defensive tidiness.
+/// `become_pilot` clears the order, so the both-at-once state should
+/// be unreachable — but "should be" is not a guarantee, and the
+/// obvious way to reach it is a right-click that lands while you are
+/// embodied. This filter means that mistake costs a stray component,
+/// not control of your own body.
 pub fn steer_toward_order(
-    _q: Query<(&Position, &MoveOrder, &mut Velocity), With<UnitMarker>>,
+    _q: Query<(&Position, &MoveOrder, &mut Velocity), Commandable>,
     mut announced: Local<bool>,
 ) {
     refuse_once(
         &mut announced,
         "steer_toward_order",
         "ordered units never receive a velocity, so a squad ignores every move order.",
+        "tests/rts_move_order.rs",
     );
 }
 
@@ -90,6 +146,7 @@ pub fn advance_units(
         &mut announced,
         "advance_units",
         "unit velocity is never integrated, so units hold position even once steering lands.",
+        "tests/rts_move_order.rs",
     );
 }
 
@@ -106,6 +163,7 @@ pub fn separate_units(
         &mut announced,
         "separate_units",
         "units are never pushed apart, so a squad stacks into one column on arrival.",
+        "tests/rts_move_order.rs",
     );
 }
 
@@ -124,27 +182,34 @@ pub fn register(app: &mut App) {
     );
 }
 
-/// Surface an unimplemented system on the sacred error bus — once per
-/// system instance, not once per tick, so a 600-tick run leaves one
-/// legible refusal per system instead of 1800 copies of it.
+/// Surface an unimplemented function on the sacred error bus, naming
+/// what breaks because of it and which red defines done.
 ///
-/// Delete each call site as its system gains a body. A silent no-op
-/// system is exactly the swallowed refusal this project forbids: units
-/// that don't move would read as a physics bug rather than as work
-/// that hasn't been done.
-fn refuse_once(announced: &mut bool, system: &str, effect: &str) {
+/// Delete each call site as its function gains a body. A silent no-op
+/// is exactly the swallowed refusal this project forbids: a body that
+/// won't move, or a wheel that won't take, would read as a physics or
+/// input bug rather than as work that hasn't been done.
+///
+/// Called directly from plain functions, which are invoked on a user
+/// action and so are rare enough to be worth hearing about every time.
+/// Per-tick systems go through `refuse_once`.
+fn refuse(function: &str, effect: &str, red: &str) {
+    crate::error::emit_region(
+        crate::error::Severity::Error,
+        format!("rts.{function}"),
+        format!("`{function}` has no body yet"),
+        format!("{effect} Implement `game::rts::{function}`; `{red}` defines done."),
+    );
+    crate::obs::emit(&format!("[rts.{function}] unimplemented — {effect}"));
+}
+
+/// `refuse`, but once per system instance rather than once per tick, so
+/// a 600-tick run leaves one legible refusal per system instead of 1800
+/// copies of it.
+fn refuse_once(announced: &mut bool, system: &str, effect: &str, red: &str) {
     if *announced {
         return;
     }
     *announced = true;
-    crate::error::emit_region(
-        crate::error::Severity::Error,
-        format!("rts.{system}"),
-        format!("`{system}` has no body yet"),
-        format!(
-            "{effect} Implement `game::rts::{system}`; \
-             `tests/rts_move_order.rs` defines done."
-        ),
-    );
-    crate::obs::emit(&format!("[rts.{system}] unimplemented — {effect}"));
+    refuse(system, effect, red);
 }
