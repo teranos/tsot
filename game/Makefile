@@ -1,4 +1,24 @@
-.PHONY: music web build clean cdda coverage
+.PHONY: music web build clean cdda coverage test red
+
+# The gate, byte-for-byte what .github/workflows/game-tests.yml runs.
+# Whole suite — lib, every target under tests/, doctests — then clippy
+# over every target. Deliberately not narrowed to --lib: a test that
+# doesn't run is a test that lies, and that narrowing is what let a red
+# tests/ directory pass CI.
+#
+# Green here means nothing is broken and every skip is named. It does
+# NOT mean every test ran; see `make red`.
+test:
+	@cargo +nightly test
+	@cargo +nightly clippy --all-targets -- -D warnings
+
+# The declared reds: tests carrying `#[ignore = "RED: ..."]`, which
+# capture intent ahead of the code that satisfies it. These are MEANT
+# to fail — that's the red bar, and this is how you look at it. A
+# non-zero exit from this target is the correct outcome while the work
+# is outstanding.
+red:
+	@cargo +nightly test -- --ignored
 
 # Fetch the CDDA map corpus (a pinned dependency, never vendored) into
 # crates/cdda/.cdda-src/ so bare `cargo build`/`cargo test` can compile
