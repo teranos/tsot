@@ -14,11 +14,16 @@
 // Steering is XZ-only, matching `physics::resolve_collisions`: the
 // ground plane decides movement, `physics::ground_follow_*` owns Y.
 //
-// STATUS: vocabulary only. The three systems below are declared and
-// registered but have no bodies yet; each surfaces once on the sacred
-// error bus so a run whose units refuse to move says why, at the
-// point of interaction, instead of looking like a physics bug.
-// `tests/rts_move_order.rs` is the red that defines done.
+// The second authority arrived with the observer: a *piloted* entity
+// is the one a human has become, driven by held input rather than by a
+// destination. The two are exclusive by construction — see `Piloted`.
+//
+// STATUS: the movement kernel, the authority state machine and the
+// pointer maths are implemented and green
+// (`tests/rts_move_order.rs`, `rts_authority.rs`, `rts_pointer.rs`).
+// Not yet here: pathfinding — units steer straight at their order and
+// walk through walls — and any input plumbing. Nothing in this module
+// reads a key, a button or a wheel; callers supply NDC and notches.
 
 use bevy_app::{App, Update};
 use bevy_ecs::prelude::*;
@@ -49,6 +54,28 @@ pub const UNIT_SPEED: f32 = 12.0;
 /// for the jostle separation adds on the final ticks without letting a
 /// unit that simply stopped early pass for arrived.
 pub const ARRIVE_RADIUS: f32 = 140.0;
+
+/// How close a single unit presses before it stops pushing inward.
+///
+/// This has to exceed the squad's own packing radius or the design
+/// fights itself: eight discs of `UNIT_RADIUS` need an enclosing circle
+/// of about 3.3·R ≈ 66, so if a unit kept steering until it was nearer
+/// than that, the outer ranks would press inward every tick against a
+/// separation pass shoving them back out, forever. Nothing would look
+/// broken — the squad would just quiver on the spot and never quite
+/// stop overlapping.
+///
+/// 90 clears 66 with room to spare, and sits far enough under
+/// `ARRIVE_RADIUS` that a settled squad is unambiguously arrived rather
+/// than borderline.
+const STOP_RADIUS: f32 = 90.0;
+
+/// Below this squared distance two units are treated as coincident and
+/// the contact normal is undefined. Same floor
+/// `physics::resolve_collisions` uses, for the same reason: dividing by
+/// that length yields NaN, and a NaN position is unrecoverable — it
+/// propagates into the camera and blanks the frame.
+const COINCIDENT_EPS_SQ: f32 = 1.0e-6;
 
 /// A commandable actor. Distinct from `PlayerMarker` (one embodied
 /// avatar driven by held input) and `NpcMarker` (autonomous wander) —
@@ -94,24 +121,54 @@ pub type Commandable = (With<UnitMarker>, Without<Piloted>);
 /// Clears any standing `MoveOrder`. The human took over; wherever the
 /// entity had been told to walk is stale intent, and resurrecting it
 /// on `unbecome` would read as the body wandering off on its own.
-pub fn become_pilot(_world: &mut World, _entity: Entity) {
-    refuse(
-        "become_pilot",
-        "the seat stays empty and the entity keeps its old order, so becoming a body does nothing.",
-        "tests/rts_authority.rs",
-    );
+pub fn become_pilot(world: &mut World, entity: Entity) {
+    unbecome(world);
+    let Ok(mut e) = world.get_entity_mut(entity) else {
+        crate::error::emit_region(
+            crate::error::Severity::Error,
+            "rts.become_pilot",
+            "cannot become an entity that does not exist",
+            format!(
+                "{entity:?} is not in the world — the seat is left empty rather than \
+                 silently seating you in nothing."
+            ),
+        );
+        return;
+    };
+    e.insert(Piloted);
+    e.remove::<MoveOrder>();
 }
 
 /// Leave the wheel. Returns the entity that was seated, so the caller
 /// can park a detached camera exactly where the body stood instead of
 /// cutting to somewhere else; `None` when the seat was already empty.
-pub fn unbecome(_world: &mut World) -> Option<Entity> {
-    refuse(
-        "unbecome",
-        "nothing is ever seated, so there is no body to step out of and no position to hand back.",
-        "tests/rts_authority.rs",
-    );
-    None
+pub fn unbecome(world: &mut World) -> Option<Entity> {
+    let mut q = world.query_filtered::<Entity, With<Piloted>>();
+    let seated: Vec<Entity> = q.iter(world).collect();
+
+    // More than one seat filled means the invariant was broken by some
+    // path that inserted `Piloted` directly instead of going through
+    // `become_pilot`. Clear them all — but say so. Quietly tidying a
+    // broken invariant is how it stays broken.
+    if seated.len() > 1 {
+        crate::error::emit_region(
+            crate::error::Severity::Error,
+            "rts.unbecome",
+            "more than one entity held the wheel",
+            format!(
+                "{} entities carried `Piloted`: {seated:?}. All were vacated. \
+                 Something inserted `Piloted` without going through `become_pilot`.",
+                seated.len()
+            ),
+        );
+    }
+
+    for &e in &seated {
+        if let Ok(mut em) = world.get_entity_mut(e) {
+            em.remove::<Piloted>();
+        }
+    }
+    seated.first().copied()
 }
 
 /// Order → velocity. Points each ordered unit at its `MoveOrder` on the
@@ -125,30 +182,31 @@ pub fn unbecome(_world: &mut World) -> Option<Entity> {
 /// embodied. This filter means that mistake costs a stray component,
 /// not control of your own body.
 pub fn steer_toward_order(
-    _q: Query<(&Position, &MoveOrder, &mut Velocity), Commandable>,
-    mut announced: Local<bool>,
+    mut q: Query<(&Position, &MoveOrder, &mut Velocity), Commandable>,
 ) {
-    refuse_once(
-        &mut announced,
-        "steer_toward_order",
-        "ordered units never receive a velocity, so a squad ignores every move order.",
-        "tests/rts_move_order.rs",
-    );
+    for (p, order, mut v) in q.iter_mut() {
+        let (dx, dz) = (order.0.x - p.0.x, order.0.z - p.0.z);
+        let dist_sq = dx * dx + dz * dz;
+        if dist_sq <= STOP_RADIUS * STOP_RADIUS {
+            v.0 = Vec3::ZERO;
+            continue;
+        }
+        let dist = dist_sq.sqrt();
+        v.0 = Vec3::new(dx / dist * UNIT_SPEED, 0.0, dz / dist * UNIT_SPEED);
+    }
 }
 
 /// Velocity → position, for units. Deliberately separate from
 /// `physics::advance_player` / `advance_npc`: those integrate one
 /// avatar and one wanderer, this integrates the commanded set.
-pub fn advance_units(
-    _q: Query<(&mut Position, &Velocity), With<UnitMarker>>,
-    mut announced: Local<bool>,
-) {
-    refuse_once(
-        &mut announced,
-        "advance_units",
-        "unit velocity is never integrated, so units hold position even once steering lands.",
-        "tests/rts_move_order.rs",
-    );
+/// Deliberately `With<UnitMarker>` and not `Commandable`: a piloted
+/// body's velocity must still be integrated, because that is exactly
+/// how held input moves it. Steering is what has to leave piloted
+/// entities alone, not integration.
+pub fn advance_units(mut q: Query<(&mut Position, &Velocity), With<UnitMarker>>) {
+    for (mut p, v) in q.iter_mut() {
+        p.0 += v.0;
+    }
 }
 
 /// Pairwise separation: push overlapping units apart on XZ until every
@@ -156,16 +214,33 @@ pub fn advance_units(
 /// sharing one order collapses into a single stacked column at the
 /// target — visually one unit, and the reason an order tolerance can
 /// never be a point tolerance.
-pub fn separate_units(
-    _q: Query<&mut Position, With<UnitMarker>>,
-    mut announced: Local<bool>,
-) {
-    refuse_once(
-        &mut announced,
-        "separate_units",
-        "units are never pushed apart, so a squad stacks into one column on arrival.",
-        "tests/rts_move_order.rs",
-    );
+pub fn separate_units(mut q: Query<&mut Position, With<UnitMarker>>) {
+    let contact = 2.0 * UNIT_RADIUS;
+    let mut pairs = q.iter_combinations_mut();
+    while let Some([mut a, mut b]) = pairs.fetch_next() {
+        let (dx, dz) = (a.0.x - b.0.x, a.0.z - b.0.z);
+        let dist_sq = dx * dx + dz * dz;
+        if dist_sq >= contact * contact {
+            continue;
+        }
+        // Coincident: the normal is undefined, so pick a fixed axis
+        // rather than divide by ~zero. Deterministic on purpose — every
+        // peer resolving the same stack the same way matters more than
+        // the direction being interesting.
+        let (nx, nz, dist) = if dist_sq > COINCIDENT_EPS_SQ {
+            let d = dist_sq.sqrt();
+            (dx / d, dz / d, d)
+        } else {
+            (1.0, 0.0, 0.0)
+        };
+        // Half the overlap each: neither unit outranks the other, and
+        // splitting it keeps the pair's centre of mass where it was.
+        let push = (contact - dist) * 0.5;
+        a.0.x += nx * push;
+        a.0.z += nz * push;
+        b.0.x -= nx * push;
+        b.0.z -= nz * push;
+    }
 }
 
 /// How much world the detached observer covers, in `half_extent`
@@ -189,12 +264,16 @@ impl CameraZoom {
     /// Saturates at the bounds rather than wrapping or erroring:
     /// scrolling past the end of the range is an ordinary thing a
     /// hand does, not a fault.
-    pub fn nudge(&mut self, _wheel_notches: i32) {
-        refuse(
-            "CameraZoom::nudge",
-            "the wheel does not move the camera, so zoom is stuck wherever it started.",
-            "tests/rts_pointer.rs",
-        );
+    pub fn nudge(&mut self, wheel_notches: i32) {
+        // Multiplicative, so a notch feels the same at every
+        // magnification — a fixed additive step would crawl when zoomed
+        // out and lurch when zoomed in.
+        //
+        // The extremes take care of themselves: a huge notch count
+        // sends the factor to 0 or infinity, and the clamp turns both
+        // into the nearer bound. No special-casing, no overflow branch.
+        const PER_NOTCH: f32 = 1.1;
+        self.0 = (self.0 * PER_NOTCH.powi(-wheel_notches)).clamp(ZOOM_MIN, ZOOM_MAX);
     }
 }
 
@@ -207,16 +286,74 @@ impl CameraZoom {
 /// meets the heightfield, which is a march plus a bisection, not a
 /// solve.
 ///
-/// `None` when the ray never meets the terrain within the camera's far
-/// plane — a pointer aimed at the sky, which is a real thing a cursor
-/// can do near the horizon and must not be answered with a fabricated
-/// coordinate.
-pub fn ground_under(_camera: &SceneCamera, _ndc: [f32; 2]) -> Option<Vec3> {
-    refuse(
-        "ground_under",
-        "the pointer has no world position, so a right-click cannot name a destination.",
-        "tests/rts_pointer.rs",
-    );
+/// `None` when the pointer is off the canvas (NDC outside `[-1, 1]`,
+/// which is what `input::pointer_ndc` reports for a cursor that has
+/// left the surface), or when the ray never meets the terrain inside
+/// the far plane. Both are answered with `None` rather than a
+/// fabricated coordinate: inventing one would send a squad marching to
+/// a place nobody clicked, and it would read as a pathfinding bug for
+/// as long as it took to find.
+pub fn ground_under(camera: &SceneCamera, ndc: [f32; 2]) -> Option<Vec3> {
+    if ndc[0].abs() > 1.0 || ndc[1].abs() > 1.0 {
+        return None;
+    }
+    let inv = bevy_math::Mat4::from_cols_array_2d(&camera.view_proj()).inverse();
+    // wgpu clip depth runs [0, 1]: z=0 is the near plane, z=1 the far.
+    let near = inv.project_point3(Vec3::new(ndc[0], ndc[1], 0.0));
+    let far = inv.project_point3(Vec3::new(ndc[0], ndc[1], 1.0));
+    let span = far - near;
+    let len = span.length();
+    if !len.is_finite() || len < 1.0 {
+        return None;
+    }
+    let dir = span / len;
+
+    // Signed vertical clearance: positive above the ground, negative
+    // below. The surface is where it changes sign.
+    let clearance = |t: f32| {
+        let p = near + dir * t;
+        p.y - crate::terrain::height(p.x, p.z)
+    };
+    let land = |t: f32| {
+        let p = near + dir * t;
+        Vec3::new(p.x, crate::terrain::height(p.x, p.z), p.z)
+    };
+
+    if clearance(0.0) <= 0.0 {
+        // The near plane is already underground — the camera is closer
+        // to the hill than its own clip plane. The first visible ground
+        // is right there.
+        return Some(land(0.0));
+    }
+
+    // Fixed-step search for a sign change, then bisect it. A fixed step
+    // is sound here because `terrain::height` is documented continuous
+    // and gentle — "no cliffs, no mountains" — so the surface cannot
+    // rise through a step and back out of it between samples.
+    //
+    // No performance claim attached to the step size: if this shows up
+    // in seer's `[perf]`, the fix is to bound the search to the field's
+    // actual height range instead of walking the whole frustum.
+    const STEP: f32 = 50.0;
+    const BISECTIONS: u32 = 40;
+    let mut prev = 0.0f32;
+    let mut t = STEP;
+    while t <= len {
+        if clearance(t) <= 0.0 {
+            let (mut lo, mut hi) = (prev, t);
+            for _ in 0..BISECTIONS {
+                let mid = 0.5 * (lo + hi);
+                if clearance(mid) > 0.0 {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            return Some(land(hi));
+        }
+        prev = t;
+        t += STEP;
+    }
     None
 }
 
@@ -231,17 +368,21 @@ pub fn ground_under(_camera: &SceneCamera, _ndc: [f32; 2]) -> Option<Vec3> {
 ///
 /// Corners may be given in any order; the rect is normalised.
 pub fn units_in_rect(
-    _camera: &SceneCamera,
-    _units: &[(Entity, Vec3)],
-    _corner_a: [f32; 2],
-    _corner_b: [f32; 2],
+    camera: &SceneCamera,
+    units: &[(Entity, Vec3)],
+    corner_a: [f32; 2],
+    corner_b: [f32; 2],
 ) -> Vec<Entity> {
-    refuse(
-        "units_in_rect",
-        "a drag selects nothing, so there is never anything for a right-click to command.",
-        "tests/rts_pointer.rs",
-    );
-    Vec::new()
+    let (min_x, max_x) = (corner_a[0].min(corner_b[0]), corner_a[0].max(corner_b[0]));
+    let (min_y, max_y) = (corner_a[1].min(corner_b[1]), corner_a[1].max(corner_b[1]));
+    units
+        .iter()
+        .filter(|(_, p)| {
+            let c = camera.world_to_clip([p.x, p.y, p.z]);
+            c[0] >= min_x && c[0] <= max_x && c[1] >= min_y && c[1] <= max_y
+        })
+        .map(|(e, _)| *e)
+        .collect()
 }
 
 /// Register the command layer's systems in `Update`, in the order the
@@ -259,34 +400,10 @@ pub fn register(app: &mut App) {
     );
 }
 
-/// Surface an unimplemented function on the sacred error bus, naming
-/// what breaks because of it and which red defines done.
-///
-/// Delete each call site as its function gains a body. A silent no-op
-/// is exactly the swallowed refusal this project forbids: a body that
-/// won't move, or a wheel that won't take, would read as a physics or
-/// input bug rather than as work that hasn't been done.
-///
-/// Called directly from plain functions, which are invoked on a user
-/// action and so are rare enough to be worth hearing about every time.
-/// Per-tick systems go through `refuse_once`.
-fn refuse(function: &str, effect: &str, red: &str) {
-    crate::error::emit_region(
-        crate::error::Severity::Error,
-        format!("rts.{function}"),
-        format!("`{function}` has no body yet"),
-        format!("{effect} Implement `game::rts::{function}`; `{red}` defines done."),
-    );
-    crate::obs::emit(&format!("[rts.{function}] unimplemented — {effect}"));
-}
-
-/// `refuse`, but once per system instance rather than once per tick, so
-/// a 600-tick run leaves one legible refusal per system instead of 1800
-/// copies of it.
-fn refuse_once(announced: &mut bool, system: &str, effect: &str, red: &str) {
-    if *announced {
-        return;
-    }
-    *announced = true;
-    refuse(system, effect, red);
-}
+// `refuse` and `refuse_once` lived here: the scaffolding that announced
+// each stubbed function on the sacred error bus, so a run whose units
+// would not move said why instead of looking like a physics bug. Every
+// function they covered now has a body, so they went with the last one.
+//
+// The bus is still used from this module, but for real failures now —
+// an entity that cannot be become, or a broken one-pilot invariant.

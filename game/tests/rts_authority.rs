@@ -66,7 +66,6 @@ fn is_piloted(app: &mut App, e: Entity) -> bool {
 }
 
 #[test]
-#[ignore = "RED: needs rts::become_pilot to seat the pilot and clear the order"]
 fn becoming_takes_the_wheel_and_clears_the_standing_order() {
     let mut app = app_with_rts();
     let e = spawn_unit(&mut app, Vec3::ZERO, Some(Vec3::new(900.0, 0.0, -600.0)));
@@ -81,7 +80,6 @@ fn becoming_takes_the_wheel_and_clears_the_standing_order() {
 }
 
 #[test]
-#[ignore = "RED: needs rts::unbecome to vacate the seat"]
 fn unbecoming_does_not_resurrect_the_cleared_order() {
     let mut app = app_with_rts();
     let start = Vec3::new(100.0, 0.0, 100.0);
@@ -106,7 +104,6 @@ fn unbecoming_does_not_resurrect_the_cleared_order() {
 }
 
 #[test]
-#[ignore = "RED: needs rts::unbecome to report who left the wheel"]
 fn unbecoming_reports_the_body_that_was_left() {
     // The detached camera parks where the body stood instead of cutting
     // to somewhere else, so unbecome has to say which body that was.
@@ -128,7 +125,6 @@ fn unbecoming_reports_the_body_that_was_left() {
 }
 
 #[test]
-#[ignore = "RED: needs rts::become_pilot to vacate the seat before taking it"]
 fn only_one_body_holds_the_wheel() {
     // Becoming is also how you switch bodies, so the invariant needs no
     // separate enforcement — but it does need to actually hold.

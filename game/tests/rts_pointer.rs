@@ -54,7 +54,6 @@ fn xz_dist(a: Vec3, b: Vec3) -> f32 {
 }
 
 #[test]
-#[ignore = "RED: needs CameraZoom::nudge"]
 fn the_wheel_zooms_and_saturates_at_both_ends() {
     // Wheel-up is zoom IN, which is a tighter frustum, so half_extent
     // shrinks. Getting this backwards is the classic inverted-zoom bug
@@ -109,7 +108,6 @@ fn zooming_in_covers_less_world() {
 }
 
 #[test]
-#[ignore = "RED: needs rts::ground_under"]
 fn the_point_under_the_cursor_round_trips_at_every_zoom() {
     // The load-bearing property, stated as a round trip: project a
     // point that is known to be on the terrain, hand the resulting NDC
@@ -118,10 +116,21 @@ fn the_point_under_the_cursor_round_trips_at_every_zoom() {
     // Asserted on XZ. Y is the heightfield's answer for that XZ, so
     // testing it as a third coordinate would only restate terrain, and
     // a Y mismatch with matching XZ is a terrain bug, not a pointer one.
+    // Probe offsets are a FRACTION of the current half-extent, not
+    // fixed world distances. A fixed offset that comfortably fills the
+    // screen when zoomed out is off the canvas entirely when zoomed in,
+    // and `ground_under` rightly refuses a pointer that is not on the
+    // canvas — so fixed offsets would test the refusal path and call it
+    // a round-trip failure. Kept under a quarter of the half-extent so
+    // the isometric basis, which mixes X and Z into both screen axes,
+    // cannot carry any of them off-screen either.
+    const FRACTIONS: [(f32, f32); 4] = [(0.0, 0.0), (0.2, -0.15), (-0.25, 0.2), (0.1, 0.25)];
+
     let f = focus();
     for half_extent in ZOOMS {
         let cam = camera_at(f, half_extent);
-        for (dx, dz) in [(0.0, 0.0), (300.0, -200.0), (-450.0, 380.0), (120.0, 640.0)] {
+        for (fx, fz) in FRACTIONS {
+            let (dx, dz) = (fx * half_extent, fz * half_extent);
             let want = on_terrain(f.x + dx, f.z + dz);
             let ndc = cam.world_to_clip([want.x, want.y, want.z]);
             let got = rts::ground_under(&cam, ndc).unwrap_or_else(|| {
@@ -145,26 +154,36 @@ fn the_point_under_the_cursor_round_trips_at_every_zoom() {
 }
 
 #[test]
-fn a_cursor_on_the_sky_names_no_destination() {
-    // Near the horizon a cursor genuinely points at nothing. The honest
-    // answer is None. Returning a fabricated coordinate would send a
-    // squad marching toward a place the user never clicked, and it
-    // would look like a pathfinding bug for as long as it took to find.
+fn a_pointer_off_the_canvas_names_no_destination() {
+    // I first wrote this as "a cursor on the sky", which was wrong, and
+    // implementing it is what showed why. Under an ORTHOGRAPHIC camera
+    // every pixel's ray points the same way — straight down-forward —
+    // so there is no horizon and no sky to aim at. Every on-screen
+    // pointer hits ground somewhere.
     //
-    // A guard, not a red: the stub returns None for everything, so this
-    // passes vacuously today and only bites once `ground_under` starts
-    // returning positions. Declaring it RED would be a lie in the
-    // opposite direction from the one the gate catches.
+    // What genuinely has no world position is a pointer that is not on
+    // the canvas at all, which is exactly what `input::pointer_ndc`
+    // reports by returning out-of-range coordinates. That is the real
+    // refusal, so that is what this pins.
     let cam = camera_at(focus(), 1450.0);
     assert_eq!(
         rts::ground_under(&cam, [0.0, 50.0]),
         None,
-        "a cursor far off the top of the frustum was given a ground position anyway"
+        "a pointer outside the canvas was given a ground position anyway"
+    );
+    assert_eq!(
+        rts::ground_under(&cam, [-1.4, 0.2]),
+        None,
+        "a pointer past the left edge was given a ground position anyway"
+    );
+    // …and the boundary itself is on-canvas, not off.
+    assert!(
+        rts::ground_under(&cam, [1.0, 1.0]).is_some(),
+        "the exact corner of the canvas was treated as off it"
     );
 }
 
 #[test]
-#[ignore = "RED: needs rts::units_in_rect"]
 fn a_drag_selects_exactly_what_it_covers() {
     let f = focus();
     let cam = camera_at(f, 1450.0);
@@ -188,7 +207,6 @@ fn a_drag_selects_exactly_what_it_covers() {
 }
 
 #[test]
-#[ignore = "RED: needs rts::units_in_rect to normalise its corners"]
 fn a_drag_selects_the_same_set_dragged_backwards() {
     // Users drag up-left as often as down-right. The rect is defined by
     // two corners, not by an origin and a direction.
@@ -207,7 +225,6 @@ fn a_drag_selects_the_same_set_dragged_backwards() {
 }
 
 #[test]
-#[ignore = "RED: needs rts::units_in_rect to respect the camera's zoom"]
 fn the_same_drag_catches_more_when_zoomed_out() {
     // The zoom-coupling bug, pinned. A screen rectangle is a claim
     // about pixels; what it covers in WORLD terms depends entirely on

@@ -16,13 +16,10 @@
 // owns Y, and pulling it in here would make a terrain change able to
 // fail a movement test.
 //
-// The three tests that need `rts` to actually do something carry
-// `#[ignore = "RED: ..."]`. That is not the red being hidden — the CI
-// gate refuses a bare `#[ignore]` and prints every declared skip with
-// its reason into the run summary, so these are named on every run.
-// It buys the one distinction a strict-TDD repo needs from its gate:
-// red because not built yet, versus red because broken. Look at them
-// with `make red`; delete the attribute as each system gains a body.
+// GREEN. All five pass against a real `steer_toward_order`,
+// `advance_units` and `separate_units`. The two that once passed
+// trivially — the no-overlap check and the holds-position check — now
+// have moving units under them and mean what their names say.
 
 use bevy_app::App;
 use bevy_ecs::prelude::*;
@@ -94,7 +91,6 @@ fn unit_positions(app: &mut App) -> Vec<Vec3> {
 }
 
 #[test]
-#[ignore = "RED: needs rts::steer_toward_order + rts::advance_units"]
 fn commanded_squad_arrives_at_its_order() {
     let mut app = squad_app(&spawn_grid(), Some(order_pos()));
     run(&mut app, TICKS);
@@ -133,7 +129,6 @@ fn arrived_squad_does_not_stack() {
 }
 
 #[test]
-#[ignore = "RED: needs rts::steer_toward_order to stop inside ARRIVE_RADIUS"]
 fn arrived_squad_stays_put() {
     let mut app = squad_app(&spawn_grid(), Some(order_pos()));
     run(&mut app, TICKS);
@@ -176,7 +171,6 @@ fn unordered_unpiloted_unit_holds_position() {
 }
 
 #[test]
-#[ignore = "RED: needs rts::separate_units with a degenerate-normal floor"]
 fn coincident_units_separate_without_nan() {
     // Two units on the exact same tile: the degenerate case for any
     // push-apart, where the contact normal is undefined and a naive
