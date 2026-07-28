@@ -1073,6 +1073,12 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     let mut ui: Vec<dpad::DpadInstance> = dpad::current_instances().to_vec();
     ui.extend(hud::current_instances());
     ui.extend(crate::watermark::watermark_quads(gpu_web::viewport_size()));
+    // The three action slots. Drawn from the ActionBar resource, which
+    // is recomputed each tick from world state — so what the buttons
+    // offer and what the keys do can never disagree.
+    if let Some(bar) = app.world().get_resource::<crate::rts::ActionBar>() {
+        ui.extend(crate::actions::build_quads(&bar.0, gpu_web::viewport_size()));
+    }
     ui.extend(crate::bang::current_instances());
     ui.extend(crate::tune_hud::current_instances());
     frame_ui(&ui)

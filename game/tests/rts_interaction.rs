@@ -308,7 +308,7 @@ fn become_takes_the_selected_body_and_follows_it() {
     drag(&mut app, [-0.4, -0.4], [0.4, 0.4]);
     assert!(is_selected(&mut app, ids[0]));
 
-    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+    frame(&mut app, InputFrame { keys: key::SLOT_B, ..Default::default() });
 
     assert!(
         app.world().get::<Piloted>(ids[0]).is_some(),
@@ -327,13 +327,13 @@ fn become_again_steps_out_where_the_body_stands() {
     // stepping out does not cut the view to somewhere else.
     let (mut app, centre, ids) = observer_app(&[(400.0, -300.0)]);
     drag(&mut app, [-0.9, -0.9], [0.9, 0.9]);
-    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+    frame(&mut app, InputFrame { keys: key::SLOT_B, ..Default::default() });
     assert!(app.world().get::<Piloted>(ids[0]).is_some());
 
     // Released, then pressed again — a level held across frames is one
     // press, not many.
     frame(&mut app, InputFrame::default());
-    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+    frame(&mut app, InputFrame { keys: key::SLOT_B, ..Default::default() });
 
     assert!(app.world().get::<Piloted>(ids[0]).is_none(), "the human stayed seated");
     let CameraFocus::Free(at) = *app.world().resource::<CameraFocus>() else {
@@ -350,12 +350,27 @@ fn become_again_steps_out_where_the_body_stands() {
 #[test]
 fn become_does_nothing_without_a_selection() {
     let (mut app, centre, _ids) = observer_app(&[(0.0, 0.0)]);
-    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+    frame(&mut app, InputFrame { keys: key::SLOT_B, ..Default::default() });
 
     assert_eq!(
         *app.world().resource::<CameraFocus>(),
         CameraFocus::Free(centre),
         "become with nothing selected moved the observer anyway"
+    );
+}
+
+#[test]
+fn the_become_key_is_the_slot_the_verb_declares() {
+    // The button and the key are the same control. If the verb moved to
+    // another slot, the key that invokes it must move with it — this
+    // ties the two together so they cannot drift apart silently.
+    use game::actions::{self, Action, Affordances};
+    let bar = actions::resolve(Affordances { selected_count: 1, piloting: false });
+    let slot = bar.iter().position(|a| *a == Some(Action::Become)).expect("become offered");
+    assert_eq!(
+        game::input::key::slot_bit(slot),
+        key::SLOT_B,
+        "become sits in slot {slot}, whose key is not the one the tests press"
     );
 }
 
@@ -366,7 +381,7 @@ fn holding_become_does_not_flip_every_frame() {
     let (mut app, _c, ids) = observer_app(&[(0.0, 0.0)]);
     drag(&mut app, [-0.4, -0.4], [0.4, 0.4]);
     for _ in 0..7 {
-        frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+        frame(&mut app, InputFrame { keys: key::SLOT_B, ..Default::default() });
     }
     assert!(
         app.world().get::<Piloted>(ids[0]).is_some(),
@@ -378,7 +393,7 @@ fn holding_become_does_not_flip_every_frame() {
 fn wasd_drives_the_body_you_became() {
     let (mut app, _c, ids) = observer_app(&[(0.0, 0.0)]);
     drag(&mut app, [-0.4, -0.4], [0.4, 0.4]);
-    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+    frame(&mut app, InputFrame { keys: key::SLOT_B, ..Default::default() });
     let before = pos_of(&app, ids[0]);
 
     for _ in 0..20 {
@@ -396,7 +411,7 @@ fn an_unpiloted_unit_is_not_driven_by_the_keyboard() {
     // keypress marches the whole world.
     let (mut app, _c, ids) = observer_app(&[(0.0, 0.0), (300.0, 0.0)]);
     drag(&mut app, [-0.4, -0.4], [0.4, 0.4]);
-    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+    frame(&mut app, InputFrame { keys: key::SLOT_B, ..Default::default() });
     let before = pos_of(&app, ids[1]);
 
     for _ in 0..20 {

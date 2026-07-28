@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 
+pub mod actions;
 pub mod audio;
 pub mod bang;
 pub mod build_info;

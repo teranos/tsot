@@ -30,6 +30,7 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::IntoScheduleConfigs;
 use bevy_math::Vec3;
 
+use crate::actions::{self, Action, Affordances, SLOTS};
 use crate::physics::{Position, Velocity};
 use crate::scene::{SceneCamera, ZOOM_MAX, ZOOM_MIN};
 
@@ -483,8 +484,14 @@ pub struct DragState {
 pub fn pump_input_frame(mut _frame: ResMut<InputFrame>) {
     #[cfg(target_arch = "wasm32")]
     {
+        // A tap on an action button IS its key. Same bit, same edge
+        // detector, same dispatch — see `actions::slots_touched`.
+        let taps = crate::actions::slots_touched(
+            crate::gpu_web::viewport_size(),
+            &crate::gpu_web::touches(),
+        );
         *_frame = InputFrame {
-            keys: crate::input::state(),
+            keys: crate::input::state() | taps,
             ndc: crate::input::pointer_ndc(),
             buttons: crate::input::buttons(),
             wheel_y: crate::input::wheel_delta_y(),
@@ -624,21 +631,62 @@ pub fn latch_buttons(frame: Res<InputFrame>, mut drag: ResMut<DragState>) {
 /// With nothing selected and nothing seated, the key does nothing. It
 /// is not an error: pressing it is how you find out whether you had
 /// something selected.
-pub fn toggle_become(
+/// What the three slots are offering this frame. Recomputed from world
+/// state every tick — a stored menu goes stale and offers you a verb
+/// for a thing you have walked away from.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct ActionBar(pub [Option<Action>; SLOTS]);
+
+/// Project the world into the three slots.
+pub fn update_action_bar(
+    focus: Res<CameraFocus>,
+    selected: Query<Entity, Orderable>,
+    mut bar: ResMut<ActionBar>,
+) {
+    bar.0 = actions::resolve(Affordances {
+        selected_count: selected.iter().count(),
+        piloting: matches!(*focus, CameraFocus::Following(_)),
+    });
+}
+
+/// Invoke whatever the pressed slot is offering.
+///
+/// The dispatch reads the BAR, never a key-to-verb table. That is what
+/// makes the button and the key the same thing: if the bar does not
+/// offer it, the key does nothing, and the human is never holding a
+/// shortcut the screen disagrees with.
+pub fn invoke_action(
     frame: Res<InputFrame>,
     drag: Res<DragState>,
+    bar: Res<ActionBar>,
     mut focus: ResMut<CameraFocus>,
     selected: Query<Entity, Orderable>,
     positions: Query<&Position>,
     mut commands: Commands,
 ) {
-    let pressed_before = drag.prev_keys & crate::input::key::BECOME != 0;
-    let pressed_now = frame.keys & crate::input::key::BECOME != 0;
-    if pressed_before || !pressed_now {
-        return;
+    let mut pressed = None;
+    for slot in 0..SLOTS {
+        let bit = crate::input::key::slot_bit(slot);
+        if bit != 0 && drag.prev_keys & bit == 0 && frame.keys & bit != 0 {
+            pressed = Some(slot);
+            break;
+        }
     }
+    let Some(slot) = pressed else { return };
+    let Some(action) = bar.0[slot] else { return };
 
-    if let CameraFocus::Following(body) = *focus {
+    match action {
+        Action::Become => become_selected(&mut focus, &selected, &mut commands),
+        Action::Leave => leave_body(&mut focus, &positions, &mut commands),
+    }
+}
+
+fn leave_body(
+    focus: &mut ResMut<CameraFocus>,
+    positions: &Query<&Position>,
+    commands: &mut Commands,
+) {
+    if let CameraFocus::Following(body) = **focus {
         let park = positions.get(body).map(|p| p.0).ok();
         commands.queue(move |world: &mut World| {
             let left = unbecome(world);
@@ -648,15 +696,23 @@ pub fn toggle_become(
                 world.insert_resource(CameraFocus::Free(p));
             }
         });
-        return;
     }
+}
 
+fn become_selected(
+    focus: &mut ResMut<CameraFocus>,
+    selected: &Query<Entity, Orderable>,
+    commands: &mut Commands,
+) {
     // Exactly one body, so "become" is never ambiguous about which.
+    // `actions::resolve` already refuses to offer the verb otherwise;
+    // this is the same rule held at the point of action, so a stale bar
+    // can never seat you in an arbitrary member of a squad.
     let mut it = selected.iter();
     let (Some(body), None) = (it.next(), it.next()) else {
         return;
     };
-    *focus = CameraFocus::Following(body);
+    **focus = CameraFocus::Following(body);
     commands.queue(move |world: &mut World| become_pilot(world, body));
 }
 
@@ -835,6 +891,7 @@ pub fn register(app: &mut App) {
     app.insert_resource(CameraFocus::Free(Vec3::ZERO));
     app.insert_resource(CameraZoom::new(1450.0));
     app.insert_resource(Viewpoint::default());
+    app.insert_resource(ActionBar::default());
     app.add_systems(
         Update,
         (
@@ -844,8 +901,9 @@ pub fn register(app: &mut App) {
             update_viewpoint.after(pan_observer),
             apply_drag_selection.after(pan_observer).after(zoom_observer),
             apply_right_click_orders.after(apply_drag_selection),
-            toggle_become.after(apply_right_click_orders),
-            drive_piloted_body.after(toggle_become),
+            update_action_bar.after(apply_right_click_orders),
+            invoke_action.after(update_action_bar),
+            drive_piloted_body.after(invoke_action),
             latch_buttons.after(drive_piloted_body),
             steer_toward_order.after(latch_buttons),
             advance_units.after(steer_toward_order),

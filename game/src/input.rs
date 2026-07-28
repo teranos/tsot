@@ -14,9 +14,27 @@ pub mod key {
     pub const S: u32 = 0x0004;
     pub const D: u32 = 0x0008;
     pub const ESC: u32 = 0x0010;
-    /// Take or leave the wheel: become the selected body, or step back
-    /// out of the one you are in.
-    pub const BECOME: u32 = 0x0020;
+
+    /// The three action slots, left to right. Q, E, R on the keyboard —
+    /// adjacent to WASD so the hand never leaves the movement keys, and
+    /// in the same left-to-right order as the buttons they mirror.
+    ///
+    /// These are bound to SLOTS, not to verbs. What slot B does depends
+    /// on context; that it is E never changes. That is the whole point
+    /// of the limit — see `crate::actions`.
+    pub const SLOT_A: u32 = 0x0020;
+    pub const SLOT_B: u32 = 0x0040;
+    pub const SLOT_C: u32 = 0x0080;
+
+    /// The key bit for action slot `i`, or 0 if there is no such slot.
+    pub fn slot_bit(i: usize) -> u32 {
+        match i {
+            0 => SLOT_A,
+            1 => SLOT_B,
+            2 => SLOT_C,
+            _ => 0,
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

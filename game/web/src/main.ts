@@ -94,9 +94,13 @@ const KEY_A = 0x02
 const KEY_S = 0x04
 const KEY_D = 0x08
 const KEY_ESC = 0x10
-// Become / unbecome — take the wheel of the selected body, or step
-// back out into the detached observer. Mirrors input::key::BECOME.
-const KEY_BECOME = 0x20
+// The three action slots, left to right. Bound to SLOTS, not verbs:
+// what slot B does depends on context, that it is E never changes.
+// Q/E/R sit beside WASD so the hand never leaves the movement keys.
+// Mirrors input::key::SLOT_A/B/C.
+const KEY_SLOT_A = 0x20
+const KEY_SLOT_B = 0x40
+const KEY_SLOT_C = 0x80
 function keyBit(k: string): number {
   switch (k.toLowerCase()) {
     case 'w': return KEY_W
@@ -104,7 +108,9 @@ function keyBit(k: string): number {
     case 's': return KEY_S
     case 'd': return KEY_D
     case 'escape': return KEY_ESC
-    case 'e': return KEY_BECOME
+    case 'q': return KEY_SLOT_A
+    case 'e': return KEY_SLOT_B
+    case 'r': return KEY_SLOT_C
     default: return 0
   }
 }
