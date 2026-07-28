@@ -264,6 +264,23 @@ pub fn wire_imports(linker: &mut Linker<Arc<Mutex<HostState>>>) -> Result<()> {
         "game_pointer_ndc_y",
         |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<f32> { Ok(-2.0) },
     )?;
+    // Mouse buttons held, as the DOM's `buttons` bitmask. No hand under
+    // wasmtime, so nothing is ever held — which is the truth here, not
+    // a placeholder: the seer run drives a scripted tour and must not
+    // have selections or orders appearing under it.
+    linker.func_wrap(
+        "env",
+        "game_pointer_buttons",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<u32> { Ok(0) },
+    )?;
+    // Vertical wheel accumulator, resets on read. Separate from
+    // `game_wheel_delta` (horizontal, drives the tune HUD) so a slider
+    // and the camera zoom never share an axis. No wheel here either.
+    linker.func_wrap(
+        "env",
+        "game_wheel_delta_y",
+        |_caller: Caller<'_, Arc<Mutex<HostState>>>| -> Result<i32> { Ok(0) },
+    )?;
     linker.func_wrap(
         "env",
         "game_show_exclamation",
