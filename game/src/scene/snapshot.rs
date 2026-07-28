@@ -25,6 +25,9 @@ pub struct SceneSnapshot {
     pub obstacles: Vec<Vec3>,
     pub fires: Vec<(Vec3, f32)>,
     pub npcs: Vec<Vec3>,
+    /// Commandable units and whether each is currently selected — the
+    /// selection has to reach the render or a drag is an act of faith.
+    pub units: Vec<(Vec3, bool)>,
     pub pins: Vec<Vec3>,
     pub trails: Vec<Vec3>,
     pub remote_peers: Vec<RemotePeerDot>,
@@ -65,6 +68,12 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         .unwrap_or(Vec3::ZERO);
     let mut npc_q = world.query_filtered::<&Position, bevy_ecs::prelude::With<NpcMarker>>();
     let npcs: Vec<Vec3> = npc_q.iter(world).map(|p| p.0).collect();
+    let mut unit_q = world.query_filtered::<
+        (&Position, Option<&crate::rts::Selected>),
+        bevy_ecs::prelude::With<crate::rts::UnitMarker>,
+    >();
+    let units: Vec<(Vec3, bool)> =
+        unit_q.iter(world).map(|(p, s)| (p.0, s.is_some())).collect();
     let mut pin_q = world.query_filtered::<&Position, bevy_ecs::prelude::With<Pin>>();
     let pins: Vec<Vec3> = pin_q.iter(world).map(|p| p.0).collect();
     let mut trail_q = world.query_filtered::<&Position, bevy_ecs::prelude::With<TrailMarker>>();
@@ -90,6 +99,7 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         obstacles,
         fires,
         npcs,
+        units,
         pins,
         trails,
         remote_peers,

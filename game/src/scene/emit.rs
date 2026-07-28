@@ -56,6 +56,18 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             scale: [70.0, 140.0, 70.0],
         });
     }
+    // Commandable units. Selected ones go bright cyan against the
+    // slate of the unselected — selection is a claim about what a
+    // right-click is about to move, so it has to be readable at a
+    // glance and at any zoom, not inferred from what you remember
+    // dragging over.
+    for (u, selected) in &snap.units {
+        instances.push(SceneInstance {
+            pos: [u.x, 55.0, u.z],
+            color: if *selected { [0.20, 0.95, 0.90] } else { [0.45, 0.50, 0.60] },
+            scale: [60.0, 130.0, 60.0],
+        });
+    }
     // Named-zone markers — thin emissive-yellow rods so the layout
     // reads at a glance. Rave's rod+sphere+label overlay lands when
     // we grow text primitives in the shim.
@@ -250,6 +262,7 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -273,6 +286,7 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -293,6 +307,7 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -332,6 +347,7 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -366,6 +382,7 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -395,6 +412,7 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -424,6 +442,7 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -444,6 +463,7 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -478,6 +498,7 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],

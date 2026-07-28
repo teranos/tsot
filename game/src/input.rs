@@ -28,6 +28,15 @@ unsafe extern "C" {
     /// the pointer isn't over the canvas.
     fn game_pointer_ndc_x() -> f32;
     fn game_pointer_ndc_y() -> f32;
+    /// Buttons held right now, as the DOM's `MouseEvent.buttons`
+    /// bitmask — a LEVEL, not an event. Edges are derived in Rust by
+    /// comparing frames, because the shim has no frame to compare to.
+    fn game_pointer_buttons() -> u32;
+    /// Accumulated VERTICAL wheel since last read. Separate from
+    /// `game_wheel_delta`, which carries the horizontal axis and drives
+    /// the tune HUD; mixing them would make a slider fight the zoom.
+    /// Reading resets the accumulator.
+    fn game_wheel_delta_y() -> i32;
 }
 
 static TOUCH_BITS: AtomicU32 = AtomicU32::new(0);
@@ -78,4 +87,29 @@ pub fn pointer_ndc() -> Option<[f32; 2]> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn pointer_ndc() -> Option<[f32; 2]> {
     None
+}
+
+/// Mouse buttons held this frame, `rts::button::*`.
+#[cfg(target_arch = "wasm32")]
+pub fn buttons() -> u32 {
+    unsafe { game_pointer_buttons() }
+}
+
+/// Native has no pointer: the seer run drives a scripted tour, not a
+/// hand. Zero is the truth here, not a placeholder.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn buttons() -> u32 {
+    0
+}
+
+/// Accumulated vertical wheel since last call. Positive = wheel up =
+/// zoom in. Reading resets the accumulator on the JS side.
+#[cfg(target_arch = "wasm32")]
+pub fn wheel_delta_y() -> i32 {
+    unsafe { game_wheel_delta_y() }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wheel_delta_y() -> i32 {
+    0
 }

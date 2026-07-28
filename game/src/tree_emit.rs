@@ -471,6 +471,7 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],

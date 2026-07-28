@@ -294,6 +294,14 @@ fn frame_budget() -> u32 {
     }
 }
 
+/// The browser's avatar-input slot, deliberately empty. `rts` owns the
+/// keyboard now: `pump_input_frame` reads it once per frame inside the
+/// rts schedule, and `pan_observer` spends it on the viewport. Calling
+/// `pump_input_frame` here as well would drain `game_wheel_delta_y`
+/// twice a frame and the second read would win with zero.
+#[cfg(target_arch = "wasm32")]
+fn viewport_owns_input() {}
+
 fn setup(mut commands: Commands) {
     obs::emit(&format!(
         "[seer.build_info] commit={} built_at={}",
@@ -317,12 +325,30 @@ fn setup(mut commands: Commands) {
         format!("commit={} — sacred-error bus armed", build_info::COMMIT),
     );
 
+    let spawn = persist::load().unwrap_or(room::SPAWN_POS);
     commands.spawn((
         PlayerMarker,
         // Resume where we left off if a position was saved.
-        Position(persist::load().unwrap_or(room::SPAWN_POS)),
-        Velocity(Vec3::new(1.5, 0.0, 0.7)),
+        Position(spawn),
+        // At rest. WASD drives the viewport now, not this body — so a
+        // starting velocity would send it drifting off with nobody
+        // holding the wheel.
+        Velocity(Vec3::ZERO),
     ));
+    // A squad to command. Placed in a loose arc near the spawn so a
+    // first drag has something to catch without having to go looking.
+    for (i, (dx, dz)) in
+        [(-140.0, 60.0), (-70.0, 120.0), (0.0, 150.0), (70.0, 120.0), (140.0, 60.0)]
+            .into_iter()
+            .enumerate()
+    {
+        commands.spawn((
+            rts::UnitMarker,
+            Position(Vec3::new(spawn.x + dx, 0.0, spawn.z + dz)),
+            Velocity(Vec3::ZERO),
+        ));
+        obs::emit(&format!("[rts.setup] spawned unit {i} at ({dx}, {dz}) from spawn"));
+    }
     // Circling NPC — same wander pattern as the deterministic native
     // player input; bumping into it fires the exclamation overlay.
     commands.spawn((
@@ -571,6 +597,18 @@ fn _init() {
     #[cfg(not(target_arch = "wasm32"))]
     let tour = seer_tour_from(&building_templates);
     app.insert_resource(building_templates);
+    // The RTS command layer: input → selection → orders → steering.
+    // Registered before the observer's focus is set below, because
+    // `register` seeds a default focus and the spawn point should win.
+    rts::register(&mut app);
+    {
+        let spawn = persist::load().unwrap_or(room::SPAWN_POS);
+        app.insert_resource(rts::CameraFocus::Free(Vec3::new(
+            spawn.x,
+            terrain::height(spawn.x, spawn.z),
+            spawn.z,
+        )));
+    }
     app.add_systems(
         Startup,
         (
@@ -587,8 +625,17 @@ fn _init() {
             setup_music.after(setup),
         ),
     );
+    // WASD moves the VIEWPORT now, not the avatar — `rts::pan_observer`
+    // owns those keys while the observer is detached. `keyboard_input`
+    // is therefore gone from the browser schedule; leaving it in would
+    // pan the camera and walk the player with the same keypress.
+    //
+    // The consequence, stated plainly: nothing drives the player body
+    // in the browser until a become gesture exists. It stands where it
+    // spawned, which is what "you begin as an omnipresent observer"
+    // means.
     #[cfg(target_arch = "wasm32")]
-    let input_system = physics::keyboard_input;
+    let input_system = viewport_owns_input;
     #[cfg(not(target_arch = "wasm32"))]
     let input_system = seer_tour_input;
     app.add_systems(

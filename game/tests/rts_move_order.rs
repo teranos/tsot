@@ -146,6 +146,29 @@ fn arrived_squad_stays_put() {
 }
 
 #[test]
+fn units_sit_on_the_terrain() {
+    // Not cosmetic. A unit's Y feeds `world_to_clip`, so a unit left at
+    // y=0 over ground at y=200 projects roughly a tenth of NDC away
+    // from where it is drawn — far enough that clicking the thing you
+    // can see selects nothing, which would read as a broken pick radius
+    // rather than a body floating under the map.
+    let spawns = vec![Vec3::new(2400.0, 0.0, -1700.0), Vec3::new(-900.0, 0.0, 450.0)];
+    let mut app = squad_app(&spawns, None);
+    run(&mut app, 2);
+
+    for (i, p) in unit_positions(&mut app).iter().enumerate() {
+        let ground = game::terrain::height(p.x, p.z);
+        assert!(
+            (p.y - ground).abs() < 1e-3,
+            "unit {i} is {:.1} off the terrain at ({:.0}, {:.0})",
+            p.y - ground,
+            p.x,
+            p.z
+        );
+    }
+}
+
+#[test]
 fn unordered_unpiloted_unit_holds_position() {
     // The command axiom stated negatively. No `MoveOrder` is not "the
     // key isn't held right now" — it is "was never ordered", and the

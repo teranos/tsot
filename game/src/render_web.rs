@@ -997,10 +997,32 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     scene::drape(&mut glass);
     scene::drape(&mut ghost);
     mesh_trees.drape();
-    let camera = SceneCamera::follow(
-        [snap.player.x, snap.player.y, snap.player.z],
-        crate::room::FLOOR_HALF,
-    );
+    // The observer owns the viewport. Falling back to the old
+    // player-follow camera keeps a sane view rather than cutting to the
+    // origin, but it is a real fault — either the schedule was never
+    // registered or the camera is following a body that is gone — so it
+    // says so once instead of quietly looking almost right forever.
+    let camera = match crate::rts::observer_camera_from_app(app) {
+        Some(c) => c,
+        None => {
+            static TOLD: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !TOLD.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                crate::error::emit_region(
+                    crate::error::Severity::Error,
+                    "render_web.camera",
+                    "no observer camera; falling back to following the player",
+                    "`rts::observer_camera_from_app` returned None — either \
+                     `rts::register` never ran, or CameraFocus points at a \
+                     despawned entity. The view still renders, from the player.",
+                );
+            }
+            SceneCamera::follow(
+                [snap.player.x, snap.player.y, snap.player.z],
+                crate::room::FLOOR_HALF,
+            )
+        }
+    };
     // Elapsed seconds for leaf-wind sway — synthetic ticks (no bevy_time,
     // same model as the campfire flicker). Advances every frame, so the
     // browser canopy ripples continuously.

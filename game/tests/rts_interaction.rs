@@ -70,6 +70,44 @@ fn right_click(app: &mut App, at: [f32; 2]) {
     frame(app, InputFrame { ndc: Some(at), buttons: button::RIGHT, ..Default::default() });
 }
 
+/// The camera the interaction systems are using this frame.
+fn observer_cam(app: &App) -> game::scene::SceneCamera {
+    let CameraFocus::Free(p) = *app.world().resource::<CameraFocus>() else {
+        panic!("observer should be detached")
+    };
+    game::scene::SceneCamera::at(
+        [p.x, p.y, p.z],
+        app.world().resource::<CameraZoom>().half_extent(),
+        game::room::FLOOR_HALF,
+    )
+}
+
+/// Where a world position lands on screen, for aiming a click at it.
+fn ndc_of(app: &App, p: Vec3) -> [f32; 2] {
+    observer_cam(app).world_to_clip([p.x, p.y, p.z])
+}
+
+/// A click aimed NEAR a unit rather than exactly at its projected
+/// centre — which is what a hand does, and what stops these tests
+/// passing for the wrong reason.
+///
+/// Aimed dead centre, a click's zero-area rectangle contains the unit
+/// by exact float equality (the test computes the same NDC the
+/// selection does), so rect-only selection appears to work and the
+/// pick radius is never exercised. Off by a couple of hundredths, the
+/// rectangle contains nothing and only a real proximity test passes.
+fn click_near(app: &mut App, unit: Vec3, offset: [f32; 2]) {
+    let c = ndc_of(app, unit);
+    let at = [c[0] + offset[0], c[1] + offset[1]];
+    click(app, at);
+}
+
+/// Press and release at the same point: a click, not a drag.
+fn click(app: &mut App, at: [f32; 2]) {
+    frame(app, InputFrame { ndc: Some(at), buttons: button::LEFT, ..Default::default() });
+    frame(app, InputFrame { ndc: Some(at), buttons: 0, ..Default::default() });
+}
+
 fn is_selected(app: &mut App, e: Entity) -> bool {
     app.world().get::<Selected>(e).is_some()
 }
@@ -184,6 +222,51 @@ fn a_right_click_cannot_order_the_body_being_piloted() {
         None,
         "a right-click gave the piloted body an order — two drivers again"
     );
+}
+
+#[test]
+fn a_click_selects_the_unit_under_it() {
+    // A click is a zero-area rectangle, so rect-only selection picks
+    // nothing — and clicking one unit is the most ordinary thing a hand
+    // does, on a mouse and on a finger alike. Below a slop threshold
+    // the gesture is a click and resolves by proximity instead.
+    let (mut app, centre, ids) = observer_app(&[(0.0, 0.0), (3000.0, 3000.0)]);
+    let target = on_terrain(centre.x, centre.z);
+
+    click_near(&mut app, target, [0.015, 0.015]);
+
+    assert!(is_selected(&mut app, ids[0]), "clicking a unit did not select it");
+    assert!(!is_selected(&mut app, ids[1]), "clicking one unit selected a distant one");
+}
+
+#[test]
+fn a_click_on_empty_ground_clears_the_selection() {
+    let (mut app, _c, ids) = observer_app(&[(0.0, 0.0)]);
+    drag(&mut app, [-0.4, -0.4], [0.4, 0.4]);
+    assert!(is_selected(&mut app, ids[0]));
+
+    click(&mut app, [-0.9, 0.85]);
+    assert!(
+        !is_selected(&mut app, ids[0]),
+        "clicking bare ground left the old selection standing"
+    );
+}
+
+#[test]
+fn a_click_takes_the_nearest_unit_not_every_nearby_one() {
+    // Click selects ONE. Two units inside the same pick radius must not
+    // both come along, or a click quietly becomes a small drag.
+    // The two project about 0.031 apart in NDC. Aiming 0.01 off the
+    // first puts BOTH inside the pick radius, with the first nearer —
+    // so "take the nearest" and "take everything close" give different
+    // answers, which is the only way this test means anything.
+    let (mut app, centre, ids) = observer_app(&[(0.0, 0.0), (55.0, 55.0)]);
+    let first = on_terrain(centre.x, centre.z);
+
+    click_near(&mut app, first, [0.0, -0.01]);
+
+    assert!(is_selected(&mut app, ids[0]), "the nearest unit was not selected");
+    assert!(!is_selected(&mut app, ids[1]), "a click dragged in a second unit");
 }
 
 #[test]

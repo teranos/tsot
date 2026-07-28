@@ -159,7 +159,11 @@ if (gameCanvas) {
   }
   gameCanvas.addEventListener('touchend', ev => { ev.preventDefault(); dropTouch(ev) }, { passive: false })
   gameCanvas.addEventListener('touchcancel', ev => { dropTouch(ev) })
+  // LEFT button only. `mousedown` fires for the right button too, so
+  // without this a right-click — the RTS order gesture — also lands as
+  // a synthetic touch on the D-pad's hit-test.
   gameCanvas.addEventListener('mousedown', ev => {
+    if (ev.button !== 0) return
     mouseTouch = clientToNdc(ev.clientX, ev.clientY, gameCanvas)
   })
   gameCanvas.addEventListener('mousemove', ev => {
@@ -184,23 +188,40 @@ if (gameCanvas) {
   gameCanvas.addEventListener('wheel', ev => {
     ev.preventDefault()
     wheelAccum += Math.round(ev.deltaX)
+    wheelAccumY += Math.round(ev.deltaY)
   }, { passive: false })
   gameCanvas.addEventListener('pointermove', ev => {
     const p = clientToNdc(ev.clientX, ev.clientY, gameCanvas)
     pointerNdcX = p.x
     pointerNdcY = p.y
+    pointerButtons = ev.buttons
   })
   gameCanvas.addEventListener('pointerleave', () => {
     pointerNdcX = -2
     pointerNdcY = -2
+    pointerButtons = 0
   })
+
+  // Buttons as a LEVEL, straight from the DOM's own bitmask, so Rust
+  // derives press and release by comparing frames. `ev.buttons` on
+  // pointerup already excludes the button being released, so up and
+  // down are the same assignment.
+  gameCanvas.addEventListener('pointerdown', ev => { pointerButtons = ev.buttons })
+  gameCanvas.addEventListener('pointerup', ev => { pointerButtons = ev.buttons })
+  gameCanvas.addEventListener('pointercancel', () => { pointerButtons = 0 })
+
+  // Right-click is the order gesture. Without this the browser menu
+  // opens over the canvas on every command.
+  gameCanvas.addEventListener('contextmenu', ev => { ev.preventDefault() })
 }
 
 // Wheel + pointer state. Off-canvas sentinel is |v| > 1 which Rust's
 // `input::pointer_ndc()` maps to `None`.
 let wheelAccum = 0
+let wheelAccumY = 0
 let pointerNdcX = -2
 let pointerNdcY = -2
+let pointerButtons = 0
 
 // IndexedDB identity storage. Rust owns the bytes; JS owns the store.
 // Pre-boot: try to load "self" so Rust's game_identity_load gets a
@@ -640,6 +661,12 @@ async function main() {
       },
       game_pointer_ndc_x: (): number => pointerNdcX,
       game_pointer_ndc_y: (): number => pointerNdcY,
+      game_pointer_buttons: (): number => pointerButtons | 0,
+      game_wheel_delta_y: (): number => {
+        const d = wheelAccumY | 0
+        wheelAccumY = 0
+        return d
+      },
       game_touch_state: (outPtr: number, outMax: number): number => {
         if (!memory) return 0
         const total = activeTouches.length + (mouseTouch ? 1 : 0)

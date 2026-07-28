@@ -436,6 +436,19 @@ pub enum CameraFocus {
     Following(Entity),
 }
 
+/// Below this NDC span on both axes, a drag was a click. Sized so an
+/// unsteady hand — or a finger, which is far less steady — still
+/// reads as a tap rather than a one-pixel rectangle that selects
+/// nothing.
+pub const CLICK_SLOP_NDC: f32 = 0.02;
+
+/// How near a click has to land, in NDC, to catch a unit. In NDC and
+/// not world units on purpose: a pick radius is a claim about how
+/// accurately a hand can aim at the SCREEN, so it must stay the same
+/// apparent size whatever the zoom. Expressed in world units it would
+/// grow into a lasso when zoomed out and shrink to nothing zoomed in.
+pub const PICK_RADIUS_NDC: f32 = 0.06;
+
 /// Observer pan speed, world units per tick per key. Faster than
 /// `KEYBOARD_SPEED` because panning a view has no body to outrun and
 /// crossing the map is the common case.
@@ -460,11 +473,20 @@ pub struct DragState {
 /// because `register` is not called from `_init()` yet. So the read
 /// lands in the same change that wires the schedule into the app.
 ///
-/// Not stubbed with zeroes on purpose. A `buttons()` that always
-/// answers "nothing is pressed" is a lie the type system cannot catch;
-/// an empty pump is merely inert, and every test drives the resource
-/// directly anyway.
-pub fn pump_input_frame(_frame: ResMut<InputFrame>) {}
+/// On native it leaves the resource alone: the seer run drives a
+/// scripted tour, not a hand, and tests write the struct directly to
+/// drive the exact frames they mean.
+pub fn pump_input_frame(mut _frame: ResMut<InputFrame>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        *_frame = InputFrame {
+            keys: crate::input::state(),
+            ndc: crate::input::pointer_ndc(),
+            buttons: crate::input::buttons(),
+            wheel_y: crate::input::wheel_delta_y(),
+        };
+    }
+}
 
 /// Left press anchors a drag; left release resolves the rectangle it
 /// swept into the selection, replacing whatever was selected before.
@@ -501,13 +523,50 @@ pub fn apply_drag_selection(
         return;
     };
     let all: Vec<(Entity, Vec3)> = units.iter().map(|(e, p)| (e, p.0)).collect();
-    let picked = units_in_rect(&camera, &all, a, b);
+
+    // A click is a rectangle with no area, and no area catches nothing
+    // — so below the slop it resolves by proximity instead, taking the
+    // single nearest unit. One unit, not everything inside the radius:
+    // a click that quietly behaved like a small drag would make
+    // "select one thing" impossible in a crowd.
+    let is_click =
+        (a[0] - b[0]).abs() <= CLICK_SLOP_NDC && (a[1] - b[1]).abs() <= CLICK_SLOP_NDC;
+    let picked: Vec<Entity> = if is_click {
+        nearest_within_pick_radius(&camera, &all, b).into_iter().collect()
+    } else {
+        units_in_rect(&camera, &all, a, b)
+    };
+
     for (e, _) in &all {
         commands.entity(*e).remove::<Selected>();
     }
     for e in picked {
         commands.entity(e).insert(Selected);
     }
+}
+
+/// The unit nearest `ndc` on screen, if any is inside
+/// `PICK_RADIUS_NDC`. Compared in clip space, like `units_in_rect`, so
+/// it tracks zoom without being told about it.
+pub fn nearest_within_pick_radius(
+    camera: &SceneCamera,
+    units: &[(Entity, Vec3)],
+    ndc: [f32; 2],
+) -> Option<Entity> {
+    units
+        .iter()
+        .filter_map(|(e, p)| {
+            let c = camera.world_to_clip([p.x, p.y, p.z]);
+            let (dx, dy) = (c[0] - ndc[0], c[1] - ndc[1]);
+            let d2 = dx * dx + dy * dy;
+            (d2 <= PICK_RADIUS_NDC * PICK_RADIUS_NDC).then_some((*e, d2))
+        })
+        // Ties broken by distance alone would be nondeterministic
+        // between peers; `total_cmp` at least makes the comparison
+        // itself exact, and equal distances are resolved by iteration
+        // order, which is the query's and therefore stable per world.
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(e, _)| e)
 }
 
 /// Right press sends the current selection to the ground under the
@@ -613,6 +672,42 @@ pub fn observer_camera(
     ))
 }
 
+/// Sit units on the terrain, after movement and separation settle.
+///
+/// The simulation carries the real elevation, not just the render —
+/// same reason `physics::ground_follow_player` exists, plus one that is
+/// specific to commanding: a unit's Y feeds `world_to_clip`, so a unit
+/// left at y=0 over ground at y=200 projects a tenth of NDC away from
+/// where it is drawn, and clicking the thing you can see selects
+/// nothing.
+pub fn ground_follow_units(mut q: Query<&mut Position, With<UnitMarker>>) {
+    for mut p in q.iter_mut() {
+        p.0.y = crate::terrain::height(p.0.x, p.0.z);
+    }
+}
+
+/// The observer's camera, resolved from the app's own focus and zoom.
+/// The render path calls this so what you see is built from the same
+/// two resources the interaction systems read — one source of truth for
+/// where the viewport is, rather than a render-side copy that can drift
+/// out of step with what a click is measured against.
+///
+/// `None` when the resources are absent (the schedule was never
+/// registered) or when following a body that no longer exists.
+pub fn observer_camera_from_app(app: &mut App) -> Option<SceneCamera> {
+    let zoom = *app.world().get_resource::<CameraZoom>()?;
+    let focus = *app.world().get_resource::<CameraFocus>()?;
+    let point = match focus {
+        CameraFocus::Free(p) => p,
+        CameraFocus::Following(e) => app.world().get::<Position>(e)?.0,
+    };
+    Some(SceneCamera::at(
+        [point.x, point.y, point.z],
+        zoom.half_extent(),
+        crate::room::FLOOR_HALF,
+    ))
+}
+
 /// Register the command layer's systems in `Update`, in the order the
 /// data flows: input → selection → orders → steering → velocity →
 /// position → de-overlap. The tests drive this same registration, so
@@ -634,6 +729,7 @@ pub fn register(app: &mut App) {
             steer_toward_order.after(latch_buttons),
             advance_units.after(steer_toward_order),
             separate_units.after(advance_units),
+            ground_follow_units.after(separate_units),
         ),
     );
 }
