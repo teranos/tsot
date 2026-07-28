@@ -14,6 +14,9 @@ pub mod key {
     pub const S: u32 = 0x0004;
     pub const D: u32 = 0x0008;
     pub const ESC: u32 = 0x0010;
+    /// Take or leave the wheel: become the selected body, or step back
+    /// out of the one you are in.
+    pub const BECOME: u32 = 0x0020;
 }
 
 #[cfg(target_arch = "wasm32")]

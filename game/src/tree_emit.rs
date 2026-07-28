@@ -472,6 +472,7 @@ mod tests {
             fires: vec![],
             npcs: vec![],
             units: vec![],
+            viewpoint: Vec3::ZERO,
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],

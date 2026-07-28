@@ -108,6 +108,10 @@ fn click(app: &mut App, at: [f32; 2]) {
     frame(app, InputFrame { ndc: Some(at), buttons: 0, ..Default::default() });
 }
 
+fn pos_of(app: &App, e: Entity) -> Vec3 {
+    app.world().get::<Position>(e).expect("entity has a Position").0
+}
+
 fn is_selected(app: &mut App, e: Entity) -> bool {
     app.world().get::<Selected>(e).is_some()
 }
@@ -296,6 +300,112 @@ fn wasd_does_not_pan_while_following_a_body() {
         CameraFocus::Following(ids[0]),
         "panning knocked the observer off the body it was following"
     );
+}
+
+#[test]
+fn become_takes_the_selected_body_and_follows_it() {
+    let (mut app, _c, ids) = observer_app(&[(0.0, 0.0)]);
+    drag(&mut app, [-0.4, -0.4], [0.4, 0.4]);
+    assert!(is_selected(&mut app, ids[0]));
+
+    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+
+    assert!(
+        app.world().get::<Piloted>(ids[0]).is_some(),
+        "pressing become did not seat the human in the selected body"
+    );
+    assert_eq!(
+        *app.world().resource::<CameraFocus>(),
+        CameraFocus::Following(ids[0]),
+        "the observer did not follow the body it became"
+    );
+}
+
+#[test]
+fn become_again_steps_out_where_the_body_stands() {
+    // Unbecoming parks the detached observer on the body it left, so
+    // stepping out does not cut the view to somewhere else.
+    let (mut app, centre, ids) = observer_app(&[(400.0, -300.0)]);
+    drag(&mut app, [-0.9, -0.9], [0.9, 0.9]);
+    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+    assert!(app.world().get::<Piloted>(ids[0]).is_some());
+
+    // Released, then pressed again — a level held across frames is one
+    // press, not many.
+    frame(&mut app, InputFrame::default());
+    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+
+    assert!(app.world().get::<Piloted>(ids[0]).is_none(), "the human stayed seated");
+    let CameraFocus::Free(at) = *app.world().resource::<CameraFocus>() else {
+        panic!("stepping out did not detach the observer")
+    };
+    let body = pos_of(&app, ids[0]);
+    assert!(
+        ((at.x - body.x).powi(2) + (at.z - body.z).powi(2)).sqrt() < 1.0,
+        "the observer parked at {at:?}, not on the body at {body:?}"
+    );
+    assert!((at.x - centre.x).abs() > 1.0, "the observer snapped back to where it started");
+}
+
+#[test]
+fn become_does_nothing_without_a_selection() {
+    let (mut app, centre, _ids) = observer_app(&[(0.0, 0.0)]);
+    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+
+    assert_eq!(
+        *app.world().resource::<CameraFocus>(),
+        CameraFocus::Free(centre),
+        "become with nothing selected moved the observer anyway"
+    );
+}
+
+#[test]
+fn holding_become_does_not_flip_every_frame() {
+    // The key is a level too. Acting on it rather than on its press
+    // edge would toggle in and out of the body sixty times a second.
+    let (mut app, _c, ids) = observer_app(&[(0.0, 0.0)]);
+    drag(&mut app, [-0.4, -0.4], [0.4, 0.4]);
+    for _ in 0..7 {
+        frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+    }
+    assert!(
+        app.world().get::<Piloted>(ids[0]).is_some(),
+        "holding the key toggled the seat instead of taking it once"
+    );
+}
+
+#[test]
+fn wasd_drives_the_body_you_became() {
+    let (mut app, _c, ids) = observer_app(&[(0.0, 0.0)]);
+    drag(&mut app, [-0.4, -0.4], [0.4, 0.4]);
+    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+    let before = pos_of(&app, ids[0]);
+
+    for _ in 0..20 {
+        frame(&mut app, InputFrame { keys: key::W, ..Default::default() });
+    }
+
+    let after = pos_of(&app, ids[0]);
+    let moved = ((after.x - before.x).powi(2) + (after.z - before.z).powi(2)).sqrt();
+    assert!(moved > 10.0, "holding W moved the body {moved:.1} units — nobody is driving");
+}
+
+#[test]
+fn an_unpiloted_unit_is_not_driven_by_the_keyboard() {
+    // WASD reaches exactly one body: the one you are in. Otherwise a
+    // keypress marches the whole world.
+    let (mut app, _c, ids) = observer_app(&[(0.0, 0.0), (300.0, 0.0)]);
+    drag(&mut app, [-0.4, -0.4], [0.4, 0.4]);
+    frame(&mut app, InputFrame { keys: key::BECOME, ..Default::default() });
+    let before = pos_of(&app, ids[1]);
+
+    for _ in 0..20 {
+        frame(&mut app, InputFrame { keys: key::W, ..Default::default() });
+    }
+
+    let after = pos_of(&app, ids[1]);
+    let moved = ((after.x - before.x).powi(2) + (after.z - before.z).powi(2)).sqrt();
+    assert!(moved < 1e-3, "a unit nobody is piloting walked {moved:.3} units");
 }
 
 #[test]

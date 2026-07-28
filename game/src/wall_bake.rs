@@ -235,8 +235,8 @@ pub fn player_inside(anchor: Vec3, snap: &crate::scene::SceneSnapshot) -> bool {
     let roof_half = cdda::CDDA_TILE / 2.0;
     let overhead = snap.structures.iter().find(|(p, k, _, _)| {
         *k == crate::template::PropKind::Roof
-            && (p.x - snap.player.x).abs() <= roof_half
-            && (p.z - snap.player.z).abs() <= roof_half
+            && (p.x - snap.viewpoint.x).abs() <= roof_half
+            && (p.z - snap.viewpoint.z).abs() <= roof_half
     });
     match overhead {
         Some((p, _, _, _)) => (p.x - anchor.x).abs() < 800.0 && (p.z - anchor.z).abs() < 800.0,

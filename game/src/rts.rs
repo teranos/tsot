@@ -459,6 +459,10 @@ pub const PAN_SPEED: f32 = 26.0;
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct DragState {
     pub prev_buttons: u32,
+    /// Keys held last frame. Same reason as `prev_buttons`: a key is a
+    /// level, and "become" acting on the level rather than its press
+    /// edge would toggle you in and out of a body sixty times a second.
+    pub prev_keys: u32,
     pub anchor: Option<[f32; 2]>,
 }
 
@@ -607,6 +611,86 @@ pub fn apply_right_click_orders(
 /// than whichever system happened to run first quietly consuming it.
 pub fn latch_buttons(frame: Res<InputFrame>, mut drag: ResMut<DragState>) {
     drag.prev_buttons = frame.buttons;
+    drag.prev_keys = frame.keys;
+}
+
+/// Take the wheel of the selected body, or step back out of the one you
+/// are in. The gesture that makes `Piloted` reachable by a human.
+///
+/// Stepping out parks the detached observer ON the body it left, so
+/// unbecoming does not cut the view somewhere else — that is what
+/// `unbecome`'s return value has been for all along.
+///
+/// With nothing selected and nothing seated, the key does nothing. It
+/// is not an error: pressing it is how you find out whether you had
+/// something selected.
+pub fn toggle_become(
+    frame: Res<InputFrame>,
+    drag: Res<DragState>,
+    mut focus: ResMut<CameraFocus>,
+    selected: Query<Entity, Orderable>,
+    positions: Query<&Position>,
+    mut commands: Commands,
+) {
+    let pressed_before = drag.prev_keys & crate::input::key::BECOME != 0;
+    let pressed_now = frame.keys & crate::input::key::BECOME != 0;
+    if pressed_before || !pressed_now {
+        return;
+    }
+
+    if let CameraFocus::Following(body) = *focus {
+        let park = positions.get(body).map(|p| p.0).ok();
+        commands.queue(move |world: &mut World| {
+            let left = unbecome(world);
+            if let Some(p) = park.or_else(|| {
+                left.and_then(|e| world.get::<Position>(e).map(|pos| pos.0))
+            }) {
+                world.insert_resource(CameraFocus::Free(p));
+            }
+        });
+        return;
+    }
+
+    // Exactly one body, so "become" is never ambiguous about which.
+    let mut it = selected.iter();
+    let (Some(body), None) = (it.next(), it.next()) else {
+        return;
+    };
+    *focus = CameraFocus::Following(body);
+    commands.queue(move |world: &mut World| become_pilot(world, body));
+}
+
+/// WASD drives the body the human is in. Reaches exactly one entity —
+/// the piloted one — because a keypress that marched every unit would
+/// make the two authorities meaningless.
+pub fn drive_piloted_body(
+    frame: Res<InputFrame>,
+    mut q: Query<&mut Velocity, (With<Piloted>, With<UnitMarker>)>,
+) {
+    // Same 45° isometric rotation `pan_observer` and
+    // `physics::keyboard_input` use, so W is "up the screen" in a body
+    // exactly as it is out of one.
+    let mut dir = Vec3::ZERO;
+    if frame.keys & crate::input::key::W != 0 {
+        dir += Vec3::new(-1.0, 0.0, -1.0);
+    }
+    if frame.keys & crate::input::key::S != 0 {
+        dir += Vec3::new(1.0, 0.0, 1.0);
+    }
+    if frame.keys & crate::input::key::A != 0 {
+        dir += Vec3::new(-1.0, 0.0, 1.0);
+    }
+    if frame.keys & crate::input::key::D != 0 {
+        dir += Vec3::new(1.0, 0.0, -1.0);
+    }
+    let v = if dir.length_squared() > 0.0 {
+        dir.normalize() * UNIT_SPEED
+    } else {
+        Vec3::ZERO
+    };
+    for mut vel in q.iter_mut() {
+        vel.0 = v;
+    }
 }
 
 /// WASD pans a detached observer. Does nothing while the observer is
@@ -672,6 +756,39 @@ pub fn observer_camera(
     ))
 }
 
+/// Where the world is centred this frame.
+///
+/// Chunk streaming, the terrain surface mesh, wall baking and the roof
+/// cut-away all build around one point, and it must be the point you
+/// are LOOKING at, not the avatar you left behind. Anchored to the
+/// player — as all of it was while the camera was leashed to the
+/// player — panning the observer away shows a world that was never
+/// generated: no ground, no trees, no buildings, because they are all
+/// still being made around a body somewhere off screen.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct Viewpoint(pub Vec3);
+
+/// Resolve `CameraFocus` into the world's centre of attention. Runs
+/// early, because everything that decides what EXISTS reads it.
+///
+/// A `Following` focus whose body is gone leaves the viewpoint where it
+/// was rather than snapping to the origin — the world stays built where
+/// you were looking while the camera fallback sorts itself out.
+pub fn update_viewpoint(
+    focus: Res<CameraFocus>,
+    positions: Query<&Position>,
+    mut viewpoint: ResMut<Viewpoint>,
+) {
+    match *focus {
+        CameraFocus::Free(p) => viewpoint.0 = p,
+        CameraFocus::Following(e) => {
+            if let Ok(p) = positions.get(e) {
+                viewpoint.0 = p.0;
+            }
+        }
+    }
+}
+
 /// Sit units on the terrain, after movement and separation settle.
 ///
 /// The simulation carries the real elevation, not just the render —
@@ -717,15 +834,19 @@ pub fn register(app: &mut App) {
     app.insert_resource(DragState::default());
     app.insert_resource(CameraFocus::Free(Vec3::ZERO));
     app.insert_resource(CameraZoom::new(1450.0));
+    app.insert_resource(Viewpoint::default());
     app.add_systems(
         Update,
         (
             pump_input_frame,
             pan_observer.after(pump_input_frame),
             zoom_observer.after(pump_input_frame),
+            update_viewpoint.after(pan_observer),
             apply_drag_selection.after(pan_observer).after(zoom_observer),
             apply_right_click_orders.after(apply_drag_selection),
-            latch_buttons.after(apply_right_click_orders),
+            toggle_become.after(apply_right_click_orders),
+            drive_piloted_body.after(toggle_become),
+            latch_buttons.after(drive_piloted_body),
             steer_toward_order.after(latch_buttons),
             advance_units.after(steer_toward_order),
             separate_units.after(advance_units),

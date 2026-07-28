@@ -812,8 +812,8 @@ pub fn frame_surface(px: f32, pz: f32) -> u32 {
 /// picks each part's cut-away index range and draws. See RENDER.md
 /// slice 4.
 pub fn frame_walls(snap: &scene::SceneSnapshot, bt: &crate::buildings::BuildingTemplates) -> u32 {
-    let pcx = (snap.player.x / crate::chunk::CHUNK_SIZE).floor() as i32;
-    let pcz = (snap.player.z / crate::chunk::CHUNK_SIZE).floor() as i32;
+    let pcx = (snap.viewpoint.x / crate::chunk::CHUNK_SIZE).floor() as i32;
+    let pcz = (snap.viewpoint.z / crate::chunk::CHUNK_SIZE).floor() as i32;
     STATE.with(|c| {
         let mut opt = c.borrow_mut();
         let Some(state) = opt.as_mut() else {
@@ -825,7 +825,7 @@ pub fn frame_walls(snap: &scene::SceneSnapshot, bt: &crate::buildings::BuildingT
             // arrive with wall mutation, later), so this is the only
             // upload path.
             let placed =
-                crate::wall_bake::visible_wall_bakes(snap.player, bt, crate::chunk::CHUNK_SIZE, 3);
+                crate::wall_bake::visible_wall_bakes(snap.viewpoint, bt, crate::chunk::CHUNK_SIZE, 3);
             let mut gpu = Vec::new();
             for pw in &placed {
                 let y = crate::terrain::height(pw.anchor.x, pw.anchor.z);
@@ -886,7 +886,7 @@ pub fn frame_walls(snap: &scene::SceneSnapshot, bt: &crate::buildings::BuildingT
             let anchor = bevy_math::Vec3::new(part.anchor[0], 0.0, part.anchor[1]);
             let inside = crate::wall_bake::player_inside(anchor, snap);
             let (draw_count, _) =
-                part.draw_counts(inside, crate::wall_bake::local_depth(anchor, snap.player));
+                part.draw_counts(inside, crate::wall_bake::local_depth(anchor, snap.viewpoint));
             if draw_count == 0 {
                 continue;
             }
@@ -923,7 +923,7 @@ pub fn frame_walls_ghost(snap: &scene::SceneSnapshot) -> u32 {
             let anchor = bevy_math::Vec3::new(part.anchor[0], 0.0, part.anchor[1]);
             let inside = crate::wall_bake::player_inside(anchor, snap);
             let (_, ghost_count) =
-                part.draw_counts(inside, crate::wall_bake::local_depth(anchor, snap.player));
+                part.draw_counts(inside, crate::wall_bake::local_depth(anchor, snap.viewpoint));
             if ghost_count == 0 {
                 continue;
             }
@@ -1042,7 +1042,7 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     // elements are correctly occluded by buildings in front of them.
     // Solid ground (with the world-anchored grid in its shader), then
     // trees — all depth-tested over the cleared cube pass.
-    let surface_result = frame_surface(snap.player.x, snap.player.z);
+    let surface_result = frame_surface(snap.viewpoint.x, snap.viewpoint.z);
     if surface_result != 0 {
         return surface_result;
     }

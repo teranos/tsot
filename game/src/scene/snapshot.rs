@@ -34,6 +34,12 @@ pub struct SceneSnapshot {
     pub structures: Vec<StructureSnap>,
     pub jukeboxes: Vec<Vec3>,
     pub player: Vec3,
+    /// Where the world is centred: the observer's point, which is the
+    /// camera focus when detached and the driven body when following
+    /// one. The terrain surface, wall bakes and roof cut-away all build
+    /// around THIS, not around `player` — anchored to the player they
+    /// vanish the moment the observer pans away.
+    pub viewpoint: Vec3,
 }
 
 pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
@@ -100,6 +106,13 @@ pub fn snapshot_scene(app: &mut App) -> SceneSnapshot {
         fires,
         npcs,
         units,
+        // Falls back to the player when the rts schedule was never
+        // registered — a bare `App` in a unit test, where the player IS
+        // the only viewpoint there is and the old behaviour is right.
+        viewpoint: world
+            .get_resource::<crate::rts::Viewpoint>()
+            .map(|v| v.0)
+            .unwrap_or(player),
         pins,
         trails,
         remote_peers,

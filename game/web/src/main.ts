@@ -94,6 +94,9 @@ const KEY_A = 0x02
 const KEY_S = 0x04
 const KEY_D = 0x08
 const KEY_ESC = 0x10
+// Become / unbecome — take the wheel of the selected body, or step
+// back out into the detached observer. Mirrors input::key::BECOME.
+const KEY_BECOME = 0x20
 function keyBit(k: string): number {
   switch (k.toLowerCase()) {
     case 'w': return KEY_W
@@ -101,6 +104,7 @@ function keyBit(k: string): number {
     case 's': return KEY_S
     case 'd': return KEY_D
     case 'escape': return KEY_ESC
+    case 'e': return KEY_BECOME
     default: return 0
   }
 }

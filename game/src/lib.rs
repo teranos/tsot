@@ -326,15 +326,25 @@ fn setup(mut commands: Commands) {
     );
 
     let spawn = persist::load().unwrap_or(room::SPAWN_POS);
-    commands.spawn((
-        PlayerMarker,
-        // Resume where we left off if a position was saved.
-        Position(spawn),
-        // At rest. WASD drives the viewport now, not this body — so a
-        // starting velocity would send it drifting off with nobody
-        // holding the wheel.
-        Velocity(Vec3::ZERO),
-    ));
+    let player = commands
+        .spawn((
+            PlayerMarker,
+            // Resume where we left off if a position was saved.
+            Position(spawn),
+            // At rest. WASD drives the viewport now, not this body — so
+            // a starting velocity would send it drifting off with
+            // nobody holding the wheel.
+            Velocity(Vec3::ZERO),
+        ))
+        .id();
+    // The seer run has no hand: `seer_tour_input` teleports the PLAYER
+    // between tour stops, so the viewpoint has to follow the player or
+    // chunk streaming would keep generating the world back at spawn
+    // while the tour walks through emptiness.
+    #[cfg(not(target_arch = "wasm32"))]
+    commands.insert_resource(rts::CameraFocus::Following(player));
+    #[cfg(target_arch = "wasm32")]
+    let _ = player;
     // A squad to command. Placed in a loose arc near the spawn so a
     // first drag has something to catch without having to go looking.
     for (i, (dx, dz)) in
@@ -649,7 +659,12 @@ fn _init() {
             physics::resolve_remote_player_collisions.after(physics::resolve_collisions),
             physics::check_npc_bump.after(physics::advance_npc),
             bang::age_and_publish.after(physics::check_npc_bump),
-            chunk::stream_chunks.after(physics::resolve_remote_player_collisions),
+            // After the viewpoint resolves: streaming decides what
+            // exists, and it has to build around where you are looking
+            // this frame, not where you were looking last one.
+            chunk::stream_chunks
+                .after(physics::resolve_remote_player_collisions)
+                .after(rts::update_viewpoint),
             campfire::flicker_fire.after(physics::resolve_remote_player_collisions),
             campfire::campfire_crackle_system.after(campfire::flicker_fire),
             dpad::dpad_input_system.after(campfire::campfire_crackle_system),

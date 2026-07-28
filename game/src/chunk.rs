@@ -17,7 +17,7 @@ use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 
 use crate::campsite;
-use crate::physics::{AabbCollider, Position, PlayerMarker};
+use crate::physics::{AabbCollider, Position};
 use crate::template::stamp_template;
 use crate::trees::{self, TreeTrunk};
 
@@ -165,20 +165,22 @@ fn spawn_tree(
         .id()
 }
 
-/// Streaming system — keep exactly the chunks around the player loaded.
-/// Cheap on frames where the player stays in range (just set diffs);
+/// Streaming system — keep exactly the chunks around the VIEWPOINT
+/// loaded. Cheap on frames where it stays in range (just set diffs);
 /// spawns/despawns a chunk's worth of trees only when a boundary is
 /// crossed.
+///
+/// Keyed to the viewpoint and not the player: this system decides what
+/// EXISTS, so anchoring it to the avatar meant panning the observer
+/// away showed a world with no trees and no buildings in it — they were
+/// still being streamed around a body off screen.
 pub fn stream_chunks(
     mut commands: Commands,
-    player_q: Query<&Position, With<PlayerMarker>>,
+    viewpoint: Res<crate::rts::Viewpoint>,
     mut loaded: ResMut<LoadedChunks>,
     buildings: Res<crate::buildings::BuildingTemplates>,
 ) {
-    let Some(player) = player_q.iter().next() else {
-        return;
-    };
-    let center = world_to_chunk(player.0);
+    let center = world_to_chunk(viewpoint.0);
     let want = active_chunks(center, LOAD_RADIUS);
 
     // Unload chunks that fell out of range.
@@ -383,7 +385,11 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(LoadedChunks::default());
         world.insert_resource(bt);
-        let player = world.spawn((PlayerMarker, Position(anchor))).id();
+        // Streaming keys off the VIEWPOINT, not the player: it decides
+        // what exists, and what exists must follow where you are
+        // looking. Moving the viewpoint below is "walking" for its
+        // purposes.
+        world.insert_resource(crate::rts::Viewpoint(anchor));
         let count_walls = |w: &mut World| {
             let mut q = w.query::<&StructureProp>();
             q.iter(w).count()
@@ -395,7 +401,8 @@ mod tests {
         // Walk to the building's far wing: the anchor chunk drops out of
         // range, but the wing chunk (now loaded) owns its slice — so the
         // building is still there rather than despawning from under you.
-        world.get_mut::<Position>(player).unwrap().0 = anchor + Vec3::new(span as f32, 0.0, 0.0);
+        world.resource_mut::<crate::rts::Viewpoint>().0 =
+            anchor + Vec3::new(span as f32, 0.0, 0.0);
         world.run_system_once(stream_chunks).unwrap();
         assert!(
             !world.resource::<LoadedChunks>().0.contains_key(&bc),
@@ -414,9 +421,7 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(LoadedChunks::default());
         world.insert_resource(crate::buildings::BuildingTemplates::load().0);
-        let player = world
-            .spawn((PlayerMarker, Position(Vec3::new(0.0, 20.0, 0.0))))
-            .id();
+        world.insert_resource(crate::rts::Viewpoint(Vec3::new(0.0, 20.0, 0.0)));
 
         world.run_system_once(stream_chunks).unwrap();
         assert_eq!(world.resource::<LoadedChunks>().0.len(), 9);
@@ -433,7 +438,7 @@ mod tests {
         assert_eq!(count_trunks(&mut world), first);
 
         // Move far and re-run: the loaded set shifts, count stays bounded.
-        world.get_mut::<Position>(player).unwrap().0 =
+        world.resource_mut::<crate::rts::Viewpoint>().0 =
             Vec3::new(CHUNK_SIZE * 20.0, 20.0, CHUNK_SIZE * 20.0);
         world.run_system_once(stream_chunks).unwrap();
         assert_eq!(world.resource::<LoadedChunks>().0.len(), 9, "still 3x3");
