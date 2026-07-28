@@ -113,6 +113,13 @@ pub struct Piloted;
 /// it the same way.
 pub type Commandable = (With<UnitMarker>, Without<Piloted>);
 
+/// A unit that may receive an order right now: selected, and not the
+/// body a human is currently driving. `Without<Piloted>` here is the
+/// invariant defended at its source — `steer_toward_order` filtering
+/// piloted entities catches the malformed state, but this stops the
+/// ordinary path from ever creating one.
+pub type Orderable = (With<Selected>, With<UnitMarker>, Without<Piloted>);
+
 /// Take the wheel: seat the human in `entity`.
 ///
 /// Vacates the seat first, so becoming is also how you switch bodies
@@ -385,25 +392,253 @@ pub fn units_in_rect(
         .collect()
 }
 
+/// One frame of human input, as data.
+///
+/// Every interaction system reads this and nothing else — no system
+/// below calls an `env.*` import, reads a static, or knows a browser
+/// exists. `pump_input_frame` is the single place the outside world
+/// gets in, which is what makes a drag, an order and a zoom testable
+/// by writing a struct.
+///
+/// `buttons` is a LEVEL, not an event: it says what is held right now,
+/// mirroring the DOM's `buttons` property. Press and release edges are
+/// derived by comparing against the previous frame, because that is the
+/// one thing a level cannot tell you and every interaction needs.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct InputFrame {
+    /// Keyboard bitmask, `input::key::*`.
+    pub keys: u32,
+    /// Pointer in NDC, or `None` when it is not over the canvas.
+    pub ndc: Option<[f32; 2]>,
+    /// Buttons held this frame, `button::*`.
+    pub buttons: u32,
+    /// Wheel notches accumulated since the last frame. Positive is
+    /// wheel-up, which zooms in.
+    pub wheel_y: i32,
+}
+
+pub mod button {
+    /// Matches the DOM `MouseEvent.buttons` bit layout, so the shim
+    /// hands the value across unchanged rather than re-encoding it.
+    pub const LEFT: u32 = 1;
+    pub const RIGHT: u32 = 2;
+}
+
+/// A unit the human has selected. Orders land on exactly this set.
+#[derive(Component)]
+pub struct Selected;
+
+/// What the observer is looking at: a point it can pan freely, or a
+/// body it is following because the human became that body.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub enum CameraFocus {
+    Free(Vec3),
+    Following(Entity),
+}
+
+/// Observer pan speed, world units per tick per key. Faster than
+/// `KEYBOARD_SPEED` because panning a view has no body to outrun and
+/// crossing the map is the common case.
+pub const PAN_SPEED: f32 = 26.0;
+
+/// Buttons held on the previous frame, so press and release edges can
+/// be derived from a level, plus the NDC the current drag started at.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct DragState {
+    pub prev_buttons: u32,
+    pub anchor: Option<[f32; 2]>,
+}
+
+/// Read the outside world into `InputFrame`. THE env boundary for
+/// interaction — on native it leaves the resource alone, so tests write
+/// the struct directly and drive the exact frames they mean.
+pub fn pump_input_frame(mut _frame: ResMut<InputFrame>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        *_frame = InputFrame {
+            keys: crate::input::state(),
+            ndc: crate::input::pointer_ndc(),
+            buttons: crate::input::buttons(),
+            wheel_y: crate::input::wheel_delta_y(),
+        };
+    }
+}
+
+/// Left press anchors a drag; left release resolves the rectangle it
+/// swept into the selection, replacing whatever was selected before.
+pub fn apply_drag_selection(
+    frame: Res<InputFrame>,
+    mut drag: ResMut<DragState>,
+    focus: Res<CameraFocus>,
+    zoom: Res<CameraZoom>,
+    units: Query<(Entity, &Position), With<UnitMarker>>,
+    mut commands: Commands,
+) {
+    let held_before = drag.prev_buttons & button::LEFT != 0;
+    let held_now = frame.buttons & button::LEFT != 0;
+
+    if !held_before && held_now {
+        // Press: remember where the rectangle starts. `None` when the
+        // press happened off-canvas, which then resolves to no drag.
+        drag.anchor = frame.ndc;
+        return;
+    }
+    if !(held_before && !held_now) {
+        return;
+    }
+
+    // Release: resolve the swept rectangle. Anything that stops us
+    // computing it leaves the old selection alone rather than silently
+    // clearing — a hand that let go outside the canvas did not ask for
+    // its selection to be thrown away.
+    let anchor = drag.anchor.take();
+    let (Some(a), Some(b)) = (anchor, frame.ndc) else {
+        return;
+    };
+    let Some(camera) = observer_camera(&focus, *zoom, &units) else {
+        return;
+    };
+    let all: Vec<(Entity, Vec3)> = units.iter().map(|(e, p)| (e, p.0)).collect();
+    let picked = units_in_rect(&camera, &all, a, b);
+    for (e, _) in &all {
+        commands.entity(*e).remove::<Selected>();
+    }
+    for e in picked {
+        commands.entity(e).insert(Selected);
+    }
+}
+
+/// Right press sends the current selection to the ground under the
+/// cursor.
+pub fn apply_right_click_orders(
+    frame: Res<InputFrame>,
+    drag: Res<DragState>,
+    focus: Res<CameraFocus>,
+    zoom: Res<CameraZoom>,
+    selected: Query<Entity, Orderable>,
+    units: Query<(Entity, &Position), With<UnitMarker>>,
+    mut commands: Commands,
+) {
+    // Press edge only. Acting on the level would re-issue the same
+    // order every frame the button stayed down.
+    let held_before = drag.prev_buttons & button::RIGHT != 0;
+    let held_now = frame.buttons & button::RIGHT != 0;
+    if held_before || !held_now {
+        return;
+    }
+    let Some(ndc) = frame.ndc else {
+        return;
+    };
+    let Some(camera) = observer_camera(&focus, *zoom, &units) else {
+        return;
+    };
+    let Some(target) = ground_under(&camera, ndc) else {
+        return;
+    };
+    for e in selected.iter() {
+        commands.entity(e).insert(MoveOrder(target));
+    }
+}
+
+/// Latch this frame's buttons for the next frame's edge detection.
+/// Runs after every consumer of the edges, so both the drag and the
+/// order see the same previous frame — one owner for the latch, rather
+/// than whichever system happened to run first quietly consuming it.
+pub fn latch_buttons(frame: Res<InputFrame>, mut drag: ResMut<DragState>) {
+    drag.prev_buttons = frame.buttons;
+}
+
+/// WASD pans a detached observer. Does nothing while the observer is
+/// following a body — those keys belong to the body then.
+pub fn pan_observer(frame: Res<InputFrame>, mut focus: ResMut<CameraFocus>) {
+    let CameraFocus::Free(point) = *focus else {
+        return;
+    };
+    // Same 45° rotation `physics::keyboard_input` applies, for the same
+    // reason: the camera is isometric, so W has to mean "up the screen"
+    // rather than "along world -Z", or every key sends you diagonally.
+    let mut dir = Vec3::ZERO;
+    if frame.keys & crate::input::key::W != 0 {
+        dir += Vec3::new(-1.0, 0.0, -1.0);
+    }
+    if frame.keys & crate::input::key::S != 0 {
+        dir += Vec3::new(1.0, 0.0, 1.0);
+    }
+    if frame.keys & crate::input::key::A != 0 {
+        dir += Vec3::new(-1.0, 0.0, 1.0);
+    }
+    if frame.keys & crate::input::key::D != 0 {
+        dir += Vec3::new(1.0, 0.0, -1.0);
+    }
+    if dir.length_squared() <= 0.0 {
+        return;
+    }
+    let step = dir.normalize() * PAN_SPEED;
+    let (x, z) = (point.x + step.x, point.z + step.z);
+    // The focus rides the terrain, as `follow` has always done with the
+    // player's height — so panning over a hill lifts the view with it
+    // instead of burying it.
+    *focus = CameraFocus::Free(Vec3::new(x, crate::terrain::height(x, z), z));
+}
+
+/// The wheel zooms the observer.
+pub fn zoom_observer(frame: Res<InputFrame>, mut zoom: ResMut<CameraZoom>) {
+    // Guarded so an idle wheel doesn't mark the resource changed every
+    // frame — change detection is a signal, and a signal that fires
+    // constantly carries nothing.
+    if frame.wheel_y != 0 {
+        zoom.nudge(frame.wheel_y);
+    }
+}
+
+/// The observer's camera for this frame, resolving `CameraFocus` to a
+/// world point. `None` when it is following a body that no longer
+/// exists — a corpse is not a viewpoint, and inventing one would put
+/// the human somewhere nothing chose.
+pub fn observer_camera(
+    focus: &CameraFocus,
+    zoom: CameraZoom,
+    positions: &Query<(Entity, &Position), With<UnitMarker>>,
+) -> Option<SceneCamera> {
+    let point = match *focus {
+        CameraFocus::Free(p) => p,
+        CameraFocus::Following(e) => positions.get(e).ok()?.1.0,
+    };
+    Some(SceneCamera::at(
+        [point.x, point.y, point.z],
+        zoom.half_extent(),
+        crate::room::FLOOR_HALF,
+    ))
+}
+
 /// Register the command layer's systems in `Update`, in the order the
-/// data flows: order → velocity → position → de-overlap. The test
-/// drives this same registration, so the ordering under test is the
-/// ordering that ships.
+/// data flows: input → selection → orders → steering → velocity →
+/// position → de-overlap. The tests drive this same registration, so
+/// the ordering under test is the ordering that ships.
 pub fn register(app: &mut App) {
+    app.insert_resource(InputFrame::default());
+    app.insert_resource(DragState::default());
+    app.insert_resource(CameraFocus::Free(Vec3::ZERO));
+    app.insert_resource(CameraZoom::new(1450.0));
     app.add_systems(
         Update,
         (
-            steer_toward_order,
+            pump_input_frame,
+            pan_observer.after(pump_input_frame),
+            zoom_observer.after(pump_input_frame),
+            apply_drag_selection.after(pan_observer).after(zoom_observer),
+            apply_right_click_orders.after(apply_drag_selection),
+            latch_buttons.after(apply_right_click_orders),
+            steer_toward_order.after(latch_buttons),
             advance_units.after(steer_toward_order),
             separate_units.after(advance_units),
         ),
     );
 }
 
-// `refuse` and `refuse_once` lived here: the scaffolding that announced
-// each stubbed function on the sacred error bus, so a run whose units
-// would not move said why instead of looking like a physics bug. Every
-// function they covered now has a body, so they went with the last one.
-//
-// The bus is still used from this module, but for real failures now —
-// an entity that cannot be become, or a broken one-pilot invariant.
+// `refuse` lived here again for the length of the interaction slice —
+// the scaffolding that announces a stubbed function on the sacred error
+// bus, so half-built input says so instead of looking like a dead
+// mouse. Every function it covered has a body now, so it left again.
+// It comes back with the next stub; clippy's dead-code gate is what
+// makes sure it never lingers past its last caller.
