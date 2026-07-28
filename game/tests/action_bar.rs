@@ -86,6 +86,63 @@ fn the_bar_sits_in_the_bottom_left_corner() {
 }
 
 #[test]
+fn a_touch_on_the_world_becomes_a_pointer() {
+    // On a phone there is no mouse, so selection has to come from
+    // somewhere. A touch that is not on a control IS the pointer —
+    // routed into the same `InputFrame` the mouse fills, so tap and
+    // drag select through one code path rather than a second one that
+    // can drift.
+    let p = [0.1, 0.3];
+    assert_eq!(
+        game::rts::world_touch(VIEWPORT, &[p]),
+        Some(p),
+        "a touch out in the world did not become the pointer"
+    );
+}
+
+#[test]
+fn a_touch_on_a_control_is_not_a_pointer() {
+    // Pressing a button is not aiming at the ground under it. Without
+    // this, every tap on an action button would also fire a click into
+    // the world behind it, and every D-pad press would drag a selection
+    // rectangle across the map.
+    let on_button = {
+        let r = actions::slot_rects(VIEWPORT)[1];
+        [r.cx, r.cy]
+    };
+    assert_eq!(
+        game::rts::world_touch(VIEWPORT, &[on_button]),
+        None,
+        "tapping an action button also aimed at the world behind it"
+    );
+
+    let d = game::dpad::cluster_rect(VIEWPORT);
+    assert_eq!(
+        game::rts::world_touch(VIEWPORT, &[[d.cx, d.cy]]),
+        None,
+        "pressing the D-pad also dragged a selection across the world"
+    );
+}
+
+#[test]
+fn no_touches_means_no_pointer() {
+    assert_eq!(game::rts::world_touch(VIEWPORT, &[]), None);
+}
+
+#[test]
+fn a_thumb_on_the_dpad_does_not_stop_the_other_hand_selecting() {
+    // Two thumbs is the normal way to hold a phone. Driving the camera
+    // with one must not disable aiming with the other.
+    let d = game::dpad::cluster_rect(VIEWPORT);
+    let world = [-0.2, 0.4];
+    assert_eq!(
+        game::rts::world_touch(VIEWPORT, &[[d.cx, d.cy], world]),
+        Some(world),
+        "a thumb on the D-pad swallowed the other thumb's pointer"
+    );
+}
+
+#[test]
 fn there_are_always_exactly_three_slots() {
     // Not "up to three". The array's length is the constraint, and it
     // holds in the emptiest state there is.

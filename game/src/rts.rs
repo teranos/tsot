@@ -478,22 +478,53 @@ pub struct DragState {
 /// because `register` is not called from `_init()` yet. So the read
 /// lands in the same change that wires the schedule into the app.
 ///
+/// The touch that is acting as the pointer this frame, if any.
+///
+/// On a phone there is no mouse, so selection has to come from
+/// somewhere — and it comes from here, routed into the same
+/// `InputFrame` the mouse fills, so tap-to-select and drag-to-select go
+/// through one code path instead of a second one that can drift from
+/// it.
+///
+/// Touches on the controls are excluded: pressing a button is not
+/// aiming at the ground behind it. Without that, every action tap would
+/// also click into the world and every D-pad press would drag a
+/// selection rectangle across the map.
+///
+/// The FIRST world touch wins, and controls are skipped rather than
+/// blocking — two thumbs is how a phone is held, so driving the camera
+/// with one must not disable aiming with the other.
+pub fn world_touch(viewport: (u32, u32), touches: &[[f32; 2]]) -> Option<[f32; 2]> {
+    let slots = actions::slot_rects(viewport);
+    let pad = crate::dpad::cluster_rect(viewport);
+    touches
+        .iter()
+        .copied()
+        .find(|t| !pad.contains(*t) && !slots.iter().any(|r| r.contains(*t)))
+}
+
 /// On native it leaves the resource alone: the seer run drives a
 /// scripted tour, not a hand, and tests write the struct directly to
 /// drive the exact frames they mean.
 pub fn pump_input_frame(mut _frame: ResMut<InputFrame>) {
     #[cfg(target_arch = "wasm32")]
     {
+        let viewport = crate::gpu_web::viewport_size();
+        let touches = crate::gpu_web::touches();
         // A tap on an action button IS its key. Same bit, same edge
         // detector, same dispatch — see `actions::slots_touched`.
-        let taps = crate::actions::slots_touched(
-            crate::gpu_web::viewport_size(),
-            &crate::gpu_web::touches(),
-        );
+        let taps = crate::actions::slots_touched(viewport, &touches);
+        // A touch out in the world IS the pointer, so tap-to-select and
+        // drag-to-select run the same code the mouse does.
+        let finger = world_touch(viewport, &touches);
         *_frame = InputFrame {
             keys: crate::input::state() | taps,
-            ndc: crate::input::pointer_ndc(),
-            buttons: crate::input::buttons(),
+            ndc: finger.or_else(crate::input::pointer_ndc),
+            buttons: if finger.is_some() {
+                button::LEFT
+            } else {
+                crate::input::buttons()
+            },
             wheel_y: crate::input::wheel_delta_y(),
         };
     }

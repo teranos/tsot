@@ -98,6 +98,24 @@ pub fn setup_dpad(mut commands: Commands) {
 /// and the outermost buttons sit inside a safe margin from the
 /// viewport edge — no clipping on narrow portrait aspects. Eight
 /// buttons: N/S/E/W plus the four diagonals with OR'd bits.
+/// The whole D-pad cluster as one rectangle, from the same constants
+/// the buttons are laid out from.
+///
+/// Exists so other input paths can ask "is this touch mine?" without
+/// reaching into the `Dpad` resource — a touch driving the camera must
+/// not also be read as aiming at the world behind it.
+pub fn cluster_rect(viewport: (u32, u32)) -> crate::hud::Rect {
+    let (w, h) = (viewport.0.max(1) as f32, viewport.1.max(1) as f32);
+    let (px, py) = (2.0 / w, 2.0 / h);
+    let (half_x, half_y) = (BUTTON_HALF_PX * px, BUTTON_HALF_PX * py);
+    let (sp_x, sp_y) = (BUTTON_SPACING_PX * px, BUTTON_SPACING_PX * py);
+    let cx = 1.0 - MARGIN_LEFT_PX * px - half_x - CORNER_SPACING_PX * px;
+    let cy = -1.0 + MARGIN_BOTTOM_PX * py + half_y + CORNER_SPACING_PX * py;
+    // The cluster spans one button either side of centre, plus its own
+    // half — the 3x3 grid's outer bound.
+    crate::hud::Rect { cx, cy, hx: sp_x + half_x, hy: sp_y + half_y }
+}
+
 fn rebuild_layout(dpad: &mut Dpad, viewport: (u32, u32)) {
     let (w, h) = viewport;
     if w == 0 || h == 0 {
