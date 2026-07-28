@@ -2,15 +2,23 @@
 
 # The gate, byte-for-byte what .github/workflows/game-tests.yml runs.
 # Whole suite — lib, every target under tests/, doctests — then clippy
-# over every target. Deliberately not narrowed to --lib: a test that
-# doesn't run is a test that lies, and that narrowing is what let a red
-# tests/ directory pass CI.
+# over every target, then the wasm32 build. Deliberately not narrowed
+# to --lib: a test that doesn't run is a test that lies, and that
+# narrowing is what let a red tests/ directory pass CI.
+#
+# The wasm build is here because this project SHIPS wasm. Everything
+# above it compiles for the host, so a `cfg(target_arch = "wasm32")`
+# block is invisible to all of it — which is exactly how a call to two
+# functions that did not exist reached master's CI and broke both the
+# deploy and the seer pipeline at once. Native-only green was never the
+# claim worth making.
 #
 # Green here means nothing is broken and every skip is named. It does
 # NOT mean every test ran; see `make red`.
 test:
 	@cargo +nightly test
 	@cargo +nightly clippy --all-targets -- -D warnings
+	@cargo +nightly build --target wasm32-unknown-unknown --lib
 
 # The declared reds: tests carrying `#[ignore = "RED: ..."]`, which
 # capture intent ahead of the code that satisfies it. These are MEANT

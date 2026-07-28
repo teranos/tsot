@@ -450,19 +450,21 @@ pub struct DragState {
 }
 
 /// Read the outside world into `InputFrame`. THE env boundary for
-/// interaction — on native it leaves the resource alone, so tests write
-/// the struct directly and drive the exact frames they mean.
-pub fn pump_input_frame(mut _frame: ResMut<InputFrame>) {
-    #[cfg(target_arch = "wasm32")]
-    {
-        *_frame = InputFrame {
-            keys: crate::input::state(),
-            ndc: crate::input::pointer_ndc(),
-            buttons: crate::input::buttons(),
-            wheel_y: crate::input::wheel_delta_y(),
-        };
-    }
-}
+/// interaction: every system below reads the resource, never an import.
+///
+/// Empty on every target for now, and deliberately so rather than
+/// half-wired. Filling it needs `input::buttons` and
+/// `input::wheel_delta_y`, which need two new `env.*` crossings, which
+/// `seer-imports-check` will reject until something reachable from a
+/// `#[no_mangle]` entry point actually calls them — and nothing is,
+/// because `register` is not called from `_init()` yet. So the read
+/// lands in the same change that wires the schedule into the app.
+///
+/// Not stubbed with zeroes on purpose. A `buttons()` that always
+/// answers "nothing is pressed" is a lie the type system cannot catch;
+/// an empty pump is merely inert, and every test drives the resource
+/// directly anyway.
+pub fn pump_input_frame(_frame: ResMut<InputFrame>) {}
 
 /// Left press anchors a drag; left release resolves the rectangle it
 /// swept into the selection, replacing whatever was selected before.

@@ -60,6 +60,7 @@ jobs:
         run: |
           rustup toolchain install nightly --profile minimal
           rustup component add clippy --toolchain nightly
+          rustup target add wasm32-unknown-unknown --toolchain nightly
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -135,3 +136,15 @@ jobs:
       - name: game — cargo +nightly clippy (every target)
         working-directory: game
         run: cargo +nightly clippy --all-targets -- -D warnings
+
+      # This project SHIPS wasm. Every step above compiles for the host,
+      # so a `cfg(target_arch = "wasm32")` block is invisible to all of
+      # them — which is how a call to two functions that did not exist
+      # passed this gate green and then broke deploy-game and seer at
+      # once. The wasm build belongs in the FAST gate, not only in the
+      # pipelines that publish. Debug, not release: this is a
+      # does-it-compile check, and the release build stays where the
+      # artifact is actually produced.
+      - name: game — cargo +nightly build --target wasm32
+        working-directory: game
+        run: cargo +nightly build --target wasm32-unknown-unknown --lib
