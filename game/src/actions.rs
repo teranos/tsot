@@ -128,14 +128,18 @@ use crate::dpad::DpadInstance;
 use crate::hud::Rect;
 
 /// Button edge and spacing, in CSS pixels. Sized for a thumb: the
-/// buttons are the touch control, and the keys are the shortcut, not
-/// the other way round.
-pub const BUTTON_PX: f32 = 64.0;
-pub const MARGIN_PX: f32 = 16.0;
-pub const GAP_PX: f32 = 8.0;
-/// Label pixel scale for the 3x5 font. "become" is 6 chars → 6·4·2 =
-/// 48px, inside a 64px button with room either side.
-const LABEL_PIXEL_PX: f32 = 2.0;
+/// buttons are the touch control and the keys are the shortcut, not the
+/// other way round.
+///
+/// 88 clears Apple's 44pt minimum touch target twice over, because
+/// these are the primary control on a phone and they are pressed while
+/// the other thumb is on the D-pad — the hand is not steady.
+pub const BUTTON_PX: f32 = 88.0;
+pub const MARGIN_PX: f32 = 20.0;
+pub const GAP_PX: f32 = 10.0;
+/// Label pixel scale for the 3x5 font. "become" is 6 chars → 6·4·3 =
+/// 72px, inside an 88px button with room either side.
+const LABEL_PIXEL_PX: f32 = 3.0;
 /// The key hint drawn on each button, in slot order. The button and the
 /// key are the same control, so the button says which key it is.
 pub const SLOT_KEYS: [&str; SLOTS] = ["q", "e", "r"];
