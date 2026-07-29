@@ -1070,7 +1070,9 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     }
     // D-pad, HUD quads, build watermark, NPC-bump "!" — all one UI
     // pass. The watermark is the running binary drawing its own commit.
-    let mut ui: Vec<dpad::DpadInstance> = dpad::current_instances().to_vec();
+    // The D-pad is gone: drag pans, pinch zooms, tap selects. Its quad
+    // type stays because the whole UI overlay is built from it.
+    let mut ui: Vec<dpad::DpadInstance> = Vec::new();
     ui.extend(hud::current_instances());
     ui.extend(crate::watermark::watermark_quads(gpu_web::viewport_size()));
     // The three action slots. Drawn from the ActionBar resource, which

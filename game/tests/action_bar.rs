@@ -116,30 +116,11 @@ fn a_touch_on_a_control_is_not_a_pointer() {
         "tapping an action button also aimed at the world behind it"
     );
 
-    let d = game::dpad::cluster_rect(VIEWPORT);
-    assert_eq!(
-        game::rts::world_touch(VIEWPORT, &[[d.cx, d.cy]]),
-        None,
-        "pressing the D-pad also dragged a selection across the world"
-    );
 }
 
 #[test]
 fn no_touches_means_no_pointer() {
     assert_eq!(game::rts::world_touch(VIEWPORT, &[]), None);
-}
-
-#[test]
-fn a_thumb_on_the_dpad_does_not_stop_the_other_hand_selecting() {
-    // Two thumbs is the normal way to hold a phone. Driving the camera
-    // with one must not disable aiming with the other.
-    let d = game::dpad::cluster_rect(VIEWPORT);
-    let world = [-0.2, 0.4];
-    assert_eq!(
-        game::rts::world_touch(VIEWPORT, &[[d.cx, d.cy], world]),
-        Some(world),
-        "a thumb on the D-pad swallowed the other thumb's pointer"
-    );
 }
 
 #[test]
