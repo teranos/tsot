@@ -1,3 +1,7 @@
+# `set -o pipefail` below needs bash; make defaults to /bin/sh, which
+# on this box is dash and does not have it.
+SHELL := /bin/bash
+
 .PHONY: music web build clean cdda coverage test red
 
 # The gate, byte-for-byte what .github/workflows/game-tests.yml runs.
@@ -13,10 +17,13 @@
 # deploy and the seer pipeline at once. Native-only green was never the
 # claim worth making.
 #
-# Green here means nothing is broken and every skip is named. It does
-# NOT mean every test ran; see `make red`.
+# Green here means nothing is broken, every skip is named, and every
+# skip named RED is actually failing. It does NOT mean every test ran;
+# see `make red`.
 test:
-	@cargo +nightly test
+	@mkdir -p target
+	@set -o pipefail; cargo +nightly test 2>&1 | tee target/test-output.txt
+	@./tools/check-declared-reds.sh target/test-output.txt
 	@cargo +nightly clippy --all-targets -- -D warnings
 	@cargo +nightly build --target wasm32-unknown-unknown --lib
 

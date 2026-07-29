@@ -133,6 +133,14 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # A skip named RED must actually be red. The audit above catches a
+      # test switched off with no reason; this catches the other
+      # direction — a test labelled RED that would pass if it ran. That
+      # happened here once and was found by eye, which is not a method.
+      - name: Declared reds must actually be red
+        working-directory: game
+        run: ./tools/check-declared-reds.sh test-output.txt
+
       - name: game — cargo +nightly clippy (every target)
         working-directory: game
         run: cargo +nightly clippy --all-targets -- -D warnings
