@@ -169,11 +169,26 @@ pub fn slot_rects(viewport: (u32, u32)) -> [Rect; SLOTS] {
 /// Empty slots are drawn dim rather than omitted. Seeing that there are
 /// three, and that two of them have nothing right now, is the point —
 /// it tells you the shape of the game's whole verb surface at a glance.
-pub fn build_quads(bar: &[Option<Action>; SLOTS], viewport: (u32, u32)) -> Vec<DpadInstance> {
+pub fn build_quads(
+    bar: &[Option<Action>; SLOTS],
+    selected_count: usize,
+    viewport: (u32, u32),
+) -> Vec<DpadInstance> {
     let (w, h) = (viewport.0.max(1) as f32, viewport.1.max(1) as f32);
     let (ndc_x, ndc_y) = (2.0 / w, 2.0 / h);
     let (sx, sy) = (LABEL_PIXEL_PX * ndc_x, LABEL_PIXEL_PX * ndc_y);
     let mut out = Vec::with_capacity(SLOTS * 24);
+
+    // Selection readout, sitting directly above the buttons.
+    let rects = slot_rects(viewport);
+    out.extend(crate::watermark::text_quads(
+        &selection_readout(selected_count),
+        rects[0].cx - rects[0].hx,
+        rects[0].cy + rects[0].hy + 14.0 * ndc_y,
+        [sx, sy],
+        if selected_count == 0 { [0.62, 0.66, 0.72] } else { [0.55, 0.95, 0.62] },
+        0.95,
+    ));
 
     for (i, rect) in slot_rects(viewport).iter().enumerate() {
         let filled = bar[i].is_some();
@@ -216,6 +231,66 @@ pub fn build_quads(bar: &[Option<Action>; SLOTS], viewport: (u32, u32)) -> Vec<D
 
 /// Glyph cell width including the one-pixel gap `text_quads` inserts.
 const GLYPH_ADVANCE: usize = crate::watermark::GLYPH_W + 1;
+
+/// What the selection readout says, drawn above the action bar.
+///
+/// Three questions were being asked and none of them had an answer on
+/// screen: how do I select, did anything get selected, is it working.
+/// With nothing selected this names the gesture; with something
+/// selected it counts it. Either way the screen states what it knows
+/// rather than leaving it to be inferred from cube colours.
+pub fn selection_readout(count: usize) -> String {
+    match count {
+        0 => "tap a unit".to_string(),
+        1 => "1 selected".to_string(),
+        n => format!("{n} selected"),
+    }
+}
+
+/// Thickness of the drag rectangle's edges, in CSS pixels.
+const DRAG_EDGE_PX: f32 = 2.0;
+/// Colour of the live drag rectangle — the same green a selected unit
+/// takes, so the box and its result read as one thing.
+const DRAG_COLOR: [f32; 3] = [0.25, 0.95, 0.35];
+
+/// The live selection rectangle, as four edges.
+///
+/// Four edges rather than a filled quad: a translucent slab over the
+/// world hides what you are selecting, which defeats the point of
+/// showing it. Corners may be given in any order.
+///
+/// Takes NDC corners and no viewport, so edge thickness is expressed
+/// in NDC by the caller — see `drag_rect_quads_px` for the pixel-sized
+/// version the renderer uses.
+pub fn drag_rect_quads(a: [f32; 2], b: [f32; 2]) -> Vec<DpadInstance> {
+    drag_rect_quads_px(a, b, (1000, 1000))
+}
+
+/// `drag_rect_quads` with edges a fixed number of CSS pixels thick.
+pub fn drag_rect_quads_px(
+    a: [f32; 2],
+    b: [f32; 2],
+    viewport: (u32, u32),
+) -> Vec<DpadInstance> {
+    let (w, h) = (viewport.0.max(1) as f32, viewport.1.max(1) as f32);
+    let (ex, ey) = (DRAG_EDGE_PX * 2.0 / w, DRAG_EDGE_PX * 2.0 / h);
+    let (lo_x, hi_x) = (a[0].min(b[0]), a[0].max(b[0]));
+    let (lo_y, hi_y) = (a[1].min(b[1]), a[1].max(b[1]));
+    let (cx, cy) = ((lo_x + hi_x) * 0.5, (lo_y + hi_y) * 0.5);
+    let (hx, hy) = ((hi_x - lo_x) * 0.5, (hi_y - lo_y) * 0.5);
+    let edge = |cx: f32, cy: f32, hx: f32, hy: f32| DpadInstance {
+        center_ndc: [cx, cy],
+        half_size_ndc: [hx, hy],
+        color: DRAG_COLOR,
+        alpha: 0.9,
+    };
+    vec![
+        edge(cx, hi_y, hx, ey * 0.5),
+        edge(cx, lo_y, hx, ey * 0.5),
+        edge(lo_x, cy, ex * 0.5, hy),
+        edge(hi_x, cy, ex * 0.5, hy),
+    ]
+}
 
 /// Slot key bits for every touch currently inside an action button.
 ///

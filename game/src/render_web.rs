@@ -1076,8 +1076,29 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     // The three action slots. Drawn from the ActionBar resource, which
     // is recomputed each tick from world state — so what the buttons
     // offer and what the keys do can never disagree.
+    let selected_count = app
+        .world()
+        .get_resource::<crate::rts::SelectionCount>()
+        .map(|c| c.0)
+        .unwrap_or(0);
     if let Some(bar) = app.world().get_resource::<crate::rts::ActionBar>() {
-        ui.extend(crate::actions::build_quads(&bar.0, gpu_web::viewport_size()));
+        ui.extend(crate::actions::build_quads(
+            &bar.0,
+            selected_count,
+            gpu_web::viewport_size(),
+        ));
+    }
+    // The live drag rectangle, while a drag is in progress.
+    if let (Some(drag), Some(frame)) = (
+        app.world().get_resource::<crate::rts::DragState>(),
+        app.world().get_resource::<crate::rts::InputFrame>(),
+    ) && let (Some(anchor), Some(now)) = (drag.anchor, frame.ndc)
+    {
+        ui.extend(crate::actions::drag_rect_quads_px(
+            anchor,
+            now,
+            gpu_web::viewport_size(),
+        ));
     }
     ui.extend(crate::bang::current_instances());
     ui.extend(crate::tune_hud::current_instances());

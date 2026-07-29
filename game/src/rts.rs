@@ -668,14 +668,22 @@ pub fn latch_buttons(frame: Res<InputFrame>, mut drag: ResMut<DragState>) {
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct ActionBar(pub [Option<Action>; SLOTS]);
 
+/// How many units are selected right now, kept so the render path can
+/// put it on screen. The count is the only thing that can answer "did
+/// anything get selected" without the human guessing from cube colours.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct SelectionCount(pub usize);
+
 /// Project the world into the three slots.
 pub fn update_action_bar(
     focus: Res<CameraFocus>,
     selected: Query<Entity, Orderable>,
     mut bar: ResMut<ActionBar>,
+    mut count: ResMut<SelectionCount>,
 ) {
+    count.0 = selected.iter().count();
     bar.0 = actions::resolve(Affordances {
-        selected_count: selected.iter().count(),
+        selected_count: count.0,
         piloting: matches!(*focus, CameraFocus::Following(_)),
     });
 }
@@ -923,6 +931,7 @@ pub fn register(app: &mut App) {
     app.insert_resource(CameraZoom::new(1450.0));
     app.insert_resource(Viewpoint::default());
     app.insert_resource(ActionBar::default());
+    app.insert_resource(SelectionCount::default());
     app.add_systems(
         Update,
         (

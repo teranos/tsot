@@ -143,6 +143,87 @@ fn a_thumb_on_the_dpad_does_not_stop_the_other_hand_selecting() {
 }
 
 #[test]
+fn with_nothing_selected_the_readout_says_how_to_select() {
+    // "not immediately obvious how to do it" — so the screen says how.
+    // An empty readout, or one that just says zero, answers neither
+    // "what do I do" nor "did it work".
+    let s = actions::selection_readout(0);
+    assert!(!s.is_empty(), "nothing on screen tells you how to select");
+    assert!(
+        s.contains("tap"),
+        "the idle readout does not name the gesture: {s:?}"
+    );
+}
+
+#[test]
+fn the_readout_counts_what_is_selected() {
+    // "not obvious if I'm even selecting anything" — so the count is on
+    // screen. This is the only thing that can answer that question
+    // without guessing.
+    assert!(actions::selection_readout(1).contains('1'));
+    assert!(actions::selection_readout(7).contains('7'));
+}
+
+#[test]
+fn the_readout_is_always_drawable() {
+    for n in [0, 1, 2, 9, 12, 100] {
+        for c in actions::selection_readout(n).chars() {
+            assert!(
+                c == ' ' || game::watermark::glyph(c).is_some(),
+                "readout for {n} contains {c:?}, which the font cannot draw"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_drag_in_progress_draws_its_rectangle() {
+    // "not obvious if I'm doing it correctly" — you cannot see a
+    // rectangle that is never drawn. Four edges, so it reads as a box
+    // rather than a filled slab over the world.
+    let quads = actions::drag_rect_quads([-0.4, -0.2], [0.3, 0.5]);
+    assert_eq!(quads.len(), 4, "expected four edges, got {}", quads.len());
+
+    // Dragged the other way, the same box.
+    let flipped = actions::drag_rect_quads([0.3, 0.5], [-0.4, -0.2]);
+    let key = |q: &[game::dpad::DpadInstance]| {
+        let mut v: Vec<[i32; 4]> = q
+            .iter()
+            .map(|i| {
+                [
+                    (i.center_ndc[0] * 1e4) as i32,
+                    (i.center_ndc[1] * 1e4) as i32,
+                    (i.half_size_ndc[0] * 1e4) as i32,
+                    (i.half_size_ndc[1] * 1e4) as i32,
+                ]
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(key(&quads), key(&flipped), "the box depends on drag direction");
+}
+
+#[test]
+fn a_drag_rectangle_stays_inside_the_corners_it_was_given() {
+    let (a, b) = ([-0.4, -0.2], [0.3, 0.5]);
+    for q in actions::drag_rect_quads(a, b) {
+        let (lo_x, hi_x) = (a[0].min(b[0]), a[0].max(b[0]));
+        let (lo_y, hi_y) = (a[1].min(b[1]), a[1].max(b[1]));
+        assert!(
+            q.center_ndc[0] >= lo_x - 0.01 && q.center_ndc[0] <= hi_x + 0.01,
+            "edge escaped the box in x: {:?}",
+            q.center_ndc
+        );
+        assert!(
+            q.center_ndc[1] >= lo_y - 0.01 && q.center_ndc[1] <= hi_y + 0.01,
+            "edge escaped the box in y: {:?}",
+            q.center_ndc
+        );
+    }
+}
+
+#[test]
 fn there_are_always_exactly_three_slots() {
     // Not "up to three". The array's length is the constraint, and it
     // holds in the emptiest state there is.
