@@ -160,6 +160,55 @@ fn seer_tour_input(
     }
 }
 
+/// Wheel notches the seer tour applies per frame while zooming. One
+/// notch is `CameraZoom`'s multiplicative step, so a run of these walks
+/// the zoom range rather than jumping across it.
+#[cfg(not(target_arch = "wasm32"))]
+const TOUR_ZOOM_NOTCHES: i32 = 2;
+
+/// Drive the camera zoom over the tour, so a seer run measures the
+/// zoomed-in and zoomed-out cases and not only the resting one.
+///
+/// Writes `InputFrame.wheel_y` rather than touching `CameraZoom`
+/// directly, so the run exercises the same path a hand does:
+/// `zoom_observer` reading the frame, `CameraZoom::nudge` clamping it.
+///
+/// Sawtooth over each stop's slice of the budget: in for the first
+/// half, out for the second. Both bounds get reached because the
+/// clamp saturates, which is the case worth measuring — a frustum at
+/// ZOOM_MAX pulls in far more geometry than one at ZOOM_MIN.
+#[cfg(not(target_arch = "wasm32"))]
+fn seer_tour_zoom(
+    frame: Res<FrameCount>,
+    tour: Res<SeerTour>,
+    zoom: Res<rts::CameraZoom>,
+    mut input: ResMut<rts::InputFrame>,
+) {
+    if tour.stops.is_empty() {
+        return;
+    }
+    let n = tour.stops.len() as u32;
+    let budget = tour.budget.max(1);
+    let per_stop = (budget / n).max(1);
+    let into_stop = frame.0.saturating_sub(1) % per_stop;
+    let turning = into_stop == 0 || into_stop == per_stop / 2;
+    if turning {
+        // At each end of the sawtooth, report where the zoom actually
+        // got to. Without this the run only proves it did not crash;
+        // the log line is the evidence that both extremes were reached.
+        obs::emit(&format!(
+            "[seer.zoom] frame {} half_extent {:.0}",
+            frame.0,
+            zoom.half_extent()
+        ));
+    }
+    input.wheel_y = if into_stop < per_stop / 2 {
+        TOUR_ZOOM_NOTCHES
+    } else {
+        -TOUR_ZOOM_NOTCHES
+    };
+}
+
 /// Scan chunks outward from the origin for the first matching one.
 #[cfg(not(target_arch = "wasm32"))]
 fn scan_chunk(pred: impl Fn(chunk::ChunkCoord) -> bool) -> Option<chunk::ChunkCoord> {
@@ -607,6 +656,10 @@ fn _init() {
     }
     #[cfg(not(target_arch = "wasm32"))]
     let tour = seer_tour_from(&building_templates);
+    // Separate registration: the Update tuple is already at bevy's
+    // 20-element limit, and this is native-only.
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(Update, seer_tour_zoom.before(rts::zoom_observer));
     app.insert_resource(building_templates);
     // The RTS command layer: input → selection → orders → steering.
     // Registered before the observer's focus is set below, because
