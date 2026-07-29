@@ -405,7 +405,7 @@ pub fn units_in_rect(
 /// mirroring the DOM's `buttons` property. Press and release edges are
 /// derived by comparing against the previous frame, because that is the
 /// one thing a level cannot tell you and every interaction needs.
-#[derive(Resource, Default, Clone, Copy, Debug)]
+#[derive(Resource, Default, Clone, Debug)]
 pub struct InputFrame {
     /// Keyboard bitmask, `input::key::*`.
     pub keys: u32,
@@ -416,6 +416,13 @@ pub struct InputFrame {
     /// Wheel notches accumulated since the last frame. Positive is
     /// wheel-up, which zooms in.
     pub wheel_y: i32,
+    /// Every finger on the glass, in NDC.
+    ///
+    /// Carried in the frame rather than read from `gpu_web::touches()`
+    /// inside the gesture system, for one reason: a system that calls
+    /// the env boundary itself cannot be driven by a test, and the
+    /// touch path is the part I cannot see working.
+    pub touches: Vec<[f32; 2]>,
 }
 
 pub mod button {
@@ -622,6 +629,7 @@ pub fn pump_input_frame(mut _frame: ResMut<InputFrame>) {
             ndc: crate::input::pointer_ndc(),
             buttons: crate::input::buttons(),
             wheel_y: crate::input::wheel_delta_y(),
+            touches,
         };
     }
 }
@@ -749,15 +757,17 @@ pub fn apply_touch_gesture(
     mut state: ResMut<TouchState>,
     mut focus: ResMut<CameraFocus>,
     mut zoom: ResMut<CameraZoom>,
-    mut frame: ResMut<InputFrame>,
+    frame: Res<InputFrame>,
     units: Query<(Entity, &Position), With<UnitMarker>>,
+    mut commands: Commands,
 ) {
     let viewport = crate::gpu_web::viewport_size();
-    let touches = crate::gpu_web::touches();
     // Fingers on the action bar are button presses, not gestures.
     let bar = actions::slot_rects(viewport);
-    let world: Vec<[f32; 2]> = touches
-        .into_iter()
+    let world: Vec<[f32; 2]> = frame
+        .touches
+        .iter()
+        .copied()
         .filter(|t| !bar.iter().any(|r| r.contains(*t)))
         .collect();
 
@@ -765,11 +775,26 @@ pub fn apply_touch_gesture(
         TouchGesture::None => {}
         TouchGesture::Pinch { notches } => zoom.nudge(notches),
         TouchGesture::Tap { at } => {
-            // A tap is a click: same ndc, same button, so
-            // `apply_drag_selection` resolves it through the pick
-            // radius exactly as a mouse click does.
-            frame.ndc = Some(at);
-            frame.buttons |= button::LEFT;
+            // Resolve the pick HERE rather than synthesising a button
+            // press. Routing a tap through the button-edge machinery
+            // could never work: one frame of LEFT is only the PRESS
+            // edge, and by the release frame `ndc` is back to the
+            // mouse pointer, which on a phone is None — so the release
+            // bailed and a tap selected nothing, every time.
+            //
+            // The PICK is still one function, shared with the mouse
+            // click path; only the gesture plumbing differs.
+            if let Some(camera) = observer_camera(&focus, *zoom, &units) {
+                let all: Vec<(Entity, Vec3)> =
+                    units.iter().map(|(e, p)| (e, p.0)).collect();
+                let hit = nearest_within_pick_radius(&camera, &all, at);
+                for (e, _) in &all {
+                    commands.entity(*e).remove::<Selected>();
+                }
+                if let Some(e) = hit {
+                    commands.entity(e).insert(Selected);
+                }
+            }
         }
         TouchGesture::Pan { dx, dy } => {
             // Drag the WORLD, so the camera moves opposite the finger.
