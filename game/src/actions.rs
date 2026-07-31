@@ -33,12 +33,23 @@ pub struct Affordances {
     pub selected_count: usize,
     /// Whether the human is currently driving a body.
     pub piloting: bool,
+    /// Whether the human is IN selecting mode.
+    ///
+    /// A mode you deliberately enter and leave, rather than a state the
+    /// program keeps quietly. That is the whole point: you cannot
+    /// wonder whether you are selecting, because you pressed a button
+    /// that said so and the bar says so while you are there.
+    pub selecting: bool,
 }
 
 /// A verb the human can invoke. Each owns a fixed slot — a verb is not
 /// "whatever is free", it is a thing your hand learns the position of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    /// Enter selecting mode.
+    Select,
+    /// Leave selecting mode, keeping what was gathered.
+    Done,
     /// Take the wheel of the one selected body.
     Become,
     /// Step back out into the detached observer.
@@ -54,6 +65,8 @@ impl Action {
     /// twice, not two keys to remember.
     pub fn slot(self) -> usize {
         match self {
+            // One verb pointing two ways: in and out of the mode.
+            Action::Select | Action::Done => 0,
             Action::Become | Action::Leave => 1,
         }
     }
@@ -67,8 +80,11 @@ impl Action {
     /// buttons and then five.
     pub fn priority(self) -> u8 {
         match self {
-            // Getting out of a body beats getting into one: you are in
-            // it, so the way out is the more urgent offer.
+            // Getting out beats getting in, for the same reason in both
+            // pairs: you are already there, so the way back is the more
+            // urgent offer.
+            Action::Done => 20,
+            Action::Select => 10,
             Action::Leave => 20,
             Action::Become => 10,
         }
@@ -79,6 +95,8 @@ impl Action {
     /// lowercase words, short enough to fit a button.
     pub fn label(self) -> &'static str {
         match self {
+            Action::Select => "select",
+            Action::Done => "done",
             Action::Become => "become",
             Action::Leave => "leave",
         }
@@ -110,6 +128,14 @@ pub fn resolve(a: Affordances) -> [Option<Action>; SLOTS] {
 /// matter — `resolve` places by slot and priority, not by arrival.
 fn candidates(a: Affordances) -> Vec<Action> {
     let mut out = Vec::new();
+    if a.selecting {
+        // In the mode there is one thing to do: finish. The other slots
+        // stay present and empty — three slots always, and an empty one
+        // says "there is nothing else here", which is information.
+        out.push(Action::Done);
+        return out;
+    }
+    out.push(Action::Select);
     if a.piloting {
         // In a body: the way out. Becoming is meaningless here, and
         // offering it would imply you could be in two at once.
@@ -172,6 +198,7 @@ pub fn slot_rects(viewport: (u32, u32)) -> [Rect; SLOTS] {
 pub fn build_quads(
     bar: &[Option<Action>; SLOTS],
     selected_count: usize,
+    selecting: bool,
     viewport: (u32, u32),
 ) -> Vec<DpadInstance> {
     let (w, h) = (viewport.0.max(1) as f32, viewport.1.max(1) as f32);
@@ -182,11 +209,11 @@ pub fn build_quads(
     // Selection readout, sitting directly above the buttons.
     let rects = slot_rects(viewport);
     out.extend(crate::watermark::text_quads(
-        &selection_readout(selected_count),
+        &selection_readout(selected_count, selecting),
         rects[0].cx - rects[0].hx,
         rects[0].cy + rects[0].hy + 14.0 * ndc_y,
         [sx, sy],
-        if selected_count == 0 { [0.62, 0.66, 0.72] } else { [0.55, 0.95, 0.62] },
+        if selecting { [0.95, 0.85, 0.40] } else { [0.55, 0.95, 0.62] },
         0.95,
     ));
 
@@ -239,11 +266,15 @@ const GLYPH_ADVANCE: usize = crate::watermark::GLYPH_W + 1;
 /// With nothing selected this names the gesture; with something
 /// selected it counts it. Either way the screen states what it knows
 /// rather than leaving it to be inferred from cube colours.
-pub fn selection_readout(count: usize) -> String {
-    match count {
-        0 => "tap a unit".to_string(),
-        1 => "1 selected".to_string(),
-        n => format!("{n} selected"),
+pub fn selection_readout(count: usize, selecting: bool) -> String {
+    match (selecting, count) {
+        // In the mode, name the gesture: it is the only place tapping
+        // picks anything, so it is the only place worth saying so.
+        (true, 0) => "selecting: tap a unit".to_string(),
+        (true, n) => format!("selecting: {n}"),
+        (false, 0) => String::new(),
+        (false, 1) => "1 selected".to_string(),
+        (false, n) => format!("{n} selected"),
     }
 }
 

@@ -20,14 +20,23 @@ use bevy_math::Vec3;
 
 use game::actions::{Action, SLOTS};
 use game::physics::{Position, Velocity};
-use game::rts::{self, ActionBar, CameraFocus, CameraZoom, InputFrame, Selected, UnitMarker};
+use game::rts::{
+    self, ActionBar, CameraFocus, CameraZoom, InputFrame, SelectMode, Selected, UnitMarker,
+};
 use game::terrain;
 
 fn on_terrain(x: f32, z: f32) -> Vec3 {
     Vec3::new(x, terrain::height(x, z), z)
 }
 
+/// An app already inside selecting mode, which is where picking works.
 fn observer_app(offsets: &[(f32, f32)]) -> (App, Vec3, Vec<Entity>) {
+    let (mut app, centre, ids) = observer_app_out_of_mode(offsets);
+    app.insert_resource(SelectMode(true));
+    (app, centre, ids)
+}
+
+fn observer_app_out_of_mode(offsets: &[(f32, f32)]) -> (App, Vec3, Vec<Entity>) {
     let mut app = App::new();
     rts::register(&mut app);
     let centre = on_terrain(1200.0, -800.0);
@@ -97,17 +106,29 @@ fn tapping_a_unit_selects_it() {
 }
 
 #[test]
-fn tapping_a_unit_reveals_become() {
-    // "I don't see the becoming action available" — this is that,
-    // end to end: finger down, finger up, and the bar offers the verb.
+fn the_whole_flow_ends_with_become_on_the_bar() {
+    // "I don't see the becoming action available" — this is that, end
+    // to end, in the shape the mode gives it: go in, pick, come out,
+    // and the verb for what you gathered is waiting.
     let (mut app, centre, _ids) = observer_app(&[(0.0, 0.0)]);
     let at = ndc_of(&app, on_terrain(centre.x, centre.z));
 
     tap(&mut app, at);
+    // Mid-gather the bar offers the way out, not verbs for a
+    // half-finished selection.
+    assert!(
+        bar(&app).contains(&Some(Action::Done)),
+        "in the mode the bar does not show the way out: {:?}",
+        bar(&app)
+    );
+
+    // Leave the mode. The selection survives — that is why it exists.
+    *app.world_mut().resource_mut::<SelectMode>() = SelectMode(false);
+    app.update();
 
     assert!(
         bar(&app).contains(&Some(Action::Become)),
-        "a unit is selected but the bar does not offer to become it: {:?}",
+        "out of the mode with a unit selected, become is not offered: {:?}",
         bar(&app)
     );
 }
@@ -136,10 +157,57 @@ fn tapping_bare_ground_clears_the_selection() {
 }
 
 #[test]
-fn dragging_across_a_unit_pans_and_does_not_select_it() {
-    // Drag is pan. If it also selected, moving the camera would
-    // constantly change what is selected under your thumb.
+fn out_of_the_mode_a_tap_does_nothing() {
+    // If a tap picked outside the mode, the mode would not mean
+    // anything — you would be selecting all the time without knowing.
+    let (mut app, centre, ids) = observer_app_out_of_mode(&[(0.0, 0.0)]);
+    let at = ndc_of(&app, on_terrain(centre.x, centre.z));
+
+    tap(&mut app, at);
+
+    assert!(!is_selected(&app, ids[0]), "a tap outside selecting mode selected a unit");
+}
+
+#[test]
+fn in_the_mode_a_drag_sweeps_a_box_instead_of_panning() {
+    // The behaviour change IS the mode. One finger means something
+    // different depending on where you are.
     let (mut app, centre, ids) = observer_app(&[(0.0, 0.0)]);
+    let c = ndc_of(&app, on_terrain(centre.x, centre.z));
+
+    touch_frame(&mut app, vec![[c[0] - 0.3, c[1] - 0.3]]);
+    touch_frame(&mut app, vec![[c[0], c[1] - 0.1]]);
+    touch_frame(&mut app, vec![[c[0] + 0.3, c[1] + 0.3]]);
+    touch_frame(&mut app, vec![]);
+
+    assert!(is_selected(&app, ids[0]), "a box swept in the mode did not select");
+    let CameraFocus::Free(now) = *app.world().resource::<CameraFocus>() else {
+        panic!("observer detached")
+    };
+    let moved = ((now.x - centre.x).powi(2) + (now.z - centre.z).powi(2)).sqrt();
+    assert!(moved < 1.0, "sweeping a box also panned the camera {moved:.1}");
+}
+
+#[test]
+fn two_fingers_still_pan_while_selecting() {
+    // A phone screen is small and the thing you want is often just off
+    // it. Losing the camera mid-selection would be unusable.
+    let (mut app, centre, _ids) = observer_app(&[]);
+    touch_frame(&mut app, vec![[-0.1, 0.0], [0.1, 0.0]]);
+    touch_frame(&mut app, vec![[0.2, 0.0], [0.4, 0.0]]);
+
+    let CameraFocus::Free(now) = *app.world().resource::<CameraFocus>() else {
+        panic!("observer detached")
+    };
+    let moved = ((now.x - centre.x).powi(2) + (now.z - centre.z).powi(2)).sqrt();
+    assert!(moved > 1.0, "two fingers did not pan while selecting");
+}
+
+#[test]
+fn dragging_across_a_unit_pans_and_does_not_select_it() {
+    // Out of the mode, drag is pan. If it also selected, moving the
+    // camera would constantly change what is selected under your thumb.
+    let (mut app, centre, ids) = observer_app_out_of_mode(&[(0.0, 0.0)]);
     let c = ndc_of(&app, on_terrain(centre.x, centre.z));
 
     touch_frame(&mut app, vec![c]);
@@ -173,7 +241,7 @@ fn a_pinch_zooms_without_selecting() {
 #[test]
 fn a_finger_on_an_action_button_is_not_a_world_gesture() {
     // The bar sits over the world. Pressing it must not also pan.
-    let (mut app, centre, _ids) = observer_app(&[]);
+    let (mut app, centre, _ids) = observer_app_out_of_mode(&[]);
     let button = {
         let r = game::actions::slot_rects(game::gpu_web::viewport_size())[1];
         [r.cx, r.cy]

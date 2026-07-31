@@ -365,7 +365,7 @@ fn the_become_key_is_the_slot_the_verb_declares() {
     // another slot, the key that invokes it must move with it — this
     // ties the two together so they cannot drift apart silently.
     use game::actions::{self, Action, Affordances};
-    let bar = actions::resolve(Affordances { selected_count: 1, piloting: false });
+    let bar = actions::resolve(Affordances { selected_count: 1, piloting: false, selecting: false });
     let slot = bar.iter().position(|a| *a == Some(Action::Become)).expect("become offered");
     assert_eq!(
         game::input::key::slot_bit(slot),

@@ -35,13 +35,12 @@ fn a_finger_that_travels_is_a_pan_and_never_a_tap() {
     read(&mut s, &[[0.0, 0.0]]);
     let g = read(&mut s, &[[0.30, 0.0]]);
     assert!(
-        matches!(g, TouchGesture::Pan { .. }),
-        "a finger crossing a third of the screen was not a pan: {g:?}"
+        matches!(g, TouchGesture::Drag { .. }),
+        "a finger crossing a third of the screen was not a drag: {g:?}"
     );
-    assert_eq!(
-        read(&mut s, &[]),
-        TouchGesture::None,
-        "lifting after a pan also fired a tap — the camera would move AND select"
+    assert!(
+        matches!(read(&mut s, &[]), TouchGesture::DragEnd { .. }),
+        "lifting after a drag did not end the drag — and must never be a tap"
     );
 }
 
@@ -54,11 +53,11 @@ fn a_pan_reports_this_frames_movement_not_the_total() {
     read(&mut s, &[[0.20, 0.0]]);
     let g = read(&mut s, &[[0.25, 0.10]]);
     match g {
-        TouchGesture::Pan { dx, dy } => {
+        TouchGesture::Drag { dx, dy, .. } => {
             assert!((dx - 0.05).abs() < 1e-5, "dx was {dx}, expected this frame's 0.05");
             assert!((dy - 0.10).abs() < 1e-5, "dy was {dy}, expected this frame's 0.10");
         }
-        other => panic!("expected a pan, got {other:?}"),
+        other => panic!("expected a drag, got {other:?}"),
     }
 }
 
@@ -76,16 +75,20 @@ fn two_fingers_spreading_zoom_in_and_closing_zoom_out() {
     read(&mut s, &[[-0.10, 0.0], [0.10, 0.0]]);
     let out = read(&mut s, &[[-0.30, 0.0], [0.30, 0.0]]);
     match out {
-        TouchGesture::Pinch { notches } => assert!(notches > 0, "spreading gave {notches}"),
-        other => panic!("expected a pinch, got {other:?}"),
+        TouchGesture::TwoFinger { notches, .. } => {
+            assert!(notches > 0, "spreading gave {notches}")
+        }
+        other => panic!("expected a two-finger gesture, got {other:?}"),
     }
 
     let mut s = TouchState::default();
     read(&mut s, &[[-0.30, 0.0], [0.30, 0.0]]);
     let inn = read(&mut s, &[[-0.10, 0.0], [0.10, 0.0]]);
     match inn {
-        TouchGesture::Pinch { notches } => assert!(notches < 0, "closing gave {notches}"),
-        other => panic!("expected a pinch, got {other:?}"),
+        TouchGesture::TwoFinger { notches, .. } => {
+            assert!(notches < 0, "closing gave {notches}")
+        }
+        other => panic!("expected a two-finger gesture, got {other:?}"),
     }
 }
 
@@ -99,7 +102,7 @@ fn a_second_finger_does_not_pan() {
     read(&mut s, &[[0.05, 0.0]]);
     let g = read(&mut s, &[[0.05, 0.0], [0.60, 0.30]]);
     assert!(
-        !matches!(g, TouchGesture::Pan { .. }),
+        !matches!(g, TouchGesture::Drag { .. }),
         "adding a finger produced a pan: {g:?}"
     );
 }
@@ -148,5 +151,5 @@ fn the_slop_threshold_is_the_boundary_it_says_it_is() {
     let mut s = TouchState::default();
     read(&mut s, &[[0.0, 0.0]]);
     read(&mut s, &[[TAP_SLOP_NDC * 4.0, 0.0]]);
-    assert_eq!(read(&mut s, &[]), TouchGesture::None);
+    assert!(matches!(read(&mut s, &[]), TouchGesture::DragEnd { .. }));
 }

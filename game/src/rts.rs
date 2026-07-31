@@ -499,11 +499,18 @@ const PINCH_NOTCHES_PER_NDC: f32 = 18.0;
 pub enum TouchGesture {
     /// Nothing, or something not yet resolved.
     None,
-    /// One finger dragging: how far it moved this frame, in NDC. The
-    /// world follows the finger, so the camera moves the other way.
-    Pan { dx: f32, dy: f32 },
-    /// Two fingers spreading or closing.
-    Pinch { notches: i32 },
+    /// One finger dragging. `from` is where the gesture began, `to`
+    /// where it is now, `dx`/`dy` this frame's movement.
+    ///
+    /// The reader does NOT decide whether this pans or sweeps a
+    /// selection box — that depends on the mode, and a reader that knew
+    /// about modes could not be tested as one thing.
+    Drag { from: [f32; 2], to: [f32; 2], dx: f32, dy: f32 },
+    /// A one-finger drag ended, carrying the rectangle it swept.
+    DragEnd { from: [f32; 2], to: [f32; 2] },
+    /// Two fingers: they pan by their midpoint and zoom by their
+    /// separation, both at once, the way a map behaves.
+    TwoFinger { dx: f32, dy: f32, notches: i32 },
     /// A finger came up having barely moved — a tap at this point.
     Tap { at: [f32; 2] },
 }
@@ -530,31 +537,35 @@ pub struct TouchState {
 pub fn read_touch_gesture(state: &mut TouchState, touches: &[[f32; 2]]) -> TouchGesture {
     match touches.len() {
         0 => {
-            let tap = match (state.start, state.last) {
-                (Some(_), Some(last)) if state.travel <= TAP_SLOP_NDC => {
-                    TouchGesture::Tap { at: last }
+            let ended = match (state.start, state.last) {
+                (Some(from), Some(last)) => {
+                    if state.travel <= TAP_SLOP_NDC {
+                        TouchGesture::Tap { at: last }
+                    } else {
+                        TouchGesture::DragEnd { from, to: last }
+                    }
                 }
                 _ => TouchGesture::None,
             };
             *state = TouchState::default();
-            tap
+            ended
         }
         1 => {
             let now = touches[0];
-            // A pinch that drops to one finger must not become a pan
+            // A pinch that drops to one finger must not become a drag
             // from wherever that finger happens to be.
-            let gesture = match (state.spread, state.last) {
-                (Some(_), _) => TouchGesture::None,
-                (None, Some(prev)) => {
+            let gesture = match (state.spread, state.last, state.start) {
+                (Some(_), _, _) => TouchGesture::None,
+                (None, Some(prev), Some(from)) => {
                     let (dx, dy) = (now[0] - prev[0], now[1] - prev[1]);
                     state.travel += (dx * dx + dy * dy).sqrt();
                     if state.travel > TAP_SLOP_NDC {
-                        TouchGesture::Pan { dx, dy }
+                        TouchGesture::Drag { from, to: now, dx, dy }
                     } else {
                         TouchGesture::None
                     }
                 }
-                (None, None) => {
+                (None, _, _) => {
                     state.start = Some(now);
                     state.travel = 0.0;
                     TouchGesture::None
@@ -566,23 +577,26 @@ pub fn read_touch_gesture(state: &mut TouchState, touches: &[[f32; 2]]) -> Touch
         }
         _ => {
             let (a, b) = (touches[0], touches[1]);
-            let now = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
-            let gesture = match state.spread {
-                Some(prev) => {
-                    let notches = ((now - prev) * PINCH_NOTCHES_PER_NDC).round() as i32;
-                    if notches == 0 {
+            let spread = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+            let mid = [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5];
+            let gesture = match (state.spread, state.last) {
+                (Some(prev_spread), Some(prev_mid)) => {
+                    let notches =
+                        ((spread - prev_spread) * PINCH_NOTCHES_PER_NDC).round() as i32;
+                    let (dx, dy) = (mid[0] - prev_mid[0], mid[1] - prev_mid[1]);
+                    if notches == 0 && dx == 0.0 && dy == 0.0 {
                         TouchGesture::None
                     } else {
-                        TouchGesture::Pinch { notches }
+                        TouchGesture::TwoFinger { dx, dy, notches }
                     }
                 }
-                None => TouchGesture::None,
+                _ => TouchGesture::None,
             };
-            state.spread = Some(now);
-            // Two fingers is never a tap, and never leaves a pan
-            // pending behind it.
+            state.spread = Some(spread);
+            state.last = Some(mid);
+            // Two fingers is never a tap, and never leaves a one-finger
+            // drag pending behind it.
             state.start = None;
-            state.last = None;
             state.travel = f32::INFINITY;
             gesture
         }
@@ -753,14 +767,29 @@ pub fn apply_right_click_orders(
 /// This is what replaced the D-pad. The pad drove the camera with
 /// WASD bits, which meant a thumb on it was spending the same channel
 /// the keyboard uses and the world could only be reached around it.
+/// The observer's camera state, as one parameter.
+///
+/// Bundled because several systems need exactly this pair and passing
+/// them separately pushed those systems past clippy's argument limit —
+/// a lint worth satisfying by naming a concept rather than silencing.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct Observer<'w> {
+    pub focus: ResMut<'w, CameraFocus>,
+    pub zoom: ResMut<'w, CameraZoom>,
+}
+
 pub fn apply_touch_gesture(
     mut state: ResMut<TouchState>,
-    mut focus: ResMut<CameraFocus>,
-    mut zoom: ResMut<CameraZoom>,
+    mode: Res<SelectMode>,
+    mut observer: Observer,
     frame: Res<InputFrame>,
+    mut live: ResMut<LiveBox>,
     units: Query<(Entity, &Position), With<UnitMarker>>,
     mut commands: Commands,
 ) {
+    let zoom_now = *observer.zoom;
+    let focus = &mut observer.focus;
+    let zoom = &mut observer.zoom;
     let viewport = crate::gpu_web::viewport_size();
     // Fingers on the action bar are button presses, not gestures.
     let bar = actions::slot_rects(viewport);
@@ -771,20 +800,55 @@ pub fn apply_touch_gesture(
         .filter(|t| !bar.iter().any(|r| r.contains(*t)))
         .collect();
 
-    match read_touch_gesture(&mut state, &world) {
+    let gesture = read_touch_gesture(&mut state, &world);
+    let selecting = mode.0;
+
+    // What one finger MEANS is the mode. Out of it the world is
+    // scenery you move around; in it, one finger picks and sweeps.
+    match gesture {
         TouchGesture::None => {}
-        TouchGesture::Pinch { notches } => zoom.nudge(notches),
+
+        TouchGesture::TwoFinger { dx, dy, notches } => {
+            // Two fingers behave the same in both modes, so the camera
+            // is always reachable — including mid-selection, where a
+            // phone screen is small and the thing you want is often
+            // just off it.
+            if notches != 0 {
+                zoom.nudge(notches);
+            }
+            pan_focus(focus, zoom_now, &units, dx, dy);
+        }
+
+        TouchGesture::Drag { from, to, dx, dy } => {
+            if selecting {
+                live.0 = Some((from, to));
+            } else {
+                pan_focus(focus, zoom_now, &units, dx, dy);
+            }
+        }
+
+        TouchGesture::DragEnd { from, to } => {
+            live.0 = None;
+            if selecting && let Some(camera) = observer_camera(focus, zoom_now, &units) {
+                let all: Vec<(Entity, Vec3)> =
+                    units.iter().map(|(e, p)| (e, p.0)).collect();
+                let picked = units_in_rect(&camera, &all, from, to);
+                for (e, _) in &all {
+                    commands.entity(*e).remove::<Selected>();
+                }
+                for e in picked {
+                    commands.entity(e).insert(Selected);
+                }
+            }
+        }
+
         TouchGesture::Tap { at } => {
-            // Resolve the pick HERE rather than synthesising a button
-            // press. Routing a tap through the button-edge machinery
-            // could never work: one frame of LEFT is only the PRESS
-            // edge, and by the release frame `ndc` is back to the
-            // mouse pointer, which on a phone is None — so the release
-            // bailed and a tap selected nothing, every time.
-            //
-            // The PICK is still one function, shared with the mouse
-            // click path; only the gesture plumbing differs.
-            if let Some(camera) = observer_camera(&focus, *zoom, &units) {
+            // Only in the mode. Out of it a tap must do nothing, or the
+            // mode would not mean anything.
+            if !selecting {
+                return;
+            }
+            if let Some(camera) = observer_camera(focus, zoom_now, &units) {
                 let all: Vec<(Entity, Vec3)> =
                     units.iter().map(|(e, p)| (e, p.0)).collect();
                 let hit = nearest_within_pick_radius(&camera, &all, at);
@@ -796,28 +860,39 @@ pub fn apply_touch_gesture(
                 }
             }
         }
-        TouchGesture::Pan { dx, dy } => {
-            // Drag the WORLD, so the camera moves opposite the finger.
-            // Converted through `ground_under` at two screen points
-            // rather than a scale factor, so the pan tracks the finger
-            // at any zoom without a second copy of the projection.
-            let CameraFocus::Free(point) = *focus else {
-                return;
-            };
-            let Some(camera) = observer_camera(&focus, *zoom, &units) else {
-                return;
-            };
-            let centre = [0.0, 0.0];
-            let moved = [-dx, -dy];
-            if let (Some(from), Some(to)) = (
-                ground_under(&camera, centre),
-                ground_under(&camera, moved),
-            ) {
-                let (ddx, ddz) = (to.x - from.x, to.z - from.z);
-                let (x, z) = (point.x + ddx, point.z + ddz);
-                *focus = CameraFocus::Free(Vec3::new(x, crate::terrain::height(x, z), z));
-            }
-        }
+    }
+}
+
+/// The rectangle a finger is sweeping right now, for the render to
+/// draw. `None` when no box is in progress.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct LiveBox(pub Option<([f32; 2], [f32; 2])>);
+
+/// Move the detached observer by a screen-space delta.
+///
+/// The world follows the finger, so the camera goes the other way.
+/// Converted through `ground_under` at two screen points rather than a
+/// scale factor, so the pan tracks the finger at any zoom without a
+/// second copy of the projection living here.
+fn pan_focus(
+    focus: &mut ResMut<CameraFocus>,
+    zoom: CameraZoom,
+    units: &Query<(Entity, &Position), With<UnitMarker>>,
+    dx: f32,
+    dy: f32,
+) {
+    let CameraFocus::Free(point) = **focus else {
+        return;
+    };
+    let Some(camera) = observer_camera(focus, zoom, units) else {
+        return;
+    };
+    if let (Some(from), Some(to)) = (
+        ground_under(&camera, [0.0, 0.0]),
+        ground_under(&camera, [-dx, -dy]),
+    ) {
+        let (x, z) = (point.x + to.x - from.x, point.z + to.z - from.z);
+        **focus = CameraFocus::Free(Vec3::new(x, crate::terrain::height(x, z), z));
     }
 }
 
@@ -852,9 +927,20 @@ pub struct ActionBar(pub [Option<Action>; SLOTS]);
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct SelectionCount(pub usize);
 
+/// Whether the human is in selecting mode.
+///
+/// A mode you enter and leave on purpose. Out of it the world is
+/// scenery: a drag pans and a tap does nothing. In it, a drag sweeps a
+/// box and a tap picks. Making it explicit is what stops it being the
+/// invisible state that made "is anything selected?" unanswerable —
+/// you pressed a button to get here and the bar says so while you are.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq)]
+pub struct SelectMode(pub bool);
+
 /// Project the world into the three slots.
 pub fn update_action_bar(
     focus: Res<CameraFocus>,
+    mode: Res<SelectMode>,
     selected: Query<Entity, Orderable>,
     mut bar: ResMut<ActionBar>,
     mut count: ResMut<SelectionCount>,
@@ -863,6 +949,7 @@ pub fn update_action_bar(
     bar.0 = actions::resolve(Affordances {
         selected_count: count.0,
         piloting: matches!(*focus, CameraFocus::Following(_)),
+        selecting: mode.0,
     });
 }
 
@@ -872,15 +959,23 @@ pub fn update_action_bar(
 /// makes the button and the key the same thing: if the bar does not
 /// offer it, the key does nothing, and the human is never holding a
 /// shortcut the screen disagrees with.
+/// This frame's input plus the edges derived from the last one.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct Edges<'w> {
+    pub frame: Res<'w, InputFrame>,
+    pub drag: Res<'w, DragState>,
+}
+
 pub fn invoke_action(
-    frame: Res<InputFrame>,
-    drag: Res<DragState>,
+    edges: Edges,
     bar: Res<ActionBar>,
+    mut mode: ResMut<SelectMode>,
     mut focus: ResMut<CameraFocus>,
     selected: Query<Entity, Orderable>,
     positions: Query<&Position>,
     mut commands: Commands,
 ) {
+    let (frame, drag) = (&edges.frame, &edges.drag);
     let mut pressed = None;
     for slot in 0..SLOTS {
         let bit = crate::input::key::slot_bit(slot);
@@ -893,6 +988,8 @@ pub fn invoke_action(
     let Some(action) = bar.0[slot] else { return };
 
     match action {
+        Action::Select => mode.0 = true,
+        Action::Done => mode.0 = false,
         Action::Become => become_selected(&mut focus, &selected, &mut commands),
         Action::Leave => leave_body(&mut focus, &positions, &mut commands),
     }
@@ -1111,6 +1208,8 @@ pub fn register(app: &mut App) {
     app.insert_resource(ActionBar::default());
     app.insert_resource(SelectionCount::default());
     app.insert_resource(TouchState::default());
+    app.insert_resource(SelectMode::default());
+    app.insert_resource(LiveBox::default());
     app.add_systems(
         Update,
         (

@@ -27,7 +27,7 @@
 use game::actions::{self, Action, Affordances, SLOTS};
 
 fn bar(selected: usize, piloting: bool) -> [Option<Action>; SLOTS] {
-    actions::resolve(Affordances { selected_count: selected, piloting })
+    actions::resolve(Affordances { selected_count: selected, piloting, selecting: false })
 }
 
 /// A representative phone-ish viewport; the maths is resolution
@@ -124,11 +124,10 @@ fn no_touches_means_no_pointer() {
 }
 
 #[test]
-fn with_nothing_selected_the_readout_says_how_to_select() {
-    // "not immediately obvious how to do it" — so the screen says how.
-    // An empty readout, or one that just says zero, answers neither
-    // "what do I do" nor "did it work".
-    let s = actions::selection_readout(0);
+fn in_selecting_mode_the_readout_says_how_to_select() {
+    // The gesture is only named where it applies: inside the mode,
+    // which is the only place a tap picks anything.
+    let s = actions::selection_readout(0, true);
     assert!(!s.is_empty(), "nothing on screen tells you how to select");
     assert!(
         s.contains("tap"),
@@ -141,14 +140,14 @@ fn the_readout_counts_what_is_selected() {
     // "not obvious if I'm even selecting anything" — so the count is on
     // screen. This is the only thing that can answer that question
     // without guessing.
-    assert!(actions::selection_readout(1).contains('1'));
-    assert!(actions::selection_readout(7).contains('7'));
+    assert!(actions::selection_readout(1, false).contains('1'));
+    assert!(actions::selection_readout(7, false).contains('7'));
 }
 
 #[test]
 fn the_readout_is_always_drawable() {
     for n in [0, 1, 2, 9, 12, 100] {
-        for c in actions::selection_readout(n).chars() {
+        for c in actions::selection_readout(n, n % 2 == 0).chars() {
             assert!(
                 c == ' ' || game::watermark::glyph(c).is_some(),
                 "readout for {n} contains {c:?}, which the font cannot draw"
@@ -220,11 +219,79 @@ fn there_are_always_exactly_three_slots() {
 }
 
 #[test]
-fn an_empty_context_still_has_three_empty_slots() {
+fn the_base_state_always_offers_a_way_into_selecting() {
+    // Out of the mode with nothing selected, there is exactly one thing
+    // to do and the bar says what it is. The other two slots stay
+    // present and empty — three slots always.
     let b = bar(0, false);
+    assert_eq!(b[Action::Select.slot()], Some(Action::Select));
+    assert_eq!(
+        b.iter().filter(|s| s.is_some()).count(),
+        1,
+        "the empty context offered more than the way in: {b:?}"
+    );
+}
+
+fn selecting_bar(selected: usize) -> [Option<Action>; SLOTS] {
+    actions::resolve(Affordances {
+        selected_count: selected,
+        piloting: false,
+        selecting: true,
+    })
+}
+
+#[test]
+fn the_mode_is_visible_on_the_bar_the_whole_time_you_are_in_it() {
+    // The point of making it a mode: you cannot wonder whether you are
+    // selecting, because the button row says so while you are.
+    let b = selecting_bar(0);
+    assert_eq!(
+        b[Action::Done.slot()],
+        Some(Action::Done),
+        "in selecting mode the bar does not show the way out: {b:?}"
+    );
     assert!(
-        b.iter().all(Option::is_none),
-        "nothing is selected and nothing is held, yet the bar offered {b:?}"
+        !b.contains(&Some(Action::Select)),
+        "the bar still offers to enter a mode you are already in"
+    );
+}
+
+#[test]
+fn entering_and_leaving_the_mode_is_the_same_button() {
+    // One verb pointing two ways, like become/leave. Otherwise going in
+    // and coming out are two keys to remember.
+    assert_eq!(Action::Select.slot(), Action::Done.slot());
+}
+
+#[test]
+fn the_mode_suppresses_verbs_that_act_on_the_selection() {
+    // While gathering, the only thing to do is finish. Offering
+    // "become" mid-gather would act on a half-made selection.
+    let b = selecting_bar(1);
+    assert!(
+        !b.contains(&Some(Action::Become)),
+        "become was offered while still selecting: {b:?}"
+    );
+}
+
+#[test]
+fn leaving_the_mode_brings_back_the_verbs_for_what_was_gathered() {
+    // The selection survives the mode — that is why the mode exists.
+    let b = bar(1, false);
+    assert!(
+        b.contains(&Some(Action::Become)),
+        "out of the mode with one selected, become is not offered: {b:?}"
+    );
+}
+
+#[test]
+fn the_readout_names_the_mode_while_you_are_in_it() {
+    let inside = actions::selection_readout(2, true);
+    assert!(inside.contains("selecting"), "the readout does not name the mode: {inside:?}");
+    let outside = actions::selection_readout(2, false);
+    assert!(
+        !outside.contains("selecting"),
+        "the readout claims the mode when out of it: {outside:?}"
     );
 }
 

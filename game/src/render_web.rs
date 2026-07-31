@@ -1083,24 +1083,32 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
         .get_resource::<crate::rts::SelectionCount>()
         .map(|c| c.0)
         .unwrap_or(0);
+    let selecting = app
+        .world()
+        .get_resource::<crate::rts::SelectMode>()
+        .map(|m| m.0)
+        .unwrap_or(false);
     if let Some(bar) = app.world().get_resource::<crate::rts::ActionBar>() {
         ui.extend(crate::actions::build_quads(
             &bar.0,
             selected_count,
+            selecting,
             gpu_web::viewport_size(),
         ));
     }
-    // The live drag rectangle, while a drag is in progress.
-    if let (Some(drag), Some(frame)) = (
-        app.world().get_resource::<crate::rts::DragState>(),
-        app.world().get_resource::<crate::rts::InputFrame>(),
-    ) && let (Some(anchor), Some(now)) = (drag.anchor, frame.ndc)
-    {
-        ui.extend(crate::actions::drag_rect_quads_px(
-            anchor,
-            now,
-            gpu_web::viewport_size(),
-        ));
+    // The live selection rectangle: a finger sweeping one in selecting
+    // mode, or a mouse dragging one.
+    let live = app
+        .world()
+        .get_resource::<crate::rts::LiveBox>()
+        .and_then(|b| b.0)
+        .or_else(|| {
+            let drag = app.world().get_resource::<crate::rts::DragState>()?;
+            let frame = app.world().get_resource::<crate::rts::InputFrame>()?;
+            Some((drag.anchor?, frame.ndc?))
+        });
+    if let Some((a, b)) = live {
+        ui.extend(crate::actions::drag_rect_quads_px(a, b, gpu_web::viewport_size()));
     }
     ui.extend(crate::bang::current_instances());
     ui.extend(crate::tune_hud::current_instances());
