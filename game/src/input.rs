@@ -14,6 +14,27 @@ pub mod key {
     pub const S: u32 = 0x0004;
     pub const D: u32 = 0x0008;
     pub const ESC: u32 = 0x0010;
+
+    /// The three action slots, left to right. Q, E, R on the keyboard —
+    /// adjacent to WASD so the hand never leaves the movement keys, and
+    /// in the same left-to-right order as the buttons they mirror.
+    ///
+    /// These are bound to SLOTS, not to verbs. What slot B does depends
+    /// on context; that it is E never changes. That is the whole point
+    /// of the limit — see `crate::actions`.
+    pub const SLOT_A: u32 = 0x0020;
+    pub const SLOT_B: u32 = 0x0040;
+    pub const SLOT_C: u32 = 0x0080;
+
+    /// The key bit for action slot `i`, or 0 if there is no such slot.
+    pub fn slot_bit(i: usize) -> u32 {
+        match i {
+            0 => SLOT_A,
+            1 => SLOT_B,
+            2 => SLOT_C,
+            _ => 0,
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -28,6 +49,15 @@ unsafe extern "C" {
     /// the pointer isn't over the canvas.
     fn game_pointer_ndc_x() -> f32;
     fn game_pointer_ndc_y() -> f32;
+    /// Buttons held right now, as the DOM's `MouseEvent.buttons`
+    /// bitmask — a LEVEL, not an event. Edges are derived in Rust by
+    /// comparing frames, because the shim has no frame to compare to.
+    fn game_pointer_buttons() -> u32;
+    /// Accumulated VERTICAL wheel since last read. Separate from
+    /// `game_wheel_delta`, which carries the horizontal axis and drives
+    /// the tune HUD; mixing them would make a slider fight the zoom.
+    /// Reading resets the accumulator.
+    fn game_wheel_delta_y() -> i32;
 }
 
 static TOUCH_BITS: AtomicU32 = AtomicU32::new(0);
@@ -78,4 +108,29 @@ pub fn pointer_ndc() -> Option<[f32; 2]> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn pointer_ndc() -> Option<[f32; 2]> {
     None
+}
+
+/// Mouse buttons held this frame, `rts::button::*`.
+#[cfg(target_arch = "wasm32")]
+pub fn buttons() -> u32 {
+    unsafe { game_pointer_buttons() }
+}
+
+/// Native has no pointer: the seer run drives a scripted tour, not a
+/// hand. Zero is the truth here, not a placeholder.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn buttons() -> u32 {
+    0
+}
+
+/// Accumulated vertical wheel since last call. Positive = wheel up =
+/// zoom in. Reading resets the accumulator on the JS side.
+#[cfg(target_arch = "wasm32")]
+pub fn wheel_delta_y() -> i32 {
+    unsafe { game_wheel_delta_y() }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wheel_delta_y() -> i32 {
+    0
 }

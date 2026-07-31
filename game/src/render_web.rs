@@ -812,8 +812,8 @@ pub fn frame_surface(px: f32, pz: f32) -> u32 {
 /// picks each part's cut-away index range and draws. See RENDER.md
 /// slice 4.
 pub fn frame_walls(snap: &scene::SceneSnapshot, bt: &crate::buildings::BuildingTemplates) -> u32 {
-    let pcx = (snap.player.x / crate::chunk::CHUNK_SIZE).floor() as i32;
-    let pcz = (snap.player.z / crate::chunk::CHUNK_SIZE).floor() as i32;
+    let pcx = (snap.viewpoint.x / crate::chunk::CHUNK_SIZE).floor() as i32;
+    let pcz = (snap.viewpoint.z / crate::chunk::CHUNK_SIZE).floor() as i32;
     STATE.with(|c| {
         let mut opt = c.borrow_mut();
         let Some(state) = opt.as_mut() else {
@@ -825,7 +825,7 @@ pub fn frame_walls(snap: &scene::SceneSnapshot, bt: &crate::buildings::BuildingT
             // arrive with wall mutation, later), so this is the only
             // upload path.
             let placed =
-                crate::wall_bake::visible_wall_bakes(snap.player, bt, crate::chunk::CHUNK_SIZE, 3);
+                crate::wall_bake::visible_wall_bakes(snap.viewpoint, bt, crate::chunk::CHUNK_SIZE, 3);
             let mut gpu = Vec::new();
             for pw in &placed {
                 let y = crate::terrain::height(pw.anchor.x, pw.anchor.z);
@@ -886,7 +886,7 @@ pub fn frame_walls(snap: &scene::SceneSnapshot, bt: &crate::buildings::BuildingT
             let anchor = bevy_math::Vec3::new(part.anchor[0], 0.0, part.anchor[1]);
             let inside = crate::wall_bake::player_inside(anchor, snap);
             let (draw_count, _) =
-                part.draw_counts(inside, crate::wall_bake::local_depth(anchor, snap.player));
+                part.draw_counts(inside, crate::wall_bake::local_depth(anchor, snap.viewpoint));
             if draw_count == 0 {
                 continue;
             }
@@ -923,7 +923,7 @@ pub fn frame_walls_ghost(snap: &scene::SceneSnapshot) -> u32 {
             let anchor = bevy_math::Vec3::new(part.anchor[0], 0.0, part.anchor[1]);
             let inside = crate::wall_bake::player_inside(anchor, snap);
             let (_, ghost_count) =
-                part.draw_counts(inside, crate::wall_bake::local_depth(anchor, snap.player));
+                part.draw_counts(inside, crate::wall_bake::local_depth(anchor, snap.viewpoint));
             if ghost_count == 0 {
                 continue;
             }
@@ -997,10 +997,32 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     scene::drape(&mut glass);
     scene::drape(&mut ghost);
     mesh_trees.drape();
-    let camera = SceneCamera::follow(
-        [snap.player.x, snap.player.y, snap.player.z],
-        crate::room::FLOOR_HALF,
-    );
+    // The observer owns the viewport. Falling back to the old
+    // player-follow camera keeps a sane view rather than cutting to the
+    // origin, but it is a real fault — either the schedule was never
+    // registered or the camera is following a body that is gone — so it
+    // says so once instead of quietly looking almost right forever.
+    let camera = match crate::rts::observer_camera_from_app(app) {
+        Some(c) => c,
+        None => {
+            static TOLD: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !TOLD.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                crate::error::emit_region(
+                    crate::error::Severity::Error,
+                    "render_web.camera",
+                    "no observer camera; falling back to following the player",
+                    "`rts::observer_camera_from_app` returned None — either \
+                     `rts::register` never ran, or CameraFocus points at a \
+                     despawned entity. The view still renders, from the player.",
+                );
+            }
+            SceneCamera::follow(
+                [snap.player.x, snap.player.y, snap.player.z],
+                crate::room::FLOOR_HALF,
+            )
+        }
+    };
     // Elapsed seconds for leaf-wind sway — synthetic ticks (no bevy_time,
     // same model as the campfire flicker). Advances every frame, so the
     // browser canopy ripples continuously.
@@ -1020,7 +1042,7 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     // elements are correctly occluded by buildings in front of them.
     // Solid ground (with the world-anchored grid in its shader), then
     // trees — all depth-tested over the cleared cube pass.
-    let surface_result = frame_surface(snap.player.x, snap.player.z);
+    let surface_result = frame_surface(snap.viewpoint.x, snap.viewpoint.z);
     if surface_result != 0 {
         return surface_result;
     }
@@ -1048,9 +1070,46 @@ pub fn frame_from_app(app: &mut bevy_app::App) -> u32 {
     }
     // D-pad, HUD quads, build watermark, NPC-bump "!" — all one UI
     // pass. The watermark is the running binary drawing its own commit.
-    let mut ui: Vec<dpad::DpadInstance> = dpad::current_instances().to_vec();
+    // The D-pad is gone: drag pans, pinch zooms, tap selects. Its quad
+    // type stays because the whole UI overlay is built from it.
+    let mut ui: Vec<dpad::DpadInstance> = Vec::new();
     ui.extend(hud::current_instances());
     ui.extend(crate::watermark::watermark_quads(gpu_web::viewport_size()));
+    // The three action slots. Drawn from the ActionBar resource, which
+    // is recomputed each tick from world state — so what the buttons
+    // offer and what the keys do can never disagree.
+    let selected_count = app
+        .world()
+        .get_resource::<crate::rts::SelectionCount>()
+        .map(|c| c.0)
+        .unwrap_or(0);
+    let selecting = app
+        .world()
+        .get_resource::<crate::rts::SelectMode>()
+        .map(|m| m.0)
+        .unwrap_or(false);
+    if let Some(bar) = app.world().get_resource::<crate::rts::ActionBar>() {
+        ui.extend(crate::actions::build_quads(
+            &bar.0,
+            selected_count,
+            selecting,
+            gpu_web::viewport_size(),
+        ));
+    }
+    // The live selection rectangle: a finger sweeping one in selecting
+    // mode, or a mouse dragging one.
+    let live = app
+        .world()
+        .get_resource::<crate::rts::LiveBox>()
+        .and_then(|b| b.0)
+        .or_else(|| {
+            let drag = app.world().get_resource::<crate::rts::DragState>()?;
+            let frame = app.world().get_resource::<crate::rts::InputFrame>()?;
+            Some((drag.anchor?, frame.ndc?))
+        });
+    if let Some((a, b)) = live {
+        ui.extend(crate::actions::drag_rect_quads_px(a, b, gpu_web::viewport_size()));
+    }
     ui.extend(crate::bang::current_instances());
     ui.extend(crate::tune_hud::current_instances());
     frame_ui(&ui)

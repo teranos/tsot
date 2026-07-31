@@ -339,7 +339,16 @@ fn should_fire(prev_held: u32, next_held: u32) -> bool {
     false
 }
 
-pub fn tune_hud_system(mut state: ResMut<TuneHudState>) {
+pub fn tune_hud_system(
+    mut state: ResMut<TuneHudState>,
+    hud: Option<Res<crate::hud::Hud>>,
+) {
+    // A submenu of settings now, closed by default. It is a developer
+    // panel and it covered a third of a phone screen.
+    if !hud.map(|h| h.tune_open).unwrap_or(false) {
+        INSTANCES.with(|c| c.borrow_mut().clear());
+        return;
+    }
     let vp = crate::gpu_web::viewport_size();
     if vp.0 == 0 || vp.1 == 0 {
         return;

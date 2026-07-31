@@ -568,6 +568,15 @@ mod tests {
     use cdda::{WallCellKind, WallEdge, WallGraph};
     use std::collections::HashMap;
 
+    /// A vertex position quantised to eighths — positional identity for
+    /// the manifold check, so two verts emitted at the same place key
+    /// the same regardless of float noise.
+    type PKey = (i64, i64, i64);
+
+    /// An undirected triangle edge, keyed by its two endpoints in
+    /// sorted order so the same edge from adjacent triangles collides.
+    type EdgeKey = (PKey, PKey);
+
     fn node(x: f32, z: f32, ew: Option<f32>, ns: Option<f32>) -> WallNode {
         WallNode {
             offset: Vec3::new(x, 0.0, z),
@@ -583,9 +592,9 @@ mod tests {
     /// are open at the bottom, they sit on the terrain.
     fn assert_manifold_or_grounded(verts: &[MeshVertex], idx: &[u32]) {
         let q = |v: f32| (v * 8.0).round() as i64;
-        let pkey = |p: [f32; 3]| (q(p[0]), q(p[1]), q(p[2]));
-        let mut edge_count: HashMap<((i64, i64, i64), (i64, i64, i64)), usize> = HashMap::new();
-        let mut edge_ground: HashMap<((i64, i64, i64), (i64, i64, i64)), bool> = HashMap::new();
+        let pkey = |p: [f32; 3]| -> PKey { (q(p[0]), q(p[1]), q(p[2])) };
+        let mut edge_count: HashMap<EdgeKey, usize> = HashMap::new();
+        let mut edge_ground: HashMap<EdgeKey, bool> = HashMap::new();
         for t in idx.chunks(3) {
             for (i, j) in [(0, 1), (1, 2), (2, 0)] {
                 let a = verts[t[i] as usize].pos;

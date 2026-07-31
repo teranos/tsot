@@ -56,6 +56,22 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
             scale: [70.0, 140.0, 70.0],
         });
     }
+    // Commandable units. Selected ones go bright GREEN against the
+    // slate of the unselected — selection is a claim about what a
+    // right-click is about to move, so it has to read at a glance.
+    //
+    // Green and not cyan: the player avatar below is cyan
+    // ([0.13, 0.83, 0.93]), and a selected unit at [0.20, 0.95, 0.90]
+    // was near enough to be the same block to anyone looking. Green is
+    // the one bright hue not already spoken for — red is NPCs, yellow
+    // is obstacles and pins, orange is fire, purple is the jukebox.
+    for (u, selected) in &snap.units {
+        instances.push(SceneInstance {
+            pos: [u.x, 55.0, u.z],
+            color: if *selected { [0.25, 0.95, 0.35] } else { [0.45, 0.50, 0.60] },
+            scale: [60.0, 130.0, 60.0],
+        });
+    }
     // Named-zone markers — thin emissive-yellow rods so the layout
     // reads at a glance. Rave's rod+sphere+label overlay lands when
     // we grow text primitives in the shim.
@@ -75,8 +91,8 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let roof_half = cdda::CDDA_TILE / 2.0;
     let overhead = snap.structures.iter().find(|(p, k, _, _)| {
         *k == PropKind::Roof
-            && (p.x - snap.player.x).abs() <= roof_half
-            && (p.z - snap.player.z).abs() <= roof_half
+            && (p.x - snap.viewpoint.x).abs() <= roof_half
+            && (p.z - snap.viewpoint.z).abs() <= roof_half
     });
     let under_roof = overhead.is_some();
     // Tight enough that a neighbouring building's roof stays solid
@@ -84,7 +100,7 @@ pub fn snapshot_to_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     // different structure), loose enough to cover a big CDDA house's
     // roof from the overhead cell.
     let cutaway_radius = 800.0_f32;
-    let overhead_pos = overhead.map(|(p, _, _, _)| *p).unwrap_or(snap.player);
+    let overhead_pos = overhead.map(|(p, _, _, _)| *p).unwrap_or(snap.viewpoint);
 
     // Structure props (furniture, roof). Size comes from the kind;
     // colour is the prop's own tint or the kind default. Ground props
@@ -178,8 +194,8 @@ pub fn snapshot_to_ghost_instances(snap: &SceneSnapshot) -> Vec<SceneInstance> {
     let roof_half = cdda::CDDA_TILE / 2.0;
     let overhead = snap.structures.iter().find(|(p, k, _, _)| {
         *k == PropKind::Roof
-            && (p.x - snap.player.x).abs() <= roof_half
-            && (p.z - snap.player.z).abs() <= roof_half
+            && (p.x - snap.viewpoint.x).abs() <= roof_half
+            && (p.z - snap.viewpoint.z).abs() <= roof_half
     });
     let Some(overhead) = overhead else {
         return Vec::new();
@@ -250,6 +266,8 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
+            viewpoint: Vec3::new(0.0, 20.0, 0.0),
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -273,6 +291,8 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
+            viewpoint: Vec3::new(123_456.0, 20.0, -98_765.0),
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -293,6 +313,8 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
+            viewpoint: Vec3::new(px, 20.0, 0.0),
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -332,6 +354,8 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
+            viewpoint: Vec3::ZERO,
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -366,6 +390,8 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
+            viewpoint: player,
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -395,6 +421,8 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
+            viewpoint: Vec3::ZERO,
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -424,6 +452,8 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
+            viewpoint: Vec3::new(5000.0, 0.0, 5000.0), // far from any roof
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -444,6 +474,8 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
+            viewpoint: Vec3::ZERO,
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],
@@ -478,6 +510,8 @@ mod tests {
             obstacles: vec![],
             fires: vec![],
             npcs: vec![],
+            units: vec![],
+            viewpoint: Vec3::ZERO,
             pins: vec![],
             trails: vec![],
             remote_peers: vec![],

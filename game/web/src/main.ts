@@ -94,6 +94,13 @@ const KEY_A = 0x02
 const KEY_S = 0x04
 const KEY_D = 0x08
 const KEY_ESC = 0x10
+// The three action slots, left to right. Bound to SLOTS, not verbs:
+// what slot B does depends on context, that it is E never changes.
+// Q/E/R sit beside WASD so the hand never leaves the movement keys.
+// Mirrors input::key::SLOT_A/B/C.
+const KEY_SLOT_A = 0x20
+const KEY_SLOT_B = 0x40
+const KEY_SLOT_C = 0x80
 function keyBit(k: string): number {
   switch (k.toLowerCase()) {
     case 'w': return KEY_W
@@ -101,6 +108,9 @@ function keyBit(k: string): number {
     case 's': return KEY_S
     case 'd': return KEY_D
     case 'escape': return KEY_ESC
+    case 'q': return KEY_SLOT_A
+    case 'e': return KEY_SLOT_B
+    case 'r': return KEY_SLOT_C
     default: return 0
   }
 }
@@ -159,7 +169,11 @@ if (gameCanvas) {
   }
   gameCanvas.addEventListener('touchend', ev => { ev.preventDefault(); dropTouch(ev) }, { passive: false })
   gameCanvas.addEventListener('touchcancel', ev => { dropTouch(ev) })
+  // LEFT button only. `mousedown` fires for the right button too, so
+  // without this a right-click — the RTS order gesture — also lands as
+  // a synthetic touch on the D-pad's hit-test.
   gameCanvas.addEventListener('mousedown', ev => {
+    if (ev.button !== 0) return
     mouseTouch = clientToNdc(ev.clientX, ev.clientY, gameCanvas)
   })
   gameCanvas.addEventListener('mousemove', ev => {
@@ -184,23 +198,40 @@ if (gameCanvas) {
   gameCanvas.addEventListener('wheel', ev => {
     ev.preventDefault()
     wheelAccum += Math.round(ev.deltaX)
+    wheelAccumY += Math.round(ev.deltaY)
   }, { passive: false })
   gameCanvas.addEventListener('pointermove', ev => {
     const p = clientToNdc(ev.clientX, ev.clientY, gameCanvas)
     pointerNdcX = p.x
     pointerNdcY = p.y
+    pointerButtons = ev.buttons
   })
   gameCanvas.addEventListener('pointerleave', () => {
     pointerNdcX = -2
     pointerNdcY = -2
+    pointerButtons = 0
   })
+
+  // Buttons as a LEVEL, straight from the DOM's own bitmask, so Rust
+  // derives press and release by comparing frames. `ev.buttons` on
+  // pointerup already excludes the button being released, so up and
+  // down are the same assignment.
+  gameCanvas.addEventListener('pointerdown', ev => { pointerButtons = ev.buttons })
+  gameCanvas.addEventListener('pointerup', ev => { pointerButtons = ev.buttons })
+  gameCanvas.addEventListener('pointercancel', () => { pointerButtons = 0 })
+
+  // Right-click is the order gesture. Without this the browser menu
+  // opens over the canvas on every command.
+  gameCanvas.addEventListener('contextmenu', ev => { ev.preventDefault() })
 }
 
 // Wheel + pointer state. Off-canvas sentinel is |v| > 1 which Rust's
 // `input::pointer_ndc()` maps to `None`.
 let wheelAccum = 0
+let wheelAccumY = 0
 let pointerNdcX = -2
 let pointerNdcY = -2
+let pointerButtons = 0
 
 // IndexedDB identity storage. Rust owns the bytes; JS owns the store.
 // Pre-boot: try to load "self" so Rust's game_identity_load gets a
@@ -640,6 +671,12 @@ async function main() {
       },
       game_pointer_ndc_x: (): number => pointerNdcX,
       game_pointer_ndc_y: (): number => pointerNdcY,
+      game_pointer_buttons: (): number => pointerButtons | 0,
+      game_wheel_delta_y: (): number => {
+        const d = wheelAccumY | 0
+        wheelAccumY = 0
+        return d
+      },
       game_touch_state: (outPtr: number, outMax: number): number => {
         if (!memory) return 0
         const total = activeTouches.length + (mouseTouch ? 1 : 0)

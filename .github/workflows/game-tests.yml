@@ -2,7 +2,7 @@ name: game-tests
 
 # Fast correctness gate for game/.
 #
-# The 98 lib tests + the determinism golden-master run here in seconds,
+# The whole suite + the determinism golden-master run here in seconds,
 # BEFORE the ~5-minute seer pipeline. seer measures runtime behaviour
 # (heap / GPU / frame time / boundary crossings) on a single run — it
 # never runs these unit tests, so a red golden-master (a cross-peer
@@ -12,6 +12,24 @@ name: game-tests
 # Runs on every push to ANY branch so a feature branch is gated too,
 # not only master — the whole point is to know fast, on the branch,
 # not after a merge.
+#
+# WHAT GREEN MEANS HERE
+#
+# This gate used to run `--lib` on both steps. That made green a lie by
+# omission: every file under game/tests/ was skipped in silence, so a
+# red integration suite passed the check whose stated job is stopping
+# exactly that. `--lib` is gone — the suite runs whole, clippy lints
+# every target.
+#
+# Which leaves the honest question a strict-TDD repo has to answer: a
+# red-first commit is supposed to land, so how does the gate tell "not
+# built yet" apart from "broken"? By making the developer say so. The
+# only way a test is skipped is `#[ignore = "<reason>"]`, and the
+# audit step below fails on any bare `#[ignore]` and prints every
+# declared skip, with its reason, into the run summary.
+#
+# So: green means nothing is broken and every skip is named. A silent
+# skip is a swallowed refusal, and this file no longer permits one.
 
 on:
   push:
@@ -42,6 +60,7 @@ jobs:
         run: |
           rustup toolchain install nightly --profile minimal
           rustup component add clippy --toolchain nightly
+          rustup target add wasm32-unknown-unknown --toolchain nightly
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -60,14 +79,80 @@ jobs:
         working-directory: game
         run: echo "CDDA_SRC=$(nix build .#cdda-src --no-link --print-out-paths)" >> "$GITHUB_ENV"
 
-      # The gate. Includes every_shipped_building_digests_stably — the
-      # determinism golden-master — which names exactly which building
-      # drifted and its expected-vs-got digest when it fails (ERROR.md
-      # #5: an error without context is unactionable).
-      - name: game — cargo +nightly test --lib
+      # The gate. Whole suite — lib tests, every target under tests/,
+      # and doctests. Includes every_shipped_building_digests_stably,
+      # the determinism golden-master, which names exactly which
+      # building drifted and its expected-vs-got digest when it fails
+      # (ERROR.md #5: an error without context is unactionable).
+      #
+      # Output is tee'd because the next step audits it. pipefail so
+      # the tee doesn't mask a failing cargo.
+      - name: game — cargo +nightly test (whole suite)
         working-directory: game
-        run: cargo +nightly test --lib
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo +nightly test 2>&1 | tee test-output.txt
 
-      - name: game — cargo +nightly clippy
+      # Every skip lands in front of you, with its reason and the run
+      # that produced it. `#[ignore]` bare is rejected: it says a test
+      # was turned off and nothing about why or what turns it back on,
+      # which is the definition of a swallowed refusal.
+      #
+      # `always()` so the audit still reports when the suite above is
+      # red — that's precisely when you want to know what didn't run.
+      - name: Declared skips must declare themselves
+        if: always()
         working-directory: game
-        run: cargo +nightly clippy --lib -- -D warnings
+        shell: bash
+        run: |
+          if [ ! -f test-output.txt ]; then
+            echo "::error::no test output to audit — the suite did not run"
+            exit 1
+          fi
+          bare=$(grep -E '\.\.\. ignored$' test-output.txt || true)
+          if [ -n "$bare" ]; then
+            echo "::error::ignored test with no reason — say why it is off and what turns it back on"
+            echo "$bare"
+            exit 1
+          fi
+          declared=$(grep -E '\.\.\. ignored, ' test-output.txt || true)
+          {
+            echo "### Declared skips"
+            echo
+            if [ -z "$declared" ]; then
+              echo "None — the whole suite ran."
+            else
+              echo "Not run, and why:"
+              echo
+              echo '```'
+              echo "$declared"
+              echo '```'
+              echo
+              echo "Run them with \`make red\` in \`game/\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A skip named RED must actually be red. The audit above catches a
+      # test switched off with no reason; this catches the other
+      # direction — a test labelled RED that would pass if it ran. That
+      # happened here once and was found by eye, which is not a method.
+      - name: Declared reds must actually be red
+        working-directory: game
+        run: ./tools/check-declared-reds.sh test-output.txt
+
+      - name: game — cargo +nightly clippy (every target)
+        working-directory: game
+        run: cargo +nightly clippy --all-targets -- -D warnings
+
+      # This project SHIPS wasm. Every step above compiles for the host,
+      # so a `cfg(target_arch = "wasm32")` block is invisible to all of
+      # them — which is how a call to two functions that did not exist
+      # passed this gate green and then broke deploy-game and seer at
+      # once. The wasm build belongs in the FAST gate, not only in the
+      # pipelines that publish. Debug, not release: this is a
+      # does-it-compile check, and the release build stays where the
+      # artifact is actually produced.
+      - name: game — cargo +nightly build --target wasm32
+        working-directory: game
+        run: cargo +nightly build --target wasm32-unknown-unknown --lib

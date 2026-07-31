@@ -19,6 +19,16 @@ pub struct SceneCamera {
 /// discovery to navigate the part you can't see.)
 const FOLLOW_HALF_EXTENT: f32 = 1450.0;
 
+/// Zoom bounds, in the same world units as `half_extent`. In is a
+/// tighter frustum; out is a wider one. `FOLLOW_HALF_EXTENT` sits
+/// inside this range and stays the resting value.
+///
+/// Bounded at both ends on purpose: past ZOOM_MIN a unit fills the
+/// screen and you have lost the board, and past ZOOM_MAX the world
+/// outruns chunk streaming and you are looking at what has not loaded.
+pub const ZOOM_MIN: f32 = 400.0;
+pub const ZOOM_MAX: f32 = 4000.0;
+
 impl SceneCamera {
     pub fn default_for_floor(floor_half: f32) -> Self {
         // True isometric: equal offsets on all three axes → 45° yaw
@@ -35,16 +45,27 @@ impl SceneCamera {
         }
     }
 
-    pub fn follow(player: [f32; 3], floor_half: f32) -> Self {
+    /// Camera looking at an arbitrary focus, at an arbitrary zoom.
+    ///
+    /// The isometric offset is the same one `follow` has always used —
+    /// this only lifts the two things that were fixed (what it looks
+    /// at, and how much it covers) into parameters, because an
+    /// observer that can pan and zoom needs both, and an observer
+    /// leashed to one entity at one magnification is not one.
+    pub fn at(focus: [f32; 3], half_extent: f32, floor_half: f32) -> Self {
         let d = floor_half * 1.2;
         Self {
-            eye: [player[0] + d, player[1] + d, player[2] + d],
-            target: player,
+            eye: [focus[0] + d, focus[1] + d, focus[2] + d],
+            target: focus,
             up: [0.0, 1.0, 0.0],
-            half_extent: FOLLOW_HALF_EXTENT,
+            half_extent,
             near: 100.0,
             far: floor_half * 6.0,
         }
+    }
+
+    pub fn follow(player: [f32; 3], floor_half: f32) -> Self {
+        Self::at(player, FOLLOW_HALF_EXTENT, floor_half)
     }
 
     /// Project a world-space point to normalised clip coords in

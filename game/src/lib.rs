@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 
+pub mod actions;
 pub mod audio;
 pub mod bang;
 pub mod build_info;
@@ -29,6 +30,7 @@ pub mod persist;
 pub mod physics;
 pub mod remote_players;
 pub mod room;
+pub mod rts;
 pub mod scene;
 pub mod sfx;
 pub mod shaders;
@@ -156,6 +158,55 @@ fn seer_tour_input(
             v.0 = Vec3::ZERO;
         }
     }
+}
+
+/// Wheel notches the seer tour applies per frame while zooming. One
+/// notch is `CameraZoom`'s multiplicative step, so a run of these walks
+/// the zoom range rather than jumping across it.
+#[cfg(not(target_arch = "wasm32"))]
+const TOUR_ZOOM_NOTCHES: i32 = 2;
+
+/// Drive the camera zoom over the tour, so a seer run measures the
+/// zoomed-in and zoomed-out cases and not only the resting one.
+///
+/// Writes `InputFrame.wheel_y` rather than touching `CameraZoom`
+/// directly, so the run exercises the same path a hand does:
+/// `zoom_observer` reading the frame, `CameraZoom::nudge` clamping it.
+///
+/// Sawtooth over each stop's slice of the budget: in for the first
+/// half, out for the second. Both bounds get reached because the
+/// clamp saturates, which is the case worth measuring — a frustum at
+/// ZOOM_MAX pulls in far more geometry than one at ZOOM_MIN.
+#[cfg(not(target_arch = "wasm32"))]
+fn seer_tour_zoom(
+    frame: Res<FrameCount>,
+    tour: Res<SeerTour>,
+    zoom: Res<rts::CameraZoom>,
+    mut input: ResMut<rts::InputFrame>,
+) {
+    if tour.stops.is_empty() {
+        return;
+    }
+    let n = tour.stops.len() as u32;
+    let budget = tour.budget.max(1);
+    let per_stop = (budget / n).max(1);
+    let into_stop = frame.0.saturating_sub(1) % per_stop;
+    let turning = into_stop == 0 || into_stop == per_stop / 2;
+    if turning {
+        // At each end of the sawtooth, report where the zoom actually
+        // got to. Without this the run only proves it did not crash;
+        // the log line is the evidence that both extremes were reached.
+        obs::emit(&format!(
+            "[seer.zoom] frame {} half_extent {:.0}",
+            frame.0,
+            zoom.half_extent()
+        ));
+    }
+    input.wheel_y = if into_stop < per_stop / 2 {
+        TOUR_ZOOM_NOTCHES
+    } else {
+        -TOUR_ZOOM_NOTCHES
+    };
 }
 
 /// Scan chunks outward from the origin for the first matching one.
@@ -293,6 +344,14 @@ fn frame_budget() -> u32 {
     }
 }
 
+/// The browser's avatar-input slot, deliberately empty. `rts` owns the
+/// keyboard now: `pump_input_frame` reads it once per frame inside the
+/// rts schedule, and `pan_observer` spends it on the viewport. Calling
+/// `pump_input_frame` here as well would drain `game_wheel_delta_y`
+/// twice a frame and the second read would win with zero.
+#[cfg(target_arch = "wasm32")]
+fn viewport_owns_input() {}
+
 fn setup(mut commands: Commands) {
     obs::emit(&format!(
         "[seer.build_info] commit={} built_at={}",
@@ -316,12 +375,40 @@ fn setup(mut commands: Commands) {
         format!("commit={} — sacred-error bus armed", build_info::COMMIT),
     );
 
-    commands.spawn((
-        PlayerMarker,
-        // Resume where we left off if a position was saved.
-        Position(persist::load().unwrap_or(room::SPAWN_POS)),
-        Velocity(Vec3::new(1.5, 0.0, 0.7)),
-    ));
+    let spawn = persist::load().unwrap_or(room::SPAWN_POS);
+    let player = commands
+        .spawn((
+            PlayerMarker,
+            // Resume where we left off if a position was saved.
+            Position(spawn),
+            // At rest. WASD drives the viewport now, not this body — so
+            // a starting velocity would send it drifting off with
+            // nobody holding the wheel.
+            Velocity(Vec3::ZERO),
+        ))
+        .id();
+    // The seer run has no hand: `seer_tour_input` teleports the PLAYER
+    // between tour stops, so the viewpoint has to follow the player or
+    // chunk streaming would keep generating the world back at spawn
+    // while the tour walks through emptiness.
+    #[cfg(not(target_arch = "wasm32"))]
+    commands.insert_resource(rts::CameraFocus::Following(player));
+    #[cfg(target_arch = "wasm32")]
+    let _ = player;
+    // A squad to command. Placed in a loose arc near the spawn so a
+    // first drag has something to catch without having to go looking.
+    for (i, (dx, dz)) in
+        [(-140.0, 60.0), (-70.0, 120.0), (0.0, 150.0), (70.0, 120.0), (140.0, 60.0)]
+            .into_iter()
+            .enumerate()
+    {
+        commands.spawn((
+            rts::UnitMarker,
+            Position(Vec3::new(spawn.x + dx, 0.0, spawn.z + dz)),
+            Velocity(Vec3::ZERO),
+        ));
+        obs::emit(&format!("[rts.setup] spawned unit {i} at ({dx}, {dz}) from spawn"));
+    }
     // Circling NPC — same wander pattern as the deterministic native
     // player input; bumping into it fires the exclamation overlay.
     commands.spawn((
@@ -569,14 +656,29 @@ fn _init() {
     }
     #[cfg(not(target_arch = "wasm32"))]
     let tour = seer_tour_from(&building_templates);
+    // Separate registration: the Update tuple is already at bevy's
+    // 20-element limit, and this is native-only.
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(Update, seer_tour_zoom.before(rts::zoom_observer));
     app.insert_resource(building_templates);
+    // The RTS command layer: input → selection → orders → steering.
+    // Registered before the observer's focus is set below, because
+    // `register` seeds a default focus and the spawn point should win.
+    rts::register(&mut app);
+    {
+        let spawn = persist::load().unwrap_or(room::SPAWN_POS);
+        app.insert_resource(rts::CameraFocus::Free(Vec3::new(
+            spawn.x,
+            terrain::height(spawn.x, spawn.z),
+            spawn.z,
+        )));
+    }
     app.add_systems(
         Startup,
         (
             setup,
             bang::setup_bang.after(setup),
             campfire::setup_campfire.after(setup),
-            dpad::setup_dpad.after(setup),
             tune_hud::setup_tune_hud.after(setup),
             hud::setup_hud.after(setup),
             jukebox::setup_jukebox.after(setup),
@@ -586,8 +688,17 @@ fn _init() {
             setup_music.after(setup),
         ),
     );
+    // WASD moves the VIEWPORT now, not the avatar — `rts::pan_observer`
+    // owns those keys while the observer is detached. `keyboard_input`
+    // is therefore gone from the browser schedule; leaving it in would
+    // pan the camera and walk the player with the same keypress.
+    //
+    // The consequence, stated plainly: nothing drives the player body
+    // in the browser until a become gesture exists. It stands where it
+    // spawned, which is what "you begin as an omnipresent observer"
+    // means.
     #[cfg(target_arch = "wasm32")]
-    let input_system = physics::keyboard_input;
+    let input_system = viewport_owns_input;
     #[cfg(not(target_arch = "wasm32"))]
     let input_system = seer_tour_input;
     app.add_systems(
@@ -601,12 +712,16 @@ fn _init() {
             physics::resolve_remote_player_collisions.after(physics::resolve_collisions),
             physics::check_npc_bump.after(physics::advance_npc),
             bang::age_and_publish.after(physics::check_npc_bump),
-            chunk::stream_chunks.after(physics::resolve_remote_player_collisions),
+            // After the viewpoint resolves: streaming decides what
+            // exists, and it has to build around where you are looking
+            // this frame, not where you were looking last one.
+            chunk::stream_chunks
+                .after(physics::resolve_remote_player_collisions)
+                .after(rts::update_viewpoint),
             campfire::flicker_fire.after(physics::resolve_remote_player_collisions),
             campfire::campfire_crackle_system.after(campfire::flicker_fire),
-            dpad::dpad_input_system.after(campfire::campfire_crackle_system),
-            tune_hud::tune_hud_system.after(dpad::dpad_input_system),
-            hud::hud_input_system.after(dpad::dpad_input_system),
+            tune_hud::tune_hud_system,
+            hud::hud_input_system,
             jukebox::jukebox_proximity_system.after(physics::resolve_collisions),
             tick.after(campfire::flicker_fire),
             drain_remote_positions_system.after(tick),
