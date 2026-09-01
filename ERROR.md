@@ -1,5 +1,18 @@
 # tsot — Sacred Error Axiom
 
+> **The primitive has moved out.** Both halves — the Rust type and
+> `Error.elm` — now live in [teranos/sacred-error](https://github.com/teranos/sacred-error),
+> because a wire shape shared by two products cannot live inside one of
+> them. Elm decided it: Cargo can name code at any git rev, but an Elm
+> dependency is a registry name and a version and nothing else, so the
+> Elm half could only be shared from a repository of its own.
+>
+> Nothing here has been changed to use it yet. When it is, `crates/sacred-error`
+> and `ccg/assets/src/Error.elm` both go, and the axiom text below collapses
+> to the parts that are actually tsot's: the `Card.elm` analogy, the
+> inventory, and the roadmap. The axiom itself, what it forbids and
+> requires, and the visual contract already live over there.
+
 ## The axiom
 
 **An Error is a first-class primitive — one typed value that crosses
