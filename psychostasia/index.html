@@ -36,10 +36,88 @@
       #error { color: #ff6b6b; white-space: pre-wrap; margin-top: 8px; }
       #readout { margin: 8px 0 0; }
       #panel { max-height: calc(100vh - 32px); overflow-y: auto; }
-      #controls label { display: grid; grid-template-columns: 170px 160px 70px; gap: 8px; align-items: center; }
-      #controls .group { margin-top: 10px; color: #ffd36b; }
-      #controls input[type='number'] { width: 64px; font: inherit; }
-      #look-json { font-size: 11px; color: #bbb; }
+
+      /* Glyph tray and window — the black and white of @qntx/glyphs' own
+         examples: the tray is a fixed right-edge column, the dots carry the
+         pointer events, a window is reached through [data-manifestation]. */
+      .glyph-run {
+        position: fixed;
+        top: 50%;
+        right: 4px;
+        transform: translateY(-50%);
+        z-index: 1000;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        pointer-events: none;
+        width: fit-content;
+      }
+      .glyph-run-indicators {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+        width: fit-content;
+        height: fit-content;
+      }
+      .glyph-run-glyph {
+        pointer-events: auto;
+        cursor: pointer;
+        font-size: 12px;
+        overflow: hidden;
+        border: 1px solid #fff;
+        color: #fff;
+      }
+      .glyph-run-glyph:hover { filter: brightness(1.6); }
+      [data-manifestation="window"] {
+        pointer-events: auto;
+        border: 1px solid #fff;
+        color: #fff;
+      }
+      .glyph-title-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 8px;
+        height: 32px;
+        width: 100%;
+        background-color: #000;
+        border-bottom: 1px solid #fff;
+        flex-shrink: 0;
+        user-select: none;
+        cursor: move;
+        font-size: 12px;
+        color: #fff;
+      }
+      .glyph-title-bar button {
+        width: 22px;
+        height: 22px;
+        padding: 1px 2px;
+        background: #000;
+        color: #fff;
+        border: 1px solid #fff;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+        margin-left: 2px;
+      }
+      .glyph-title-bar button:hover { background: #fff; color: #000; }
+      .glyph-content-area { flex: 1 1 auto; overflow: auto; padding: 8px; }
+      .glyph-content { font-size: 12px; line-height: 1.6; }
+
+      /* tweak */
+      /* The glyph element carries an inline white-space: nowrap that every
+         manifestation inherits; tweak's content wraps again from its own root,
+         so a label never runs under its slider or gets cut off. */
+      .tweak { white-space: normal; }
+      .tweak-row { display: grid; grid-template-columns: 170px 1fr 64px; gap: 8px; align-items: center; }
+      .tweak-row span { overflow-wrap: break-word; word-break: break-word; }
+      .tweak-group { margin-top: 10px; color: #ffd36b; }
+      .tweak input[type='number'] { width: 64px; font: inherit; }
+      .tweak-actions { margin-top: 10px; display: flex; gap: 8px; }
+      .tweak-json { font-size: 11px; color: #bbb; }
     </style>
   </head>
   <body>
@@ -65,13 +143,9 @@
       <div id="place">EARTH</div>
       <div id="held" hidden></div>
       <div id="error" hidden></div>
-      <!-- "c" hides and shows the readout and the controls -->
+      <!-- "c" hides and shows the readout; the tweaks live in the tray -->
       <div id="controls-panel">
         <pre id="readout"></pre>
-        <div id="controls"></div>
-        <button id="look-copy">copy look</button>
-        <button id="look-reset">reset look</button>
-        <pre id="look-json"></pre>
       </div>
     </div>
     <script>

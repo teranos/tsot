@@ -1,3 +1,5 @@
+import { configureGlyphs, glyphRun } from '@jsr/qntx__glyphs'
+import { fieldParams } from './field'
 import {
   MAX_INTERVAL_S,
   MIN_INTERVAL_S,
@@ -10,11 +12,11 @@ import {
   tick,
   verdictSoul,
 } from './judge'
-import { fieldParams } from './field'
 import { loudness, rms } from './level'
 import { DEFAULT_LOOK, LOOK_PARAMS, type Look, parseLook } from './look'
 import { createScale3d } from './scale3d'
 import { devilOpacity, hellOpacity, playbackRate } from './scene'
+import { tweakGlyph } from './tweak'
 
 // Judge only the band a voice and most instruments live in; the bins
 // above are mic self-noise and would read every sound as tonal.
@@ -74,7 +76,7 @@ hell.play().catch(e => showError('hell video would not play', e))
 
 const scale3d = createScale3d(el<HTMLCanvasElement>('scale3d'), showError)
 
-// The look: every adjustable number, saved in this browser, shown as JSON.
+// The look: every adjustable number, saved in this browser.
 function loadLook(): Look {
   let saved: string | null = null
   try {
@@ -85,76 +87,43 @@ function loadLook(): Look {
   try {
     return parseLook(saved)
   } catch (e) {
-    showError('look: saved look refused, using the default look (the save stays until a control changes)', e)
+    showError('look: saved look refused, using the default look (the save stays until a tweak changes)', e)
     return { ...DEFAULT_LOOK }
   }
 }
 const look = loadLook()
-const lookJson = el<HTMLPreElement>('look-json')
 function lookChanged() {
   try {
     localStorage.setItem(LOOK_STORE, JSON.stringify(look))
   } catch (e) {
     showError('look: could not save to browser storage', e)
   }
-  lookJson.textContent = JSON.stringify(look, null, 1)
   scale3d.setLook(look)
 }
-
-const controls = el<HTMLDivElement>('controls')
-let group = ''
-for (const p of LOOK_PARAMS) {
-  if (p.group !== group) {
-    group = p.group
-    const h = document.createElement('div')
-    h.className = 'group'
-    h.textContent = group
-    controls.append(h)
-  }
-  const row = document.createElement('label')
-  const name = document.createElement('span')
-  name.textContent = p.label
-  const range = document.createElement('input')
-  const num = document.createElement('input')
-  range.type = 'range'
-  num.type = 'number'
-  for (const input of [range, num]) {
-    input.min = String(p.min)
-    input.max = String(p.max)
-    input.step = String(p.step)
-    input.value = String(look[p.key])
-  }
-  const set = (v: number) => {
-    look[p.key] = Math.min(p.max, Math.max(p.min, v))
-    range.value = num.value = String(look[p.key])
-    lookChanged()
-  }
-  range.addEventListener('input', () => set(Number(range.value)))
-  num.addEventListener('change', () => {
-    const v = Number(num.value)
-    if (num.value === '' || !Number.isFinite(v)) {
-      showError(`look: "${num.value}" is not a number for ${p.label}`, `kept ${look[p.key]}`)
-      num.value = String(look[p.key])
-      return
-    }
-    set(v)
-  })
-  row.append(name, range, num)
-  controls.append(row)
-}
-el<HTMLButtonElement>('look-copy').addEventListener('click', () =>
-  navigator.clipboard.writeText(JSON.stringify(look, null, 1)).catch(e => showError('look: copy to clipboard failed', e)),
-)
-el<HTMLButtonElement>('look-reset').addEventListener('click', () => {
-  try {
-    localStorage.removeItem(LOOK_STORE)
-  } catch (e) {
-    showError('look: could not clear the saved look', e)
-    return
-  }
-  location.reload()
-})
 lookChanged()
+
+// The glyph tray, with tweak as its first glyph. The resting dot is doubled
+// from the package's 10px default, as its own examples do: a 10px dot on a
+// dark piece is hard to aim at.
+configureGlyphs({ dotGeometry: { minWidth: 20, minHeight: 20 } })
+glyphRun.init()
+glyphRun.add(
+  tweakGlyph({
+    params: LOOK_PARAMS,
+    values: look,
+    onChange: lookChanged,
+    onError: showError,
+    onReset: () => {
+      try {
+        localStorage.removeItem(LOOK_STORE)
+      } catch (e) {
+        showError('look: could not clear the saved look', e)
+        return
+      }
+      location.reload()
+    },
+  }),
+)
 
 async function start() {
   let stream: MediaStream
@@ -193,7 +162,7 @@ function run(analyser: AnalyserNode, ctx: AudioContext, track: MediaStreamTrack)
   // Held arrow: +1 drifts toward heaven, -1 toward hell, 0 none.
   let pushing: 1 | -1 | 0 = 0
   window.addEventListener('keydown', ev => {
-    // Keys typed into a control belong to the control.
+    // Keys typed into a tweak belong to the tweak.
     if (ev.target instanceof HTMLInputElement) return
     if (ev.key === 'c') {
       panel.hidden = !panel.hidden
@@ -247,7 +216,8 @@ function run(analyser: AnalyserNode, ctx: AudioContext, track: MediaStreamTrack)
         `flatness ${flat.toFixed(3)}  (tonal under ${look.flatnessSplit})`,
         `sound    ${sound}`,
         `soul     ${s.soul.toFixed(3)}  (-1 hell, 1 heaven)`,
-        `keys     h heaven now, H hell now, hold ↑/↓ to drift, c hides this panel`,
+        `keys     h heaven now, H hell now, hold ↑/↓ to drift, c hides this readout`,
+        `tweak    the dot in the tray at the right edge`,
         `judgment possible in ${Math.max(0, MIN_INTERVAL_S - s.sinceJudgment).toFixed(0)}s, forced in ${Math.max(0, MAX_INTERVAL_S - s.sinceJudgment).toFixed(0)}s`,
       ].join('\n')
     } catch (e) {
