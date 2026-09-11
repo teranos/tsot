@@ -106,18 +106,6 @@
       .glyph-title-bar button:hover { background: #fff; color: #000; }
       .glyph-content-area { flex: 1 1 auto; overflow: auto; padding: 8px; }
       .glyph-content { font-size: 12px; line-height: 1.6; }
-
-      /* tweak */
-      /* The glyph element carries an inline white-space: nowrap that every
-         manifestation inherits; tweak's content wraps again from its own root,
-         so a label never runs under its slider or gets cut off. */
-      .tweak { white-space: normal; }
-      .tweak-row { display: grid; grid-template-columns: 170px 1fr 64px; gap: 8px; align-items: center; }
-      .tweak-row span { overflow-wrap: break-word; word-break: break-word; }
-      .tweak-group { margin-top: 10px; color: #ffd36b; }
-      .tweak input[type='number'] { width: 64px; font: inherit; }
-      .tweak-actions { margin-top: 10px; display: flex; gap: 8px; }
-      .tweak-json { font-size: 11px; color: #bbb; }
     </style>
   </head>
   <body>

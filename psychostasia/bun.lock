@@ -7,25 +7,15 @@
       "dependencies": {
         "@jsr/qntx__glyphs": "0.13.0",
         "three": "0.186.0",
-      },
-      "devDependencies": {
-        "happy-dom": "20.0.11",
+        "tweak": "github:teranos/tweak#395509aab28143208b115196c8c92b8f2ed44c37",
       },
     },
   },
   "packages": {
     "@jsr/qntx__glyphs": ["@jsr/qntx__glyphs@0.13.0", "https://npm.jsr.io/~/11/@jsr/qntx__glyphs/0.13.0.tgz", {}, "sha512-DH+8BIHjzikTzDHIiK3ZMBuf0jg7LQjtPGVHFn3rFSST8AnFWhu6B+/mtuWZ+rDeRVBPUKaPM3yV0zft+bwL+g=="],
 
-    "@types/node": ["@types/node@20.19.43", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-6oYBAi5ikg4Pl+kGsoYtawUMBT2zZMCvPNF7pVLnHZfd1zf38DRiWn/gT01RYCdUqkv7Fhr+C9ot4/tb+2sVvA=="],
-
-    "@types/whatwg-mimetype": ["@types/whatwg-mimetype@3.0.2", "", {}, "sha512-c2AKvDT8ToxLIOUlN51gTiHXflsfIFisS4pO7pDPoKouJCESkhZnEy623gwP9laCy5lnLDAw1vAzu2vM2YLOrA=="],
-
-    "happy-dom": ["happy-dom@20.0.11", "", { "dependencies": { "@types/node": "^20.0.0", "@types/whatwg-mimetype": "^3.0.2", "whatwg-mimetype": "^3.0.0" } }, "sha512-QsCdAUHAmiDeKeaNojb1OHOPF7NjcWPBR7obdu3NwH2a/oyQaLg5d0aaCy/9My6CdPChYF07dvz5chaXBGaD4g=="],
-
     "three": ["three@0.186.0", "", {}, "sha512-cr/fIM2ddMSVbYVgkfD4jLJv7Fh/8ZTjvo+7gQeSVGUZHxpx9FDwoL5iC7hUz/LiRA8wMbqfnb90xKfm1/HHkQ=="],
 
-    "undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
-
-    "whatwg-mimetype": ["whatwg-mimetype@3.0.0", "", {}, "sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q=="],
+    "tweak": ["tweak@github:teranos/tweak#395509a", { "peerDependencies": { "@jsr/qntx__glyphs": "0.13.0" } }, "teranos-tweak-395509a"],
   }
 }

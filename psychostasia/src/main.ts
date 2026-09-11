@@ -16,7 +16,7 @@ import { loudness, rms } from './level'
 import { DEFAULT_LOOK, LOOK_PARAMS, type Look, parseLook } from './look'
 import { createScale3d } from './scale3d'
 import { devilOpacity, hellOpacity, playbackRate } from './scene'
-import { tweakGlyph } from './tweak'
+import { tweakGlyph } from 'tweak'
 
 // Judge only the band a voice and most instruments live in; the bins
 // above are mic self-noise and would read every sound as tonal.

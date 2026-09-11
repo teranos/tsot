@@ -2,7 +2,3 @@
 # where they live under the @jsr scope.
 [install.scopes]
 "@jsr" = "https://npm.jsr.io"
-
-# Glyph tests need a DOM; the pure tests don't notice it.
-[test]
-preload = ["./test-setup.ts"]

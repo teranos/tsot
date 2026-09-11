@@ -1,12 +1,10 @@
 {
   "name": "psychostasia",
-  "private": true,
-  "type": "module",
   "dependencies": {
     "@jsr/qntx__glyphs": "0.13.0",
-    "three": "0.186.0"
+    "three": "0.186.0",
+    "tweak": "github:teranos/tweak#395509aab28143208b115196c8c92b8f2ed44c37"
   },
-  "devDependencies": {
-    "happy-dom": "20.0.11"
-  }
+  "private": true,
+  "type": "module"
 }
