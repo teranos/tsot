@@ -65,3 +65,8 @@ ccg/build.log
 
 # `nix build` output symlink — regenerated on every build.
 game/result
+
+# psychostasia media — lives in the psychostasia-assets-548351057127 bucket
+# (infra/psychostasia.tf); `make assets` pulls it and checks it against
+# psychostasia/assets.sha256.
+psychostasia/assets/
