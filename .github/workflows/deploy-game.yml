@@ -112,7 +112,7 @@ jobs:
 
       - name: Assume deploy role
         if: env.STATIC_DISTRIBUTION_ID != ''
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@v6.2.4
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

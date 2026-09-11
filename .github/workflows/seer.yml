@@ -62,7 +62,7 @@ jobs:
 
       - name: Assume deploy role
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@v6.2.4
         with:
           role-to-assume: arn:aws:iam::548351057127:role/seer-github-deploy
           aws-region: eu-central-1
@@ -114,7 +114,7 @@ jobs:
 
       - name: Upload native log (CI artifact)
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: game-native-${{ github.sha }}
           path: game/out/
@@ -223,7 +223,7 @@ jobs:
 
       - name: Upload host log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: seer-host-${{ github.sha }}
           path: out/
@@ -231,7 +231,7 @@ jobs:
 
       - name: Assume deploy role
         if: success() && vars.SEER_DISTRIBUTION_ID != ''
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@v6.2.4
         with:
           role-to-assume: arn:aws:iam::548351057127:role/seer-github-deploy
           aws-region: eu-central-1

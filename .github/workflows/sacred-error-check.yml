@@ -44,7 +44,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5.1.0
 
       # Each grep returns the file:line count of pattern matches.
       # Compare against the snapshotted baseline; if the count grows,
